@@ -8810,8 +8810,12 @@
     ev.preventDefault();
     ev.stopPropagation();
     const sid = currentSession && currentSession.id;
-    if (!sid || !currentSession || currentSession.source !== 'codex') {
-      showOpToast('Steer is only available for Codex sessions.', 'error');
+    const steerableSource = currentSession && (
+      currentSession.source === 'codex'
+      || (currentSession.source === 'devin-cli' && currentSession.acp_steer_ready === true)
+    );
+    if (!sid || !steerableSource) {
+      showOpToast('Steer is only available for Codex and steer-ready Devin sessions.', 'error');
       return;
     }
     const row = btn.closest('.event.user_text');
@@ -8857,7 +8861,10 @@
         else if (row) row.remove();
       }
       btn.textContent = '✓';
-      showOpToast(data.via === 'codex-steer' ? 'Steered running Codex turn.' : 'Sent to Codex.');
+      showOpToast(
+        data.via === 'codex-steer' ? 'Steered running Codex turn.'
+        : currentSession.source === 'devin-cli' ? 'Steered running Devin turn.'
+        : 'Sent to Codex.');
       setTimeout(refreshConversationList, 1500);
       setTimeout(refreshConversationList, 3500);
     } catch (err) {
@@ -14144,16 +14151,20 @@
   }
 
   function userMessageSteerHtml(text, notification, compactCardHtml) {
-    if (!currentSession || currentSession.source !== 'codex') return '';
+    const isCodex = currentSession && currentSession.source === 'codex';
+    const isDevin = currentSession && currentSession.source === 'devin-cli'
+      && currentSession.acp_steer_ready === true;
+    if (!isCodex && !isDevin) return '';
     if (notification || compactCardHtml || !String(text || '').trim()) return '';
-    const steerable = codexTurnSteerable();
+    const steerable = isCodex ? codexTurnSteerable() : devinTurnSteerable();
+    const engine = isCodex ? 'Codex' : 'Devin';
     const title = steerable
-      ? 'Steer Codex with this message'
-      : 'No running Codex turn can be steered from CCC; use Send to resume or follow up';
+      ? 'Steer ' + engine + ' with this message'
+      : 'No running ' + engine + ' turn can be steered from CCC; use Send to resume or follow up';
     const inactiveAttrs = steerable ? '' : ' hidden disabled aria-hidden="true"';
     return '<button type="button" class="user-message-steer" data-steer-user-message'
       + inactiveAttrs + ' title="' + escapeAttr(title)
-      + '" aria-label="Steer Codex with this message">Steer</button>';
+      + '" aria-label="Steer ' + escapeAttr(engine) + ' with this message">Steer</button>';
   }
 
   document.addEventListener('click', (ev) => {
@@ -31470,6 +31481,17 @@
     return writer !== 'desktop' && writer !== 'external' && writer !== 'unknown';
   }
 
+  // Devin mirror of codexTurnSteerable: the backend steers a live turn via
+  // the shared `devin acp` connection (cancel + resend — acp.py's
+  // _devin_acp_try_steer), so the button only makes sense while that conn
+  // owns the session and a turn is actually running.
+  function devinTurnSteerable() {
+    if (!currentSession || currentSession.source !== 'devin-cli') return false;
+    if (currentSession.acp_steer_ready !== true) return false;
+    if (!liveStatusMatchesOpenConv() || !liveStatus) return false;
+    return liveStatus.kind === 'acp' && liveStatus.status === 'running';
+  }
+
   // Queued-row Steer only makes sense for engines that can interrupt/replace
   // an active turn. Devin (and other queue-only engines) has no such primitive;
   // showing the button there makes it appear broken when the replacement never
@@ -31493,10 +31515,12 @@
   }
 
   function syncUserMessageSteerButtons(root) {
-    const steerable = codexTurnSteerable();
+    const isDevin = currentSession && currentSession.source === 'devin-cli';
+    const steerable = isDevin ? devinTurnSteerable() : codexTurnSteerable();
+    const engine = isDevin ? 'Devin' : 'Codex';
     const title = steerable
-      ? 'Steer Codex with this message'
-      : 'No running Codex turn can be steered from CCC; use Send to resume or follow up';
+      ? 'Steer ' + engine + ' with this message'
+      : 'No running ' + engine + ' turn can be steered from CCC; use Send to resume or follow up';
     (root || document).querySelectorAll('[data-steer-user-message]').forEach((btn) => {
       btn.hidden = !steerable;
       btn.disabled = !steerable;
