@@ -322,6 +322,26 @@ def _uncertain_sweep(runtime, stop_event, interval=UNCERTAIN_SWEEP_INTERVAL_S):
             continue
 
 
+def _worker_pid_alive(pidfile):
+    """True if the pid recorded in ``pidfile`` is another live ccc_worker."""
+    try:
+        pid = int(Path(pidfile).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    if pid == os.getpid():
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        # No /proc (macOS): fall back to a bare liveness probe.
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    return b"ccc_worker" in cmdline
+
+
 def serve(path=None):
     path = Path(path or socket_path())
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -330,6 +350,15 @@ def serve(path=None):
         live = ControlPlaneClient(path=path, token_file=token_path()).request("health")
         if live.get("available"):
             raise RuntimeError(f"CCC worker is already running at {path}")
+        # A failed health probe is not proof of death: under heavy load (or a
+        # locked ledger) a healthy worker can miss the probe. Unlinking its
+        # socket then leaves it alive but unreachable ("worker is down") while
+        # this instance crashes. Only clear the socket if the owner is gone.
+        if _worker_pid_alive(worker_pid_path()):
+            raise RuntimeError(
+                f"CCC worker pid is alive but not answering health at {path}; "
+                "refusing to unlink its socket"
+            )
         try:
             path.unlink()
         except OSError:
