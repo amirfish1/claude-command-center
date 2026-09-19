@@ -9781,10 +9781,10 @@
           && !isPkood && !isGemini && !isAntigravity && !isDevinCli
           && !!liveStatus.live && !!liveStatus.headlessPresent && !liveStatus.tty;
         const claudeSteerable = isClaudeHeadless && !!liveStatus.sidecarInFlight;
-        // Devin CLI steers over an opt-in `devin acp` ACP connection that the
-        // first steer attaches lazily — the row field devin_acp_ready mirrors
-        // server-side "could attempt" (flag on + binary resolves), not "a
-        // connection is already up" (nothing else ever creates one).
+        // Devin CLI sends/steers over a `devin acp` ACP connection that the
+        // first send attaches lazily — the row field devin_acp_ready mirrors
+        // server-side "could attempt" (binary resolves), not "a connection
+        // is already up" (nothing else ever creates one).
         const devinSteerable = isDevinCli && currentSession.acp_steer_ready === true;
         const canSteer = canSend && hasSession && !isNewSession && !isBacklogIssue
           && ((isCodex && codexTurnSteerable()) || isKimi || devinSteerable || claudeSteerable);
@@ -9803,7 +9803,7 @@
               : (isKimi
                   ? 'Steer is available while a Kimi turn is running'
                   : (isDevinCli
-                      ? 'Devin steer needs CCC_DEVIN_ACP_STEER=1 and the devin binary on PATH'
+                      ? 'Devin steer needs the devin binary on PATH'
                       : (isClaudeHeadless
                           ? 'Steer is available while a tool is running'
                           : 'Steer needs a live headless, Codex, Kimi, or Devin session'))));
@@ -11024,7 +11024,7 @@
         && !(currentSession.source === 'devin-cli' && currentSession.acp_steer_ready === true)
         && !(liveStatus.live && liveStatus.headlessPresent && !liveStatus.tty)) {
       // Claude headless steers via the FIFO interrupt control request; Devin
-      // CLI steers over its opt-in `devin acp` connection; every other
+      // CLI steers over its live `devin acp` connection; every other
       // non-Codex/Kimi surface still has no interrupt channel.
       showOpToast('Steer needs a live headless, Codex, Kimi, or steer-ready Devin session.', 'error');
       return;
@@ -31452,16 +31452,17 @@
   // showing the button there makes it appear broken when the replacement never
   // consumes the durable queue entry (CCC-???).
   //
-  // Devin is a partial exception: an experimental, opt-in live ACP steer
-  // path exists server-side (acp.py's _devin_acp_try_steer), gated on
-  // CCC_DEVIN_ACP_STEER. Unlike Kimi/Grok, whose ACP connection is the ONLY
-  // way CCC ever drives them (so the engine name alone is a truthful
-  // signal), Devin's canonical transport is the one-shot CLI and the ACP
-  // path only exists when the opt-in is on and the `devin` binary
-  // resolves. `acpReady` carries that signal (conversation row field
-  // `devin_acp_ready`, mirrored onto currentSession as `acp_steer_ready`);
-  // the `devin acp` connection itself is attached lazily by the first
-  // steer, and a failed attach degrades to the durable queue server-side.
+  // Devin is a partial exception: a live ACP send/steer path exists
+  // server-side (acp.py's _devin_acp_try_steer, the same transport Devin
+  // Desktop uses). Unlike Kimi/Grok, whose ACP connection is the ONLY way
+  // CCC ever drives them (so the engine name alone is a truthful signal),
+  // Devin's canonical transport is the one-shot CLI and the ACP path only
+  // exists when the `devin` binary resolves. `acpReady` carries that
+  // signal (conversation row field `devin_acp_ready`, mirrored onto
+  // currentSession as `acp_steer_ready`); the `devin acp` connection
+  // itself is attached lazily by the first send, and a failed attach
+  // (e.g. the session is open in Devin Desktop) degrades to the durable
+  // queue server-side.
   function sessionSupportsQueuedSteer(source, acpReady) {
     if (source === 'codex' || source === 'kimi' || source === 'grok') return true;
     if (source === 'devin-cli') return !!acpReady;

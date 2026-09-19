@@ -844,6 +844,26 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         result = _compact_result(result)
         result.setdefault("engine", "kimi")
         return result
+    if engine == "devin" and _core._is_devin_cli_session(sid):
+        # Devin advertises `compact` as a builtin availableCommand — the ACP
+        # server intercepts it before the model, same shape as Kimi's
+        # adapter. Route it through the live `devin acp` connection
+        # (session/load attaches on demand); a busy or unloaded session
+        # degrades to the durable devin queue, which redelivers /compact as
+        # the next prompt when the turn ends.
+        raw_id = _core._devin_cli_raw_id(sid)
+        cwd = _core.find_session_cwd(sid) or ""
+        if cwd:
+            with _core._ACP_LOCK:
+                _core._acp_session("devin", raw_id, create=True, cwd=cwd)
+        result = _core._acp_prompt("devin", raw_id, "/compact")
+        if not result.get("ok"):
+            queued = _core._queue_devin_steer(sid, "/compact")
+            queued.setdefault("engine", "devin")
+            return queued
+        result = _compact_result(result)
+        result.setdefault("engine", "devin")
+        return result
     if engine != "claude":
         return {
             "ok": False,

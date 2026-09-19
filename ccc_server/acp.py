@@ -83,22 +83,28 @@ _ACP_HARNESSES = {
     },
     # Devin (Cognition) CLI's `devin acp` subcommand runs it as an ACP server
     # over stdio (docs.devin.ai/cli/reference/commands) -- the same protocol
-    # family as Kimi/Grok above. This registration only lights up the
-    # generic connection-lifecycle machinery (handshake, event/transcript
-    # plumbing, terminal/*); it does NOT change Devin's existing one-shot
-    # `devin -p` / `devin --resume -p` flow in engines.py, which remains the
-    # only path CCC uses to spawn/resume Devin CLI sessions today. See
-    # _devin_acp_try_steer's docstring for the one place this harness is
-    # actually exercised, and why that is opt-in and defensive: nobody has
-    # run `devin acp` against this codebase, so its wire behavior (in
-    # particular whether session/load|resume accepts a session id minted by
-    # the one-shot CLI) is unverified.
+    # family as Kimi/Grok above, and the same transport the Devin Desktop /
+    # Devin - Next apps use for every session they drive. Verified live
+    # (2026-09): initialize advertises loadSession + session/list +
+    # session/delete; authenticate resolves instantly when the machine is
+    # already signed in; session/load attaches to ANY session in the shared
+    # sessions.db (including `devin -p` ones) and replays its history;
+    # session/prompt then runs real turns. A session open in another ACP
+    # host (e.g. Devin Desktop) fails load with -32015 session_locked --
+    # the caller falls back to the durable queue in that case.
+    #
+    # Unlike kimi/grok, Devin's ACP server takes NO credentials from the
+    # environment or the on-disk CLI store: the host must call
+    # `authenticate` per connection ("devin-browser" -- instant when the
+    # machine holds a valid Devin login, otherwise it drives the browser
+    # sign-in). `auth_method` makes _acp_ensure run that handshake.
     "devin": {
         "label": "Devin",
         "bin_env": "CCC_DEVIN_ACP_BIN",
         "bin_names": ("devin",),
         "acp_args": ("acp",),
         "kill_env": "CCC_DEVIN_ACP",
+        "auth_method": "devin-browser",
     },
 }
 
@@ -112,10 +118,8 @@ _ACP_HARNESSES = {
 # connection the worker must own to avoid a second agent process). Devin's
 # canonical transport is still the one-shot CLI, which already runs
 # wherever the request lands (dashboard or worker) with no control-plane
-# hop -- adding Devin here would require worker-side engine.execute/query
-# dispatch support for a "devin" ACP verb set that has never been built or
-# exercised. Keeping it dashboard/worker-local (same posture as "glm")
-# avoids introducing an unverified routing path for an unverified protocol.
+# hop, and its ACP connection is attach-on-demand: whichever process runs
+# the first steer/load owns it, exactly like "glm".
 _ACP_WORKER_HARNESSES = frozenset({"kimi", "grok"})
 
 _ACP_LOCK = threading.Condition()
@@ -558,60 +562,45 @@ def _devin_acp_session_loaded(sid):
         return state is not None and state.get("loaded_conn") == id(conn)
 
 
-def _devin_acp_steer_enabled():
-    """Opt-in gate for the experimental Devin ACP live-steer path.
-
-    Kimi/Grok's ACP wiring has been exercised against their real CLIs.
-    Devin's has not: the `devin` binary is not installed anywhere this
-    integration has been developed or tested, so nothing here has ever
-    completed a live `devin acp` handshake, let alone confirmed that
-    session/load|resume accepts a session id minted by the one-shot CLI
-    (`devin --resume <id> -p ...`) without side effects on that session.
-    Default OFF keeps the feature fully inert (byte-identical behavior to
-    before this harness existed) until an operator with the binary
-    installed opts in with CCC_DEVIN_ACP_STEER=1 to actually exercise it.
-    """
-    return os.environ.get("CCC_DEVIN_ACP_STEER", "0").strip().lower() in ("1", "true", "yes")
-
-
 def _devin_acp_steer_capable():
-    """True when a Devin ACP steer could be ATTEMPTED at all right now.
+    """True when a Devin ACP send/steer could be ATTEMPTED at all right now.
 
     Deliberately broader than _devin_acp_session_loaded: the `devin acp`
-    connection is created lazily by the first steer itself
+    connection is created lazily by the first prompt itself
     (_devin_acp_try_steer -> _acp_prompt -> _acp_ensure_session_loaded),
     and nothing else in CCC ever attaches one — so gating the UI on an
     already-loaded connection could never open for any session. This
-    checks only the environment: opt-in flag on, harness not disabled,
-    `devin` binary resolvable. A session that then fails session/load
-    still degrades to the durable queue inside _devin_acp_try_steer.
+    checks only the environment: harness not disabled, `devin` binary
+    resolvable. A session that then fails session/load (e.g. -32015
+    session_locked while it is open in Devin Desktop) still degrades to
+    the durable queue inside _devin_acp_try_steer.
     """
-    if not _devin_acp_steer_enabled():
-        return False
     if not _core._acp_harness_enabled("devin"):
         return False
     return bool(_core._acp_resolve_bin("devin").get("available"))
 
 
-def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, idempotency_key=None):
-    """Best-effort live steer of a Devin CLI session over `devin acp`.
+def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, mode="steer",
+                         idempotency_key=None):
+    """Best-effort live delivery to a Devin CLI session over `devin acp`.
 
     Returns None whenever the ACP path was not attempted, or did not reach a
     conclusive success -- the caller (_inject_text_into_session_router) MUST
-    treat None as "fall back to the existing one-shot durable queue exactly
-    as before this harness existed" (_queue_devin_steer). Only a genuine
-    `ok: True` prompt result is returned, so a partially-working or
-    misbehaving ACP path degrades to today's behavior instead of surfacing
-    a confusing new failure mode to the user.
+    treat None as "fall back to the existing one-shot durable queue"
+    (_queue_devin_steer / _queue_devin_resume_input). Only a genuine
+    `ok: True` prompt result is returned, so a partially-working ACP path
+    degrades to the queue instead of surfacing a confusing new failure mode.
 
-    Every step here — connecting to `devin acp`, and (inside _acp_prompt's
-    own _acp_ensure_session_loaded call) attaching to an EXISTING
-    devincli- session via session/load or session/resume — is unverified
-    without the real binary (see _devin_acp_steer_enabled). This function is
-    therefore wrapped end to end in a broad except so any surprise (a wire
-    format that doesn't match Kimi/Grok's, a hang that raises on the
-    calling thread, an unexpected exception shape) cannot break the
-    existing queue path it sits in front of.
+    mode="steer": a busy session is interrupted (session/cancel) and the
+    text resent — the same primitive the Esc button uses.
+
+    mode="send": a single prompt attempt; a busy session returns None so
+    the caller's durable queue delivers when the current turn ends.
+
+    Verified against the real `devin acp` wire (2026-09): authenticate ->
+    session/load on any sessions.db id -> session/prompt works end to end.
+    The broad except stays regardless — a surprise in the wire path must
+    never break the queue fallback it sits in front of.
     """
     if not raw_id or not text:
         return None
@@ -622,9 +611,9 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, idempotency_key=None)
             with _core._ACP_LOCK:
                 _core._acp_session("devin", raw_id, create=True, cwd=cwd)
         result = _core._acp_prompt(
-            "devin", raw_id, text, mode="steer", idempotency_key=idempotency_key,
+            "devin", raw_id, text, mode=mode, idempotency_key=idempotency_key,
         )
-        if result.get("code") == "busy":
+        if mode == "steer" and result.get("code") == "busy":
             # Same cancel-then-resend primitive as the generic kimi/grok
             # steer path in _inject_text_into_session_router: ACP has no
             # in-place mid-turn steer, but session/cancel interrupts the
@@ -1286,9 +1275,10 @@ def _acp_handle_session_update(harness, sid, update):
         state = _core._acp_session(harness, sid, create=True)
         # CCC-941: only content-bearing updates count as "activity" — bumping
         # this on every kind (incl. available_commands_update/
-        # config_option_update, which the harness can resend on reconnect
-        # with no real turn happening) made old idle sessions show "1h ago".
-        if kind not in ("available_commands_update", "config_option_update"):
+        # config_option_update/session_info_update, which the harness can
+        # resend on reconnect with no real turn happening) made old idle
+        # sessions show "1h ago".
+        if kind not in ("available_commands_update", "config_option_update", "session_info_update"):
             state["updated_at"] = time.time()
 
         # session/load history replay: accumulate per speaker/kind and finalize
@@ -1467,6 +1457,13 @@ def _acp_handle_session_update(harness, sid, update):
 
         if kind == "current_mode_update":
             state["mode"] = update.get("currentModeId")
+            return
+
+        if kind == "session_info_update":
+            # Devin emits this (title, share state) on load and on rename.
+            title = update.get("title")
+            if isinstance(title, str) and title:
+                state["title"] = title
             return
 
         if kind == "usage_update":
@@ -1960,6 +1957,49 @@ def _acp_reader(harness, conn):
             _core._ACP_LOCK.notify_all()
 
 
+def _acp_authenticate(harness, conn):
+    """Drive the ACP ``authenticate`` handshake for harnesses whose agent
+    takes credentials only from the ACP host (devin's ``devin-browser``).
+
+    Idempotent per connection: a successful call flips
+    ``conn["authenticated"]`` and is never repeated. Failures are retried no
+    more than once per 30s so a browser sign-in the user completes late
+    self-heals on the next ensure. Returns True when no auth is needed or
+    auth succeeded; False while still unauthenticated (the connection stays
+    initialized — session calls then fail with a clean -32000 auth_required
+    that callers surface instead of a dead-transport error)."""
+    cfg = _core._ACP_HARNESSES.get(harness) or {}
+    method = cfg.get("auth_method")
+    if not method or conn.get("authenticated"):
+        return True
+    now = time.monotonic()
+    if now < conn.get("auth_retry_at", 0):
+        return False
+    conn["auth_retry_at"] = now + 30
+    method_id = method if isinstance(method, str) else None
+    if not method_id:
+        methods = conn.get("auth_methods") or []
+        method_id = (methods[0] or {}).get("id") if methods else None
+    if not method_id:
+        # Nothing advertised to authenticate against — treat as done.
+        conn["authenticated"] = True
+        return True
+    resp = _acp_request(harness, "authenticate", {"methodId": method_id}, timeout=180)
+    if resp.get("ok"):
+        conn["authenticated"] = True
+        _core._ACP_ENSURE_ERROR.pop(harness, None)
+        return True
+    conn["authenticated"] = False
+    err = resp.get("error") or "authentication required"
+    _core._ACP_ENSURE_ERROR[harness] = (
+        f"{cfg.get('label', harness)} ACP login failed or is still pending: {err}"
+    )
+    _core._log_activity(
+        "acp", "AUTH", f"harness={harness} method={method_id} error=\"{err}\"",
+    )
+    return False
+
+
 def _acp_ensure(harness):
     """Lazily start + initialize the harness's ACP subprocess."""
     cfg = _core._ACP_HARNESSES.get(harness)
@@ -1967,15 +2007,24 @@ def _acp_ensure(harness):
         return None
     with _core._ACP_LOCK:
         _core._acp_load_state(harness)
+        ready = None
         while True:
             conn = _core._ACP_CONNS.get(harness)
             if conn and conn.get("initialized") and conn["transport"].alive():
-                return conn
+                ready = conn
+                break
             if not (conn or {}).get("initializing"):
                 break
             _core._ACP_LOCK.wait(0.5)
-        conn = {"initializing": True, "next_id": 1, "caps": {}}
-        _core._ACP_CONNS[harness] = conn
+        if ready is None:
+            conn = {"initializing": True, "next_id": 1, "caps": {}}
+            _core._ACP_CONNS[harness] = conn
+    if ready is not None:
+        # Authenticate outside the lock: devin's devin-browser flow can
+        # block on a real browser sign-in, and _acp_request itself takes
+        # no lock anyway.
+        _acp_authenticate(harness, ready)
+        return ready
 
     resolved = _core._acp_resolve_bin(harness)
     proc = None
@@ -2026,6 +2075,7 @@ def _acp_ensure(harness):
     response = _acp_wait_response(harness, req_id, timeout=10) if req_id is not None else None
     result = (response or {}).get("result")
     if isinstance(result, dict):
+        initialized = False
         with _core._ACP_LOCK:
             if _core._ACP_CONNS.get(harness) is conn and transport.alive():
                 conn["caps"] = result.get("agentCapabilities") or {}
@@ -2035,7 +2085,12 @@ def _acp_ensure(harness):
                 conn["initializing"] = False
                 _core._ACP_ENSURE_ERROR.pop(harness, None)
                 _core._ACP_LOCK.notify_all()
-                return conn
+                initialized = True
+        if initialized:
+            # Host-driven credential handshake (devin's devin-browser).
+            # Runs outside the lock — it can block on a browser sign-in.
+            _acp_authenticate(harness, conn)
+            return conn
     transport.close()
     with _core._ACP_LOCK:
         _core._ACP_ENSURE_ERROR[harness] = (
@@ -2387,7 +2442,10 @@ def _acp_load(harness, sid, cwd):
     # (observed: a Grok internal TypeError string). One quiet retry after a
     # short beat covers the common case instead of surfacing a raw crash
     # message the user has to notice and manually resend around (CCC-853).
-    if not resp.get("ok") and not resp.get("auth_required"):
+    # Devin's -32015 session_locked is exempt: the session is open in
+    # another ACP host (e.g. Devin Desktop) and a 750ms-later retry can
+    # never succeed — the caller's queue fallback owns that case.
+    if not resp.get("ok") and not resp.get("auth_required") and resp.get("code") != -32015:
         time.sleep(0.75)
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],

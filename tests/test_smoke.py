@@ -19641,7 +19641,9 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
              ), \
              mock.patch.object(self.server, "_write_fifo_line_once", return_value=False), \
              mock.patch.object(self.server, "resume_session_headless") as resume:
-            result = self.server._inject_text_into_session("sid-live-1", "follow up")
+            result = self.server._inject_text_into_session(
+                "sid-live-fifo-write-fails", "follow up"
+            )
         self.assertTrue(result.get("foreign_live_writer"), result)
         resume.assert_not_called()
 

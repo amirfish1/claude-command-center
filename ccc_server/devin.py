@@ -2109,10 +2109,11 @@ def _find_devin_cli_conversations_locked(
 
     rows = []
     raw_id_to_con = {}
-    # One probe for the whole scan: whether the experimental Devin ACP steer
-    # path (CCC_DEVIN_ACP_STEER) could be attempted at all. Not per-session —
-    # the `devin acp` connection is attached lazily by the first steer, so a
-    # per-session "is it loaded yet" gate could never turn true for anyone.
+    # One probe for the whole scan: whether the Devin ACP delivery path
+    # (acp.py's _devin_acp_try_steer) could be attempted at all. Not
+    # per-session — the `devin acp` connection is attached lazily by the
+    # first send/steer, so a per-session "is it loaded yet" gate could
+    # never turn true for anyone.
     try:
         devin_steer_capable = bool(_core._devin_acp_steer_capable())
     except Exception:
@@ -2212,13 +2213,13 @@ def _find_devin_cli_conversations_locked(
                 "session_id": sid,
                 "source": "devin-cli",
                 "engine": "devin",
-                # True when the experimental Steer path
-                # (CCC_DEVIN_ACP_STEER, see acp.py's _devin_acp_try_steer)
-                # could actually be attempted: the opt-in is on and the
+                # True when the live ACP delivery path (acp.py's
+                # _devin_acp_try_steer) could actually be attempted: the
                 # `devin` binary resolves. The `devin acp` connection is
-                # attached lazily by the first steer click, so a session
+                # attached lazily by the first send/steer, so a session
                 # that has never been steered is still "ready" — and a
-                # session whose attach fails degrades to the durable queue
+                # session whose attach fails (e.g. session_locked while
+                # open in Devin Desktop) degrades to the durable queue
                 # server-side rather than silently no-oping.
                 "devin_acp_ready": devin_steer_capable,
                 "timestamp": "",

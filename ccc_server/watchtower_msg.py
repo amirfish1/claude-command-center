@@ -2093,22 +2093,32 @@ def _inject_text_into_session_router(
         # `devin --resume` cannot attach to it; retrying only duplicates the
         # pending message when the CLI rejects the parallel session start.
         raw_id = _core._devin_cli_raw_id(session_id)
-        if mode == "steer":
-            # Best-effort live steer over `devin acp` (an ACP harness the
-            # same shape as Kimi/Grok's, registered in acp.py). Off by
-            # default and fails closed at every step -- see
-            # _devin_acp_try_steer's docstring for exactly what is and is
-            # not verified. A None result means "not attempted or not
-            # conclusive"; the one-shot queue below is untouched in that case.
+        live_spawn = _core._find_live_spawn_entry_for_session(session_id)
+        # A session lock held by a live pid that is neither a CCC `devin -p`
+        # spawn nor our own ACP connection means another ACP host (Devin
+        # Desktop / Next, a sibling CCC) owns the writer slot.
+        external_owner = (
+            _core._devin_cli_session_live(raw_id)
+            and live_spawn is None
+            and not _core._devin_acp_session_loaded(raw_id)
+        )
+        # Live delivery over `devin acp` — the same transport Devin Desktop
+        # uses — attempted for BOTH sends and steers whenever the binary
+        # resolves. Skipped entirely while another writer holds the session
+        # lock: a load against a locked session fails -32015 anyway, so
+        # attempting it would only pay a subprocess spawn for a guaranteed
+        # failure. A None result also means "not attempted or not
+        # conclusive" (binary missing, auth pending, transport failure);
+        # the durable queue below is untouched in that case and still owns
+        # delivery.
+        if live_spawn is None and not external_owner:
             acp_result = _core._devin_acp_try_steer(
-                session_id, raw_id, cwd, text, idempotency_key=idempotency_key,
+                session_id, raw_id, cwd, text,
+                mode="steer" if mode == "steer" else "send",
+                idempotency_key=idempotency_key,
             )
             if acp_result is not None:
                 return acp_result
-        live_spawn = _core._find_live_spawn_entry_for_session(session_id)
-        external_owner = (
-            _core._devin_cli_session_live(raw_id) and live_spawn is None
-        )
         if mode == "steer":
             _core._queue_devin_steer(session_id, text)
         else:

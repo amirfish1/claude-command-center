@@ -1,11 +1,14 @@
-"""Devin ACP harness registration and defensive live-steer wiring.
+"""Devin ACP harness registration and live-send/steer wiring.
 
-Devin's ACP path (``ccc_server/acp.py``'s ``_devin_acp_try_steer``) has never
-been exercised against a live ``devin acp`` process -- the binary is not
-installed anywhere this integration was developed. Every ACP primitive is
-mocked here; these tests verify the Python *logic* (opt-in gating, fail-closed
-behavior on any missing/erroring dependency, and wiring into the message
-dispatcher) -- they do not and cannot verify the actual wire protocol.
+``_devin_acp_try_steer`` (``ccc_server/acp.py``) is the normal delivery path
+for devincli- sessions: sends and steers both go over ``devin acp`` -- the
+same transport Devin Desktop / Devin - Next use -- and only an inconclusive
+result falls back to the durable one-shot queue. The wire side has been
+verified against a real ``devin acp`` process (initialize -> authenticate
+-> session/list -> session/load -> session/prompt); these tests mock every
+ACP primitive and verify the Python *logic*: capability gating, fail-closed
+behavior, busy/cancel/retry for steer, and ownership checks that keep CCC
+from spawning an ACP connection it cannot use.
 """
 import importlib
 from unittest import mock
@@ -27,76 +30,43 @@ def test_devin_harness_is_registered():
     assert cfg["bin_names"] == ("devin",)
     assert cfg["acp_args"] == ("acp",)
     assert cfg["kill_env"] == "CCC_DEVIN_ACP"
+    # Devin's ACP server takes credentials only from the ACP host, so the
+    # harness must advertise the browser auth method for _acp_ensure to run
+    # the authenticate handshake after initialize.
+    assert cfg["auth_method"] == "devin-browser"
     # Devin is deliberately NOT worker-routed (see the comment above
-    # _ACP_WORKER_HARNESSES in acp.py): its canonical transport stays the
-    # one-shot CLI, which already runs dashboard/worker-local with no
-    # control-plane hop, unlike Kimi/Grok whose ACP connection is their
-    # only transport.
+    # _ACP_WORKER_HARNESSES in acp.py): its ACP connection is
+    # attach-on-demand, owned by whichever process first steers/loads --
+    # the same posture as "glm".
     assert "devin" not in server._ACP_WORKER_HARNESSES
     assert server._acp_harness_enabled("devin") is True
 
 
 # ---------------------------------------------------------------------------
-# Opt-in feature flag
+# _devin_acp_steer_capable -- the "could a delivery be attempted" UI signal
 # ---------------------------------------------------------------------------
 
-def test_devin_acp_steer_disabled_by_default(monkeypatch):
+def test_devin_acp_steer_capable_true_when_bin_resolves():
+    """No flag, no existing connection required — the first prompt attaches
+    the connection lazily, so capability must depend only on the harness
+    being enabled and the devin binary resolving."""
     server = _server()
-    monkeypatch.delenv("CCC_DEVIN_ACP_STEER", raising=False)
-    assert server._devin_acp_steer_enabled() is False
-
-
-@pytest.mark.parametrize("value", ["1", "true", "True", "yes", "YES"])
-def test_devin_acp_steer_enabled_via_env(monkeypatch, value):
-    server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", value)
-    assert server._devin_acp_steer_enabled() is True
-
-
-@pytest.mark.parametrize("value", ["0", "false", "no", ""])
-def test_devin_acp_steer_stays_disabled_for_falsy_values(monkeypatch, value):
-    server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", value)
-    assert server._devin_acp_steer_enabled() is False
-
-
-# ---------------------------------------------------------------------------
-# _devin_acp_steer_capable -- the "could a steer be attempted" UI signal
-# ---------------------------------------------------------------------------
-
-def test_devin_acp_steer_capable_disabled_by_default(monkeypatch):
-    """With the opt-in flag off the row field must stay false — no Steer
-    affordance, and _devin_acp_try_steer would decline anyway."""
-    server = _server()
-    monkeypatch.delenv("CCC_DEVIN_ACP_STEER", raising=False)
-    with mock.patch.object(server, "_acp_resolve_bin") as resolve_bin:
-        assert server._devin_acp_steer_capable() is False
-    resolve_bin.assert_not_called()
-
-
-def test_devin_acp_steer_capable_true_when_enabled_and_bin_resolves(monkeypatch):
-    """No existing connection is required — the first steer attaches it
-    lazily, so capability must not depend on _devin_acp_session_loaded."""
-    server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
          mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True, "bin": "/usr/bin/devin"}), \
          mock.patch.object(server, "_devin_acp_session_loaded", return_value=False):
         assert server._devin_acp_steer_capable() is True
 
 
-def test_devin_acp_steer_capable_false_when_harness_disabled(monkeypatch):
+def test_devin_acp_steer_capable_false_when_harness_disabled():
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     with mock.patch.object(server, "_acp_harness_enabled", return_value=False), \
          mock.patch.object(server, "_acp_resolve_bin") as resolve_bin:
         assert server._devin_acp_steer_capable() is False
     resolve_bin.assert_not_called()
 
 
-def test_devin_acp_steer_capable_false_when_bin_unavailable(monkeypatch):
+def test_devin_acp_steer_capable_false_when_bin_unavailable():
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
          mock.patch.object(server, "_acp_resolve_bin", return_value={"available": False}):
         assert server._devin_acp_steer_capable() is False
@@ -112,22 +82,8 @@ def test_devin_acp_try_steer_requires_raw_id_and_text():
     assert server._devin_acp_try_steer("sid", "raw", None, "") is None
 
 
-def test_devin_acp_try_steer_noop_when_feature_disabled(monkeypatch):
-    """Default production state: the opt-in flag is off, so the ACP path
-    must never even probe the binary or call _acp_prompt."""
+def test_devin_acp_try_steer_noop_when_harness_disabled():
     server = _server()
-    monkeypatch.delenv("CCC_DEVIN_ACP_STEER", raising=False)
-    with mock.patch.object(server, "_acp_resolve_bin") as resolve_bin, \
-         mock.patch.object(server, "_acp_prompt") as prompt:
-        result = server._devin_acp_try_steer("devincli-x", "raw-1", None, "steer this")
-    assert result is None
-    resolve_bin.assert_not_called()
-    prompt.assert_not_called()
-
-
-def test_devin_acp_try_steer_noop_when_harness_disabled(monkeypatch):
-    server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     with mock.patch.object(server, "_acp_harness_enabled", return_value=False), \
          mock.patch.object(server, "_acp_prompt") as prompt:
         result = server._devin_acp_try_steer("devincli-x", "raw-1", None, "steer this")
@@ -135,9 +91,8 @@ def test_devin_acp_try_steer_noop_when_harness_disabled(monkeypatch):
     prompt.assert_not_called()
 
 
-def test_devin_acp_try_steer_noop_when_bin_unavailable(monkeypatch):
+def test_devin_acp_try_steer_noop_when_bin_unavailable():
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
          mock.patch.object(server, "_acp_resolve_bin", return_value={"available": False}), \
          mock.patch.object(server, "_acp_prompt") as prompt:
@@ -146,12 +101,11 @@ def test_devin_acp_try_steer_noop_when_bin_unavailable(monkeypatch):
     prompt.assert_not_called()
 
 
-def test_devin_acp_try_steer_swallows_exceptions(monkeypatch):
+def test_devin_acp_try_steer_swallows_exceptions():
     """Any surprise (unexpected wire shape, hang that raises) degrades to
     None (fall back to the queue) instead of propagating out of the
     dispatcher and surfacing a new failure mode."""
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
          mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
          mock.patch.object(server, "_acp_prompt", side_effect=RuntimeError("boom")), \
@@ -166,9 +120,8 @@ def test_devin_acp_try_steer_swallows_exceptions(monkeypatch):
 # _devin_acp_try_steer -- happy path and busy/cancel/retry, all mocked
 # ---------------------------------------------------------------------------
 
-def test_devin_acp_try_steer_happy_path(monkeypatch):
+def test_devin_acp_try_steer_happy_path():
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     ok_result = {"ok": True, "via": "acp-prompt", "harness": "devin", "session_id": "raw-1"}
     with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
          mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True, "bin": "/usr/bin/devin"}), \
@@ -182,11 +135,27 @@ def test_devin_acp_try_steer_happy_path(monkeypatch):
     )
 
 
-def test_devin_acp_try_steer_only_a_conclusive_ok_is_returned(monkeypatch):
+def test_devin_acp_try_steer_send_mode_passes_send_through():
+    """mode="send" forwards to _acp_prompt unchanged -- a plain follow-up
+    rides the same live pipe a steer would."""
+    server = _server()
+    ok_result = {"ok": True, "via": "acp-prompt", "harness": "devin"}
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
+         mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
+         mock.patch.object(server, "_acp_prompt", return_value=ok_result) as prompt:
+        result = server._devin_acp_try_steer(
+            "devincli-x", "raw-1", None, "follow up", mode="send",
+        )
+    assert result == ok_result
+    prompt.assert_called_once_with(
+        "devin", "raw-1", "follow up", mode="send", idempotency_key=None,
+    )
+
+
+def test_devin_acp_try_steer_only_a_conclusive_ok_is_returned():
     """A non-busy failure (not just busy) must also fall back to the queue,
     not surface as a new error to the caller."""
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
          mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
          mock.patch.object(server, "_acp_prompt", return_value={"ok": False, "error": "empty prompt"}):
@@ -194,9 +163,25 @@ def test_devin_acp_try_steer_only_a_conclusive_ok_is_returned(monkeypatch):
     assert result is None
 
 
-def test_devin_acp_try_steer_cancels_and_retries_on_busy(monkeypatch):
+def test_devin_acp_try_steer_send_busy_returns_none_without_cancelling():
+    """mode="send" on a busy session must NOT interrupt the running turn --
+    the durable queue delivers the text after the turn ends."""
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
+    busy = {"ok": False, "code": "busy", "error": "turn already in progress"}
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
+         mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
+         mock.patch.object(server, "_acp_prompt", return_value=busy) as prompt, \
+         mock.patch.object(server, "_acp_cancel") as cancel:
+        result = server._devin_acp_try_steer(
+            "devincli-x", "raw-1", None, "follow up", mode="send",
+        )
+    assert result is None
+    prompt.assert_called_once()
+    cancel.assert_not_called()
+
+
+def test_devin_acp_try_steer_cancels_and_retries_on_busy():
+    server = _server()
     busy = {"ok": False, "code": "busy", "error": "turn already in progress"}
     retried_ok = {"ok": True, "via": "acp-prompt", "harness": "devin"}
     prompt_calls = []
@@ -219,9 +204,8 @@ def test_devin_acp_try_steer_cancels_and_retries_on_busy(monkeypatch):
     assert prompt_calls[1][4] == "inject:1:steer-retry"
 
 
-def test_devin_acp_try_steer_gives_up_when_cancel_fails(monkeypatch):
+def test_devin_acp_try_steer_gives_up_when_cancel_fails():
     server = _server()
-    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
     busy = {"ok": False, "code": "busy"}
     with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
          mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
@@ -233,7 +217,7 @@ def test_devin_acp_try_steer_gives_up_when_cancel_fails(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _devin_acp_session_loaded -- per-session UI signal
+# _devin_acp_session_loaded -- per-session UI signal + ownership check
 # ---------------------------------------------------------------------------
 
 def test_devin_acp_session_loaded_false_when_no_connection(monkeypatch):
@@ -283,31 +267,42 @@ def _devin_dispatch_common_mocks(server, sid):
             "live": False, "status": None, "kind": None,
             "tty": None, "terminal_app": None,
         }),
+        mock.patch.object(server, "_find_live_spawn_entry_for_session", return_value=None),
+        mock.patch.object(server, "_devin_cli_session_live", return_value=False),
+        mock.patch.object(server, "_devin_acp_session_loaded", return_value=False),
     ]
 
 
-def test_devin_steer_falls_back_to_queue_when_acp_declines(monkeypatch):
-    """No-regression guarantee: with CCC_DEVIN_ACP_STEER unset (today's
-    production default), mode="steer" on a devincli- session must still land
-    in exactly the same one-shot durable queue as before this harness
-    existed. This exercises the REAL _devin_acp_try_steer (not mocked) so a
-    future change to its default-off gate would be caught here."""
+def _enter_stack(stack):
+    for cm in stack:
+        cm.__enter__()
+
+
+def _exit_stack(stack):
+    for cm in reversed(stack):
+        cm.__exit__(None, None, None)
+
+
+def test_devin_steer_falls_back_to_queue_when_acp_declines():
+    """No-regression guarantee: when the ACP path returns None (binary
+    missing, auth pending, transport failure), mode="steer" on a devincli-
+    session must still land in exactly the same durable queue as before
+    this transport existed."""
     server = _server()
-    monkeypatch.delenv("CCC_DEVIN_ACP_STEER", raising=False)
     sid = "devincli-steer-fallback-test"
+    stack = _devin_dispatch_common_mocks(server, sid) + [
+        mock.patch.object(server, "_devin_acp_try_steer", return_value=None),
+    ]
     with mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
          mock.patch.object(server, "_queue_devin_steer", return_value=True) as queue_steer, \
          mock.patch.object(server, "_note_pending_queued") as note_queued, \
          mock.patch.object(server, "resume_session_devin") as resume, \
          mock.patch.object(server, "_control_plane_engine_call") as cp:
-        stack = _devin_dispatch_common_mocks(server, sid)
-        for cm in stack:
-            cm.__enter__()
+        _enter_stack(stack)
         try:
             result = server._inject_text_into_session(sid, "steer text", mode="steer")
         finally:
-            for cm in reversed(stack):
-                cm.__exit__(None, None, None)
+            _exit_stack(stack)
 
     assert result["ok"] is True
     assert result["via"] == "devin-resume-queued"
@@ -318,52 +313,146 @@ def test_devin_steer_falls_back_to_queue_when_acp_declines(monkeypatch):
     note_queued.assert_called_once()
 
 
-def test_devin_steer_returns_acp_result_when_available(monkeypatch):
+def test_devin_steer_returns_acp_result_when_available():
     """When _devin_acp_try_steer reaches a conclusive success, the dispatcher
     must return it directly and must NOT also enqueue the one-shot fallback
     (that would double-send)."""
     server = _server()
     sid = "devincli-steer-acp-test"
     acp_ok = {"ok": True, "via": "acp-prompt", "harness": "devin", "session_id": "steer-acp-test"}
-    stack = _devin_dispatch_common_mocks(server, sid) + [
-        mock.patch.object(server, "_devin_acp_try_steer", return_value=acp_ok),
-    ]
-    with mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
+    stack = _devin_dispatch_common_mocks(server, sid)
+    with mock.patch.object(server, "_devin_acp_try_steer", return_value=acp_ok) as acp_try, \
+         mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
          mock.patch.object(server, "_queue_devin_steer") as queue_steer, \
          mock.patch.object(server, "_save_pending_inputs") as save:
-        for cm in stack:
-            cm.__enter__()
+        _enter_stack(stack)
         try:
             result = server._inject_text_into_session(sid, "steer text", mode="steer")
         finally:
-            for cm in reversed(stack):
-                cm.__exit__(None, None, None)
+            _exit_stack(stack)
 
     assert result["ok"] is True
     assert result["via"] == "acp-prompt"
+    acp_try.assert_called_once()
+    assert acp_try.call_args.kwargs["mode"] == "steer"
     queue_steer.assert_not_called()
     pump.assert_not_called()
 
 
-def test_devin_non_steer_send_never_calls_acp_try_steer():
-    """A plain follow-up (mode="send", the default) must not even consult the
-    ACP path -- only mode="steer" does, matching Kimi/Grok's steer-only
-    cancel/retry behavior."""
+def test_devin_send_attempts_acp_with_send_mode_then_falls_back():
+    """A plain follow-up (mode="send", the default) goes over ACP too --
+    same live pipe a steer would use -- and only an inconclusive attempt
+    falls back to the durable resume queue."""
     server = _server()
     sid = "devincli-plain-send-test"
-    acp_try_patch = mock.patch.object(server, "_devin_acp_try_steer")
-    stack = _devin_dispatch_common_mocks(server, sid) + [acp_try_patch]
-    with mock.patch.object(server, "_pump_devin_resume_queue"), \
+    stack = _devin_dispatch_common_mocks(server, sid)
+    with mock.patch.object(server, "_devin_acp_try_steer", return_value=None) as acp_try, \
+         mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
+         mock.patch.object(server, "_queue_devin_resume_input") as queue_resume, \
          mock.patch.object(server, "_save_pending_inputs"):
-        acp_try = None
-        for cm in stack:
-            entered = cm.__enter__()
-            if cm is acp_try_patch:
-                acp_try = entered
+        _enter_stack(stack)
         try:
-            server._inject_text_into_session(sid, "follow up")
+            result = server._inject_text_into_session(sid, "follow up")
         finally:
-            for cm in reversed(stack):
-                cm.__exit__(None, None, None)
+            _exit_stack(stack)
+
+    acp_try.assert_called_once()
+    assert acp_try.call_args.kwargs["mode"] == "send"
+    assert result["ok"] is True
+    assert result["via"] == "devin-resume-queued"
+    queue_resume.assert_called_once_with(sid, "follow up")
+    pump.assert_called_once_with(sid)
+
+
+def test_devin_send_returns_acp_result_when_available():
+    server = _server()
+    sid = "devincli-send-acp-test"
+    acp_ok = {"ok": True, "via": "acp-prompt", "harness": "devin"}
+    stack = _devin_dispatch_common_mocks(server, sid)
+    with mock.patch.object(server, "_devin_acp_try_steer", return_value=acp_ok) as acp_try, \
+         mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
+         mock.patch.object(server, "_queue_devin_resume_input") as queue_resume:
+        _enter_stack(stack)
+        try:
+            result = server._inject_text_into_session(sid, "follow up")
+        finally:
+            _exit_stack(stack)
+
+    assert result["ok"] is True
+    assert result["via"] == "acp-prompt"
+    acp_try.assert_called_once()
+    assert acp_try.call_args.kwargs["mode"] == "send"
+    queue_resume.assert_not_called()
+    pump.assert_not_called()
+
+
+def test_devin_send_skips_acp_when_external_owner_holds_lock():
+    """A session lock held by a live foreign writer (Devin Desktop / Next,
+    a sibling CCC's ACP conn) means session/load would fail -32015 -- the
+    dispatcher must go straight to the durable queue without spawning."""
+    server = _server()
+    sid = "devincli-send-external-owner-test"
+    stack = _devin_dispatch_common_mocks(server, sid)
+    _enter_stack(stack)
+    try:
+        with mock.patch.object(server, "_devin_acp_try_steer") as acp_try, \
+             mock.patch.object(server, "_devin_cli_session_live", return_value=True), \
+             mock.patch.object(server, "_pump_devin_resume_queue"), \
+             mock.patch.object(server, "_queue_devin_resume_input"), \
+             mock.patch.object(server, "_note_pending_queued"):
+            result = server._inject_text_into_session(sid, "follow up")
+    finally:
+        _exit_stack(stack)
 
     acp_try.assert_not_called()
+    assert result["ok"] is True
+    assert result["external_devin_owner"] is True
+
+
+def test_devin_send_skips_acp_when_ccc_live_spawn_holds_session():
+    """A live CCC `devin -p` spawn owns the session lock until it exits --
+    same skip-the-ACP-spawn logic as the external-owner case."""
+    server = _server()
+    sid = "devincli-send-live-spawn-test"
+    stack = _devin_dispatch_common_mocks(server, sid)
+    _enter_stack(stack)
+    try:
+        with mock.patch.object(server, "_devin_acp_try_steer") as acp_try, \
+             mock.patch.object(
+                 server, "_find_live_spawn_entry_for_session", return_value={"pid": 1234},
+             ), \
+             mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
+             mock.patch.object(server, "_queue_devin_resume_input"), \
+             mock.patch.object(server, "_note_pending_queued"):
+            result = server._inject_text_into_session(sid, "follow up")
+    finally:
+        _exit_stack(stack)
+
+    acp_try.assert_not_called()
+    assert result["ok"] is True
+    assert result["via"] == "devin-resume-queued"
+    pump.assert_called_once_with(sid)
+
+
+def test_devin_send_uses_acp_when_our_own_conn_holds_the_lock():
+    """Our own ACP connection holding the session lock is NOT an external
+    owner -- the send must still be attempted over ACP."""
+    server = _server()
+    sid = "devincli-send-ours-loaded-test"
+    acp_ok = {"ok": True, "via": "acp-prompt", "harness": "devin"}
+    stack = _devin_dispatch_common_mocks(server, sid)
+    _enter_stack(stack)
+    try:
+        with mock.patch.object(server, "_devin_acp_try_steer", return_value=acp_ok) as acp_try, \
+             mock.patch.object(server, "_devin_cli_session_live", return_value=True), \
+             mock.patch.object(server, "_devin_acp_session_loaded", return_value=True), \
+             mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
+             mock.patch.object(server, "_queue_devin_resume_input"):
+            result = server._inject_text_into_session(sid, "follow up")
+    finally:
+        _exit_stack(stack)
+
+    assert result["ok"] is True
+    assert result["via"] == "acp-prompt"
+    acp_try.assert_called_once()
+    pump.assert_not_called()
