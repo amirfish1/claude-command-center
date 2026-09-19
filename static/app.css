@@ -2897,6 +2897,22 @@
     font-size: 12px;
     font-weight: 650;
   }
+  /* CCC-1172: the header's two asks are truncated by ellipsis; role=button
+     (set only while they carry text) signals the click-to-expand affordance,
+     and .is-expanded lets the whole string wrap inline. */
+  .conv-pane-title[role="button"],
+  .conv-pane-last-user-message[role="button"] { cursor: pointer; }
+  .conv-pane-title:focus-visible,
+  .conv-pane-last-user-message:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: 3px;
+  }
+  .conv-pane-title.is-expanded,
+  .conv-pane-last-user-message.is-expanded {
+    white-space: normal;
+    text-overflow: clip;
+  }
   /* JSONL transcript size badge next to the pane title. Helps the user
      correlate slow first-paint with conversation size. */
   .conv-pane-size {

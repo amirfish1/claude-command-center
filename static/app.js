@@ -15618,6 +15618,18 @@
     messageEl.textContent = cleaned;
     messageEl.hidden = !cleaned;
     messageEl.title = cleaned;
+    // Same CCC-1172 affordance as the pane title: hover shows the full text,
+    // click/Enter toggles .is-expanded inline.
+    if (cleaned) {
+      messageEl.tabIndex = 0;
+      messageEl.setAttribute('role', 'button');
+      messageEl.setAttribute('aria-expanded', messageEl.classList.contains('is-expanded') ? 'true' : 'false');
+    } else {
+      messageEl.removeAttribute('tabindex');
+      messageEl.removeAttribute('role');
+      messageEl.removeAttribute('aria-expanded');
+      messageEl.classList.remove('is-expanded');
+    }
     pane.classList.toggle('has-last-user-message', !!cleaned);
   }
   if ($mobileOriginalAsk) {
@@ -15628,6 +15640,28 @@
       $mobileOriginalAsk.title = expanded ? 'Collapse original ask' : 'Show the full original ask';
     });
   }
+  // CCC-1172: the pane header's two asks (the session title and the latest
+  // user message) ellipsize in one row. Hover shows each in full via the
+  // title attr; click — or Enter/Space on the focused span — toggles
+  // .is-expanded so the whole string wraps inline. Delegated: split-pane
+  // clones and popouts carry the same spans.
+  function togglePaneHeaderTextExpand(el) {
+    const expanded = !el.classList.contains('is-expanded');
+    el.classList.toggle('is-expanded', expanded);
+    el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  }
+  document.addEventListener('click', (ev) => {
+    const el = ev.target && ev.target.closest && ev.target.closest('.conv-pane-title, .conv-pane-last-user-message');
+    if (!el || el.hidden) return;
+    togglePaneHeaderTextExpand(el);
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const el = ev.target && ev.target.closest && ev.target.closest('.conv-pane-title, .conv-pane-last-user-message');
+    if (!el || el.hidden) return;
+    ev.preventDefault();
+    togglePaneHeaderTextExpand(el);
+  });
   function handleMobileBreakpointChange() {
     // When transitioning to narrow viewport with an active conversation,
     // show the pane overlay; when transitioning to wide, hide it
@@ -41185,6 +41219,21 @@
       categoryEl.textContent = category || '';
     }
     titleEl.textContent = title || '';
+    // CCC-1172: the ellipsized title stays readable in full — hover carries
+    // it in the tooltip, click/Enter toggles .is-expanded inline (delegated
+    // next to the mobile-original-ask listener). role/tabindex make the
+    // span a keyboard-reachable button only while it carries text.
+    titleEl.title = title || '';
+    if (title) {
+      titleEl.tabIndex = 0;
+      titleEl.setAttribute('role', 'button');
+      titleEl.setAttribute('aria-expanded', titleEl.classList.contains('is-expanded') ? 'true' : 'false');
+    } else {
+      titleEl.removeAttribute('tabindex');
+      titleEl.removeAttribute('role');
+      titleEl.removeAttribute('aria-expanded');
+      titleEl.classList.remove('is-expanded');
+    }
     pane.classList.toggle('has-pane-title', !!(category || title));
     const header = pane.querySelector('[data-role="pane-header"]');
     if (header) header.title = [category, title].filter(Boolean).join(' - ');
@@ -41233,7 +41282,7 @@
           + sidChip
           + spawnedByChip
           + (typeof window._cccHandoffMovedChipHtml === 'function' ? window._cccHandoffMovedChipHtml(row) : '')
-          + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
+          + (title ? '<span class="ccc-breadcrumb-title" title="' + escapeAttr(title) + '">' + escapeHtml(title) + '</span>' : '')
           // Transport pill slot, filled by updateConvProcessIndicator below.
           // CSS shows it only where the per-pane header is hidden (mobile).
           + '<span class="conv-pane-proc ccc-breadcrumb-proc" data-role="breadcrumb-proc"></span>'
