@@ -3216,6 +3216,10 @@ def session_live_status(session_id, session_cwd):
                 result["model"] = snap.get("model")
             else:
                 result["kind"] = "headless"
+                # Another ACP host (Devin Desktop / Next, a `devin` TUI, a
+                # sibling CCC) owns the writer slot — a send can only queue
+                # until that client lets go, so the UI should say why.
+                result["external_devin_owner"] = True
             return result
         # Dormant session — no live process anywhere. Same ACP contract as
         # kimi/grok: "live" means the shared `devin acp` conn can attach and

@@ -2124,9 +2124,9 @@ def _inject_text_into_session_router(
         else:
             _core._queue_devin_resume_input(session_id, text)
         reason = (
-            "Devin is working in another client; the latest steering message "
-            "will send after that turn finishes."
-            if external_owner and mode == "steer"
+            "This Devin session is open in another client (e.g. Devin "
+            "Desktop) — your message will deliver when that client lets go."
+            if external_owner
             else "Queued for Devin delivery"
         )
         _core._note_pending_queued(session_id, text, reason)

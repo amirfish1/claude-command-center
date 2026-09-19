@@ -5676,6 +5676,10 @@
         // spawn-registry entry, no tty, no WatchTower FIFO) — a queued
         // mode=send message will NOT drain on its own from this state.
         foreignWriterHold: !!data.foreign_writer_hold,
+        // A Devin session whose lock is held by another ACP host (Devin
+        // Desktop / Next, a `devin` TUI, a sibling CCC) — queued sends
+        // park until that client lets go, and the user should see why.
+        devinExternalOwner: !!data.external_devin_owner,
       };
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
@@ -5689,6 +5693,16 @@
           .filter(p => p && p.sid === _fetchedFor && !p.delivered && p.entry)
           .forEach(p => markPendingSendQueued(p, "Queued - no delivery channel found for this session "
             + "(it's live, but CCC lost its spawn registry entry — open a real terminal to it to unblock)."));
+      }
+      // A Devin session parked behind another ACP host gets the same
+      // treatment — "queued" alone looks identical to a busy-turn wait,
+      // but this one only clears when the other client lets go.
+      if (liveStatus.devinExternalOwner && Array.isArray(_pendingSends)) {
+        _pendingSends
+          .filter(p => p && p.sid === _fetchedFor && !p.delivered && p.entry)
+          .forEach(p => markPendingSendQueued(p,
+            "Queued - this Devin session is open in another client "
+            + "(e.g. Devin Desktop); it'll deliver when that client lets go."));
       }
       // Audible feedback when the agent stops working for this conversation.
       // Only fire while this page is visible and the status still belongs to
