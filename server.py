@@ -14151,6 +14151,7 @@ _ARCHIVE_LIST_FIELDS = (
     "needs_approval", "needs_approval_message", "question_waiting", "question_text",
     "question_header", "question_preamble", "question_options",
     "question_option_details", "can_headless_resume", "can_app_resume", "codex_state",
+    "devin_acp_ready",
     "codex_fresh", "codex_state_reason", "codex_writer", "codex_desktop_attached",
     "bridge_session_id", "registry_status", "registry_status_updated_at",
     "registry_tmux", "messaging_socket_path", "usage_limit_resume_at",
