@@ -5681,6 +5681,11 @@
         // park until that client lets go, and the user should see why.
         devinExternalOwner: !!data.external_devin_owner,
         acpError: (typeof data.acp_error === 'string' && data.acp_error) || null,
+        // Live "can a steer/send be attempted over devin acp" signal from
+        // session-status — the open session's row is not always loaded in
+        // the collection acp_steer_ready was resolved from (archiveData,
+        // cross-repo, placeholder swaps), so this is the reliable path.
+        devinAcpReady: data.devin_acp_ready === true,
       };
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
@@ -8812,7 +8817,7 @@
     const sid = currentSession && currentSession.id;
     const steerableSource = currentSession && (
       currentSession.source === 'codex'
-      || (currentSession.source === 'devin-cli' && currentSession.acp_steer_ready === true)
+      || devinSteerCapableNow()
     );
     if (!sid || !steerableSource) {
       showOpToast('Steer is only available for Codex and steer-ready Devin sessions.', 'error');
@@ -8952,7 +8957,17 @@
         (sid && (c.session_id === sid || c.id === sid))
         || (currentConversation && c.id === currentConversation)
       )
-    )) || null;
+    ))
+      // Cross-repo rows (e.g. a devincli session in another workspace) live in
+      // archiveData — same fallback as selectedConv above, or their
+      // devin_acp_ready flag reads as absent and acp_steer_ready stays false.
+      || (Array.isArray(archiveData) ? archiveData.find(c => (
+        c && (
+          (sid && (c.session_id === sid || c.id === sid))
+          || (currentConversation && c.id === currentConversation)
+        )
+      )) : null)
+      || null;
     currentSession = {
       id: sid || null,
       cwd: cwd || null,
@@ -9815,7 +9830,7 @@
         // first send attaches lazily — the row field devin_acp_ready mirrors
         // server-side "could attempt" (binary resolves), not "a connection
         // is already up" (nothing else ever creates one).
-        const devinSteerable = isDevinCli && currentSession.acp_steer_ready === true;
+        const devinSteerable = devinSteerCapableNow();
         const canSteer = canSend && hasSession && !isNewSession && !isBacklogIssue
           && ((isCodex && codexTurnSteerable()) || isKimi || devinSteerable || claudeSteerable);
         activeSteerBtn.classList.toggle('visible', canSteer);
@@ -11051,7 +11066,7 @@
     if (injectMode === 'steer'
         && currentSession.source !== 'codex'
         && currentSession.source !== 'kimi'
-        && !(currentSession.source === 'devin-cli' && currentSession.acp_steer_ready === true)
+        && !devinSteerCapableNow()
         && !(liveStatus.live && liveStatus.headlessPresent && !liveStatus.tty)) {
       // Claude headless steers via the FIFO interrupt control request; Devin
       // CLI steers over its live `devin acp` connection; every other
@@ -14152,8 +14167,11 @@
 
   function userMessageSteerHtml(text, notification, compactCardHtml) {
     const isCodex = currentSession && currentSession.source === 'codex';
-    const isDevin = currentSession && currentSession.source === 'devin-cli'
-      && currentSession.acp_steer_ready === true;
+    // Render the button for every devin-cli user message like codex does —
+    // capability is a live signal (devinTurnSteerable/syncUserMessageSteerButtons
+    // keep it hidden until liveStatus says acp+running), and gating render on
+    // it meant a late-arriving status could never reveal the button.
+    const isDevin = currentSession && currentSession.source === 'devin-cli';
     if (!isCodex && !isDevin) return '';
     if (notification || compactCardHtml || !String(text || '').trim()) return '';
     const steerable = isCodex ? codexTurnSteerable() : devinTurnSteerable();
@@ -31481,13 +31499,23 @@
     return writer !== 'desktop' && writer !== 'external' && writer !== 'unknown';
   }
 
+  // "Could a steer/send be attempted over the shared `devin acp` conn" for
+  // the open session: the conversation-row flag when it's loaded, else the
+  // live session-status signal — the row is not always present in the
+  // collection acp_steer_ready was resolved from (archiveData, cross-repo
+  // sessions, placeholder swaps).
+  function devinSteerCapableNow() {
+    if (!currentSession || currentSession.source !== 'devin-cli') return false;
+    if (currentSession.acp_steer_ready === true) return true;
+    return !!(liveStatusMatchesOpenConv() && liveStatus && liveStatus.devinAcpReady === true);
+  }
+
   // Devin mirror of codexTurnSteerable: the backend steers a live turn via
   // the shared `devin acp` connection (cancel + resend — acp.py's
   // _devin_acp_try_steer), so the button only makes sense while that conn
   // owns the session and a turn is actually running.
   function devinTurnSteerable() {
-    if (!currentSession || currentSession.source !== 'devin-cli') return false;
-    if (currentSession.acp_steer_ready !== true) return false;
+    if (!devinSteerCapableNow()) return false;
     if (!liveStatusMatchesOpenConv() || !liveStatus) return false;
     return liveStatus.kind === 'acp' && liveStatus.status === 'running';
   }
@@ -31510,7 +31538,7 @@
   // queue server-side.
   function sessionSupportsQueuedSteer(source, acpReady) {
     if (source === 'codex' || source === 'kimi' || source === 'grok') return true;
-    if (source === 'devin-cli') return !!acpReady;
+    if (source === 'devin-cli') return !!acpReady || devinSteerCapableNow();
     return false;
   }
 

@@ -3183,6 +3183,11 @@ def session_live_status(session_id, session_cwd):
         # is still running) and the lock file in the CLI's session_locks
         # dir. No TTY — the CLI runs headless.
         raw_id = _core._devin_cli_raw_id(session_id)
+        # "Could a live steer/send be attempted over the shared `devin acp`
+        # conn" — the same signal the conversation row carries as
+        # devin_acp_ready, exposed here so the open session doesn't depend
+        # on which list collection its row happened to load in.
+        result["devin_acp_ready"] = _core._devin_acp_steer_capable()
         entry = _core._live_spawn_registry_entry_for_session(session_id, "devin")
         if not entry:
             entry = _core._find_live_spawn_entry_for_session(session_id)
