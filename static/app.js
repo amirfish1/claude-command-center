@@ -67740,6 +67740,9 @@
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
   const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi', 'opencode', 'devin', 'grok'];
+  // Workers spawn through the orchestration path, which knows three engines
+  // the New session UI has no launcher for (aider, droid, pi).
+  const WORKER_DEFAULT_ENGINES = SPAWN_DEFAULT_ENGINES.concat(['aider', 'droid', 'pi']);
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
@@ -67968,7 +67971,7 @@
       ? data.reasoning_effort
       : '';
     // The WatchTower queue-worker default; '' means WT picks (codex first).
-    spawnDefaultsState.worker_engine = SPAWN_DEFAULT_ENGINES.includes(data.worker_engine)
+    spawnDefaultsState.worker_engine = WORKER_DEFAULT_ENGINES.includes(data.worker_engine)
       ? data.worker_engine
       : '';
     spawnDefaultsState.worker_model = String(data.worker_model == null ? '' : data.worker_model).trim();
@@ -68008,8 +68011,12 @@
     // loop (~40 req/s per idle tab, measured 2026-09-12) that starved the
     // archive bootstrap.
     if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
-    if (typeof applyDisabledEnginesToPickers === 'function') applyDisabledEnginesToPickers();
-    if (typeof renderEnginesHub === 'function') renderEnginesHub();
+    // The hub's state is declared further down this closure; a merge that
+    // lands before that point has run must not trip over it.
+    try {
+      applyDisabledEnginesToPickers();
+      renderEnginesHub();
+    } catch (_) {}
   }
 
   // setSpawnDefaultModel/setSpawnEngine only ever mutate in-memory +
@@ -77625,7 +77632,7 @@
       install: 'python -m pip install aider-install && aider-install' },
     pi: { mono: 'Pi', label: 'Pi', vendor: 'Any provider', hue: 330, docs: 'https://github.com/badlogic/pi-mono' },
   };
-  const ENGINE_HUB_WORKER_ENGINES = ['claude', 'codex', 'kimi', 'grok'];
+  const ENGINE_HUB_WORKER_ENGINES = WORKER_DEFAULT_ENGINES;
   const ENGINE_HUB_POLL_MS = 8000;
   let _engHubData = null;
   let _engHubSig = '';
@@ -77645,13 +77652,33 @@
     return new Set(Array.isArray(spawnDefaultsState.disabled_engines) ? spawnDefaultsState.disabled_engines : []);
   }
 
-  // Hide switched-off engines from every engine <select>. The option a
-  // select currently shows is never pulled out from under it.
+  // The two defaults selects offer every engine, in the same order as the
+  // list below. A switched-off engine stays pickable here, marked (off):
+  // choosing it as a default switches it back on server-side.
+  function _engHubFillDefaultSelect(sel, engines, blankLabel) {
+    if (!sel) return;
+    const off = _engHubDisabledSet();
+    const order = Object.keys(ENGINE_HUB_META).filter(e => engines.includes(e));
+    const want = (blankLabel ? [['', blankLabel]] : []).concat(order.map(e =>
+      [e, ENGINE_HUB_META[e].label + (off.has(e) ? ' (off)' : '')]));
+    const have = Array.from(sel.options).map(o => [o.value, o.textContent]);
+    if (JSON.stringify(want) === JSON.stringify(have)) return;
+    const cur = sel.value;
+    sel.innerHTML = want.map(w => '<option value="' + escapeHtml(w[0]) + '">' + escapeHtml(w[1]) + '</option>').join('');
+    sel.value = cur;
+  }
+
+  // Hide switched-off engines from the spawn pickers. The option a select
+  // currently shows is never pulled out from under it.
   function applyDisabledEnginesToPickers() {
     const off = _engHubDisabledSet();
-    [$convInputEngineSelect, $kptToolbarEngineSelect,
-      document.getElementById('spawnDefaultsEngine'),
-      document.getElementById('spawnDefaultsWorkerEngine')].forEach(sel => {
+    const $defEngine = document.getElementById('spawnDefaultsEngine');
+    const $defWorker = document.getElementById('spawnDefaultsWorkerEngine');
+    _engHubFillDefaultSelect($defEngine, SPAWN_DEFAULT_ENGINES, '');
+    _engHubFillDefaultSelect($defWorker, WORKER_DEFAULT_ENGINES, 'WatchTower default');
+    if ($defEngine) $defEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
+    if ($defWorker) $defWorker.value = spawnDefaultsState.worker_engine || '';
+    [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(sel => {
       if (!sel) return;
       Array.from(sel.options).forEach(opt => {
         const hide = !!opt.value && off.has(opt.value) && sel.value !== opt.value;
@@ -77714,8 +77741,11 @@
         limited: !!(usage && usage.worst >= 100),
       };
     }).sort((a, b) => {
-      const rank = r => (r.isDefault ? 0 : r.isWorkerDefault ? 1 : r.state === 'ready' ? 2 : r.state === 'setup' ? (r.installed ? 3 : 4) : 5);
-      return rank(a) - rank(b);
+      // Fixed catalog order. A row never moves when its state changes, so the
+      // switch you just flipped stays under the pointer.
+      const order = Object.keys(ENGINE_HUB_META);
+      const pos = r => { const i = order.indexOf(r.engine); return i < 0 ? order.length : i; };
+      return pos(a) - pos(b);
     });
   }
 
@@ -77774,7 +77804,6 @@
     if (row.installed && row.auth === false && row.login) actions.push('<button type="button" class="settings-action-btn eng-primary" data-eng-act="login" data-eng="' + e + '">Sign in</button>');
     actions.push('<button type="button" class="settings-action-btn" data-eng-act="verify" data-eng="' + e + '">Verify setup</button>');
     if (row.installed && row.auth !== false && row.login && row.canTerminal) actions.push('<button type="button" class="settings-action-btn" data-eng-act="login" data-eng="' + e + '">Switch account</button>');
-    if (row.state === 'ready' && !row.isDefault && SPAWN_DEFAULT_ENGINES.includes(e)) actions.push('<button type="button" class="settings-action-btn" data-eng-act="default" data-eng="' + e + '">Make default for new sessions</button>');
     if (row.state === 'ready' && !row.isWorkerDefault && ENGINE_HUB_WORKER_ENGINES.includes(e)) actions.push('<button type="button" class="settings-action-btn" data-eng-act="worker" data-eng="' + e + '">Make worker default</button>');
     const links = [['Setup guide', row.meta.docs]].concat(row.meta.links || []).filter(l => l[1]).map(l =>
       '<a class="eng-link" href="' + escapeHtml(l[1]) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l[0]) + ' ↗</a>').join('');
@@ -77797,8 +77826,7 @@
     const open = _engHubOpen === e;
     const mono = row.meta.mono || row.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
     const sub = [row.meta.vendor, row.version ? 'v' + row.version.replace(/^v/, '') : '', row.email].filter(Boolean).join(' · ');
-    const tags = (row.isDefault ? '<span class="eng-tag">New sessions</span>' : '')
-      + (row.isWorkerDefault ? '<span class="eng-tag">Workers</span>' : '');
+    const tags = (row.isWorkerDefault ? '<span class="eng-tag">Workers</span>' : '');
     const locked = row.isDefault || row.isWorkerDefault;
     const authPill = !row.installed ? ''
       : row.auth === true ? _engHubPill('ok', 'Signed in', row.email || '')
@@ -77815,6 +77843,11 @@
       + authPill + _engHubUsageHtml(row) + '</span>'
       + '<svg class="eng-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>'
       + '</button>'
+      + '<span class="eng-row-default">' + (row.isDefault
+        ? '<span class="eng-default-badge" title="New sessions start on this engine unless you pick another.">Default</span>'
+        : (row.state === 'ready' && SPAWN_DEFAULT_ENGINES.includes(e))
+          ? '<button type="button" class="eng-make-default" data-eng-act="default" data-eng="' + e + '" title="Start new sessions on ' + escapeHtml(row.meta.label) + '">Make default</button>'
+          : '') + '</span>'
       + '<button type="button" class="settings-toggle' + (row.disabled ? '' : ' is-on') + '" role="switch" aria-checked="' + !row.disabled + '"'
       + ' data-eng-enable="' + e + '"'
       + ' aria-label="Use ' + escapeHtml(row.meta.label) + ' in CCC"'
@@ -77893,6 +77926,7 @@
   }
 
   function startEnginesHub() {
+    applyDisabledEnginesToPickers();
     if (!_engHubVisible()) { _engHubSchedule(); return; }
     refreshEnginesHub();
     if (!_engHubKimiVersion) {

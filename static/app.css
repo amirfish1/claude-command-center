@@ -25665,8 +25665,8 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
 }
 .settings-modal {
   position: relative;
-  width: min(980px, calc(100vw - 40px));
-  height: min(780px, calc(100vh - 48px));
+  width: min(1180px, calc(100vw - 40px));
+  height: min(820px, calc(100vh - 48px));
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -26007,6 +26007,22 @@ a.settings-row {
 .eng-usage.is-warn .eng-usage-text { color: var(--orange); }
 .eng-usage.is-bad .eng-usage-fill { background: var(--red); }
 .eng-usage.is-bad .eng-usage-text { color: var(--red); }
+.eng-row-default { flex: 0 0 104px; display: flex; justify-content: flex-end; }
+.eng-make-default {
+  border: 1px solid var(--border); border-radius: 6px; background: transparent;
+  color: var(--text-muted); font: inherit; font-size: 11.5px; padding: 3px 9px;
+  cursor: pointer; white-space: nowrap;
+  transition: color 0.12s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+}
+.eng-make-default:hover, .eng-make-default:focus-visible {
+  color: var(--accent-contrast); background: var(--accent); border-color: var(--accent);
+}
+.eng-default-badge {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 .eng-chev { flex: 0 0 auto; width: 14px; height: 14px; color: var(--text-muted); transition: transform 0.15s ease-out; }
 .eng-row.is-open .eng-chev { transform: rotate(180deg); }
 .eng-row.is-off .eng-row-main { opacity: 0.5; }
@@ -26044,6 +26060,7 @@ a.settings-row {
 @media (max-width: 860px) {
   .eng-defaults { grid-template-columns: 1fr; }
   .eng-id { flex-basis: 140px; }
+  .eng-row-default { flex-basis: auto; }
   .eng-drawer { padding-left: 14px; }
 }
 @media (max-width: 620px) {
