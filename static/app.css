@@ -25911,23 +25911,26 @@ a.settings-row {
 .eng-stat.is-ok .eng-stat-num { color: var(--green); }
 .eng-stat.is-warn .eng-stat-num { color: var(--orange); }
 
-.eng-defaults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.eng-card {
+/* Two one-line strips: title, then each control with a short inline label.
+   The long descriptions stay in the DOM for settings search only. */
+.eng-defaults {
   border: 1px solid var(--border); border-radius: 12px;
-  background: var(--surface); padding: 12px 14px 8px;
+  background: var(--surface); overflow: hidden;
 }
-.eng-card-head { margin-bottom: 4px; }
-.eng-card-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.eng-card-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
-/* Inside a card the label says enough; the long descriptions stay in the
-   DOM for settings search but do not render. */
-.eng-defaults-card .settings-row { min-height: 34px; padding: 4px 0; gap: 10px; }
+.eng-card { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 18px; padding: 5px 14px; }
+.eng-card + .eng-card { border-top: 1px solid var(--border); }
+.eng-card-head { flex: 0 0 96px; }
+.eng-card-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.eng-card-sub { display: none; }
+.eng-defaults-card .settings-row { min-height: 30px; padding: 0; gap: 7px; border: 0; width: auto; flex: 0 0 auto; }
+.eng-defaults-card .settings-row-main { flex: 0 0 auto; }
 .eng-defaults-card .settings-row-desc { display: none; }
-.eng-defaults-card .settings-row-label { font-size: 12.5px; font-weight: 450; color: var(--text-muted); }
-.eng-defaults-card .settings-row-control { min-width: 0; }
+.eng-defaults-card .settings-row-label { font-size: 11.5px; font-weight: 450; color: var(--text-muted); }
+.eng-defaults-card .settings-row-control { min-width: 0; gap: 4px; }
 .eng-defaults-card .settings-row-control select,
-.eng-defaults-card .settings-row-control input[type="text"] { max-width: 190px; }
-.eng-defaults-card .settings-suffix { font-size: 12px; color: var(--text-muted); }
+.eng-defaults-card .settings-row-control input[type="text"] { max-width: 170px; font-size: 12px; padding-top: 3px; padding-bottom: 3px; }
+.eng-defaults-card .settings-number-input { width: 52px; }
+.eng-defaults-card .settings-suffix { font-size: 11.5px; color: var(--text-muted); }
 
 .eng-list-head {
   display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
@@ -26056,7 +26059,6 @@ button.eng-default-chip:hover, button.eng-default-chip:focus-visible {
 .eng-drawer .settings-row-note { margin-top: 0; }
 
 @media (max-width: 860px) {
-  .eng-defaults { grid-template-columns: 1fr; }
   .eng-id { flex-basis: 140px; }
   .eng-row-default { flex-basis: auto; }
   .eng-drawer { padding-left: 14px; }

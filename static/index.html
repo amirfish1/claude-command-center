@@ -2641,7 +2641,7 @@
             <div class="eng-defaults">
               <div class="eng-card eng-defaults-card">
                 <div class="eng-card-head">
-                  <div class="eng-card-title">New sessions</div>
+                  <div class="eng-card-title" title="What you get when you spawn without choosing.">New sessions</div>
                   <div class="eng-card-sub">What you get when you spawn without choosing.</div>
                 </div>
 
@@ -2678,7 +2678,7 @@
 
                   <div class="settings-row" id="spawnDefaultsEffortField" style="display:none;" data-keywords="spawn defaults reasoning effort new session">
                     <div class="settings-row-main">
-                      <div class="settings-row-label">Reasoning effort</div>
+                      <div class="settings-row-label">Effort</div>
                       <div class="settings-row-desc">Used for new sessions on the default engine unless a request chooses an explicit effort. Hidden for engines with no reasoning-effort setting.</div>
                     </div>
                     <div class="settings-row-control">
@@ -2695,24 +2695,24 @@
 
                   <div class="settings-row" data-keywords="spawn defaults autocompact compact new session">
                     <div class="settings-row-main">
-                      <div class="settings-row-label">Autocompact threshold</div>
+                      <div class="settings-row-label">Autocompact</div>
                       <div class="settings-row-desc">Claude Code auto-compacts when context reaches this many tokens. Applies to new sessions you spawn.</div>
                     </div>
                     <div class="settings-row-control">
                       <input type="number" id="spawnDefaultsAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Autocompact threshold in thousands of tokens">
-                      <span class="settings-suffix" aria-hidden="true">K tokens</span>
+                      <span class="settings-suffix" aria-hidden="true">K</span>
                     </div>
                   </div>
               </div>
               <div class="eng-card eng-defaults-card">
                 <div class="eng-card-head">
-                  <div class="eng-card-title">Workers</div>
+                  <div class="eng-card-title" title="WatchTower queue workers, unless the queue overrides.">Workers</div>
                   <div class="eng-card-sub">WatchTower queue workers, unless the queue overrides.</div>
                 </div>
 
                   <div class="settings-row" data-keywords="worker engine watchtower spawn defaults">
                     <div class="settings-row-main">
-                      <div class="settings-row-label">Worker engine</div>
+                      <div class="settings-row-label">Engine</div>
                       <div class="settings-row-desc">WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).</div>
                     </div>
                     <div class="settings-row-control">
@@ -2728,7 +2728,7 @@
 
                   <div class="settings-row" id="spawnDefaultsWorkerModelField" data-keywords="worker model watchtower spawn defaults">
                     <div class="settings-row-main">
-                      <div class="settings-row-label">Worker model</div>
+                      <div class="settings-row-label">Model</div>
                       <div class="settings-row-desc">The default model for WatchTower workers using the selected Worker engine. Queue-specific models still win.</div>
                     </div>
                     <div class="settings-row-control">
@@ -2739,7 +2739,7 @@
 
                   <div class="settings-row" id="spawnDefaultsWorkerEffortField" data-keywords="worker reasoning effort watchtower spawn defaults">
                     <div class="settings-row-main">
-                      <div class="settings-row-label">Worker reasoning effort</div>
+                      <div class="settings-row-label">Effort</div>
                       <div class="settings-row-desc">WatchTower queue workers spawn at this effort when the queue has no explicit override. Engines with no reasoning-effort setting ignore it.</div>
                     </div>
                     <div class="settings-row-control">
@@ -2759,12 +2759,12 @@
 
                   <div class="settings-row" data-keywords="worker autocompact compact watchtower spawn defaults">
                     <div class="settings-row-main">
-                      <div class="settings-row-label">Worker autocompact threshold</div>
+                      <div class="settings-row-label">Autocompact</div>
                       <div class="settings-row-desc">Claude Code auto-compacts for WatchTower queue workers at this token count. Separate from the new-session default.</div>
                     </div>
                     <div class="settings-row-control">
                       <input type="number" id="spawnDefaultsWorkerAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Worker autocompact threshold in thousands of tokens">
-                      <span class="settings-suffix" aria-hidden="true">K tokens</span>
+                      <span class="settings-suffix" aria-hidden="true">K</span>
                     </div>
                   </div>
               </div>
