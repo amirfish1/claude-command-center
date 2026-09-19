@@ -77881,7 +77881,7 @@
       + '<svg class="eng-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>'
       + '</button>'
       + '<span class="eng-row-default"' + (row.state === 'ready' ? ' role="group" aria-label="Default for"' : '') + '>'
-      + (row.state === 'ready' ? '<span class="eng-default-for" aria-hidden="true">Default for</span>' : '')
+      + (row.state === 'ready' ? '<span class="eng-default-for" aria-hidden="true">Default</span>' : '')
       + _engHubDefaultChip(row, 'default', 'Sessions', row.isDefault, SPAWN_DEFAULT_ENGINES.includes(e),
         'New sessions start on ' + row.meta.label, 'Make ' + row.meta.label + ' the default for new sessions')
       + _engHubDefaultChip(row, 'worker', 'Workers', row.isWorkerDefault, ENGINE_HUB_WORKER_ENGINES.includes(e),

@@ -25975,17 +25975,18 @@ a.settings-row {
   background: hsl(var(--eng-hue) 70% 93%);
   border-color: hsl(var(--eng-hue) 50% 82%);
 }
-.eng-id { flex: 0 0 190px; min-width: 0; display: flex; flex-direction: column; }
+.eng-id { flex: 0 0 172px; min-width: 0; display: flex; flex-direction: column; }
 .eng-name { font-size: 13.5px; font-weight: 550; color: var(--text); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .eng-sub { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Fixed tracks, not wrapping flex: the three signals line up as columns
    down the list whatever each pill happens to say. */
 .eng-status {
   flex: 1 1 auto; min-width: 0;
-  display: grid; grid-template-columns: 104px 148px minmax(0, 1fr);
+  display: grid; grid-template-columns: 100px 140px minmax(0, 1fr);
   align-items: center; justify-items: start; gap: 6px;
 }
 .eng-pill {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--border); color: var(--text-muted); white-space: nowrap;
@@ -26001,7 +26002,7 @@ a.settings-row {
 .eng-usage.is-warn .eng-usage-text { color: var(--orange); }
 .eng-usage.is-bad .eng-usage-fill { background: var(--red); }
 .eng-usage.is-bad .eng-usage-text { color: var(--red); }
-.eng-row-default { flex: 0 0 214px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.eng-row-default { flex: 0 0 194px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 .eng-default-for { font-size: 10.5px; color: var(--text-muted); margin-right: 3px; white-space: nowrap; }
 .eng-default-chip {
   width: 68px; box-sizing: border-box; text-align: center;
