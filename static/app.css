@@ -26010,8 +26010,6 @@ a.settings-row {
 .eng-chev { flex: 0 0 auto; width: 14px; height: 14px; color: var(--text-muted); transition: transform 0.15s ease-out; }
 .eng-row.is-open .eng-chev { transform: rotate(180deg); }
 .eng-row.is-off .eng-row-main { opacity: 0.5; }
-/* A default engine's switch is locked on; keep it looking on. */
-.eng-row .settings-toggle:disabled { opacity: 0.85; cursor: not-allowed; }
 
 .eng-drawer { padding: 2px 14px 14px 58px; display: flex; flex-direction: column; gap: 10px; }
 .eng-step {

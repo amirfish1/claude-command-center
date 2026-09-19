@@ -77816,9 +77816,9 @@
       + '<svg class="eng-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>'
       + '</button>'
       + '<button type="button" class="settings-toggle' + (row.disabled ? '' : ' is-on') + '" role="switch" aria-checked="' + !row.disabled + '"'
-      + ' data-eng-enable="' + e + '"' + (locked ? ' disabled' : '')
+      + ' data-eng-enable="' + e + '"'
       + ' aria-label="Use ' + escapeHtml(row.meta.label) + ' in CCC"'
-      + ' title="' + (locked ? 'This is a default engine. Pick another default before switching it off.'
+      + ' title="' + (locked ? 'On. This is a default engine: switching it off hands the default to the next ready engine.'
         : row.disabled ? 'Off: hidden from every engine picker' : 'On: offered in every engine picker') + '">'
       + '<span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button>'
       + '</div>' + (open ? _engHubDrawer(row) : '') + '</div>';
@@ -77915,7 +77915,31 @@
     catch (_) { showOpToast('Could not copy. Select the command and copy it by hand.', 'err'); }
   }
 
-  async function _engHubSaveDisabled(next) {
+  // Switching off a default engine must not dead-end: hand the default to the
+  // next ready engine in the same POST (the server drops a default from the
+  // disabled list, so the default has to move first) and say so.
+  function _engHubDefaultHandoff(engine, next) {
+    const extra = {};
+    const moved = [];
+    const ready = _engHubRows().filter(r => r.engine !== engine && r.state === 'ready' && !next.includes(r.engine));
+    if (spawnDefaultsState.engine === engine) {
+      const to = ready.find(r => SPAWN_DEFAULT_ENGINES.includes(r.engine) && !r.limited)
+        || ready.find(r => SPAWN_DEFAULT_ENGINES.includes(r.engine));
+      if (!to) return null;
+      extra.engine = to.engine;
+      moved.push('New sessions now default to ' + to.meta.label);
+    }
+    if (spawnDefaultsState.worker_engine === engine) {
+      const to = ready.find(r => ENGINE_HUB_WORKER_ENGINES.includes(r.engine) && !r.limited && r.engine !== extra.engine)
+        || ready.find(r => ENGINE_HUB_WORKER_ENGINES.includes(r.engine));
+      extra.worker_engine = to ? to.engine : '';
+      extra.worker_model = '';
+      moved.push('Workers now default to ' + (to ? to.meta.label : 'WatchTower\'s pick'));
+    }
+    return { extra, moved };
+  }
+
+  async function _engHubSaveDisabled(next, extra, doneMsg) {
     const prev = spawnDefaultsState.disabled_engines || [];
     spawnDefaultsState.disabled_engines = next;
     applyDisabledEnginesToPickers();
@@ -77923,11 +77947,13 @@
     try {
       const res = await fetch('/api/spawn-defaults', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ disabled_engines: next }),
+        body: JSON.stringify(Object.assign({}, extra || {}, { disabled_engines: next })),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'save failed');
       mergeSpawnDefaults(data);
+      if (typeof syncSpawnEngineDependentUi === 'function') syncSpawnEngineDependentUi();
+      if (doneMsg) showOpToast(doneMsg, 'ok');
     } catch (err) {
       spawnDefaultsState.disabled_engines = prev;
       applyDisabledEnginesToPickers();
@@ -77996,8 +78022,17 @@
         if (enableBtn.disabled) return;
         const engine = enableBtn.getAttribute('data-eng-enable');
         const off = _engHubDisabledSet();
-        if (off.has(engine)) off.delete(engine); else off.add(engine);
-        _engHubSaveDisabled(Array.from(off));
+        if (off.has(engine)) { off.delete(engine); _engHubSaveDisabled(Array.from(off)); return; }
+        off.add(engine);
+        const next = Array.from(off);
+        const handoff = _engHubDefaultHandoff(engine, next);
+        if (!handoff) {
+          showOpToast('Nothing else is ready to take over as the default. Set up another engine first.', 'err');
+          return;
+        }
+        const label = (ENGINE_HUB_META[engine] || {}).label || engine;
+        _engHubSaveDisabled(next, handoff.extra,
+          handoff.moved.length ? label + ' is off. ' + handoff.moved.join('. ') + '.' : '');
         return;
       }
       const actBtn = ev.target.closest('[data-eng-act]');
