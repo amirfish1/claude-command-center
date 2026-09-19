@@ -22218,6 +22218,18 @@ body.has-gc-reader .pwa-install-banner {
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
   font-size: 12.5px; color: var(--text-muted); flex-shrink: 0; min-width: 44px;
 }
+/* Queue name on a ticket row — only rendered when the panel scope doesn't
+   already say which queue the row belongs to (All queues, or a sub-queue row
+   inside a family scope). Same role as q2's .q2-tqueue: cyan, small, clipped
+   before it can push the note or signals off the row; full name on hover. */
+.fq-queue {
+  /* Never shrink — the note truncates instead. A label that collapses on
+     chip-crowded (needs-input) rows is exactly where the queue name matters. */
+  flex: 0 0 auto; max-width: 12ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--cyan);
+}
 .fq-note {
   flex: 1 1 0;
   min-width: 0;

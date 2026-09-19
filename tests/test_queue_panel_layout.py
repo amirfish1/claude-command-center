@@ -549,8 +549,8 @@ for (const [key, expected] of Object.entries(cases)) {
         self.assertIn("font-size: 13px;", empty_css)
         self.assertIn("font-size: 12px;", empty_sub_css)
 
-    def test_all_queue_rows_prefix_compact_refs_with_the_queue_name(self):
-        """All-queue rows need a compact queue cue before their local number."""
+    def test_all_queue_rows_show_the_queue_name(self):
+        """Rows whose queue isn't implied by the panel scope carry its name."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -559,11 +559,12 @@ for (const [key, expected] of Object.entries(cases)) {
             app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
         ]
 
-        self.assertIn("const allQueues = _uxqProjectKey(requestedProject) === 'ALL';", queue_js)
         self.assertIn("const compactRef = ref.replace(/^.*-/, '#');", queue_js)
-        self.assertIn("const queuePrefix = String(it.project || ref.split('-')[0] || '').slice(0, 4);", queue_js)
-        self.assertIn("const displayRef = allQueues && queuePrefix ? queuePrefix + compactRef : compactRef;", queue_js)
-        self.assertIn("escapeHtml(displayRef)", queue_js)
+        self.assertIn("_uxqProjectKey(queueName) !== _uxqProjectKey(proj)", queue_js)
+        self.assertIn("queueLabelHtml", queue_js)
+        self.assertIn('class="fq-queue"', queue_js)
+        self.assertIn("escapeHtml(compactRef)", queue_js)
+        self.assertIn(".fq-queue {", app_css)
         self.assertIn("fq-priority-chip", queue_js)
         self.assertIn("_uxqChips(it, priorityBumpHtml)", queue_js)
         self.assertIn(".fq-priority-chip .fq-prio-bump", app_css)

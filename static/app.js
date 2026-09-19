@@ -47115,7 +47115,6 @@
       _uxqRefreshFamilyRoots(items);
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
-      const allQueues = _uxqProjectKey(requestedProject) === 'ALL';
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
       _uxqRenderFilterToggle();
@@ -47314,8 +47313,16 @@
         const bumpTitle = atTop ? 'Already highest priority (p0)' : ('Bump to ' + np);
         const priorityBumpHtml = '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>';
         const compactRef = ref.replace(/^.*-/, '#');
-        const queuePrefix = String(it.project || ref.split('-')[0] || '').slice(0, 4);
-        const displayRef = allQueues && queuePrefix ? queuePrefix + compactRef : compactRef;
+        // The queue name rides the row whenever the panel scope doesn't
+        // already imply it: every row in the All-queues view (resolved scope
+        // is empty), plus sub-queue rows inside a family scope (CCC-GH under
+        // CCC). Mirrors the q2 board's viewAll .q2-tqueue (CCC-1170) — the
+        // old 4-char ref prefix only fired on an explicit ALL selection and
+        // collapsed distinct queues to the same stump.
+        const queueName = String(it.project || (ref.indexOf('-') > 0 ? ref.split('-')[0] : '') || '').trim();
+        const queueLabelHtml = queueName && _uxqProjectKey(queueName) !== _uxqProjectKey(proj)
+          ? '<span class="fq-queue" title="Queue: ' + escapeAttr(queueName) + '">' + escapeHtml(queueName) + '</span>'
+          : '';
         // One ▶ per open ticket, one meaning: run this ticket. It sets
         // run_requested on the ticket and WatchTower's reconciler does the
         // spawning, so presses queue serially inside desired_workers instead
@@ -47349,7 +47356,8 @@
           + '</span>';
         return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
-          + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(displayRef) + '</span>'
+          + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(compactRef) + '</span>'
+          + queueLabelHtml
           + _uxqChips(it, priorityBumpHtml)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
           + signalsHtml
