@@ -25978,12 +25978,6 @@ a.settings-row {
 .eng-id { flex: 0 0 190px; min-width: 0; display: flex; flex-direction: column; }
 .eng-name { font-size: 13.5px; font-weight: 550; color: var(--text); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .eng-sub { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.eng-tag {
-  font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-  padding: 1px 6px; border-radius: 999px;
-  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
 /* Fixed tracks, not wrapping flex: the three signals line up as columns
    down the list whatever each pill happens to say. */
 .eng-status {
@@ -26007,22 +26001,25 @@ a.settings-row {
 .eng-usage.is-warn .eng-usage-text { color: var(--orange); }
 .eng-usage.is-bad .eng-usage-fill { background: var(--red); }
 .eng-usage.is-bad .eng-usage-text { color: var(--red); }
-.eng-row-default { flex: 0 0 104px; display: flex; justify-content: flex-end; }
-.eng-make-default {
+.eng-row-default { flex: 0 0 214px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.eng-default-for { font-size: 10.5px; color: var(--text-muted); margin-right: 3px; white-space: nowrap; }
+.eng-default-chip {
+  width: 68px; box-sizing: border-box; text-align: center;
   border: 1px solid var(--border); border-radius: 6px; background: transparent;
-  color: var(--text-muted); font: inherit; font-size: 11.5px; padding: 3px 9px;
-  cursor: pointer; white-space: nowrap;
+  color: var(--text-muted); font: inherit; font-size: 11.5px; padding: 3px 0;
+  white-space: nowrap;
   transition: color 0.12s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
 }
-.eng-make-default:hover, .eng-make-default:focus-visible {
+button.eng-default-chip { cursor: pointer; }
+button.eng-default-chip:hover, button.eng-default-chip:focus-visible {
   color: var(--accent-contrast); background: var(--accent); border-color: var(--accent);
 }
-.eng-default-badge {
-  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-  padding: 3px 9px; border-radius: 6px; white-space: nowrap;
-  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+.eng-default-chip.is-active {
+  font-weight: 600; color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.eng-default-chip.is-blank { border-color: transparent; }
 .eng-chev { flex: 0 0 auto; width: 14px; height: 14px; color: var(--text-muted); transition: transform 0.15s ease-out; }
 .eng-row.is-open .eng-chev { transform: rotate(180deg); }
 .eng-row.is-off .eng-row-main { opacity: 0.5; }

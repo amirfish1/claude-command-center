@@ -77566,16 +77566,25 @@
       const res = await fetch('/api/engines/update-status', { cache: 'no-store' });
       const data = await res.json();
       const running = !!data.running;
+      const auto = data.automatic !== false;
+      const autoToggle = document.getElementById('engineAutoUpdateToggle');
+      if (autoToggle) {
+        autoToggle.classList.toggle('is-on', auto);
+        autoToggle.setAttribute('aria-checked', auto ? 'true' : 'false');
+        autoToggle.title = auto ? 'On: installed CLIs update themselves every hour'
+          : 'Off: CLIs only update when you press Update now';
+      }
       desc.textContent = running
         ? 'Updating installed engines and refreshing model catalogs…'
-        : (_engineUpdateSummary(data) || 'Automatic updates run hourly.');
+        : (auto ? '' : 'Off. CLIs only update when you press Update now. ')
+          + (_engineUpdateSummary(data) || (auto ? 'Automatic updates run hourly.' : ''));
       desc.title = Object.values(data.engines || {}).map((row) => {
         return (row.label || 'Engine') + ': ' + (row.message || row.status || 'pending');
       }).join('\n');
       if (lastRun) {
         lastRun.textContent = data.last_finished_at
           ? 'Last run ' + new Date(data.last_finished_at).toLocaleString()
-          : 'Always on';
+          : '';
       }
       if (btn) {
         btn.disabled = running;
@@ -77591,6 +77600,27 @@
         btn.textContent = 'Update now';
       }
     }
+  }
+
+  const engineAutoUpdateToggle = document.getElementById('engineAutoUpdateToggle');
+  if (engineAutoUpdateToggle) {
+    engineAutoUpdateToggle.addEventListener('click', async () => {
+      const enabled = !engineAutoUpdateToggle.classList.contains('is-on');
+      engineAutoUpdateToggle.classList.toggle('is-on', enabled);
+      engineAutoUpdateToggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
+      try {
+        const res = await fetch('/api/engines/auto-update', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || 'save failed');
+        if (typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(engineAutoUpdateToggle.closest('.settings-row'));
+      } catch (err) {
+        showOpToast('Could not save automatic updates: ' + ((err && err.message) || 'network'), 'err');
+      }
+      refreshEngineUpdateStatus();
+    });
   }
 
   const engineUpdateNowBtn = document.getElementById('engineUpdateNowBtn');
@@ -77804,7 +77834,6 @@
     if (row.installed && row.auth === false && row.login) actions.push('<button type="button" class="settings-action-btn eng-primary" data-eng-act="login" data-eng="' + e + '">Sign in</button>');
     actions.push('<button type="button" class="settings-action-btn" data-eng-act="verify" data-eng="' + e + '">Verify setup</button>');
     if (row.installed && row.auth !== false && row.login && row.canTerminal) actions.push('<button type="button" class="settings-action-btn" data-eng-act="login" data-eng="' + e + '">Switch account</button>');
-    if (row.state === 'ready' && !row.isWorkerDefault && ENGINE_HUB_WORKER_ENGINES.includes(e)) actions.push('<button type="button" class="settings-action-btn" data-eng-act="worker" data-eng="' + e + '">Make worker default</button>');
     const links = [['Setup guide', row.meta.docs]].concat(row.meta.links || []).filter(l => l[1]).map(l =>
       '<a class="eng-link" href="' + escapeHtml(l[1]) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l[0]) + ' ↗</a>').join('');
     const facts = [];
@@ -77821,12 +77850,20 @@
       + '<div class="eng-actions">' + actions.join('') + '<span class="eng-links">' + links + '</span></div></div>';
   }
 
+  // One chip per default slot, right on the row: filled means this engine
+  // holds the slot, outlined means one click gives it the slot.
+  function _engHubDefaultChip(row, act, text, active, eligible, activeTitle, title) {
+    if (row.state !== 'ready' || !eligible) return '<span class="eng-default-chip is-blank" aria-hidden="true"></span>';
+    if (active) return '<span class="eng-default-chip is-active" title="' + escapeHtml(activeTitle) + '">' + text + '</span>';
+    return '<button type="button" class="eng-default-chip" data-eng-act="' + act + '" data-eng="' + row.engine
+      + '" title="' + escapeHtml(title) + '">' + text + '</button>';
+  }
+
   function _engHubRowHtml(row) {
     const e = row.engine;
     const open = _engHubOpen === e;
     const mono = row.meta.mono || row.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
     const sub = [row.meta.vendor, row.version ? 'v' + row.version.replace(/^v/, '') : '', row.email].filter(Boolean).join(' · ');
-    const tags = (row.isWorkerDefault ? '<span class="eng-tag">Workers</span>' : '');
     const locked = row.isDefault || row.isWorkerDefault;
     const authPill = !row.installed ? ''
       : row.auth === true ? _engHubPill('ok', 'Signed in', row.email || '')
@@ -77836,18 +77873,20 @@
       + '<div class="eng-row-head">'
       + '<button type="button" class="eng-row-main" data-eng-toggle-open="' + e + '" aria-expanded="' + open + '">'
       + '<span class="eng-mono" style="--eng-hue:' + row.meta.hue + '" aria-hidden="true">' + escapeHtml(mono) + '</span>'
-      + '<span class="eng-id"><span class="eng-name">' + escapeHtml(row.meta.label) + tags + '</span>'
+      + '<span class="eng-id"><span class="eng-name">' + escapeHtml(row.meta.label) + '</span>'
       + '<span class="eng-sub">' + escapeHtml(sub) + '</span></span>'
       + '<span class="eng-status">'
       + (row.installed ? _engHubPill('ok', 'Installed', row.bin) : _engHubPill('bad', 'Not installed'))
       + authPill + _engHubUsageHtml(row) + '</span>'
       + '<svg class="eng-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>'
       + '</button>'
-      + '<span class="eng-row-default">' + (row.isDefault
-        ? '<span class="eng-default-badge" title="New sessions start on this engine unless you pick another.">Default</span>'
-        : (row.state === 'ready' && SPAWN_DEFAULT_ENGINES.includes(e))
-          ? '<button type="button" class="eng-make-default" data-eng-act="default" data-eng="' + e + '" title="Start new sessions on ' + escapeHtml(row.meta.label) + '">Make default</button>'
-          : '') + '</span>'
+      + '<span class="eng-row-default"' + (row.state === 'ready' ? ' role="group" aria-label="Default for"' : '') + '>'
+      + (row.state === 'ready' ? '<span class="eng-default-for" aria-hidden="true">Default for</span>' : '')
+      + _engHubDefaultChip(row, 'default', 'Sessions', row.isDefault, SPAWN_DEFAULT_ENGINES.includes(e),
+        'New sessions start on ' + row.meta.label, 'Make ' + row.meta.label + ' the default for new sessions')
+      + _engHubDefaultChip(row, 'worker', 'Workers', row.isWorkerDefault, ENGINE_HUB_WORKER_ENGINES.includes(e),
+        'WatchTower workers run on ' + row.meta.label, 'Make ' + row.meta.label + ' the default for WatchTower workers')
+      + '</span>'
       + '<button type="button" class="settings-toggle' + (row.disabled ? '' : ' is-on') + '" role="switch" aria-checked="' + !row.disabled + '"'
       + ' data-eng-enable="' + e + '"'
       + ' aria-label="Use ' + escapeHtml(row.meta.label) + ' in CCC"'
@@ -78490,14 +78529,6 @@
     refreshAppearanceChecks();
   }
 
-  function settingsResetSessions() {
-    try {
-      localStorage.removeItem('ccc.spawnEngine');
-      localStorage.removeItem('ccc-spawn-cwd');
-    } catch (_) {}
-    refreshSpawnEngineValue();
-  }
-
   // ── Preview feature flags ───────────────────────────────────────────
   // ff(name) is the frontend gate. Reads resolved state stashed at boot by
   // the /api/features fetch in index.html (default {} = all off until it
@@ -78754,11 +78785,10 @@
         if (typeof window._cccOpenFleetPulse === 'function') window._cccOpenFleetPulse();
         return;
       }
-      const resetBtn = e.target.closest('#settingsResetAppearance, #settingsResetLayout, #settingsResetSessions');
+      const resetBtn = e.target.closest('#settingsResetAppearance, #settingsResetLayout');
       if (resetBtn) {
         if (resetBtn.id === 'settingsResetAppearance') settingsResetAppearance();
         else if (resetBtn.id === 'settingsResetLayout') settingsResetLayout();
-        else if (resetBtn.id === 'settingsResetSessions') settingsResetSessions();
         showSettingsSavedPulse(resetBtn.closest('.settings-reset-row'));
         return;
       }

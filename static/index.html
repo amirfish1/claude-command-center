@@ -2432,21 +2432,21 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             <span>Layout &amp; View</span>
           </button>
-          <button type="button" class="settings-rail-item" id="settingsRailTab-sessions" data-section-target="sessions" role="tab" aria-selected="false" aria-controls="settingsSection-sessions">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
-            <span>Sessions &amp; Spawning</span>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-engines" data-section-target="engines" role="tab" aria-selected="false" aria-controls="settingsSection-engines">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            <span>Engines</span>
           </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-network" data-section-target="network" role="tab" aria-selected="false" aria-controls="settingsSection-network">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
             <span>Fleet &amp; Network</span>
           </button>
-          <button type="button" class="settings-rail-item" id="settingsRailTab-engines" data-section-target="engines" role="tab" aria-selected="false" aria-controls="settingsSection-engines">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-            <span>Engines</span>
-          </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-tools" data-section-target="tools" role="tab" aria-selected="false" aria-controls="settingsSection-tools">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
             <span>Tools</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-sessions" data-section-target="sessions" role="tab" aria-selected="false" aria-controls="settingsSection-sessions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6.5 15h4"/></svg>
+            <span>Subscription data</span>
           </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-experimental" data-section-target="experimental" role="tab" aria-selected="false" aria-controls="settingsSection-experimental" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v5.5L5.5 17a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 8.5V3"/></svg>
@@ -2626,45 +2626,6 @@
             </div>
           </section>
 
-          <section class="settings-section" id="settingsSection-sessions" data-section-id="sessions" role="tabpanel" aria-labelledby="settingsRailTab-sessions">
-            <div class="settings-section-eyebrow">Sessions &amp; Spawning</div>
-
-            <div class="settings-row" data-keywords="claude subscription monthly plan cost price weekly spend estimate billing">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Monthly Claude plan</div>
-                <div class="settings-row-desc">Estimate each Claude session's share of your weekly subscription spend.</div>
-              </div>
-              <div class="settings-row-control">
-                <span class="settings-currency-prefix" aria-hidden="true">$</span>
-                <input type="number" id="settingsMonthlyClaudePlanInput" class="settings-number-input" min="0" step="0.01" inputmode="decimal" placeholder="200" aria-label="Monthly Claude plan in US dollars">
-              </div>
-            </div>
-            <div class="settings-row" data-keywords="codex subscription monthly plan cost price weekly spend estimate billing">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Monthly Codex plan</div>
-                <div class="settings-row-desc">Estimate each Codex session's share of your weekly subscription spend.</div>
-              </div>
-              <div class="settings-row-control">
-                <span class="settings-currency-prefix" aria-hidden="true">$</span>
-                <input type="number" id="settingsMonthlyCodexPlanInput" class="settings-number-input" min="0" step="0.01" inputmode="decimal" placeholder="100" aria-label="Monthly Codex plan in US dollars">
-              </div>
-            </div>
-
-            <div class="settings-row" data-keywords="spawn defaults engine model effort worker moved engines">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Default engine, model and effort</div>
-                <div class="settings-row-desc">Defaults for new sessions and WatchTower workers live with the engines they pick from.</div>
-              </div>
-              <div class="settings-row-control">
-                <button type="button" class="settings-action-btn" data-settings-goto="engines">Open Engines</button>
-              </div>
-            </div>
-
-
-            <div class="settings-reset-row">
-              <button type="button" class="settings-reset-btn" id="settingsResetSessions">Reset Sessions &amp; Spawning to defaults</button>
-            </div>
-          </section>
 
           <section class="settings-section" id="settingsSection-engines" data-section-id="engines" role="tabpanel" aria-labelledby="settingsRailTab-engines">
             <div class="settings-section-eyebrow">Engines</div>
@@ -2830,8 +2791,11 @@
                 <div class="settings-row-desc engine-update-summary" id="engineUpdateStatusDesc">Checking installed engines…</div>
               </div>
               <div class="settings-row-control">
-                <span class="settings-row-value" id="engineUpdateLastRun">Always on</span>
+                <span class="settings-row-value" id="engineUpdateLastRun"></span>
                 <button type="button" class="settings-action-btn" id="engineUpdateNowBtn">Update now</button>
+                <button type="button" class="settings-toggle is-on" id="engineAutoUpdateToggle" role="switch" aria-checked="true" aria-label="Automatic CLI updates">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
               </div>
             </div>
 
@@ -2958,6 +2922,31 @@
                 <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
               </div>
             </a>
+          </section>
+
+          <section class="settings-section" id="settingsSection-sessions" data-section-id="sessions" role="tabpanel" aria-labelledby="settingsRailTab-sessions">
+            <div class="settings-section-eyebrow">Subscription data</div>
+
+            <div class="settings-row" data-keywords="claude subscription monthly plan cost price weekly spend estimate billing">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Monthly Claude plan</div>
+                <div class="settings-row-desc">Estimate each Claude session's share of your weekly subscription spend.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-currency-prefix" aria-hidden="true">$</span>
+                <input type="number" id="settingsMonthlyClaudePlanInput" class="settings-number-input" min="0" step="0.01" inputmode="decimal" placeholder="200" aria-label="Monthly Claude plan in US dollars">
+              </div>
+            </div>
+            <div class="settings-row" data-keywords="codex subscription monthly plan cost price weekly spend estimate billing">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Monthly Codex plan</div>
+                <div class="settings-row-desc">Estimate each Codex session's share of your weekly subscription spend.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-currency-prefix" aria-hidden="true">$</span>
+                <input type="number" id="settingsMonthlyCodexPlanInput" class="settings-number-input" min="0" step="0.01" inputmode="decimal" placeholder="100" aria-label="Monthly Codex plan in US dollars">
+              </div>
+            </div>
           </section>
 
           <section class="settings-section" id="settingsSection-experimental" data-section-id="experimental" role="tabpanel" aria-labelledby="settingsRailTab-experimental" hidden>
