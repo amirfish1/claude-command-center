@@ -1,0 +1,1 @@
+- Settings > Engines: Automatic CLI updates now has an on/off switch. Off stops the hourly update pass; Update now still works.
