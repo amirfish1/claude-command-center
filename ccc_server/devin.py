@@ -1429,6 +1429,10 @@ def _devin_cli_row_fields_for_session(con, raw_id, prev):
                 continue
             if not isinstance(msg, dict) or str(msg.get("role") or "").lower() != "assistant":
                 continue
+            # Compactor context summaries are not replies — the sidebar
+            # preview/model label should show the last real one.
+            if _devin_cli_is_context_summary(msg):
+                continue
             meta = msg.get("metadata") or {}
             if not isinstance(meta, dict):
                 meta = {}
@@ -2437,8 +2441,28 @@ def _find_devin_cli_conversations_locked(
     return rows
 
 
+def _devin_cli_is_context_summary(msg):
+    """True when an assistant message is a Devin compactor context summary.
+
+    Every few turns the CLI's compactor writes a "Request and Intent /
+    Current state / ..." handoff as an ordinary assistant row — rendered
+    inline it's a multi-screen wall of text (CCC-1174). Two metadata
+    markers identify it, and they coincide on all observed rows:
+    ``metadata.generation_model == "compactor"`` and the
+    ``metadata.extensions["devin-rs/summary"]`` extension. Text matching
+    on the heading is deliberately NOT a signal — a real reply can quote
+    it."""
+    meta = msg.get("metadata") or {}
+    if not isinstance(meta, dict):
+        return False
+    if str(meta.get("generation_model") or "").strip().lower() == "compactor":
+        return True
+    ext = meta.get("extensions")
+    return isinstance(ext, dict) and bool(ext.get("devin-rs/summary"))
+
+
 def _devin_cli_parse_message_row(chat_message, created_at, seen):
-    """Parse one message_nodes row into (role, text, ts_str) or None.
+    """Parse one message_nodes row into (role, text, ts_str, is_summary).
 
     Reuses the existing dedup ``seen`` set so incremental parses stay
     consistent with a full parse. Unknown / skipped shapes return None."""
@@ -2467,7 +2491,8 @@ def _devin_cli_parse_message_row(chat_message, created_at, seen):
     ts_raw = msg.get("metadata", {}).get("created_at") or created_at
     ts = _devin_epoch(ts_raw)
     ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
-    return role, text, ts_str
+    is_summary = role == "assistant" and _devin_cli_is_context_summary(msg)
+    return role, text, ts_str, is_summary
 
 
 def _parse_devin_cli_conversation(session_id, after_line=0):
@@ -2504,7 +2529,7 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
             )
             if parsed is None:
                 continue
-            role, text, ts_str = parsed
+            role, text, ts_str, is_summary = parsed
             line += 1
             max_row_id = max(max_row_id, row["row_id"])
             if role == "user":
@@ -2516,7 +2541,10 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
                 events.append({
                     "line": line, "ts": ts_str, "type": "assistant",
                     "message_id": f"devincli-{line}",
-                    "blocks": [{"kind": "text", "text": text}],
+                    "blocks": [{
+                        "kind": "devin_summary" if is_summary else "text",
+                        "text": text,
+                    }],
                 })
 
     try:
@@ -2593,7 +2621,7 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
                 )
                 if parsed is None:
                     continue
-                role, text, ts_str = parsed
+                role, text, ts_str, is_summary = parsed
                 line += 1
                 if role == "user":
                     events.append({
@@ -2604,7 +2632,10 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
                     events.append({
                         "line": line, "ts": ts_str, "type": "assistant",
                         "message_id": f"devincli-{line}",
-                        "blocks": [{"kind": "text", "text": text}],
+                        "blocks": [{
+                            "kind": "devin_summary" if is_summary else "text",
+                            "text": text,
+                        }],
                     })
             with _DEVIN_CLI_PARSE_CACHE_LOCK:
                 _DEVIN_CLI_PARSE_CACHE.pop(raw_id, None)
@@ -2705,7 +2736,9 @@ def _extract_devin_cli_usage(session_id):
             total_cache_read += cache_read
             total_cache_creation += cache_creation
             gm = meta.get("generation_model")
-            if gm:
+            # Compactor summaries still count toward token totals/turn
+            # series, but "compactor" is not the session's chat model.
+            if gm and str(gm).strip().lower() != "compactor":
                 model = gm
             if window or out_tok:
                 turn_epoch = _devin_epoch(meta.get("created_at"))
@@ -2957,9 +2990,18 @@ def _devin_cli_session_detail(session_id):
     for ev in reversed(events):
         if ev.get("type") == "assistant" and not last_assistant_text:
             blocks = ev.get("blocks")
-            if isinstance(blocks, list) and blocks and isinstance(blocks[0], dict):
-                last_assistant_text = blocks[0].get("text", "")
-            else:
+            if isinstance(blocks, list):
+                # First real text block — a compactor context summary
+                # (kind "devin_summary") is not the last reply.
+                last_assistant_text = next(
+                    (
+                        str(b.get("text") or "")
+                        for b in blocks
+                        if isinstance(b, dict) and b.get("kind") == "text"
+                    ),
+                    "",
+                )
+            if not last_assistant_text:
                 last_assistant_text = ev.get("text", "")
         turns.insert(0, ev)
         if len(turns) >= 3:

@@ -59351,6 +59351,23 @@
             }
             blockParts.push('<div class="assistant-text" dir="auto">' + renderMarkdown(b.text) + '</div>');
             hasNonTool = true;
+          } else if (b.kind === 'devin_summary') {
+            // CCC-1174: Devin's compactor drops a "Request and Intent / …
+            // / Current state" context handoff into the transcript as an
+            // ordinary assistant message every few turns — a multi-screen
+            // wall each time. Render it as ONE collapsed <details>; the
+            // CCC-913 per-section split stays available once expanded.
+            // Not pushed to agentAnswerParts: it is a checkpoint, not the
+            // reply (also keeps it out of read-aloud/copy).
+            const _sumText = String(b.text || '');
+            if (_sumText.trim()) {
+              blockParts.push('<details class="ctx-usage-details devin-summary-details devin-context-summary">'
+                + '<summary title="' + escapeAttr('Auto-generated context checkpoint from the Devin compactor - not a reply.') + '">'
+                + 'Context summary</summary>'
+                + renderDevinSummaryBlock(_sumText)
+                + '</details>');
+              hasNonTool = true;
+            }
           } else if (b.kind === 'plan') {
             // ACP plan snapshot (kimi TodoList): compact todo card.
             const planHtml = _planEntriesHtml(b.entries);

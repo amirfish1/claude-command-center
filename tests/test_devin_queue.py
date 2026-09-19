@@ -1612,5 +1612,171 @@ class DevinCliNextHomeTests(unittest.TestCase):
         self.assertEqual(ids, {"devincli-orig-cli-session"})
 
 
+class DevinCompactorSummaryTests(unittest.TestCase):
+    """CCC-1174: Devin's compactor writes a periodic "Request and Intent /
+    Current state / ..." context handoff as an ordinary assistant row.
+    Those rows must be identified (metadata, never text matching) and
+    emitted as a distinct collapsed block kind — and must not masquerade
+    as the session's last reply in the sidebar/detail surfaces."""
+
+    SCHEMA = """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            working_directory TEXT,
+            backend_type TEXT,
+            model TEXT,
+            agent_mode TEXT,
+            created_at REAL,
+            last_activity_at REAL,
+            title TEXT,
+            main_chain_id TEXT
+        );
+        CREATE TABLE prompt_history (
+            session_id TEXT,
+            content TEXT,
+            timestamp REAL,
+            is_shell INTEGER
+        );
+        CREATE TABLE message_nodes (
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            node_id INTEGER NOT NULL,
+            parent_node_id INTEGER,
+            chat_message TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(session_id, node_id)
+        );
+        CREATE TABLE tool_call_state (
+            session_id TEXT NOT NULL,
+            tool_call_id TEXT NOT NULL,
+            tool_call_json TEXT,
+            tool_call_update_json TEXT,
+            PRIMARY KEY (session_id, tool_call_id)
+        );
+    """
+
+    SUMMARY_BODY = (
+        "## 1. Request and Intent\n\n### Enduring objective\n\n"
+        "The user wants the queue drained.\n\n"
+        "## 2. Current state\n\nTwo tickets closed."
+    )
+
+    def _msg(self, role, content, **meta):
+        return json.dumps({"role": role, "content": content, "metadata": meta})
+
+    def setUp(self):
+        self.server = importlib.import_module("server")
+        self.devin_mod = importlib.import_module("ccc_server.devin")
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
+        self.db_path = os.path.join(self.tmpdir, "sessions.db")
+        now = int(time.time() * 1000)
+        con = sqlite3.connect(self.db_path)
+        con.executescript(self.SCHEMA)
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, '', '', '', ?, ?, NULL, NULL)",
+            ("sum-test", "/tmp/ccc", now, now),
+        )
+        rows = [
+            ("sum-test", 1, self._msg("user", "drain the queue", is_user_input=True)),
+            ("sum-test", 2, self._msg(
+                "assistant", "closed two tickets",
+                generation_model="swarm-1",
+                metrics={"input_tokens": 900, "cache_read_tokens": 100},
+            )),
+            ("sum-test", 3, self._msg(
+                "assistant", self.SUMMARY_BODY,
+                generation_model="compactor",
+                metrics={"input_tokens": 60000, "output_tokens": 5000},
+            )),
+        ]
+        con.executemany(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            [(s, n, m, now + n) for s, n, m in rows],
+        )
+        con.commit()
+        con.close()
+
+        env_patch = mock.patch.dict(
+            os.environ,
+            {
+                "CCC_DEVIN_DB": self.db_path,
+                "CCC_DEVIN_NEXT_DB": os.path.join(self.tmpdir, "next-sessions.db"),
+            },
+        )
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        for p in (
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_PARSE_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_LIST_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ID_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO_LOADED", False),
+            mock.patch.object(
+                self.devin_mod,
+                "_devin_cli_row_memo_path",
+                lambda: self.devin_mod.Path(os.path.join(self.tmpdir, "row_memo.json")),
+            ),
+            mock.patch.object(
+                self.devin_mod, "_DEVIN_CLI_ROW_MEMO_BG", {"pending": {}, "thread": None}
+            ),
+            mock.patch.object(self.server, "_spawned_sessions", []),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.devin_mod._devin_cli_row_memo_background_join, 10)
+
+    def test_is_context_summary_uses_metadata_not_text(self):
+        m = self.devin_mod
+        self.assertTrue(m._devin_cli_is_context_summary(
+            {"role": "assistant", "content": "x",
+             "metadata": {"generation_model": "compactor"}}))
+        self.assertTrue(m._devin_cli_is_context_summary(
+            {"role": "assistant", "content": "x",
+             "metadata": {"extensions": {"devin-rs/summary": {"source": "file_compactor"}}}}))
+        # A real reply that merely QUOTES the summary heading is not one.
+        self.assertFalse(m._devin_cli_is_context_summary(
+            {"role": "assistant", "content": self.SUMMARY_BODY,
+             "metadata": {"generation_model": "swarm-1"}}))
+        self.assertFalse(m._devin_cli_is_context_summary(
+            {"role": "assistant", "content": self.SUMMARY_BODY}))
+        self.assertFalse(m._devin_cli_is_context_summary(
+            {"role": "assistant", "content": "x", "metadata": "junk"}))
+        self.assertFalse(m._devin_cli_is_context_summary(
+            {"role": "assistant", "content": "x", "metadata": None}))
+
+    def test_parse_marks_summary_blocks_devin_summary(self):
+        parsed = self.server._parse_devin_cli_conversation("devincli-sum-test")
+        events = parsed["events"]
+        kinds = [
+            b["kind"]
+            for e in events if e.get("type") == "assistant"
+            for b in e.get("blocks", [])
+        ]
+        self.assertEqual(kinds, ["text", "devin_summary"])
+        self.assertEqual(events[0]["type"], "user_text")
+        summary_ev = events[-1]
+        self.assertEqual(summary_ev["blocks"][0]["text"], self.SUMMARY_BODY)
+
+    def test_sidebar_tail_walk_skips_summary(self):
+        rows = {r["id"]: r for r in self.server.find_devin_cli_conversations(
+            "/tmp/ccc", include_old=True)}
+        row = rows["devincli-sum-test"]
+        self.assertEqual(row["last_assistant_text"], "closed two tickets")
+        self.assertEqual(row["model"], "swarm-1")
+
+    def test_session_detail_skips_summary_for_last_text(self):
+        detail, status = self.devin_mod._devin_cli_session_detail("devincli-sum-test")
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["last_assistant_text"], "closed two tickets")
+
+    def test_usage_model_is_not_compactor(self):
+        usage = self.devin_mod._extract_devin_cli_usage("devincli-sum-test")
+        self.assertEqual(usage["model"], "swarm-1")
+        # The compactor's tokens are still real spend — totals include them.
+        self.assertEqual(usage["total_output_tokens"], 5000)
+
+
 if __name__ == "__main__":
     unittest.main()

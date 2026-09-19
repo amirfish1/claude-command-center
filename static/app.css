@@ -1752,6 +1752,14 @@
   details.ctx-usage-details > summary::before { content: '▸'; font-size: 10px; }
   details.ctx-usage-details[open] > summary::before { content: '▾'; }
   details.ctx-usage-details > summary:hover { color: var(--text); border-color: var(--accent, #58a6ff); }
+  /* CCC-1174: a Devin compactor context checkpoint is bookkeeping, not a
+     reply — keep its collapsed row quieter and dashed-bordered. */
+  details.devin-context-summary > summary {
+    border-style: dashed; opacity: 0.85;
+  }
+  details.devin-context-summary > summary::after {
+    content: 'auto-checkpoint'; font-size: 10px; opacity: 0.7;
+  }
   .md-code {
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
     background: rgba(110,118,129,0.2); padding: 1px 5px;
