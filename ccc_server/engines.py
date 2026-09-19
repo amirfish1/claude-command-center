@@ -129,10 +129,11 @@ def _detect_engines_installed():
     return {"engines": engines}
 
 
-def _engines_installed():
+def _engines_installed(fresh=False):
     now = time.monotonic()
     if (
-        _ENGINES_INSTALLED_CACHE["data"] is not None
+        not fresh
+        and _ENGINES_INSTALLED_CACHE["data"] is not None
         and now - _ENGINES_INSTALLED_CACHE["ts"] < _ENGINES_INSTALLED_TTL_SEC
     ):
         return copy.deepcopy(_ENGINES_INSTALLED_CACHE["data"])

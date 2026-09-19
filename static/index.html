@@ -2650,128 +2650,16 @@
               </div>
             </div>
 
-            <div class="settings-subsection-label">Default for new sessions</div>
-
-            <div class="settings-row" data-keywords="spawn defaults engine new session codex claude kimi">
+            <div class="settings-row" data-keywords="spawn defaults engine model effort worker moved engines">
               <div class="settings-row-main">
-                <div class="settings-row-label">Engine</div>
-                <div class="settings-row-desc">Default engine used when you spawn a new session. Used by New session and by ccc-orchestration when engine is omitted.</div>
+                <div class="settings-row-label">Default engine, model and effort</div>
+                <div class="settings-row-desc">Defaults for new sessions and WatchTower workers live with the engines they pick from.</div>
               </div>
               <div class="settings-row-control">
-                <select id="spawnDefaultsEngine" class="bug-input" style="width:auto;">
-                  <option value="claude">Claude</option>
-                  <option value="codex">Codex</option>
-                  <option value="cursor">Cursor</option>
-                  <option value="antigravity">Antigravity</option>
-                  <option value="kilo">Kilo</option>
-                  <option value="hermes">Hermes</option>
-                  <option value="kimi">Kimi</option>
-                  <option value="opencode">OpenCode</option>
-                  <option value="grok">Grok</option>
-                </select>
+                <button type="button" class="settings-action-btn" data-settings-goto="engines">Open Engines</button>
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="spawn defaults model new session">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Model</div>
-                <div class="settings-row-desc">The New session model picker mirrors this value. Explicit API payloads still win.</div>
-              </div>
-              <div class="settings-row-control">
-                <select id="spawnDefaultsModel" class="bug-input" style="width:auto;"></select>
-                <input id="spawnDefaultsOtherModel" class="bug-input" type="text" style="display:none;width:auto;" placeholder="Model id or Antigravity label">
-              </div>
-            </div>
-
-            <div class="settings-row" id="spawnDefaultsEffortField" style="display:none;" data-keywords="spawn defaults reasoning effort new session">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Reasoning effort</div>
-                <div class="settings-row-desc">Used for new sessions on the default engine unless a request chooses an explicit effort. Hidden for engines with no reasoning-effort setting.</div>
-              </div>
-              <div class="settings-row-control">
-                <select id="spawnDefaultsEffort" class="bug-input" style="width:auto;">
-                  <option value="">Engine default</option>
-                  <option value="low">Light</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                  <option value="xhigh">Extra High</option>
-                  <option value="max">Max</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="settings-row" data-keywords="spawn defaults autocompact compact new session">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Autocompact threshold</div>
-                <div class="settings-row-desc">Claude Code auto-compacts when context reaches this many tokens. Applies to new sessions you spawn.</div>
-              </div>
-              <div class="settings-row-control">
-                <input type="number" id="spawnDefaultsAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Autocompact threshold in thousands of tokens">
-                <span class="settings-suffix" aria-hidden="true">K tokens</span>
-              </div>
-            </div>
-
-            <div class="settings-subsection-label">Default for workers</div>
-
-            <div class="settings-row" data-keywords="worker engine watchtower spawn defaults">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Worker engine</div>
-                <div class="settings-row-desc">WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).</div>
-              </div>
-              <div class="settings-row-control">
-                <select id="spawnDefaultsWorkerEngine" class="bug-input" style="width:auto;">
-                  <option value="">WatchTower default</option>
-                  <option value="claude">Claude</option>
-                  <option value="codex">Codex</option>
-                  <option value="kimi">Kimi</option>
-                  <option value="grok">Grok</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="settings-row" id="spawnDefaultsWorkerModelField" data-keywords="worker model watchtower spawn defaults">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Worker model</div>
-                <div class="settings-row-desc">The default model for WatchTower workers using the selected Worker engine. Queue-specific models still win.</div>
-              </div>
-              <div class="settings-row-control">
-                <select id="spawnDefaultsWorkerModel" class="bug-input" style="width:auto;"></select>
-                <input id="spawnDefaultsWorkerOtherModel" class="bug-input" type="text" style="display:none;width:auto;" placeholder="Model id">
-              </div>
-            </div>
-
-            <div class="settings-row" id="spawnDefaultsWorkerEffortField" data-keywords="worker reasoning effort watchtower spawn defaults">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Worker reasoning effort</div>
-                <div class="settings-row-desc">WatchTower queue workers spawn at this effort when the queue has no explicit override. Engines with no reasoning-effort setting ignore it.</div>
-              </div>
-              <div class="settings-row-control">
-                <!-- No worker engine chosen means WatchTower picks one at claim
-                     time, so the option list here has to be the union of every
-                     ladder; app.js narrows it once a worker engine is selected. -->
-                <select id="spawnDefaultsWorkerEffort" class="bug-input" style="width:auto;">
-                  <option value="">Engine default</option>
-                  <option value="low">Light</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                  <option value="xhigh">Extra High</option>
-                  <option value="max">Max</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="settings-row" data-keywords="worker autocompact compact watchtower spawn defaults">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Worker autocompact threshold</div>
-                <div class="settings-row-desc">Claude Code auto-compacts for WatchTower queue workers at this token count. Separate from the new-session default.</div>
-              </div>
-              <div class="settings-row-control">
-                <input type="number" id="spawnDefaultsWorkerAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Worker autocompact threshold in thousands of tokens">
-                <span class="settings-suffix" aria-hidden="true">K tokens</span>
-              </div>
-            </div>
-
-            <div class="settings-row-note" id="spawnDefaultsError" hidden></div>
 
             <div class="settings-reset-row">
               <button type="button" class="settings-reset-btn" id="settingsResetSessions">Reset Sessions &amp; Spawning to defaults</button>
@@ -2781,6 +2669,161 @@
           <section class="settings-section" id="settingsSection-engines" data-section-id="engines" role="tabpanel" aria-labelledby="settingsRailTab-engines">
             <div class="settings-section-eyebrow">Engines</div>
 
+            <div class="eng-hero" data-keywords="engines status installed signed in usage ready setup overview">
+              <div class="eng-hero-main">
+                <div class="eng-hero-title" id="engHeroTitle">Checking your engines…</div>
+                <div class="eng-hero-sub" id="engHeroSub">Install, sign in and switch engines on or off. Status refreshes on its own.</div>
+              </div>
+              <div class="eng-hero-stats" id="engHeroStats" aria-hidden="true"></div>
+            </div>
+
+            <div class="eng-defaults">
+              <div class="eng-card eng-defaults-card">
+                <div class="eng-card-head">
+                  <div class="eng-card-title">New sessions</div>
+                  <div class="eng-card-sub">What you get when you spawn without choosing.</div>
+                </div>
+
+                  <div class="settings-row" data-keywords="spawn defaults engine new session codex claude kimi">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Engine</div>
+                      <div class="settings-row-desc">Default engine used when you spawn a new session. Used by New session and by ccc-orchestration when engine is omitted.</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <select id="spawnDefaultsEngine" class="bug-input" style="width:auto;">
+                        <option value="claude">Claude</option>
+                        <option value="codex">Codex</option>
+                        <option value="cursor">Cursor</option>
+                        <option value="antigravity">Antigravity</option>
+                        <option value="kilo">Kilo</option>
+                        <option value="hermes">Hermes</option>
+                        <option value="kimi">Kimi</option>
+                        <option value="opencode">OpenCode</option>
+                        <option value="grok">Grok</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="settings-row" data-keywords="spawn defaults model new session">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Model</div>
+                      <div class="settings-row-desc">The New session model picker mirrors this value. Explicit API payloads still win.</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <select id="spawnDefaultsModel" class="bug-input" style="width:auto;"></select>
+                      <input id="spawnDefaultsOtherModel" class="bug-input" type="text" style="display:none;width:auto;" placeholder="Model id or Antigravity label">
+                    </div>
+                  </div>
+
+                  <div class="settings-row" id="spawnDefaultsEffortField" style="display:none;" data-keywords="spawn defaults reasoning effort new session">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Reasoning effort</div>
+                      <div class="settings-row-desc">Used for new sessions on the default engine unless a request chooses an explicit effort. Hidden for engines with no reasoning-effort setting.</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <select id="spawnDefaultsEffort" class="bug-input" style="width:auto;">
+                        <option value="">Engine default</option>
+                        <option value="low">Light</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">Extra High</option>
+                        <option value="max">Max</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="settings-row" data-keywords="spawn defaults autocompact compact new session">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Autocompact threshold</div>
+                      <div class="settings-row-desc">Claude Code auto-compacts when context reaches this many tokens. Applies to new sessions you spawn.</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <input type="number" id="spawnDefaultsAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Autocompact threshold in thousands of tokens">
+                      <span class="settings-suffix" aria-hidden="true">K tokens</span>
+                    </div>
+                  </div>
+              </div>
+              <div class="eng-card eng-defaults-card">
+                <div class="eng-card-head">
+                  <div class="eng-card-title">Workers</div>
+                  <div class="eng-card-sub">WatchTower queue workers, unless the queue overrides.</div>
+                </div>
+
+                  <div class="settings-row" data-keywords="worker engine watchtower spawn defaults">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Worker engine</div>
+                      <div class="settings-row-desc">WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <select id="spawnDefaultsWorkerEngine" class="bug-input" style="width:auto;">
+                        <option value="">WatchTower default</option>
+                        <option value="claude">Claude</option>
+                        <option value="codex">Codex</option>
+                        <option value="kimi">Kimi</option>
+                        <option value="grok">Grok</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="settings-row" id="spawnDefaultsWorkerModelField" data-keywords="worker model watchtower spawn defaults">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Worker model</div>
+                      <div class="settings-row-desc">The default model for WatchTower workers using the selected Worker engine. Queue-specific models still win.</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <select id="spawnDefaultsWorkerModel" class="bug-input" style="width:auto;"></select>
+                      <input id="spawnDefaultsWorkerOtherModel" class="bug-input" type="text" style="display:none;width:auto;" placeholder="Model id">
+                    </div>
+                  </div>
+
+                  <div class="settings-row" id="spawnDefaultsWorkerEffortField" data-keywords="worker reasoning effort watchtower spawn defaults">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Worker reasoning effort</div>
+                      <div class="settings-row-desc">WatchTower queue workers spawn at this effort when the queue has no explicit override. Engines with no reasoning-effort setting ignore it.</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <!-- No worker engine chosen means WatchTower picks one at claim
+                           time, so the option list here has to be the union of every
+                           ladder; app.js narrows it once a worker engine is selected. -->
+                      <select id="spawnDefaultsWorkerEffort" class="bug-input" style="width:auto;">
+                        <option value="">Engine default</option>
+                        <option value="low">Light</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">Extra High</option>
+                        <option value="max">Max</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="settings-row" data-keywords="worker autocompact compact watchtower spawn defaults">
+                    <div class="settings-row-main">
+                      <div class="settings-row-label">Worker autocompact threshold</div>
+                      <div class="settings-row-desc">Claude Code auto-compacts for WatchTower queue workers at this token count. Separate from the new-session default.</div>
+                    </div>
+                    <div class="settings-row-control">
+                      <input type="number" id="spawnDefaultsWorkerAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Worker autocompact threshold in thousands of tokens">
+                      <span class="settings-suffix" aria-hidden="true">K tokens</span>
+                    </div>
+                  </div>
+              </div>
+            </div>
+            <div class="settings-row-note" id="spawnDefaultsError" hidden></div>
+
+            <div class="eng-list-head">
+              <div class="settings-subsection-label">All engines</div>
+              <div class="eng-filter" id="engFilter" role="tablist" aria-label="Filter engines">
+                <button type="button" class="eng-filter-btn is-active" data-eng-filter="all" role="tab" aria-selected="true">All <span data-eng-count="all"></span></button>
+                <button type="button" class="eng-filter-btn" data-eng-filter="ready" role="tab" aria-selected="false">Ready <span data-eng-count="ready"></span></button>
+                <button type="button" class="eng-filter-btn" data-eng-filter="setup" role="tab" aria-selected="false">Needs setup <span data-eng-count="setup"></span></button>
+                <button type="button" class="eng-filter-btn" data-eng-filter="off" role="tab" aria-selected="false">Off <span data-eng-count="off"></span></button>
+              </div>
+            </div>
+            <div class="eng-list" id="engList" data-keywords="engine claude codex cursor antigravity gemini kilo opencode kimi hermes devin grok aider droid pi install login sign in authenticate verify usage quota enable disable">
+              <div class="eng-list-empty">Checking installed engines…</div>
+            </div>
+
+            <div class="settings-subsection-label">Updates</div>
             <div class="settings-row" data-keywords="engine cli automatic updates versions install latest claude codex cursor antigravity">
               <div class="settings-row-main">
                 <div class="settings-row-label">Automatic CLI updates</div>
@@ -2792,36 +2835,7 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="kimi engine acp setup install moonshot membership">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Kimi (ACP)</div>
-                <div class="settings-row-desc" id="kimiSetupDesc">Checking setup…</div>
-              </div>
-              <div class="settings-row-control kimi-setup-control">
-                <span class="settings-row-value kimi-setup-version" id="kimiSetupVersion"></span>
-                <button type="button" class="settings-action-btn" id="kimiSetupVerifyBtn">Verify setup</button>
-                <button type="button" class="settings-action-btn" id="kimiSetupRecheckBtn">Recheck</button>
-              </div>
-            </div>
-
-            <div class="settings-row" id="kimiSetupStepsRow" hidden data-keywords="kimi install login guide steps">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Get started with Kimi</div>
-                <div class="settings-row-desc kimi-setup-steps" id="kimiSetupSteps"></div>
-              </div>
-            </div>
-
-            <div class="settings-row" data-keywords="kimi docs membership third party setup guide">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Kimi documentation</div>
-                <div class="settings-row-desc">Membership plans and the official third-party agent setup guide.</div>
-              </div>
-              <div class="settings-row-control kimi-setup-links">
-                <a class="settings-action-btn" id="kimiDocsMembership" href="https://www.kimi.com/code/docs/en/kimi-code/membership.html" target="_blank" rel="noopener noreferrer">Membership</a>
-                <a class="settings-action-btn" id="kimiDocsSetup" href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>
-              </div>
-            </div>
-
+            <div class="settings-subsection-label">API keys</div>
             <div class="settings-row" data-keywords="byok bring your own key api key openrouter tokenrouter anthropic openai xai moonshot google keychain">
               <div class="settings-row-main">
                 <div class="settings-row-label">BYOK — bring your own key</div>

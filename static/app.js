@@ -67929,6 +67929,9 @@
     spawnDefaultsState.auto_compact_k = _mergeAutoCompactK(data.auto_compact_k);
     spawnDefaultsState.worker_auto_compact_k = _mergeAutoCompactK(data.worker_auto_compact_k);
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
+    if (Array.isArray(data.disabled_engines)) {
+      spawnDefaultsState.disabled_engines = data.disabled_engines.filter(e => typeof e === 'string');
+    }
     // Model policy deny-list, for the confirm-before-spawn prompt (see
     // installSpawnProvenanceTag). Server still enforces this -- this copy
     // just lets the UI ask before round-tripping a 400.
@@ -67952,6 +67955,8 @@
     // loop (~40 req/s per idle tab, measured 2026-09-12) that starved the
     // archive bootstrap.
     if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
+    if (typeof applyDisabledEnginesToPickers === 'function') applyDisabledEnginesToPickers();
+    if (typeof renderEnginesHub === 'function') renderEnginesHub();
   }
 
   // setSpawnDefaultModel/setSpawnEngine only ever mutate in-memory +
@@ -77542,75 +77547,443 @@
     });
   }
 
-  // ── Engines section: 'Add Kimi engine' guided setup (WEBINAR-DEMO-23) ──
-  // States: not installed (install steps) → installed, unverified (version +
-  // verify button) → verified working. Verification is one ACP session/new
-  // roundtrip server-side (no prompt, no tokens burned).
-  let _kimiSetupState = null;
-  async function refreshKimiSetupStatus() {
-    const desc = document.getElementById('kimiSetupDesc');
-    if (!desc) return;
-    const versionEl = document.getElementById('kimiSetupVersion');
-    const stepsRow = document.getElementById('kimiSetupStepsRow');
-    const stepsEl = document.getElementById('kimiSetupSteps');
-    const verifyBtn = document.getElementById('kimiSetupVerifyBtn');
-    try {
-      const res = await fetch('/api/engines/kimi/setup-status', { cache: 'no-store' });
-      const data = await res.json();
-      _kimiSetupState = data || {};
-    } catch (_) {
-      _kimiSetupState = { ok: false };
-    }
-    const st = _kimiSetupState || {};
-    if (!st.installed) {
-      desc.textContent = st.reason
-        ? ('Kimi CLI not found: ' + st.reason)
-        : 'Kimi CLI not found on this machine.';
-      if (versionEl) versionEl.textContent = 'not installed';
-      if (stepsRow) stepsRow.hidden = false;
-      if (stepsEl) stepsEl.innerHTML =
-      '1. Get a Kimi membership. See <a href="https://www.kimi.com/code/docs/en/kimi-code/membership.html" target="_blank" rel="noopener noreferrer">Membership</a> (much cheaper than Claude, includes Kimi Code).<br>'
-      + '2. Install the Kimi Code CLI. See <a href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>.<br>'
-        + '3. Sign in with your account: <code>kimi login</code>.<br>'
-      + '4. Click <strong>Recheck</strong>, then <strong>Verify setup</strong> to spawn a smoke-test session.';
-      if (verifyBtn) verifyBtn.style.display = 'none';
-      return;
-    }
-    desc.textContent = 'Installed: ' + (st.version || 'unknown version')
-      + (st.bin ? ' (' + st.bin + ')' : '')
-      + '. Default model: ' + (st.model || 'kimi-code/k3') + '.';
-    if (versionEl) versionEl.textContent = st.version || '';
-    if (stepsRow) stepsRow.hidden = true;
-    if (verifyBtn) verifyBtn.style.display = '';
+  // ── Engines hub (Settings > Engines) ──
+  // One row per engine: installed / signed in / usage, an on-off switch every
+  // engine picker honours, and a drawer with the next setup step. Composed
+  // client-side from endpoints that already exist (doctor, onboarding status,
+  // usage, update-status), all cheap and cached server-side. Status keeps
+  // itself fresh while the pane is showing; there is no refresh control.
+  const ENGINE_HUB_META = {
+    claude: { label: 'Claude Code', vendor: 'Anthropic', hue: 24, docs: 'https://docs.claude.com/en/docs/claude-code' },
+    codex: { label: 'Codex', vendor: 'OpenAI', hue: 160, docs: 'https://developers.openai.com/codex/cli' },
+    cursor: { label: 'Cursor Agent', vendor: 'Cursor', hue: 220, docs: 'https://cursor.com/cli' },
+    antigravity: { label: 'Antigravity', vendor: 'Google', hue: 265, docs: 'https://antigravity.google' },
+    kimi: { label: 'Kimi Code', vendor: 'Moonshot', hue: 200, docs: 'https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html',
+      links: [['Membership', 'https://www.kimi.com/code/docs/en/kimi-code/membership.html']] },
+    opencode: { label: 'OpenCode', vendor: 'Any provider', hue: 45, docs: 'https://opencode.ai/docs',
+      install: 'curl -fsSL https://opencode.ai/install | bash', login: 'opencode auth login' },
+    kilo: { label: 'Kilo Code', vendor: 'Any provider', hue: 50, docs: 'https://kilo.ai/docs/cli', install: 'npm install -g @kilocode/cli' },
+    hermes: { label: 'Hermes', vendor: 'Nous Research', hue: 300, docs: 'https://github.com/NousResearch/hermes-agent' },
+    devin: { label: 'Devin', vendor: 'Cognition', hue: 185, docs: 'https://docs.devin.ai' },
+    grok: { label: 'Grok', vendor: 'xAI', hue: 0, docs: 'https://docs.x.ai' },
+    droid: { label: 'Droid', vendor: 'Factory', hue: 15, docs: 'https://docs.factory.ai/cli/getting-started/quickstart',
+      install: 'curl -fsSL https://app.factory.ai/cli | sh' },
+    aider: { label: 'Aider', vendor: 'Any provider', hue: 120, docs: 'https://aider.chat/docs/install.html',
+      install: 'python -m pip install aider-install && aider-install' },
+    pi: { label: 'Pi', vendor: 'Any provider', hue: 330, docs: 'https://github.com/badlogic/pi-mono' },
+  };
+  const ENGINE_HUB_WORKER_ENGINES = ['claude', 'codex', 'kimi', 'grok'];
+  const ENGINE_HUB_POLL_MS = 8000;
+  let _engHubData = null;
+  let _engHubSig = '';
+  let _engHubFilter = 'all';
+  let _engHubOpen = '';
+  let _engHubTimer = null;
+  let _engHubKimiVersion = '';
+  const _engHubNotes = {};   // engine -> { kind, text } outcome of the last action
+
+  function _engHubVisible() {
+    const sec = document.getElementById('settingsSection-engines');
+    return !!($settingsModal && !$settingsModal.hidden && sec
+      && (sec.classList.contains('is-active-section') || $settingsModal.classList.contains('is-searching')));
   }
-  if (document.getElementById('kimiSetupVerifyBtn')) {
-    document.getElementById('kimiSetupVerifyBtn').addEventListener('click', async (ev) => {
-      const btn = ev.currentTarget;
-      const desc = document.getElementById('kimiSetupDesc');
-      btn.disabled = true;
-      btn.textContent = 'Verifying…';
-      try {
-        const res = await fetch('/api/engines/kimi/verify', { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (data && data.ok && desc) {
-    desc.textContent = 'Working. Spawned smoke-test session '
-            + String(data.session_id || '').slice(0, 21) + '… via ACP. Kimi is ready to use.';
-          if (typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(btn.closest('.settings-row'));
-        } else if (desc) {
-          desc.textContent = 'Setup not working yet: ' + ((data && data.error) || 'unknown error')
-        + '. Run `kimi login` in a terminal and retry.';
-        }
-      } catch (err) {
-        if (desc) desc.textContent = 'Verify failed: ' + ((err && err.message) || 'network');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Verify setup';
-      }
+
+  function _engHubDisabledSet() {
+    return new Set(Array.isArray(spawnDefaultsState.disabled_engines) ? spawnDefaultsState.disabled_engines : []);
+  }
+
+  // Hide switched-off engines from every engine <select>. The option a
+  // select currently shows is never pulled out from under it.
+  function applyDisabledEnginesToPickers() {
+    const off = _engHubDisabledSet();
+    [$convInputEngineSelect, $kptToolbarEngineSelect,
+      document.getElementById('spawnDefaultsEngine'),
+      document.getElementById('spawnDefaultsWorkerEngine')].forEach(sel => {
+      if (!sel) return;
+      Array.from(sel.options).forEach(opt => {
+        const hide = !!opt.value && off.has(opt.value) && sel.value !== opt.value;
+        opt.hidden = hide;
+        opt.disabled = hide;
+      });
     });
   }
-  if (document.getElementById('kimiSetupRecheckBtn')) {
-    document.getElementById('kimiSetupRecheckBtn').addEventListener('click', refreshKimiSetupStatus);
+
+  function _engHubUsage(engine, usage) {
+    const u = usage && usage.ok !== false ? usage[engine] : null;
+    if (!u) return null;
+    const short = engine === 'claude' ? u.five_hour : u.session;
+    const week = engine === 'claude' ? u.seven_day : u.weekly;
+    const num = w => (w && typeof w.pct === 'number') ? Math.max(0, Math.min(100, w.pct)) : null;
+    const s = num(short), w = num(week);
+    if (s == null && w == null) return null;
+    const worst = Math.max(s == null ? 0 : s, w == null ? 0 : w);
+    return { session: s, weekly: w, worst,
+      resets: (week && week.resets_at) || (short && short.resets_at) || '',
+      stale: !!u.stale };
   }
+
+  function _engHubResetLabel(iso) {
+    const t = Date.parse(iso || '');
+    if (!Number.isFinite(t)) return '';
+    const h = (t - Date.now()) / 3600000;
+    if (h <= 0) return '';
+    return h < 24 ? 'resets in ' + Math.max(1, Math.round(h)) + 'h' : 'resets in ' + Math.round(h / 24) + 'd';
+  }
+
+  function _engHubRows() {
+    const d = _engHubData || {};
+    const doctor = (d.doctor && d.doctor.engines) || {};
+    const clis = (d.onboarding && d.onboarding.clis) || {};
+    const updates = (d.updates && d.updates.engines) || {};
+    const off = _engHubDisabledSet();
+    return Object.keys(doctor).map(engine => {
+      const doc = doctor[engine] || {};
+      const cli = clis[engine] || {};
+      const meta = ENGINE_HUB_META[engine] || { label: engine, vendor: '', hue: 210 };
+      const installed = !!doc.cli_present;
+      const auth = doc.auth_present;   // true / false / null (no probe)
+      const usage = installed ? _engHubUsage(engine, d.usage) : null;
+      const disabled = off.has(engine);
+      let state = 'ready';
+      if (disabled) state = 'off';
+      else if (!installed || auth === false) state = 'setup';
+      const version = String((updates[engine] || {}).version_after || (updates[engine] || {}).version_before
+        || (engine === 'kimi' ? _engHubKimiVersion : '') || '').replace(/\s*\(.*\)\s*$/, '').replace(/^codex-cli\s+/, '');
+      return {
+        engine, meta, installed, auth, usage, disabled, state, version,
+        bin: doc.cli_bin || '', email: cli.email || '',
+        install: cli.install_instruction || meta.install || '',
+        login: cli.login_instruction || meta.login || '',
+        canTerminal: !!clis[engine],
+        byokReady: !!doc.byok_ready, byokKey: !!doc.byok_profile_present,
+        isDefault: spawnDefaultsState.engine === engine,
+        isWorkerDefault: spawnDefaultsState.worker_engine === engine,
+        limited: !!(usage && usage.worst >= 100),
+      };
+    }).sort((a, b) => {
+      const rank = r => (r.isDefault ? 0 : r.isWorkerDefault ? 1 : r.state === 'ready' ? 2 : r.state === 'setup' ? (r.installed ? 3 : 4) : 5);
+      return rank(a) - rank(b);
+    });
+  }
+
+  function _engHubPill(kind, text, title) {
+    return '<span class="eng-pill is-' + kind + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>'
+      + '<span class="eng-pill-dot" aria-hidden="true"></span>' + escapeHtml(text) + '</span>';
+  }
+
+  function _engHubUsageHtml(row) {
+    if (!row.installed) return '<span class="eng-usage is-none">-</span>';
+    const u = row.usage;
+    if (!u) {
+      if (row.byokReady) {
+        return _engHubPill(row.byokKey ? 'ok' : 'muted', row.byokKey ? 'API key set' : 'Bring a key',
+          row.byokKey ? 'A BYOK key profile is saved for this engine.' : 'Runs on your own provider key. Add one under API keys below.');
+      }
+      return _engHubPill('muted', 'Usage not tracked', 'CCC has no quota signal for this engine.');
+    }
+    const pct = Math.round(u.worst);
+    const level = pct >= 100 ? 'bad' : pct >= 80 ? 'warn' : 'ok';
+    const bits = [];
+    if (u.session != null) bits.push('Session ' + Math.round(u.session) + '%');
+    if (u.weekly != null) bits.push('Week ' + Math.round(u.weekly) + '%');
+    const reset = _engHubResetLabel(u.resets);
+    if (reset) bits.push(reset);
+    return '<span class="eng-usage is-' + level + '" title="' + escapeHtml(bits.join(' · ')) + '">'
+      + '<span class="eng-usage-bar"><span class="eng-usage-fill" style="width:' + Math.max(3, pct) + '%"></span></span>'
+      + '<span class="eng-usage-text">' + (pct >= 100 ? 'Limit reached' : (100 - pct) + '% left') + '</span></span>';
+  }
+
+  function _engHubCmd(label, cmd) {
+    if (!cmd) return '';
+    return '<div class="eng-cmd"><span class="eng-cmd-label">' + escapeHtml(label) + '</span>'
+      + '<code>' + escapeHtml(cmd) + '</code>'
+      + '<button type="button" class="eng-cmd-copy" data-eng-copy="' + escapeHtml(cmd) + '">Copy</button></div>';
+  }
+
+  function _engHubDrawer(row) {
+    const e = row.engine;
+    let step = '';
+    if (!row.installed) {
+      step = '<div class="eng-step"><div class="eng-step-title">Step 1 of 2: install the CLI</div>'
+        + '<div class="eng-step-body">' + (row.install
+          ? 'Run the command below' + (row.canTerminal ? ', or let CCC open a terminal for you.' : ' in a terminal.') + ' This page notices on its own once it lands.'
+          : 'Follow the setup guide, then come back. This page notices on its own once it lands.') + '</div></div>';
+    } else if (row.auth === false) {
+      step = '<div class="eng-step"><div class="eng-step-title">Step 2 of 2: sign in</div>'
+        + '<div class="eng-step-body">The CLI is installed but not signed in.</div></div>';
+    } else if (row.limited) {
+      step = '<div class="eng-step is-warn"><div class="eng-step-title">Usage limit reached</div>'
+        + '<div class="eng-step-body">New sessions on this engine will stall until the window resets. '
+        + escapeHtml(_engHubResetLabel(row.usage.resets) || '') + '</div></div>';
+    }
+    const actions = [];
+    if (!row.installed && row.install && row.canTerminal) actions.push('<button type="button" class="settings-action-btn eng-primary" data-eng-act="install" data-eng="' + e + '">Install in terminal</button>');
+    if (row.installed && row.auth === false && row.login) actions.push('<button type="button" class="settings-action-btn eng-primary" data-eng-act="login" data-eng="' + e + '">Sign in</button>');
+    actions.push('<button type="button" class="settings-action-btn" data-eng-act="verify" data-eng="' + e + '">Verify setup</button>');
+    if (row.installed && row.auth !== false && row.login && row.canTerminal) actions.push('<button type="button" class="settings-action-btn" data-eng-act="login" data-eng="' + e + '">Switch account</button>');
+    if (row.state === 'ready' && !row.isDefault && SPAWN_DEFAULT_ENGINES.includes(e)) actions.push('<button type="button" class="settings-action-btn" data-eng-act="default" data-eng="' + e + '">Make default for new sessions</button>');
+    if (row.state === 'ready' && !row.isWorkerDefault && ENGINE_HUB_WORKER_ENGINES.includes(e)) actions.push('<button type="button" class="settings-action-btn" data-eng-act="worker" data-eng="' + e + '">Make worker default</button>');
+    const links = [['Setup guide', row.meta.docs]].concat(row.meta.links || []).filter(l => l[1]).map(l =>
+      '<a class="eng-link" href="' + escapeHtml(l[1]) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l[0]) + ' ↗</a>').join('');
+    const facts = [];
+    if (row.bin) facts.push(['Binary', row.bin]);
+    if (row.version) facts.push(['Version', row.version]);
+    if (row.email) facts.push(['Account', row.email]);
+    const model = (spawnDefaultsState.models || {})[e];
+    if (model) facts.push(['Default model', model]);
+    const note = _engHubNotes[e];
+    return '<div class="eng-drawer">' + step
+      + (facts.length ? '<dl class="eng-facts">' + facts.map(f => '<div><dt>' + escapeHtml(f[0]) + '</dt><dd>' + escapeHtml(f[1]) + '</dd></div>').join('') + '</dl>' : '')
+      + _engHubCmd('Install', row.installed ? '' : row.install) + _engHubCmd('Sign in', row.installed ? row.login : '')
+      + (note ? '<div class="settings-row-note is-' + note.kind + '">' + escapeHtml(note.text) + '</div>' : '')
+      + '<div class="eng-actions">' + actions.join('') + '<span class="eng-links">' + links + '</span></div></div>';
+  }
+
+  function _engHubRowHtml(row) {
+    const e = row.engine;
+    const open = _engHubOpen === e;
+    const mono = row.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
+    const sub = [row.meta.vendor, row.version ? 'v' + row.version.replace(/^v/, '') : '', row.email].filter(Boolean).join(' · ');
+    const tags = (row.isDefault ? '<span class="eng-tag">New sessions</span>' : '')
+      + (row.isWorkerDefault ? '<span class="eng-tag">Workers</span>' : '');
+    const locked = row.isDefault || row.isWorkerDefault;
+    const authPill = !row.installed ? ''
+      : row.auth === true ? _engHubPill('ok', 'Signed in', row.email || '')
+      : row.auth === false ? _engHubPill('bad', 'Not signed in')
+      : _engHubPill('muted', 'Sign-in not checked', 'CCC cannot see this engine\'s login state. Use Verify setup, or spawn a session to confirm.');
+    return '<div class="eng-row is-' + row.state + (open ? ' is-open' : '') + (row.limited ? ' is-limited' : '') + '" data-eng-row="' + e + '">'
+      + '<div class="eng-row-head">'
+      + '<button type="button" class="eng-row-main" data-eng-toggle-open="' + e + '" aria-expanded="' + open + '">'
+      + '<span class="eng-mono" style="--eng-hue:' + row.meta.hue + '" aria-hidden="true">' + escapeHtml(mono) + '</span>'
+      + '<span class="eng-id"><span class="eng-name">' + escapeHtml(row.meta.label) + tags + '</span>'
+      + '<span class="eng-sub">' + escapeHtml(sub) + '</span></span>'
+      + '<span class="eng-status">'
+      + (row.installed ? _engHubPill('ok', 'Installed', row.bin) : _engHubPill('bad', 'Not installed'))
+      + authPill + _engHubUsageHtml(row) + '</span>'
+      + '<svg class="eng-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>'
+      + '</button>'
+      + '<button type="button" class="settings-toggle' + (row.disabled ? '' : ' is-on') + '" role="switch" aria-checked="' + !row.disabled + '"'
+      + ' data-eng-enable="' + e + '"' + (locked ? ' disabled' : '')
+      + ' aria-label="Use ' + escapeHtml(row.meta.label) + ' in CCC"'
+      + ' title="' + (locked ? 'This is a default engine. Pick another default before switching it off.'
+        : row.disabled ? 'Off: hidden from every engine picker' : 'On: offered in every engine picker') + '">'
+      + '<span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button>'
+      + '</div>' + (open ? _engHubDrawer(row) : '') + '</div>';
+  }
+
+  function renderEnginesHub(force) {
+    const list = document.getElementById('engList');
+    if (!list || !_engHubData) return;
+    const rows = _engHubRows();
+    const counts = { all: rows.length, ready: 0, setup: 0, off: 0 };
+    rows.forEach(r => { counts[r.state] += 1; });
+    const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.installed, r.auth, r.usage, r.version, r.email,
+      r.isDefault, r.isWorkerDefault, r.byokKey, r.bin]), _engHubFilter, _engHubOpen, _engHubNotes,
+      (spawnDefaultsState.models || {})[_engHubOpen] || '']);
+    if (!force && sig === _engHubSig) return;
+    _engHubSig = sig;
+    const shown = rows.filter(r => _engHubFilter === 'all' || r.state === _engHubFilter);
+    list.innerHTML = shown.length ? shown.map(_engHubRowHtml).join('')
+      : '<div class="eng-list-empty">' + (_engHubFilter === 'setup' ? 'Nothing needs setup.' : 'No engines here.') + '</div>';
+    document.querySelectorAll('[data-eng-count]').forEach(el => { el.textContent = counts[el.getAttribute('data-eng-count')] || 0; });
+    document.querySelectorAll('[data-eng-filter]').forEach(btn => {
+      const on = btn.getAttribute('data-eng-filter') === _engHubFilter;
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    const title = document.getElementById('engHeroTitle');
+    const sub = document.getElementById('engHeroSub');
+    const stats = document.getElementById('engHeroStats');
+    const limited = rows.filter(r => r.state === 'ready' && r.limited);
+    if (title) title.textContent = counts.ready + ' of ' + counts.all + ' engines ready';
+    if (sub) {
+      const needs = rows.filter(r => r.state === 'setup');
+      sub.textContent = limited.length
+        ? limited.map(r => r.meta.label).join(', ') + (limited.length > 1 ? ' are' : ' is') + ' out of usage right now.'
+        : needs.length ? needs.map(r => r.meta.label).join(', ') + (needs.length > 1 ? ' need' : ' needs') + ' setup. Open a row for the next step.'
+        : 'Everything that is switched on is installed and signed in.';
+    }
+    if (stats) {
+      stats.innerHTML = [['ready', 'Ready', 'ok'], ['setup', 'Needs setup', 'warn'], ['off', 'Off', 'muted']].map(s =>
+        '<div class="eng-stat is-' + s[2] + '"><span class="eng-stat-num">' + counts[s[0]] + '</span><span class="eng-stat-label">' + s[1] + '</span></div>').join('');
+    }
+  }
+
+  async function refreshEnginesHub(opts) {
+    if (!document.getElementById('engList')) return;
+    const get = url => fetch(url, { cache: 'no-store' }).then(r => r.json()).catch(() => null);
+    const fresh = opts && opts.fresh;
+    const [doctor, onboarding, usage, updates] = await Promise.all([
+      get('/api/engines/doctor' + (fresh ? '?fresh=1' : '')), get('/api/onboarding/status'),
+      get('/api/usage/current'), get('/api/engines/update-status'),
+    ]);
+    if (!doctor || !doctor.engines) {
+      if (!_engHubData) {
+        const list = document.getElementById('engList');
+        if (list) list.innerHTML = '<div class="eng-list-empty">Engine status is unavailable right now. Retrying on its own.</div>';
+      }
+      return null;
+    }
+    _engHubData = { doctor, onboarding, usage, updates };
+    renderEnginesHub();
+    return _engHubData;
+  }
+
+  function _engHubSchedule() {
+    if (_engHubTimer) { clearTimeout(_engHubTimer); _engHubTimer = null; }
+    if (!_engHubVisible()) return;
+    _engHubTimer = setTimeout(async () => {
+      _engHubTimer = null;
+      if (_engHubVisible() && !document.hidden) await refreshEnginesHub();
+      _engHubSchedule();
+    }, ENGINE_HUB_POLL_MS);
+  }
+
+  function startEnginesHub() {
+    if (!_engHubVisible()) { _engHubSchedule(); return; }
+    refreshEnginesHub();
+    if (!_engHubKimiVersion) {
+      // Slow probe (spawns `kimi --version`), so once per page, not per poll.
+      fetch('/api/engines/kimi/setup-status', { cache: 'no-store' }).then(r => r.json()).then(st => {
+        _engHubKimiVersion = String((st && st.version) || '');
+        renderEnginesHub();
+      }).catch(() => {});
+    }
+    _engHubSchedule();
+  }
+
+  function _engHubNote(engine, kind, text) {
+    if (text) _engHubNotes[engine] = { kind, text }; else delete _engHubNotes[engine];
+    renderEnginesHub();
+  }
+
+  async function _engHubCopy(text, what) {
+    try { await navigator.clipboard.writeText(text); showOpToast('Copied ' + what, 'ok'); }
+    catch (_) { showOpToast('Could not copy. Select the command and copy it by hand.', 'err'); }
+  }
+
+  async function _engHubSaveDisabled(next) {
+    const prev = spawnDefaultsState.disabled_engines || [];
+    spawnDefaultsState.disabled_engines = next;
+    applyDisabledEnginesToPickers();
+    renderEnginesHub();
+    try {
+      const res = await fetch('/api/spawn-defaults', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disabled_engines: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'save failed');
+      mergeSpawnDefaults(data);
+    } catch (err) {
+      spawnDefaultsState.disabled_engines = prev;
+      applyDisabledEnginesToPickers();
+      renderEnginesHub();
+      showOpToast('Could not save engine switch: ' + ((err && err.message) || 'network'), 'err');
+    }
+  }
+
+  async function _engHubTerminal(engine, kind, row) {
+    const cmd = kind === 'install' ? row.install : row.login;
+    try {
+      const res = await fetch('/api/onboarding/' + kind + '-terminal', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok) {
+        _engHubNote(engine, 'busy', 'Opened ' + (data.terminal_app || 'a terminal') + ' running "' + (data.command || cmd)
+          + '". Finish there. This page updates on its own.');
+        return;
+      }
+    } catch (_) {}
+    if (cmd) {
+      await _engHubCopy(cmd, 'command');
+      _engHubNote(engine, 'busy', 'Copied "' + cmd + '". Run it in a terminal. This page updates on its own.');
+    }
+  }
+
+  async function _engHubVerify(engine, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Verifying…';
+    _engHubNote(engine, 'busy', 'Checking the CLI and sign-in…');
+    const data = await refreshEnginesHub({ fresh: true });
+    const row = _engHubRows().find(r => r.engine === engine);
+    if (!data || !row) { _engHubNote(engine, 'error', 'Could not reach the status check. Try again in a moment.'); return; }
+    if (!row.installed) { _engHubNote(engine, 'error', 'CLI not found on this machine. Install it, then verify again.'); return; }
+    if (row.auth === false) { _engHubNote(engine, 'error', 'Installed at ' + row.bin + ', but not signed in.'); return; }
+    if (engine === 'kimi') {
+      // Real roundtrip: one ACP session/new, no prompt, no tokens spent.
+      _engHubNote(engine, 'busy', 'Installed. Opening a smoke-test session over ACP…');
+      try {
+        const res = await fetch('/api/engines/kimi/verify', { method: 'POST' });
+        const v = await res.json().catch(() => ({}));
+        if (v && v.ok) _engHubNote(engine, 'ok', 'Working. Smoke-test session opened over ACP. Kimi is ready.');
+        else _engHubNote(engine, 'error', 'Not working yet: ' + ((v && v.error) || 'unknown error') + '. Run "kimi login" and verify again.');
+      } catch (err) {
+        _engHubNote(engine, 'error', 'Verify failed: ' + ((err && err.message) || 'network'));
+      }
+      return;
+    }
+    _engHubNote(engine, 'ok', row.auth === true
+      ? 'Looks good: CLI found at ' + row.bin + ' and signed in' + (row.email ? ' as ' + row.email : '') + '.'
+      : 'CLI found at ' + row.bin + '. CCC cannot read this engine\'s sign-in state, so spawn a session to confirm.');
+  }
+
+  (function wireEnginesHub() {
+    const section = document.getElementById('settingsSection-engines');
+    if (!section) return;
+    section.addEventListener('click', (ev) => {
+      const filterBtn = ev.target.closest('[data-eng-filter]');
+      if (filterBtn) { _engHubFilter = filterBtn.getAttribute('data-eng-filter'); renderEnginesHub(); return; }
+      const copyBtn = ev.target.closest('[data-eng-copy]');
+      if (copyBtn) { _engHubCopy(copyBtn.getAttribute('data-eng-copy'), 'command'); return; }
+      const enableBtn = ev.target.closest('[data-eng-enable]');
+      if (enableBtn) {
+        if (enableBtn.disabled) return;
+        const engine = enableBtn.getAttribute('data-eng-enable');
+        const off = _engHubDisabledSet();
+        if (off.has(engine)) off.delete(engine); else off.add(engine);
+        _engHubSaveDisabled(Array.from(off));
+        return;
+      }
+      const actBtn = ev.target.closest('[data-eng-act]');
+      if (actBtn) {
+        const engine = actBtn.getAttribute('data-eng');
+        const act = actBtn.getAttribute('data-eng-act');
+        const row = _engHubRows().find(r => r.engine === engine);
+        if (!row) return;
+        if (act === 'verify') _engHubVerify(engine, actBtn);
+        else if (act === 'install' || act === 'login') _engHubTerminal(engine, act, row);
+        else if (act === 'default') {
+          spawnDefaultsState.engine = engine;
+          renderSpawnDefaultsInline();
+          persistSpawnDefaults(document.getElementById('spawnDefaultsEngine').closest('.settings-row'));
+          renderEnginesHub();
+        } else if (act === 'worker') {
+          spawnDefaultsState.worker_engine = engine;
+          spawnDefaultsState.worker_model = '';
+          renderSpawnDefaultsInline();
+          persistSpawnDefaults(document.getElementById('spawnDefaultsWorkerEngine').closest('.settings-row'));
+          renderEnginesHub();
+        }
+        return;
+      }
+      const openBtn = ev.target.closest('[data-eng-toggle-open]');
+      if (openBtn) {
+        const engine = openBtn.getAttribute('data-eng-toggle-open');
+        _engHubOpen = _engHubOpen === engine ? '' : engine;
+        renderEnginesHub();
+      }
+    });
+    document.addEventListener('click', (ev) => {
+      const go = ev.target.closest('[data-settings-goto]');
+      if (go) setActiveSettingsRailSection(go.getAttribute('data-settings-goto'));
+    });
+    // Coming back from the terminal where the install/login ran is the moment
+    // status most likely changed.
+    window.addEventListener('focus', () => { if (_engHubVisible()) refreshEnginesHub(); });
+  })();
 
   // ── Engines section: BYOK (bring-your-own-key) profiles (W2-2) ──
   // Keys never round-trip back from the server after being saved; this
@@ -77846,6 +78219,7 @@
       sec.classList.toggle('is-active-section', active);
       sec.setAttribute('aria-hidden', active ? 'false' : 'true');
     });
+    if (typeof startEnginesHub === 'function') startEnginesHub();
     if (opts.scroll === false) return;
     $settingsPane.scrollTop = 0;
   }
@@ -78064,7 +78438,6 @@
     refreshMonthlyCodexPlanInput();
     refreshSpawnEngineValue();
     refreshEngineUpdateStatus();
-    refreshKimiSetupStatus();
     refreshByokSettings();
     setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
     setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);

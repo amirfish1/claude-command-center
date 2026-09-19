@@ -25885,6 +25885,168 @@ a.settings-row {
 }
 .settings-action-btn.danger:hover { background: rgba(248,81,73,0.16); }
 
+/* ── Engines hub (Settings → Engines) ──
+   Hero summary, two defaults cards, then one row per engine. Status reads
+   left to right in a fixed order (installed, signed in, usage) so the eye
+   can scan a column instead of reading each row. */
+.eng-hero {
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  padding: 16px 18px; margin-bottom: 14px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+    var(--surface);
+}
+.eng-hero-main { flex: 1 1 260px; min-width: 0; }
+.eng-hero-title { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
+.eng-hero-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; line-height: 1.45; }
+.eng-hero-stats { display: flex; gap: 8px; }
+.eng-stat {
+  min-width: 74px; padding: 8px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.eng-stat-num { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); line-height: 1.1; }
+.eng-stat-label { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.eng-stat.is-ok .eng-stat-num { color: var(--green); }
+.eng-stat.is-warn .eng-stat-num { color: var(--orange); }
+
+.eng-defaults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.eng-card {
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); padding: 12px 14px 8px;
+}
+.eng-card-head { margin-bottom: 4px; }
+.eng-card-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.eng-card-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+/* Inside a card the label says enough; the long descriptions stay in the
+   DOM for settings search but do not render. */
+.eng-defaults-card .settings-row { min-height: 34px; padding: 4px 0; gap: 10px; }
+.eng-defaults-card .settings-row-desc { display: none; }
+.eng-defaults-card .settings-row-label { font-size: 12.5px; font-weight: 450; color: var(--text-muted); }
+.eng-defaults-card .settings-row-control { min-width: 0; }
+.eng-defaults-card .settings-row-control select,
+.eng-defaults-card .settings-row-control input[type="text"] { max-width: 190px; }
+.eng-defaults-card .settings-suffix { font-size: 12px; color: var(--text-muted); }
+
+.eng-list-head {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+  margin: 18px 0 8px;
+}
+.eng-list-head .settings-subsection-label { margin: 0; }
+.eng-filter {
+  display: inline-flex; padding: 2px; gap: 2px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.eng-filter-btn {
+  border: 0; background: transparent; color: var(--text-muted);
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+}
+.eng-filter-btn span { opacity: 0.7; font-variant-numeric: tabular-nums; margin-left: 2px; }
+.eng-filter-btn:hover { color: var(--text); }
+.eng-filter-btn.is-active { background: var(--surface-2); color: var(--text); }
+
+.eng-list {
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); overflow: hidden;
+}
+.eng-list-empty { padding: 18px; font-size: 12.5px; color: var(--text-muted); text-align: center; }
+.eng-row + .eng-row { border-top: 1px solid var(--border); }
+.eng-row-head { display: flex; align-items: center; gap: 12px; padding-right: 14px; }
+.eng-row-main {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 0 10px 14px;
+  border: 0; background: transparent; color: inherit; font: inherit;
+  text-align: left; cursor: pointer;
+}
+.eng-row-head:hover { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+.eng-row-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+.eng-mono {
+  flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
+  color: hsl(var(--eng-hue) 70% 78%);
+  background: hsl(var(--eng-hue) 45% 22%);
+  border: 1px solid hsl(var(--eng-hue) 45% 32%);
+}
+[data-theme="light"] .eng-mono {
+  color: hsl(var(--eng-hue) 60% 30%);
+  background: hsl(var(--eng-hue) 70% 93%);
+  border-color: hsl(var(--eng-hue) 50% 82%);
+}
+.eng-id { flex: 0 0 190px; min-width: 0; display: flex; flex-direction: column; }
+.eng-name { font-size: 13.5px; font-weight: 550; color: var(--text); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.eng-sub { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eng-tag {
+  font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 1px 6px; border-radius: 999px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.eng-status { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.eng-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-muted); white-space: nowrap;
+}
+.eng-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.eng-pill.is-ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 35%, transparent); background: color-mix(in srgb, var(--green) 9%, transparent); }
+.eng-pill.is-bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); background: color-mix(in srgb, var(--red) 9%, transparent); }
+.eng-pill.is-muted .eng-pill-dot { opacity: 0.5; }
+.eng-usage { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-muted); white-space: nowrap; margin-left: 2px; }
+.eng-usage-bar { width: 64px; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.eng-usage-fill { display: block; height: 100%; border-radius: 999px; background: var(--green); }
+.eng-usage.is-warn .eng-usage-fill { background: var(--orange); }
+.eng-usage.is-warn .eng-usage-text { color: var(--orange); }
+.eng-usage.is-bad .eng-usage-fill { background: var(--red); }
+.eng-usage.is-bad .eng-usage-text { color: var(--red); }
+.eng-chev { flex: 0 0 auto; width: 14px; height: 14px; color: var(--text-muted); transition: transform 0.15s ease-out; }
+.eng-row.is-open .eng-chev { transform: rotate(180deg); }
+.eng-row.is-off .eng-row-main { opacity: 0.5; }
+.eng-row .settings-toggle:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.eng-drawer { padding: 2px 14px 14px 58px; display: flex; flex-direction: column; gap: 10px; }
+.eng-step {
+  border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--accent) 9%, transparent); padding: 8px 12px;
+}
+.eng-step.is-warn { border-left-color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent); }
+.eng-step-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.eng-step-body { font-size: 12px; color: var(--text-muted); margin-top: 2px; line-height: 1.45; }
+.eng-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 16px; margin: 0; }
+.eng-facts dt { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.eng-facts dd { margin: 1px 0 0; font-size: 12px; color: var(--text); overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); }
+.eng-cmd {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); padding: 6px 6px 6px 10px;
+}
+.eng-cmd-label { flex: 0 0 auto; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.eng-cmd code { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text); overflow-x: auto; white-space: nowrap; background: none; padding: 0; }
+.eng-cmd-copy {
+  flex: 0 0 auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  color: var(--text); font: inherit; font-size: 11.5px; padding: 3px 9px; cursor: pointer;
+}
+.eng-cmd-copy:hover { background: var(--surface-2); }
+.eng-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.eng-actions .eng-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+.eng-actions .eng-primary:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
+.eng-links { margin-left: auto; display: inline-flex; gap: 12px; }
+.eng-link { font-size: 12px; color: var(--accent); text-decoration: none; }
+.eng-link:hover { text-decoration: underline; }
+.eng-drawer .settings-row-note { margin-top: 0; }
+
+@media (max-width: 860px) {
+  .eng-defaults { grid-template-columns: 1fr; }
+  .eng-id { flex-basis: 140px; }
+  .eng-drawer { padding-left: 14px; }
+}
+@media (max-width: 620px) {
+  .eng-row-main { flex-wrap: wrap; }
+  .eng-status { flex-basis: 100%; padding-left: 44px; }
+  .eng-list-head { flex-direction: column; align-items: flex-start; }
+}
+
 /* BYOK key-add form + profile chips (Settings → Engines) */
 .settings-text-input, .settings-select {
   padding: 6px 10px; font-size: 12.5px;

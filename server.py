@@ -27727,6 +27727,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/engines/doctor":
             # W3-3/W9-1: per-engine CLI/auth/BYOK health plus read-only
             # dashboard instance diagnostics. Backs `ccc doctor`.
+            # ?fresh=1 (Settings > Engines "Verify setup") skips the 60s
+            # install-inventory cache so a CLI installed a moment ago shows.
+            qs = urllib.parse.parse_qs(parsed.query)
+            if (qs.get("fresh", ["0"])[0] or "0").strip().lower() in ("1", "true", "yes"):
+                _engines_installed(fresh=True)
             self.send_json(build_ccc_doctor())
         elif path == "/api/doctor/instances":
             # W9-1: read-only duplicate dashboard detector for `ccc doctor`.
