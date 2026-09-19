@@ -11,7 +11,24 @@ Rules: stdlib-only (same as server.py); no side effects at import beyond
 def/class/constants; new subsystems start here, not in server.py.
 """
 
+import os as _os
 import sys as _sys
+
+
+def test_isolation_active():
+    """True when running under a test runner or in a child process of one.
+
+    server.py stamps CCC_TEST_ISOLATION=1 into os.environ when it detects
+    pytest/unittest, so multiprocessing "spawn" children and test-spawned
+    subprocesses — fresh interpreters with neither runner in sys.modules —
+    still resolve test-isolated state paths instead of the live
+    ~/.claude/command-center files (CCC-1165).
+    """
+    return (
+        "pytest" in _sys.modules
+        or "unittest" in _sys.modules
+        or bool(_os.environ.get("CCC_TEST_ISOLATION"))
+    )
 
 
 class _CoreProxy:

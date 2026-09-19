@@ -11,10 +11,13 @@ from pathlib import Path
 import json
 import os
 import re
+import sys
+import tempfile
 import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import test_isolation_active as _test_isolation_active
 
 # ---------------------------------------------------------------------------
 # Log parsing (mirrors the bash viewer filter logic)
@@ -108,7 +111,17 @@ SESSION_LANE_OVERRIDES_FILE = _core.COMMAND_CENTER_STATE_DIR / "session-lane-ove
 # {session_id: epoch_seconds} — last time the user interacted with this card
 # from the UI (typed a message, clicked Approve/Deny, etc.). Drag-drop and
 # auto-events do NOT count.
-LAST_INTERACTIONS_FILE = _core.COMMAND_CENTER_STATE_DIR / "last-interactions.json"
+if _test_isolation_active():
+    # Same test-runner isolation as ACTIVITY_LOG_FILE: interaction-recording
+    # tests stamp synthetic session ids into this shared file (CCC-1165).
+    LAST_INTERACTIONS_FILE = (
+        Path(tempfile.gettempdir())
+        / f"ccc-test-last-interactions-{os.getpid()}.json"
+    )
+else:
+    LAST_INTERACTIONS_FILE = (
+        _core.COMMAND_CENTER_STATE_DIR / "last-interactions.json"
+    )
 SESSION_ISSUES_FILE = _core.COMMAND_CENTER_STATE_DIR / "session-issues.json"  # {session_id: issue_number}
 FIX_DEPLOY_SPAWNED_FILE = _core.COMMAND_CENTER_STATE_DIR / "fix-deploy-spawned.json"  # {commit_sha: {pid, spawned_at, name}}
 # {bind_host, allowed_origins[], trust_tailnet} — persisted same-origin
@@ -595,9 +608,16 @@ _CONV_META_COMPAT_SCHEMA_VERSIONS = {17}
 # CCC_CONV_META_CACHE_FILE redirects the file (the test suite points it at a
 # tmp dir: a test process holds the user's real cache in memory from import
 # time, and a save from a test wrote fixture entries over it, 2026-09-12).
+# The sys.modules/env-marker arms cover `python3 -m unittest` (which never
+# loads conftest.py) and spawned child processes with no runner loaded
+# (CCC-1165).
 _CONV_META_CACHE_FILE = Path(
     os.environ.get("CCC_CONV_META_CACHE_FILE")
-    or (Path.home() / ".claude" / "command-center" / "conv_meta_cache.json")
+    or (
+        Path(tempfile.gettempdir()) / f"ccc-test-conv-meta-{os.getpid()}.json"
+        if _test_isolation_active()
+        else Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
+    )
 ).expanduser()
 
 

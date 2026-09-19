@@ -106,6 +106,7 @@ import ccc_peer_uds
 # Pure/stdlib, no imports from server.py -- mirrors ccc_peer_uds.py's split
 # between wire-format helpers (here) and registry/routing (server.py below).
 import ccc_peer_inbound
+from ccc_server import test_isolation_active
 from ccc_server.events import DashboardEventHub
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
@@ -127,6 +128,13 @@ from productivity import (
 # every repo-scoped request must carry a concrete repo path, cwd, or session id.
 CCC_ROOT = Path(__file__).resolve().parent
 COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
+if test_isolation_active():
+    # Stamp an isolation marker so spawned children stay isolated too:
+    # multiprocessing "spawn" workers and `python -c "import server"`
+    # subprocesses re-import this module in a fresh interpreter where
+    # neither test runner is in sys.modules — the env var is the only
+    # signal that survives into the child (CCC-1165).
+    os.environ.setdefault("CCC_TEST_ISOLATION", "1")
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
@@ -327,7 +335,7 @@ def _dashboard_event_watch_exit():
 # format. Distinct from CODEX_TELEMETRY_FILE (JSONL, machine-oriented, one
 # record per codex RPC stage) and _RESUME_LEDGER_FILE (JSONL, internal wake/
 # resume bookkeeping) -- this one is for a human to skim "what did CCC do".
-if "pytest" in sys.modules or "unittest" in sys.modules:
+if test_isolation_active():
     # The test suite re-imports this module fresh per test (`sys.modules.pop
     # ("server"); import server`) without mocking this path, so every test
     # exercising an inject/spawn/kill code path wrote real lines into the
@@ -9748,7 +9756,7 @@ _SERVER_START_TS = time.time()
 # behavior. Off the hot path: the ledger is written only at lifecycle
 # transitions (reuse/spawn/exit/retire/server_start), never per row or per poll
 # iteration (the exit write is guarded to fire once via `_cleanup_done`).
-if "pytest" in sys.modules or "unittest" in sys.modules:
+if test_isolation_active():
     # Same rationale as ACTIVITY_LOG_FILE's test-runner redirect:
     # the test suite re-imports this module fresh per test, and without a
     # redirect every test exercising an interrupt-detection code path would
@@ -13353,7 +13361,17 @@ def find_all_conversations(
 # persisted rows from before that row-shaping change get rebuilt instead of
 # permanently reusing their stale (cost-less) dict.
 _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 8
-_ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
+if test_isolation_active():
+    # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
+    # for synthetic session ids into this shared cache (CCC-1165).
+    _ARCHIVE_RESPONSE_CACHE_FILE = (
+        Path(tempfile.gettempdir())
+        / f"ccc-test-archive-cache-{os.getpid()}.json"
+    )
+else:
+    _ARCHIVE_RESPONSE_CACHE_FILE = (
+        COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
+    )
 
 
 def _archive_response_cache_build_id():
@@ -20099,8 +20117,27 @@ CODEX_THREAD_REGISTRY_FILE = (
     COMMAND_CENTER_STATE_DIR / "codex-thread-registry.json"
 )
 SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
-PENDING_INPUTS_FILE = COMMAND_CENTER_STATE_DIR / "pending-inputs.json"
-PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
+if test_isolation_active():
+    # Same test-runner isolation as ACTIVITY_LOG_FILE: inject/queue tests
+    # exercise _inject_text_into_session/_queue_terminal_input with synthetic
+    # session ids, and these paths are shared with the LIVE dashboard — test
+    # rows written here were drained by the real server's pending-inputs
+    # watcher, which logged fake dead_session Q_DROP lines into the live
+    # activity.log (CCC-1165). Per-process paths keep concurrent test runs
+    # from sharing one queue file or contending on its watcher lock; every
+    # sibling (.lock/.metadata.json/.conflicts/.watcher.lock/claim journals)
+    # derives from these two constants.
+    PENDING_INPUTS_FILE = (
+        Path(tempfile.gettempdir())
+        / f"ccc-test-pending-inputs-{os.getpid()}.json"
+    )
+    PENDING_INPUT_HANDOFF_DIR = (
+        Path(tempfile.gettempdir())
+        / f"ccc-test-pending-handoffs-{os.getpid()}"
+    )
+else:
+    PENDING_INPUTS_FILE = COMMAND_CENTER_STATE_DIR / "pending-inputs.json"
+    PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
 AUTO_HANDOVER_FILE = COMMAND_CENTER_STATE_DIR / "auto-handover.json"
 _INTERRUPT_EVENTS_ENABLED = False
 

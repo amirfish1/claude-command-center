@@ -26,6 +26,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import test_isolation_active as _test_isolation_active
 
 _pending_queued_meta: dict = {}
 _pending_queued_meta_lock = threading.Lock()
@@ -4638,7 +4639,7 @@ def _wt_read_receipts():
 
 
 def _injection_health_state_path():
-    if "pytest" in sys.modules:
+    if _test_isolation_active():
         return Path(tempfile.gettempdir()) / "ccc-test-injection-health.json"
     return _core.COMMAND_CENTER_STATE_DIR / "injection-health.json"
 

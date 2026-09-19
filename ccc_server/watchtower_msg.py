@@ -30,6 +30,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import test_isolation_active as _test_isolation_active
 
 # ---------------------------------------------------------------------------
 # Stage 2 of the WatchTower messaging handover (docs/messaging-design.md in
@@ -889,11 +890,14 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
 # existed -- precisely the CCC-863 orphan. Nothing retrofits a gate into an
 # already-running interpreter; that failure mode belongs to the stray reaper
 # above. Reaper kills stale code, breaker caps live code.
-if "pytest" in sys.modules:
+if _test_isolation_active():
     # Per-process and truncated at import: the ledger is deliberately durable
     # across restarts in production, which in a test process would mean one
     # suite's injects metering the next suite's -- a slow-building, order-
-    # dependent flake. Tests that care monkeypatch this to a tmp_path.
+    # dependent flake. Tests that care monkeypatch this to a tmp_path. The
+    # unittest/env-marker arms matter too: `python3 -m unittest` never loads
+    # conftest.py, and spawned child processes have no runner in sys.modules
+    # (CCC-1165 — fixture session ids reached the real inject-budget.json).
     INJECT_BUDGET_FILE = (
         Path(tempfile.gettempdir()) / f"ccc-test-inject-budget-{os.getpid()}.json"
     )
