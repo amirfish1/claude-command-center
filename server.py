@@ -10385,17 +10385,137 @@ _system_health_lock = threading.Lock()
 _SYSTEM_HEALTH_TTL = 5.0
 
 
+# ── Anomaly detector: leaked / runaway processes ──────────────────────────
+# Surfaced in the Health panel AND as a confirm-to-kill prompt. Runs off the
+# same single `ps` sweep as the rest of System Health — never per-row work.
+# Kill is never automatic: the user confirms, and the kill endpoint re-derives
+# the anomaly list fresh so it can only ever touch a currently-flagged tree.
+_SYS_ANOMALY_RUNAWAY_MIN = 120.0    # one-shot tools alive longer than this leaked
+_SYS_ANOMALY_MEM_MIN_AGE = 60.0     # minutes alive before a memory hog counts
+_SYS_ANOMALY_MEM_FLOOR_MB = 2048.0  # absolute RSS floor for a memory hog
+_SYS_ANOMALY_MEM_FRAC = 0.12        # ...or this fraction of total RAM, if larger
+# Tools that should finish in minutes. Alive for hours == leaked/hung.
+_SYS_ONESHOT_RE = re.compile(
+    r"(?:^|[\s/])(?:tsc|eslint|jest|vitest|pytest|mypy|pyright|tsserver|"
+    r"webpack|cargo\s+(?:build|test|check)|go\s+(?:build|test|vet)|"
+    r"next\s+build|vite\s+build|npm\s+(?:test|run\s+(?:build|test|lint|typecheck)))(?:\s|$)"
+)
+_SYS_WRAPPER_BASES = frozenset(("npm", "npx", "sh", "dash", "pnpm", "yarn"))
+
+
+def _sys_anomaly_protected(row, my_pids):
+    if row["pid"] <= 1 or row["pid"] in my_pids:
+        return True
+    base = row["cmd"].split(None, 1)[0].rsplit("/", 1)[-1]
+    if base in _PROC_KNOWN_DAEMON_BASES or base in ("claude", "codex", "systemd", "sshd"):
+        return True
+    return False
+
+
+def _sys_anomaly_tree(root, by_pid, children):
+    """PIDs to kill for one anomaly: its descendants plus pure wrapper
+    ancestors (npm exec / sh -c) that exist only to launch it. Never a shell
+    or a session, so a leaked tool can't take its owner down with it."""
+    tree, stack = [], [root["pid"]]
+    while stack:
+        pid = stack.pop()
+        tree.append(pid)
+        stack.extend(children.get(pid, ()))
+    cur = by_pid.get(root["ppid"])
+    while cur and cur["pid"] > 1:
+        base = cur["cmd"].split(None, 1)[0].rsplit("/", 1)[-1]
+        if base not in _SYS_WRAPPER_BASES:
+            break
+        tree.append(cur["pid"])
+        cur = by_pid.get(cur["ppid"])
+    return sorted(set(tree))
+
+
+def _sys_anomalies(rows, total_mb=None):
+    by_pid = {r["pid"]: r for r in rows}
+    children = {}
+    for r in rows:
+        children.setdefault(r["ppid"], []).append(r["pid"])
+    my_pids = {os.getpid(), os.getppid()}
+    mem_floor = _SYS_ANOMALY_MEM_FLOOR_MB
+    if total_mb:
+        mem_floor = max(mem_floor, total_mb * _SYS_ANOMALY_MEM_FRAC)
+    out = []
+    for r in rows:
+        if _sys_anomaly_protected(r, my_pids):
+            continue
+        kind = reason = None
+        if r["etime_min"] >= _SYS_ANOMALY_RUNAWAY_MIN and _SYS_ONESHOT_RE.search(r["cmd"]):
+            kind = "runaway"
+            reason = "one-shot tool still running after %s" % _sys_fmt_age(r["etime_min"])
+        elif r["rss_mb"] >= mem_floor and r["etime_min"] >= _SYS_ANOMALY_MEM_MIN_AGE:
+            kind = "memory"
+            reason = "holding %.1f GB of RAM for %s" % (r["rss_mb"] / 1024.0, _sys_fmt_age(r["etime_min"]))
+        if not kind:
+            continue
+        tree = _sys_anomaly_tree(r, by_pid, children)
+        # A wrapper (npm exec / sh -c) can also match the one-shot regex; only
+        # report the deepest process so one leak is one anomaly.
+        if any(c in by_pid and _SYS_ONESHOT_RE.search(by_pid[c]["cmd"]) and kind == "runaway"
+               for c in children.get(r["pid"], ())):
+            continue
+        out.append({
+            "key": "%d:%s" % (r["pid"], kind),
+            "pid": r["pid"],
+            "kind": kind,
+            "reason": reason,
+            "label": _sys_label(r["cmd"]),
+            "cmd": r["cmd"][:300],
+            "rss_mb": round(r["rss_mb"]),
+            "cpu": round(r["cpu"]),
+            "etime_min": round(r["etime_min"], 1),
+            "tree_pids": tree,
+            "tree_rss_mb": round(sum(by_pid[p]["rss_mb"] for p in tree if p in by_pid)),
+        })
+    out.sort(key=lambda a: (a["kind"] != "runaway", -a["rss_mb"]))
+    return out[:8]
+
+
+def _sys_fmt_age(minutes):
+    if minutes >= 1440:
+        return "%.1fd" % (minutes / 1440.0)
+    if minutes >= 60:
+        return "%.1fh" % (minutes / 60.0)
+    return "%dm" % minutes
+
+
+def system_anomaly_kill(pids, force=False):
+    """Kill confirmed anomaly trees. Only PIDs inside a *currently* flagged
+    anomaly tree are eligible (fresh sweep, not the client's stale view)."""
+    rows = _sys_process_rows()
+    allowed = set()
+    for a in _sys_anomalies(rows, _sys_memory().get("total_mb")):
+        allowed.update(a["tree_pids"])
+    want = set()
+    for p in pids:
+        try:
+            want.add(int(p))
+        except (TypeError, ValueError):
+            continue
+    result = system_process_kill(sorted(want & allowed), force=force) if want & allowed else \
+        {"ok": True, "killed": [], "blocked": [], "errors": {}}
+    result["blocked"] = sorted(set(result.get("blocked", [])) | (want - allowed))
+    return result
+
+
 def _build_system_health_uncached():
     now = time.time()
     rows = _sys_process_rows()
     sessions = _sys_sessions(rows, now)
     apps = _sys_gui_apps(rows)
     reap = [s for s in sessions if s["reapable"]]
+    memory = _sys_memory()
     return {
         "ts": now,
-        "memory": _sys_memory(),
+        "memory": memory,
         "cpu": _sys_cpu(),
         "hogs": _sys_hogs(rows),
+        "anomalies": _sys_anomalies(rows, memory.get("total_mb")),
         "sessions": sessions,
         "apps": apps,
         "session_totals": {
@@ -10433,6 +10553,26 @@ def build_system_health(force=False):
         data = _build_system_health_uncached()
         snap["data"] = data
         snap["ts"] = now
+        return data
+
+
+_system_anomalies_snapshot = {"ts": 0.0, "data": None}
+_system_anomalies_lock = threading.Lock()
+_SYSTEM_ANOMALIES_TTL = 10.0
+
+
+def build_system_anomalies():
+    snap = _system_anomalies_snapshot
+    if snap["data"] is not None and time.time() - snap["ts"] < _SYSTEM_ANOMALIES_TTL:
+        return snap["data"]
+    with _system_anomalies_lock:
+        if snap["data"] is not None and time.time() - snap["ts"] < _SYSTEM_ANOMALIES_TTL:
+            return snap["data"]
+        memory = _sys_memory()
+        data = {"ts": time.time(), "memory": memory,
+                "anomalies": _sys_anomalies(_sys_process_rows(), memory.get("total_mb"))}
+        snap["data"] = data
+        snap["ts"] = data["ts"]
         return data
 
 
@@ -11058,6 +11198,7 @@ def system_process_kill(pids, force=False):
             errors[str(pid)] = str(e)
     _system_processes_snapshot["data"] = None
     _system_health_snapshot["data"] = None
+    _system_anomalies_snapshot["data"] = None
     return {"ok": True, "killed": killed, "blocked": blocked, "errors": errors}
 
 
@@ -26904,6 +27045,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # hogs, and Claude session trees with last-activity + reapability.
             # Cached 5s (build_system_health) so polling stays cheap.
             self.send_json(build_system_health())
+        elif path == "/api/system/anomalies":
+            # Leaked/runaway process detector (one ps sweep, 10s cache). Polled
+            # by the dashboard to raise the confirm-to-kill prompt.
+            self.send_json(build_system_anomalies())
         elif path in ("/api/system-processes", "/api/system/processes"):
             force = "force" in parsed.query
             self.send_json(build_system_processes(force=force))
@@ -33018,6 +33163,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(decision_inbox_governor_act(
                     str(payload.get("session_id") or ""), payload.get("action"),
                     reason=str(payload.get("reason") or "")[:300]))
+        elif path == "/api/system/anomalies/kill":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            pids = payload.get("pids")
+            if not isinstance(pids, list) or not pids:
+                self.send_json({"ok": False, "error": "missing pids"})
+            else:
+                self.send_json(system_anomaly_kill(pids, force=bool(payload.get("force"))))
         elif path in ("/api/system-processes/kill", "/api/system/processes/kill"):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

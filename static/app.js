@@ -494,6 +494,80 @@
     tick();
     setInterval(tick, 5000);
   }
+  // Anomaly prompt: a leaked/runaway process (e.g. a tsc that hung for 19h and
+  // holds 3+ GB) is surfaced as a modal asking the user to confirm the kill.
+  // Nothing is ever killed without that click. "Not now" snoozes that anomaly
+  // for 6h (localStorage) so it doesn't nag; the Health panel still lists it.
+  const ANOMALY_SNOOZE_KEY = 'ccc-anomaly-snooze';
+  const ANOMALY_SNOOZE_MS = 6 * 3600 * 1000;
+  function _anomalySnoozed() {
+    try { return JSON.parse(localStorage.getItem(ANOMALY_SNOOZE_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function _snoozeAnomalies(keys) {
+    const s = _anomalySnoozed(), now = Date.now();
+    Object.keys(s).forEach(function (k) { if (now - s[k] > ANOMALY_SNOOZE_MS) delete s[k]; });
+    keys.forEach(function (k) { s[k] = now; });
+    try { localStorage.setItem(ANOMALY_SNOOZE_KEY, JSON.stringify(s)); } catch (_) {}
+  }
+  function _showAnomalyPrompt(anoms, manual) {
+    if (document.getElementById('cccAnomalyPrompt')) return;
+    const esc = (typeof _shEsc === 'function') ? _shEsc : function (x) { return String(x); };
+    const ov = document.createElement('div');
+    ov.id = 'cccAnomalyPrompt';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    let rows = '';
+    anoms.forEach(function (a, i) {
+      rows += '<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--border)">' +
+        '<input type="checkbox" data-i="' + i + '" checked style="margin-top:3px">' +
+        '<span style="min-width:0"><b>' + esc(a.label) + '</b> <span style="opacity:.7">PID ' + a.pid + '</span><br>' +
+        '<span style="color:var(--red)">' + esc(a.reason) + '</span> · ' + (a.tree_rss_mb / 1024).toFixed(1) + ' GB across ' + a.tree_pids.length + ' process' + (a.tree_pids.length === 1 ? '' : 'es') + '<br>' +
+        '<code style="font-size:11px;opacity:.7;word-break:break-all">' + esc(a.cmd.slice(0, 160)) + '</code></span></label>';
+    });
+    ov.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px 20px;max-width:560px;width:calc(100% - 40px);max-height:80vh;overflow:auto;box-shadow:0 8px 32px rgba(0,0,0,.5);color:var(--text);font-size:13px">' +
+      '<div style="font-size:15px;font-weight:600;margin-bottom:6px">Runaway process detected</div>' +
+      '<div style="opacity:.8;margin-bottom:8px">This looks leaked or hung and is eating memory. Kill it? Nothing is killed unless you confirm.</div>' + rows +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">' +
+      '<button type="button" class="sh-btn" data-act="later">' + (manual ? 'Cancel' : 'Not now') + '</button>' +
+      '<button type="button" class="sh-btn sh-btn-danger" data-act="kill">Kill selected</button></div></div>';
+    document.body.appendChild(ov);
+    const close = function () { ov.remove(); };
+    ov.querySelector('[data-act="later"]').addEventListener('click', function () {
+      if (!manual) _snoozeAnomalies(anoms.map(function (a) { return a.key; }));
+      close();
+    });
+    ov.querySelector('[data-act="kill"]').addEventListener('click', function () {
+      const pids = [];
+      Array.prototype.forEach.call(ov.querySelectorAll('input[type=checkbox]:checked'), function (cb) {
+        pids.push.apply(pids, anoms[Number(cb.getAttribute('data-i'))].tree_pids);
+      });
+      if (!pids.length) { close(); return; }
+      fetch('/api/system/anomalies/kill', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pids: pids }),
+      }).then(function (r) { return r.json(); }).then(function (r) {
+        if (typeof showOpToast === 'function') showOpToast('Killed ' + ((r && r.killed) || []).length + ' process(es)', 'info');
+        if (typeof _pollSystemHealth === 'function') _pollSystemHealth();
+      }).catch(function () {});
+      close();
+    });
+  }
+  function _startAnomalyPoll() {
+    const tick = _gated('cccAnomalies', function () {
+      return fetch('/api/system/anomalies', { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || !Array.isArray(d.anomalies)) return;
+          const snoozed = _anomalySnoozed(), now = Date.now();
+          const fresh = d.anomalies.filter(function (a) {
+            return !(snoozed[a.key] && now - snoozed[a.key] < ANOMALY_SNOOZE_MS);
+          });
+          if (fresh.length) _showAnomalyPrompt(fresh, false);
+        })
+        .catch(function () {});
+    });
+    setTimeout(tick, 4000);
+    setInterval(tick, 30000);
+  }
   function _startStuckSessionsPoll(host) {
     const metric = host.querySelector('#cccStuckPill');
     if (!metric) return;
@@ -599,6 +673,18 @@
     }
     html += '</div>';
 
+    // Anomalies: leaked / runaway processes (same detector as the pop-up)
+    const anoms = d.anomalies || [];
+    if (anoms.length) {
+      html += '<div><div class="sh-sec-title">Anomalies - ' + anoms.length + '</div>';
+      anoms.forEach(function (a) {
+        html += '<div class="sh-sess"><span class="sh-badge ' + (a.kind === 'runaway' ? 'sh-crit' : 'sh-warn') + '">' + _shEsc(a.kind) +
+                '</span><span>' + _shEsc(a.label) + '</span><span class="sh-meta">PID ' + a.pid + ' · ' + _shFmtMB(a.tree_rss_mb) + ' · ' +
+                _shEsc(a.reason) + '</span><button class="sh-btn" data-anomaly-review="' + _shEsc(a.key) + '">Review</button></div>';
+      });
+      html += '</div>';
+    }
+
     // GUI app-server engines
     const apps = d.apps || [];
     const at = d.app_totals || {};
@@ -670,6 +756,13 @@
     Array.prototype.forEach.call(body.querySelectorAll('[data-quit-app]'), function (b) {
       b.addEventListener('click', function () {
         _confirmQuitApp(b, b.getAttribute('data-quit-app'));
+      });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-anomaly-review]'), function (b) {
+      b.addEventListener('click', function () {
+        const key = b.getAttribute('data-anomaly-review');
+        const a = (d.anomalies || []).filter(function (x) { return x.key === key; });
+        if (a.length) _showAnomalyPrompt(a, true);
       });
     });
     // Session name → open that conversation in CCC and close the panel.
@@ -1294,6 +1387,7 @@
     const spacer = footer.querySelector('.sidebar-footer-spacer');
     if (spacer) footer.insertBefore(wrap, spacer); else footer.appendChild(wrap);
     _startHealthPoll(health);
+    _startAnomalyPoll();
     _startStuckSessionsPoll(health);
 
     function _refreshStripState() {
