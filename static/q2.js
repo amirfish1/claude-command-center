@@ -251,6 +251,20 @@
       ? it.resolution.unresolved.filter(Boolean) : [];
   }
 
+  // Closed-list admission for the default "Recent closed" view: rows in the
+  // 12h window (or carrying unresolved follow-ups) always show, and each
+  // 'Show more' click widens closedCap by CLOSED_CAP to admit that many older
+  // rows too (CCC-1167). `closed` arrives touchedAt-sorted newest-first, so
+  // the first `budget` non-kept rows are the newest of the remainder.
+  function pickShownClosed(closed, alwaysShow, closedCap) {
+    var budget = Math.max(0, (closedCap || 0) - CLOSED_CAP);
+    return (closed || []).filter(function (it) {
+      if (alwaysShow(it)) return true;
+      if (budget > 0) { budget--; return true; }
+      return false;
+    });
+  }
+
   // Operational bucket, the order the main dashboard sorts by
   // (static/app.js:35571): live work, then things needing a human, then
   // follow-ups, then claimable work, then clean closes, then inert rows.
@@ -2183,10 +2197,17 @@
       return;
     }
 
-    var shownClosed = state.viewAll ? [] : (state.showClosed ? closed.slice(0, state.closedCap) : recentClosed);
+    var shownClosed = state.viewAll ? [] : (state.showClosed
+      ? closed.slice(0, state.closedCap)
+      : pickShownClosed(closed, function (it) {
+          return isRecentClosed(it) || unresolvedNotes(it).length > 0;
+        }, state.closedCap));
     var html = openish.map(ticketRow).join('');
     if (shownClosed.length) {
-      var label = state.showClosed
+      // Once the recent view has been expanded past its 12h window the label
+      // stops being accurate — switch to the plain "Closed" count form.
+      var expanded = state.showClosed || state.closedCap > CLOSED_CAP;
+      var label = expanded
         ? 'Closed' + (closed.length > shownClosed.length
           ? ' (newest ' + shownClosed.length + ' of ' + closed.length + ')' : '')
         : 'Recent closed · last 12h';
