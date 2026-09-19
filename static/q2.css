@@ -179,6 +179,15 @@ body {
   width: 26px;
   height: 2px;
 }
+/* The activity-log band is bottom-anchored: once it is a fixed size (dragged
+   or restored) any leftover column space must land ABOVE this handle, not
+   below the log — otherwise the handle stays put and the log's far edge moves
+   instead (CCC-1168). Auto margin only absorbs space left after flex-grow,
+   so a queue-attendant band with a body still stretches into the room the
+   drag frees up. */
+.q2-resizer-h[data-q2-resize-v="logbar"] {
+  margin-top: auto;
+}
 /* While dragging, kill text selection and pointer noise everywhere else. */
 body.q2-resizing { cursor: col-resize; user-select: none; }
 body.q2-resizing-v { cursor: row-resize; user-select: none; }
@@ -825,11 +834,15 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
-/* Dragged (or restored from localStorage): exact pixel height, no grow. */
+/* Dragged (or restored from localStorage): exact pixel height, no grow. The
+   max-height is only a guardrail (corrupt localStorage, a taller window at
+   save time) — the real cap lives in setLogbarHeight(), and a tighter CSS
+   bound here snaps the band smaller mid-drag when fill mode had already
+   grown it taller (CCC-1168). */
 .q2-logbar.is-sized {
   flex: 0 0 auto;
   height: var(--q2-logbar-h, 28%);
-  max-height: 60vh;
+  max-height: 90%;
 }
 .q2-logbar.is-collapsed { flex: 0 0 auto; height: auto; min-height: 0; }
 .q2-logbar-head {

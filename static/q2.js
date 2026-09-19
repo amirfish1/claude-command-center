@@ -3297,7 +3297,7 @@
       // These fields override the SYSTEM spawn defaults. When a queue leaves
       // one unset it falls through to those, so the form has to say where they
       // live — otherwise "default model" is a dead end.
-      + '<a class="q2-linklike q2-modal-sys" href="/?ccc_settings=sessions" target="_blank" rel="noopener"'
+      + '<a class="q2-linklike q2-modal-sys" href="/?ccc_settings=engines" target="_blank" rel="noopener"'
       + ' title="Open CCC settings: Sessions &amp; Spawning">System spawn defaults &#8599;</a>'
       + '<span class="q2-dim q2-modal-hint">Saving replaces the whole config, as `wt config` does</span>'
       + '<button type="button" class="q2-btn" data-q2-modal-close>Cancel</button>'
@@ -3888,8 +3888,12 @@
     return Math.max(LOGBAR_MIN, Math.round(avail * 0.7));
   }
 
-  function setLogbarHeight(px, persist) {
-    var h = Math.round(Math.max(LOGBAR_MIN, Math.min(logbarMax(), px)));
+  function setLogbarHeight(px, persist, maxPx) {
+    // maxPx lets a gesture cap at the band's starting height when fill mode
+    // has already grown it past the 70% max — otherwise the first drag snaps
+    // the band smaller and the top edge moves opposite the cursor (CCC-1168).
+    var cap = (maxPx != null) ? maxPx : logbarMax();
+    var h = Math.round(Math.max(LOGBAR_MIN, Math.min(cap, px)));
     document.documentElement.style.setProperty('--q2-logbar-h', h + 'px');
     // A dragged height is exact: stop the band's default fill-to-bottom
     // growth (CSS .is-sized) so the user gets the size they set.
@@ -3905,7 +3909,7 @@
     var saved = null;
     try { saved = localStorage.getItem(LOGBAR_KEY); } catch (_) {}
     var n = parseFloat(saved);
-    if (!isNaN(n)) setLogbarHeight(n, false);
+    if (!isNaN(n)) setLogbarHeight(n, false, Math.max(logbarMax(), n));
   })();
 
   var logbarHandle = document.querySelector('[data-q2-resize-v="logbar"]');
@@ -3916,12 +3920,15 @@
       var startY = e.clientY;
       var host = $('q2LogBar');
       var startH = host ? host.getBoundingClientRect().height : LOGBAR_MIN;
+      // Above the 70% max the gesture may only shrink (or grow back to the
+      // starting size) — never snap below startH mid-drag.
+      var dragMax = Math.max(logbarMax(), startH);
       logbarHandle.setPointerCapture(e.pointerId);
       logbarHandle.classList.add('is-dragging');
       document.body.classList.add('q2-resizing-v');
 
       // Dragging the handle up (clientY decreases) grows the log band below it.
-      function onMove(ev) { setLogbarHeight(startH + (startY - ev.clientY), false); }
+      function onMove(ev) { setLogbarHeight(startH + (startY - ev.clientY), false, dragMax); }
       function onUp() {
         logbarHandle.removeEventListener('pointermove', onMove);
         logbarHandle.removeEventListener('pointerup', onUp);
@@ -3929,7 +3936,7 @@
         logbarHandle.classList.remove('is-dragging');
         document.body.classList.remove('q2-resizing-v');
         var host2 = $('q2LogBar');
-        if (host2) setLogbarHeight(host2.getBoundingClientRect().height, true);
+        if (host2) setLogbarHeight(host2.getBoundingClientRect().height, true, dragMax);
       }
       logbarHandle.addEventListener('pointermove', onMove);
       logbarHandle.addEventListener('pointerup', onUp);
@@ -3947,8 +3954,9 @@
       var step = e.shiftKey ? 60 : 20;
       var host = $('q2LogBar');
       var cur = host ? host.getBoundingClientRect().height : LOGBAR_MIN;
-      if (e.key === 'ArrowUp') { e.preventDefault(); setLogbarHeight(cur + step, true); }
-      else if (e.key === 'ArrowDown') { e.preventDefault(); setLogbarHeight(cur - step, true); }
+      var keyMax = Math.max(logbarMax(), cur);
+      if (e.key === 'ArrowUp') { e.preventDefault(); setLogbarHeight(cur + step, true, keyMax); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); setLogbarHeight(cur - step, true, keyMax); }
       else if (e.key === 'Home') {
         e.preventDefault();
         document.documentElement.style.removeProperty('--q2-logbar-h');
