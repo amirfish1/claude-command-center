@@ -2635,7 +2635,7 @@
                 <div class="eng-hero-title" id="engHeroTitle">Checking your engines…</div>
                 <div class="eng-hero-sub" id="engHeroSub">Install, sign in and switch engines on or off. Status refreshes on its own.</div>
               </div>
-              <div class="eng-hero-stats" id="engHeroStats" aria-hidden="true"></div>
+              <div class="eng-hero-stats" id="engHeroStats" role="group" aria-label="Filter engines"></div>
             </div>
 
             <div class="eng-defaults">
@@ -2772,13 +2772,7 @@
             <div class="settings-row-note" id="spawnDefaultsError" hidden></div>
 
             <div class="eng-list-head">
-              <div class="settings-subsection-label">All engines</div>
-              <div class="eng-filter" id="engFilter" role="tablist" aria-label="Filter engines">
-                <button type="button" class="eng-filter-btn is-active" data-eng-filter="all" role="tab" aria-selected="true">All <span data-eng-count="all"></span></button>
-                <button type="button" class="eng-filter-btn" data-eng-filter="ready" role="tab" aria-selected="false">Ready <span data-eng-count="ready"></span></button>
-                <button type="button" class="eng-filter-btn" data-eng-filter="setup" role="tab" aria-selected="false">Needs setup <span data-eng-count="setup"></span></button>
-                <button type="button" class="eng-filter-btn" data-eng-filter="off" role="tab" aria-selected="false">Off <span data-eng-count="off"></span></button>
-              </div>
+              <div class="settings-subsection-label" id="engListLabel">All engines</div>
             </div>
             <div class="eng-list" id="engList" data-keywords="engine claude codex cursor antigravity gemini kilo opencode kimi hermes devin grok aider droid pi install login sign in authenticate verify usage quota enable disable">
               <div class="eng-list-empty">Checking installed engines…</div>

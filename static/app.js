@@ -77910,12 +77910,8 @@
     const shown = rows.filter(r => _engHubFilter === 'all' || r.state === _engHubFilter);
     list.innerHTML = shown.length ? shown.map(_engHubRowHtml).join('')
       : '<div class="eng-list-empty">' + (_engHubFilter === 'setup' ? 'Nothing needs setup.' : 'No engines here.') + '</div>';
-    document.querySelectorAll('[data-eng-count]').forEach(el => { el.textContent = counts[el.getAttribute('data-eng-count')] || 0; });
-    document.querySelectorAll('[data-eng-filter]').forEach(btn => {
-      const on = btn.getAttribute('data-eng-filter') === _engHubFilter;
-      btn.classList.toggle('is-active', on);
-      btn.setAttribute('aria-selected', on ? 'true' : 'false');
-    });
+    const listLabel = document.getElementById('engListLabel');
+    if (listLabel) listLabel.textContent = ({ ready: 'Ready engines', setup: 'Engines that need setup', off: 'Switched-off engines' })[_engHubFilter] || 'All engines';
     const title = document.getElementById('engHeroTitle');
     const sub = document.getElementById('engHeroSub');
     const stats = document.getElementById('engHeroStats');
@@ -77929,8 +77925,11 @@
         : 'Everything that is switched on is installed and signed in.';
     }
     if (stats) {
-      stats.innerHTML = [['ready', 'Ready', 'ok'], ['setup', 'Needs setup', 'warn'], ['off', 'Off', 'muted']].map(s =>
-        '<div class="eng-stat is-' + s[2] + '"><span class="eng-stat-num">' + counts[s[0]] + '</span><span class="eng-stat-label">' + s[1] + '</span></div>').join('');
+      // The counts double as the list filter; pressing the active one again
+      // goes back to All.
+      stats.innerHTML = [['all', 'All', 'muted'], ['ready', 'Ready', 'ok'], ['setup', 'Needs setup', 'warn'], ['off', 'Off', 'muted']].map(s =>
+        '<button type="button" class="eng-stat is-' + s[2] + (_engHubFilter === s[0] ? ' is-active' : '') + '" data-eng-filter="' + s[0]
+        + '" aria-pressed="' + (_engHubFilter === s[0]) + '"><span class="eng-stat-num">' + counts[s[0]] + '</span><span class="eng-stat-label">' + s[1] + '</span></button>').join('');
     }
   }
 
@@ -78087,7 +78086,12 @@
     if (!section) return;
     section.addEventListener('click', (ev) => {
       const filterBtn = ev.target.closest('[data-eng-filter]');
-      if (filterBtn) { _engHubFilter = filterBtn.getAttribute('data-eng-filter'); renderEnginesHub(); return; }
+      if (filterBtn) {
+        const want = filterBtn.getAttribute('data-eng-filter');
+        _engHubFilter = want === _engHubFilter ? 'all' : want;
+        renderEnginesHub();
+        return;
+      }
       const copyBtn = ev.target.closest('[data-eng-copy]');
       if (copyBtn) { _engHubCopy(copyBtn.getAttribute('data-eng-copy'), 'command'); return; }
       const enableBtn = ev.target.closest('[data-eng-enable]');
