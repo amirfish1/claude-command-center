@@ -833,7 +833,13 @@ EOF
         && [ "$worker_content_hash" != "$repo_content_hash" ]; then
         worker_stale_hash=1
       fi
-      if [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; then
+      if { [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; } \
+        && [ "${existing_worker_idle:-0}" != "1" ]; then
+        # Never roll a worker that owns active/queued/uncertain work: source
+        # files change far more often than worker behaviour, and a restart
+        # cuts off live turns. The hourly maintenance tick retries once idle.
+        echo "→ Worker code is stale but the worker is busy — restart deferred until it is idle"
+      elif [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; then
         if [ "$worker_stale_version" = "1" ]; then
           echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
         else

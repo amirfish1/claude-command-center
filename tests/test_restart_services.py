@@ -253,6 +253,41 @@ class RestartWorkerProcessTests(unittest.TestCase):
         self.assertLess(kick, wait)
         self.assertLess(wait, src.index('exec "$PYTHON" "$HERE/server.py"'))
 
+    def test_stale_but_busy_worker_is_deferred_not_restarted(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_control_plane_request",
+            return_value={"ok": True, "active": 1, "queued": 0, "uncertain": 0,
+                          "worker": {"server_version": "1.0.0"}},
+        ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
+             mock.patch.object(server, "_restart_worker_process") as restart:
+            out = server._restart_stale_worker()
+        self.assertFalse(out["restarted"])
+        self.assertEqual(out["reason"], "stale_deferred_busy")
+        self.assertEqual(out["active"], 1)
+        restart.assert_not_called()
+
+    def test_stale_and_idle_worker_is_restarted(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_control_plane_request",
+            return_value={"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                          "worker": {"server_version": "1.0.0"}},
+        ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
+             mock.patch.object(
+                 server, "_restart_worker_process",
+                 return_value={"restarted": True, "via": "launchd"},
+             ) as restart:
+            out = server._restart_stale_worker()
+        self.assertTrue(out["restarted"])
+        restart.assert_called_once()
+
+    def test_run_sh_defers_stale_restart_when_worker_busy(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent / "run.sh").read_text()
+        defer = src.index("restart deferred until it is idle")
+        self.assertLess(src.index('existing_worker_idle:-0}" != "1"'), defer)
+        self.assertLess(defer, src.index('launchctl kickstart -k "$(worker_service_target)"', defer))
+
 
 class ScheduleRestartTests(unittest.TestCase):
     """The dashboard's own in-place restart: kickstart via launchd when

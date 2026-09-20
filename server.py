@@ -16431,6 +16431,20 @@ def _restart_stale_worker():
         stale = bool(loaded_hash) and bool(disk_hash) and loaded_hash != disk_hash
     if not stale:
         return {"restarted": False, "reason": "current", "server_version": loaded}
+    # Never roll a worker that owns unresolved work: the code on disk changes
+    # far more often than the worker's behaviour does, and a restart cuts off
+    # active turns. Defer; the next maintenance tick or run.sh launch retries.
+    busy = {
+        key: int(health.get(key) or 0)
+        for key in ("active", "queued", "uncertain")
+    }
+    if any(busy.values()):
+        print(
+            "  [maintenance] worker stale, deferred "
+            f"(active={busy['active']} queued={busy['queued']} "
+            f"uncertain={busy['uncertain']})"
+        )
+        return {"restarted": False, "reason": "stale_deferred_busy", **busy}
     return _restart_worker_process(worker, was=loaded, now=repo_version)
 
 

@@ -810,6 +810,12 @@ def _engine_maintenance_once(force_updates=False):
     # still running stale/incompatible code, on this same hourly cadence,
     # instead of waiting for the next full dashboard restart to catch it idle.
     worker_compat_status = _core._worker_compat_maintenance_check()
+    try:
+        # Idle-gated: retries a worker restart that run.sh/update deferred
+        # because the worker was busy at the time.
+        _core._restart_stale_worker()
+    except Exception:
+        pass
     return {
         "updates": update_status,
         "catalog": catalog_status,

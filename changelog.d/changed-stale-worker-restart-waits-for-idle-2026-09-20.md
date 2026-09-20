@@ -1,0 +1,1 @@
+A worker running older code is now restarted only when it is idle. If it has active, queued or uncertain work, the restart is deferred and retried on the hourly maintenance tick, so an unrelated source edit no longer cuts off a running turn.
