@@ -1,0 +1,1 @@
+Sending to a session whose folder can't be used (for example a scheduled run started at the filesystem root) now fails with a clear "Session cwd is gone" error instead of showing "Queued" and silently dropping the message a few seconds later.
