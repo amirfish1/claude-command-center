@@ -45361,6 +45361,15 @@
     $trig.setAttribute('aria-expanded', open ? 'true' : 'false');
     $trig.classList.toggle('is-open', open);
   }
+  // Worker/session label prefixed with the machine tag WatchTower stamps on
+  // worker events (by.machine / item.claimed_machine) — "her-bym-a1b2". The
+  // tag rides as its own field so claim matching still sees the bare id; a
+  // label that already carries it isn't double-prefixed.
+  function _uxqWithMachine(worker, machine) {
+    const w = String(worker || '');
+    const m = String(machine || '');
+    return (m && w && !w.startsWith(m + '-')) ? m + '-' + w : w;
+  }
   // Select work evidence, not edits or newly filed tickets. Timeline claims
   // retain history when reopening clears the current claim fields.
   function _uxqRecentWorkItems(items) {
@@ -45373,8 +45382,8 @@
       ].filter(ev => ev && ['claim', 'progress', 'block', 'close'].includes(ev.event));
       const candidates = [
         ...events,
-        { at: item.claimed_at, by: { worker: item.claimed_by, session_id: item.claimed_session_id } },
-        { at: item.closed_at, by: { worker: item.closed_by || item.claimed_by, session_id: item.claimed_session_id } },
+        { at: item.claimed_at, by: { worker: item.claimed_by, session_id: item.claimed_session_id, machine: item.claimed_machine } },
+        { at: item.closed_at, by: { worker: item.closed_by || item.claimed_by, session_id: item.claimed_session_id, machine: item.closed_machine || item.claimed_machine } },
       ].filter(ev => Number.isFinite(Date.parse(ev.at || '')))
         .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       if (!candidates.length) return null;
@@ -45385,8 +45394,10 @@
         ? (item.resolution && item.resolution.summary) || ''
         : latest.text || '';
       return { item, at: latest.at, ms: Date.parse(latest.at), resolved,
-        worker: by.worker || latest.worker || by.session_id || latest.session_id
-          || (resolved && item.closed_by) || item.claimed_by || item.claimed_session_id || '',
+        worker: _uxqWithMachine(
+          by.worker || latest.worker || by.session_id || latest.session_id
+            || (resolved && item.closed_by) || item.claimed_by || item.claimed_session_id || '',
+          by.machine || (resolved ? item.closed_machine : '') || item.claimed_machine || ''),
         summary: Array.isArray(summary) ? summary.filter(Boolean).join('\n') : String(summary),
       };
     }).filter(Boolean).sort((a, b) => b.ms - a.ms).slice(0, 10);
@@ -46277,8 +46288,8 @@
       if (!iso) return '';
       return ' <span class="uxq-tl-time" title="' + escapeAttr(iso) + '">' + escapeHtml(_uxqRelTime(iso)) + '</span>';
     }
-    function _tlWorker(w) {
-      return w ? ' <span class="uxq-tl-worker">' + escapeHtml(String(w).slice(0, 16)) + '</span>' : '';
+    function _tlWorker(w, machine) {
+      return w ? ' <span class="uxq-tl-worker">' + escapeHtml(_uxqWithMachine(w, machine).slice(0, 20)) + '</span>' : '';
     }
     function _fmtRes(v) {
       const arr = Array.isArray(v) ? v : [v];
@@ -46294,13 +46305,14 @@
         worker: by.worker || '',
         session: by.session_id || '',
         kind: by.kind || '',
+        machine: by.machine || '',
       };
     }
     function _tlHead(label, ev) {
       const actor = _tlActor(ev);
       return '<span class="uxq-tl-verb">' + escapeHtml(label) + '</span>'
         + _tlTime(ev && ev.at)
-        + _tlWorker(actor.worker || actor.kind)
+        + _tlWorker(actor.worker || actor.kind, actor.worker ? actor.machine : '')
         + (actor.session ? _sessionBtn(actor.session, 'open session') : '');
     }
     function _tlText(text, cls) {

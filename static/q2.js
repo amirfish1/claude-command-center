@@ -2024,7 +2024,7 @@
     // "run requested" here reads as if nothing had happened yet.
     var queued = canRun && !!it.run_requested && st !== 'blocked';
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
-      : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
+      : unverified ? 'claimed by ' + withMachine(it.claimed_by, it.claimed_machine) + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
       : queued ? 'launching\u2026'
       : statusLabel(st);
@@ -2260,6 +2260,16 @@
     }).join('') + '</div>';
   }
 
+  // Worker/session label prefixed with the machine tag WatchTower stamps on
+  // worker events (by.machine / item.claimed_machine) — "her-bym-a1b2". The
+  // tag rides as its own field so claim matching still sees the bare id; a
+  // label that already carries it isn't double-prefixed.
+  function withMachine(worker, machine) {
+    var w = String(worker || '');
+    var m = String(machine || '');
+    return (m && w && w.indexOf(m + '-') !== 0) ? m + '-' + w : w;
+  }
+
   function sessionBtn(sid, label) {
     if (!sid) return '';
     // Must match the ccc_popout=conversation&conv= link built elsewhere in
@@ -2287,7 +2297,7 @@
 
     function head(label, ev) {
       var by = (ev && ev.by && typeof ev.by === 'object') ? ev.by : {};
-      var actor = by.worker || by.kind || '';
+      var actor = by.worker ? withMachine(by.worker, by.machine) : (by.kind || '');
       return '<span class="q2-tl-verb">' + esc(label) + '</span>'
         + (ev.at ? '<span class="q2-tl-time" title="' + esc(ev.at) + '">' + esc(relTime(ev.at)) + '</span>' : '')
         + (actor ? '<span class="q2-tl-who">' + esc(String(actor).slice(0, 26)) + '</span>' : '')
@@ -2338,7 +2348,7 @@
       var verb = st === 'in_progress' ? 'In progress'
         : st === 'blocked' ? 'Needs your input' : 'Open · unclaimed';
       rows += evt('now', '<span class="q2-tl-verb" title="Current status, not a new event">' + esc(verb) + '</span>'
-        + (item.claimed_by ? '<span class="q2-tl-who">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : ''), '');
+        + (item.claimed_by ? '<span class="q2-tl-who">' + esc(withMachine(item.claimed_by, item.claimed_machine).slice(0, 30)) + '</span>' : ''), '');
     }
     return '<div class="q2-tl">' + rows + '</div>';
   }
