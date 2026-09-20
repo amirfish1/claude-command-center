@@ -3,7 +3,7 @@ description: Tier-A lean commit — only your paths, no changelog.d/push in same
 allowed-tools: Bash(git diff:*), Bash(git status:*), Bash(git commit:*), Bash(scripts/lean-commit.sh:*)
 ---
 
-Perform a **lean commit** on the shared `main` clone. Read `CLAUDE.md` § Git commits if anything is unclear.
+Perform a **lean commit**: commit only the paths you changed. Read `CLAUDE.md` § Git workflow if anything is unclear.
 
 ## What “lean commit” means
 
@@ -31,8 +31,8 @@ Perform a **lean commit** on the shared `main` clone. Read `CLAUDE.md` § Git co
    git commit --only path/one path/two -m "type(scope): subject"
    ```
 
-4. **Reply** — one short line: `Lean commit <sha> — <subject>` and list paths committed. Do not push in this turn — the push comes when the feature or fix is finished (`CLAUDE.md` § Push).
+4. **Reply** — one short line: `Lean commit <sha> — <subject>` and list paths committed. Do not push in this turn.
 
 If there is nothing to commit for your paths, say so in one line — do not commit other sessions’ files.
 
-**User-visible slice done?** Add a `changelog.d/` file in a **separate** turn (Tier B), not bundled into this lean commit.
+**User-visible slice done?** Add a `changelog.d/` file in a **separate** turn, not bundled into this lean commit.

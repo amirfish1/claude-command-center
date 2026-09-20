@@ -30,72 +30,28 @@ Subject line under ~70 chars. Body (wrapped at ~80) explains the why, not the wh
 
 Co-author tag from the trailer is fine but not mandatory.
 
-## Git commits (shared `main`, parallel sessions)
+## Git workflow
 
-Multiple sessions share one checkout on `main`. **Commit small and often** so
-pushing (or **Push all** in the CCC UI) does not require hunting other sessions.
-A commit is **only** git in that turn — no extra ceremony bundled in.
+Outside contributors: fork, branch, and open a PR against `main` — see
+`CONTRIBUTING.md`. Keep each PR to one focused change.
 
-### Tiers — pick one per commit
+Rules that hold for everyone, agents included:
 
-| Tier | When | Do | Do not |
-|------|------|-----|--------|
-| **A — lean / WIP** | Mid-work checkpoint: still iterating, or pausing before idle | `git commit --only <paths> -m "type(scope): subject"` | `changelog.d/` in same turn; edit `CHANGELOG.md`; version bump; push |
-| **B — slice done** | Feature built or bug fixed (verified) | Same as A; add a `changelog.d/` snippet if user-visible (same or next commit); then **push** (see § Push) | Hand-edit `CHANGELOG.md`; release scripts |
-| **C — release** | Cutting `vX.Y.Z` | `./scripts/cut-release.sh` (rollup, version bump, tag) | Ad-hoc version bumps on random commits |
-
-Use **Tier A** for mid-work checkpoints. When the feature or bug fix is
-actually finished, it is **Tier B** — and Tier B ends with a push.
-
-### Lean commit (Tier A)
-
-Use the **`/lean-commit`** slash command or:
-
-```bash
-git commit --only path/to/changed path/to/other -m "fix(ui): short subject"
-```
-
-- **When:** slice done, or pausing / going idle — **not** after every assistant turn.
-- **One command, then stop** — no `changelog.d/`, no push. (The push happens
-  when the feature/fix is finished — see § Push.)
-- Candidate path list (noise filtered): `scripts/lean-commit.sh`
-
-### Push
-
-- **Always push at the end of building a feature or fixing a bug.** A fix that
-  sits unpushed on one machine is not shipped: other installs only get it via
-  `git pull`. Once the work is committed and its targeted tests pass, run
-  `git push origin main` without waiting to be asked.
-- **Do not push** half-done WIP (Tier A checkpoints), failing tests, or a
-  release (Tier C goes through `./scripts/cut-release.sh`).
-- A push sends every unpushed commit on `main`, including sibling sessions'
-  commits — that is expected on this shared clone. If the push is rejected
-  because `origin/main` moved, `git pull --rebase origin main` then push
-  again; never force-push `main`.
-- If the pre-push gate (`scripts/pre-push.sh`) fails, fix it — do not bypass
-  it with `--no-verify`.
-- If the tree is dirty with others' work, commit **your** paths only and stop.
-
-### CHANGELOG (`changelog.d/`)
-
-- **Tier A:** do not add or edit `changelog.d/` in the same turn as the code commit.
-- **Tier B:** drop one small file in `changelog.d/` per user-visible change (see
-  `changelog.d/README.md`). Never edit `CHANGELOG.md` directly — release rolls
-  snippets up.
-
-### Multi-Agent Git Hygiene
-
-Multiple agent sessions can share one working tree on this machine. The shared
-clone stays on `main`.
-
-1. **Never branch in the shared clone** unless the user asked. Use
-   `git worktree add` for branch-isolated work.
-2. **Never** `git add -A`, `git add .`, or `git commit -a`.
-3. **Commit with `--only <paths>`** — the index is shared; plain `git commit -m`
-   can sweep in sibling sessions' staged work.
-
-- **NEVER** run `git checkout -- .`, `git restore .`, `git clean -f`, or
+- **Stage by explicit path.** Never `git add -A`, `git add .`, or
+  `git commit -a` — they sweep unrelated files into the commit.
+  `git commit --only <paths> -m "type(scope): subject"` is the safe form.
+- **Never** run `git checkout -- .`, `git restore .`, `git clean -f`, or
   `git reset --hard` without asking first.
+- Never force-push `main`, and never bypass the pre-push gate
+  (`scripts/pre-push.sh`) with `--no-verify` — fix what it reports.
+- `/lean-commit` (`.claude/commands/lean-commit.md`) commits only the paths you
+  changed; `scripts/lean-commit.sh` lists candidates with noise filtered.
+
+**Maintainer-local workflow.** How a given maintainer runs their own machines
+(when to commit, when to push, parallel-session etiquette) is not project
+convention and is not recorded here. If a gitignored `CLAUDE.local.md` exists
+at the repo root, read it and any files it imports, and follow it — it takes
+precedence over this section.
 
 ## CHANGELOG
 

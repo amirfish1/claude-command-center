@@ -88,11 +88,3 @@ Flow popout mode is activated by `?ccc_popout=flow`:
   still-open main dashboard window.
 - First-time Organize on a fully loaded board could use a smarter initial
   layout when there are no saved user positions.
-
-## Working agreements
-
-- For Flow fix proposals, use: problem / tradeoff / value (L/M/H) /
-  confidence (L/M/H).
-- Keep commits small and scoped. Use `git commit --only <paths>`.
-- Push when the fix or feature is finished (see `CLAUDE.md` § Push); not for
-  mid-work checkpoints.

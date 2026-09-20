@@ -30,24 +30,28 @@ Subject line under ~70 chars. Body (wrapped at ~80) explains the why, not the wh
 
 Co-author tag from the trailer is fine but not mandatory.
 
-## Git commits (shared `main`, parallel sessions)
+## Git workflow
 
-Multiple sessions share one checkout on `main`. **Commit small and often** so
-pushing (or **Push all** in the CCC UI) does not require hunting other sessions.
+Outside contributors: fork, branch, and open a PR against `main` — see
+`CONTRIBUTING.md`. Keep each PR to one focused change.
 
-| Tier | When | Do | Do not |
-|------|------|-----|--------|
-| **A — lean** | Mid-work checkpoint or before idle | `git commit --only <paths> -m "type(scope): subject"` | `changelog.d/`, version bump, push in same turn |
-| **B — done** | Feature built or bug fixed (verified) | Tier A + `changelog.d/` snippet if user-visible, then `git push origin main` | Edit `CHANGELOG.md` by hand |
-| **C — release** | Shipping `vX.Y.Z` | `./scripts/cut-release.sh` | Random version bumps |
+Rules that hold for everyone, agents included:
 
-**`/lean-commit`** — slash command; see `.claude/commands/lean-commit.md`. Helper:
-`scripts/lean-commit.sh` (lists candidate paths, noise filtered).
+- **Stage by explicit path.** Never `git add -A`, `git add .`, or
+  `git commit -a` — they sweep unrelated files into the commit.
+  `git commit --only <paths> -m "type(scope): subject"` is the safe form.
+- **Never** run `git checkout -- .`, `git restore .`, `git clean -f`, or
+  `git reset --hard` without asking first.
+- Never force-push `main`, and never bypass the pre-push gate
+  (`scripts/pre-push.sh`) with `--no-verify` — fix what it reports.
+- `/lean-commit` (`.claude/commands/lean-commit.md`) commits only the paths you
+  changed; `scripts/lean-commit.sh` lists candidates with noise filtered.
 
-Never `git add -A` / `git commit -a`. **Always push at the end of building a
-feature or fixing a bug** (tests passing); do not push half-done WIP, and never
-force-push `main`. Full rules: `CLAUDE.md` § Git commits and
-`.claude/rules/git-and-commits.md`.
+**Maintainer-local workflow.** How a given maintainer runs their own machines
+(when to commit, when to push, parallel-session etiquette) is not project
+convention and is not recorded here. If a gitignored `CLAUDE.local.md` exists
+at the repo root, read it and any files it imports, and follow it — it takes
+precedence over this section.
 
 ## CHANGELOG
 
