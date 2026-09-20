@@ -8525,10 +8525,10 @@
       // anywhere on the row copies the full UUID. Easier to scan than
       // a 36-character hex string, and the copy icon gives an obvious
       // affordance hint.
-      const shortId = shortSessionId(value);
+      const shortId = railSessionIdLabel(value);
       el.innerHTML =
         '<span class="sid-label">Session</span>' +
-        '<code class="sid-short">' + shortId + '</code>' +
+        '<code class="sid-short">' + escapeHtml(shortId) + '</code>' +
         '<span class="sid-copy" aria-hidden="true">&#128203;</span>';
       el.dataset.copySessionId = value;
       // CCC-1051: other sessions find this transcript fastest from
@@ -8544,12 +8544,30 @@
     }
   }
 
-  function shortSessionId(sid) {
-    // Engine ids may carry a readable prefix (kimi's "session_<uuid>") —
-    // strip it so the visible 8 chars are the disambiguating digits, not
+  function stripSessionIdPrefix(sid) {
+    // Engine ids may carry a readable constant prefix (kimi's
+    // "session_<uuid>", devin's "devincli-<slug>" / "devin-<uuid>") —
+    // strip it so the visible chars are the disambiguating digits, not
     // a useless constant prefix.
     const s = String(sid || '');
-    return (s.startsWith('session_') ? s.slice(8) : s).slice(0, 8);
+    for (const prefix of ['devincli-', 'devin-', 'session_']) {
+      if (s.startsWith(prefix)) return s.slice(prefix.length);
+    }
+    return s;
+  }
+
+  function shortSessionId(sid) {
+    return stripSessionIdPrefix(sid).slice(0, 8);
+  }
+
+  function railSessionIdLabel(sid) {
+    // The RHS rail chip has more room than the sidebar's 8-char compact
+    // form — show the whole engine-stripped id when it fits (devin-cli
+    // word slugs like "able-roadrunner"), middle-ellipsis when it's long
+    // (uuids) so two sessions never render as the same chip.
+    const s = stripSessionIdPrefix(sid);
+    if (s.length <= 20) return s;
+    return s.slice(0, 12) + '…' + s.slice(-7);
   }
 
   function sidebarSessionIdChipHtml(c) {
