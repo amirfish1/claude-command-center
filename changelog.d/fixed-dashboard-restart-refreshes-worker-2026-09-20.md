@@ -1,0 +1,1 @@
+Restarting only the dashboard now also refreshes a stale worker and waits for it before the dashboard starts, so "restart the worker first" is no longer required. The in-app update path also detects worker code drift by content hash, not just version.
