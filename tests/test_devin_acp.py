@@ -30,10 +30,11 @@ def test_devin_harness_is_registered():
     assert cfg["bin_names"] == ("devin",)
     assert cfg["acp_args"] == ("acp",)
     assert cfg["kill_env"] == "CCC_DEVIN_ACP"
-    # Devin's ACP server takes credentials only from the ACP host, so the
-    # harness must advertise the browser auth method for _acp_ensure to run
-    # the authenticate handshake after initialize.
+    # Devin's ACP server uses the stored CLI login on its own; the browser
+    # auth method stays advertised but lazy, so _acp_ensure only runs the
+    # authenticate handshake once a request comes back auth-required.
     assert cfg["auth_method"] == "devin-browser"
+    assert cfg["auth_lazy"] is True
     # Devin is deliberately NOT worker-routed (see the comment above
     # _ACP_WORKER_HARNESSES in acp.py): its ACP connection is
     # attach-on-demand, owned by whichever process first steers/loads --
@@ -681,7 +682,8 @@ def test_devin_authenticate_single_flights_concurrent_callers():
 
     import ccc_server.acp as acp_mod
 
-    conn = {"authenticated": False, "auth_methods": [{"id": "devin-browser"}]}
+    conn = {"authenticated": False, "auth_demanded": True,
+            "auth_methods": [{"id": "devin-browser"}]}
     calls = []
 
     def slow_auth(harness, method, params=None, timeout=None, sid=None):
@@ -713,7 +715,8 @@ def test_devin_authenticate_waiter_reports_failure_and_retries_later():
 
     import ccc_server.acp as acp_mod
 
-    conn = {"authenticated": False, "auth_methods": [{"id": "devin-browser"}]}
+    conn = {"authenticated": False, "auth_demanded": True,
+            "auth_methods": [{"id": "devin-browser"}]}
 
     def failing_auth(harness, method, params=None, timeout=None, sid=None):
         time.sleep(0.2)
@@ -735,3 +738,39 @@ def test_devin_authenticate_waiter_reports_failure_and_retries_later():
     assert conn["authenticated"] is False
     assert "devin" in acp_mod._core._ACP_ENSURE_ERROR
     acp_mod._core._ACP_ENSURE_ERROR.pop("devin", None)
+
+
+def test_devin_authenticate_is_lazy_until_agent_demands_it():
+    """`devin acp` uses the stored CLI login on its own, and devin-browser
+    always opens a browser tab -- so a fresh connection must NOT call
+    authenticate (observed live: a login tab on every message)."""
+    import ccc_server.acp as acp_mod
+
+    conn = {"auth_methods": [{"id": "devin-browser"}]}
+    with mock.patch.object(acp_mod, "_acp_request") as req:
+        assert acp_mod._acp_authenticate("devin", conn) is True
+    req.assert_not_called()
+
+
+def test_devin_generic_server_error_is_not_an_auth_demand():
+    """-32000 is the generic JSON-RPC server error; only a sign-in shaped
+    message may arm the browser handshake for an auth_lazy harness."""
+    import ccc_server.acp as acp_mod
+
+    conn = {"initialized": True}
+    core = acp_mod._core
+
+    def run(message):
+        with mock.patch.dict(core._ACP_CONNS, {"devin": conn}), \
+                mock.patch.object(core, "_acp_request_async", return_value=7), \
+                mock.patch.object(acp_mod, "_acp_wait_response", return_value={
+                    "error": {"code": -32000, "message": message}}):
+            return acp_mod._acp_request("devin", "session/load", {})
+
+    out = run("internal error: session store busy")
+    assert not out.get("auth_required")
+    assert not conn.get("auth_demanded")
+
+    out = run("Authentication required")
+    assert out.get("auth_required") is True
+    assert conn.get("auth_demanded") is True

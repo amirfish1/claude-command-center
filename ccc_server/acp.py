@@ -93,11 +93,13 @@ _ACP_HARNESSES = {
     # host (e.g. Devin Desktop) fails load with -32015 session_locked --
     # the caller falls back to the durable queue in that case.
     #
-    # Unlike kimi/grok, Devin's ACP server takes NO credentials from the
-    # environment or the on-disk CLI store: the host must call
-    # `authenticate` per connection ("devin-browser" -- instant when the
-    # machine holds a valid Devin login, otherwise it drives the browser
-    # sign-in). `auth_method` makes _acp_ensure run that handshake.
+    # Devin's ACP server falls back to env vars and the stored CLI
+    # credentials when the host provides none (its own startup log says so;
+    # session/list + session/load verified working with no `authenticate`).
+    # The "devin-browser" `authenticate` method always drives a real browser
+    # sign-in, so running it eagerly per connection popped a login tab on
+    # every fresh `devin acp` process. `auth_lazy` defers the handshake
+    # until the agent actually answers a request with auth-required.
     "devin": {
         "label": "Devin",
         "bin_env": "CCC_DEVIN_ACP_BIN",
@@ -105,6 +107,7 @@ _ACP_HARNESSES = {
         "acp_args": ("acp",),
         "kill_env": "CCC_DEVIN_ACP",
         "auth_method": "devin-browser",
+        "auth_lazy": True,
         # `devin acp` implements session/load only — session/resume answers
         # -32601. When CCC already holds the transcript, attach via load
         # and drop the history replay instead of re-folding it.
@@ -925,6 +928,11 @@ def _acp_wait_response(harness, req_id, timeout=20):
     return entry.get("response")
 
 
+_ACP_AUTH_ERROR_RE = re.compile(
+    r"auth|log[ -]?in|sign[ -]?in|credential", re.I,
+)
+
+
 def _acp_request(harness, method, params=None, timeout=20, sid=None):
     """Synchronous RPC for control methods (short timeouts only — never
     use for session/prompt, whose response lands at turn end)."""
@@ -938,12 +946,19 @@ def _acp_request(harness, method, params=None, timeout=20, sid=None):
     if isinstance(error, dict):
         code = error.get("code")
         out = {"ok": False, "error": error.get("message") or f"ACP error {code}", "code": code}
-        if code == -32000:
+        _cfg = _core._ACP_HARNESSES.get(harness) or {}
+        # -32000 is JSON-RPC's generic server-error code. For auth_lazy
+        # harnesses an auth demand opens a browser tab, so only honour it
+        # when the message actually reads as a sign-in problem.
+        if code == -32000 and (
+            not _cfg.get("auth_lazy")
+            or _ACP_AUTH_ERROR_RE.search(str(error.get("message") or ""))
+        ):
             out["auth_required"] = True
-            _cfg = _core._ACP_HARNESSES.get(harness) or {}
             _method = _cfg.get("auth_method")
             _conn = _core._ACP_CONNS.get(harness)
             if _conn is not None:
+                _conn["auth_demanded"] = True
                 # Mark the conn unauthenticated so _acp_ensure re-runs the
                 # authenticate handshake (rate-limited by auth_retry_at)
                 # instead of shortcutting to "ready".
@@ -2062,6 +2077,11 @@ def _acp_authenticate(harness, conn):
     cfg = _core._ACP_HARNESSES.get(harness) or {}
     method = cfg.get("auth_method")
     if not method or conn.get("authenticated"):
+        return True
+    # auth_lazy (devin): the agent already holds the stored CLI login, and
+    # its only auth method opens a browser tab — never run it until a
+    # request has actually come back auth-required on this connection.
+    if cfg.get("auth_lazy") and not conn.get("auth_demanded"):
         return True
     # Single-flight the authenticate call: devin's devin-browser method can
     # park the request for minutes waiting on a human sign-in. A second
