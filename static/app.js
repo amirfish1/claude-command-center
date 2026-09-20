@@ -17487,7 +17487,7 @@
       q = queues.find(x => String(x.queue || '').toUpperCase() === String(queue).toUpperCase()) || null;
     } catch (_) {}
     try {
-      const res = await fetch('/api/queue/list', { cache: 'no-store' });
+      const res = await fetch('/api/queue/list?slim=1', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       items = (Array.isArray(data && data.items) ? data.items : [])
         .filter(it => String(it.project || '').toUpperCase() === String(queue).toUpperCase());
@@ -43737,7 +43737,7 @@
     const requestVersion = _uxqItemsVersion;
     _uxqItemsPromise = (async () => {
     try {
-      const res = await backgroundApiFetch('/api/queue/list', { cache: 'no-store' });
+      const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
       if (requestVersion !== _uxqItemsVersion) return _uxqItemsCache.items;
@@ -45975,6 +45975,18 @@
     // 10s+ or fail outright during GraphQL quota storms — the user should
     // never wait on it just to read a ticket they can already see.
     if (fallback) _uxqOpenItemModal(fallback);
+    // A slim list row (closed ticket, prose trimmed by ?slim=1) gets its full
+    // text from the server's list memo first — milliseconds, no `gh` call.
+    if (fallback && fallback._slim) {
+      try {
+        const cres = await fetch('/api/ux-fixes/item?cached=1&ref=' + encodeURIComponent(ref), { cache: 'no-store' });
+        const cdata = await cres.json().catch(() => ({}));
+        if (cres.ok && cdata.ok && cdata.item && document.getElementById('uxqItemModal')
+            && _uxqItemRef(cdata.item) === ref) {
+          _uxqOpenItemModal(cdata.item);
+        }
+      } catch (_) { /* live hydrate below still runs */ }
+    }
     try {
       const res = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
@@ -47844,7 +47856,7 @@
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
         try {
-          const res = await fetch('/api/queue/list?fresh=1', { cache: 'no-store' });
+          const res = await fetch('/api/queue/list?fresh=1&slim=1', { cache: 'no-store' });
           const data = await res.json().catch(() => ({}));
           if (data && data.ok) {
             const items = Array.isArray(data.items) ? data.items : [];
@@ -66195,7 +66207,7 @@
     if (!opts.force && fresh) return uxFixesQueueMeta;
     _uxFixesQueueMetaPromise = (async () => {
       try {
-        const res = await backgroundApiFetch('/api/queue/list', { cache: 'no-store' });
+        const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store' });
         if (!res.ok) return uxFixesQueueMeta;
         const data = await res.json().catch(() => ({}));
         const meta = _setUxFixesQueueMeta(Array.isArray(data.items) ? data.items : []);

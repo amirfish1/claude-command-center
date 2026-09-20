@@ -663,7 +663,7 @@
     try {
       var results = await Promise.all([
         getJson('/api/queue/status'),
-        getJson('/api/queue/list'),
+        getJson('/api/queue/list?slim=1'),
       ]);
       state.queues = (results[0] && results[0].queues) || [];
       // Per-project health rows carry WHY a queue is stuck (is there a fixer at
@@ -735,6 +735,15 @@
     state.detail = cached;
     state.detailFailed = false;
     renderDetail();
+    // A slim list row (closed ticket, prose trimmed by ?slim=1) gets its full
+    // text from the server's list memo first — milliseconds, no `gh` call.
+    if (cached && cached._slim) {
+      try {
+        var full = await getJson('/api/ux-fixes/item?cached=1&ref=' + encodeURIComponent(ref));
+        if (state.ref !== ref) return;
+        if (full && full.item) { state.detail = full.item; renderDetail(); }
+      } catch (_) { /* live hydrate below still runs */ }
+    }
     try {
       var data = await getJson('/api/ux-fixes/item?ref=' + encodeURIComponent(ref));
       if (state.ref !== ref) return;  // user moved on while this was in flight

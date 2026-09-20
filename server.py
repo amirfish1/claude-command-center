@@ -25388,17 +25388,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # just without the live comment feed — mark it stale so the
                 # client can say so.
                 stale = False
-                try:
-                    item = _q.get(ref)
-                except Exception:
-                    item = None
+                # ?cached=1: answer from the untrimmed list memo without the
+                # live get(). A slim list row opens its detail through this
+                # first so the full body never waits on `gh issue view`; the
+                # client follows up with a plain (live) request.
+                cached_only = (qs.get("cached", [""])[0] or "").strip() in ("1", "true", "yes")
+                item = None
+                if not cached_only:
+                    try:
+                        item = _q.get(ref)
+                    except Exception:
+                        item = None
                 if not item:
                     item = next(
                         (it for it in (_ux_fixes_list_items_cached(None, None) or [])
                          if str(it.get("ref") or "") == ref),
                         None,
                     )
-                    stale = item is not None
+                    stale = item is not None and not cached_only
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
