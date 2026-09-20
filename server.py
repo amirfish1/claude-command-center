@@ -14837,7 +14837,20 @@ def _archive_overlay_wt_worker_sessions(rows):
     if not workers:
         return []
     existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
-    missing = [w for w in workers if w.get("alive") and not w.get("released_at")
+    normalized = []
+    for w in workers:
+        # WT records a devin worker's session_id as the raw CLI slug while
+        # the conversation row is devincli-<slug> — overlaying the raw id
+        # renders the same session twice (CCC-1176). Canonicalize at this
+        # boundary only: WT-side joins elsewhere compare against WT's raw id.
+        if (str(w.get("engine") or "").lower() == "devin"
+                and w.get("session_id")
+                and not str(w["session_id"]).startswith(DEVIN_CLI_SESSION_PREFIX)
+                and not _is_devin_session(str(w["session_id"]))):
+            w = dict(w)
+            w["session_id"] = DEVIN_CLI_SESSION_PREFIX + str(w["session_id"])
+        normalized.append(w)
+    missing = [w for w in normalized if w.get("alive") and not w.get("released_at")
                and w.get("session_id") and str(w["session_id"]) not in existing]
     if not missing:
         return []
