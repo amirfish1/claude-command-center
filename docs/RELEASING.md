@@ -11,6 +11,58 @@ Short, copy-pasteable checklist for cutting a new version. Not a policy doc — 
 ./scripts/cut-release.sh X.Y.Z --skip-dmg           # source/brew only (no notarized DMG / Sparkle update)
 ```
 
+## 0. Ship WatchTower first
+
+`watchtower.queue` is a hard dependency and users receive WatchTower by pulling
+`main` of `github.com/amirfish1/watchtower` into CCC's managed clone — so a CCC
+release that needs new WatchTower code only reaches users if WT's `main` is
+pushed first.
+
+```bash
+cd ~/Apps/WatchTower
+git log origin/main..HEAD --oneline     # anything unreleased?
+./scripts/cut-release.sh patch --dry-run
+./scripts/cut-release.sh patch          # bumps, runs pytest, tags, pushes, GH release
+```
+
+Cut a WT tag whenever `main` has pending commits — the tag is bookkeeping, the
+`main` push is the actual delivery channel.
+
+## 0.5 Unreleased prose → snippets before the rollup
+
+`release.py` inserts the new `## [X.Y.Z]` block **below** `## [Unreleased]` —
+it never moves hand-written prose under that header. Anything typed directly
+into `[Unreleased]` stays unreleased forever (the `watchtower.queue` entry sat
+there from v5.26.0 through v5.32.0). Before cutting, move each `[Unreleased]`
+entry into a `changelog.d/<category>-<slug>-<date>.md` snippet so it rolls into
+the release, and leave the `[Unreleased]` header empty.
+
+## 0.7 Marketing surfaces (before or right after the cut)
+
+- **README.md** — add the `## Recent` entry, refresh stale feature copy, fix
+  any claims the release invalidates (v5.33.0: the "reduced built-in queue"
+  fallback no longer exists).
+- **docs/index.html** (ccc.amirfish.ai) — bump the nav badge, hero badge,
+  release meta line, compare-table header, and the `#whats-new` strip; swap the
+  hero frame image; keep engine counts honest ("eight engines", not seven).
+  The GET CCC button links `releases/latest` so it never pins an old tag.
+- **Screenshots** — never capture the live dashboard (real session titles =
+  PII). Use the seeded fixtures via `scripts/story-capture`:
+  `python3 -m http.server 8877` at the repo root, then
+  `node scripts/story-capture/shot.js --flow scripts/story-capture/flows/<flow>.js --out docs/images/ccc-vX-Y-Z-<name>.png --scale 2`.
+  The flows run today's `static/` against `docs/demo/api/*.json` fakes. Stale
+  flows happen — e.g. `queue-workers.js` still targets the Queues-tab strip
+  that moved into Workers in v5.33.
+- **Release notes** — pass `--notes-file` with a short highlight reel above
+  the full changelog section; the GH release page is what social posts link to.
+
+## 0.9 Announce
+
+Draft and hand to the maintainer (or post): a WhatsApp blurb for friends
+(short, casual, top 3 features + link) and a Reddit post that names the actual
+new features — never "there's a new version". Threads that worked:
+r/ClaudeAI, r/codex, r/LocalLLaMA for the multi-engine angle.
+
 `cut-release.sh` orchestrates the whole sequence below, fails loud on the first error, auto-computes the Homebrew sha256, and verifies at the end. **Always `--dry-run` first.** Prereqs are the same as the manual steps (Developer ID cert, `ccc-notary` notarytool profile, Sparkle EdDSA key in login keychain, `gh` logged in, Homebrew tap at `~/Apps/homebrew-ccc` or `$CCC_BREW_TAP`).
 
 The manual steps below are the fallback / reference for what the wrapper does.
