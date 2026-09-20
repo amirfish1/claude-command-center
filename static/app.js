@@ -45264,15 +45264,24 @@
     if (last) bits.push(last);
     return bits.join(' · ');
   }
+  // Background refresh after a scope repaint: expire the snapshot and let the
+  // normal render path refetch + repaint, with no spinner in front of it.
+  function _uxqRevalidateAfterScopeChange() {
+    _uxqItemsCache.ts = 0;
+    Promise.resolve(_renderQueuePanel()).catch(() => {});
+  }
   // Selecting a queue from the picker: set the scope override, close, repaint.
   function _uxqPickerPickQueue(name) {
     _uxqSetScopeOverride(name);
     _uxqPickerClose();
     _uxqResetHistoryPage();
-    _uxqItemsCache.ts = 0;
+    // Repaint from the snapshot we already hold (a scope change only filters
+    // it), THEN revalidate. Zeroing the cache ts first defeated allowStale and
+    // put the multi-MB /api/queue/list fetch in front of every queue switch.
     _uxqSetScopeLoading(true);
     Promise.resolve(_renderQueuePanel({ allowStale: true })).finally(() => {
       _uxqSetScopeLoading(false);
+      _uxqRevalidateAfterScopeChange();
     });
     // Scroll the ticket list to top so the new selection's first row shows.
     const $list = document.getElementById('sidebarQueueList');
@@ -45293,12 +45302,12 @@
     if (qName) {
       _uxqSetScopeOverride(qName);
       _uxqResetHistoryPage();
-      _uxqItemsCache.ts = 0;
       _uxqSetScopeLoading(true);
       Promise.resolve(_renderQueuePanel({ allowStale: true })).then(() => {
         _uxqSetScopeLoading(false);
         _uxqPickerClose();
         _uxqOpenItemDetail(ref);
+        _uxqRevalidateAfterScopeChange();
       });
     } else {
       pickAndOpen();
