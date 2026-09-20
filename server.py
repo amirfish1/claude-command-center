@@ -9668,8 +9668,10 @@ def _acp_live_activity_fields(harness, session_id):
         if harness == "kimi":
             idx = _kimi_session_index().get(session_id) or {}
             tail = _kimi_wire_tail_meta(idx.get("session_dir"))
-        else:
+        elif harness == "grok":
             tail = _grok_wire_tail_meta(_grok_conversation_source(session_id))
+        # Other harnesses (devin) have no wire file — the registry's
+        # pending_permissions above is still their parked-approval signal.
         out["sidecar_ts"] = float(tail.get("wire_mtime") or 0)
         out["last_event_type"] = tail.get("last_event_type")
         if tail.get("mid_turn"):
@@ -9753,6 +9755,17 @@ def _live_activity_entry_for_session(session_id):
         entry["last_event_type"] = tail.get("last_event_type")
     elif engine in ("kimi", "grok"):
         entry.update(_acp_live_activity_fields(engine, session_id))
+    elif engine == "devin":
+        _add_sidecar_fields(entry)
+        try:
+            acp_fields = _acp_live_activity_fields(
+                "devin", _devin_cli_raw_id(session_id))
+            if acp_fields.get("needs_approval"):
+                entry["needs_approval"] = True
+                entry["needs_approval_message"] = acp_fields.get(
+                    "needs_approval_message")
+        except Exception:
+            pass
     elif engine == "hermes":
         # Hermes has no Claude sidecars; its runtime lease is the liveness
         # signal and was already applied above.

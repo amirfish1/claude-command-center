@@ -3226,6 +3226,10 @@ def session_live_status(session_id, session_cwd):
                 )
                 result["cwd"] = snap.get("cwd") or result["cwd"]
                 result["model"] = snap.get("model")
+                result["acp_pending_permission"] = snap.get("pending_permission")
+                if snap.get("pending_permissions"):
+                    result["needs_approval"] = True
+                    result["needs_approval_message"] = "Devin is waiting for a tool approval"
             else:
                 result["kind"] = "headless"
                 # Another ACP host (Devin Desktop / Next, a `devin` TUI, a
@@ -3250,6 +3254,10 @@ def session_live_status(session_id, session_cwd):
                 or session_cwd
             )
             result["model"] = snap.get("model")
+            result["acp_pending_permission"] = snap.get("pending_permission")
+            if snap.get("pending_permissions"):
+                result["needs_approval"] = True
+                result["needs_approval_message"] = "Devin is waiting for a tool approval"
             result["match_count"] = 1
         else:
             # ACP can't attach right now — surface why (bin missing,
