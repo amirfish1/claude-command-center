@@ -185,6 +185,49 @@ def test_worker_routed_inject_is_only_metered_by_the_worker(monkeypatch):
     assert calls == []
 
 
+def test_terminal_queue_drain_is_not_metered(monkeypatch):
+    """CCC-1175: a drain tick completes an earlier (already metered) send.
+
+    The watcher re-parks an undeliverable head entry and retries each tick;
+    metering those ticks as fresh "repeat" sends trips the breaker on a
+    message that never landed once, and the watcher then treats `blocked`
+    as terminal — the queued text is silently dropped.
+    """
+    calls = []
+    monkeypatch.setattr(
+        server, "_inject_budget_check", lambda *args: calls.append(args) or None,
+    )
+    monkeypatch.setattr(server, "_federation_resolve_target", lambda sid: (sid, None))
+    monkeypatch.setattr(server, "_claude_subagent_parent_session_id", lambda sid: None)
+    monkeypatch.setattr(server, "_canonical_kimi_session_id", lambda sid: sid)
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
+    monkeypatch.setattr(server, "find_session_cwd", lambda sid: None)
+    monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {"live": False})
+    monkeypatch.setattr(server, "_is_cursor_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_hermes_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+    monkeypatch.setattr(server, "_session_acp_harness", lambda sid: "")
+    monkeypatch.setattr(server, "_is_opencode_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_devin_cli_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_gemini_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_antigravity_session", lambda sid: False)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        server, "_try_uds_peer_delivery",
+        lambda *args, **kwargs: {"ok": True, "via": "uds"},
+    )
+
+    drained = server._inject_text_into_session_router(
+        "sid", "continue", _from_terminal_queue=True,
+    )
+    assert drained["ok"] is True
+    assert calls == [], "drain of a queued send must not consume budget"
+
+    direct = server._inject_text_into_session_router("sid", "continue")
+    assert direct["ok"] is True
+    assert len(calls) == 1, "the original send is still metered once"
+
+
 # ── The held bucket ──────────────────────────────────────────────────────────
 
 def test_trip_lands_in_the_held_bucket_for_the_human(ledger):

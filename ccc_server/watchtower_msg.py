@@ -1702,7 +1702,14 @@ def _inject_text_into_session_router(
     # Circuit breaker. The worker owns a routed Claude inject, so meter only
     # after that hand-off declines; otherwise both dashboard and worker record
     # the one logical attempt. A refusal logs its own BLOCKED event below.
-    _blocked = _core._inject_budget_check(session_id, text, source)
+    # Terminal-queue drains are exempt for the same reason they are exempt
+    # from dedupe: the call *completes* an earlier send (metered when it was
+    # first offered), so counting every re-park tick as a fresh "repeat" trips
+    # the breaker on a message that never landed once — and the watcher treats
+    # `blocked` as terminal, silently dropping the queued text (CCC-1175).
+    _blocked = None
+    if not _from_terminal_queue:
+        _blocked = _core._inject_budget_check(session_id, text, source)
     if _blocked is not None:
         _core._log_activity(
             "inject", "BLOCKED",
