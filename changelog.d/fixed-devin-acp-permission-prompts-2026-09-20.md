@@ -1,0 +1,1 @@
+- Fixed Devin sessions parking forever on tool permission prompts after a `devin acp` restart: pending `session/request_permission` requests now surface in the open pane's Needs-approval strip (with the option buttons) and on kanban rows, and CCC re-asserts the session's configured mode after `session/load` instead of silently dropping back to accept-edits.
