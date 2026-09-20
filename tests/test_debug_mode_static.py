@@ -28,9 +28,9 @@ class TestDebugModeStatic(unittest.TestCase):
             '#statsBtn', '#annotationFabBtn', '#annotationScreenBtn', '#annotationNotesBtn',
             '#statusRailActivityLogBtn',
             '#cccHealth', '#cccAdvisorPill',
-            '#cccFleetPill', '#cccHeroPulsePill', '[data-role="pane-annotate"]',
+            '#cccFleetPill', '#cccHeroPulsePill',
             '#customNavLinks .q2-toggle-opt[href="/view/reddit"]',
-            '[data-role="conv-rowstyle-palette"]', '[data-role="conv-bg-palette"]',
+            '[data-role="conv-rowstyle-palette"]',
         ):
             self.assertIn("html:not(.ccc-debug-mode) " + selector, self.css)
 

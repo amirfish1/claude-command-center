@@ -27437,7 +27437,6 @@ html:not(.ccc-debug-mode) #cccHeroPulsePill,
 html:not(.ccc-debug-mode) #deployPill,
 html:not(.ccc-debug-mode) #customNavLinks .q2-toggle-opt[href="/view/reddit"],
 html:not(.ccc-debug-mode) [data-role="conv-rowstyle-palette"],
-html:not(.ccc-debug-mode) [data-role="conv-bg-palette"],
 html:not(.ccc-debug-mode) #statsModal {
   display: none !important;
 }
