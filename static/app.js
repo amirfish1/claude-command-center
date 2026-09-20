@@ -67400,7 +67400,12 @@
       }
       const folderOrphan = (c.folder_path === c.slug);
       return Object.assign(_contextFieldsFromRow(c), {
-        id: c.session_id,
+        // Claude Task-tool subagent rows carry a distinct composite id
+        // ("<parent>:agent-<id>") so a click opens the nested transcript
+        // through the same resolver the family lane uses; every other row
+        // either lacks id or has id === session_id, so this falls back
+        // unchanged for them.
+        id: c.id || c.session_id,
         session_id: c.session_id,
         first_message: c.first_message,
         // #1 rename overrides + #9 archived set come from server-side

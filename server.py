@@ -12553,6 +12553,255 @@ def _conv_meta_cache_is_cold(path, stat_result=None):
     return not (cached and cached.get("cache_key") == (st.st_mtime_ns, st.st_size))
 
 
+_CLAUDE_TASK_AGENT_SID_RE = re.compile(r"^agent-[0-9a-zA-Z-]+$")
+
+
+def _is_claude_task_agent_row(row):
+    """True for archive rows built from a Task-tool subagent transcript.
+
+    The bare ``agent-*`` session id plus a ``jsonl_path`` under
+    ``<sid>/subagents/`` is the same on-disk convention
+    ``_claude_subagent_parent_session_id`` and the family-tree enrichment
+    recognize — no separate marker field needed.
+    """
+    if not isinstance(row, dict):
+        return False
+    sid = str(row.get("session_id") or "")
+    if not _CLAUDE_TASK_AGENT_SID_RE.match(sid):
+        return False
+    return os.sep + "subagents" + os.sep in str(row.get("jsonl_path") or "")
+
+
+def _claude_task_agent_transcript_live(agent_path, stat_result=None, now=None):
+    """Is this Task-tool subagent transcript still mid-run?
+
+    A subagent has no process, spawn-registry entry, or sidecar of its own,
+    so the process-liveness probe can never see it. The transcript's tail
+    shape (same verdict the family endpoint uses via _agent_transcript_active)
+    plus a freshness bound is the truth: a crashed lane stops writing but its
+    tail still reads mid-tool, so without the mtime gate it would look live
+    forever.
+    """
+    try:
+        st = stat_result if stat_result is not None else agent_path.stat()
+    except (OSError, AttributeError):
+        return False
+    now = time.time() if now is None else now
+    if (now - st.st_mtime) >= _LIVE_MTIME_WINDOW:
+        return False
+    try:
+        return bool(_agent_transcript_active(
+            str(agent_path), st.st_mtime, st.st_size,
+        ))
+    except Exception:
+        return False
+
+
+def _claude_task_agent_row(
+    agent_path, parent_sid, *,
+    slug, folder_label, folder_path, worktree_label=None,
+    name_overrides=None, archived_set=frozenset(), trashed_set=frozenset(),
+    pinned_rank=None, session_overrides=None, now=None,
+):
+    """Archive-shaped row for one Claude Task-tool subagent transcript
+    (``<parent>/subagents/agent-*.jsonl``).
+
+    The transcript is a child of an interactive session, not an independently
+    resumable session: the row's ``id`` is the composite
+    ``<parent>:agent-<id>`` the transcript resolver already accepts (the same
+    convention the family-tree lane opens through), while ``session_id``
+    stays the bare ``agent-*`` id the SessionGraph parents under
+    ``parent_sid``. Fields mirror the parent row shape so the sidebar's
+    existing cluster renderer needs no subagent-specific branch.
+    """
+    try:
+        st = agent_path.stat()
+    except OSError:
+        return None
+    agent_id = agent_path.stem
+    now = time.time() if now is None else now
+
+    # Optional sidecar Claude Code writes next to the transcript
+    # (description/agentType/model) — same fields the graph enrichment reads.
+    meta_desc = meta_model = None
+    try:
+        with open(agent_path.with_name(f"{agent_id}.meta.json"), "r",
+                  encoding="utf-8") as mf:
+            mdata = json.load(mf)
+        meta_desc = mdata.get("description") or mdata.get("agentType")
+        meta_model = mdata.get("model")
+    except Exception:
+        pass
+
+    # Head fields — the first ~20 lines (task prompt, cwd, branch) never
+    # change, so share the parent scan's (mtime_ns, size)-keyed cache.
+    first_message = timestamp = git_branch = head_cwd = None
+    head_key = (st.st_mtime_ns, st.st_size)
+    hc = _conv_head_cache.get(str(agent_path))
+    if hc is not None and hc[0] == head_key:
+        first_message, git_branch, timestamp, head_cwd = hc[1]
+    else:
+        try:
+            with open(agent_path, "r") as fh:
+                for i, line in enumerate(fh):
+                    if i >= 20:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not first_message:
+                        text = _extract_user_prompt_text(ev)
+                        if text:
+                            first_message = text
+                    if not git_branch:
+                        git_branch = ev.get("gitBranch") or ev.get("git_branch")
+                    if not timestamp:
+                        timestamp = ev.get("timestamp")
+                    if not head_cwd:
+                        head_cwd = ev.get("cwd")
+                    if first_message and git_branch and timestamp and head_cwd:
+                        break
+        except (OSError, UnicodeDecodeError):
+            pass
+        _conv_head_cache[str(agent_path)] = (
+            head_key, (first_message, git_branch, timestamp, head_cwd),
+        )
+
+    try:
+        tail_meta = _extract_tail_meta(agent_path) or {}
+    except Exception:
+        tail_meta = {}
+
+    session_cwd = head_cwd or folder_path or ""
+    row_mtime = tail_meta.get("last_meaningful_ts") or st.st_mtime
+    model = tail_meta.get("model") or meta_model or ""
+    latest_tok = tail_meta.get("latest_input_tokens") or 0
+    peak_tok = tail_meta.get("peak_input_tokens") or 0
+    _ov_1m = ((session_overrides or {}).get(agent_id) or {}).get("context_1m")
+    ctx_limit = (
+        1_000_000
+        if _ov_1m or "[1m]" in model.lower() or max(latest_tok, peak_tok) > 200_000
+        else 200_000
+    )
+    name_overrides = name_overrides or {}
+    pinned_rank = pinned_rank or {}
+    display_name = (
+        name_overrides.get(agent_id)
+        or tail_meta.get("custom_title")
+        or meta_desc
+        or tail_meta.get("ai_title")
+        or None
+    )
+    spawn_named = _tail_meta_spawn_named(tail_meta)
+    display_name, spawn_named = _apply_auto_title(
+        display_name, spawn_named, agent_id, bool(name_overrides.get(agent_id)),
+    )
+    return {
+        # Composite open id — _resolve_conversation_path maps
+        # "<parent>:agent-<id>" back to this exact file (CCC-112 convention).
+        "id": f"{parent_sid}:{agent_id}",
+        "session_id": agent_id,
+        "source": "interactive",
+        "engine": "claude",
+        "jsonl_path": str(agent_path),
+        "slug": slug,
+        "folder_label": folder_label,
+        "folder_path": folder_path,
+        "pinned_repo": False,
+        "worktree_label": worktree_label,
+        "session_cwd": session_cwd,
+        "session_cwd_exists": bool(
+            session_cwd and Path(session_cwd).is_dir()
+        ),
+        "session_cwd_is_worktree": bool(
+            session_cwd and (Path(session_cwd) / ".git").is_file()
+        ),
+        "timestamp": timestamp or "",
+        "branch": git_branch,
+        "git_branch": git_branch,
+        "effective_branch": git_branch,
+        "effective_kind": None,
+        "mtime": row_mtime,
+        "modified": row_mtime,
+        "size": st.st_size,
+        "first_message": first_message[:200] if first_message else None,
+        "ai_title": (tail_meta.get("ai_title") or None),
+        "display_name": display_name,
+        "spawn_named": spawn_named,
+        "name_overridden": bool(name_overrides.get(agent_id)),
+        "auto_titled": agent_id in _auto_titled_session_ids(),
+        "archived": agent_id in archived_set,
+        "trashed": agent_id in trashed_set,
+        "recently_unarchived": _is_recently_unarchived(agent_id, now),
+        "pinned": agent_id in pinned_rank,
+        "pin_rank": pinned_rank.get(agent_id),
+        "worktree_dirty": False,
+        "has_edit": bool(tail_meta.get("has_edit")),
+        "has_commit": bool(tail_meta.get("has_commit")),
+        "has_push": bool(tail_meta.get("has_push")),
+        "tail_pr_number": tail_meta.get("tail_pr_number"),
+        "tail_pr_url": tail_meta.get("tail_pr_url"),
+        "pr_state": None,
+        # Transcript-tail liveness — a Task-tool subagent owns no process or
+        # sidecar, so _archive_session_is_live can never see it running.
+        "is_live": _claude_task_agent_transcript_live(agent_path, st, now),
+        "last_assistant_text": _archive_bound_assistant_text(
+            tail_meta.get("last_assistant_text")
+        ),
+        "last_event_type": tail_meta.get("last_event_type"),
+        "pending_tool": tail_meta.get("pending_tool"),
+        "pending_file": tail_meta.get("pending_file"),
+        "subagent_count": tail_meta.get("subagent_count", 0),
+        "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
+        "subagent_recent": tail_meta.get("subagent_recent", []),
+        "workflows": [],
+        "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+        "goal": "",
+        "goal_status": "",
+        "parent_session_id": parent_sid,
+        "spawned_via": "",
+        "continued_from_session_id": _continued_from_session_id_from_text(
+            first_message
+        ),
+        "model": model,
+        "reasoning_effort": tail_meta.get("reasoning_effort")
+        or _conv_row_reasoning_effort(
+            agent_id, session_overrides or {}, None,
+        ),
+        "latest_input_tokens": latest_tok,
+        "lifetime_tokens": tail_meta.get("lifetime_tokens") or 0,
+        "cost_usd": tail_meta.get("cost_usd") or 0.0,
+        "cost_breakdown_usd": tail_meta.get("cost_breakdown_usd") or {},
+        "total_input_tokens": tail_meta.get("total_input_tokens") or 0,
+        "total_cache_creation_tokens": tail_meta.get("total_cache_creation_tokens") or 0,
+        "total_cache_read_tokens": tail_meta.get("total_cache_read_tokens") or 0,
+        "total_output_tokens": tail_meta.get("total_output_tokens") or 0,
+        "live_context_tokens": tail_meta.get("live_context_tokens") or 0,
+        "live_context_limit": tail_meta.get("live_context_limit") or 0,
+        "live_context_percent": tail_meta.get("live_context_percent") or 0,
+        "context_limit": ctx_limit,
+        **_token_optimizer_quality_for_session(agent_id),
+        "sidecar_status": None,
+        "sidecar_has_writes": False,
+        "sidecar_tool": None,
+        "sidecar_file": None,
+        "sidecar_ts": 0,
+        "sidecar_in_flight": False,
+        "needs_approval": False,
+        "needs_approval_message": "",
+        "question_waiting": False,
+        "question_text": "",
+        "question_header": "",
+        "question_preamble": "",
+        "question_options": [],
+        "question_option_details": [],
+    }
+
+
 def find_all_conversations(
     limit_per_folder=None,
     resolve_pr_states=True,
@@ -12587,8 +12836,20 @@ def find_all_conversations(
     """
     _only_dirs = None
     if only_jsonl_paths is not None:
-        only_jsonl_paths = {str(p) for p in only_jsonl_paths}
+        # Canonicalize: project_dirs below are resolved (_archive_canonical_
+        # project_dirs), so compare in canonical space — callers may hand us
+        # paths through symlinked prefixes (e.g. /var → /private/var on macOS).
+        only_jsonl_paths = {os.path.realpath(str(p)) for p in only_jsonl_paths}
         _only_dirs = {os.path.dirname(p) for p in only_jsonl_paths}
+        # Task-tool subagent transcripts nest at
+        # <project>/<sid>/subagents/agent-*.jsonl — their dirname is the
+        # subagents dir, not the project dir, so a dirname-only filter would
+        # skip every project dir and the incremental rebuild would silently
+        # drop subagent-file deltas. Admit that file's project dir too.
+        for _p in only_jsonl_paths:
+            _pd = os.path.dirname(_p)
+            if os.path.basename(_pd) == "subagents":
+                _only_dirs.add(os.path.dirname(os.path.dirname(_pd)))
     projects_root = Path.home() / ".claude" / "projects"
     projects_root_exists = projects_root.is_dir()
 
@@ -12730,14 +12991,37 @@ def find_all_conversations(
 
         try:
             jsonls = []
+            subagent_files = []  # (parent_sid, agent-*.jsonl Path)
             for f in project_dir.iterdir():
                 # Session subdirs (<sid>/subagents/...) fall out of the same
                 # iterdir for free (DirEntry d_type, no extra stat). One
                 # is_dir probe each keeps _ARCHIVE_WORKFLOW_SESSION_DIRS to
                 # genuine workflow owners only.
                 if f.is_dir():
-                    if (f / "subagents" / "workflows").is_dir():
+                    _subagents_dir = f / "subagents"
+                    if (_subagents_dir / "workflows").is_dir():
                         _ARCHIVE_WORKFLOW_SESSION_DIRS[f.name] = f
+                    # Claude Task-tool subagent transcripts: the same
+                    # <sid>/subagents/agent-*.jsonl shape the SessionGraph's
+                    # lazy enrichment globs. One scandir per session dir —
+                    # sessions that never spawned a subagent have no
+                    # subagents dir, so this raises FileNotFoundError and
+                    # skips at syscall cost only.
+                    try:
+                        for _af in _subagents_dir.iterdir():
+                            if (
+                                _af.is_file()
+                                and _af.name.startswith("agent-")
+                                and _af.name.endswith(".jsonl")
+                            ):
+                                if (
+                                    only_jsonl_paths is not None
+                                    and str(_af) not in only_jsonl_paths
+                                ):
+                                    continue
+                                subagent_files.append((f.name, _af))
+                    except OSError:
+                        pass
                     continue
                 if only_jsonl_paths is not None and str(f) not in only_jsonl_paths:
                     continue
@@ -13149,6 +13433,34 @@ def find_all_conversations(
                 # rows get safe defaults that suppress the live pill.
                 **sidecar_fields,
             })
+
+        # Task-tool subagent transcripts collected during the iterdir above
+        # become child rows of the parent session — the sidebar's existing
+        # cluster renderer nests them via parent_session_id. Emitted
+        # unconditionally (not gated on the parent row appearing): in
+        # incremental mode the parent is carried by the cached merge, and a
+        # deleted-parent orphan renders harmlessly at top level.
+        for _parent_sid, _af in subagent_files:
+            _agent_id = _af.stem
+            if _agent_id in seen_session_ids:
+                continue
+            _agent_row = _claude_task_agent_row(
+                _af, _parent_sid,
+                slug=slug,
+                folder_label=folder_label,
+                folder_path=folder_path,
+                worktree_label=_wt_worktree_label,
+                name_overrides=name_overrides,
+                archived_set=archived_set,
+                trashed_set=trashed_set,
+                pinned_rank=pinned_rank,
+                session_overrides=session_overrides,
+                now=_now,
+            )
+            if _agent_row is None:
+                continue
+            seen_session_ids.add(_agent_id)
+            out.append(_agent_row)
 
     # Incremental mode: rows for everything below (registry-only sessions,
     # non-Claude engines, remote) are carried over from the cached snapshot
@@ -13954,14 +14266,37 @@ def _archive_corpus_signature_parts():
         try:
             with os.scandir(directory) as it:
                 for e in it:
-                    if not e.name.endswith(".jsonl"):
-                        continue
-                    try:
-                        st = e.stat()
-                    except OSError:
-                        continue
-                    parts.append(f"{e.path}|{st.st_mtime_ns}|{st.st_size}")
-                    files[e.path] = (st.st_mtime_ns, st.st_size)
+                    if e.name.endswith(".jsonl"):
+                        try:
+                            st = e.stat()
+                        except OSError:
+                            continue
+                        parts.append(f"{e.path}|{st.st_mtime_ns}|{st.st_size}")
+                        files[e.path] = (st.st_mtime_ns, st.st_size)
+                    elif e.is_dir():
+                        # Task-tool subagent transcripts at
+                        # <sid>/subagents/agent-*.jsonl — file granularity
+                        # like the parents, so a new/changed/removed
+                        # subagent invalidates the snapshot (and lands in
+                        # the incremental delta's changed/removed lists).
+                        # One scandir per session dir; sessions with no
+                        # subagents raise FileNotFoundError at syscall cost.
+                        try:
+                            with os.scandir(os.path.join(e.path, "subagents")) as sit:
+                                for se in sit:
+                                    if not (
+                                        se.name.startswith("agent-")
+                                        and se.name.endswith(".jsonl")
+                                    ):
+                                        continue
+                                    try:
+                                        st = se.stat()
+                                    except OSError:
+                                        continue
+                                    parts.append(f"{se.path}|{st.st_mtime_ns}|{st.st_size}")
+                                    files[se.path] = (st.st_mtime_ns, st.st_size)
+                        except OSError:
+                            continue
         except OSError:
             continue
     # Fold in dir-level mtimes of sibling engine transcript stores so adds /
@@ -15580,7 +15915,17 @@ def _rehydrate_archive_cached_rows(rows):
             row["continued_from_session_id"] = continued_from
 
             row_ts = row.get("mtime") or row.get("modified") or 0
-            if sid in live_candidates or (_now_rehydrate - row_ts) < _LIVE_MTIME_WINDOW:
+            if _is_claude_task_agent_row(row):
+                # Task-tool subagents own no process/sidecar — liveness is
+                # the transcript tail shape plus a freshness bound (same
+                # verdict the family endpoint reports for the lane map).
+                try:
+                    is_live = _claude_task_agent_transcript_live(
+                        Path(row["jsonl_path"]), now=_now_rehydrate,
+                    )
+                except Exception:
+                    is_live = False
+            elif sid in live_candidates or (_now_rehydrate - row_ts) < _LIVE_MTIME_WINDOW:
                 is_live = _archive_session_is_live(sid)
             else:
                 is_live = False

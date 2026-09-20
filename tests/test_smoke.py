@@ -8112,6 +8112,224 @@ class TestRepoContextHelpers(unittest.TestCase):
             f"find_conversations took {elapsed:.2f}s for {seed_count} seeded sessions; budget is {target_seconds}s",
         )
 
+    # ---- Claude Task-tool subagent archive rows ---------------------------
+
+    _TASK_PARENT_SID = "d26f56d0-83e0-4438-affb-7c7801951998"
+
+    def _seed_task_agent_corpus(self):
+        """Create <tmp_home>/.claude/projects/<slug>/<parent>.jsonl plus two
+        <parent>/subagents/agent-*.jsonl transcripts: one finished (text-only
+        tail), one still mid-tool (tool_use tail, fresh mtime). Returns
+        (project_dir, parent_path, done_path, live_path)."""
+        slug = "-demo-repo"
+        project_dir = pathlib.Path(self.tmp_home, ".claude", "projects", slug)
+        parent_sid = self._TASK_PARENT_SID
+        parent_path = project_dir / f"{parent_sid}.jsonl"
+        parent_path.parent.mkdir(parents=True, exist_ok=True)
+        parent_path.write_text(
+            json.dumps({
+                "type": "user", "sessionId": parent_sid, "cwd": str(self.repo),
+                "timestamp": "2026-06-01T00:00:00.000Z", "gitBranch": "main",
+                "message": {"role": "user", "content": [
+                    {"type": "text", "text": "build the thing"}]},
+            }) + "\n"
+            + json.dumps({
+                "type": "assistant", "timestamp": "2026-06-01T00:00:05.000Z",
+                "message": {"role": "assistant", "content": [
+                    {"type": "text", "text": "on it"}]},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        sub_dir = project_dir / parent_sid / "subagents"
+        done_path = sub_dir / "agent-aaaa1111bbbb2222.jsonl"
+        live_path = sub_dir / "agent-cccc3333dddd4444.jsonl"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        done_path.write_text(
+            json.dumps({
+                "type": "user", "timestamp": "2026-06-01T00:00:01.000Z",
+                "cwd": str(self.repo),
+                "message": {"role": "user", "content": [
+                    {"type": "text", "text": "Research module foo"}]},
+            }) + "\n"
+            + json.dumps({
+                "type": "assistant", "timestamp": "2026-06-01T00:00:02.000Z",
+                "message": {"role": "assistant", "content": [
+                    {"type": "text", "text": "Found it."}]},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        live_path.write_text(
+            json.dumps({
+                "type": "user", "timestamp": "2026-06-01T00:00:01.000Z",
+                "cwd": str(self.repo),
+                "message": {"role": "user", "content": [
+                    {"type": "text", "text": "Scan the codebase"}]},
+            }) + "\n"
+            + json.dumps({
+                "type": "assistant", "timestamp": "2026-06-01T00:00:02.000Z",
+                "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "Read",
+                     "input": {"file_path": "x.py"}}]},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (sub_dir / "agent-aaaa1111bbbb2222.meta.json").write_text(
+            json.dumps({"description": "research helper",
+                        "model": "claude-sonnet-4-6"}),
+            encoding="utf-8",
+        )
+        return project_dir, parent_path, done_path, live_path
+
+    def _find_all_no_engines(self, **kwargs):
+        """find_all_conversations with every non-Claude finder and the live
+        probes stubbed out — deterministic + no subprocess / network."""
+        stubs = {
+            "_discover_live_session_ids": lambda: set(),
+            "_archive_session_is_live": lambda sid: False,
+            "_load_session_registry": lambda: {},
+            "_find_remote_sessions": lambda **kw: [],
+        }
+        for name in (
+            "find_codex_conversations", "find_gemini_conversations",
+            "find_cursor_conversations", "find_antigravity_conversations",
+            "find_kilo_conversations", "find_opencode_conversations",
+            "find_aider_conversations", "find_hermes_conversations",
+            "find_kimi_conversations", "find_copilot_conversations",
+            "find_grok_conversations", "find_devin_conversations",
+            "find_devin_cli_conversations", "find_copilotchat_conversations",
+        ):
+            stubs[name] = lambda **kw: []
+        with mock.patch.multiple(self.server, **stubs):
+            return self.server.find_all_conversations(
+                resolve_pr_states=False, resolve_effective=False,
+                resolve_worktree_dirty=False, **kwargs,
+            )
+
+    def test_find_all_conversations_emits_task_agent_child_rows(self):
+        """Task-tool subagent transcripts (<sid>/subagents/agent-*.jsonl)
+        surface as archive rows nested under their parent session."""
+        project_dir, parent_path, done_path, live_path = self._seed_task_agent_corpus()
+        rows = self._find_all_no_engines()
+        by_sid = {r.get("session_id"): r for r in rows}
+        parent = by_sid.get(self._TASK_PARENT_SID)
+        self.assertIsNotNone(parent, "parent transcript should produce a row")
+        for agent_path in (done_path, live_path):
+            agent_id = agent_path.stem
+            row = by_sid.get(agent_id)
+            self.assertIsNotNone(row, f"{agent_id} should produce a row")
+            self.assertEqual(row["id"], f"{self._TASK_PARENT_SID}:{agent_id}")
+            self.assertEqual(row["parent_session_id"], self._TASK_PARENT_SID)
+            self.assertEqual(row["engine"], "claude")
+            self.assertEqual(row["source"], "interactive")
+            # Paths are canonicalized (Path.resolve()) during the scan —
+            # compare resolved paths (/var vs /private/var on macOS).
+            self.assertEqual(
+                pathlib.Path(row["jsonl_path"]).resolve(), agent_path.resolve())
+            self.assertEqual(row["slug"], parent["slug"])
+            self.assertEqual(row["folder_label"], parent["folder_label"])
+            self.assertEqual(row["folder_path"], parent["folder_path"])
+            self.assertTrue(self.server._is_claude_task_agent_row(row))
+            # The composite row id resolves back to the nested transcript
+            # through the same path the transcript-popout convention uses.
+            prev_root = self.server.PROJECTS_ROOT
+            self.server.PROJECTS_ROOT = project_dir.parent
+            try:
+                resolved = self.server._resolve_conversation_path(row["id"])
+            finally:
+                self.server.PROJECTS_ROOT = prev_root
+            self.assertEqual(resolved.resolve(), agent_path.resolve())
+        self.assertFalse(self.server._is_claude_task_agent_row(parent))
+        # .meta.json description is the display name when present.
+        self.assertEqual(
+            by_sid["agent-aaaa1111bbbb2222"]["display_name"], "research helper")
+        self.assertEqual(
+            by_sid["agent-aaaa1111bbbb2222"]["model"], "claude-sonnet-4-6")
+        # Without a meta sidecar the task prompt carries the row.
+        self.assertIn("Scan the codebase",
+                      by_sid["agent-cccc3333dddd4444"]["first_message"])
+
+    def test_find_all_conversations_task_agent_liveness_from_tail(self):
+        """A Task-tool subagent owns no process/sidecar — is_live must come
+        from the transcript tail shape, not the session liveness probe."""
+        _, _, done_path, live_path = self._seed_task_agent_corpus()
+        rows = self._find_all_no_engines()
+        by_sid = {r.get("session_id"): r for r in rows}
+        self.assertFalse(by_sid[done_path.stem]["is_live"],
+                         "text-only tail = finished subagent")
+        self.assertTrue(by_sid[live_path.stem]["is_live"],
+                        "fresh tool_use tail = still running")
+        # Rehydrate (the cached-serve path) must keep that verdict and must
+        # never route agent rows through the process/sidecar probe.
+        calls = []
+        with mock.patch.object(
+            self.server, "_archive_session_is_live",
+            side_effect=lambda sid: calls.append(sid) or False,
+        ):
+            hydrated = self.server._rehydrate_archive_cached_rows(rows)
+        h_by_sid = {r.get("session_id"): r for r in hydrated}
+        self.assertFalse(h_by_sid[done_path.stem]["is_live"])
+        self.assertTrue(h_by_sid[live_path.stem]["is_live"])
+        self.assertNotIn(done_path.stem, calls)
+        self.assertNotIn(live_path.stem, calls)
+
+    def test_find_all_conversations_task_agent_incremental(self):
+        """A changed subagent transcript rebuilds just that row; a changed
+        parent does not drag the subagent files along."""
+        _, parent_path, done_path, live_path = self._seed_task_agent_corpus()
+        rows = self._find_all_no_engines(only_jsonl_paths={str(done_path)})
+        self.assertEqual([r["session_id"] for r in rows], [done_path.stem])
+        rows = self._find_all_no_engines(only_jsonl_paths={str(parent_path)})
+        self.assertEqual([r["session_id"] for r in rows],
+                         [self._TASK_PARENT_SID])
+        # Merge semantics: a fresh agent row joins the cached set; a removed
+        # agent file drops its cached row.
+        cached = [{"session_id": self._TASK_PARENT_SID, "jsonl_path": str(parent_path)},
+                  {"session_id": done_path.stem, "jsonl_path": str(done_path)}]
+        merged = self.server._archive_merge_incremental_rows(
+            cached,
+            [{"session_id": live_path.stem, "jsonl_path": str(live_path)}],
+            [],
+        )
+        self.assertEqual(
+            {r["session_id"] for r in merged},
+            {self._TASK_PARENT_SID, done_path.stem, live_path.stem})
+        merged = self.server._archive_merge_incremental_rows(
+            cached, [], [str(done_path)])
+        self.assertEqual({r["session_id"] for r in merged},
+                         {self._TASK_PARENT_SID})
+
+    def test_archive_corpus_signature_tracks_task_agent_files(self):
+        """Creating, modifying, or removing a subagent transcript must bust
+        the archive cache signature like a top-level transcript."""
+        project_dir, parent_path, done_path, _ = self._seed_task_agent_corpus()
+        sig0 = self.server._archive_corpus_signature_uncached()
+        new_agent = project_dir / self._TASK_PARENT_SID / "subagents" / "agent-eeee5555ffff6666.jsonl"
+        new_agent.write_text(json.dumps({"type": "user"}) + "\n", encoding="utf-8")
+        sig1 = self.server._archive_corpus_signature_uncached()
+        self.assertNotEqual(sig0, sig1, "new subagent file must bust the signature")
+        new_agent.write_text(
+            json.dumps({"type": "user"}) + "\n"
+            + json.dumps({"type": "assistant"}) + "\n",
+            encoding="utf-8",
+        )
+        sig2 = self.server._archive_corpus_signature_uncached()
+        self.assertNotEqual(sig1, sig2, "subagent file growth must bust the signature")
+        new_agent.unlink()
+        sig3 = self.server._archive_corpus_signature_uncached()
+        self.assertNotEqual(sig2, sig3, "subagent removal must bust the signature")
+
+    def test_archive_list_projection_keeps_task_agent_fields(self):
+        """The /list allowlist must carry the composite id + parent link (the
+        two fields the sidebar nests and opens on) while dropping internals."""
+        _, _, done_path, _ = self._seed_task_agent_corpus()
+        rows = self._find_all_no_engines()
+        row = next(r for r in rows if r.get("session_id") == done_path.stem)
+        projected = self.server._archive_list_project_row(row)
+        self.assertEqual(projected["id"], row["id"])
+        self.assertEqual(projected["session_id"], done_path.stem)
+        self.assertEqual(projected["parent_session_id"], self._TASK_PARENT_SID)
+        self.assertNotIn("jsonl_path", projected)
+
     def test_repo_path_plus_fallback_keeps_real_space_repo(self):
         """A repo with a real space in its name still resolves directly — the
         fallback only kicks in when the as-given path does not exist."""
