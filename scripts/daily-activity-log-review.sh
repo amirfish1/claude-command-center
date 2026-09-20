@@ -40,6 +40,10 @@ wt.
 EOF
 )
 
+# launchd runs us from "/". A session anchored there can't be resumed by CCC
+# (filesystem root is rejected as a cwd), so start from $HOME instead.
+cd "$HOME"
+
 "$CLAUDE_BIN" -p "$PROMPT" \
   --permission-mode bypassPermissions \
   --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch"
