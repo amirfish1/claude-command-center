@@ -156,7 +156,11 @@ docs/intro-video/**/__pycache__/
 static/reddit/
 
 # Hunch local index cache (was accidentally committed once at 47MB — never again)
-.hunch/
+# Hunch records (decisions/components/constraints/manifest) are shared via git; only the derived
+# code-graph indexes below stay local (edges/index.json alone is tens of MB).
+.hunch/edges/
+.hunch/symbols/
+.hunch/findings/
 # >>> hunch (derived runtime index — regenerable from .hunch/*.json) >>>
 .hunch/*.sqlite
 .hunch/*.sqlite-shm

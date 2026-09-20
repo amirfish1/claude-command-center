@@ -1,0 +1,39 @@
+{
+  "id": "dec_d25469d0c7",
+  "title": "fix(kimi): steer cancels the active turn instead of just queueing",
+  "topic": null,
+  "status": "accepted",
+  "context": "ACP transports (Kimi/Grok) reject a session/prompt sent while a turn is\nactive, so a mid-turn Steer always fell into the busy-queue path and\njust sat there showing \"Queued\" forever — the UI never actually\ndelivered it early, the exact behavior Steer exists to avoid.\n\nsession/cancel (the same primitive the Esc/interrupt button already\nuses successfully for these sessions) DOES interrupt an active turn.\ninject_input's steer path now: cancel the turn, poll the session\nsnapshot briefly for it to act",
+  "decision": "Changed code in server.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "4b1d19c6",
+  "valid_from": "2026-08-22T11:59:18-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:4b1d19c6",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:25.819Z"
+  },
+  "date": "2026-08-22T11:59:18-07:00"
+}

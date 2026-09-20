@@ -1,0 +1,24 @@
+{
+  "id": "con_627861dec9",
+  "type": "performance",
+  "statement": "Never spawn a subprocess per row and never do O(all sessions/conversations) work uncached on a path that scans ~/.claude/projects or session state; gate by candidacy, cache by (mtime, size), batch subprocess calls",
+  "scope": [
+    "server.py"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "Every \"CCC is slow\" incident traced back to the same bug: a user-facing path doing per-item subprocess forks (ps/lsof/gh/git) or full transcript re-parses, invisible at test scale (tiny fixtures) but seconds-plus in production with 1000+ transcripts. tests/test_perf_budget.py enforces this with call-count invariants, run by scripts/pre-push.sh before every push — if it fails, fix the call pattern, don't relax the bound.",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T18:01:06.402Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T18:01:06.402Z"
+  }
+}

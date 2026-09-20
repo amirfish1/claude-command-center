@@ -1,0 +1,44 @@
+{
+  "id": "dec_17d300bd5f",
+  "title": "fix(headless): bound tool-child hold + route /clear through clear_session_context",
+  "topic": null,
+  "status": "accepted",
+  "context": "A worker-owned Claude spawn's queued-input gate treated a live tool\nchild as an unbounded busy signal, so a stuck background command (a\nlong-running `npx vercel deploy`, in the field) held every later\nmessage queued (\"sending…\") long after the enclosing turn had actually\nfinished. Also, a queued \"/clear\" was written to the FIFO as literal\ntext — Claude executes it, but CCC never re-keyed the spawn/UI to the\nfresh post-clear session, so the conversation went dead.\n\n- worker_engines.py: input_stat",
+  "decision": "Changed code in server.py, tests/test_smoke.py, worker_engines.py (3 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_04d13fd0aa",
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py",
+    "tests/test_smoke.py",
+    "worker_engines.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "df5afb0a",
+  "valid_from": "2026-08-22T17:29:49-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:df5afb0a",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "tests/test_smoke.py",
+      "worker_engines.py"
+    ],
+    "last_verified": "2026-08-23T01:55:23.776Z"
+  },
+  "date": "2026-08-22T17:29:49-07:00"
+}

@@ -1,0 +1,42 @@
+{
+  "id": "dec_9d3f8f3224",
+  "title": "feat(ui): badge the F2 Continue route when a token-sitter checkpoint exists",
+  "topic": null,
+  "status": "accepted",
+  "context": "Continuing a cold session already needs no typed prompt, but nothing\ntold the user a durable checkpoint was there to pick up — so add a\nsmall ✅🪑 badge on the recommended \"Continue\" route when one exists.\n\n- server.py: new extract_session_token_sitter_checkpoint() globs\n  ~/.claude/token-optimizer/checkpoints/<sid>-*.md (token-sitter's own\n  naming), exposed at GET /api/session/<sid>/token-sitter-checkpoint\n- static/app.js: f2RenderComposer fetches it (cached per session) and\n  appends the badge",
+  "decision": "Introduced server.py, static/app.js: added extract_session_token_sitter_checkpoint, f2TokenSitterCheckpointExists, f2PaintTokenSitterBadge.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809",
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "server.py",
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "1790e3a0",
+  "valid_from": "2026-08-22T12:21:03-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:1790e3a0",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:25.271Z"
+  },
+  "date": "2026-08-22T12:21:03-07:00"
+}

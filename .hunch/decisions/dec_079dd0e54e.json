@@ -1,0 +1,44 @@
+{
+  "id": "dec_079dd0e54e",
+  "title": "fix(sessions): wire real context-% data into kimi and devin CLI rows",
+  "topic": null,
+  "status": "accepted",
+  "context": "Kimi and Devin CLI archive/list rows never set latest_input_tokens or\ncontext_limit, so the sidebar's context-% chip silently disappeared for\nevery kimi/devin session even though the underlying token data existed.\n\n- kimi: extend the existing incremental wire.jsonl scanner\n  (_kimi_wire_lifetime_tokens -> _kimi_wire_usage_meta) to also track the\n  latest context-window size (context.update_token_count, falling back to\n  the last usage.record turn window), and stamp it + a context_limit onto\n  ev",
+  "decision": "Changed ccc_server/devin.py, server.py: added _devin_cli_list_context_usage, _kimi_wire_usage_meta; changed _kimi_wire_lifetime_tokens.",
+  "consequences": [
+    "Changes _kimi_wire_lifetime_tokens (signature/behavior)."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_2eb884c5e6",
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "ccc_server/devin.py",
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "c169ad26",
+  "valid_from": "2026-08-22T14:53:40-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:c169ad26",
+      "synth:provider=deterministic",
+      "branch:main",
+      "ccc_server/devin.py",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:24.748Z"
+  },
+  "date": "2026-08-22T14:53:40-07:00"
+}

@@ -1,0 +1,53 @@
+{
+  "id": "dec_60e4538c4e",
+  "title": "fix(devin): resolve stuck placeholder on Devin CLI session spawn",
+  "topic": null,
+  "status": "accepted",
+  "context": "CCC now matches the spawned Devin CLI session (wrapper vs child pid,\nnewline-flattened prompts), attaches spawn_pid so the card swaps, shows\nthe spawn log while it materializes, and only treats a Devin session as\nlive when the lock file's process is actually running.\n What changed: added _devin_cli_lock_pid, _devin_cli_pid_alive, _devin_cli_raw_id_for_pid, _devin_spawn_pid_by_session_id, isSpawnLogPlaceholderSource, test_devin_prompt_match_ignores_whitespace, test_devin_spawn_session_id_resolved",
+  "decision": "Changed ccc_server/devin.py, server.py, static/app.js, tests/test_devin_queue.py, tests/test_smoke.py: added _devin_cli_lock_pid, _devin_cli_pid_alive, _devin_cli_raw_id_for_pid, _devin_spawn_pid_by_session_id, isSpawnLogPlaceholderSource, test_devin_prompt_match_ignores_whitespace, test_devin_spawn_session_id_resolved_from_lock_pid, test_devin_cli_session_live_requires_live_pid; changed _devin_cli_session_live, _take_claude_prewarm; new dep(s): ccc_server.devin.",
+  "consequences": [
+    "Adds dependency: ccc_server.devin.",
+    "Changes _devin_cli_session_live, _take_claude_prewarm (signature/behavior)."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_04d13fd0aa",
+    "cmp_2eb884c5e6",
+    "cmp_3a52ce7809",
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "ccc_server/devin.py",
+    "server.py",
+    "static/app.js",
+    "tests/test_devin_queue.py",
+    "tests/test_smoke.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "2240b9a6",
+  "valid_from": "2026-08-22T11:01:49-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:2240b9a6",
+      "synth:provider=deterministic",
+      "branch:main",
+      "ccc_server/devin.py",
+      "server.py",
+      "static/app.js",
+      "tests/test_devin_queue.py",
+      "tests/test_smoke.py"
+    ],
+    "last_verified": "2026-08-23T01:55:26.540Z"
+  },
+  "date": "2026-08-22T11:01:49-07:00"
+}

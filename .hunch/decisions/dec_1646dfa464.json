@@ -1,0 +1,45 @@
+{
+  "id": "dec_1646dfa464",
+  "title": "Antigravity model-tier pruning + server-authoritative UI model lists",
+  "topic": "antigravity-model-pruning",
+  "status": "accepted",
+  "context": "User: new antigravity flash 3.8 model appeared; model lists were overlong everywhere (\"hard to find anything\") and pruning only applied to claude. Wanted pruning + new model on New session dialog, f2 Continue-new, and ccc models.",
+  "decision": "Extended server-side model pruning to antigravity: new _prune_antigravity_models_to_latest_tiers (with _antigravity_model_generation parser) in server.py, wired into _build_engine_model_catalog right after the claude pruner. Policy: family = (brand, tier) parsed from labels like \"Gemini 3.5 Pro (High)\" and raw ids like \"gemini-3.1-pro-preview\"; keep highest version per family, force-keep the generation hosting the engine default, keep all effort variants of kept generations. Result: antigravity catalog 18 -> 9 models (3.5 Pro H/M/L, 3.5 Flash H/M, 3.8 Flash H, Claude Sonnet/Opus 4.6 Thinking, GPT-OSS 120B). Also changed static/app.js _mergeModelOptionsForEngine: a non-empty server catalog list now REPLACES MODEL_OPTIONS_BY_ENGINE[engine] (server is source of truth) instead of union-merging — union kept stale static entries alive on every picker (New session dialog, spawn defaults, f2 Continue-new, Simple home) after server-side pruning. Empty/absent server list keeps union fallback. Static fallback antigravity list updated to the pruned 9 incl. Gemini 3.8 Flash (High). Committed 2dbbabab (not pushed). ccc CLI engine-column follow-up from dec_638f150a33 was already shipped in 9a88b4d0 — no change needed.",
+  "consequences": [
+    "Server-side pruning is now the single authority; UI pickers mirror it automatically via replace-merge",
+    "Future new antigravity generations prune automatically by version parse; the configured default's generation is never dropped",
+    "Old models no longer in any list are still spawnable as custom models where supports_custom=true"
+  ],
+  "alternatives_rejected": [
+    "Client-side only pruning (would drift from server catalog and ccc CLI)",
+    "Union-merge kept (stale entries never disappeared)"
+  ],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py",
+    "static/app.js",
+    "changelog.d/changed-antigravity-model-pruning-2026-09-02.md"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": null,
+  "valid_from": "2026-09-02T18:52:09.317Z",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "premises": [],
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [
+      "server.py",
+      "static/app.js",
+      "changelog.d/changed-antigravity-model-pruning-2026-09-02.md"
+    ]
+  },
+  "date": "2026-09-02T18:52:09.317Z"
+}

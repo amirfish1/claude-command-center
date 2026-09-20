@@ -1,0 +1,44 @@
+{
+  "id": "dec_fc72a7eb3b",
+  "title": "fix(devin): resolve spawn session id via message_nodes fallback",
+  "topic": null,
+  "status": "accepted",
+  "context": "One-shot `devin -p` invocations often skip prompt_history and write\nthe first user turn straight to message_nodes, leaving spawn->session\nmatching stuck with a null id. Also fixes millisecond created_at values\nbeing compared against unix-seconds bounds in SQL, which silently\ndropped matching rows.\n What changed: added _devin_cli_first_prompt_for_session, test_devin_spawn_session_id_resolved_from_message_nodes; new dep(s): json.",
+  "decision": "Changed server.py, tests/test_devin_queue.py: added _devin_cli_first_prompt_for_session, test_devin_spawn_session_id_resolved_from_message_nodes; new dep(s): json.",
+  "consequences": [
+    "Adds dependency: json."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_04d13fd0aa",
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py",
+    "tests/test_devin_queue.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "00100dc9",
+  "valid_from": "2026-08-22T14:23:12-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:00100dc9",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "tests/test_devin_queue.py"
+    ],
+    "last_verified": "2026-08-23T01:55:24.778Z"
+  },
+  "date": "2026-08-22T14:23:12-07:00"
+}

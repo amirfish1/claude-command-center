@@ -1,0 +1,47 @@
+{
+  "id": "dec_7e609502bc",
+  "title": "feat(spawn): add autocompact thresholds for sessions and workers",
+  "topic": null,
+  "status": "accepted",
+  "context": "Add Sessions & Spawning settings for Claude Code auto-compact window,\nseparate for new sessions (auto_compact_k) and WatchTower workers\n(worker_auto_compact_k), defaulting to 250K.\n\nServer persists the two new keys in spawn-defaults.json, validates the\n50-1000K range, and injects CLAUDE_CODE_AUTO_COMPACT_WINDOW into the\nspawned process environment. The new-session default is explicitly\npassed through the spawn path so it survives worker routing, while the\nworker default is used by worker-spawned",
+  "decision": "Introduced server.py, static/app.js, tests/test_smoke.py: added _validate_auto_compact_k, _spawn_auto_compact_k_tokens, _spawn_env, _mergeAutoCompactK; changed spawn_session_remote.",
+  "consequences": [
+    "Changes spawn_session_remote (signature/behavior)."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_04d13fd0aa",
+    "cmp_3a52ce7809",
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "server.py",
+    "static/app.js",
+    "tests/test_smoke.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "d344cfbf",
+  "valid_from": "2026-08-22T08:10:22-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:d344cfbf",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "static/app.js",
+      "tests/test_smoke.py"
+    ],
+    "last_verified": "2026-08-23T01:55:27.547Z"
+  },
+  "date": "2026-08-22T08:10:22-07:00"
+}

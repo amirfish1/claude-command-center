@@ -1,0 +1,48 @@
+{
+  "id": "dec_638f150a33",
+  "title": "ccc spawn + ccc models CLI: status, design, pending follow-ups",
+  "topic": "ccc-cli-spawn-models",
+  "status": "accepted",
+  "context": "Origin: user said spawning a session via CCC is too complicated — agents don't know real model names. Session (kimi, session_75b1cfb2) hit a tool-emission fault in plan mode (~35 misfires: Write/Bash/Edit never fired; playwright MCP + hunch MCP fired reliably) — if a future session sees this, leave plan mode and the fault clears. Stray records from the storm: fnd_6f0d268a29 (misfire finding, keep), dec_207f9be652 (thin, superseded by this one). Smoke suite currently shows 37F/5E from OTHER sessions' uncommitted work in the shared tree (tests/test_queue_*.py etc.) — NOT from this change; ccc is not imported by tests.",
+  "decision": "HANDOFF — ccc spawn + ccc models CLI. STATUS: implemented + verified live, UNCOMMITTED in ~/Apps/claude-command-center (shared main). Files: ccc (new cmd_spawn, cmd_models, _post_json; SUBCOMMANDS += spawn,models; docstring), README.md (ccc CLI section), AGENTS.md (conventions bullet), changelog.d/added-ccc-cli-spawn-models-2026-09-01.md. Commit: git commit --only ccc README.md AGENTS.md changelog.d/added-ccc-cli-spawn-models-2026-09-01.md (never git add -A here). DESIGN: ccc spawn '<prompt>' [--engine --model --effort --name --cwd --worktree --report-to --json] → POST /api/sessions/spawn. Prompt positional or stdin; cwd defaults to os.getcwd() (endpoint is repo-scoped — missing repo_path/cwd → 400); --effort → reasoning_effort; --report-to also becomes parent_session_id; _post_json parses HTTPError bodies (server returns 400/503 JSON with error+supported_engines); no Origin header passes same-origin check. ccc models [--engine --json] → GET /api/engines/models; per-engine header (default, ladder from efforts_by_engine, supports_custom) + rows (id, cost_summary/cost_tier, notes default/unavailable/1M ctx/per-model efforts, label). Verified: spawned ccc-spawn-cli-test 2505ae58 (haiku-4-5) seen in ccc sessions; models table across 12 engines. PENDING (user asks, not yet applied): (1) ENGINE COLUMN on every ccc models row — prepend {engine:<12} in cmd_models row print and the (no catalogued models) placeholder; keep header lines. (2) MODEL DATES: catalog has NO date field (verified live field union across all engines + upstream ~/.claude/command-center/claude-models.json rows are only id/label/display_name/oneM/source). To add a RELEASED column: extend the claude-models.json fetcher to capture release dates its source page publishes (same shape as cost plumbing), or parse YYYYMMDD from dated ids; Anthropic /v1/models created_at rejected (key+network). No server restart needed for any of this (client-only).",
+  "consequences": [],
+  "alternatives_rejected": [
+    "'ccc model-list' as command name — 'ccc models' matches the 'ccc sessions' pattern",
+    "client-side model alias resolution — server owns validation + catalog",
+    "dates via Anthropic /v1/models created_at — needs key+network at catalog build; prefer extending the claude-models.json fetcher (its source page already publishes release dates) or parsing YYYYMMDD suffixes from dated ids"
+  ],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "ccc",
+    "README.md",
+    "AGENTS.md",
+    "changelog.d/added-ccc-cli-spawn-models-2026-09-01.md",
+    "server.py",
+    "model_advisor.py"
+  ],
+  "supersedes": "dec_638f150a33",
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": null,
+  "valid_from": "2026-09-02T02:33:51.591Z",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "premises": [],
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [
+      "ccc",
+      "README.md",
+      "AGENTS.md",
+      "changelog.d/added-ccc-cli-spawn-models-2026-09-01.md",
+      "server.py",
+      "model_advisor.py"
+    ]
+  },
+  "date": "2026-09-02T02:35:31.857Z"
+}

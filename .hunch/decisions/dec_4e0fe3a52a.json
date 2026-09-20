@@ -1,0 +1,49 @@
+{
+  "id": "dec_4e0fe3a52a",
+  "title": "Model-picker favorites: record every selection, rank most-recent-first",
+  "topic": "model-picker-favorites-recency",
+  "status": "accepted",
+  "context": "User: 'favorite models in new session rarely gets updated... I selected a model - next time i see it there. ALWAYS.' Root causes: (1) recordSpawnChoice only fired on successful spawn; (2) picks endpoint returned top-8 by count only, so a new one-off pick was invisible.",
+  "decision": "New-session model-picker favorites now record on EVERY deliberate selection and rank most-recent-first. (1) static/app.js: recordSpawnChoice() hooks at the end of setSpawnDefaultModel success path, setSpawnEngine(v, opts) (record defaults true), the $convInputEffortSelect change handler, and selectSpawnPick (pill clicks). (2) setSpawnEngine gained an opts param; automatic call sites pass {record: false}: failed-spawn retry (~18260), CLI-unavailable auto-fallback (~63625), spawn restore (~74434). (3) ccc_server/log_parse.py get_model_picker_picks() (~476-496): ordering changed from pure count-desc to most-recently-recorded key first + remaining by count desc, still capped at 8. Commits f326c874 (hooks) + 051de718 (ranking + guard), both unpushed.",
+  "consequences": [
+    "Pills reorder on every selection — that is the requested 'always up-to-date' behavior",
+    "The on-disk picks format is unchanged; only GET ordering changed",
+    "Automatic engine fallbacks (CLI unavailable, failed-spawn retry) must keep passing {record:false} — new setSpawnEngine call sites need a deliberate choice"
+  ],
+  "alternatives_rejected": [
+    "Record only on actual spawn (status quo — favorites rarely changed)",
+    "Pure count ranking (a one-off selection of a new model could never appear in top 8)",
+    "Pure MRU ranking (lost the habitual-picks signal)",
+    "Recording from setSpawnEngine with no opt-out (auto-fallback paths would pollute favorites with picks the user never made)"
+  ],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "static/app.js",
+    "ccc_server/log_parse.py",
+    "changelog.d/changed-model-picker-favorites-always-current-2026-09-02.md",
+    "changelog.d/changed-model-picker-recency-ranking-2026-09-02.md"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": null,
+  "valid_from": "2026-09-02T19:50:48.401Z",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "premises": [],
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [
+      "static/app.js",
+      "ccc_server/log_parse.py",
+      "changelog.d/changed-model-picker-favorites-always-current-2026-09-02.md",
+      "changelog.d/changed-model-picker-recency-ranking-2026-09-02.md"
+    ]
+  },
+  "date": "2026-09-02T19:50:48.401Z"
+}

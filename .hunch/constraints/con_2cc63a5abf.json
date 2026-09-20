@@ -1,0 +1,24 @@
+{
+  "id": "con_2cc63a5abf",
+  "type": "architecture",
+  "statement": "server.py changes require restarting BOTH the dashboard (com.github.claude-command-center) AND the worker (com.github.claude-command-center.worker), never just the dashboard",
+  "scope": [
+    "server.py"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "worker_engines.py does a lazy `import server` (EngineHost._legacy()), so the worker runs its own copy of server.py's module-level state, separate from the dashboard process. Restarting only the dashboard leaves the old code live in the worker, which looks exactly like \"the fix didn't work.\"",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T18:00:54.883Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T18:00:54.883Z"
+  }
+}

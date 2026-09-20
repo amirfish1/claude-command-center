@@ -1,0 +1,24 @@
+{
+  "id": "con_418e0377d4",
+  "type": "security",
+  "statement": "When bounding a headless `claude -p` subprocess to a read-only toolset, `--allowedTools` alone does NOT restrict the toolset — you must also pass `--disallowedTools` to actually block Bash/Write/Edit/etc; `--allowedTools \"Read,Grep,Glob\"` combined with `--permission-mode dontAsk` still let the model run Bash successfully in a direct empirical test",
+  "scope": [
+    "**"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "Verified by direct test: `claude -p --allowedTools \"Read,Grep,Glob\" --permission-mode dontAsk ...` was asked to run `whoami` via Bash and it did, printing the real output. Only adding `--disallowedTools \"Bash,Write,Edit,...\"` explicitly blocked it (confirmed the model then reported Bash wasn't in its toolset). Any future code trying to sandbox a claude -p call to read-only tools must set both flags, not just allowedTools.",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T21:29:12.491Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T21:29:12.491Z"
+  }
+}

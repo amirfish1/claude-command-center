@@ -1,0 +1,39 @@
+{
+  "id": "dec_d1b9c1c0d4",
+  "title": "fix(ui): reconnect cross-browser F2 continuations to their origin row",
+  "topic": null,
+  "status": "accepted",
+  "context": "f2EffectiveParentSessionId only found a continuation's newer session\nvia a localStorage edge recorded in the SAME browser that clicked\n\"Continue in a new session\". When that happened elsewhere, the old\norigin session never learned a newer session continued from it and\nrendered as an orphaned standalone row -- even though the new\nsession's own provenance chip already linked back to it, showing the\nsame relationship twice, disconnected instead of nested (CCC-927).\n\nNow falls back to scanning loade",
+  "decision": "Changed code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "829fd980",
+  "valid_from": "2026-08-22T13:06:31-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:829fd980",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:24.841Z"
+  },
+  "date": "2026-08-22T13:06:31-07:00"
+}

@@ -1,0 +1,39 @@
+{
+  "id": "dec_0dfedd82a0",
+  "title": "fix(ui): compact-request toast names the actual engine, not always Claude",
+  "topic": null,
+  "status": "accepted",
+  "context": "compactRequestSuccessMessage() hardcoded \"Claude\" in its fallback\ncopy even for Kimi/Codex sessions, so a Kimi user saw \"Waiting for\nClaude to write the compact boundary.\" Look up the real engine label\nvia SESSION_ENGINE_LABELS.\n",
+  "decision": "Changed code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "3cd18abd",
+  "valid_from": "2026-08-22T12:14:07-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:3cd18abd",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:25.326Z"
+  },
+  "date": "2026-08-22T12:14:07-07:00"
+}

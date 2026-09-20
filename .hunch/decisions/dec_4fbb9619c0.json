@@ -1,0 +1,39 @@
+{
+  "id": "dec_4fbb9619c0",
+  "title": "feat(ui): click workspace-pill path to reveal in Finder",
+  "topic": null,
+  "status": "accepted",
+  "context": "The cwd path shown in the input-context strip (e.g. \"~/Apps/content-engine\")\nwas inert text. Wired it to the existing /api/open endpoint the same way\nother path chips in CCC already do — clicking it now runs `open -R` to\nreveal the folder in Finder (no launch flag, so it never executes anything).\n\nFixes CCC-921.\n",
+  "decision": "Introduced code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "85b28e3e",
+  "valid_from": "2026-08-22T11:54:09-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:85b28e3e",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:25.857Z"
+  },
+  "date": "2026-08-22T11:54:09-07:00"
+}

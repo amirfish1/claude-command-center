@@ -1,0 +1,24 @@
+{
+  "id": "con_db5f0fc0be",
+  "type": "correctness",
+  "statement": "Never `git add -A`, `git add .`, or `git commit -a` in this repo; stage by explicit path and commit with `git commit --only <paths>`",
+  "scope": [
+    "**"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "Multiple Claude Code sessions share one working tree on main. The .git/index is a single shared file — a broad add/commit sweeps in a sibling session's uncommitted, unrelated edits into your commit. Observed directly: a `git commit --only static/app.js static/app.css static/index.html` still produced 1174 insertions/122 deletions (far more than the actual diff) because a sibling session had an in-progress queue-panel redesign uncommitted in the same three files — --only operates on working-tree state per path, not \"my hunks,\" so it doesn't isolate sibling edits within a shared file either. Remediation when it already happened: amend the message to honestly describe the mixed content, never surgically extract (risks losing the sibling's work).",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T18:01:00.306Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T18:01:00.306Z"
+  }
+}

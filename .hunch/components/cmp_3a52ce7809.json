@@ -1,0 +1,40 @@
+{
+  "id": "cmp_3a52ce7809",
+  "kind": "module",
+  "name": ".",
+  "responsibility": "",
+  "paths": [
+    "ccc_acp.py",
+    "ccc_peer_inbound.py",
+    "ccc_peer_uds.py",
+    "ccc_worker.py",
+    "control_plane.py",
+    "docker-compose.yml",
+    "fcntl.py",
+    "federation.py",
+    "objects_store.py",
+    "probe-canvas-phase2.js",
+    "probe-canvas-review.js",
+    "productivity.py",
+    "puppeteer-browser-config.js",
+    "require-puppeteer.js",
+    "server.py",
+    "simple-ui-clicks.js",
+    "snapshot.js",
+    "ssh_multiplexer.py",
+    "verify-ccc-1051.js",
+    "worker_engines.py"
+  ],
+  "status": "active",
+  "owners": [],
+  "fragility": 0,
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.5,
+    "evidence": [
+      "."
+    ]
+  },
+  "created_at": "2026-08-22T21:23:34.346Z",
+  "updated_at": "2026-09-17T18:39:01.286Z"
+}

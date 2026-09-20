@@ -1,0 +1,53 @@
+{
+  "id": "dec_89f9d2c7a7",
+  "title": "Model policy deny-list is the single choke point for blocking a model across CCC and WatchTower",
+  "topic": "model-policy",
+  "status": "accepted",
+  "context": "2026-09-05: GPT-6 Astra (2.5x price) drained a weekly Codex allowance in ~30 minutes because it was the default in three places at once (the Codex CLI's own config.toml, CCC's spawn-defaults.json, and a WatchTower queue pin). WatchTower's approved-model list already excluded it, but CCC's queue editor called config.set_model directly and skipped the CLI-only check, and blank-model queues inherited CCC's default unchecked. Codex 0.153 requirements.toml has no model allow-list, so vendor-side enforcement is impossible.",
+  "decision": "A machine-wide deny-list file, ~/.claude/command-center/model-policy.json ({\"blocked_models\": [...]}, unioned with CCC_BLOCKED_MODELS / WATCHTOWER_BLOCKED_MODELS), consulted at every spawn/resume/switch site. CCC: _model_policy_blocks wired into _model_catalog_allows_model (pickers hide), _validate_codex_model, /api/sessions/spawn for all engines, /api/queue/config (checked before any setter runs), and the codex queue-wake path. Explicit requests for a blocked model are rejected with a policy error; inherited defaults fall back to the first allowed curated model rather than failing the spawn. WatchTower reads the same file: set_model raises, model() substitutes policy_fallback_model, build_drain_command re-checks.",
+  "consequences": [
+    "To use a blocked model deliberately, edit the policy file first (CCC picks it up by mtime without restart; WatchTower reads per call).",
+    "WatchTower code changes need the ai.watchtower.watcher daemon restarted; the daemon and wt CLI import the editable checkout at ~/Apps/watchtower.",
+    "Changing a queue's model via wt config retires its running worker.",
+    "Any new spawn path must go through _validate_codex_model / _model_policy_error or it silently bypasses the policy."
+  ],
+  "alternatives_rejected": [
+    "Rely on Codex requirements.toml: it has no model allow-list (verified against the 0.153.4 binary).",
+    "Just change the defaults: a default is not enforcement; the next picker click or queue edit reintroduces the model.",
+    "Enforce WatchTower's hardcoded approved list at spawn time for all engines: would break kimi/other engines whose CCC defaults are not in that list; the deny-list is narrower and explicit.",
+    "Fail the spawn when an inherited default is blocked: strands queue work silently; substitution plus a ledger event keeps queues draining on an allowed model."
+  ],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py",
+    "ccc_server/queue_events.py",
+    "tests/test_model_policy.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "5b015e67",
+  "valid_from": "2026-09-06T04:46:36.678Z",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "premises": [
+    {
+      "claim": "tests/test_model_policy.py pins the deny-list behavior",
+      "path_exists": "tests/test_model_policy.py"
+    }
+  ],
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [
+      "server.py",
+      "ccc_server/queue_events.py",
+      "tests/test_model_policy.py"
+    ]
+  },
+  "date": "2026-09-06T04:46:36.678Z"
+}

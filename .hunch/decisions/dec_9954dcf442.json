@@ -1,0 +1,42 @@
+{
+  "id": "dec_9954dcf442",
+  "title": "feat(kimi): show ACP-reported slash commands in the / dropdown",
+  "topic": null,
+  "status": "accepted",
+  "context": "Kimi/Grok ACP push their own command catalog via an\navailable_commands_update notification (docs/kimi-code-reference.md);\nCCC just never read it, and the composer's / dropdown hard-blocked\nKimi with \"not wired\" and fell back to Claude's list for Grok (which\nlisted commands like /context that don't exist there).\n\n- server.py extract_session_slash_commands(): new kimi/grok branch\n  reads state[\"available_commands\"] from live ACP session state\n- static/app.js: drop the Kimi hard-block in\n  slashCom",
+  "decision": "Introduced code in server.py, static/app.js (2 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809",
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "server.py",
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "f2c30659",
+  "valid_from": "2026-08-22T12:17:14-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:f2c30659",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:25.298Z"
+  },
+  "date": "2026-08-22T12:17:14-07:00"
+}

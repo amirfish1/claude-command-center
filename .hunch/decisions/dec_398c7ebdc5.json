@@ -1,0 +1,39 @@
+{
+  "id": "dec_398c7ebdc5",
+  "title": "fix(kimi): support /compact over ACP instead of blocking it",
+  "topic": null,
+  "status": "accepted",
+  "context": "Confirmed by reading MoonshotAI/kimi-code source directly\n(packages/acp-adapter/src/slash.ts + builtin-commands.ts): \"compact\" is\none of the ACP adapter's own BUILTIN slash commands. The adapter\nintercepts it before it ever reaches the model and runs\nsession.compact() itself, reporting back via session/update\n(compaction.started/completed/blocked) — the same client-side\ninterception pattern as Claude's \"/clear\" (CCC-935). This is distinct\nfrom the kap-server daemon's REST-only :compact endpoint,",
+  "decision": "Changed code in server.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "fdca971c",
+  "valid_from": "2026-08-22T17:38:37-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:fdca971c",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:23.738Z"
+  },
+  "date": "2026-08-22T17:38:37-07:00"
+}

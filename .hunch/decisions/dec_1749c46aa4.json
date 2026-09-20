@@ -1,0 +1,39 @@
+{
+  "id": "dec_1749c46aa4",
+  "title": "fix(kimi): don't yank the live thinking box before JSONL catches up",
+  "topic": null,
+  "status": "accepted",
+  "context": "A thinking-only step (kimi reasons, then calls a tool with no interim\ntext) never set visibleContentAdded, so the turn's 'result' event hit the\nlingerMs:0 fallback path in handleSpawnEvents and clearStreamingBubble ran\nimmediately -- wiping the streamed thinking box before the JSONL re-render\n(the primary hand-off, per its own comment) had a chance to replace it\nwith the persisted version. Looked like the thoughts just vanished. The\nbackend already persists the full thinking text (server.py\n_acp",
+  "decision": "Changed code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "247adf17",
+  "valid_from": "2026-08-22T06:09:47-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:247adf17",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:27.807Z"
+  },
+  "date": "2026-08-22T06:09:47-07:00"
+}

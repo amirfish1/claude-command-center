@@ -1,0 +1,38 @@
+{
+  "id": "dec_99bfd91cb6",
+  "title": "ccc models: engine + released columns shipped",
+  "topic": "ccc-cli-models-table",
+  "status": "accepted",
+  "context": "dec_207f9be652 was a thin stray record from a tool fault during the ccc spawn/models session; the actual follow-ups are now implemented.",
+  "decision": "ccc models rows lead with the engine name and include a released column derived client-side from dated id suffixes (-YYYYMMDD or -YYYY-MM-DD); no release-date data source exists in any engine catalog, so undated ids render blank.",
+  "consequences": [],
+  "alternatives_rejected": [
+    "server-side fetcher scraping Anthropic's overview/deprecations pages — neither publishes release dates (only cutoffs and retirement dates)"
+  ],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "ccc",
+    "README.md"
+  ],
+  "supersedes": "dec_207f9be652",
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "d3a713b4",
+  "valid_from": "2026-09-02T02:58:36.320Z",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "premises": [],
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [
+      "ccc",
+      "README.md"
+    ]
+  },
+  "date": "2026-09-02T02:58:36.320Z"
+}

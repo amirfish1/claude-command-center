@@ -1,0 +1,39 @@
+{
+  "id": "dec_11460929cf",
+  "title": "fix(ui): rename Auto handover pill to token-sitter",
+  "topic": null,
+  "status": "accepted",
+  "context": "Annotation asked to match the button/toast copy to the actual\ntoken-sitter branding used elsewhere in the toggle flow.\n",
+  "decision": "Changed code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "b11035f5",
+  "valid_from": "2026-08-22T08:09:56-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:b11035f5",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:27.578Z"
+  },
+  "date": "2026-08-22T08:09:56-07:00"
+}

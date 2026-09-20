@@ -1,0 +1,39 @@
+{
+  "id": "dec_1212b9763f",
+  "title": "fix(ui): word-majority bidi direction, not first-strong-char",
+  "topic": null,
+  "status": "accepted",
+  "context": "dir=\"auto\" alone still misjudged mixed Hebrew/Latin paragraphs: the\nUnicode bidi algorithm picks direction from the FIRST strong-directional\ncharacter only, so a Hebrew sentence that opens with (or is dominated by\ncharacter count of) an English term/acronym like \"App Password\" or\n\"Google\" rendered fully left-aligned/LTR even though it reads as Hebrew.\n\ntagBlocksForRtl() now counts which script each whitespace-delimited word\nbelongs to and sets dir=\"rtl\"/\"ltr\" explicitly by majority vote across\nw",
+  "decision": "Changed static/app.js: added _bidiMajorityDir.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "f807d346",
+  "valid_from": "2026-08-22T11:28:18-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:f807d346",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:25.891Z"
+  },
+  "date": "2026-08-22T11:28:18-07:00"
+}

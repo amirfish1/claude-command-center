@@ -1,0 +1,39 @@
+{
+  "id": "dec_bd22004750",
+  "title": "feat(ui): show per-turn token in/cached/out chip on Kimi answers",
+  "topic": null,
+  "status": "accepted",
+  "context": "wire_tail._attach_kimi_wire_usage already stamps tokens_in/tokens_out/\ntokens_cached on each Kimi assistant event server-side, matching the\nfields the generic Claude/Antigravity branch already renders a chip\nfrom -- but the kimi branch continues before reaching that code, so\nthe metadata row (turn number, timestamp, speak/copy) never got one.\nReuse the same _formatAntigravityTokenChips formatter for parity.\n\n- static/app.js: append the chip to .kimi-answer-meta's innerHTML\n- static/app.css: righ",
+  "decision": "Introduced code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "34b99266",
+  "valid_from": "2026-08-22T15:24:23-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:34b99266",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:24.217Z"
+  },
+  "date": "2026-08-22T15:24:23-07:00"
+}

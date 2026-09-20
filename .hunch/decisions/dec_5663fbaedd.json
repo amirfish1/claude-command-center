@@ -1,0 +1,39 @@
+{
+  "id": "dec_5663fbaedd",
+  "title": "fix(system-status): show last-used time on all spawned claude processes",
+  "topic": null,
+  "status": "accepted",
+  "context": "Claude/agy processes discovered via the ps scan (not CCC's own spawn\nregistry) always rendered \"started\": \"\" — no relative timestamp in the\nSystem status panel's Spawned processes list, unlike registry-tracked\nentries. ps now also reports etime, which lets us back-compute a start\ntimestamp for these rows too.\n\n- server.py: `ps -A -o pid,ppid,rss,etime,command`, new\n  _parse_ps_etime_s() parses '[[dd-]hh:]mm:ss', claude_results rows get\n  a real \"started\" timestamp instead of \"\"\n What changed: ad",
+  "decision": "Changed server.py: added _parse_ps_etime_s.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "f1a1d85a",
+  "valid_from": "2026-08-22T08:34:26-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:f1a1d85a",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:26.729Z"
+  },
+  "date": "2026-08-22T08:34:26-07:00"
+}

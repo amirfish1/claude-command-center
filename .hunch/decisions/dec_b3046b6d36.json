@@ -1,0 +1,39 @@
+{
+  "id": "dec_b3046b6d36",
+  "title": "fix(kimi): return friendly error for /context on ACP sessions",
+  "topic": null,
+  "status": "accepted",
+  "context": "Kimi/Grok ACP sessions don't implement Claude Code's /context command;\nsending it forwarded raw to the subprocess and surfaced a bare \"Unknown\nACP command: /context\" with no guidance. Intercept it in _acp_prompt and\npoint the user at the usage strip instead.\n",
+  "decision": "Changed code in server.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "6c42e89f",
+  "valid_from": "2026-08-22T12:14:07-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:6c42e89f",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:25.463Z"
+  },
+  "date": "2026-08-22T12:14:07-07:00"
+}

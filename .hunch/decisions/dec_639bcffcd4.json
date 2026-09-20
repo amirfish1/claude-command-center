@@ -1,0 +1,43 @@
+{
+  "id": "dec_639bcffcd4",
+  "title": "fix(composer): move model pill back to usage strip above composer",
+  "topic": null,
+  "status": "accepted",
+  "context": "a9570395 (CCC-823) moved the model pill from the #convInputContext strip\ninto the composer's action-button row. CCC-908 (filed ~21h later, same\nauthor) asked for the opposite: pill back in that strip, action row keeps\njust Esc/TTS/mic/send. Revert the placement only — the \"label shows just\nthe model name, not reasoning effort\" simplification from the same commit\nstays as-is, since that wasn't part of the complaint.\n\nCCC-908\n What changed: removed getComposerModelPillSlot.",
+  "decision": "Changed static/app.js: removed getComposerModelPillSlot.",
+  "consequences": [
+    "Removes getComposerModelPillSlot — potential breaking change for callers."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "4977d4ff",
+  "valid_from": "2026-08-22T07:06:09-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [
+      "getComposerModelPillSlot"
+    ],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:4977d4ff",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:27.725Z"
+  },
+  "date": "2026-08-22T07:06:09-07:00"
+}

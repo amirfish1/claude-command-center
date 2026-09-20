@@ -1,0 +1,39 @@
+{
+  "id": "dec_e48015579d",
+  "title": "fix(kimi): keep agent_thought_chunk when replaying a resumed session",
+  "topic": null,
+  "status": "accepted",
+  "context": "session/load's replay branch only tracked user/agent_message_chunk\nspeakers, so agent_thought_chunk fell through to the \"no active_turn\"\nbranch and was silently dropped — a resumed Kimi session showed tool\ncalls and text but zero thinking, even when the raw wire.jsonl held\n100+ think events for that session.\n",
+  "decision": "Changed code in server.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "7b3b67ec",
+  "valid_from": "2026-08-22T16:59:10-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:7b3b67ec",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:24.103Z"
+  },
+  "date": "2026-08-22T16:59:10-07:00"
+}

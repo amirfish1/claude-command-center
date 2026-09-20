@@ -1,0 +1,24 @@
+{
+  "id": "con_0496274e58",
+  "type": "performance",
+  "statement": "Never spawn a subprocess per row and never do O(all sessions/conversations) work uncached on a path that scans ~/.claude/projects or session state; gate by candidacy (recent-mtime window), cache by (mtime, size) persisted to disk, batch subprocess calls into one",
+  "scope": [
+    "ccc_server/ask.py"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "Every \"CCC is slow\" incident traced back to the same bug pattern, invisible at test scale (tiny fixtures) but seconds-plus with 1000+ real transcripts. This is the general form of con_627861dec9; recording it broader since it also covers Ask-tab-style new retrieval paths (search_recent_sessions, search_conversation_history, search_local_automation_hits) that are exactly the kind of per-question filesystem/subprocess work this constraint exists to bound.",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T21:32:36.764Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T21:32:36.764Z"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "dec_c9a88afcbd",
+  "title": "feat(ui): show cache-adjusted tokens per turn in token chip",
+  "topic": null,
+  "status": "accepted",
+  "context": "CCC-930: add a bright 'Cached-adjusted tokens this turn: XXX' line to the\nper-turn token chip (Claude/Antigravity/Kimi paths), discounting cache-read\ninput tokens to 10% before summing with output — the same ratio the rail's\nper-conversation cache-adjusted headline already uses server-side.\n What changed: added _cacheAdjustedTurnTokens.",
+  "decision": "Introduced static/app.js: added _cacheAdjustedTurnTokens.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "1768d1b3",
+  "valid_from": "2026-08-22T15:57:45-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:1768d1b3",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:24.190Z"
+  },
+  "date": "2026-08-22T15:57:45-07:00"
+}

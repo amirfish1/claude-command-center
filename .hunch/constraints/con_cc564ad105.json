@@ -1,0 +1,24 @@
+{
+  "id": "con_cc564ad105",
+  "type": "architecture",
+  "statement": "Fix broken infra/tooling (a script, a launchd job, a missing dependency) the same turn you find it — don't ask the user first and don't just report it",
+  "scope": [
+    "**"
+  ],
+  "severity": "advisory",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "Asking means the user has to read and respond before it gets fixed, which in practice means it stays broken. This applies to CCC's own scripts/hooks/launchd jobs, not to owner-policy decisions (deploy, release, security posture) which do need confirmation.",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T21:32:10.492Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T21:32:10.492Z"
+  }
+}

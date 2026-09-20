@@ -1,0 +1,43 @@
+{
+  "id": "dec_2760f62a5a",
+  "title": "fix(sessions): compute devin CLI context % for archived sessions too",
+  "topic": null,
+  "status": "accepted",
+  "context": "The first pass gated context-% computation to the live session only,\nbecause a naive batched query (ROW_NUMBER window function over the whole\nmessage_nodes table) forced SQLite to read every session's full turn\nhistory to determine the last row per session, and Devin CLI's sessions.db\nstores full turn content inline (observed: multi-GB across a few thousand\nrows) -- that version hung for 10+ minutes on a real corpus.\n\nReplaced it with one query per session (\"ORDER BY node_id DESC LIMIT 8\"),\nwhic",
+  "decision": "Changed ccc_server/devin.py: added _devin_cli_context_usage_for_raw_ids; removed _devin_cli_list_context_usage.",
+  "consequences": [
+    "Removes _devin_cli_list_context_usage — potential breaking change for callers."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_2eb884c5e6"
+  ],
+  "related_files": [
+    "ccc_server/devin.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "8f460608",
+  "valid_from": "2026-08-22T15:04:23-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [
+      "_devin_cli_list_context_usage"
+    ],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:8f460608",
+      "synth:provider=deterministic",
+      "branch:main",
+      "ccc_server/devin.py"
+    ],
+    "last_verified": "2026-08-23T01:55:24.523Z"
+  },
+  "date": "2026-08-22T15:04:23-07:00"
+}

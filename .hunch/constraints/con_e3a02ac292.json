@@ -1,0 +1,24 @@
+{
+  "id": "con_e3a02ac292",
+  "type": "architecture",
+  "statement": "Never add a manual refresh button to fix UI staleness in CCC; fix the staleness at its source with auto-refresh instead",
+  "scope": [
+    "**"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "A manual refresh control is a workaround that papers over a caching/polling bug instead of fixing it, and it's one more thing the user has to remember to click. One action should map to one concern: the UI should just stay current on its own.",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T21:32:19.045Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T21:32:19.045Z"
+  }
+}

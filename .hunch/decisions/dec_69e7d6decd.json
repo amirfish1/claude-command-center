@@ -1,0 +1,39 @@
+{
+  "id": "dec_69e7d6decd",
+  "title": "fix(ui): wire autocompact threshold into Claude prewarm spec and dedup key",
+  "topic": null,
+  "status": "accepted",
+  "context": "Touched 1 file(s) across static/app.js.",
+  "decision": "Changed code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "77fa7706",
+  "valid_from": "2026-08-22T12:34:04-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:77fa7706",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:24.969Z"
+  },
+  "date": "2026-08-22T12:34:04-07:00"
+}

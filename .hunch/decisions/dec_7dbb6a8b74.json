@@ -1,0 +1,39 @@
+{
+  "id": "dec_7dbb6a8b74",
+  "title": "fix(ui): open bottom-left system status on Status tab by default",
+  "topic": null,
+  "status": "accepted",
+  "context": "_openSystemHealth() hardcoded 'health' as the default tab even though\nthe modal's own fallback already defaults to 'status'. Users clicking\nthe pill landed on Health when Status is what they expect first.\n",
+  "decision": "Changed code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "bdd553b2",
+  "valid_from": "2026-08-22T08:32:47-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:bdd553b2",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:27.040Z"
+  },
+  "date": "2026-08-22T08:32:47-07:00"
+}

@@ -1,0 +1,30 @@
+{
+  "id": "dec_207f9be652",
+  "title": "ccc models rows carry the engine column",
+  "topic": "ccc-cli-models-table",
+  "status": "superseded",
+  "context": "",
+  "decision": "",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [],
+  "supersedes": null,
+  "superseded_by": "dec_99bfd91cb6",
+  "caused_by_bug": null,
+  "commit": null,
+  "valid_from": "2026-09-02T02:23:32.069Z",
+  "valid_to": "2026-09-02T02:58:36.320Z",
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "premises": [],
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": []
+  },
+  "date": "2026-09-02T02:23:32.069Z"
+}

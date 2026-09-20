@@ -1,0 +1,39 @@
+{
+  "id": "dec_ad99a7b771",
+  "title": "fix(devin): resolve repo/path for Devin CLI sessions in bottom bar",
+  "topic": null,
+  "status": "accepted",
+  "context": "find_session_cwd() had no branch for devincli-* sessions, so the\nconv-input-context strip's workspace pill never rendered for them.\nReuse the existing _devin_cli_session_cwd() DB lookup, matching the\npattern already used for every other engine.\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\n",
+  "decision": "Changed code in server.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "7a9e141d",
+  "valid_from": "2026-08-22T08:40:23-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:7a9e141d",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:26.693Z"
+  },
+  "date": "2026-08-22T08:40:23-07:00"
+}

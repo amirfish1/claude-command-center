@@ -1,0 +1,39 @@
+{
+  "id": "dec_c0dcc31b3e",
+  "title": "fix(group-chat): expose name_map in active-chat sidebar summary",
+  "topic": null,
+  "status": "accepted",
+  "context": "Sidebar participant rows fell back to the raw session UUID because\n_list_active_group_chat_summaries() dropped the sidecar's already-parsed\nname_map field before returning. No extra I/O; the field was sitting in\nmemory the whole time.\n",
+  "decision": "Changed code in server.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "15aeab06",
+  "valid_from": "2026-08-22T06:04:43-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:15aeab06",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:27.845Z"
+  },
+  "date": "2026-08-22T06:04:43-07:00"
+}

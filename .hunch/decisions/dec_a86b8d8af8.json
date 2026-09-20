@@ -1,0 +1,39 @@
+{
+  "id": "dec_a86b8d8af8",
+  "title": "fix(ui): show empty-state message when conv list window empties",
+  "topic": null,
+  "status": "accepted",
+  "context": "The Coding/Workers/Archived tab body wrapper (_archivedHtml) was always\nnon-empty (tools header + list div), so the _tabEmpty('sessions')\nfallback never fired even when the row list itself was empty. Only the\nengine-filter case had its own \"No X sessions.\" message; a Now/1d/7d\nwindow filtering out every row rendered a blank body under the visible\nheader, reading as if the list had disappeared (CCC-928).\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\n",
+  "decision": "Changed code in static/app.js (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_a381562afa"
+  ],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "d6253642",
+  "valid_from": "2026-08-22T15:04:40-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:d6253642",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-08-23T01:55:24.242Z"
+  },
+  "date": "2026-08-22T15:04:40-07:00"
+}

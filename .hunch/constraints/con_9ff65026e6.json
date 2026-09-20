@@ -1,0 +1,24 @@
+{
+  "id": "con_9ff65026e6",
+  "type": "correctness",
+  "statement": "Never git add -A, git add ., or git commit -a in this repo; stage by explicit path and commit with git commit --only, and for partial-file staging (git apply --cached / git add -p) commit immediately after with no other commands in between",
+  "scope": [
+    "**"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "This repo's shared clone hosts multiple parallel Claude Code sessions on main at once. git commit <pathspec> is shorthand for --only against the WORKING TREE at those exact paths, not \"my hunks\" — it re-sweeps a sibling session's uncommitted edits in the same file. For genuinely partial-hunk staging where --only can't be used, the safe pattern is git apply --cached (stage only the intended hunk) followed immediately by a bare git commit with no commands between, minimizing the race window.",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-08-31T21:31:56.241Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-08-31T21:31:56.241Z"
+  }
+}

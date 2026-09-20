@@ -1,0 +1,39 @@
+{
+  "id": "dec_5ce6f5b37b",
+  "title": "fix(kimi): strip injected goal-command prefix from session titles",
+  "topic": null,
+  "status": "accepted",
+  "context": "Kimi's ACP agent titles a session from the raw first user message. When\nthat message is CCC's /goal-command compatibility shim, the injected\ninstruction text landed as the session's title/first_message instead of\nthe user's actual goal. Reuses the same prefix-stripping already applied\nto replayed messages.\n\nFixes CCC-920.\n What changed: added _strip_ccc_kimi_goal_prefix.",
+  "decision": "Changed server.py: added _strip_ccc_kimi_goal_prefix.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [
+    "cmp_3a52ce7809"
+  ],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "2aba19db",
+  "valid_from": "2026-08-22T11:10:31-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:2aba19db",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-08-23T01:55:26.091Z"
+  },
+  "date": "2026-08-22T11:10:31-07:00"
+}
