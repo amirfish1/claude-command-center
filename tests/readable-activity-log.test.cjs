@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const app=fs.readFileSync('static/app.js','utf8');
+const index=fs.readFileSync('static/index.html','utf8');
 function helpers(){
  const start=app.indexOf('  // Readable activity log:');
  assert.notEqual(start,-1,'readable log helpers exist');
@@ -50,4 +51,11 @@ test('summaries and expanded details escape untrusted log text',()=>{
  const h=helpers();const groups=h._readableLogGroups([event('TITLED','title=<img src=x onerror=alert(1)>','autotitle')]);
  const html=h._readableLogGroupHtml(groups[0],true);
  assert.ok(!html.includes('<img'));assert.ok(html.includes('&lt;img'));
+});
+test('rail log exposes one control that toggles every visible entry',()=>{
+ assert.match(index,/id="railLogToggleAll"/);
+ assert.match(app,/function _setRailLogEntriesOpen\(open\)/);
+ assert.match(app,/button\.textContent = open \? 'Collapse all' : 'Expand all'/);
+ const render=app.slice(app.indexOf('  function _renderRailLogPane()'),app.indexOf('  async function refreshRailLogPane()'));
+ assert.match(render,/if \(!events\.length\) \{[^}]*_syncRailLogToggleAll\(\);/);
 });
