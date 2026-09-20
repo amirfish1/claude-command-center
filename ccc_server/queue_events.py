@@ -1018,8 +1018,8 @@ def _ux_fixes_list_synced_at(status_filter=None, lane_filter=None):
 # hydrate through /api/ux-fixes/item, which reads the untrimmed memo.
 #
 # Opt-in, so the default response shape is unchanged for external callers.
-_SLIM_TEXT_MAX = 400
-_SLIM_EVENT_TEXT_MAX = 200
+_SLIM_TEXT_MAX = 240
+_SLIM_EVENT_TEXT_MAX = 120
 _slim_memo_lock = threading.Lock()
 _slim_memo = {"src": None, "items": None}
 
@@ -1046,6 +1046,9 @@ def _slim_item(item):
             res["summary"] = [_slim_clip(s, _SLIM_TEXT_MAX) for s in summary]
         else:
             res["summary"] = _slim_clip(summary, _SLIM_TEXT_MAX)
+        for lk in ("caveats", "follow_ups"):
+            if isinstance(res.get(lk), list):
+                res[lk] = [_slim_clip(v, _SLIM_EVENT_TEXT_MAX) for v in res[lk]]
         out["resolution"] = res
     for key in ("history", "timeline"):
         events = out.get(key)
