@@ -2387,31 +2387,31 @@ def _inject_text_into_session_router(
 
 
 def _maybe_queue_on_invalid_cwd(session_id, text, status, result):
-    """If a resume returned invalid_cwd, queue the text so it isn't lost.
+    """Surface a resume that failed with invalid_cwd as a loud, honest error.
 
-    The user's typed message would otherwise vanish into a toast and they'd
-    have to retype after relocating the cwd. Queueing means the moment the
-    user points CCC at the new directory (or restores it on disk), the
-    next inject drains the queue and the message goes through. Adds a
-    note to the response so the client can show a helpful toast.
+    This used to queue the text ("will send once the folder is restored").
+    That promise could never be kept: this path only runs for a session with
+    no live process, and the terminal-queue watcher drops a queued message
+    for a non-live session within seconds (`_drop_dead_terminal_queue`), so
+    the client showed "Queued" for a message that was already gone. Return
+    the failure instead so the client shows the real reason and the user
+    keeps their text. `cwd_missing` stays on the payload for callers that
+    render a relocate affordance.
     """
     if not isinstance(result, dict):
         return result
     if (result.get("code") or "") != "invalid_cwd":
         return result
-    if not text:
-        return result
-    queued_status = dict(status or {})
-    queued_status["status"] = queued_status.get("status") or "cwd-missing"
-    queued = _core._queue_terminal_input(session_id, text, queued_status)
-    queued["cwd_missing"] = True
-    queued["missing_path"] = result.get("path") or ""
-    queued["original_error"] = result.get("error") or "Session cwd is gone"
-    queued["note"] = (
-        "Queued — your message will be sent the moment the directory is "
-        "restored or you point CCC at the new location."
+    failed = dict(result)
+    failed["ok"] = False
+    failed["queued"] = False
+    failed["cwd_missing"] = True
+    failed["missing_path"] = result.get("path") or ""
+    failed["note"] = (
+        "Not delivered - this session's folder is unusable, so it cannot be "
+        "resumed. Restore or relocate the folder and send again."
     )
-    return queued
+    return failed
 
 
 def _set_session_model(session_id, model, context_1m, reasoning_effort=None, effort_only=False):
