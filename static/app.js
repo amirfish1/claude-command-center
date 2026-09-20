@@ -3945,6 +3945,53 @@
     return parentId;
   }
 
+  // A lane's recorded parent can be the folded middle leg of a continuation
+  // chain — CCC-945 re-homes such children under the chain head in every
+  // sidebar tree. Origin chips resolve through the same successor map so
+  // they name — and open — the visible head instead of a session that never
+  // renders as a row. Cached on the row pools' identity, same contract as
+  // _f2OriginIndex.
+  let _contSuccIdxCache = { convs: null, arch: null, clen: -1, alen: -1, succ: null };
+  function _continuationSuccessorIndex() {
+    const convs = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
+      ? conversationsData : [];
+    const arch = (typeof archiveData !== 'undefined' && Array.isArray(archiveData))
+      ? archiveData : [];
+    const cache = _contSuccIdxCache;
+    if (cache.convs === convs && cache.arch === arch
+        && cache.clen === convs.length && cache.alen === arch.length && cache.succ) {
+      return cache.succ;
+    }
+    const byId = new Set();
+    [convs, arch].forEach(pool => pool.forEach(r => {
+      const id = String((r && (r.session_id || r.id)) || '').trim();
+      if (id) byId.add(id);
+    }));
+    const succ = new Map();
+    [convs, arch].forEach(pool => pool.forEach(r => {
+      const id = String((r && (r.session_id || r.id)) || '').trim();
+      const pid = continuationParentId(r);
+      if (!id || !pid || pid === id || !byId.has(pid)) return;
+      const ts = Number(r.modified || r.last_interacted || r.mtime || 0) || 0;
+      const prev = succ.get(pid);
+      if (!prev || ts >= prev.ts) succ.set(pid, { sid: id, ts });
+    }));
+    _contSuccIdxCache = { convs, arch, clen: convs.length, alen: arch.length, succ };
+    return succ;
+  }
+  function spawnParentVisibleId(parentId) {
+    let cur = String(parentId || '').trim();
+    const succ = _continuationSuccessorIndex();
+    const seen = new Set();
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const next = succ.get(cur);
+      if (!next || !next.sid || next.sid === cur) break;
+      cur = next.sid;
+    }
+    return cur;
+  }
+
   // CCC-763: forward lookup for the ORIGIN session — "what did I continue
   // into", the mirror of f2EffectiveParentSessionId's "what did I continue
   // from". Lets the origin's own composer link straight to the session it
@@ -8528,9 +8575,14 @@
     if (!row || row.source === 'backlog' || row.source === 'github_pr' || row.backlog_type === 'github') return '';
     const sid = String(row.session_id || row.id || '').trim();
     const contId = continuationParentId(row);
-    const parentId = contId || f2EffectiveParentSessionId(sid, row.parent_session_id || row.hermes_parent_session_id);
-    if (!parentId || parentId === sid) return '';
-    const parentRow = conversationsData.find(c => c && (c.session_id === parentId || c.id === parentId));
+    const recordedParentId = contId || f2EffectiveParentSessionId(sid, row.parent_session_id || row.hermes_parent_session_id);
+    if (!recordedParentId || recordedParentId === sid) return '';
+    // A spawned lane's recorded parent may be a folded continuation leg —
+    // open the visible chain head it nests under, same as the sidebar chip.
+    const parentId = contId ? recordedParentId : spawnParentVisibleId(recordedParentId);
+    const parentRow = conversationsData.find(c => c && (c.session_id === parentId || c.id === parentId))
+      || ((typeof archiveData !== 'undefined' && Array.isArray(archiveData)) ? archiveData : [])
+        .find(c => c && (c.session_id === parentId || c.id === parentId));
     const cleanFirst = parentRow && parentRow.first_message ? cleanIssuePrompt(parentRow.first_message) : '';
     const raw = (parentRow && (parentRow.display_name || parentRow.ai_title))
       || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '')
@@ -33332,12 +33384,21 @@
         className = ' is-successor';
         chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(contId) + '"';
       } else if (parentId) {
-        // Child subagent relationship: spawned by an orchestrator
-        const parentTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(parentId), parentId);
+        // Child subagent relationship: spawned by an orchestrator. When the
+        // recorded parent folded into a continuation successor, the child
+        // nests under the chain head — name that row so the chip matches
+        // the tree instead of pointing at a leg that never renders.
+        const visibleParentId = spawnParentVisibleId(parentId);
+        const parentTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(visibleParentId), visibleParentId);
         label = '\u21b3 ' + parentTitle;
-        title = 'Subagent spawned by ' + parentTitle + ' (' + parentId + ') \u2014 click to open parent';
+        title = 'Subagent spawned by ' + parentTitle + ' (' + visibleParentId + ') \u2014 click to open parent';
+        if (visibleParentId !== parentId) {
+          const recordedTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(parentId), parentId);
+          title = 'Subagent spawned by ' + recordedTitle + ' \u2014 folded into ' + parentTitle
+            + ' (' + visibleParentId + ') \u2014 click to open';
+        }
         className = ' is-parent';
-        chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(parentId) + '"';
+        chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(visibleParentId) + '"';
       } else {
         const threadSource = String(c.thread_source || '').trim().toLowerCase();
         if (threadSource === 'ccc') {

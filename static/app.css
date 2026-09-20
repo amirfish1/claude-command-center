@@ -6184,7 +6184,15 @@
      sidebar or exposes a wall of completed subagent rows. */
   .conv-subagent-cluster { position: relative; }
   .conv-subagent-cluster-body { display: none; }
-  .conv-subagent-cluster.is-expanded > .conv-subagent-cluster-body { display: block; }
+  .conv-subagent-cluster.is-expanded > .conv-subagent-cluster-body {
+    display: block;
+    /* Tree rail: shift the lane block right of the parent and run a guide
+       line down its left edge, so nested children read as children rather
+       than full-width sibling cards. */
+    margin-left: 10px;
+    padding-left: 8px;
+    border-left: 1px solid rgba(154, 173, 194, 0.18);
+  }
   .conv-subagent-cluster-toggle {
     display: inline-flex;
     align-items: center;
