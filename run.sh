@@ -859,6 +859,27 @@ EOF
               sleep 0.2
             done
           fi
+        else
+          # kickstart -k returns before the old worker is gone. Do not hand
+          # control to the dashboard until a NEW worker pid answers health, so
+          # restarting only the dashboard never boots it against a dying
+          # worker (or into the workerless legacy path). This is what makes
+          # "restart the worker first, then the dashboard" unnecessary.
+          for _ in $(seq 1 75); do
+            new_worker_pid="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null | "$PYTHON" -c '
+import json, sys
+try:
+    print(int((json.load(sys.stdin).get("worker") or {}).get("pid") or 0))
+except Exception:
+    print(0)
+' 2>/dev/null || true)"
+            if [ "${new_worker_pid:-0}" -gt 1 ] 2>/dev/null \
+              && [ "$new_worker_pid" != "${existing_worker_pid:-0}" ]; then
+              echo "  worker   : restarted on v$repo_version (pid $new_worker_pid)"
+              break
+            fi
+            sleep 0.2
+          done
         fi
       fi
     fi

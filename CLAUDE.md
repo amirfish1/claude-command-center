@@ -251,10 +251,13 @@ launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center.worker
 launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center
 ```
 
-Restart the worker **first**: it is the one holding engine subprocesses, and
-the dashboard reconnects to it. Note that restarting the worker marks running
+Order does not matter: on launch `run.sh` compares the worker's loaded code
+fingerprint (`server.py` + `ccc_server/*.py`) to the repo, kickstarts a stale
+worker, and waits for the new worker pid before starting the dashboard. So
+`kickstart`-ing only the dashboard also refreshes a stale worker; the second
+command above is just the explicit form. Restarting the worker marks running
 queue items "needs reconciliation" (one click on Reconcile), so only do it when
-the change actually requires it.
+the change actually requires it, including via this automatic path.
 
 ## Finishing a change — does it need a deploy?
 

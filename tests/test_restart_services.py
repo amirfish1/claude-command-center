@@ -12,6 +12,7 @@ kicks a real service.
 """
 
 import importlib
+import pathlib
 import subprocess
 import unittest
 from unittest import mock
@@ -205,6 +206,52 @@ class RestartWorkerProcessTests(unittest.TestCase):
             out = server._restart_stale_worker()
         self.assertTrue(out["restarted"])
         restart.assert_called_once()
+
+    def test_same_version_but_different_content_hash_is_stale(self):
+        """A fix that never bumps __version__ must still restart the worker."""
+        server = self.server
+        with mock.patch.object(
+            server, "_control_plane_request",
+            return_value={"ok": True, "worker": {
+                "server_version": "2.0.0", "server_content_hash": "old0000000000000",
+            }},
+        ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
+             mock.patch(
+                 "ccc_server.content_hash.compute",
+                 return_value=("2.0.0", "new1111111111111"),
+             ), \
+             mock.patch.object(
+                 server, "_restart_worker_process",
+                 return_value={"restarted": True, "via": "launchd"},
+             ) as restart:
+            out = server._restart_stale_worker()
+        self.assertTrue(out["restarted"])
+        restart.assert_called_once()
+
+    def test_matching_content_hash_is_current(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_control_plane_request",
+            return_value={"ok": True, "worker": {
+                "server_version": "2.0.0", "server_content_hash": "same000000000000",
+            }},
+        ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
+             mock.patch(
+                 "ccc_server.content_hash.compute",
+                 return_value=("2.0.0", "same000000000000"),
+             ), \
+             mock.patch.object(server, "_restart_worker_process") as restart:
+            out = server._restart_stale_worker()
+        self.assertEqual(out["reason"], "current")
+        restart.assert_not_called()
+
+    def test_run_sh_waits_for_the_new_worker_before_starting_dashboard(self):
+        """Restarting only the dashboard must not race a dying worker."""
+        src = (pathlib.Path(__file__).resolve().parent.parent / "run.sh").read_text()
+        kick = src.index('launchctl kickstart -k "$(worker_service_target)"')
+        wait = src.index('"$new_worker_pid" != "${existing_worker_pid:-0}"', kick)
+        self.assertLess(kick, wait)
+        self.assertLess(wait, src.index('exec "$PYTHON" "$HERE/server.py"'))
 
 
 class ScheduleRestartTests(unittest.TestCase):

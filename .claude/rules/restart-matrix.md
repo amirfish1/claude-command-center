@@ -27,5 +27,7 @@ launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center.worker
 launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center
 ```
 
-Worker first. Restarting it marks running queue items "needs reconciliation",
-so only restart when the change actually requires it.
+Order does not matter: `run.sh` restarts a stale worker (content-hash check)
+and waits for it before the dashboard starts. Restarting the worker marks
+running queue items "needs reconciliation", so only restart when the change
+actually requires it.

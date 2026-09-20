@@ -16406,6 +16406,17 @@ def _restart_stale_worker():
         bool(loaded) and bool(repo_version) and loaded != repo_version
     )
     if not stale:
+        # Same fingerprint run.sh compares: a fix that does not bump
+        # __version__ (or lives only in ccc_server/*.py) still leaves the
+        # worker on old code. Both sides must be present to call it stale.
+        loaded_hash = worker.get("server_content_hash") or ""
+        try:
+            from ccc_server.content_hash import compute as _content_hash
+            _, disk_hash = _content_hash(_install_dir())
+        except Exception:
+            disk_hash = ""
+        stale = bool(loaded_hash) and bool(disk_hash) and loaded_hash != disk_hash
+    if not stale:
         return {"restarted": False, "reason": "current", "server_version": loaded}
     return _restart_worker_process(worker, was=loaded, now=repo_version)
 
