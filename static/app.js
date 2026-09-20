@@ -33383,7 +33383,12 @@
           'This row is the head of a ' + legs + '-leg continuation chain; the earlier legs fold into it.')
         + '">\u21b1 ' + legs + ' legs</span>';
     };
-    const _sessionProvenanceChipHtml = (c) => {
+    // suppressSpawnChip: rows already nested inside their parent's cluster
+    // (opts.currentChildDepth > 0) don't need the ↳ chip — the parent row is
+    // right above them and the chip only buys a second meta line on
+    // hover/select. The ⤴ from: continuation chip stays: it names a leg the
+    // list doesn't show.
+    const _sessionProvenanceChipHtml = (c, suppressSpawnChip) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
       // continuationParentId also reads the first_message origin marker, so a
       // successor whose server field is empty still labels as a successor
@@ -33402,6 +33407,7 @@
         className = ' is-successor';
         chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(contId) + '"';
       } else if (parentId) {
+        if (suppressSpawnChip) return '';
         // Child subagent relationship: spawned by an orchestrator. When the
         // recorded parent folded into a continuation successor, the child
         // nests under the chain head — name that row so the chip matches
@@ -34329,8 +34335,9 @@
       const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
       // The session this one continued from folds into this row; its
-      // meta-row ⤴ from: chip is the way back to it.
-      const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);
+      // meta-row ⤴ from: chip is the way back to it. A nested cluster child
+      // skips the ↳ spawned-by chip — its parent is the row directly above.
+      const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c, Number(opts.currentChildDepth || 0) > 0);
       const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
       // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
