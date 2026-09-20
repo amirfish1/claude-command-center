@@ -44,6 +44,10 @@ Rules that hold for everyone, agents included:
   `git reset --hard` without asking first.
 - Never force-push `main`, and never bypass the pre-push gate
   (`scripts/pre-push.sh`) with `--no-verify` — fix what it reports.
+- **Commit means push.** On the maintainer's shared clone every commit is
+  pushed immediately (`git push origin main`) — deployment pulls from
+  origin, so an unpushed commit is undeployed. If the gate fails, fix it or
+  don't commit. (Fork/PR contributors push their branch, not `main`.)
 - `/lean-commit` (`.claude/commands/lean-commit.md`) commits only the paths you
   changed; `scripts/lean-commit.sh` lists candidates with noise filtered.
 
