@@ -45968,25 +45968,27 @@
     return true;
   }
   async function _uxqOpenItemDetail(ref) {
-    const fallback = _uxqItemForRef(ref);
+    let fallback = _uxqItemForRef(ref);
+    // A slim list row (closed ticket, prose trimmed by ?slim=1) must NEVER
+    // reach the modal: its note is clipped, and the editable title re-saves
+    // whatever it was handed (WT-67). Swap it for the untrimmed row from the
+    // server's list memo first — milliseconds, no `gh` call. If that fails,
+    // open from the live fetch below instead of from the clipped copy.
+    if (fallback && fallback._slim) {
+      let full = null;
+      try {
+        const cres = await fetch('/api/ux-fixes/item?cached=1&ref=' + encodeURIComponent(ref), { cache: 'no-store' });
+        const cdata = await cres.json().catch(() => ({}));
+        if (cres.ok && cdata.ok && cdata.item && !cdata.item._slim) full = cdata.item;
+      } catch (_) {}
+      fallback = full;
+    }
     // Open instantly from the cached list row, then hydrate with the
     // canonical item (fresh timeline, full _github_body). The item endpoint
     // shells to `gh issue view` for GitHub-backed queues, which can take
     // 10s+ or fail outright during GraphQL quota storms — the user should
     // never wait on it just to read a ticket they can already see.
     if (fallback) _uxqOpenItemModal(fallback);
-    // A slim list row (closed ticket, prose trimmed by ?slim=1) gets its full
-    // text from the server's list memo first — milliseconds, no `gh` call.
-    if (fallback && fallback._slim) {
-      try {
-        const cres = await fetch('/api/ux-fixes/item?cached=1&ref=' + encodeURIComponent(ref), { cache: 'no-store' });
-        const cdata = await cres.json().catch(() => ({}));
-        if (cres.ok && cdata.ok && cdata.item && document.getElementById('uxqItemModal')
-            && _uxqItemRef(cdata.item) === ref) {
-          _uxqOpenItemModal(cdata.item);
-        }
-      } catch (_) { /* live hydrate below still runs */ }
-    }
     try {
       const res = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));

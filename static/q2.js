@@ -3687,6 +3687,9 @@
       return;
     }
     if (e.target.closest('[data-q2-title-open]')) {
+      // A slim list row has clipped text; never seed an editable field from
+      // it. Hydration replaces it within milliseconds (see loadDetail).
+      if (state.detail && state.detail._slim) { note('Still loading this ticket.'); return; }
       state.editingTitle = true;
       renderDetail();
       var titleTa = document.querySelector('[data-q2-input="title"]');
