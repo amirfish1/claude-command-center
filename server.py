@@ -15001,6 +15001,12 @@ def _archive_overlay_acp_sessions(rows):
     for harness in _ACP_HARNESSES:
         if not _acp_harness_enabled(harness):
             continue
+        # Harnesses whose durable archive rows use a different id namespace
+        # than the ACP registry key (devin: raw slug vs `devincli-<slug>`)
+        # opt out — an overlay row under the ACP id can never dedupe against
+        # the durable row and renders the same session twice (CCC-1176).
+        if not (_ACP_HARNESSES.get(harness) or {}).get("archive_overlay", True):
+            continue
         with _ACP_LOCK:
             sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
         if not sessions:

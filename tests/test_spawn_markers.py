@@ -134,6 +134,38 @@ def test_archive_overlay_acp_sessions_infers_spawned_via(monkeypatch, tmp_path):
     assert rows[0]["engine"] == "kimi"
 
 
+def test_archive_overlay_skips_devin_acp_sessions(monkeypatch, tmp_path):
+    """Devin's ACP registry keys sessions by the raw slug while the durable
+    archive row is ``devincli-<slug>`` — the two ids never match, so an ACP
+    overlay row duplicated every attached devin session in the sidebar
+    (CCC-1176). The devin harness opts out via ``archive_overlay: False``;
+    the sessions.db overlay covers the spawn-to-snapshot gap instead.
+    """
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    sid = "raw-devin-slug"
+    monkeypatch.setattr(server, "_ACP_HARNESSES", {
+        "devin": {"label": "Devin", "archive_overlay": False},
+    })
+    monkeypatch.setattr(server, "_acp_harness_enabled", lambda harness: True)
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", {
+        "devin": {
+            sid: {
+                "attached": True,
+                "status": "active",
+                "cwd": str(cwd),
+                "updated_at": 1_700_000_000,
+            }
+        }
+    })
+    monkeypatch.setattr(server, "_load_spawn_markers", lambda: {})
+    monkeypatch.setattr(server, "_load_session_name_overrides", lambda: {})
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+    monkeypatch.setattr(server, "_load_pinned_conversations", lambda: [])
+
+    assert server._archive_overlay_acp_sessions([]) == []
+
+
 
 def test_spawn_markers_are_decoded_once_per_file_version(monkeypatch, tmp_path):
     # _load_spawn_markers read and json-decoded every SPAWN_MARKERS_DIR file

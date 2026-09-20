@@ -112,6 +112,13 @@ _ACP_HARNESSES = {
         # -32601. When CCC already holds the transcript, attach via load
         # and drop the history replay instead of re-folding it.
         "no_resume": True,
+        # Devin ACP state is keyed by the RAW session slug while the durable
+        # archive row is `devincli-<slug>` — an overlay row here can never
+        # dedupe against it, so every attached session rendered twice in the
+        # sidebar (CCC-1176). The sessions.db overlay
+        # (_archive_overlay_devin_cli_sessions) already covers the
+        # spawn-to-snapshot gap with the canonical id.
+        "archive_overlay": False,
     },
 }
 
