@@ -40,11 +40,12 @@ A commit is **only** git in that turn — no extra ceremony bundled in.
 
 | Tier | When | Do | Do not |
 |------|------|-----|--------|
-| **A — lean / WIP** | Slice done, still iterating, or before idle | `git commit --only <paths> -m "type(scope): subject"` | `changelog.d/` in same turn; edit `CHANGELOG.md`; version bump; push |
-| **B — slice done** | User-visible fix/feature complete | Same as A; add a `changelog.d/` snippet (same or next commit) | Hand-edit `CHANGELOG.md`; release scripts |
+| **A — lean / WIP** | Mid-work checkpoint: still iterating, or pausing before idle | `git commit --only <paths> -m "type(scope): subject"` | `changelog.d/` in same turn; edit `CHANGELOG.md`; version bump; push |
+| **B — slice done** | Feature built or bug fixed (verified) | Same as A; add a `changelog.d/` snippet if user-visible (same or next commit); then **push** (see § Push) | Hand-edit `CHANGELOG.md`; release scripts |
 | **C — release** | Cutting `vX.Y.Z` | `./scripts/cut-release.sh` (rollup, version bump, tag) | Ad-hoc version bumps on random commits |
 
-Default to **Tier A** unless the user asked for changelog or release work.
+Use **Tier A** for mid-work checkpoints. When the feature or bug fix is
+actually finished, it is **Tier B** — and Tier B ends with a push.
 
 ### Lean commit (Tier A)
 
@@ -55,14 +56,24 @@ git commit --only path/to/changed path/to/other -m "fix(ui): short subject"
 ```
 
 - **When:** slice done, or pausing / going idle — **not** after every assistant turn.
-- **One command, then stop** — no `changelog.d/`, no push unless the user said
-  push/ship/Push all.
+- **One command, then stop** — no `changelog.d/`, no push. (The push happens
+  when the feature/fix is finished — see § Push.)
 - Candidate path list (noise filtered): `scripts/lean-commit.sh`
 
 ### Push
 
-- **Do not push** unless the user says push/ship/Push all (or you are the
-  designated integrator and the tree is clean).
+- **Always push at the end of building a feature or fixing a bug.** A fix that
+  sits unpushed on one machine is not shipped: other installs only get it via
+  `git pull`. Once the work is committed and its targeted tests pass, run
+  `git push origin main` without waiting to be asked.
+- **Do not push** half-done WIP (Tier A checkpoints), failing tests, or a
+  release (Tier C goes through `./scripts/cut-release.sh`).
+- A push sends every unpushed commit on `main`, including sibling sessions'
+  commits — that is expected on this shared clone. If the push is rejected
+  because `origin/main` moved, `git pull --rebase origin main` then push
+  again; never force-push `main`.
+- If the pre-push gate (`scripts/pre-push.sh`) fails, fix it — do not bypass
+  it with `--no-verify`.
 - If the tree is dirty with others' work, commit **your** paths only and stop.
 
 ### CHANGELOG (`changelog.d/`)

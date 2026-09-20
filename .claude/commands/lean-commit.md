@@ -31,7 +31,7 @@ Perform a **lean commit** on the shared `main` clone. Read `CLAUDE.md` § Git co
    git commit --only path/one path/two -m "type(scope): subject"
    ```
 
-4. **Reply** — one short line: `Lean commit <sha> — <subject>` and list paths committed. Do not push unless Amir said push/ship/Push all.
+4. **Reply** — one short line: `Lean commit <sha> — <subject>` and list paths committed. Do not push in this turn — the push comes when the feature or fix is finished (`CLAUDE.md` § Push).
 
 If there is nothing to commit for your paths, say so in one line — do not commit other sessions’ files.
 

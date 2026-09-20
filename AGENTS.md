@@ -37,15 +37,16 @@ pushing (or **Push all** in the CCC UI) does not require hunting other sessions.
 
 | Tier | When | Do | Do not |
 |------|------|-----|--------|
-| **A — lean** | Slice done or before idle | `git commit --only <paths> -m "type(scope): subject"` | `changelog.d/`, version bump, push in same turn |
-| **B — done** | User-visible slice complete | Tier A + `changelog.d/` snippet | Edit `CHANGELOG.md` by hand |
+| **A — lean** | Mid-work checkpoint or before idle | `git commit --only <paths> -m "type(scope): subject"` | `changelog.d/`, version bump, push in same turn |
+| **B — done** | Feature built or bug fixed (verified) | Tier A + `changelog.d/` snippet if user-visible, then `git push origin main` | Edit `CHANGELOG.md` by hand |
 | **C — release** | Shipping `vX.Y.Z` | `./scripts/cut-release.sh` | Random version bumps |
 
 **`/lean-commit`** — slash command; see `.claude/commands/lean-commit.md`. Helper:
 `scripts/lean-commit.sh` (lists candidate paths, noise filtered).
 
-Never `git add -A` / `git commit -a`. Never push unless the user said
-push/ship/Push all. Full rules: `CLAUDE.md` § Git commits and
+Never `git add -A` / `git commit -a`. **Always push at the end of building a
+feature or fixing a bug** (tests passing); do not push half-done WIP, and never
+force-push `main`. Full rules: `CLAUDE.md` § Git commits and
 `.claude/rules/git-and-commits.md`.
 
 ## CHANGELOG

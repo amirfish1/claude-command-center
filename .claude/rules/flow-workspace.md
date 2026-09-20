@@ -94,4 +94,5 @@ Flow popout mode is activated by `?ccc_popout=flow`:
 - For Flow fix proposals, use: problem / tradeoff / value (L/M/H) /
   confidence (L/M/H).
 - Keep commits small and scoped. Use `git commit --only <paths>`.
-- Do not push unless the user explicitly asks.
+- Push when the fix or feature is finished (see `CLAUDE.md` § Push); not for
+  mid-work checkpoints.
