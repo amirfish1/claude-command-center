@@ -1,0 +1,1 @@
+- Queue panel and board: switching queues paints instantly from the list already in memory, and the polled ticket list is about half the size (`/api/queue/list?slim=1` trims closed-ticket prose; full text loads when a ticket is opened).
