@@ -1746,10 +1746,14 @@ _MODEL_RATES = {
     # inputCacheCreation bucket is priced as a cache miss.
     # https://www.kimi.com/resources/kimi-k3-pricing
     # https://www.kimi.com/resources/kimi-k2-7-code-pricing (checked 2026-08)
+    # kimi-for-coding was upgraded in place to K2.8 Preview on 2026-09-11
+    # (same alias, same price — no k2.8-specific pricing published yet):
+    # https://www.kimi.com/code/docs/en/kimi-code/models.html
     "k3": (3.00, 3.00, 0.30, 15.00),
     "k3-256k": (3.00, 3.00, 0.30, 15.00),
     "kimi-k3": (3.00, 3.00, 0.30, 15.00),
     "kimi-for-coding": (0.95, 0.95, 0.19, 4.00),
+    "kimi-k2.8-preview": (0.95, 0.95, 0.19, 4.00),
     "kimi-k2.7-code": (0.95, 0.95, 0.19, 4.00),
     "kimi-for-coding-highspeed": (1.90, 1.90, 0.38, 8.00),
     "kimi-k2.7-code-highspeed": (1.90, 1.90, 0.38, 8.00),

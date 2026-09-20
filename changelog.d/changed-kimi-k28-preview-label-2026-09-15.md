@@ -1,0 +1,1 @@
+- Kimi: the `kimi-code/kimi-for-coding` picker entry is now labeled "K2.8 Preview" — Moonshot upgraded the alias in place on 2026-09-11 (same model ID, effort ladder low/high/max read from Kimi's config.toml as before). Highspeed remains K2.7 Code HighSpeed.
