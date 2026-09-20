@@ -498,6 +498,7 @@ def _acp_new_session_state(harness, sid, cwd=""):
         "delta_seq": 0,
         "pending_permissions": {},   # req_id -> {sessionId, toolCall, options, requested_at}
         "config_options": [],
+        "desired_mode": None,        # last mode CCC explicitly set — re-asserted on attach
         "available_commands": [],
         "model": None,
         "stop_reason": None,
@@ -772,6 +773,7 @@ def _acp_save_state_unlocked(harness):
                     "turn_seq": st.get("turn_seq") or 0,
                     "next_line": st.get("next_line") or 1,
                     "model": st.get("model"),
+                    "desired_mode": st.get("desired_mode"),
                 }
                 for sid, st in sessions.items()
                 if st.get("attached")
@@ -806,6 +808,7 @@ def _acp_load_state(harness):
         state["status"] = "idle"
         state["turn_seq"] = int(meta.get("turn_seq") or 0)
         state["model"] = meta.get("model")
+        state["desired_mode"] = meta.get("desired_mode") or None
         state["updated_at"] = float(meta.get("updated_at") or 0)
         # The persisted value can be stale (last save predates the session's
         # most recent activity, or the sid was never captured in a save at
@@ -2615,6 +2618,8 @@ def _acp_load(harness, sid, cwd):
         }, timeout=30, sid=sid)
     with _core._ACP_LOCK:
         state = _core._acp_session(harness, sid, create=True, cwd=cwd)
+        desired_mode = state.get("desired_mode")
+        loaded_mode = None
         replay = state.get("replay")
         if replay:
             _core._acp_replay_flush_unlocked(harness, sid, state, replay)
@@ -2634,9 +2639,21 @@ def _acp_load(harness, sid, cwd):
                 for opt in options:
                     if isinstance(opt, dict) and opt.get("id") == "model":
                         state["model"] = opt.get("currentValue")
+                    if isinstance(opt, dict) and opt.get("id") == "mode":
+                        loaded_mode = opt.get("currentValue")
         _acp_save_state_unlocked(harness)
     if resp.get("ok"):
         _core._acp_wire_tail_start(harness)
+        if desired_mode and desired_mode != loaded_mode:
+            # session/load drops back to the harness default mode — re-assert
+            # the mode CCC last configured so a harness restart doesn't
+            # silently downgrade e.g. a bypass session to prompting, which
+            # parks every non-allowlisted exec on an unanswered
+            # session/request_permission (renders as "hangs forever").
+            try:
+                _acp_set_config(harness, sid, "mode", desired_mode)
+            except Exception:
+                pass
     if not resp.get("ok"):
         return resp
     return {"ok": True, "session_id": sid, "harness": harness, "via": f"acp-{method.split('/')[-1]}"}
@@ -2782,6 +2799,10 @@ def _acp_set_config(harness, sid, config_id, value):
             for opt in state.get("config_options") or []:
                 if isinstance(opt, dict) and opt.get("id") == config_id:
                     opt["currentValue"] = value
+            if config_id == "mode":
+                # Persist the operator's chosen mode — session/load resets to
+                # the harness default, so _acp_load re-asserts this on attach.
+                state["desired_mode"] = value
             _acp_save_state_unlocked(harness)
     return resp
 
