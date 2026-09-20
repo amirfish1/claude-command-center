@@ -109,6 +109,10 @@ import ccc_peer_inbound
 from ccc_server import test_isolation_active
 from ccc_server.events import DashboardEventHub
 
+# Pure helpers and path constants moved to leaf modules (slice 3)
+_adopt_ccc_module("paths")
+_adopt_ccc_module("textutil")
+
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
 # records into its normalized input contracts.
@@ -127,7 +131,6 @@ from productivity import (
 # Tool's own assets live next to this file. Repos are never process-global:
 # every repo-scoped request must carry a concrete repo path, cwd, or session id.
 CCC_ROOT = Path(__file__).resolve().parent
-COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 if test_isolation_active():
     # Stamp an isolation marker so spawned children stay isolated too:
     # multiprocessing "spawn" workers and `python -c "import server"`
@@ -135,9 +138,6 @@ if test_isolation_active():
     # neither test runner is in sys.modules — the env var is the only
     # signal that survives into the child (CCC-1165).
     os.environ.setdefault("CCC_TEST_ISOLATION", "1")
-COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
-COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
-PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
 _dashboard_events = DashboardEventHub(capacity=512)
 
 
@@ -2152,22 +2152,6 @@ def _wt_queue_attend_skip(queue):
     return {"ok": True, "skipped": entry}
 
 
-# Mirrors watchtower.config._validate_queue_label so a bad label is refused
-# before any setter runs (this module cannot import watchtower).
-_QUEUE_LABEL_RESERVED = {
-    "watchtower:in-progress", "watchtower:no-auto-drain", "watchtower:play",
-}
-
-
-def _validate_queue_label(label):
-    if "," in label or "\n" in label or "\r" in label:
-        raise ValueError("queue_label cannot contain commas or newlines")
-    if len(label) > 50:
-        raise ValueError("queue_label must be 50 characters or fewer")
-    if label.lower() in _QUEUE_LABEL_RESERVED:
-        raise ValueError("queue_label is reserved for a WatchTower control label")
-
-
 def _queue_config_from_payload(payload):
     """Validate and normalize the complete WatchTower queue form payload.
 
@@ -3691,15 +3675,6 @@ def _categorize_file_target(target):
     # os.path.splitext handles trailing-dot / no-dot cleanly.
     _, ext = os.path.splitext(s)
     return FILE_EXT_TO_CATEGORY.get(ext.lower())
-
-
-def _path_is_within(child, parent):
-    try:
-        child_p = Path(child).expanduser().resolve(strict=False)
-        parent_p = Path(parent).expanduser().resolve(strict=False)
-    except (OSError, RuntimeError):
-        return False
-    return child_p == parent_p or parent_p in child_p.parents
 
 
 def _open_target_path(target):
@@ -8914,14 +8889,6 @@ def _save_spawn_defaults(config):
     return {"ok": True, **payload}
 
 
-def _validate_auto_compact_k(value, default=250):
-    try:
-        v = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(50, min(1000, v))
-
-
 def _spawn_auto_compact_k_tokens(auto_compact_k=None):
     """Return autocompact threshold in tokens for the current process role."""
     if auto_compact_k is not None:
@@ -10236,23 +10203,6 @@ _SYS_BUSY_CPU = 30.0         # tree CPU% above which a session counts as working
 _SYS_HOG_CPU = 80.0          # process CPU% to count as a sustained hog
 _SYS_HOG_MIN_AGE = 2.0       # minutes alive, to skip brief compile/encode spikes
 _SYS_UNIT_MB = {"K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1024 * 1024.0}
-# Absolute tool paths: the launchd daemon's PATH lacks /usr/sbin, so bare
-# `sysctl`/`lsof` silently fail (FileNotFoundError -> ""). On Linux the same
-# tools live elsewhere (or not at all), so resolve per platform: prefer the
-# shipped macOS path when it exists, else a PATH lookup, else the bare name.
-# Missing tools degrade to "" in _sys_run rather than crashing. sysctl and
-# vm_stat are macOS-only; on Linux _sys_memory/_sys_cpu use /proc + os instead.
-def _resolve_sys_tool(macos_path, name):
-    if os.path.exists(macos_path):
-        return macos_path
-    return shutil.which(name) or name
-
-
-_SYS_PS = _resolve_sys_tool("/bin/ps", "ps")
-_SYS_LSOF = _resolve_sys_tool("/usr/sbin/lsof", "lsof")
-_SYS_SYSCTL = _resolve_sys_tool("/usr/sbin/sysctl", "sysctl")
-_SYS_VM_STAT = _resolve_sys_tool("/usr/bin/vm_stat", "vm_stat")
-_SYS_OSASCRIPT = _resolve_sys_tool("/usr/bin/osascript", "osascript")
 _SYS_GUI_APPS = (
     {
         "id": "cursor",
@@ -16171,61 +16121,6 @@ def load_known_repos():
     return repos
 
 
-def _which(cmd):
-    """Return the absolute path of `cmd` on PATH, or None. shutil-free so the
-    file stays stdlib-only without importing shutil at module top."""
-    import shutil
-    return shutil.which(cmd)
-
-
-def _iter_common_cli_candidates(cmd):
-    """Yield common user-install locations that launchd often omits from PATH."""
-    home = Path.home()
-    fixed = [
-        Path("/opt/homebrew/bin") / cmd,
-        Path("/usr/local/bin") / cmd,
-        home / ".local" / "bin" / cmd,
-        home / ".npm-global" / "bin" / cmd,
-        home / "Library" / "pnpm" / cmd,
-        home / ".volta" / "bin" / cmd,
-        home / ".bun" / "bin" / cmd,
-        home / ".asdf" / "shims" / cmd,
-        home / ".nodenv" / "shims" / cmd,
-        home / ".local" / "share" / "mise" / "shims" / cmd,
-    ]
-    seen = set()
-    for p in fixed:
-        s = str(p)
-        if s not in seen:
-            seen.add(s)
-            yield p
-    glob_roots = [
-        (home / ".nvm" / "versions" / "node", f"*/bin/{cmd}"),
-        (home / ".fnm" / "node-versions", f"*/installation/bin/{cmd}"),
-    ]
-    for root, pattern in glob_roots:
-        if not root.is_dir():
-            continue
-        try:
-            paths = sorted(root.glob(pattern), reverse=True)
-        except OSError:
-            continue
-        for p in paths:
-            s = str(p)
-            if s not in seen:
-                seen.add(s)
-                yield p
-    try:
-        hidden_bin_paths = sorted(home.glob(f".*/bin/{cmd}"), reverse=True)
-    except OSError:
-        hidden_bin_paths = []
-    for p in hidden_bin_paths:
-        s = str(p)
-        if s not in seen:
-            seen.add(s)
-            yield p
-
-
 def _resolve_claude_bin():
     """Locate a usable Claude Code CLI binary.
 
@@ -17728,50 +17623,6 @@ def _reveal_bug_screenshot(path_str):
 # Local-only notes created from the browser overlay. Each annotation stores
 # the user's note plus enough page/element/viewport anchors for a later agent
 # to reopen the page and inspect the same visual area.
-
-_LONE_SURROGATE_RE = re.compile("[{}-{}]".format(chr(0xD800), chr(0xDFFF)))
-
-
-def _strip_lone_surrogates(s):
-    """Remove unpaired UTF-16 surrogate code points (U+D800..U+DFFF).
-
-    JS strings are UTF-16; the browser's clipboard / pasted-image / selection
-    APIs can leave a lone high or low surrogate in the payload sent to
-    /api/annotations (or any other text field). Python stores those as-is
-    in `str`, but `json.dumps` happily serialises them, and the Anthropic
-    API rejects the resulting request with
-        "API Error: 400 The request body is not valid JSON:
-         no low surrogate in string: line 1 column N (char N)"
-    Strip the unpaired code points at the boundary so downstream injection
-    paths can never feed broken UTF-16 into the API. Paired surrogates
-    (i.e. real astral-plane chars like emoji) are already collapsed into
-    a single Python code point above U+FFFF and do not match this regex.
-    """
-    if not s:
-        return s
-    return _LONE_SURROGATE_RE.sub("", s)
-
-
-def _strip_spawn_payload_surrogates(payload):
-    """Drop unpaired UTF-16 surrogates from every string in a spawn payload.
-
-    Browser callers build spawn names/prompts by manipulating UTF-16 JS
-    strings; an emoji cut mid-pair arrives as a lone surrogate that
-    ``json.loads`` keeps, and the next strict UTF-8 encode downstream
-    (control-plane socket write, engine stdin, sqlite store) then raises
-    ``UnicodeEncodeError: surrogates not allowed`` — killing the spawn before
-    any registry row exists (OPS-935). Strip them at the HTTP boundary so the
-    effective spawn request is always encodable.
-    """
-    def _clean(value):
-        if isinstance(value, str):
-            return _strip_lone_surrogates(value)
-        if isinstance(value, dict):
-            return {key: _clean(val) for key, val in value.items()}
-        if isinstance(value, list):
-            return [_clean(item) for item in value]
-        return value
-    return _clean(payload)
 
 
 def _annotation_text(value, max_len=4000):
@@ -20571,22 +20422,7 @@ def _drain_new_prewarm_events(last_seen_id=""):
 
 
 # Test-patched globals kept here; ccc_server/log_parse.py reads them via _core.
-_CODEX_THREAD_REGISTRY_ENV = (
-    os.environ.get("CCC_CODEX_THREAD_REGISTRY")
-    or os.environ.get("WATCHTOWER_CODEX_THREAD_REGISTRY")
-)
 _session_cwd_relocation_cache_dirty = False
-LOG_VIEWER_STATE_DIR = COMMAND_CENTER_STATE_DIR
-PINNED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "pinned-conversations.json"  # [session_id,...]
-SPAWN_DEFAULTS_FILE = COMMAND_CENTER_STATE_DIR / "spawn-defaults.json"
-SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
-USAGE_LIMIT_RESUME_FILE = COMMAND_CENTER_STATE_DIR / "usage_limit_resumes.json"
-CODEX_THREAD_REGISTRY_FILE = (
-    Path(os.path.expanduser(_CODEX_THREAD_REGISTRY_ENV))
-    if _CODEX_THREAD_REGISTRY_ENV else
-    COMMAND_CENTER_STATE_DIR / "codex-thread-registry.json"
-)
-SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
 if test_isolation_active():
     # Same test-runner isolation as ACTIVITY_LOG_FILE: inject/queue tests
     # exercise _inject_text_into_session/_queue_terminal_input with synthetic
@@ -24889,12 +24725,6 @@ def _parse_conversation_event(ev, line_num):
 # Spawned headless Claude sessions
 # ---------------------------------------------------------------------------
 
-def _slugify(text, max_len=40):
-    """Turn a prompt into a filesystem-safe slug."""
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return slug[:max_len].rstrip("-")
-
-
 def _cleanup_failed_spawn_worktree(toplevel, candidate, branch):
     """Remove the exact worktree/branch reserved for a failed spawn attempt."""
     if candidate.exists():
@@ -25055,13 +24885,6 @@ def _run_worktree_init_hook(worktree_path, parent_repo, session_name, log_fh):
 
 
 # Test-patched globals kept here; ccc_server/codex.py reads them via _core.
-CODEX_GOALS_DB_CANDIDATES = (
-    Path.home() / ".codex" / "goals_1.sqlite",
-    Path.home() / ".codex" / "sqlite" / "goals_1.sqlite",
-)
-CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
-CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
-CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _CODEX_APP_SERVER_PROC = None
 _CODEX_APP_SERVER_TRANSPORT = None
 _CODEX_APP_SERVER_INITIALIZED = False
@@ -25071,7 +24894,6 @@ _CODEX_APP_SERVER_INFLIGHT = 0
 _CODEX_THREAD_LIST_LAST_AT = 0.0
 _CODEX_THREAD_LIST_INFLIGHT = False
 _CODEX_THREAD_LIST_BACKGROUND_REFRESH_INFLIGHT = False
-_SPAWN_TIMELINE_FILE = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"
 _SPAWN_TIMELINE_FILE_SIG = None
 _CODEX_APP_SERVER_FALSE_MISSES = 0
 _system_services_cache = {"ts": 0.0, "payload": None}
