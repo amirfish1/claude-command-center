@@ -6156,8 +6156,29 @@
     /* Nested lanes read as subordinate rows: tighter padding + a smaller
        title so a cluster of children doesn't take the same vertical
        footprint as full sessions. */
-    padding-top: 3px;
-    padding-bottom: 3px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+  /* Slim the icon column to match: a small engine glyph, no $$$ tier text —
+     the cost signal is a whole-session concern the parent row carries. */
+  .conv-item.is-current-child-row .conv-session-icon .conv-session-svg {
+    width: 12px;
+    height: 12px;
+  }
+  .conv-item.is-current-child-row .session-tier-cost { display: none; }
+  /* The spacing/rowstyle presets (roomy/airy padding, large-bright 16px
+     titles) and the dense table all pin padding/font/line-height with
+     !important at id-level specificity — a nested lane must stay slim under
+     every preset, so its sizing is !important too, anchored on #convList +
+     .conv-subagent-cluster to win those selectors. (Dense keeps its own,
+     even slimmer, values by virtue of coming later at equal specificity.) */
+  #convList .conv-subagent-cluster .conv-item.is-current-child-row {
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+  }
+  #convList .conv-subagent-cluster .conv-item.is-current-child-row .conv-title {
+    font-size: 12.5px !important;
+    line-height: 1.3 !important;
   }
   .conv-current-sessions-scroll .conv-item .conv-title-row,
   .conv-current-sessions-scroll .conv-item .conv-main-row {
@@ -6183,6 +6204,12 @@
     font-weight: 450;
     font-style: italic;
     color: var(--text-secondary);
+    /* One line only — a nested lane never gets the wrap-titles 2-line
+       clamp, or it stops reading as the slim subordinate row. */
+    white-space: nowrap;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   :root:not([data-theme="light"]) .conv-item.is-current-child-row .conv-title,
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title,
