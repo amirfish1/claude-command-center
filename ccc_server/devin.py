@@ -2461,11 +2461,149 @@ def _devin_cli_is_context_summary(msg):
     return isinstance(ext, dict) and bool(ext.get("devin-rs/summary"))
 
 
-def _devin_cli_parse_message_row(chat_message, created_at, seen):
-    """Parse one message_nodes row into (role, text, ts_str, is_summary).
+_DEVIN_CLI_MODEL_KEY_RE = re.compile(r"[^a-z0-9]+")
 
-    Reuses the existing dedup ``seen`` set so incremental parses stay
-    consistent with a full parse. Unknown / skipped shapes return None."""
+
+def _devin_cli_norm_model_key(value):
+    """'SWE-2 Medium' -> 'swe2medium' — compares the ``sessions.model``
+    fusion slug against the per-message ``response_dimensions`` label."""
+    return _DEVIN_CLI_MODEL_KEY_RE.sub("", str(value or "").lower())
+
+
+def _devin_cli_fusion_sidekick_key(con, raw_id):
+    """Normalized model key of the Fusion sidekick, or '' for non-Fusion.
+
+    Fusion sessions stamp ``sessions.model`` as
+    ``fusion-<lead-slug>-sidekick-<sidekick-slug>``. Each assistant row then
+    carries its actual model in ``metadata.response_dimensions`` (uid
+    ``model``) — matching the two is what distinguishes lead turns from
+    sidekick turns, since the rows carry no actor field."""
+    try:
+        row = con.execute(
+            "SELECT model FROM sessions WHERE id = ?", (raw_id,)
+        ).fetchone()
+    except sqlite3.Error:
+        return ""
+    model = str((row[0] if row else "") or "")
+    if not model.startswith("fusion-") or "-sidekick-" not in model:
+        return ""
+    return _devin_cli_norm_model_key(model.rsplit("-sidekick-", 1)[1])
+
+
+def _devin_cli_response_model(msg):
+    """Model label from metadata.response_dimensions[] (uid 'model')."""
+    meta = msg.get("metadata")
+    if not isinstance(meta, dict):
+        return ""
+    dims = meta.get("response_dimensions")
+    if not isinstance(dims, list):
+        return ""
+    for dim in dims:
+        if not isinstance(dim, dict) or dim.get("uid") != "model":
+            continue
+        metric = (dim.get("kind") or {}).get("Metric") or {}
+        if isinstance(metric, dict):
+            return str(metric.get("value") or "")
+    return ""
+
+
+# Devin's lowercase tool ids -> the canonical names _edit_tool_input keys on.
+_DEVIN_CLI_EDIT_TOOL_NAMES = {
+    "edit": "Edit",
+    "write": "Write",
+    "notebook_edit": "NotebookEdit",
+}
+
+
+def _devin_cli_tool_block(tool_call):
+    """{kind: tool_use, ...} block for one Devin tool_call, or None.
+
+    Keeps Devin's own tool names (exec/read/edit/...) — the renderer's
+    name lists know the aliases. Reuses the shared shell/ask/edit helpers
+    through _core so disclosures and redaction match the Claude path."""
+    if not isinstance(tool_call, dict):
+        return None
+    name = str(tool_call.get("name") or "").strip()
+    if not name:
+        return None
+    args = tool_call.get("arguments")
+    if not isinstance(args, dict):
+        args = {}
+    block = {
+        "kind": "tool_use",
+        "name": name,
+        "id": str(tool_call.get("id") or ""),
+        "has_input": bool(args),
+    }
+    if name == "exec":
+        raw_command = str(args.get("command") or "")
+        detail = (
+            _core._shell_command_activity_label(raw_command, max_len=1200)
+            if raw_command else ""
+        )
+        block["detail"] = detail
+        command_text = (
+            _core._redacted_shell_command_text(raw_command, max_len=12000)
+            if raw_command else ""
+        )
+        if command_text and (
+            "\n" in command_text
+            or len(command_text) > 160
+            or re.sub(r"\s+", " ", command_text).strip() != detail
+        ):
+            block["command"] = command_text
+            here = _core._extract_shell_heredoc(raw_command)
+            block["command_kind"] = (
+                _core._shell_script_label(here.get("head", ""))
+                if here else "Shell command"
+            )
+    elif name == "ask_user_question":
+        ask = _core._ask_user_question_structured(args)
+        if ask:
+            block["question"] = ask
+        block["detail"] = _core._ask_user_question_payload(args).get("summary", "")
+    elif name in ("sidekick", "run_subagent"):
+        # The handoff brief is the detail line; the full message stays
+        # available through the Input disclosure.
+        block["detail"] = _core._prompt_fragment(
+            str(args.get("message") or args.get("task") or args.get("title") or ""),
+            240,
+        )
+    else:
+        block["detail"] = _core._tool_use_detail(name, args, max_len=240)
+    edit_inp = _core._edit_tool_input(
+        _DEVIN_CLI_EDIT_TOOL_NAMES.get(name, name), args
+    )
+    if edit_inp:
+        block["edit_input"] = edit_inp
+    return block
+
+
+def _devin_cli_is_tool_error(msg):
+    """True when a role=tool row reports failure via chisel/tool_result_meta."""
+    meta = msg.get("metadata")
+    if not isinstance(meta, dict):
+        return False
+    ext = meta.get("extensions")
+    if not isinstance(ext, dict):
+        return False
+    trm = ext.get("chisel/tool_result_meta")
+    return isinstance(trm, dict) and trm.get("success") is False
+
+
+_DEVIN_CLI_SUBAGENT_REPORT_RE = re.compile(
+    r"</?subagent_completion_notification[^>]*>")
+
+
+def _devin_cli_parse_message_row(chat_message, created_at, seen, sidekick_key):
+    """Parse one message_nodes row into a transcript event dict, or None.
+
+    Dedup key is ``message_id`` — stable across the CLI's per-turn context
+    rebuilds, which re-commit the same logical messages as new rows.
+    ``sidekick_key`` (from _devin_cli_fusion_sidekick_key) is '' for
+    non-Fusion sessions; when set, assistant events carry ``actor``/``model``
+    so the UI can tell lead turns from sidekick turns.
+    Unknown / skipped shapes return None."""
     try:
         msg = json.loads(chat_message)
     except (ValueError, TypeError):
@@ -2473,26 +2611,162 @@ def _devin_cli_parse_message_row(chat_message, created_at, seen):
     if not isinstance(msg, dict):
         return None
     role = str(msg.get("role") or "").strip().lower()
-    if role not in ("user", "assistant"):
+    if role not in ("user", "assistant", "tool", "system"):
         return None
-    text = str(msg.get("content") or "").strip()
-    if not text:
-        return None
-    # Skip system-injected user messages (context rebuilds) — only keep
-    # actual user input. Assistant messages have no is_user_input flag.
-    if role == "user":
-        meta = msg.get("metadata") or {}
-        if not meta.get("is_user_input"):
-            return None
-    dedup_key = (role, text)
+    meta = msg.get("metadata")
+    meta = meta if isinstance(meta, dict) else {}
+    mid = str(msg.get("message_id") or "")
+    dedup_key = ("id", mid) if mid else (
+        "rc", role, str(msg.get("content") or "")[:400])
     if dedup_key in seen:
         return None
-    seen.add(dedup_key)
-    ts_raw = msg.get("metadata", {}).get("created_at") or created_at
+    ts_raw = meta.get("created_at") or created_at
     ts = _devin_epoch(ts_raw)
     ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
-    is_summary = role == "assistant" and _devin_cli_is_context_summary(msg)
-    return role, text, ts_str, is_summary
+    text = str(msg.get("content") or "").strip()
+
+    if role == "user":
+        # Skip system-injected user messages (context rebuilds, sidekick
+        # handoffs) — only keep actual user input.
+        if not meta.get("is_user_input") or not text:
+            return None
+        seen.add(dedup_key)
+        return {"type": "user_text", "text": text, "ts": ts_str,
+                "images": []}
+
+    if role == "tool":
+        if not text:
+            return None
+        seen.add(dedup_key)
+        return {"type": "tool_result", "text": text, "ts": ts_str,
+                "tool_use_id": str(msg.get("tool_call_id") or ""),
+                "is_error": _devin_cli_is_tool_error(msg)}
+
+    if role == "system":
+        # Fusion's sidekick reports back through a system notification row —
+        # render it as a sidekick message so the handoff reads end to end.
+        if "<subagent_completion_notification>" not in text:
+            return None
+        body = _DEVIN_CLI_SUBAGENT_REPORT_RE.sub("", text).strip()
+        if not body:
+            return None
+        seen.add(dedup_key)
+        ev = {"type": "assistant", "ts": ts_str, "subagent_report": True,
+              "blocks": [{"kind": "text", "text": body}]}
+        if mid:
+            ev["message_id"] = mid
+        if sidekick_key:
+            ev["actor"] = "sidekick"
+        return ev
+
+    # assistant
+    blocks = []
+    thinking = msg.get("thinking")
+    if isinstance(thinking, dict):
+        ttext = str(thinking.get("thinking") or "").strip()
+        signature = str(thinking.get("signature") or "").strip()
+        if ttext:
+            blocks.append({
+                "kind": "thinking",
+                "text": ttext[:4000] + ("..." if len(ttext) > 4000 else ""),
+                "signature_only": False,
+            })
+        elif signature:
+            blocks.append({"kind": "thinking", "text": "",
+                           "signature_only": True})
+    if text:
+        is_summary = _devin_cli_is_context_summary(msg)
+        blocks.append({
+            "kind": "devin_summary" if is_summary else "text",
+            "text": text,
+        })
+    tool_calls = msg.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            tb = _devin_cli_tool_block(tc)
+            if tb:
+                blocks.append(tb)
+    if not blocks:
+        return None
+    seen.add(dedup_key)
+    ev = {"type": "assistant", "ts": ts_str, "blocks": blocks}
+    if mid:
+        ev["message_id"] = mid
+    if sidekick_key:
+        model_label = _devin_cli_response_model(msg)
+        ev["actor"] = (
+            "sidekick"
+            if _devin_cli_norm_model_key(model_label) == sidekick_key
+            else "lead"
+        )
+        if model_label:
+            ev["model"] = model_label
+    metrics = meta.get("metrics")
+    if isinstance(metrics, dict):
+        tin = (int(metrics.get("input_tokens") or 0)
+               + int(metrics.get("cache_read_tokens") or 0)
+               + int(metrics.get("cache_creation_tokens") or 0))
+        tout = int(metrics.get("output_tokens") or 0)
+        if tin or tout:
+            ev["tokens_in"] = tin
+            ev["tokens_out"] = tout
+            ev["tokens_cached"] = int(metrics.get("cache_read_tokens") or 0)
+            ev["token_usage"] = {
+                "input_tokens": int(metrics.get("input_tokens") or 0),
+                "cache_read_input_tokens": int(
+                    metrics.get("cache_read_tokens") or 0),
+                "cache_creation_input_tokens": int(
+                    metrics.get("cache_creation_tokens") or 0),
+                "output_tokens": tout,
+            }
+    return ev
+
+
+def _devin_cli_tool_input(session_id, tool_use_id):
+    """Full tool input JSON for the transcript's Input disclosure.
+
+    tool_call_state is keyed (session_id, tool_call_id) — a PK lookup, no
+    table scan. Its tool_call_json is the ACP ToolCall payload whose
+    rawInput is the arguments dict. Falls back to a bounded message_nodes
+    scan for interrupted sessions where the state row never landed."""
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id or not tool_use_id:
+        return None
+    con = _devin_cli_connect_for_raw_id(raw_id)
+    if con is None:
+        return None
+    try:
+        row = con.execute(
+            "SELECT tool_call_json FROM tool_call_state "
+            "WHERE session_id = ? AND tool_call_id = ?",
+            (raw_id, tool_use_id),
+        ).fetchone()
+        if row and row[0]:
+            try:
+                payload = json.loads(row[0])
+            except (ValueError, TypeError):
+                payload = None
+            if isinstance(payload, dict) and "rawInput" in payload:
+                return _core._tool_input_payload(payload.get("rawInput"))
+        for row in con.execute(
+            "SELECT chat_message FROM message_nodes WHERE session_id = ? "
+            "AND instr(chat_message, ?) > 0 ORDER BY row_id DESC LIMIT 20",
+            (raw_id, tool_use_id),
+        ):
+            try:
+                msg = json.loads(row[0])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            for tc in msg.get("tool_calls") or []:
+                if isinstance(tc, dict) and tc.get("id") == tool_use_id:
+                    return _core._tool_input_payload(tc.get("arguments"))
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+    return None
 
 
 def _parse_devin_cli_conversation(session_id, after_line=0):
@@ -2520,32 +2794,23 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
     max_row_id = 0
     db_key = _devin_cli_cache_key()
     was_incremental = False
+    # One PK lookup per parse call — '' for non-Fusion sessions.
+    sidekick_key = _devin_cli_fusion_sidekick_key(con, raw_id)
 
     def _append_rows(rows):
         nonlocal line, max_row_id
         for row in rows:
-            parsed = _devin_cli_parse_message_row(
-                row["chat_message"], row["created_at"], seen
+            ev = _devin_cli_parse_message_row(
+                row["chat_message"], row["created_at"], seen, sidekick_key
             )
-            if parsed is None:
+            if ev is None:
                 continue
-            role, text, ts_str, is_summary = parsed
             line += 1
             max_row_id = max(max_row_id, row["row_id"])
-            if role == "user":
-                events.append({
-                    "line": line, "ts": ts_str, "type": "user_text",
-                    "text": text, "images": [],
-                })
-            else:
-                events.append({
-                    "line": line, "ts": ts_str, "type": "assistant",
-                    "message_id": f"devincli-{line}",
-                    "blocks": [{
-                        "kind": "devin_summary" if is_summary else "text",
-                        "text": text,
-                    }],
-                })
+            ev["line"] = line
+            if ev["type"] == "assistant" and not ev.get("message_id"):
+                ev["message_id"] = f"devincli-{line}"
+            events.append(ev)
 
     try:
         # Try to resume from the incremental cache. row_id is append-only on
@@ -2616,27 +2881,16 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
                 "WHERE session_id = ? ORDER BY node_id",
                 (raw_id,),
             ):
-                parsed = _devin_cli_parse_message_row(
-                    row["chat_message"], row["created_at"], seen
+                ev = _devin_cli_parse_message_row(
+                    row["chat_message"], row["created_at"], seen, sidekick_key
                 )
-                if parsed is None:
+                if ev is None:
                     continue
-                role, text, ts_str, is_summary = parsed
                 line += 1
-                if role == "user":
-                    events.append({
-                        "line": line, "ts": ts_str, "type": "user_text",
-                        "text": text, "images": [],
-                    })
-                else:
-                    events.append({
-                        "line": line, "ts": ts_str, "type": "assistant",
-                        "message_id": f"devincli-{line}",
-                        "blocks": [{
-                            "kind": "devin_summary" if is_summary else "text",
-                            "text": text,
-                        }],
-                    })
+                ev["line"] = line
+                if ev["type"] == "assistant" and not ev.get("message_id"):
+                    ev["message_id"] = f"devincli-{line}"
+                events.append(ev)
             with _DEVIN_CLI_PARSE_CACHE_LOCK:
                 _DEVIN_CLI_PARSE_CACHE.pop(raw_id, None)
         except sqlite3.Error:

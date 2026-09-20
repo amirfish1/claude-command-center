@@ -839,6 +839,33 @@
   }
 
   .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
+  /* Fusion (devin-cli) lanes: the lead keeps the default assistant look;
+     sidekick turns get a teal edge + chip so handoffs read at a glance. */
+  .event.assistant.event-actor-sidekick {
+    border-left-color: var(--accent, #58a6ff);
+    background: rgba(88, 166, 255, 0.07);
+  }
+  .actor-chip {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+  }
+  .actor-chip.actor-sidekick {
+    color: var(--accent, #58a6ff);
+    background: rgba(88, 166, 255, 0.14);
+    border: 1px solid rgba(88, 166, 255, 0.35);
+  }
+  .actor-chip.actor-lead {
+    color: var(--purple, #bc8cff);
+    background: rgba(188, 140, 255, 0.10);
+    border: 1px solid rgba(188, 140, 255, 0.25);
+  }
   .event.tool_result { display: none; } /* hide tool results - they're noise */
   .event.attachment {
     background: rgba(56, 139, 253, 0.05);

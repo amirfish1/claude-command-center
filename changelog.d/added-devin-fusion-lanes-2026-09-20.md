@@ -1,0 +1,1 @@
+Devin CLI conversation view now renders tool calls and results for `devincli-*` sessions (previously text-only), and on Fusion sessions each turn is tagged lead vs. sidekick — sidekick turns get an accent border + chip, the lead's `sidekick` handoffs render as tool rows, and the sidekick's completion report lands as a "sidekick ▸ report" message.

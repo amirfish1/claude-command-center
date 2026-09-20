@@ -7413,6 +7413,7 @@
   function isCommandActivityTool(tool) {
     const name = toolDisplayName(String(tool || ''));
     return name === 'Bash'
+      || name === 'exec' // devin-cli
       || name === 'exec_command'
       || name === 'shell_command'
       || name === 'run_shell_command'
@@ -7422,7 +7423,7 @@
   function liveActivityToolLabel(tool) {
     const name = String(tool || '');
     if (name === 'Bash') return 'Bash command';
-    if (name === 'exec_command' || name === 'shell_command' || name === 'run_shell_command' || name === 'run_command') return 'Shell command';
+    if (name === 'exec' || name === 'exec_command' || name === 'shell_command' || name === 'run_shell_command' || name === 'run_command') return 'Shell command';
     if (name === 'Read') return 'Reading file';
     if (name === 'Edit' || name === 'MultiEdit') return 'Editing file';
     if (name === 'Write') return 'Writing file';
@@ -7439,7 +7440,7 @@
   function liveActivityCompactToolLabel(tool) {
     const name = String(tool || '');
     if (name === 'Bash') return 'Bash';
-    if (name === 'exec_command' || name === 'shell_command' || name === 'run_shell_command' || name === 'run_command') return 'Shell';
+    if (name === 'exec' || name === 'exec_command' || name === 'shell_command' || name === 'run_shell_command' || name === 'run_command') return 'Shell';
     return liveActivityToolLabel(tool);
   }
 
@@ -54580,11 +54581,14 @@
 
   function isEditToolName(name) {
     const base = toolDisplayName(name);
-    return base === 'Edit' || base === 'MultiEdit' || base === 'Write' || base === 'NotebookEdit';
+    // Lowercase entries are devin-cli tool names.
+    return base === 'Edit' || base === 'MultiEdit' || base === 'Write' || base === 'NotebookEdit'
+      || base === 'edit' || base === 'write' || base === 'notebook_edit';
   }
 
   function isFileToolName(name) {
-    return isEditToolName(name) || toolDisplayName(name) === 'Read';
+    const base = toolDisplayName(name);
+    return isEditToolName(base) || base === 'Read' || base === 'read';
   }
 
   function compactPathDetail(detail) {
@@ -54712,10 +54716,10 @@
     if (!editInput) return '';
     const name = toolDisplayName(b.name || '');
     let body = '';
-    if (name === 'Edit' && (editInput.old_string != null || editInput.new_string != null)) {
+    if ((name === 'Edit' || name === 'edit') && (editInput.old_string != null || editInput.new_string != null)) {
       body = '<div class="tool-edit-section tool-edit-old"><span class="tool-edit-label">Before</span><pre>' + escapeHtml(String(editInput.old_string || '')) + '</pre></div>'
            + '<div class="tool-edit-section tool-edit-new"><span class="tool-edit-label">After</span><pre>' + escapeHtml(String(editInput.new_string || '')) + '</pre></div>';
-    } else if (name === 'Write' && editInput.content != null) {
+    } else if ((name === 'Write' || name === 'write') && editInput.content != null) {
       body = '<div class="tool-edit-section tool-edit-new"><span class="tool-edit-label">Content</span><pre>' + escapeHtml(String(editInput.content || '')) + '</pre></div>';
     } else if (name === 'MultiEdit' && Array.isArray(editInput.edits)) {
       body = editInput.edits.map(function (e, i) {
@@ -54776,6 +54780,8 @@
       case 'WebSearch':    return detail ? 'Searched the web for ' + trunc(detail, 50) : 'Ran WebSearch';
       case 'TodoWrite':    return 'Updated todos';
       case 'Task':         return detail ? 'Spawned subagent: ' + trunc(detail, 50) : 'Spawned subagent';
+      case 'sidekick':     return detail ? 'Delegated to sidekick: ' + trunc(detail, 50) : 'Delegated to sidekick';
+      case 'run_subagent': return detail ? 'Spawned subagent: ' + trunc(detail, 50) : 'Spawned subagent';
       case 'TaskCreate':   return 'Created task';
       case 'TaskUpdate':   return 'Updated task';
       case 'AskUserQuestion': return detail ? 'Question: ' + trunc(detail, 70) : 'Asked a question';
@@ -54786,7 +54792,10 @@
 
   function toolCallCarriesConversationContext(toolCall) {
     const key = normalizedToolKey(toolCallName(toolCall));
-    return key === 'ask_user_question' || key.startsWith('kanban_');
+    // sidekick/run_subagent handoffs are conversation context — the row is
+    // where the lead's work visibly leaves for the worker lane.
+    return key === 'ask_user_question' || key === 'sidekick'
+      || key === 'run_subagent' || key.startsWith('kanban_');
   }
 
   function toolGroupCarriesConversationContext(group) {
@@ -58514,6 +58523,11 @@
       }
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
+      // Fusion (devin-cli) events carry actor 'lead'|'sidekick' — the lane
+      // class tints the turn and drives the actor chip below.
+      if (ev.actor === 'sidekick' || ev.actor === 'lead') {
+        div.classList.add('event-actor-' + ev.actor);
+      }
       if (ev.pending) {
         div.dataset.queuedSteerServer = 'true';
         // A durable server-queue row is "queued", not "sending": the
@@ -59374,9 +59388,17 @@
           attachPresentationArtifactToAssistant($view, div, ev, renderedConversationId);
           continue;
         }
+        const _actorChip = (ev.actor === 'sidekick' || ev.actor === 'lead')
+          ? '<span class="actor-chip actor-' + ev.actor + '" title="'
+            + escapeAttr(ev.actor === 'sidekick'
+              ? (ev.subagent_report ? 'Sidekick subagent — completion report' : 'Sidekick subagent turn (Fusion)')
+              : 'Lead model turn (Fusion)')
+            + '">' + escapeHtml(ev.subagent_report ? 'sidekick ▸ report' : ev.actor) + '</span>'
+          : '';
         let html = assistantMessageActionsHtml(ev)
           + '<span class="line-num">L' + ev.line + '</span>'
-          + tsSpan(ev.ts);
+          + tsSpan(ev.ts)
+          + _actorChip;
         let hasNonTool = false;
         // Collect block HTML in parts so the per-turn token chip can be merged
         // into the end of the last tool-call (CCC-30) instead of floating as
@@ -59403,7 +59425,7 @@
               });
             }
             const baseName = toolDisplayName(b.name);
-            const displayName = baseName === 'AskUserQuestion' ? 'Question' : baseName;
+            const displayName = (baseName === 'AskUserQuestion' || baseName === 'ask_user_question') ? 'Question' : baseName;
             const source = toolBlockSource(b);
             const sourceHtml = source
               ? '<span class="tool-source" title="Tool source">' + escapeHtml(source) + '</span> '
@@ -59414,7 +59436,7 @@
             // Accept the new {questions:[...]} shape and the older single-
             // question shape so older transcripts still render.
             let askQuestions = null;
-            if (baseName === 'AskUserQuestion' && b.question && typeof b.question === 'object') {
+            if ((baseName === 'AskUserQuestion' || baseName === 'ask_user_question') && b.question && typeof b.question === 'object') {
               if (Array.isArray(b.question.questions) && b.question.questions.length) {
                 askQuestions = b.question.questions;
               } else if (b.question.header || b.question.question || (Array.isArray(b.question.options) && b.question.options.length)) {

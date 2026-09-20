@@ -1778,5 +1778,198 @@ class DevinCompactorSummaryTests(unittest.TestCase):
         self.assertEqual(usage["total_output_tokens"], 5000)
 
 
+class DevinCliFusionLaneTests(unittest.TestCase):
+    """Fusion sessions keep the lead and the sidekick in one message_nodes
+    forest. The parser must emit tool calls and tag each assistant turn
+    with the actor (lead vs sidekick) resolved from the per-message
+    response_dimensions model label against the sessions.model slug."""
+
+    SCHEMA = DevinCompactorSummaryTests.SCHEMA
+
+    def _msg(self, role, content, message_id=None, **kw):
+        msg = {"role": role, "content": content}
+        if message_id:
+            msg["message_id"] = message_id
+        msg.update(kw)
+        return json.dumps(msg)
+
+    def _dims(self, model_label):
+        return [{"uid": "model", "kind": {"Metric": {"value": model_label}}}]
+
+    def setUp(self):
+        self.server = importlib.import_module("server")
+        self.devin_mod = importlib.import_module("ccc_server.devin")
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
+        self.db_path = os.path.join(self.tmpdir, "sessions.db")
+        now = int(time.time() * 1000)
+        con = sqlite3.connect(self.db_path)
+        con.executescript(self.SCHEMA)
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, '', ?, '', ?, ?, NULL, NULL)",
+            ("fus-test", "/tmp/ccc",
+             "fusion-claude-fable-5-1-medium-sidekick-swe-2-medium", now, now),
+        )
+        lead_meta = {"response_dimensions": self._dims("Claude Fable 5.1 Medium"),
+                     "metrics": {"input_tokens": 10, "output_tokens": 5,
+                                 "cache_read_tokens": 100}}
+        kick_meta = {"response_dimensions": self._dims("SWE-2 Medium")}
+        rows = [
+            (1, None, self._msg("user", "sync the repos",
+                                message_id="u1",
+                                metadata={"is_user_input": True})),
+            (2, 1, self._msg(
+                "assistant", "Handing off.",
+                message_id="a1",
+                tool_calls=[{
+                    "id": "toolu_sk1", "name": "sidekick", "kind": "function",
+                    "arguments": {"message": "update auto_pull_repos.sh"}},
+                ], metadata=lead_meta)),
+            (3, 2, self._msg("tool", "Sidekick finished the handoff.",
+                             message_id="t1", tool_call_id="toolu_sk1",
+                             metadata={"extensions": {
+                                 "chisel/tool_result_meta": {"success": True}}})),
+            # Sidekick tree: separate root (parent_node_id NULL).
+            (4, None, self._msg("system", "You are the Sidekick subagent of Devin,",
+                                message_id="sk-sys")),
+            (5, 4, self._msg(
+                "assistant", "",
+                message_id="sk-a1",
+                tool_calls=[{
+                    "id": "call_exec1", "name": "exec", "kind": "function",
+                    "arguments": {"command": "git status --short"},
+                }, {
+                    "id": "call_ed1", "name": "edit", "kind": "function",
+                    "arguments": {"file_path": "/tmp/x.sh",
+                                  "old_string": "a", "new_string": "b"},
+                }], metadata=kick_meta)),
+            (6, 5, self._msg("tool", "M x.sh",
+                             message_id="sk-t1", tool_call_id="call_exec1",
+                             metadata={"extensions": {
+                                 "chisel/tool_result_meta": {"success": True}}})),
+            (7, 5, self._msg("tool", "boom: no such file",
+                             message_id="sk-t2", tool_call_id="call_ed1",
+                             metadata={"extensions": {
+                                 "chisel/tool_result_meta": {"success": False}}})),
+            (8, 5, self._msg("assistant", "Sidekick done.",
+                             message_id="sk-a2", metadata=kick_meta)),
+            (9, 3, self._msg(
+                "system",
+                "<subagent_completion_notification>\n[Background subagent "
+                "with agent_id=sidekick completed]\n\nCommitted as abc123.",
+                message_id="note1")),
+            (10, 3, self._msg("assistant", "All synced.",
+                              message_id="a2", metadata=lead_meta)),
+        ]
+        con.executemany(
+            "INSERT INTO message_nodes "
+            "(session_id, node_id, parent_node_id, chat_message, created_at) "
+            "VALUES ('fus-test', ?, ?, ?, ?)",
+            [(n, p, m, now + n) for n, p, m in rows],
+        )
+        con.execute(
+            "INSERT INTO tool_call_state VALUES ('fus-test', 'call_exec1', ?, NULL)",
+            (json.dumps({"toolCallId": "call_exec1",
+                         "rawInput": {"command": "git status --short"}}),),
+        )
+        con.commit()
+        con.close()
+
+        env_patch = mock.patch.dict(
+            os.environ,
+            {
+                "CCC_DEVIN_DB": self.db_path,
+                "CCC_DEVIN_NEXT_DB": os.path.join(self.tmpdir, "next-sessions.db"),
+            },
+        )
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        for p in (
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_PARSE_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_LIST_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ID_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO_LOADED", False),
+            mock.patch.object(
+                self.devin_mod,
+                "_devin_cli_row_memo_path",
+                lambda: self.devin_mod.Path(os.path.join(self.tmpdir, "row_memo.json")),
+            ),
+            mock.patch.object(
+                self.devin_mod, "_DEVIN_CLI_ROW_MEMO_BG", {"pending": {}, "thread": None}
+            ),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.devin_mod._devin_cli_row_memo_background_join, 10)
+
+    def test_fusion_parse_tags_actors_and_tools(self):
+        parsed = self.server._parse_devin_cli_conversation("devincli-fus-test")
+        events = parsed["events"]
+        types = [e["type"] for e in events]
+        self.assertEqual(
+            types,
+            ["user_text", "assistant", "tool_result", "assistant",
+             "tool_result", "tool_result", "assistant", "assistant",
+             "assistant"],
+        )
+        by_mid = {e.get("message_id"): e for e in events if e.get("type") == "assistant"}
+        lead = by_mid["a1"]
+        self.assertEqual(lead["actor"], "lead")
+        self.assertEqual(lead["model"], "Claude Fable 5.1 Medium")
+        self.assertEqual(lead["tokens_in"], 110)
+        self.assertEqual(lead["tokens_cached"], 100)
+        sk_call = lead["blocks"][-1]
+        self.assertEqual(sk_call["kind"], "tool_use")
+        self.assertEqual(sk_call["name"], "sidekick")
+        self.assertIn("auto_pull_repos", sk_call["detail"])
+        self.assertTrue(sk_call["has_input"])
+
+        kick = by_mid["sk-a1"]
+        self.assertEqual(kick["actor"], "sidekick")
+        self.assertEqual(kick["model"], "SWE-2 Medium")
+        kinds = [b["kind"] for b in kick["blocks"]]
+        self.assertEqual(kinds, ["tool_use", "tool_use"])
+        names = [b["name"] for b in kick["blocks"]]
+        self.assertEqual(names, ["exec", "edit"])
+        self.assertEqual(kick["blocks"][0]["detail"], "git status --short")
+        self.assertEqual(kick["blocks"][1]["edit_input"]["new_string"], "b")
+
+        report = by_mid["note1"]
+        self.assertEqual(report["actor"], "sidekick")
+        self.assertTrue(report["subagent_report"])
+        self.assertIn("Committed as abc123.", report["blocks"][0]["text"])
+
+        results = [e for e in events if e["type"] == "tool_result"]
+        self.assertEqual(
+            [(r["tool_use_id"], r["is_error"]) for r in results],
+            [("toolu_sk1", False), ("call_exec1", False), ("call_ed1", True)],
+        )
+
+    def test_non_fusion_session_has_no_actor(self):
+        con = sqlite3.connect(self.db_path)
+        con.execute(
+            "INSERT INTO sessions VALUES ('plain', '/tmp/ccc', '', "
+            "'swe-2-medium', '', 0, 0, NULL, NULL)")
+        con.execute(
+            "INSERT INTO message_nodes "
+            "(session_id, node_id, chat_message, created_at) "
+            "VALUES ('plain', 1, ?, 0)",
+            (self._msg("assistant", "hi", message_id="p1",
+                       metadata={"response_dimensions": self._dims("SWE-2 Medium")}),),
+        )
+        con.commit()
+        con.close()
+        parsed = self.server._parse_devin_cli_conversation("devincli-plain")
+        ev = parsed["events"][0]
+        self.assertNotIn("actor", ev)
+        self.assertNotIn("model", ev)
+
+    def test_tool_input_endpoint_reads_tool_call_state(self):
+        payload = self.server._conversation_tool_input(
+            "devincli-fus-test", "1", "call_exec1")
+        self.assertIn("git status --short", payload)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23749,6 +23749,8 @@ def _tool_input_at_jsonl_line(filepath, line_num, tool_use_id=""):
 
 
 def _conversation_tool_input(conversation_id, line_num, tool_use_id=""):
+    if _is_devin_cli_session(conversation_id):
+        return _devin_cli_tool_input(conversation_id, tool_use_id)
     filepath, parser = _resolve_conversation_reader(conversation_id)
     if parser is not _parse_conversation_event:
         return None
