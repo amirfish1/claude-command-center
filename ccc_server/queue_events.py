@@ -1308,6 +1308,18 @@ def _build_ux_fixes_health_payload_uncached():
         worker_session_ids = _core._wt_read_worker_session_ids()
     except Exception:
         worker_session_ids = []
+    # Durable worker_id -> session_id bindings recorded while each worker was
+    # live (CCC-1179). WT's own ledger never learns devin worker sessions (WT
+    # cannot resolve a `devin -p` session id), so union the map's sids into
+    # worker_session_ids as well -- otherwise dead devin workers keep
+    # lingering in the Current-sessions list the ledger exists to filter.
+    try:
+        worker_session_map = _core._wt_worker_session_map()
+    except Exception:
+        worker_session_map = {}
+    for _sid in worker_session_map.values():
+        if _sid and _sid not in worker_session_ids:
+            worker_session_ids.append(_sid)
     # Past workers from the last 24h (log files, excluding live).
     try:
         past_workers = _core._wt_past_workers(hours=24)
@@ -1321,6 +1333,7 @@ def _build_ux_fixes_health_payload_uncached():
         "wt_workers_released_count": wt_workers_released_count,
         "queues": queues,
         "worker_session_ids": worker_session_ids,
+        "worker_session_map": worker_session_map,
         "past_workers": past_workers,
         "github_sync": _github_sync_status(),
     }

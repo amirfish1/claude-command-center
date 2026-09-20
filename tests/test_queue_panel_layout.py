@@ -177,6 +177,53 @@ class TestQueuePanelLayout(unittest.TestCase):
                 "019f9fc4-c7dc-7133-a73e-d7d6df2bec22",
             )
 
+    def test_past_devin_worker_chip_gets_session_id_from_map(self):
+        """A `devin -p` worker log is plain prose — extract_session_id finds
+        nothing, so the durable worker_id→session_id map recorded while the
+        worker was live is the only resolver (CCC-1179)."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs_dir = pathlib.Path(temp_dir, "logs")
+            logs_dir.mkdir()
+            pathlib.Path(logs_dir, "ccc-maptest1.log").write_text(
+                "plain worker output, no stream-json session line\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(server, "_WT_HOME", pathlib.Path(temp_dir)),
+                mock.patch.object(server, "_wt_read_workers", return_value=[]),
+            ):
+                server._wt_record_worker_session(
+                    "ccc-maptest1", "devincli-able-roadrunner")
+                rows = server._wt_past_workers(hours=1)
+
+            self.assertEqual(rows[0]["session_id"], "devincli-able-roadrunner")
+
+    def test_wt_worker_session_map_persists(self):
+        """The worker_id→session_id map is durable: a recorded binding lands
+        on disk so it survives both worker exit and a server restart."""
+        server = importlib.import_module("server")
+        server._wt_record_worker_session("ccc-maptest2", "devincli-x")
+        self.assertEqual(
+            server._wt_worker_session_map()["ccc-maptest2"], "devincli-x")
+        self.assertTrue(
+            pathlib.Path(server._WT_WORKER_SESSION_MAP_FILE).exists())
+        on_disk = json.loads(
+            pathlib.Path(server._WT_WORKER_SESSION_MAP_FILE).read_text())
+        self.assertEqual(
+            on_disk["map"]["ccc-maptest2"], "devincli-x")
+
+    def test_ticket_detail_session_link_falls_back_to_dead_worker_map(self):
+        """The ticket detail's Session row must keep resolving after the
+        worker exits: past_workers and the durable worker_session_map
+        (CCC-1179)."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("_uxqHealthCache.past_workers", app_js)
+        self.assertIn("worker_session_map", app_js)
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        self.assertIn("state.workerSessionMap", q2_js)
+        self.assertIn("state.pastWorkers", q2_js)
+
     def test_main_sidebar_replaces_merge_with_shared_queues_tab(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 

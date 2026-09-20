@@ -50,6 +50,8 @@
     queues: [],
     projects: {},       // queue name → per-project health row (why it's stuck)
     workers: [],        // live WatchTower workers — the only proof a claim is real
+    pastWorkers: [],    // exited workers (24h log scan) — dead-claim session links
+    workerSessionMap: {}, // durable worker_id -> session_id (CCC-1179)
     items: [],
     queue: '',
     viewAll: false,     // global inbox mode; never overloaded onto a queue name
@@ -326,7 +328,29 @@
       var by = tl[i] && tl[i].by;
       if (by && typeof by === 'object' && by.session_id) return String(by.session_id);
     }
-    return '';
+    // claimed_by is the worker's durable id and survives its exit; resolve it
+    // through the live roster, then the 24h past-worker scan, then the
+    // server-recorded map (the only source covering engines whose session id
+    // never reaches workers.json, e.g. devin -p — CCC-1179).
+    var claimedBy = String(item.claimed_by || '').trim();
+    if (!claimedBy) return '';
+    var pools = [state.workers, state.pastWorkers];
+    for (var p = 0; p < pools.length; p++) {
+      var hit = (pools[p] || []).filter(function (w) {
+        return String((w && w.worker_id) || '') === claimedBy
+          && String((w && w.session_id) || '').trim();
+      })[0];
+      if (hit) {
+        var hsid = String(hit.session_id);
+        // WT stores a devin worker's session_id as the raw CLI slug; the
+        // conversation id is devincli-<slug> (CCC-1176).
+        if (String(hit.engine || '').toLowerCase() === 'devin'
+            && hsid.indexOf('devin') !== 0) hsid = 'devincli-' + hsid;
+        return hsid;
+      }
+    }
+    var mapped = (state.workerSessionMap || {})[claimedBy];
+    return mapped ? String(mapped) : '';
   }
 
   // Per-queue facts derived in ONE pass over the item list. renderQueues runs
@@ -675,6 +699,8 @@
       });
       state.workers = (((results[0] && results[0].wt_workers) || [])
         .filter(function (w) { return w && w.alive !== false; }));
+      state.pastWorkers = (results[0] && results[0].past_workers) || [];
+      state.workerSessionMap = (results[0] && results[0].worker_session_map) || {};
       state.items = (results[1] && results[1].items) || [];
       state.offline = false;
     } catch (e) {

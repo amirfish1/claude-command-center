@@ -841,6 +841,111 @@ def _wt_workers_path():
                 or (_WT_HOME / "workers.json"))
 
 
+if test_isolation_active():
+    _WT_WORKER_SESSION_MAP_FILE = (
+        Path(tempfile.gettempdir())
+        / f"ccc-test-wt-worker-session-map-{os.getpid()}.json"
+    )
+else:
+    _WT_WORKER_SESSION_MAP_FILE = (
+        COMMAND_CENTER_STATE_DIR / "wt-worker-session-map.json"
+    )
+_WT_WORKER_SESSION_MAP_CAP = 500
+_WT_WORKER_SESSION_MAP = None       # {worker_id: session_id}, lazily loaded
+_WT_WORKER_SESSION_MAP_MTIME = 0.0
+_WT_WORKER_SESSION_MAP_LOCK = threading.RLock()
+
+
+def _wt_load_worker_session_map():
+    """Read the durable {worker_id: session_id} map from disk. {} on any error."""
+    try:
+        data = json.loads(_WT_WORKER_SESSION_MAP_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    raw = data.get("map") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in raw.items()
+        if str(k or "").strip() and str(v or "").strip()
+    }
+
+
+def _wt_worker_session_map():
+    """Durable worker_id -> session_id bindings for WT workers, incl. dead ones.
+
+    workers.json drops a worker the moment its process exits, and a ticket's
+    claimed_session_id is only backfilled while the worker is live (for devin
+    workers never -- WT cannot see a `devin -p` session), so a closed ticket
+    used to lose every path back to the session that did the work (CCC-1179:
+    "why no link to CCC session in the ticket details?"). CCC already
+    resolves every live worker's session id (log heal + the devin
+    session_locks resolver); recording the binding here is what lets the
+    ticket detail still offer "open in CCC" after the worker exits.
+
+    Values are CCC conversation ids: devin workers are stored under their
+    canonical ``devincli-<slug>`` form (``_wt_read_workers`` rows keep WT's
+    raw slug for WT-side joins; see CCC-1176).
+    """
+    global _WT_WORKER_SESSION_MAP, _WT_WORKER_SESSION_MAP_MTIME
+    with _WT_WORKER_SESSION_MAP_LOCK:
+        if _WT_WORKER_SESSION_MAP is None:
+            _WT_WORKER_SESSION_MAP = _wt_load_worker_session_map()
+            try:
+                _WT_WORKER_SESSION_MAP_MTIME = (
+                    _WT_WORKER_SESSION_MAP_FILE.stat().st_mtime)
+            except OSError:
+                _WT_WORKER_SESSION_MAP_MTIME = 0.0
+        else:
+            # Peer CCC instances (multi-repo peers share the state dir)
+            # record their own workers' bindings into the same file -- pick
+            # theirs up, but only pay the read when the file actually changed.
+            try:
+                mtime = _WT_WORKER_SESSION_MAP_FILE.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            if mtime != _WT_WORKER_SESSION_MAP_MTIME:
+                disk = _wt_load_worker_session_map()
+                disk.update(_WT_WORKER_SESSION_MAP)  # in-process wins (newer)
+                _WT_WORKER_SESSION_MAP = disk
+                _WT_WORKER_SESSION_MAP_MTIME = mtime
+        return dict(_WT_WORKER_SESSION_MAP)
+
+
+def _wt_record_worker_session(worker_id, session_id):
+    """Persist one worker_id -> session_id binding (see _wt_worker_session_map).
+
+    Called from _wt_read_workers on every resolved row; a no-op (no disk
+    write) once the binding is already recorded. Atomic tmp+replace; the map
+    keeps only the most recent _WT_WORKER_SESSION_MAP_CAP bindings."""
+    global _WT_WORKER_SESSION_MAP, _WT_WORKER_SESSION_MAP_MTIME
+    worker_id = str(worker_id or "").strip()
+    session_id = str(session_id or "").strip()
+    if not worker_id or not session_id:
+        return
+    with _WT_WORKER_SESSION_MAP_LOCK:
+        m = _wt_worker_session_map()
+        if m.get(worker_id) == session_id:
+            return
+        m.pop(worker_id, None)  # move-to-end so the freshest survive the cap
+        m[worker_id] = session_id
+        if len(m) > _WT_WORKER_SESSION_MAP_CAP:
+            for old in list(m)[: len(m) - _WT_WORKER_SESSION_MAP_CAP]:
+                m.pop(old)
+        _WT_WORKER_SESSION_MAP = m
+        try:
+            _WT_WORKER_SESSION_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _WT_WORKER_SESSION_MAP_FILE.with_name(
+                _WT_WORKER_SESSION_MAP_FILE.name + ".tmp")
+            tmp.write_text(json.dumps({"map": m}, indent=1))
+            tmp.replace(_WT_WORKER_SESSION_MAP_FILE)
+            _WT_WORKER_SESSION_MAP_MTIME = (
+                _WT_WORKER_SESSION_MAP_FILE.stat().st_mtime)
+        except OSError:
+            pass
+
+
 def _queue_store_path():
     """The WT ticket store file whose mtime/size the queue-events SSE watches.
 
@@ -2629,6 +2734,18 @@ def _wt_read_workers(include_activity=True):
             sid = _wt_devin_worker_session_id(pid)
             if sid:
                 row["session_id"] = sid
+        # Persist every resolved worker_id -> session_id binding so the link
+        # survives the worker's exit (CCC-1179). The map is a CCC-side lookup
+        # for opening the conversation, so canonicalize the devin raw slug to
+        # its devincli-<slug> conversation id here (the row itself keeps WT's
+        # raw id — WT-side joins compare against it, CCC-1176).
+        if row.get("worker_id") and row.get("session_id"):
+            sid = str(row["session_id"])
+            if (str(row.get("engine") or "").lower() == "devin"
+                    and not sid.startswith(DEVIN_CLI_SESSION_PREFIX)
+                    and not _is_devin_session(sid)):
+                sid = DEVIN_CLI_SESSION_PREFIX + sid
+            _wt_record_worker_session(row["worker_id"], sid)
         out.append(row)
     return out
 
@@ -3022,11 +3139,20 @@ def _wt_past_workers(hours=24, max_per_queue=3):
                 per_queue[queue] = per_queue.get(queue, 0) + 1
             ended_ago = int(now - st.st_mtime)
             ended_iso = datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            # Extract session_id so chips can be clickable. Capped at the
-            # first ~60 lines (extract_session_id): worker logs that never
-            # record one (codex/antigravity/failed spawns) used to be parsed
-            # to EOF — 92k-line/6MB logs at ~260ms per health build.
-            session_id = extract_session_id(p) or ""
+            # Extract session_id so chips can be clickable. The durable
+            # worker_id -> session_id map (recorded while the worker was
+            # live) is tried first — cheaper than the log scan and the only
+            # source that covers engines whose logs carry no JSON session id
+            # (devin -p emits plain text, CCC-1179). The log scan stays as
+            # fallback for workers this server never observed live. Capped at
+            # the first ~60 lines (extract_session_id): worker logs that
+            # never record one (codex/antigravity/failed spawns) used to be
+            # parsed to EOF — 92k-line/6MB logs at ~260ms per health build.
+            session_id = (
+                _wt_worker_session_map().get(worker_id)
+                or extract_session_id(p)
+                or ""
+            )
             out.append({
                 "worker_id": worker_id,
                 "queue": queue,

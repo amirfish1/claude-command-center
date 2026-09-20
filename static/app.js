@@ -43852,7 +43852,7 @@
   }
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
-  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [], github_sync: null };
+  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], worker_session_map: {}, past_workers: [], github_sync: null };
   // A queue-health refresh can finish after a drain click but before its POST.
   // Keep the requested state separately so that stale snapshot cannot repaint
   // the button back to its former value or hide its in-progress spinner.
@@ -43964,6 +43964,12 @@
         ? data.worker_session_ids : [];
       // Past workers from the last 24h (log file scan, excludes live workers).
       const past_workers = Array.isArray(data && data.past_workers) ? data.past_workers : [];
+      // Durable worker_id -> session_id map (CCC-1179): the only source that
+      // still resolves a session for a worker that has already exited —
+      // incl. devin workers, whose session id never reaches workers.json or
+      // the ticket's claimed_session_id.
+      const worker_session_map = (data && data.worker_session_map && typeof data.worker_session_map === 'object')
+        ? data.worker_session_map : {};
       // GitHub sync health (rate-limit backoff state) for the degraded-sync
       // notice on GitHub-backed queues. null on older servers pre-restart.
       const github_sync = (data && data.github_sync && typeof data.github_sync === 'object')
@@ -43972,7 +43978,7 @@
       // write the cache, regardless of resolve order.
       if (seq >= _uxqHealthAppliedSeq) {
         _uxqHealthAppliedSeq = seq;
-        _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers, github_sync };
+        _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, worker_session_map, past_workers, github_sync };
         // A brand-new sub-queue can arrive here before any of its tickets do, so
         // re-derive the families off the fresh queue list.
         _uxqRefreshFamilyRoots();
@@ -46560,7 +46566,34 @@
                 ? _uxqHealthCache.wt_workers : [];
               const w = roster.find(w => w && _uxFixesIdentityKey(w.worker_id || '') === key
                 && String(w.session_id || '').trim());
-              if (w) sid = String(w.session_id).trim();
+              if (w) {
+                sid = String(w.session_id).trim();
+                // WT stores a devin worker's session_id as the raw CLI slug;
+                // the conversation id is devincli-<slug> (CCC-1176).
+                if (String(w.engine || '').toLowerCase() === 'devin'
+                    && sid.indexOf('devin') !== 0) sid = 'devincli-' + sid;
+              }
+            }
+            if (!sid) {
+              // The worker already exited (e.g. viewing a closed ticket): the
+              // live roster no longer carries it. past_workers covers ~24h
+              // via the server-side log scan; the durable worker_session_map
+              // covers anything older and engines whose logs have no
+              // extractable session id (devin -p — CCC-1179).
+              const past = Array.isArray((_uxqHealthCache || {}).past_workers)
+                ? _uxqHealthCache.past_workers : [];
+              const p = past.find(p => p && _uxFixesIdentityKey(p.worker_id || '') === key
+                && String(p.session_id || '').trim());
+              if (p) sid = String(p.session_id).trim();
+            }
+            if (!sid) {
+              const map = (_uxqHealthCache || {}).worker_session_map || {};
+              for (const wid in map) {
+                if (_uxFixesIdentityKey(wid) === key && String(map[wid] || '').trim()) {
+                  sid = String(map[wid]).trim();
+                  break;
+                }
+              }
             }
           }
           if (!sid) return '';
