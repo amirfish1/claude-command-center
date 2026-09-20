@@ -25320,6 +25320,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 items = _ux_fixes_list_items_cached(status_filter, lane_filter, fresh=fresh)
                 synced_at = _ux_fixes_list_synced_at(status_filter, lane_filter)
+                # ?slim=1 trims closed-ticket prose the list rows never read
+                # (see _ux_fixes_slim_items). Opt-in: default shape unchanged.
+                if (qs.get("slim", [""])[0] or "").strip() in ("1", "true", "yes"):
+                    items = _ux_fixes_slim_items(items)
                 self.send_json({
                     "ok": True, "items": items, "count": len(items),
                     "synced_at": synced_at,

@@ -1007,6 +1007,77 @@ def _ux_fixes_list_synced_at(status_filter=None, lane_filter=None):
 
 
 # ---------------------------------------------------------------------------
+# Slim list payload (?slim=1)
+# ---------------------------------------------------------------------------
+# The board polls the whole list, and closed tickets are ~97% of it: full issue
+# bodies, resolution write-ups and per-event history text that only a ticket's
+# detail view reads. Slim mode trims that prose on CLOSED rows only and leaves
+# every field the list rows compute from (status, claims, history event/at/by,
+# resolution.unresolved + acks) intact. Open and in-progress rows ship whole,
+# so a detail pane over live work never paints from a trimmed row. Detail views
+# hydrate through /api/ux-fixes/item, which reads the untrimmed memo.
+#
+# Opt-in, so the default response shape is unchanged for external callers.
+_SLIM_TEXT_MAX = 400
+_SLIM_EVENT_TEXT_MAX = 200
+_slim_memo_lock = threading.Lock()
+_slim_memo = {"src": None, "items": None}
+
+
+def _slim_clip(value, limit):
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit] + "…"
+    return value
+
+
+def _slim_item(item):
+    if not isinstance(item, dict) or str(item.get("status") or "") != "closed":
+        return item
+    out = dict(item)
+    out.pop("_github_body", None)
+    for key in ("text", "note"):
+        if key in out:
+            out[key] = _slim_clip(out[key], _SLIM_TEXT_MAX)
+    res = out.get("resolution")
+    if isinstance(res, dict) and "summary" in res:
+        res = dict(res)
+        summary = res["summary"]
+        if isinstance(summary, list):
+            res["summary"] = [_slim_clip(s, _SLIM_TEXT_MAX) for s in summary]
+        else:
+            res["summary"] = _slim_clip(summary, _SLIM_TEXT_MAX)
+        out["resolution"] = res
+    for key in ("history", "timeline"):
+        events = out.get(key)
+        if not isinstance(events, list):
+            continue
+        slim_events = []
+        for ev in events:
+            if isinstance(ev, dict):
+                ev = {k: v for k, v in ev.items() if k != "resolution"}
+                for tk in ("text", "question"):
+                    if tk in ev:
+                        ev[tk] = _slim_clip(ev[tk], _SLIM_EVENT_TEXT_MAX)
+            slim_events.append(ev)
+        out[key] = slim_events
+    out["_slim"] = True
+    return out
+
+
+def _ux_fixes_slim_items(items):
+    """Trimmed copy of a list-memo result, memoized on the memo's identity so
+    concurrent polls of one snapshot build it once."""
+    with _slim_memo_lock:
+        if _slim_memo["src"] is items and _slim_memo["items"] is not None:
+            return _slim_memo["items"]
+    slim = [_slim_item(it) for it in (items or [])]
+    with _slim_memo_lock:
+        _slim_memo["src"] = items
+        _slim_memo["items"] = slim
+    return slim
+
+
+# ---------------------------------------------------------------------------
 # GitHub-backed queue freshness
 # ---------------------------------------------------------------------------
 # The queue-events SSE detects change by stat'ing the local ticket store, which
