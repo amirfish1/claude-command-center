@@ -6153,11 +6153,20 @@
     --current-child-indent: calc(var(--current-child-depth, 1) * 14px);
     --conv-icon-left: calc(10px + var(--current-child-indent));
     border-left-color: rgba(154, 173, 194, 0.24);
+    /* Nested lanes read as subordinate rows: tighter padding + a smaller
+       title so a cluster of children doesn't take the same vertical
+       footprint as full sessions. */
+    padding-top: 3px;
+    padding-bottom: 3px;
   }
   .conv-current-sessions-scroll .conv-item .conv-title-row,
   .conv-current-sessions-scroll .conv-item .conv-main-row {
     min-height: var(--current-session-row-h);
     width: 100%;
+  }
+  .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title-row,
+  .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-main-row {
+    min-height: 20px;
   }
   .conv-current-sessions-scroll .conv-item .conv-title {
     color: var(--text);
@@ -6170,6 +6179,7 @@
   .conv-item.is-current-child-row .conv-title,
   .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title,
   .conv-archived-list .conv-item.is-current-child-row .conv-title {
+    font-size: 12.5px;
     font-weight: 450;
     font-style: italic;
     color: var(--text-secondary);
@@ -29022,6 +29032,16 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 }
 .conv-workers-starting { opacity: 0.75; }
 #convList.workers-dense .conv-item.is-current-child-row { --conv-icon-left: 10px; }
+/* Subordinate sizing: a nested lane is a slimmer row than a full session —
+   tighter padding and a step smaller title. Needs !important because the
+   dense table pins font-size/padding with !important of its own. */
+#convList.workers-dense .conv-item.is-current-child-row {
+  padding-top: 1px !important;
+  padding-bottom: 1px !important;
+}
+#convList.workers-dense .conv-item.is-current-child-row .conv-title {
+  font-size: 12px !important;
+}
 #convList.workers-dense .conv-item.is-current-child-row .conv-title::before {
   content: '\21B3';
   margin-right: 5px;
