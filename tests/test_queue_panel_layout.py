@@ -224,6 +224,17 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("state.workerSessionMap", q2_js)
         self.assertIn("state.pastWorkers", q2_js)
 
+    def test_pending_worker_row_retires_on_devincli_conv_id(self):
+        """The Workers lane's 'starting…' pending row must retire once the
+        worker's session row lands — for devin workers that means matching
+        devincli-<slug>, not just WT's raw session_id (CCC-1180)."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        block = app_js[
+            app_js.index("_wtPending = ("):app_js.index("_wtWarmHealthForWorkersLane")]
+        self.assertIn("'devincli-'", block)
+        self.assertIn("worker_session_map", block)
+        self.assertIn("_knownSids", block)
+
     def test_main_sidebar_replaces_merge_with_shared_queues_tab(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 

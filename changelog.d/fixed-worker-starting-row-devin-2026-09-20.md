@@ -1,0 +1,1 @@
+Fixed Workers lane rows stuck on "starting…" forever: a WatchTower worker's pending row now also matches its session via the durable worker→session map and devin's canonical devincli-<slug> conversation id, so it retires the moment the session lands (CCC-1180).

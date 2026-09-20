@@ -37441,7 +37441,18 @@
         _wtPending = (((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])).filter(w => {
           if (!w || w.alive === false) return false;
           const sid = String(w.session_id || '').trim();
-          return !sid || !_knownSids.has(sid);
+          const wid = String(w.worker_id || '').trim();
+          const mapSid = String((((_uxqHealthCache || {}).worker_session_map) || {})[wid] || '').trim();
+          const candidates = [sid, mapSid];
+          // WT stores a devin worker's session_id as the raw CLI slug while
+          // the conversation row id is devincli-<slug> (CCC-1176/CCC-1180) —
+          // without canonicalizing, the pending row never retires even though
+          // the session is already live in the lane.
+          if (String(w.engine || '').toLowerCase() === 'devin'
+              && sid && sid.indexOf('devin') !== 0) {
+            candidates.push('devincli-' + sid);
+          }
+          return !candidates.some(c => c && _knownSids.has(c));
         });
         // The health poll only runs for the Queues panel, so on a cold sidebar
         // this lane would show nothing until the user opened Queues once.
