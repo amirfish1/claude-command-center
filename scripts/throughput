@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Shim: ``scripts/throughput ingest`` == ``python3 -m ccc_server.usage_db ingest``."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from ccc_server.usage_db.cli import main  # noqa: E402
+
+sys.exit(main())
