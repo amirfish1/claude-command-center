@@ -1,0 +1,1 @@
+- Watchtower activity log (main panel and q2 log bar): periodic refreshes no longer wipe an in-progress text selection. Rows are patched in place via append-aware DOM diffing (WtLogBursts.patchList) instead of rebuilding innerHTML, so unchanged rows keep their nodes — and selections inside them — across refresh cycles.

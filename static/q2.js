@@ -1952,12 +1952,15 @@
     }
     host.setAttribute('data-log-queue', projectKey(state.queue));
 
-    var rows;
+    // Patchable items ({key, sig, html}) — patchList keeps unchanged row
+    // nodes alive across poll refreshes so a text selection in the log
+    // survives (CCC-1183).
+    var items = [];
     if (!state.queue) {
-      rows = '<div class="q2-dim q2-log-empty">Pick a queue.</div>';
+      items.push({ key: 'empty', sig: 'pick', html: '<div class="q2-dim q2-log-empty">Pick a queue.</div>' });
     } else if (!state.log.length) {
-      rows = '<div class="q2-dim q2-log-empty">No reconciler activity recorded for '
-        + esc(state.queue) + '.</div>';
+      items.push({ key: 'empty', sig: 'none:' + state.queue, html: '<div class="q2-dim q2-log-empty">No reconciler activity recorded for '
+        + esc(state.queue) + '.</div>' });
     } else {
       // Group consecutive lines about the same ticket. The log interleaves
       // several tickets' events, and without a break between clusters it reads
@@ -1965,35 +1968,49 @@
       // a dozen IDLE_* lines; one GC sweep = N GC_RELEASED lines) collapse to
       // a single summary row first — see wt-log-bursts.js.
       var prevRef = null;
-      var parts = [];
       WtLogBursts.collapse(state.log).forEach(function (it) {
         if (it.key) {
           // Burst rows carry no ref; like other reconciler lines they don't
           // reset the current ticket cluster.
           prevRef = null;
-          parts.push(q2LogBurstHtml(it.key, it.members));
+          items.push({
+            key: it.key,
+            sig: it.key + '|' + (state.logBurstOpen[it.key] ? 'open' : 'closed'),
+            html: q2LogBurstHtml(it.key, it.members),
+          });
           return;
         }
-        if (it.raw !== undefined) { parts.push(q2LogRowHtml(it)); return; }
+        if (it.raw !== undefined) {
+          items.push({ key: 'raw:' + it.raw, sig: 'raw', html: q2LogRowHtml(it) });
+          return;
+        }
         var e = it.entry;
         var refM = String(e.detail || '').match(/^([A-Z0-9][A-Z0-9-]*-\d+)\b/);
         var thisRef = refM ? refM[1] : null;
         var newCluster = prevRef !== null && thisRef !== prevRef;
         prevRef = thisRef;
-        parts.push(q2LogRowHtml(e, newCluster));
+        items.push({ key: 'line:' + e.line, sig: newCluster ? 'row|c' : 'row', html: q2LogRowHtml(e, newCluster) });
       });
-      rows = parts.join('');
     }
 
-    host.innerHTML = '<div class="q2-logbar-head">'
-      + '<button type="button" class="q2-ops-toggle" data-q2-log-toggle aria-expanded="' + (open ? 'true' : 'false') + '">'
+    // Head is patched separately so the body — and any selection in it — is
+    // untouched when only the count/caret changed.
+    var headInner = '<button type="button" class="q2-ops-toggle" data-q2-log-toggle aria-expanded="' + (open ? 'true' : 'false') + '">'
       + '<span class="q2-ops-caret" aria-hidden="true">' + (open ? '&#9662;' : '&#9656;') + '</span>'
       + 'Activity log' + (state.queue ? ' &middot; ' + esc(state.queue) : '')
       + '</button>'
       + '<span class="q2-spacer"></span>'
-      + '<span class="q2-dim q2-logbar-count">' + (state.log.length ? state.log.length + ' lines' : '') + '</span>'
-      + '</div>'
-      + '<div class="q2-logbar-body">' + rows + '</div>';
+      + '<span class="q2-dim q2-logbar-count">' + (state.log.length ? state.log.length + ' lines' : '') + '</span>';
+    var head = host.querySelector('.q2-logbar-head');
+    if (!head) {
+      host.innerHTML = '<div class="q2-logbar-head">' + headInner + '</div><div class="q2-logbar-body"></div>';
+      head = host.querySelector('.q2-logbar-head');
+      head.__lbHtml = headInner;
+    } else if (head.__lbHtml !== headInner) {
+      head.innerHTML = headInner;
+      head.__lbHtml = headInner;
+    }
+    WtLogBursts.patchList(host.querySelector('.q2-logbar-body'), items, 'q2-log-item');
 
     if (pinned) {
       var nb = host.querySelector('.q2-logbar-body');

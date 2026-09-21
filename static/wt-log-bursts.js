@@ -134,11 +134,72 @@
     return { verb: 'IDLE', worker: worker, text: parts.join(' · ') };
   }
 
+  // Replace-in-place a log list's children so unchanged rows keep their DOM
+  // nodes — and any text selection inside them — across poll re-renders.
+  // Each item {key, sig, html} maps to one child div carrying data-lb=key;
+  // key is identity (line text / burst key), sig is the render version —
+  // bump it (e.g. open-state, cluster flag, folded separators) to force
+  // that item's html to be patched in place.
+  //
+  // Alignment assumes append-mostly growth: the newest lines arrive at the
+  // end and the tail cap evicts from the front. The largest tail of the old
+  // children that prefixes the new item list is kept; only sig-changed items
+  // get their innerHTML rewritten.
+  function patchList(container, items, itemClass) {
+    if (!container) return;
+    var kids = container.children;
+    var initd = kids.length === 0
+      ? container.childNodes.length === 0
+      : kids[0].hasAttribute('data-lb');
+    if (!initd) {
+      container.textContent = '';
+      kids = container.children;
+    }
+    var oldLen = kids.length;
+    var shift = -1;
+    var maxTail = Math.min(oldLen, items.length);
+    for (var t = maxTail; t >= 0; t--) {
+      var ok = true;
+      for (var j = 0; j < t; j++) {
+        if (kids[oldLen - t + j].getAttribute('data-lb') !== items[j].key) { ok = false; break; }
+      }
+      if (ok) { shift = oldLen - t; break; }
+    }
+    if (shift < 0) {
+      container.textContent = '';
+      shift = 0;
+      oldLen = 0;
+    }
+    for (var r = 0; r < shift; r++) container.removeChild(container.firstChild);
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var node = container.children[i];
+      if (node && node.getAttribute('data-lb') === it.key) {
+        if (node.__lbSig !== it.sig) {
+          node.innerHTML = it.html;
+          node.__lbSig = it.sig;
+        }
+        continue;
+      }
+      var div = document.createElement('div');
+      if (itemClass) div.className = itemClass;
+      div.setAttribute('data-lb', it.key);
+      div.innerHTML = it.html;
+      div.__lbSig = it.sig;
+      if (node) container.insertBefore(div, node);
+      else container.appendChild(div);
+    }
+    while (container.children.length > items.length) {
+      container.removeChild(container.lastChild);
+    }
+  }
+
   return {
     parseLine: parseLine,
     burstKey: burstKey,
     collapse: collapse,
     summary: summary,
+    patchList: patchList,
     kv: kv,
     fmtSecs: fmtSecs,
   };

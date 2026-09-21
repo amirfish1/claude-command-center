@@ -44219,6 +44219,7 @@
     return {
       utcMs,
       ref,
+      sig: 'row',
       html:
         '<div class="wl-row ' + verbClass + '">'
         + '<span class="wl-meta">'
@@ -44257,6 +44258,7 @@
     return {
       utcMs,
       ref: '',
+      sig: 'burst|' + (open ? 'open' : 'closed'),
       html:
         '<div class="wl-row wl-burst ' + _wtLogVerbClass(sum.verb) + '">'
         + '<span class="wl-meta">'
@@ -44278,19 +44280,29 @@
     };
   }
 
-  function _renderWtLogLines(lines) {
+  // Rendered log as patchable items ({key, sig, html}) — WtLogBursts.patchList
+  // applies them to #wtLogPre so unchanged rows keep their DOM nodes and any
+  // text selection inside survives the 3s refresh (CCC-1183). Separators fold
+  // into the FOLLOWING item so every item is exactly one container child.
+  function _wtLogItems(lines) {
     const now = Date.now();
-    const rows = [];
+    const items = [];
     let prevMs = null;
     let prevRef = null;
+    let pendingSeps = '';
     // Fold reconciler bursts into single rows first so the gap/item-divider
     // bookkeeping below sees one item per evaluation, not a dozen lines.
-    const items = window.WtLogBursts
+    const collapsed = window.WtLogBursts
       ? WtLogBursts.collapse(lines)
       : lines.map(line => ({ raw: line }));
-    for (const it of items) {
+    for (const it of collapsed) {
       if (it.raw !== undefined) {
-        rows.push('<div class="wl-row"><span class="wl-detail">' + escapeHtml(it.raw) + '</span></div>');
+        items.push({
+          key: 'raw:' + it.raw,
+          sig: 'raw',
+          html: pendingSeps + '<div class="wl-row"><span class="wl-detail">' + escapeHtml(it.raw) + '</span></div>',
+        });
+        pendingSeps = '';
         continue;
       }
       const r = it.key ? _wtLogBurstHtml(it.key, it.members, now)
@@ -44298,7 +44310,7 @@
       let insertedGap = false;
       if (prevMs !== null && r.utcMs - prevMs >= 3 * 60 * 1000) {
         const gapMin = Math.round((r.utcMs - prevMs) / 60000);
-        rows.push('<div class="wl-sep"><span class="wl-sep-label">' + gapMin + 'm gap</span></div>');
+        pendingSeps += '<div class="wl-sep"><span class="wl-sep-label">' + gapMin + 'm gap</span></div>';
         insertedGap = true;
       }
       // Divider whenever the issue item changes, so the stream reads as grouped
@@ -44307,13 +44319,25 @@
       // the current item, so a SPAWN/REAP mid-lifecycle stays grouped with its
       // ticket.
       if (!insertedGap && r.ref && prevRef && r.ref !== prevRef) {
-        rows.push('<div class="wl-item-sep"></div>');
+        pendingSeps += '<div class="wl-item-sep"></div>';
       }
       prevMs = r.utcMs;
       if (r.ref) prevRef = r.ref;
-      rows.push(r.html);
+      // sig bumps when anything folded into the html can change without the
+      // key changing: a burst's open state, or separators re-derived when the
+      // tail window evicts the previous line.
+      items.push({ key: it.key || ('line:' + it.entry.line), sig: pendingSeps + '|' + r.sig, html: pendingSeps + r.html });
+      pendingSeps = '';
     }
-    return rows.join('');
+    return items;
+  }
+
+  function _renderWtLogItems(pre, lines) {
+    if (!lines.length) {
+      pre.innerHTML = '<span style="opacity:0.4">(log is empty)</span>';
+      return;
+    }
+    WtLogBursts.patchList(pre, _wtLogItems(lines), 'wl-item');
   }
 
   function _closeWtLogPanel() {
@@ -44375,7 +44399,7 @@
         if (_wtLogExpandedBursts.has(key)) _wtLogExpandedBursts.delete(key);
         else _wtLogExpandedBursts.add(key);
         const st = _preEl.scrollTop;
-        _preEl.innerHTML = _renderWtLogLines(_wtLogLastLines);
+        _renderWtLogItems(_preEl, _wtLogLastLines);
         _preEl.scrollTop = st;
         _wtSyncEnd();
       });
@@ -44425,7 +44449,7 @@
             // yanked back to the end on the next 3s refresh.
             const wasAtBottom = (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 40;
             _wtLogLastLines = data.lines;
-            pre.innerHTML = data.lines.length ? _renderWtLogLines(data.lines) : '<span style="opacity:0.4">(log is empty)</span>';
+            _renderWtLogItems(pre, data.lines);
             if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
           } else {
             pre.textContent = data.error || 'Could not load log.';
