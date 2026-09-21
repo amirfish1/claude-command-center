@@ -14357,6 +14357,20 @@
       + '</div>';
   }
 
+  // Devin Fusion: the lead's handoff brief lands as a (huge) user_text event.
+  // Render it as a collapsed card — the summary line proves the handoff
+  // happened and shows its headline; the full spec stays one click away.
+  function renderDevinHandoffCard(ev) {
+    const title = String((ev && ev.handoff_title) || '').trim();
+    return '<details class="devin-handoff-card">'
+      + '<summary>'
+      +   '<span class="devin-handoff-label">➤ Handoff to sidekick</span>'
+      +   (title ? '<span class="devin-handoff-title">' + escapeHtml(title) + '</span>' : '')
+      + '</summary>'
+      + '<div class="devin-handoff-body">' + renderMarkdown(String(ev.text || '')) + '</div>'
+      + '</details>';
+  }
+
   function parseTaskNotificationBlock(text) {
     const src = String(text || '').trim();
     if (!/^<task-notification\b/i.test(src) || !/<\/task-notification>\s*$/i.test(src)) return null;
@@ -59362,6 +59376,9 @@
         let textHtml;
         if (notification) {
           textHtml = renderTaskNotificationBlock(notification, cleanedText, true);
+        } else if (ev.handoff) {
+          div.classList.add('devin-handoff-event');
+          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + renderDevinHandoffCard(ev) + '</div>';
         } else if (compactCardHtml) {
           textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + compactCardHtml + '</div>';
         } else if (cleanedText) {
@@ -59727,11 +59744,19 @@
               // summary — the "lots of wasted space" a whole run of these
               // produces back-to-back.
             } else {
-              // Text present: visible block with an expandable body. Shown
-              // expanded by default regardless of Verbose transcript mode
-              // (CCC-942) — Verbose still gates tool output, but thinking is
-              // useful even outside that mode and shouldn't require a click.
-              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:block">' + escapeHtml(b.text) + '</div></div>');
+              // Text present: visible block with an expandable body. Short
+              // thinking stays expanded regardless of Verbose (CCC-942);
+              // LONG thinking clamps to a two-line teaser — a single click
+              // (on the label or the teaser itself) unfolds it. Devin/ACP
+              // models routinely emit multi-page reasoning, and always-open
+              // bodies drowned the actual transcript.
+              const _tText = String(b.text || '');
+              const _tLong = _tText.length > 280;
+              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" title="Click to expand / collapse"'
+                + ' onclick="this.parentElement.querySelector(\'.t-body\').classList.toggle(\'is-clamped\')">💭 Thinking</span>'
+                + '<div class="t-body' + (_tLong ? ' is-clamped' : '') + '"'
+                + (_tLong ? ' onclick="this.classList.remove(\'is-clamped\')"' : '')
+                + '>' + escapeHtml(_tText) + '</div></div>');
               hasNonTool = true;
             }
           }

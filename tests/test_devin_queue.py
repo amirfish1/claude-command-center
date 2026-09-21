@@ -1860,6 +1860,14 @@ class DevinCliFusionLaneTests(unittest.TestCase):
                 message_id="note1")),
             (10, 3, self._msg("assistant", "All synced.",
                               message_id="a2", metadata=lead_meta)),
+            # The sidekick's handoff brief lands as user input in its tree.
+            (11, 4, self._msg(
+                "user",
+                "This is your first handoff from the lead. Work it to "
+                "completion.\n\n<lead_handoff>\nTwo final items.\n\n"
+                "## A. Update the status script",
+                message_id="sk-u1",
+                metadata={"is_user_input": True})),
         ]
         con.executemany(
             "INSERT INTO message_nodes "
@@ -1911,7 +1919,7 @@ class DevinCliFusionLaneTests(unittest.TestCase):
             types,
             ["user_text", "assistant", "tool_result", "assistant",
              "tool_result", "tool_result", "assistant", "assistant",
-             "assistant"],
+             "assistant", "user_text"],
         )
         by_mid = {e.get("message_id"): e for e in events if e.get("type") == "assistant"}
         lead = by_mid["a1"]
@@ -1945,6 +1953,12 @@ class DevinCliFusionLaneTests(unittest.TestCase):
             [(r["tool_use_id"], r["is_error"]) for r in results],
             [("toolu_sk1", False), ("call_exec1", False), ("call_ed1", True)],
         )
+
+        handoff = events[-1]
+        self.assertEqual(handoff["type"], "user_text")
+        self.assertTrue(handoff["handoff"])
+        self.assertEqual(handoff["handoff_title"], "Two final items.")
+        self.assertEqual(handoff["actor"], "sidekick")
 
     def test_non_fusion_session_has_no_actor(self):
         con = sqlite3.connect(self.db_path)

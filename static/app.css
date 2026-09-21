@@ -866,6 +866,105 @@
     background: rgba(188, 140, 255, 0.10);
     border: 1px solid rgba(188, 140, 255, 0.25);
   }
+  /* In the conversations popout the base assistant row is borderless and
+     heavily padded (24px top — tuned for sparse Claude prose turns). Fusion
+     lanes get explicit edge colors, a whisper of tint, and roughly half the
+     vertical padding since devin emits an event per tool call. The conv-bg
+     (stitch) override uses !important at higher specificity, so the
+     has-conv-bg variants below carry !important to stay visible there too. */
+  .conversations-view .event.assistant.event-actor-lead,
+  .conv-pane.has-conv-bg .conversations-view .event.assistant.event-actor-lead {
+    border-left: 3px solid var(--purple) !important;
+    background: rgba(188, 140, 255, 0.045) !important;
+    padding: 12px 0 3px 14px !important;
+    margin-bottom: 4px !important;
+  }
+  .conversations-view .event.assistant.event-actor-sidekick,
+  .conv-pane.has-conv-bg .conversations-view .event.assistant.event-actor-sidekick {
+    border-left: 3px solid var(--accent, #58a6ff) !important;
+    background: rgba(88, 166, 255, 0.05) !important;
+    padding: 12px 0 3px 14px !important;
+    margin-bottom: 4px !important;
+  }
+  /* Role-accented inline emphasis: lead highlights read purple, sidekick
+     highlights keep the blue accent — the prose itself stays neutral. */
+  .event-actor-lead .assistant-text .md-code,
+  .event-actor-lead .assistant-text a { color: var(--purple); }
+  .event-actor-sidekick .assistant-text .md-code,
+  .event-actor-sidekick .assistant-text a { color: var(--accent); }
+  /* Fold the per-turn meta lines onto one row inside the dense lanes. */
+  .event-actor-lead .event-token-chips.cache-adjusted,
+  .event-actor-sidekick .event-token-chips.cache-adjusted { display: inline-block; margin-right: 12px; }
+  .event-actor-lead .event-model-meta,
+  .event-actor-sidekick .event-model-meta { display: inline-block; }
+  /* Lead→sidekick handoff brief: collapsed card, not a full user bubble. */
+  .devin-handoff-card {
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    border-left: 3px solid var(--accent, #58a6ff);
+    border-radius: 6px;
+    background: rgba(88, 166, 255, 0.06);
+    padding: 6px 10px;
+  }
+  .devin-handoff-card summary {
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    list-style: none;
+    min-width: 0;
+  }
+  .devin-handoff-card summary::-webkit-details-marker { display: none; }
+  .devin-handoff-card .devin-handoff-label {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent, #58a6ff);
+  }
+  .devin-handoff-card .devin-handoff-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .devin-handoff-card .devin-handoff-body {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--text);
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+  /* The handoff arrives as a user_text event but it isn't the operator's
+     bubble — flatten the chat styling and let the card carry the look.
+     Stitch's user_text override is !important at (0,6,0), so the
+     has-conv-bg variant needs !important at (0,7,0) to win. */
+  .conversations-view .event.user_text.devin-handoff-event,
+  .conv-pane.has-conv-bg[data-conv-bg] .conversations-view .event.user_text.devin-handoff-event {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    max-width: none !important;
+    width: auto !important;
+    background: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 6px !important;
+    clip-path: none !important;
+    padding: 4px 0 !important;
+  }
+  .conversations-view .event.user_text.devin-handoff-event .user-msg,
+  .conv-pane.has-conv-bg[data-conv-bg] .conversations-view .event.user_text.devin-handoff-event .user-msg {
+    margin-top: 0 !important;
+    color: var(--text) !important;
+  }
+  /* Stitch appends a cyan >_ prompt to every user bubble — noise on a card. */
+  .conversations-view .event.user_text.devin-handoff-event .user-msg::after,
+  .conv-pane.has-conv-bg[data-conv-bg] .conversations-view .event.user_text.devin-handoff-event .user-msg::after {
+    content: none !important;
+  }
   .event.tool_result { display: none; } /* hide tool results - they're noise */
   .event.attachment {
     background: rgba(56, 139, 253, 0.05);
@@ -1898,6 +1997,15 @@
   }
   .thinking-toggle:hover { color: var(--text); }
   .t-body { white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+  /* Long thinking starts clamped to a two-line teaser; click unfolds it. */
+  .t-body.is-clamped {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    max-height: none;
+    cursor: pointer;
+  }
   /* Signature-only: reasoning text not persisted; show compact non-expandable marker. */
   .thinking-block-silent .thinking-toggle { cursor: default; opacity: 0.6; }
   .thinking-block-silent .thinking-toggle:hover { color: var(--text-muted); }

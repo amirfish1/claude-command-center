@@ -2593,6 +2593,25 @@ def _devin_cli_is_tool_error(msg):
 
 _DEVIN_CLI_SUBAGENT_REPORT_RE = re.compile(
     r"</?subagent_completion_notification[^>]*>")
+_DEVIN_CLI_HANDOFF_RE = re.compile(
+    r"<lead_handoff[^>]*>(.*?)(?:</lead_handoff>|\s*$)", re.S)
+
+
+def _devin_cli_handoff_title(text):
+    """First content line inside <lead_handoff>…</lead_handoff> — the
+    collapsed handoff card's headline. The tag is not always closed."""
+    m = _DEVIN_CLI_HANDOFF_RE.search(text or "")
+    body = m.group(1) if m else (text or "")
+    for line in body.splitlines():
+        line = line.strip().lstrip("#").strip()
+        if line:
+            return line[:140]
+    if m:
+        for line in (text or "")[:m.start()].splitlines():
+            line = line.strip().lstrip("#").strip()
+            if line:
+                return line[:140]
+    return ""
 
 
 def _devin_cli_parse_message_row(chat_message, created_at, seen, sidekick_key):
@@ -2631,8 +2650,19 @@ def _devin_cli_parse_message_row(chat_message, created_at, seen, sidekick_key):
         if not meta.get("is_user_input") or not text:
             return None
         seen.add(dedup_key)
-        return {"type": "user_text", "text": text, "ts": ts_str,
-                "images": []}
+        ev = {"type": "user_text", "text": text, "ts": ts_str,
+              "images": []}
+        # The lead's handoff brief is stored as user input TO the sidekick —
+        # a multi-KB spec that would otherwise flood the transcript as one
+        # giant user bubble. Flag it so the UI renders a collapsed card.
+        if "<lead_handoff>" in text:
+            ev["handoff"] = True
+            title = _devin_cli_handoff_title(text)
+            if title:
+                ev["handoff_title"] = title
+            if sidekick_key:
+                ev["actor"] = "sidekick"
+        return ev
 
     if role == "tool":
         if not text:
