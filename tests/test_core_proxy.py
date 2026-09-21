@@ -15,7 +15,10 @@ import sys
 import unittest
 
 import server  # noqa: F401  baseline: server imported once for the suite
+import types
+
 from ccc_server import acp, codex, core, pending_inputs
+import ccc_server
 
 
 class TestCoreProxyFallback(unittest.TestCase):
@@ -56,6 +59,61 @@ class TestCoreProxyFallback(unittest.TestCase):
         finally:
             if saved is not None:
                 sys.modules["server"] = saved
+
+
+class TestCoreProxyRegistry(unittest.TestCase):
+    """Slice 1: registry-backed resolution for a server-less process."""
+
+    def setUp(self):
+        self._saved_server = sys.modules.pop("server", None)
+        self._saved_reg = dict(ccc_server._registry)
+        self.fake = types.ModuleType("ccc_server._fake_owner")
+        self.fake._fake_value = 1
+        ccc_server.register(self.fake)
+
+    def tearDown(self):
+        ccc_server._registry.clear()
+        ccc_server._registry.update(self._saved_reg)
+        if self._saved_server is not None:
+            sys.modules["server"] = self._saved_server
+
+    def test_read_resolves_via_registry_without_scan(self):
+        # Not in sys.modules, so only the registry can find it.
+        self.assertNotIn("ccc_server._fake_owner", sys.modules)
+        self.assertEqual(core._fake_value, 1)
+
+    def test_lookup_is_live_not_snapshot(self):
+        self.fake._fake_value = 2
+        self.assertEqual(core._fake_value, 2)
+
+    def test_write_routes_to_owner_when_server_absent(self):
+        core._fake_value = 7
+        self.assertEqual(self.fake._fake_value, 7)
+
+    def test_write_unknown_name_raises_without_server(self):
+        with self.assertRaises(AttributeError):
+            core._never_registered_xyz = 1
+
+    def test_later_registration_wins(self):
+        other = types.ModuleType("ccc_server._fake_owner2")
+        other._fake_value = 99
+        ccc_server.register(other)
+        self.assertEqual(core._fake_value, 99)
+
+    def test_registry_hit_skips_module_scan(self):
+        class _Boom(dict):
+            def items(self):
+                raise AssertionError("scanned sys.modules on a registry hit")
+
+        real = ccc_server._sys.modules
+        try:
+            ccc_server._sys.modules = _Boom(real)
+            self.assertEqual(core._fake_value, 1)
+        finally:
+            ccc_server._sys.modules = real
+
+    def test_server_adoption_populates_registry(self):
+        self.assertIs(ccc_server._registry["_pending_resume_lock"], pending_inputs)
 
 
 if __name__ == "__main__":

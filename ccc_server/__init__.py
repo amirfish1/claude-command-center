@@ -31,6 +31,26 @@ def test_isolation_active():
     )
 
 
+# name -> ccc_server module that owns it. Filled by register() as
+# server.py adopts (or a worker bootstrap imports) each module, so the proxy
+# can resolve names with one dict lookup when "server" is absent (the worker
+# without `import server`). Holds modules, not values: reads stay live.
+_registry = {}
+
+
+def register(mod):
+    """Record `mod` as the owner of its top-level names for `core` lookups.
+
+    Later registrations win, matching `_adopt_ccc_module`'s globals().update
+    order, so a name defined in two modules resolves the same way whether
+    server.py or a bootstrap did the importing.
+    """
+    for k in vars(mod):
+        if not k.startswith("__") and k != "_core":
+            _registry[k] = mod
+    return mod
+
+
 class _CoreProxy:
     """Live view of the server module.
 
@@ -40,15 +60,12 @@ class _CoreProxy:
     the test suite's server-module reloads and sees monkeypatched
     attributes either way.
 
-    During the test suite's pop-and-reimport of "server" there is a wide
-    window where the fresh module has not yet run `_adopt_ccc_module` for
-    the subsystem that owns a name (adoption happens ~20k lines into
-    server.py). Background threads spawned by the previous server instance
-    (queue pumps, rollout watchers) that touch `_core.X` in that window
-    used to die on AttributeError. When "server" lacks the name (or is
-    popped entirely), fall back to the already-imported ccc_server.*
-    submodule that defines it — `_adopt_ccc_module` rebinds server to the
-    very same object once import catches up, and monkeypatches on server
+    When "server" is absent (the worker decoupled from server.py) or lacks
+    the name (the test suite's mid-reimport window, where adoption runs ~20k
+    lines into server.py and background threads from the previous instance
+    still touch `_core.X`), resolve through the registry of adopted
+    ccc_server modules: one dict lookup. Names never registered fall back to
+    scanning the imported ccc_server.* submodules. Monkeypatches on server
     still win on the primary path.
     """
 
@@ -61,6 +78,12 @@ class _CoreProxy:
                 return getattr(mod, name)
             except AttributeError:
                 pass  # server mid-reimport; try the owning submodule
+        owner = _registry.get(name)
+        if owner is not None:
+            try:
+                return getattr(owner, name)
+            except AttributeError:
+                pass  # owner dropped the name; fall through to the scan
         for full, sub in list(_sys.modules.items()):
             if full.startswith("ccc_server.") and hasattr(sub, name):
                 return getattr(sub, name)
@@ -68,7 +91,14 @@ class _CoreProxy:
         raise AttributeError(name)
 
     def __setattr__(self, name, value):
-        setattr(_sys.modules["server"], name, value)
+        mod = _sys.modules.get("server")
+        if mod is not None:
+            setattr(mod, name, value)
+            return
+        owner = _registry.get(name)
+        if owner is None:
+            raise AttributeError(name)
+        setattr(owner, name, value)
 
 
 core = _CoreProxy()

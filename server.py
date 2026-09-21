@@ -90,6 +90,7 @@ def _adopt_ccc_module(name):
         k: v for k, v in vars(mod).items()
         if not k.startswith("__") and k != "_core"
     })
+    _ccc_core_register(mod)
     return mod
 
 
@@ -106,7 +107,7 @@ import ccc_peer_uds
 # Pure/stdlib, no imports from server.py -- mirrors ccc_peer_uds.py's split
 # between wire-format helpers (here) and registry/routing (server.py below).
 import ccc_peer_inbound
-from ccc_server import test_isolation_active
+from ccc_server import test_isolation_active, register as _ccc_core_register
 from ccc_server.events import DashboardEventHub
 
 # Pure helpers and path constants moved to leaf modules (slice 3)
