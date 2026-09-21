@@ -90,6 +90,10 @@ def _attach_real(conn, row, start, end, since, as_of_day):
 _NO_REAL = fees.real_metrics(None, None, 0, 0, 0)
 
 
+def _pct(part, whole):
+    return round(100.0 * part / whole, 1) if whole else None
+
+
 def _aggregate(conn, period_expr, split_model, where, args):
     group = ([period_expr + " AS period"] if period_expr else []) + ["c.engine"] + (
         ["c.pricing_key AS model"] if split_model else [])
@@ -100,8 +104,7 @@ def _aggregate(conn, period_expr, split_model, where, args):
         "SUM(c.cache_creation_tokens) AS cache_creation_tokens, SUM(c.output_tokens) AS output_tokens, "
         "SUM(c.input_tokens + c.cache_read_tokens + c.cache_creation_tokens + c.output_tokens) AS total_tokens, "
         "SUM(c.cost_usd) AS cost_usd_priced, "
-        "SUM(CASE WHEN c.cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced_calls, "
-        "SUM(c.cache_read_savings_usd) AS cache_read_savings_usd "
+        "SUM(CASE WHEN c.cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced_calls "
         "FROM event_costs c WHERE " + " AND ".join(where)
         + f" GROUP BY {', '.join(keys)}"
         + (" ORDER BY period DESC, c.engine" + (", cost_usd_priced DESC" if split_model else "")
@@ -110,6 +113,8 @@ def _aggregate(conn, period_expr, split_model, where, args):
     rows = _rows(conn.execute(sql, args))
     for r in rows:
         r.update(_NO_REAL)  # filled in only on engine-level rows (see _attach_real)
+        r["cache_read_pct"] = _pct(r["cache_read_tokens"], r["total_tokens"])
+        r["unpriced_pct"] = _pct(r["unpriced_calls"], r["calls"])
     return rows
 
 
@@ -212,6 +217,7 @@ def run_rate(conn, engine=None, as_of: Optional[str] = None):
                 "trailing_30d_tokens": t30["tokens"],
                 "trailing_30d_usd": round(t30["cost"], 2),
                 "trailing_30d_unpriced_calls": t30["unpriced"],
+                "trailing_30d_unpriced_pct": _pct(t30["unpriced"], t30["calls"]),
                 "trailing_30d_real_usd": m30["real_cost_usd"],
                 "trailing_30d_real_usd_per_mtok": m30["real_usd_per_mtok"],
                 "trailing_30d_real_usd_per_mtok_noncache": m30["real_usd_per_mtok_noncache"],

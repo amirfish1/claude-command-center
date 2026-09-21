@@ -176,7 +176,14 @@ def parse(sf: SourceFile) -> list:
                 f"per-call sum ({summed}) differs from source running total ({final_total})"
                 + ("; forked thread inherits its parent's total" if ps.metadata.get("forked_from_id") else "")
             )
-    if any(e.model_id is None for e in ps.events):
+    # Calls logged before the thread's first turn_context carry no model; they belong to
+    # the model the thread then starts with, so price them at that rather than as unknown.
+    early = [e for e in ps.events if e.model_id is None]
+    if early and first_model:
+        for e in early:
+            e.model_id = first_model
+        ps.warnings.append(f"{len(early)} usage event(s) before the first turn assumed to use {first_model}")
+    elif early:
         ps.warnings.append("some usage events have no model")
     if bad:
         ps.warnings.append(

@@ -257,6 +257,19 @@ class CodexAdapterTests(UsageDbCase):
         self.assertTrue(ps.usage_complete)
         self.assertEqual(ps.warnings, [])
 
+    def test_calls_before_first_turn_get_the_threads_first_model(self):
+        u = {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5, "total_tokens": 15}
+        p = os.path.join(self.codex, "sessions", "2026", "09", "01", "rollout-2026-09-01T10-00-00-cx9.jsonl")
+        _write(p, [
+            {"timestamp": "2026-09-01T10:00:00.000Z", "type": "session_meta",
+             "payload": {"id": "cx9", "timestamp": "2026-09-01T10:00:00.000Z", "cwd": "/w", "model_provider": "openai"}},
+            self._tc("2026-09-01T10:00:01.000Z", u, u),  # billed before any turn_context names the model
+            {"timestamp": "2026-09-01T10:00:02.000Z", "type": "turn_context", "payload": {"model": "gpt-5.6-terra"}},
+            self._tc("2026-09-01T10:00:03.000Z", u, dict(u, input_tokens=20, output_tokens=10, total_tokens=30))])
+        [ps] = codex.parse(_sf("codex", p))
+        self.assertEqual([e.model_id for e in ps.events], ["gpt-5.6-terra", "gpt-5.6-terra"])
+        self.assertTrue(any("before the first turn" in w for w in ps.warnings))
+
     def test_model_change_mid_session_attributes_per_event(self):
         u = {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5, "total_tokens": 15}
         p = self._rollout(events=[

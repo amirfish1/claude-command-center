@@ -52,9 +52,12 @@ LABELS = {
     "trailing_30d_real_usd_per_mtok_noncache": "REAL $/MTok non-cache 30d",
     "trailing_30d_list_to_real": "LIST:REAL 30d", "month_to_date_usd": "list_mtd_usd",
     "month_to_date_real_usd": "real_mtd_usd", "month_to_date_list_to_real": "LIST:REAL mtd",
-    "month_projected_usd": "list_month_proj_usd",
+    "month_projected_usd": "list_month_proj_usd", "cache_read_pct": "cache read %",
+    "unpriced_pct": "unpriced %", "trailing_30d_unpriced_pct": "unpriced % 30d",
 }
-_DECIMALS = {"real_usd_per_mtok": 4, "real_usd_per_mtok_noncache": 3,
+# Unpriced calls are only worth a column when they are a meaningful share of the calls.
+UNPRICED_WARN_PCT = 15.0
+_DECIMALS = {"cache_read_pct": 1, "unpriced_pct": 1, "trailing_30d_unpriced_pct": 1, "real_usd_per_mtok": 4, "real_usd_per_mtok_noncache": 3,
              "trailing_30d_real_usd_per_mtok": 4, "trailing_30d_real_usd_per_mtok_noncache": 3}
 _MULTIPLIERS = {"list_to_real", "trailing_30d_list_to_real", "month_to_date_list_to_real"}
 
@@ -134,6 +137,15 @@ def cmd_sessions(args):
     return 0
 
 
+def _with_unpriced(rows, cols, key):
+    """Append the unpriced-% column, filled only for rows over the threshold, and only if any is."""
+    over = [r for r in rows if (r.get(key) or 0) > UNPRICED_WARN_PCT]
+    if not over:
+        return rows, cols, False
+    shown = [dict(r, **{key: r[key] if (r.get(key) or 0) > UNPRICED_WARN_PCT else None}) for r in rows]
+    return shown, cols + [key], True
+
+
 def _fee_notes(conn, rows):
     notes = []
     for eng in sorted({r["engine"] for r in rows}):
@@ -153,10 +165,14 @@ def cmd_summary(args):
         return 0
     lead = ["engine", "model"] if args.by == "engine" else ["period", "engine"] + (
         ["model"] if args.split_model else [])
-    print_table(rows, lead + ["calls", "total_tokens", "cache_read_tokens", "cost_usd_priced", "unpriced_calls",
-                              "real_cost_usd", "real_usd_per_mtok", "list_to_real"])
-    print("\nlist_usd = API list-price equivalent over priced calls ('unpriced_calls' > 0 makes it, and LIST:REAL, "
-          "a lower bound).\nREAL = what you actually pay: your plan fee accrued daily over the period "
+    cols = lead + ["calls", "total_tokens", "cache_read_pct", "cost_usd_priced",
+                   "real_cost_usd", "real_usd_per_mtok", "list_to_real"]
+    shown, cols, flagged = _with_unpriced(rows, cols, "unpriced_pct")
+    print_table(shown, cols)
+    print("\nlist_usd = API list-price equivalent" + (
+        f"; rows with unpriced % shown have more than {UNPRICED_WARN_PCT:.0f}% of calls on models with no "
+        "(complete) price, so list_usd and LIST:REAL there are lower bounds" if flagged else "")
+          + ".\nREAL = what you actually pay: your plan fee accrued daily over the period "
           "(monthly fee / days in month).\nREAL $/MTok = real_usd / all tokens; LIST:REAL = list_usd / real_usd. "
           "Days/weeks/months are UTC.")
     if args.split_model or args.model:
@@ -180,9 +196,13 @@ def cmd_runrate(args):
     rows = queries.run_rate(conn, args.engine, args.as_of)
     print(json.dumps(rows, indent=2) if args.json else "", end="")
     if not args.json:
-        print_table(rows, ["engine", "trailing_30d_tokens", "trailing_30d_usd", "trailing_30d_unpriced_calls",
-                           "trailing_30d_real_usd", "trailing_30d_real_usd_per_mtok", "trailing_30d_list_to_real",
-                           "month_to_date_usd", "month_to_date_real_usd", "month_projected_usd"])
+        cols = ["engine", "trailing_30d_tokens", "trailing_30d_usd", "trailing_30d_real_usd",
+                "trailing_30d_real_usd_per_mtok", "trailing_30d_list_to_real",
+                "month_to_date_usd", "month_to_date_real_usd", "month_projected_usd"]
+        shown, cols, flagged = _with_unpriced(rows, cols, "trailing_30d_unpriced_pct")
+        print_table(shown, cols)
+        if flagged:
+            print(f"\nlist figures for rows with unpriced % shown are lower bounds (>{UNPRICED_WARN_PCT:.0f}% of calls unpriced).")
         for n in _fee_notes(conn, rows):
             print("note: " + n)
     return 0
