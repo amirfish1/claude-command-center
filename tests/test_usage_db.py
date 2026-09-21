@@ -100,7 +100,7 @@ class FormatTests(unittest.TestCase):
     def test_dollars_cents_and_token_formats(self):
         f = cli._fmt
         self.assertEqual([f(v, "real_cost_usd") for v in (200.0, 3774.97, 9.5, 3.67, 0.07, 0.0)],
-                         ["$200", "$3,775", "$9.5", "$3.67", "$0.07", "$0"])
+                         ["$200", "$3,775", "$9.50", "$3.67", "$0.07", "$0"])
         self.assertEqual([f(v, "real_usd_per_mtok") for v in (0.0231, 0.622, 1.393, 0.0121, 1.0, 12.5)],
                          ["2.31 cents", "62.2 cents", "$1.39", "1.21 cents", "$1.00", "$12.50"])
         self.assertEqual([f(v, "total_tokens") for v in (1_400_000_000, 230_000_000, 6_066_350_879, 43_857_110_730, 33_900, 512)],
@@ -109,6 +109,20 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(f(None, "total_tokens"), "-")
         # raw mode (the `sql` command) never reformats
         self.assertEqual(f(43_857_110_730, "total_tokens", raw=True), "43,857,110,730")
+
+
+class MonthArgTests(unittest.TestCase):
+    def _args(self, **kw):
+        import argparse
+        return argparse.Namespace(**dict({"month": None, "since": None, "until": None}, **kw))
+
+    def test_month_resolves_to_since_and_exclusive_until(self):
+        self.assertEqual(cli._month_range(self._args(month="2026-08")), ("2026-08-01", "2026-09-01"))
+        self.assertEqual(cli._month_range(self._args(month="2026-12")), ("2026-12-01", "2027-01-01"))
+        self.assertEqual(cli._month_range(self._args(since="2026-08-05")), ("2026-08-05", None))
+        for bad in (self._args(month="2026-13"), self._args(month="2026-08", since="2026-08-01")):
+            with self.assertRaises(SystemExit):
+                cli._month_range(bad)
 
 
 class PlansCliTests(UsageDbCase):
@@ -604,6 +618,17 @@ class CostTests(UsageDbCase):
         # split (per version) keeps them apart
         split = {r["model"] for r in queries.summarize(self.conn, "month", split_model=True)}
         self.assertEqual(split, {"claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5"})
+
+    def test_since_until_bound_usage_and_fee(self):
+        self._priced_month_with_plan(100)  # usage on 2026-09-01; plan open-ended
+        kw = dict(as_of="2026-09-30T12:00:00Z")
+        row = queries.summarize(self.conn, "month", since="2026-09-01", until="2026-09-15", **kw)[0]
+        self.assertAlmostEqual(row["cost_usd_priced"], 11.15, places=6)
+        self.assertAlmostEqual(row["real_cost_usd"], 100.0 * 14 / 30, places=2)  # 09-01 .. 09-14
+        # until is exclusive: it drops usage on/after that day, and the fee with it
+        self.assertEqual(queries.summarize(self.conn, "month", until="2026-09-01", **kw), [])
+        tot = queries.summarize(self.conn, "engine", since="2026-09-01", until="2026-09-11", **kw)[0]
+        self.assertAlmostEqual(tot["real_cost_usd"], 100.0 * 10 / 30, places=2)
 
     def test_no_fee_or_inactive_plan_gives_no_real_cost(self):
         self._two_model_session()

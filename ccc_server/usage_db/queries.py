@@ -77,11 +77,13 @@ def _period_bounds(by, label):
     return d, (d.replace(day=28) + timedelta(days=4)).replace(day=1)
 
 
-def _attach_real(conn, row, start, end, since, as_of_day):
+def _attach_real(conn, row, start, end, since, as_of_day, until=None):
     """Add the real-cost columns to an engine-level row (never to a model slice)."""
     if since:
         start = max(start, fees.parse_day(since))
     end = min(end, as_of_day + timedelta(days=1))  # a period still running accrues through today
+    if until:
+        end = min(end, fees.parse_day(until))  # exclusive, like the usage filter
     noncache = (row["input_tokens"] or 0) + (row["cache_creation_tokens"] or 0) + (row["output_tokens"] or 0)
     fee = fees.fee_for_range(fees.load_plans(conn, row["engine"]), start, end) if start < end else None
     row.update(fees.real_metrics(fee, row["cost_usd_priced"], row["unpriced_calls"],
@@ -159,7 +161,7 @@ def _sort_period_rows(rows):
 
 
 def summarize(conn, by="month", since=None, engine=None, model=None, split_model=False, by_family=False,
-              as_of=None):
+              as_of=None, until=None):
     """Tokens, API-list-price cost and what-you-really-pay per ``day|week|month`` (UTC) or ``engine``.
 
     Real-cost columns (``real_cost_usd``, ``real_usd_per_mtok``, ``real_usd_per_mtok_noncache``,
@@ -174,12 +176,15 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
 
     ``list_share_pct`` is a model row's share of its engine's list cost in the same period.
     ``by="engine"`` returns each engine's total row (model ``(all models)``) then its models.
+    ``since`` (inclusive) and ``until`` (exclusive) bound the calls, and the fee accrues over the same days.
     """
     if by != "engine" and by not in _PERIODS:
         raise ValueError("by must be day, week, month or engine")
     where, args = ["c.ts IS NOT NULL"], []
     if since:
         where.append("c.ts >= ?"); args.append(since)
+    if until:
+        where.append("c.ts < ?"); args.append(until)
     if engine:
         where.append("c.engine = ?"); args.append(engine)
     terms = [t.strip() for t in (model or "").split(",") if t.strip()]
@@ -214,7 +219,7 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
         for tot in _finish(_aggregate(conn, None, False, where, args)):
             tot["model"] = "(all models)"
             _attach_real(conn, tot, fees.parse_day(since or tot["first_ts"]), as_of_day + timedelta(days=1),
-                         since, as_of_day)
+                         since, as_of_day, until)
             out.append(tot)
             out += [m for m in models if m["engine"] == tot["engine"]]
         return out
@@ -224,7 +229,7 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
     rows = _finish(_aggregate(conn, period_expr, False, where, args))
     for r in rows:
         start, end = _period_bounds(by, r["period"])
-        _attach_real(conn, r, start, end, since, as_of_day)
+        _attach_real(conn, r, start, end, since, as_of_day, until)
     return rows
 
 

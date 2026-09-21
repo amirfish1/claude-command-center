@@ -9,6 +9,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+from datetime import datetime, timedelta
 
 from . import ingest as ingest_mod
 from . import fees, pricing, queries, schema
@@ -73,7 +74,8 @@ def _money(v):
     """``$XX``: whole dollars, with cents only below $10 (``$3.67``, ``$0.07``)."""
     if abs(v) >= 10:
         return f"${v:,.0f}"
-    return "$" + f"{v:.2f}".rstrip("0").rstrip(".")
+    text = f"{v:.2f}"
+    return "$" + (text[:-3] if text.endswith(".00") else text)
 
 
 def _cents(dollars_per_mtok):
@@ -162,11 +164,26 @@ def cmd_ingest(args):
     return 1 if any(d[1] == "failed" for d in rep.details) else 0
 
 
+def _month_range(args):
+    """Resolve ``--month YYYY-MM`` into (since, until); it cannot be combined with --since/--until."""
+    if not getattr(args, "month", None):
+        return args.since, getattr(args, "until", None)
+    if args.since or getattr(args, "until", None):
+        sys.exit("--month replaces --since/--until; use one or the other")
+    try:
+        first = datetime.strptime(args.month, "%Y-%m").date()
+    except ValueError:
+        sys.exit(f"bad --month {args.month!r}: use YYYY-MM")
+    nxt = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return first.isoformat(), nxt.isoformat()
+
+
 def cmd_sessions(args):
     conn = _open(args, True)
     sub = {"exclude": False, "only": True, "include": None}[args.subagents]
+    since, until = _month_range(args)
     rows = queries.list_sessions(conn, args.engine, args.provider, args.model, args.project,
-                                 args.since, args.until, sub, args.order, args.limit)
+                                 since, until, sub, args.order, args.limit)
     if args.json:
         print(json.dumps(rows, indent=2, default=str))
         return 0
@@ -200,8 +217,9 @@ def _fee_notes(conn, rows):
 
 def cmd_summary(args):
     conn = _open(args, True)
-    rows = queries.summarize(conn, args.by, args.since, args.engine, args.model, args.split_model,
-                             args.by_family, args.as_of)
+    since, until = _month_range(args)
+    rows = queries.summarize(conn, args.by, since, args.engine, args.model, args.split_model,
+                             args.by_family, args.as_of, until)
     if args.json:
         print(json.dumps(rows, indent=2, default=str))
         return 0
@@ -326,13 +344,17 @@ def build_parser():
     s = sub.add_parser("sessions", help="list sessions with tokens and cost")
     s.add_argument("--engine", type=_engine); s.add_argument("--provider"); s.add_argument("--model")
     s.add_argument("--project"); s.add_argument("--since"); s.add_argument("--until")
+    s.add_argument("--month", help="one calendar month, YYYY-MM (instead of --since/--until)")
     s.add_argument("--subagents", choices=["exclude", "only", "include"], default="exclude")
     s.add_argument("--order", default="started_at DESC"); s.add_argument("--limit", type=int, default=30)
     s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_sessions)
 
     s = sub.add_parser("summary", help="tokens and cost by day/week/month/engine")
     s.add_argument("--by", choices=["day", "week", "month", "engine"], default="month")
-    s.add_argument("--since"); s.add_argument("--engine", type=_engine)
+    s.add_argument("--since", help="first day included (YYYY-MM-DD)")
+    s.add_argument("--until", help="day to stop before, exclusive (YYYY-MM-DD)")
+    s.add_argument("--month", help="one calendar month, YYYY-MM (same as --since/--until for that month)")
+    s.add_argument("--engine", type=_engine)
     s.add_argument("--model", help="model name substring(s); comma-separate to compare side by side, "
                    "one row per name (e.g. sonnet,fable  or  fable-5-1)")
     s.add_argument("--split-model", action="store_true", help="one row per model version within each period")
