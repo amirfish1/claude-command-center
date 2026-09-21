@@ -6,8 +6,13 @@ import subprocess
 import sys
 import unittest
 
-import server
+import server  # noqa: F401
 from ccc_server import activity_log, repo_paths
+
+
+def _srv():
+    # Other test files pop and re-import server; always use the live module.
+    return sys.modules["server"]
 
 ACTIVITY_NAMES = [
     "ACTIVITY_LOG_FILE", "_activity_log_preview", "_ACTIVITY_LOG_DIR_READY",
@@ -37,14 +42,21 @@ class TestSlice4LeafModules(unittest.TestCase):
             self.assertEqual(res.returncode, 0, res.stderr)
 
     def test_server_reexports_same_objects(self):
-        for mod, names in ((activity_log, ACTIVITY_NAMES), (repo_paths, REPO_NAMES)):
-            for name in names:
-                self.assertTrue(hasattr(server, name), name)
-                self.assertIs(getattr(server, name), getattr(mod, name), name)
+        # Fresh interpreter: in-suite server re-imports reload the modules in
+        # place, so identity only holds for a single clean import.
+        code = (
+            "import server; from ccc_server import activity_log, repo_paths; "
+            f"pairs = [(activity_log, {ACTIVITY_NAMES!r}), (repo_paths, {REPO_NAMES!r})]; "
+            "bad = [n for m, ns in pairs for n in ns "
+            "if getattr(server, n, None) is not getattr(m, n)]; "
+            "assert not bad, bad"
+        )
+        res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
 
     def test_names_no_longer_defined_in_server_source(self):
         import ast
-        tree = ast.parse(open(server.__file__).read())
+        tree = ast.parse(open(_srv().__file__).read())
         defined = set()
         for n in tree.body:
             if isinstance(n, (ast.FunctionDef, ast.ClassDef)):
@@ -59,24 +71,24 @@ class TestSlice4LeafModules(unittest.TestCase):
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "sub" / "a.log"
-            with mock.patch.object(server, "ACTIVITY_LOG_FILE", p), \
-                    mock.patch.object(server, "_ACTIVITY_LOG_DIR_READY", False):
-                server._log_activity("cat", "verb", "hello")
+            with mock.patch.object(_srv(), "ACTIVITY_LOG_FILE", p), \
+                    mock.patch.object(_srv(), "_ACTIVITY_LOG_DIR_READY", False):
+                _srv()._log_activity("cat", "verb", "hello")
             self.assertIn("hello", p.read_text())
 
     def test_server_patch_reaches_known_repo_paths_uncached(self):
         from unittest import mock
-        server._invalidate_known_repo_paths()
-        with mock.patch.object(server, "_known_repo_paths_uncached", return_value=["/x"]):
+        _srv()._invalidate_known_repo_paths()
+        with mock.patch.object(_srv(), "_known_repo_paths_uncached", return_value=["/x"]):
             self.assertEqual(repo_paths._known_repo_paths(), ["/x"])
-        server._invalidate_known_repo_paths()
+        _srv()._invalidate_known_repo_paths()
 
     def test_server_patch_reaches_resolve_repo_path(self):
         import tempfile
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(server, "_known_repo_paths", return_value=[]):
-                with self.assertRaises(server.RepoContextError):
+            with mock.patch.object(_srv(), "_known_repo_paths", return_value=[]):
+                with self.assertRaises(repo_paths.RepoContextError):
                     repo_paths.resolve_repo_path(d)  # plain dir, not known
 
 

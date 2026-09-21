@@ -114,14 +114,14 @@ _KNOWN_REPO_PATHS_REBUILD_LOCK = threading.Lock()
 def _invalidate_known_repo_paths():
     """Drop the memo — call after adding/removing a repo."""
     with _KNOWN_REPO_PATHS_LOCK:
-        _KNOWN_REPO_PATHS_CACHE["at"] = 0.0
-        _KNOWN_REPO_PATHS_CACHE["paths"] = None
+        _core._KNOWN_REPO_PATHS_CACHE["at"] = 0.0
+        _core._KNOWN_REPO_PATHS_CACHE["paths"] = None
 
 
 def _known_repo_paths_memo_hit():
     with _KNOWN_REPO_PATHS_LOCK:
-        hit = _KNOWN_REPO_PATHS_CACHE["paths"]
-        fresh = hit is not None and time.time() - _KNOWN_REPO_PATHS_CACHE["at"] < _KNOWN_REPO_PATHS_TTL_S
+        hit = _core._KNOWN_REPO_PATHS_CACHE["paths"]
+        fresh = hit is not None and time.time() - _core._KNOWN_REPO_PATHS_CACHE["at"] < _core._KNOWN_REPO_PATHS_TTL_S
         return hit, fresh
 
 
@@ -144,8 +144,8 @@ def _known_repo_paths():
             return list(hit)
         out = _core._known_repo_paths_uncached()
         with _KNOWN_REPO_PATHS_LOCK:
-            _KNOWN_REPO_PATHS_CACHE["at"] = time.time()
-            _KNOWN_REPO_PATHS_CACHE["paths"] = out
+            _core._KNOWN_REPO_PATHS_CACHE["at"] = time.time()
+            _core._KNOWN_REPO_PATHS_CACHE["paths"] = out
         return list(out)
     finally:
         _KNOWN_REPO_PATHS_REBUILD_LOCK.release()

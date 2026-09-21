@@ -34,6 +34,11 @@ class TestDiagnosticLogIsolation(unittest.TestCase):
     def test_test_runners_write_diagnostics_outside_runtime_state(self):
         source = REPO_ROOT / "server.py"
         tree = ast.parse(source.read_text(encoding="utf-8"))
+        # ACTIVITY_LOG_FILE moved to ccc_server/activity_log.py (slice 4);
+        # scan its top-level declarations alongside server.py's.
+        tree.body += ast.parse(
+            (REPO_ROOT / "ccc_server" / "activity_log.py").read_text(encoding="utf-8")
+        ).body
         names = {
             "ACTIVITY_LOG_FILE",
             "_RESUME_LEDGER_FILE",
