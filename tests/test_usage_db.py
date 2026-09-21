@@ -101,8 +101,8 @@ class FormatTests(unittest.TestCase):
         f = cli._fmt
         self.assertEqual([f(v, "real_cost_usd") for v in (200.0, 3774.97, 9.5, 3.67, 0.07, 0.0)],
                          ["$200", "$3,775", "$9.5", "$3.67", "$0.07", "$0"])
-        self.assertEqual([f(v, "real_usd_per_mtok") for v in (0.0231, 0.622, 1.393, 0.0121)],
-                         ["2.31 cents", "62.2 cents", "139 cents", "1.21 cents"])
+        self.assertEqual([f(v, "real_usd_per_mtok") for v in (0.0231, 0.622, 1.393, 0.0121, 1.0, 12.5)],
+                         ["2.31 cents", "62.2 cents", "$1.39", "1.21 cents", "$1.00", "$12.50"])
         self.assertEqual([f(v, "total_tokens") for v in (1_400_000_000, 230_000_000, 6_066_350_879, 43_857_110_730, 33_900, 512)],
                          ["1.4B", "230M", "6.1B", "43.9B", "33.9K", "512"])
         self.assertEqual(f(29.7, "list_to_real"), "29.7x")

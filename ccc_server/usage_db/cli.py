@@ -77,8 +77,11 @@ def _money(v):
 
 
 def _cents(dollars_per_mtok):
+    """Per-1M-token price: cents below $1 (``2.31 cents``), dollars from $1 up (``$1.33``)."""
+    if abs(dollars_per_mtok) >= 1:
+        return f"${dollars_per_mtok:,.2f}"
     c = dollars_per_mtok * 100
-    return f"{c:,.0f} cents" if abs(c) >= 100 else f"{c:.1f} cents" if abs(c) >= 10 else f"{c:.2f} cents"
+    return f"{c:.1f} cents" if abs(c) >= 10 else f"{c:.2f} cents"
 
 
 def _tokens(n):
@@ -218,12 +221,12 @@ def cmd_summary(args):
         "(complete) price, so list $ and LIST:REAL there are lower bounds" if flagged else "") + ".")
     if not model_view or args.by == "engine":
         print("REAL = what you actually pay: your plan fee accrued daily over the period "
-              "(monthly fee / days in month).\nREAL /MTok = real $ / all tokens, in cents; LIST:REAL = list $ / "
+              "(monthly fee / days in month).\nREAL /MTok = real $ / all tokens, in cents (dollars from $1); LIST:REAL = list $ / "
               "real $. Days/weeks/months are UTC.")
     if model_view:
         print("Model views show list price only: the fee is per engine, so REAL columns are '-' on model rows. "
               "'% of list $' = the row's share of that engine's list cost in the period; "
-              "'list /MTok' = list $ / all tokens, in cents.")
+              "'list /MTok' = list $ / all tokens, in cents (dollars from $1).")
     for n in _fee_notes(conn, rows):
         print("note: " + n)
     return 0
