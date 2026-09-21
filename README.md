@@ -691,6 +691,14 @@ Set `CCC_DECISION_INBOX_DISABLED=1` to keep the loop off entirely. Cards and
 run history live in `~/.claude/command-center/decision-inbox/`. API:
 `GET /api/decision-inbox`, `POST /api/decision-inbox/{run,decide,dismiss,governor}`.
 
+## Throughput usage database
+
+`scripts/throughput ingest` reads your Claude Code, Codex and Kimi session
+stores (read-only) into a local SQLite database — one row per session with
+tokens, cache usage, model and message counts — and `throughput summary`,
+`runrate` and `breakeven` compare what each provider costs at API list price.
+See [docs/usage-db.md](docs/usage-db.md).
+
 ## Kimi Knowledge Bridge
 
 Kimi Code sessions can become searchable in [Total Recall](https://github.com/alexgreensh/total-recall)

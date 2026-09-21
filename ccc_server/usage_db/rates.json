@@ -9,9 +9,9 @@
    "input": 10.0,
    "cache_read": 0.25,
    "cache_write_5m": 12.5,
-   "cache_write_1h": null,
+   "cache_write_1h": 20.0,
    "output": 50.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -21,9 +21,9 @@
    "input": 10.0,
    "cache_read": 1.0,
    "cache_write_5m": 12.5,
-   "cache_write_1h": null,
+   "cache_write_1h": 20.0,
    "output": 50.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -33,10 +33,10 @@
    "input": 2.0,
    "cache_read": 0.2,
    "cache_write_5m": 2.5,
-   "cache_write_1h": null,
+   "cache_write_1h": 4.0,
    "output": 10.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
-   "verified_at": null
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (fitted against Claude Code cost-state records on the author's machine: refit/reported cost ratio 1.00-1.03; that is Claude Code's own client-side estimate, not an invoice)",
+   "verified_at": "2026-09-20"
   },
   {
    "provider": "anthropic",
@@ -45,10 +45,10 @@
    "input": 5.0,
    "cache_read": 0.5,
    "cache_write_5m": 6.25,
-   "cache_write_1h": null,
+   "cache_write_1h": 10.0,
    "output": 25.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
-   "verified_at": null
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (fitted against Claude Code cost-state records on the author's machine: refit/reported cost ratio 1.00-1.03; that is Claude Code's own client-side estimate, not an invoice)",
+   "verified_at": "2026-09-20"
   },
   {
    "provider": "anthropic",
@@ -57,9 +57,9 @@
    "input": 5.0,
    "cache_read": 0.5,
    "cache_write_5m": 6.25,
-   "cache_write_1h": null,
+   "cache_write_1h": 10.0,
    "output": 25.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -69,9 +69,9 @@
    "input": 5.0,
    "cache_read": 0.5,
    "cache_write_5m": 6.25,
-   "cache_write_1h": null,
+   "cache_write_1h": 10.0,
    "output": 25.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -81,9 +81,9 @@
    "input": 5.0,
    "cache_read": 0.5,
    "cache_write_5m": 6.25,
-   "cache_write_1h": null,
+   "cache_write_1h": 10.0,
    "output": 25.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -93,9 +93,9 @@
    "input": 3.0,
    "cache_read": 0.3,
    "cache_write_5m": 3.75,
-   "cache_write_1h": null,
+   "cache_write_1h": 6.0,
    "output": 15.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -105,9 +105,9 @@
    "input": 3.0,
    "cache_read": 0.3,
    "cache_write_5m": 3.75,
-   "cache_write_1h": null,
+   "cache_write_1h": 6.0,
    "output": 15.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -117,9 +117,9 @@
    "input": 3.0,
    "cache_read": 0.3,
    "cache_write_5m": 3.75,
-   "cache_write_1h": null,
+   "cache_write_1h": 6.0,
    "output": 15.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -129,10 +129,10 @@
    "input": 1.0,
    "cache_read": 0.1,
    "cache_write_5m": 1.25,
-   "cache_write_1h": null,
+   "cache_write_1h": 2.0,
    "output": 5.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
-   "verified_at": null
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (fitted against Claude Code cost-state records on the author's machine: refit/reported cost ratio 1.00-1.03; that is Claude Code's own client-side estimate, not an invoice)",
+   "verified_at": "2026-09-20"
   },
   {
    "provider": "openai",
@@ -369,9 +369,9 @@
    "input": 15.0,
    "cache_read": 1.5,
    "cache_write_5m": 18.75,
-   "cache_write_1h": null,
+   "cache_write_1h": 30.0,
    "output": 75.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -381,9 +381,9 @@
    "input": 15.0,
    "cache_read": 1.5,
    "cache_write_5m": 18.75,
-   "cache_write_1h": null,
+   "cache_write_1h": 30.0,
    "output": 75.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -393,9 +393,9 @@
    "input": 3.0,
    "cache_read": 0.3,
    "cache_write_5m": 3.75,
-   "cache_write_1h": null,
+   "cache_write_1h": 6.0,
    "output": 15.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -405,9 +405,9 @@
    "input": 0.8,
    "cache_read": 0.08,
    "cache_write_5m": 1.0,
-   "cache_write_1h": null,
+   "cache_write_1h": 1.6,
    "output": 4.0,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   },
   {
@@ -417,10 +417,11 @@
    "input": 0.25,
    "cache_read": 0.03,
    "cache_write_5m": 0.3,
-   "cache_write_1h": null,
+   "cache_write_1h": 0.5,
    "output": 1.25,
-   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time",
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES (list prices, checked 2026-07..09 per that file); effective date unknown so applied to all time; cache_write_1h = 2x input (2x factor taken from the verified rows; this model had no cost-state coverage or a >5% residual)",
    "verified_at": null
   }
- ]
+ ],
+ "note": "Rates are DATA. verified_at is set only where a rate was checked against an independent source; see docs/usage-db.md."
 }
