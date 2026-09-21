@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from ccc_server.content_hash import compute as _compute_ccc_content_hash
+from ccc_server.import_closure import compute_closure as _compute_import_closure
 
 
 # A worker restart re-adopts every live transport within seconds, so an
@@ -65,6 +66,14 @@ class EngineHost:
                     _, server._ccc_content_hash = _compute_ccc_content_hash(repo_root)
                 except Exception:
                     server._ccc_content_hash = None
+                # Shadow fingerprint: hash of only the files this worker can
+                # load (static import closure). Reported alongside the
+                # legacy hash; nothing acts on it yet (see import_closure.py).
+                try:
+                    closure = _compute_import_closure(repo_root)
+                    server._ccc_closure = {k: closure[k] for k in ("hash", "file_count", "includes_server")}
+                except Exception:
+                    server._ccc_closure = None
                 # server.main() installs this for the dashboard process, but
                 # the worker never calls main() -- it only imports server as
                 # a library here. Without this, SIGUSR2-triggered dumps (used

@@ -16058,6 +16058,22 @@ def _restart_stale_worker():
         except Exception:
             disk_hash = ""
         stale = bool(loaded_hash) and bool(disk_hash) and loaded_hash != disk_hash
+    # Shadow metric (slice 2): would the import-closure fingerprint have
+    # restarted? Logged only; the decision above still acts on the old hash.
+    try:
+        from ccc_server.import_closure import compute_closure as _closure
+        new_hash = _closure(_install_dir())["hash"]
+        loaded_closure = worker.get("worker_closure_hash") or ""
+        new_stale = bool(loaded_closure) and loaded_closure != new_hash
+        _log_activity(
+            "worker", "stale?",
+            f"WORKER_STALE_CHECK old_stale={stale} new_stale={new_stale} "
+            f"active={int(health.get('active') or 0)} "
+            f"old_hash={worker.get('server_content_hash') or ''} "
+            f"new_hash={loaded_closure} disk_new_hash={new_hash}",
+        )
+    except Exception:
+        pass
     if not stale:
         return {"restarted": False, "reason": "current", "server_version": loaded}
     # Never roll a worker that owns unresolved work: the code on disk changes

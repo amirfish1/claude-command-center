@@ -94,6 +94,9 @@ class WorkerRuntime:
                     "recovered_uncertain": len(self.recovered),
                     "server_version": getattr(server_mod, "__version__", None) if server_mod else None,
                     "server_content_hash": getattr(server_mod, "_ccc_content_hash", None) if server_mod else None,
+                    "worker_closure_hash": (getattr(server_mod, "_ccc_closure", None) or {}).get("hash") if server_mod else None,
+                    "closure_file_count": (getattr(server_mod, "_ccc_closure", None) or {}).get("file_count") if server_mod else None,
+                    "closure_includes_server": (getattr(server_mod, "_ccc_closure", None) or {}).get("includes_server") if server_mod else None,
                     "capabilities": [
                         "engine-execution-v1",
                         "work-graph-v1",
