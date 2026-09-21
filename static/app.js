@@ -44155,10 +44155,15 @@
   // Watchtower activity log panel — floating overlay over the conversation area.
   let _wtLogTimer = null;
   let _wtLogQueueFilter = '';
+  // Expanded reconciler-burst keys + the last fetched lines, so the delegated
+  // toggle handler can re-render without a refetch.
+  const _wtLogExpandedBursts = new Set();
+  let _wtLogLastLines = [];
 
   function _wtLogVerbClass(verb) {
     if (['CLAIM','CLOSE','BLOCK','DISCUSS','UNBLOCK'].includes(verb)) return 'wl-worker';
-    if (['DISPATCH','NUDGE','SPAWN','STOP','REAP','RECONC'].includes(verb)) return 'wl-reconciler';
+    if (['DISPATCH','NUDGE','SPAWN','STOP','REAP','RECONC','GC_RELEASED'].includes(verb)
+        || verb.startsWith('IDLE')) return 'wl-reconciler';
     if (['ENQUEUE','REOPEN'].includes(verb)) return 'wl-queue-action';
     return '';
   }
@@ -44184,71 +44189,129 @@
     return { worker: '', rest: restDetail };
   }
 
+  function _wtLogRowHtml(p, now) {
+    const utcMs = p.utcMs;
+    // Pull a leading ticket ref (e.g. BYM-33) out of the detail — used both
+    // for the ref column below and to group the stream by issue item.
+    const refM = p.detail.match(/^([A-Z]+-\d+)\b[ ]*(?:—[ ]*)?/);
+    const ref = refM ? refM[1] : '';
+    const dt = new Date(utcMs);
+    const hh = dt.getHours().toString().padStart(2,'0');
+    const mm = dt.getMinutes().toString().padStart(2,'0');
+    const ss = dt.getSeconds().toString().padStart(2,'0');
+    const localTime = hh + ':' + mm + ':' + ss;
+    const relSec = Math.round((now - utcMs) / 1000);
+    const rel = relSec < 60 ? 'now'
+      : relSec < 3600 ? Math.floor(relSec/60) + 'm ago'
+      : relSec < 86400 ? Math.floor(relSec/3600) + 'h ago'
+      : Math.floor(relSec/86400) + 'd ago';
+    const tsTip = escapeAttr(p.date + ' ' + p.time + ' UTC · ' + rel);
+    const verbClass = _wtLogVerbClass(p.verb);
+    const qColor = _wtLogQueueColor(p.queue);
+    // ref/refM computed above (used for the divider too). The ref renders in
+    // its own column BEFORE the verb; reconciler rows (lowercase worker id)
+    // don't match, so their ref column stays empty.
+    const restDetailWithRef = refM ? p.detail.slice(refM[0].length) : p.detail;
+    const { worker, rest: restDetail } = _wtLogExtractWorker(p.verb, restDetailWithRef);
+    const refHtml = ref ? '<span class="wl-ref">' + escapeHtml(ref) + '</span>' : '';
+    const workerHtml = worker ? '<span class="wl-worker-id" title="' + escapeAttr(worker) + '">' + escapeHtml(worker) + '</span>' : '';
+    const detailHtml = escapeHtml(restDetail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');
+    return {
+      utcMs,
+      ref,
+      html:
+        '<div class="wl-row ' + verbClass + '">'
+        + '<span class="wl-meta">'
+        + '<span class="wl-ts" title="' + tsTip + '">' + escapeHtml(localTime) + '</span>'
+        + '<span class="wl-queue" style="color:' + qColor + '">' + escapeHtml(p.queue) + '</span>'
+        + '<span class="wl-ref-col">' + refHtml + '</span>'
+        + '<span class="wl-verb">' + escapeHtml(p.verb) + '</span>'
+        + '</span>'
+        + '<span class="wl-worker-col">' + workerHtml + '</span>'
+        + '<span class="wl-detail">' + detailHtml + '</span>'
+        + '</div>',
+    };
+  }
+
+  // A collapsed reconciler burst renders as ONE summary row — the digest is
+  // the single line of thinking; the raw member lines sit behind the toggle
+  // (the panel re-renders every 3s, so open state lives in
+  // _wtLogExpandedBursts, not the DOM).
+  function _wtLogBurstHtml(key, members, now) {
+    const rep = members[members.length - 1];
+    const utcMs = rep.utcMs;
+    const dt = new Date(utcMs);
+    const localTime = [dt.getHours(), dt.getMinutes(), dt.getSeconds()]
+      .map(n => String(n).padStart(2, '0')).join(':');
+    const relSec = Math.round((now - utcMs) / 1000);
+    const rel = relSec < 60 ? 'now'
+      : relSec < 3600 ? Math.floor(relSec/60) + 'm ago'
+      : relSec < 86400 ? Math.floor(relSec/3600) + 'h ago'
+      : Math.floor(relSec/86400) + 'd ago';
+    const sum = WtLogBursts.summary(members);
+    const open = _wtLogExpandedBursts.has(key);
+    const tip = escapeAttr(members.map(m => m.line).join('\n'));
+    const workerHtml = sum.worker
+      ? '<span class="wl-worker-id" title="' + escapeAttr(sum.worker) + '">' + escapeHtml(sum.worker) + '</span>'
+      : '';
+    return {
+      utcMs,
+      ref: '',
+      html:
+        '<div class="wl-row wl-burst ' + _wtLogVerbClass(sum.verb) + '">'
+        + '<span class="wl-meta">'
+        + '<span class="wl-ts" title="' + escapeAttr(rep.date + ' ' + rep.time + ' UTC · ' + rel) + '">' + escapeHtml(localTime) + '</span>'
+        + '<span class="wl-queue" style="color:' + _wtLogQueueColor(rep.queue) + '">' + escapeHtml(rep.queue) + '</span>'
+        + '<span class="wl-ref-col"></span>'
+        + '<span class="wl-verb">' + escapeHtml(sum.verb) + '</span>'
+        + '</span>'
+        + '<span class="wl-worker-col">' + workerHtml + '</span>'
+        + '<span class="wl-detail">' + escapeHtml(sum.text) + '</span>'
+        + '<button type="button" class="wl-burst-toggle" data-wl-burst="' + escapeAttr(key) + '"'
+        + ' title="' + tip + '">' + (open ? '▾' : '▸') + ' ' + members.length + ' lines</button>'
+        + '</div>'
+        + (open
+          ? '<div class="wl-burst-children">'
+            + members.map(m => _wtLogRowHtml(m, now).html).join('')
+            + '</div>'
+          : ''),
+    };
+  }
+
   function _renderWtLogLines(lines) {
     const now = Date.now();
     const rows = [];
     let prevMs = null;
     let prevRef = null;
-    for (const line of lines) {
-      const m = line.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC\s+(\S+)\s+(\S+)\s*(.*)/);
-      if (!m) {
-        rows.push('<div class="wl-row"><span class="wl-detail">' + escapeHtml(line) + '</span></div>');
+    // Fold reconciler bursts into single rows first so the gap/item-divider
+    // bookkeeping below sees one item per evaluation, not a dozen lines.
+    const items = window.WtLogBursts
+      ? WtLogBursts.collapse(lines)
+      : lines.map(line => ({ raw: line }));
+    for (const it of items) {
+      if (it.raw !== undefined) {
+        rows.push('<div class="wl-row"><span class="wl-detail">' + escapeHtml(it.raw) + '</span></div>');
         continue;
       }
-      const [, date, time, queue, verb, detail] = m;
-      const utcMs = new Date(date + 'T' + time + 'Z').getTime();
-      // Pull a leading ticket ref (e.g. BYM-33) out of the detail — used both
-      // for the ref column below and to group the stream by issue item.
-      const refM = detail.match(/^([A-Z]+-\d+)\b[ ]*(?:—[ ]*)?/);
-      const ref = refM ? refM[1] : '';
+      const r = it.key ? _wtLogBurstHtml(it.key, it.members, now)
+                       : _wtLogRowHtml(it.entry, now);
       let insertedGap = false;
-      if (prevMs !== null && utcMs - prevMs >= 3 * 60 * 1000) {
-        const gapMin = Math.round((utcMs - prevMs) / 60000);
+      if (prevMs !== null && r.utcMs - prevMs >= 3 * 60 * 1000) {
+        const gapMin = Math.round((r.utcMs - prevMs) / 60000);
         rows.push('<div class="wl-sep"><span class="wl-sep-label">' + gapMin + 'm gap</span></div>');
         insertedGap = true;
       }
       // Divider whenever the issue item changes, so the stream reads as grouped
       // per ticket. Skipped if a time-gap separator already broke here (no double
-      // rule). Reconciler rows carry no ref and don't reset the current item, so
-      // a SPAWN/REAP mid-lifecycle stays grouped with its ticket.
-      if (!insertedGap && ref && prevRef && ref !== prevRef) {
+      // rule). Reconciler rows — bursts included — carry no ref and don't reset
+      // the current item, so a SPAWN/REAP mid-lifecycle stays grouped with its
+      // ticket.
+      if (!insertedGap && r.ref && prevRef && r.ref !== prevRef) {
         rows.push('<div class="wl-item-sep"></div>');
       }
-      prevMs = utcMs;
-      if (ref) prevRef = ref;
-      const dt = new Date(utcMs);
-      const hh = dt.getHours().toString().padStart(2,'0');
-      const mm = dt.getMinutes().toString().padStart(2,'0');
-      const ss = dt.getSeconds().toString().padStart(2,'0');
-      const localTime = hh + ':' + mm + ':' + ss;
-      const relSec = Math.round((now - utcMs) / 1000);
-      const rel = relSec < 60 ? 'now'
-        : relSec < 3600 ? Math.floor(relSec/60) + 'm ago'
-        : relSec < 86400 ? Math.floor(relSec/3600) + 'h ago'
-        : Math.floor(relSec/86400) + 'd ago';
-      const tsTip = escapeAttr(date + ' ' + time + ' UTC · ' + rel);
-      const verbClass = _wtLogVerbClass(verb);
-      const qColor = _wtLogQueueColor(queue);
-      // ref/refM computed above (used for the divider too). The ref renders in
-      // its own column BEFORE the verb; reconciler rows (lowercase worker id)
-      // don't match, so their ref column stays empty.
-      const restDetailWithRef = refM ? detail.slice(refM[0].length) : detail;
-      const { worker, rest: restDetail } = _wtLogExtractWorker(verb, restDetailWithRef);
-      const refHtml = ref ? '<span class="wl-ref">' + escapeHtml(ref) + '</span>' : '';
-      const workerHtml = worker ? '<span class="wl-worker-id" title="' + escapeAttr(worker) + '">' + escapeHtml(worker) + '</span>' : '';
-      const detailHtml = escapeHtml(restDetail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');
-      rows.push(
-        '<div class="wl-row ' + verbClass + '">'
-        + '<span class="wl-meta">'
-        + '<span class="wl-ts" title="' + tsTip + '">' + escapeHtml(localTime) + '</span>'
-        + '<span class="wl-queue" style="color:' + qColor + '">' + escapeHtml(queue) + '</span>'
-        + '<span class="wl-ref-col">' + refHtml + '</span>'
-        + '<span class="wl-verb">' + escapeHtml(verb) + '</span>'
-        + '</span>'
-        + '<span class="wl-worker-col">' + workerHtml + '</span>'
-        + '<span class="wl-detail">' + detailHtml + '</span>'
-        + '</div>'
-      );
+      prevMs = r.utcMs;
+      if (r.ref) prevRef = r.ref;
+      rows.push(r.html);
     }
     return rows.join('');
   }
@@ -44303,6 +44366,19 @@
         }
       };
       if (_preEl) _preEl.addEventListener('scroll', _wtSyncEnd, { passive: true });
+      // Burst toggles: one delegated listener survives the 3s innerHTML
+      // refresh; toggling re-renders the cached lines in place (no refetch).
+      if (_preEl) _preEl.addEventListener('click', (e) => {
+        const t = e.target.closest('[data-wl-burst]');
+        if (!t) return;
+        const key = t.getAttribute('data-wl-burst');
+        if (_wtLogExpandedBursts.has(key)) _wtLogExpandedBursts.delete(key);
+        else _wtLogExpandedBursts.add(key);
+        const st = _preEl.scrollTop;
+        _preEl.innerHTML = _renderWtLogLines(_wtLogLastLines);
+        _preEl.scrollTop = st;
+        _wtSyncEnd();
+      });
       if (_endBtnEl) _endBtnEl.addEventListener('click', () => {
         if (_preEl) _preEl.scrollTop = _preEl.scrollHeight;
         _wtSyncEnd();
@@ -44348,6 +44424,7 @@
             // already at the bottom, so scrolling up to read history isn't
             // yanked back to the end on the next 3s refresh.
             const wasAtBottom = (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 40;
+            _wtLogLastLines = data.lines;
             pre.innerHTML = data.lines.length ? _renderWtLogLines(data.lines) : '<span style="opacity:0.4">(log is empty)</span>';
             if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
           } else {

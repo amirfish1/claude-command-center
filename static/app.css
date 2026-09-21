@@ -23756,6 +23756,21 @@ body.has-gc-reader .pwa-install-banner {
 .wl-reconciler .wl-verb { color: #d29922; font-weight: 600; }
 .wl-queue-action .wl-verb { color: #58a6ff; }
 .wl-ref { background: rgba(88,166,255,0.12); border-radius: 3px; padding: 0 3px; color: #79c0ff; font-weight: 500; }
+/* Collapsed reconciler burst: the summary row's toggle chip and the expanded
+   raw member rows (indented, dimmed — they're the audit detail, not the
+   headline). */
+.wl-burst-toggle {
+  flex: 0 0 auto; align-self: baseline;
+  font: inherit; font-size: 10px; line-height: 1.5;
+  color: var(--text-muted);
+  background: rgba(139,148,158,0.12);
+  border: 1px solid rgba(139,148,158,0.28);
+  border-radius: 8px; padding: 0 7px;
+  cursor: pointer; white-space: nowrap;
+}
+.wl-burst-toggle:hover { background: rgba(139,148,158,0.24); color: var(--text); }
+.wl-burst-children { margin: 1px 0 4px 16px; padding-left: 8px; border-left: 1px solid rgba(139,148,158,0.25); }
+.wl-burst-children .wl-row { opacity: 0.68; }
 /* Floating "jump to end" pill — mirrors .conv-scroll-end-btn, scoped to the
    log panel (which is position:absolute, so it anchors this button). */
 .wt-log-end-btn {

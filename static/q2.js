@@ -69,6 +69,7 @@
     configsOwn: {},     // queue -> only the fields that queue SET itself
     log: [],            // reconciler activity lines for the selected queue
     logQueue: '',
+    logBurstOpen: {},   // expanded reconciler-burst keys in the log bar
     learningsQueue: '',
     learnings: null,    // selected queue's learnings file, loaded on demand
     learningsError: '',
@@ -1163,12 +1164,40 @@
     }
   }
 
-  // "2026-07-27 01:02:52 UTC  CCC   SPAWN  CCC-666 — text"
-  var LOG_RE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*UTC\s+(\S+)\s+(\S+)\s*(.*)$/;
-  function parseLogLine(line) {
-    var m = String(line || '').match(LOG_RE);
-    if (!m) return { raw: String(line || '') };
-    return { date: m[1], time: m[2], queue: m[3], verb: m[4], rest: m[5] };
+  // Log lines are parsed/collapsed by static/wt-log-bursts.js (WtLogBursts):
+  // each entry is {line,date,time,queue,verb,detail,utcMs}; bursts arrive as
+  // {key, members} items (see renderLogBar).
+  function q2LogRowHtml(e, clusterStart) {
+    if (e.raw !== undefined) return '<div class="q2-log-row"><span class="q2-log-rest">' + esc(e.raw) + '</span></div>';
+    return '<div class="q2-log-row' + (clusterStart ? ' is-cluster-start' : '') + '">'
+      + '<span class="q2-log-time" title="' + esc(e.date + ' ' + e.time + ' UTC') + '">' + esc(e.time) + '</span>'
+      + '<span class="q2-log-verb is-' + esc(e.verb.toLowerCase()) + '">' + esc(e.verb) + '</span>'
+      + '<span class="q2-log-rest">' + esc(e.detail) + '</span>'
+      + '</div>';
+  }
+
+  // A collapsed reconciler burst is ONE summary row — the digest is the
+  // single line of reconciler thinking; the raw member lines sit behind the
+  // toggle (open state lives in state.logBurstOpen so poll re-renders keep
+  // it).
+  function q2LogBurstHtml(key, members) {
+    var rep = members[members.length - 1];
+    var sum = WtLogBursts.summary(members);
+    var open = !!state.logBurstOpen[key];
+    var tip = members.map(function (m) { return m.line; }).join('\n');
+    var workerBit = sum.worker ? esc(sum.worker) + ' ' : '';
+    return '<div class="q2-log-row is-burst">'
+      + '<span class="q2-log-time" title="' + esc(rep.date + ' ' + rep.time + ' UTC') + '">' + esc(rep.time) + '</span>'
+      + '<span class="q2-log-verb is-' + esc(sum.verb.toLowerCase()) + '">' + esc(sum.verb) + '</span>'
+      + '<span class="q2-log-rest">' + workerBit + esc(sum.text) + '</span>'
+      + '<button type="button" class="q2-log-burst-toggle" data-q2-log-burst="' + esc(key) + '"'
+      + ' title="' + esc(tip) + '">' + (open ? '▾' : '▸') + ' ' + members.length + '</button>'
+      + '</div>'
+      + (open
+        ? '<div class="q2-log-burst-children">'
+          + members.map(function (m) { return q2LogRowHtml(m); }).join('')
+          + '</div>'
+        : '');
   }
 
   // Everything the diagram draws, gathered once.
@@ -1932,21 +1961,28 @@
     } else {
       // Group consecutive lines about the same ticket. The log interleaves
       // several tickets' events, and without a break between clusters it reads
-      // as one undifferentiated wall.
+      // as one undifferentiated wall. Reconciler bursts (one idle evaluation =
+      // a dozen IDLE_* lines; one GC sweep = N GC_RELEASED lines) collapse to
+      // a single summary row first — see wt-log-bursts.js.
       var prevRef = null;
-      rows = state.log.map(function (line) {
-        var e = parseLogLine(line);
-        if (e.raw) return '<div class="q2-log-row"><span class="q2-log-rest">' + esc(e.raw) + '</span></div>';
-        var refM = String(e.rest || '').match(/^([A-Z0-9][A-Z0-9-]*-\d+)\b/);
+      var parts = [];
+      WtLogBursts.collapse(state.log).forEach(function (it) {
+        if (it.key) {
+          // Burst rows carry no ref; like other reconciler lines they don't
+          // reset the current ticket cluster.
+          prevRef = null;
+          parts.push(q2LogBurstHtml(it.key, it.members));
+          return;
+        }
+        if (it.raw !== undefined) { parts.push(q2LogRowHtml(it)); return; }
+        var e = it.entry;
+        var refM = String(e.detail || '').match(/^([A-Z0-9][A-Z0-9-]*-\d+)\b/);
         var thisRef = refM ? refM[1] : null;
         var newCluster = prevRef !== null && thisRef !== prevRef;
         prevRef = thisRef;
-        return '<div class="q2-log-row' + (newCluster ? ' is-cluster-start' : '') + '">'
-          + '<span class="q2-log-time" title="' + esc(e.date + ' ' + e.time + ' UTC') + '">' + esc(e.time) + '</span>'
-          + '<span class="q2-log-verb is-' + esc(e.verb.toLowerCase()) + '">' + esc(e.verb) + '</span>'
-          + '<span class="q2-log-rest">' + esc(e.rest) + '</span>'
-          + '</div>';
-      }).join('');
+        parts.push(q2LogRowHtml(e, newCluster));
+      });
+      rows = parts.join('');
     }
 
     host.innerHTML = '<div class="q2-logbar-head">'
@@ -3745,6 +3781,14 @@
     var logT = e.target.closest('[data-q2-log-toggle]');
     if (logT) {
       try { localStorage.setItem(LS_LOG_OPEN, logOpen() ? '0' : '1'); } catch (_) {}
+      renderLogBar();
+      return;
+    }
+    var logBurst = e.target.closest('[data-q2-log-burst]');
+    if (logBurst) {
+      e.stopPropagation();
+      var burstKey = logBurst.getAttribute('data-q2-log-burst');
+      state.logBurstOpen[burstKey] = !state.logBurstOpen[burstKey];
       renderLogBar();
       return;
     }

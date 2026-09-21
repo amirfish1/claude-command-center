@@ -1,0 +1,1 @@
+- Watchtower activity log (main panel and q2 log bar): reconciler bursts now render as one summary line — an idle evaluation's IDLE_CANDIDATE + IDLE_SIGNAL×N + IDLE_DECISION collapses to "worker idle <age> ≥ floor <f> → DECISION · reasons", and a GC sweep's GC_RELEASED lines merge similarly. Raw lines stay reachable behind a per-burst "N lines" toggle.

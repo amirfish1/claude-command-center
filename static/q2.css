@@ -910,6 +910,8 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-log-verb.is-stop,
 .q2-log-verb.is-reap,
 .q2-log-verb.is-release { color: var(--red); }
+.q2-log-verb.is-idle        { color: var(--orange); }
+.q2-log-verb.is-gc_released { color: var(--red); }
 .q2-log-rest {
   flex: 1 1 auto;
   min-width: 0;
@@ -918,6 +920,29 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Collapsed reconciler burst: summary row's toggle chip stays a flex item of
+   its own so it survives the .q2-log-rest ellipsis clip; expanded raw member
+   rows indent under the summary, dimmed. */
+.q2-log-burst-toggle {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.q2-log-burst-toggle:hover { color: var(--text); border-color: var(--text-muted); }
+.q2-log-burst-children {
+  margin-left: 14px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border);
+}
+.q2-log-burst-children .q2-log-row { opacity: 0.68; }
 
 /* ── column 1: queue rows ─────────────────────────────────────────────── */
 .q2-qrow {
