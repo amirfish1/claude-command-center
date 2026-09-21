@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_tokens                INTEGER NOT NULL DEFAULT 0,
     usage_event_count           INTEGER NOT NULL DEFAULT 0,
     compaction_count            INTEGER NOT NULL DEFAULT 0,
-    source_path                 TEXT,
+    source_path                 TEXT,    -- canonical file: the largest one when a session id exists in several
+    source_size                 INTEGER,
     source_format_version       TEXT,
     source_modified_at          TEXT,
     ingested_at                 TEXT NOT NULL,
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     output_tokens            INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens         INTEGER NOT NULL DEFAULT 0,
     scope                    TEXT NOT NULL DEFAULT 'call',
+    source_path              TEXT,             -- file the event was read from (a session id can span files)
     UNIQUE (engine, event_key)
 );
 CREATE INDEX IF NOT EXISTS idx_events_session ON usage_events(session_id);

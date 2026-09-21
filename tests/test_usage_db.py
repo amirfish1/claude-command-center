@@ -150,6 +150,35 @@ class ClaudeAdapterTests(UsageDbCase):
         self.assertEqual(owner["sid"], "a-early")
         self.assertEqual(rep.duplicate_events_skipped, 1)
 
+    def test_session_id_in_two_project_dirs_keeps_all_events_either_order(self):
+        big = [_claude_user("2026-09-01T10:00:00.000Z"),
+               _claude_msg("m1", "claude-sonnet-5", "2026-09-01T10:00:05.000Z", out=4),
+               _claude_msg("m2", "claude-sonnet-5", "2026-09-01T10:00:06.000Z", out=6)]
+        stub = [{"type": "relocated", "timestamp": "2026-09-01T10:00:00.000Z"}]
+        for first, second in (("a-proj", "b-proj"), ("b-proj", "a-proj")):
+            shutil.rmtree(self.claude, ignore_errors=True)
+            self.conn.execute("DELETE FROM usage_events"); self.conn.execute("DELETE FROM sessions")
+            self.conn.execute("DELETE FROM ingest_files"); self.conn.commit()
+            _write(os.path.join(self.claude, first, "s1.jsonl"), big)
+            _write(os.path.join(self.claude, second, "s1.jsonl"), stub)
+            rep = self.run_ingest(engines=["claude_code"])
+            row = self.one("SELECT output_tokens o, usage_event_count n, user_message_count u, source_path p FROM sessions")
+            self.assertEqual((row["o"], row["n"], row["u"]), (10, 2, 1), (first, second))
+            self.assertIn(first, row["p"])
+            self.assertEqual(self.one("SELECT COUNT(*) n FROM sessions")["n"], 1)
+            self.assertEqual(rep.engines["claude_code"]["skipped"], 1)
+            # a rerun keeps both files' contribution
+            self.run_ingest(engines=["claude_code"])
+            self.assertEqual(self.one("SELECT usage_event_count n FROM sessions")["n"], 2)
+
+    def test_identical_copy_in_second_dir_is_not_double_counted(self):
+        recs = [_claude_user("2026-09-01T10:00:00.000Z"), _claude_msg("m1", "claude-sonnet-5", "2026-09-01T10:00:05.000Z", out=4)]
+        _write(os.path.join(self.claude, "a", "s1.jsonl"), recs)
+        _write(os.path.join(self.claude, "b", "s1.jsonl"), recs)
+        self.run_ingest(engines=["claude_code"])
+        self.assertEqual(self.one("SELECT output_tokens o, usage_event_count n FROM sessions")["o"], 4)
+        self.assertEqual(self.one("SELECT COUNT(*) n FROM usage_events")["n"], 1)
+
     def test_empty_transcript_skipped(self):
         _write(os.path.join(self.claude, "proj", "empty.jsonl"), [{"type": "queue-operation", "timestamp": "2026-09-01T10:00:00.000Z"}])
         rep = self.run_ingest(engines=["claude_code"])

@@ -102,6 +102,7 @@ def _upsert_session(conn, ps: ParsedSession, sf: SourceFile, ingested_at: str):
         duration_seconds=_duration(ps.started_at, ps.last_activity_at),
         compaction_count=ps.compaction_count,
         source_path=ps.source_path,
+        source_size=sf.size,
         source_format_version=ps.source_format_version,
         source_modified_at=_iso_from_ns(sf.mtime_ns),
         ingested_at=ingested_at,
@@ -122,21 +123,24 @@ def _upsert_session(conn, ps: ParsedSession, sf: SourceFile, ingested_at: str):
 
 
 def _claim_events(conn, session_id: int, ps: ParsedSession, report: Report, dirty: set):
-    """Replace this session's events. A duplicated event (same engine + key) stays
+    """Replace the events read from this file. A duplicated event (same engine + key) stays
     with whichever session started first (ties: smaller source id), so totals are
     the same regardless of ingestion order and nothing is counted twice."""
-    conn.execute("DELETE FROM usage_events WHERE session_id=?", (session_id,))
+    conn.execute(
+        "DELETE FROM usage_events WHERE session_id=? AND source_path=?", (session_id, ps.source_path)
+    )
     my_rank = (ps.started_at or "9999", ps.source_session_id)
     for e in ps.events:
         cur = conn.execute(
             "INSERT OR IGNORE INTO usage_events (session_id, engine, event_key, ts, model_id, "
             "pricing_key, input_tokens, cache_read_tokens, cache_creation_tokens, "
-            "cache_creation_1h_tokens, output_tokens, reasoning_tokens, scope) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "cache_creation_1h_tokens, output_tokens, reasoning_tokens, scope, source_path) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 session_id, ps.engine, e.event_key, e.ts, e.model_id, pricing_key(e.model_id),
                 e.input_tokens, e.cache_read_tokens, e.cache_creation_tokens,
                 e.cache_creation_1h_tokens, e.output_tokens, e.reasoning_tokens, e.scope,
+                ps.source_path,
             ),
         )
         if cur.rowcount:
@@ -196,6 +200,11 @@ def _stored_warnings(conn, session_id: int) -> list:
         return json.loads(row["raw_metadata_json"] or "{}").get("parse_warnings", [])
     except ValueError:
         return []
+
+
+def _outranks(held_size, held_path, sf: SourceFile) -> bool:
+    """True when the file already holding a session beats ``sf`` (larger, then smaller path)."""
+    return (held_size or 0, sf.path) > (sf.size, held_path or "")
 
 
 def _link_parents(conn):
@@ -278,6 +287,20 @@ def ingest(
                     counts["skipped"] += 1
                     skipped_n += 1
                     report.note(eng, "skipped", sf.path, "empty transcript (no messages, no usage)")
+                    continue
+                held = conn.execute(
+                    "SELECT id, source_path, source_size FROM sessions WHERE engine=? AND source_session_id=?",
+                    (ps.engine, ps.source_session_id),
+                ).fetchone()
+                if held and held["source_path"] != sf.path and _outranks(held["source_size"], held["source_path"], sf):
+                    # The same session id also lives in a larger file (e.g. a moved session leaves a
+                    # small stub behind). Keep that file's row; still claim any events unique to this one.
+                    _claim_events(conn, held["id"], ps, report, dirty)
+                    _refresh_aggregates(conn, held["id"], _stored_warnings(conn, held["id"]))
+                    counts["skipped"] += 1
+                    skipped_n += 1
+                    report.note(eng, "skipped", sf.path,
+                                f"secondary copy of session {ps.source_session_id} (canonical file: {held['source_path']})")
                     continue
                 if ps.warnings:
                     ps.metadata["parse_warnings"] = ps.warnings
