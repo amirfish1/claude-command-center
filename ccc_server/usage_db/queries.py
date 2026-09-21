@@ -107,7 +107,7 @@ def _aggregate(conn, period_expr, split_model, where, args):
         "SUM(CASE WHEN c.cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced_calls "
         "FROM event_costs c WHERE " + " AND ".join(where)
         + f" GROUP BY {', '.join(keys)}"
-        + (" ORDER BY period DESC, c.engine" + (", cost_usd_priced DESC" if split_model else "")
+        + (" ORDER BY c.engine, period DESC" + (", cost_usd_priced DESC" if split_model else "")
            if period_expr else " ORDER BY c.engine" + (", cost_usd_priced DESC" if split_model else ""))
     )
     rows = _rows(conn.execute(sql, args))
