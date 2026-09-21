@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 from . import ingest as ingest_mod
-from . import pricing, queries, schema
+from . import fees, pricing, queries, schema
 from .adapters import ADAPTERS
 
 ENGINE_ALIASES = {"claude": "claude_code", "claude-code": "claude_code", "claude_code": "claude_code",
@@ -43,11 +43,29 @@ def _open(args, must_exist=False):
     return conn
 
 
-def _fmt(v):
+# Table headers for the columns that mean "what you actually pay" vs "list price".
+LABELS = {
+    "cost_usd_priced": "list_usd", "cost_usd": "list_usd", "trailing_30d_usd": "list_30d_usd",
+    "real_cost_usd": "real_usd", "real_usd_per_mtok": "REAL $/MTok",
+    "real_usd_per_mtok_noncache": "REAL $/MTok (non-cache)", "list_to_real": "LIST:REAL",
+    "trailing_30d_real_usd": "real_30d_usd", "trailing_30d_real_usd_per_mtok": "REAL $/MTok 30d",
+    "trailing_30d_real_usd_per_mtok_noncache": "REAL $/MTok non-cache 30d",
+    "trailing_30d_list_to_real": "LIST:REAL 30d", "month_to_date_usd": "list_mtd_usd",
+    "month_to_date_real_usd": "real_mtd_usd", "month_to_date_list_to_real": "LIST:REAL mtd",
+    "month_projected_usd": "list_month_proj_usd",
+}
+_DECIMALS = {"real_usd_per_mtok": 4, "real_usd_per_mtok_noncache": 3,
+             "trailing_30d_real_usd_per_mtok": 4, "trailing_30d_real_usd_per_mtok_noncache": 3}
+_MULTIPLIERS = {"list_to_real", "trailing_30d_list_to_real", "month_to_date_list_to_real"}
+
+
+def _fmt(v, col=None):
     if v is None:
-        return "unknown" if False else "-"
+        return "-"
+    if col in _MULTIPLIERS and isinstance(v, (int, float)):
+        return f"{v:,.1f}x"
     if isinstance(v, float):
-        return f"{v:,.2f}"
+        return f"{v:,.{_DECIMALS.get(col, 2)}f}"
     if isinstance(v, int):
         return f"{v:,}"
     return str(v)
@@ -58,12 +76,13 @@ def print_table(rows, cols=None, out=sys.stdout):
         print("(no rows)", file=out)
         return
     cols = cols or list(rows[0].keys())
-    body = [[_fmt(r.get(c)) for c in cols] for r in rows]
-    widths = [max(len(c), *(len(b[i]) for b in body)) for i, c in enumerate(cols)]
-    print("  ".join(c.ljust(w) for c, w in zip(cols, widths)), file=out)
+    body = [[_fmt(r.get(c), c) for c in cols] for r in rows]
+    heads = [LABELS.get(c, c) for c in cols]
+    widths = [max(len(h), *(len(b[i]) for b in body)) for i, h in enumerate(heads)]
+    print("  ".join(h.ljust(w) for h, w in zip(heads, widths)), file=out)
     print("  ".join("-" * w for w in widths), file=out)
     for b in body:
-        print("  ".join(v.rjust(w) if v.replace(",", "").replace(".", "").replace("-", "").isdigit() else v.ljust(w)
+        print("  ".join(v.rjust(w) if v.replace(",", "").replace(".", "").replace("-", "").replace("x", "").isdigit() else v.ljust(w)
                         for v, w in zip(b, widths)), file=out)
 
 
@@ -115,17 +134,35 @@ def cmd_sessions(args):
     return 0
 
 
+def _fee_notes(conn, rows):
+    notes = []
+    for eng in sorted({r["engine"] for r in rows}):
+        if not fees.load_plans(conn, eng):
+            notes.append(f"no fee configured for {eng}: its REAL columns are '-' (add one with 'plans add')")
+        for name in fees.undated_plans(conn, eng):
+            notes.append(f"plan '{name}' has no start date: its fee is applied to every period shown "
+                         "(set one with 'plans add --name ... --since YYYY-MM-DD')")
+    return notes
+
+
 def cmd_summary(args):
     conn = _open(args, True)
-    rows = queries.summarize(conn, args.by, args.since, args.engine)
+    rows = queries.summarize(conn, args.by, args.since, args.engine, args.model, args.split_model, args.as_of)
     if args.json:
         print(json.dumps(rows, indent=2, default=str))
         return 0
-    cols = (["engine", "model", "first_ts", "last_ts"] if args.by == "engine" else ["period", "engine"]) + [
-        "calls", "total_tokens", "cache_read_tokens", "cost_usd_priced", "unpriced_calls", "cache_read_savings_usd"]
-    print_table(rows, cols)
-    print("\ncost = API list-price equivalent over priced calls; 'unpriced_calls' > 0 means a lower bound. "
+    lead = ["engine", "model"] if args.by == "engine" else ["period", "engine"] + (
+        ["model"] if args.split_model else [])
+    print_table(rows, lead + ["calls", "total_tokens", "cache_read_tokens", "cost_usd_priced", "unpriced_calls",
+                              "real_cost_usd", "real_usd_per_mtok", "list_to_real"])
+    print("\nlist_usd = API list-price equivalent over priced calls ('unpriced_calls' > 0 makes it, and LIST:REAL, "
+          "a lower bound).\nREAL = what you actually pay: your plan fee accrued daily over the period "
+          "(monthly fee / days in month).\nREAL $/MTok = real_usd / all tokens; LIST:REAL = list_usd / real_usd. "
           "Days/weeks/months are UTC.")
+    if args.split_model or args.model:
+        print("Model slices show list price only: the fee is per engine, so REAL columns are '-' on them.")
+    for n in _fee_notes(conn, rows):
+        print("note: " + n)
     return 0
 
 
@@ -143,7 +180,11 @@ def cmd_runrate(args):
     rows = queries.run_rate(conn, args.engine, args.as_of)
     print(json.dumps(rows, indent=2) if args.json else "", end="")
     if not args.json:
-        print_table(rows)
+        print_table(rows, ["engine", "trailing_30d_tokens", "trailing_30d_usd", "trailing_30d_unpriced_calls",
+                           "trailing_30d_real_usd", "trailing_30d_real_usd_per_mtok", "trailing_30d_list_to_real",
+                           "month_to_date_usd", "month_to_date_real_usd", "month_projected_usd"])
+        for n in _fee_notes(conn, rows):
+            print("note: " + n)
     return 0
 
 
@@ -154,14 +195,29 @@ def cmd_breakeven(args):
     return 0
 
 
+def _day(value):
+    try:
+        return fees.parse_day(value).isoformat() if value else None
+    except ValueError:
+        sys.exit(f"bad date {value!r}: use YYYY-MM-DD")
+
+
 def cmd_plans(args):
     conn = _open(args)
     if args.action == "add":
+        if args.currency.upper() != "USD":
+            sys.exit("only USD plans are supported (rates and list-price costs are USD)")
+        since, until = _day(args.since), _day(args.until)
+        if since and until and until <= since:
+            sys.exit("--until must be after --since (until is exclusive)")
+        # Same name = update in place (this is how you set or fix a plan's dates).
         conn.execute("INSERT OR REPLACE INTO subscription_plans (name, engine, monthly_fee, currency, "
-                     "active_from, note) VALUES (?,?,?,?,?,?)",
-                     (args.name, args.engine, args.fee, args.currency, args.since, args.note))
+                     "active_from, active_to, note) VALUES (?,?,?,?,?,?,?)",
+                     (args.name, args.engine, args.fee, "USD", since, until, args.note))
         conn.commit()
     print_table([dict(r) for r in conn.execute("SELECT * FROM subscription_plans ORDER BY engine, name")])
+    print("\nactive_from is inclusive, active_to exclusive; blank = open-ended. "
+          "Re-run 'plans add' with the same --name to change a plan.")
     return 0
 
 
@@ -207,6 +263,9 @@ def build_parser():
     s = sub.add_parser("summary", help="tokens and cost by day/week/month/engine")
     s.add_argument("--by", choices=["day", "week", "month", "engine"], default="month")
     s.add_argument("--since"); s.add_argument("--engine", type=_engine)
+    s.add_argument("--model", help="only this model (substring of the model id, e.g. opus, fable-5-1, sonnet)")
+    s.add_argument("--split-model", action="store_true", help="one row per model within each period")
+    s.add_argument("--as-of", help="treat this UTC timestamp as 'now' (for the fee accrual)")
     s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_summary)
 
     s = sub.add_parser("activity", help="first/last billed call per engine")
@@ -224,7 +283,8 @@ def build_parser():
     s = sub.add_parser("plans", help="list/add subscription plans (fees are configuration)")
     s.add_argument("action", choices=["list", "add"], nargs="?", default="list")
     s.add_argument("--name"); s.add_argument("--engine", type=_engine); s.add_argument("--fee", type=float)
-    s.add_argument("--currency", default="USD"); s.add_argument("--since"); s.add_argument("--note")
+    s.add_argument("--currency", default="USD"); s.add_argument("--since", help="first day the fee applies (YYYY-MM-DD)")
+    s.add_argument("--until", help="day the fee stops applying, exclusive (YYYY-MM-DD)"); s.add_argument("--note")
     s.set_defaults(fn=cmd_plans)
 
     s = sub.add_parser("rates", help="list rates or load a rates JSON file")

@@ -10,7 +10,9 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-from ccc_server.usage_db import ingest, pricing, queries, schema
+from datetime import date
+
+from ccc_server.usage_db import cli, fees, ingest, pricing, queries, schema
 from ccc_server.usage_db.adapters import claude_code, codex, kimi
 from ccc_server.usage_db.models import family_and_label, pricing_key
 from ccc_server.usage_db.types import SourceFile
@@ -70,6 +72,42 @@ class UsageDbCase(unittest.TestCase):
             "cache_read_rate, cache_write_5m_rate, cache_write_1h_rate, output_rate) VALUES (?,?,?,?,?,?,?,?,?)",
             ("t", key, eff, to, inp, cr, cw5, cw1h, out))
         self.conn.commit()
+
+
+class FeeTests(unittest.TestCase):
+    def test_fee_accrues_daily_by_calendar_month(self):
+        plans = [{"name": "p", "monthly_fee": 62.0, "active_from": None, "active_to": None}]
+        self.assertAlmostEqual(fees.fee_for_range(plans, date(2026, 8, 1), date(2026, 9, 1)), 62.0)  # 31-day month
+        self.assertAlmostEqual(fees.fee_for_range(plans, date(2026, 2, 1), date(2026, 3, 1)), 62.0)  # 28-day month
+        self.assertAlmostEqual(fees.fee_for_range(plans, date(2026, 8, 31), date(2026, 9, 2)), 2.0 + 62.0 / 30)
+
+    def test_plan_window_and_sum_and_none(self):
+        a = {"name": "a", "monthly_fee": 30.0, "active_from": "2026-09-10", "active_to": "2026-09-20"}
+        b = {"name": "b", "monthly_fee": 60.0, "active_from": None, "active_to": None}
+        self.assertAlmostEqual(fees.fee_for_range([a], date(2026, 9, 1), date(2026, 10, 1)), 10.0)
+        self.assertAlmostEqual(fees.fee_for_range([a, b], date(2026, 9, 1), date(2026, 10, 1)), 70.0)
+        self.assertIsNone(fees.fee_for_range([a], date(2026, 10, 1), date(2026, 11, 1)))
+        self.assertIsNone(fees.fee_for_range([], date(2026, 9, 1), date(2026, 10, 1)))
+
+    def test_real_metrics_none_without_fee_and_lower_bound_inputs(self):
+        self.assertEqual(set(fees.real_metrics(None, 5.0, 0, 10, 5).values()), {None})
+        m = fees.real_metrics(2.0, 10.0, 0, 4_000_000, 1_000_000)
+        self.assertEqual((m["real_usd_per_mtok"], m["real_usd_per_mtok_noncache"], m["list_to_real"]),
+                         (0.5, 2.0, 5.0))
+
+
+class PlansCliTests(UsageDbCase):
+    def _cli(self, *argv):
+        return cli.main(["--db", os.path.join(self.tmp, "t.sqlite3"), *argv])
+
+    def test_plans_add_updates_in_place_and_validates(self):
+        self._cli("plans", "add", "--name", "p", "--engine", "claude", "--fee", "200")
+        self._cli("plans", "add", "--name", "p", "--engine", "claude", "--fee", "200", "--since", "2026-06-01")
+        row = self.one("SELECT COUNT(*) n, MAX(active_from) f FROM subscription_plans")
+        self.assertEqual((row["n"], row["f"]), (1, "2026-06-01"))
+        for bad in (["--since", "June"], ["--since", "2026-06-01", "--until", "2026-05-01"], ["--currency", "EUR"]):
+            with self.assertRaises(SystemExit):
+                self._cli("plans", "add", "--name", "q", "--engine", "codex", "--fee", "1", *bad)
 
 
 class ModelTests(unittest.TestCase):
@@ -449,7 +487,10 @@ class CostTests(UsageDbCase):
             rows = queries.summarize(self.conn, by)
             self.assertEqual([r["period"] for r in rows], [key], by)
             self.assertAlmostEqual(rows[0]["cost_usd_priced"], 11.15, places=6)
-        self.assertEqual(len(queries.summarize(self.conn, "engine")), 2)
+        # one engine total row + its two models
+        rows = queries.summarize(self.conn, "engine")
+        self.assertEqual([r["model"] for r in rows][0], "(all models)")
+        self.assertEqual(len(rows), 3)
 
     def test_run_rate_and_break_even_keep_fees_separate(self):
         self._two_model_session()
@@ -464,7 +505,73 @@ class CostTests(UsageDbCase):
         self.conn.execute("INSERT INTO subscription_plans (name, engine, monthly_fee) VALUES ('p','claude_code',100)")
         be = queries.break_even(self.conn, 200.0, as_of="2026-09-10T00:00:00Z")
         self.assertEqual(be["current_subscription_fees_usd"], 100)
-        self.assertAlmostEqual(be["api_equivalent_per_current_subscription_dollar"], 0.11, places=2)
+        # 30 dates ending 2026-09-10 = 20 Aug days at 100/31 + 10 Sep days at 100/30 (plan has no start date)
+        fee30 = 20 * 100 / 31 + 10 * 100 / 30
+        self.assertAlmostEqual(be["real_cost_trailing_30d_usd"], fee30, places=2)
+        self.assertAlmostEqual(be["list_to_real"], 11.15 / fee30, places=2)
+        self.assertGreater(be["real_usd_per_mtok"], 0)
+
+    def _priced_month_with_plan(self, fee=100, since=None, until=None):
+        self._two_model_session()
+        self.add_rate("claude-sonnet-5", 2.0, 0.2, 2.5, 10.0)
+        self.add_rate("claude-opus-5", 5.0, 0.5, 6.25, 25.0, cw1h=10.0)
+        self.conn.execute("INSERT INTO subscription_plans (name, engine, monthly_fee, active_from, active_to) "
+                          "VALUES ('p','claude_code',?,?,?)", (fee, since, until))
+
+    def test_real_cost_columns_on_engine_level_rows(self):
+        self._priced_month_with_plan(100)
+        # session tokens: 1M+2M+0.1M (sonnet) + 1M cache write (opus) = 4.1M; list cost 11.15
+        row = queries.summarize(self.conn, "month", as_of="2026-09-30T12:00:00Z")[0]
+        self.assertAlmostEqual(row["real_cost_usd"], 100.0, places=2)          # a full calendar month = the fee
+        self.assertAlmostEqual(row["real_usd_per_mtok"], 100.0 / 4.1, places=3)
+        self.assertAlmostEqual(row["real_usd_per_mtok_noncache"], 100.0 / 2.1, places=3)  # 1M+0.1M+1M
+        self.assertAlmostEqual(row["list_to_real"], 11.15 / 100.0, places=2)
+        # the running month accrues through today only
+        part = queries.summarize(self.conn, "month", as_of="2026-09-15T12:00:00Z")[0]
+        self.assertAlmostEqual(part["real_cost_usd"], 100.0 * 15 / 30, places=2)
+        # a day row carries one day of fee
+        day = queries.summarize(self.conn, "day", as_of="2026-09-30T12:00:00Z")[0]
+        self.assertAlmostEqual(day["real_cost_usd"], 100.0 / 30, places=2)
+
+    def test_model_slices_show_list_price_only(self):
+        self._priced_month_with_plan(100)
+        for kw in ({"split_model": True}, {"model": "opus"}):
+            rows = queries.summarize(self.conn, "month", as_of="2026-09-30T00:00:00Z", **kw)
+            self.assertTrue(rows)
+            for r in rows:
+                self.assertIsNone(r["real_cost_usd"])
+                self.assertIsNone(r["list_to_real"])
+        split = {r["model"]: r["cost_usd_priced"] for r in queries.summarize(
+            self.conn, "month", split_model=True)}
+        self.assertAlmostEqual(split["claude-sonnet-5"], 3.4, places=6)
+        self.assertAlmostEqual(split["claude-opus-5"], 7.75, places=6)
+        only = queries.summarize(self.conn, "month", model="opus")
+        self.assertEqual(len(only), 1)
+        self.assertAlmostEqual(only[0]["cost_usd_priced"], 7.75, places=6)
+        eng = queries.summarize(self.conn, "engine", model="sonnet")
+        self.assertEqual([r["model"] for r in eng], ["claude-sonnet-5"])
+
+    def test_no_fee_or_inactive_plan_gives_no_real_cost(self):
+        self._two_model_session()
+        self.add_rate("claude-sonnet-5", 2.0, 0.2, 2.5, 10.0)
+        self.add_rate("claude-opus-5", 5.0, 0.5, 6.25, 25.0, cw1h=10.0)
+        self.assertIsNone(queries.summarize(self.conn, "month")[0]["real_cost_usd"])
+        # plan that starts after the usage month
+        self.conn.execute("INSERT INTO subscription_plans (name, engine, monthly_fee, active_from) "
+                          "VALUES ('later','claude_code',100,'2026-10-01')")
+        self.assertIsNone(queries.summarize(self.conn, "month", as_of="2026-12-01T00:00:00Z")[0]["real_cost_usd"])
+
+    def test_plan_dates_bound_the_fee(self):
+        self._priced_month_with_plan(100, since="2026-09-11", until="2026-09-21")  # 10 days, until exclusive
+        row = queries.summarize(self.conn, "month", as_of="2026-09-30T00:00:00Z")[0]
+        self.assertAlmostEqual(row["real_cost_usd"], 100.0 * 10 / 30, places=2)
+
+    def test_engine_total_uses_data_range_and_since(self):
+        self._priced_month_with_plan(100)
+        tot = queries.summarize(self.conn, "engine", as_of="2026-09-30T00:00:00Z")[0]
+        self.assertAlmostEqual(tot["real_cost_usd"], 100.0, places=2)  # first call 09-01 .. 09-30
+        clipped = queries.summarize(self.conn, "month", since="2026-09-01T10:30:00Z", as_of="2026-09-30T00:00:00Z")[0]
+        self.assertAlmostEqual(clipped["real_cost_usd"], 100.0 * 30 / 30, places=2)
 
     def test_engine_with_no_recent_calls_reports_data_backed_zero(self):
         self._two_model_session()

@@ -27,11 +27,11 @@ stores: `ingest --full-rebuild` recreates every row.
 |---|---|
 | `ingest [--engine E] [--dry-run] [--full-rebuild] [--claude-root P] [--codex-root P] [--kimi-root P] [--json] [-v]` | Read the stores into the DB. Incremental (file size + mtime), idempotent, one corrupt file or line never stops the run. Prints discovered / inserted / updated / unchanged / skipped / failed sessions per engine. `--dry-run` writes nothing. A cold run over ~9,500 sessions takes about a minute; a rerun takes seconds. |
 | `sessions` | Session list with tokens and cost. Filters: `--engine --provider --model --project --since --until --subagents exclude\|only\|include`. |
-| `summary --by day\|week\|month\|engine` | Tokens and cost roll-ups (UTC buckets). |
+| `summary --by day\|week\|month\|engine [--engine E] [--model M] [--split-model] [--since D] [--as-of T]` | Tokens, list-price cost and real cost roll-ups (UTC buckets). `--split-model` gives one row per model per period; `--model M` keeps only models whose id contains `M` (`opus`, `fable-5-1`, `gpt-5-6`). `--by engine` shows each engine's total row, then its models. |
 | `activity` | First and last billed call per engine — read "Kimi stopped on date X" from the data. |
-| `runrate` | Trailing-30-day and month-projected API-equivalent cost per engine. |
-| `breakeven --fee N` | Second-subscription comparison; the fee is an input, never assumed. |
-| `plans add --name --engine --fee` / `plans` | Record subscription fees you actually pay. |
+| `runrate` | Trailing-30-day and month-to-date list-price cost, real cost and multiplier per engine, plus a month projection (list price). |
+| `breakeven --fee N` | Second-subscription comparison; the candidate fee is an input, never assumed. Also reports your current real $/MTok and list:real. |
+| `plans add --name --engine --fee [--since D] [--until D]` / `plans` | Record subscription fees you actually pay. Same `--name` updates the plan in place (how you set its dates). `--since` inclusive, `--until` exclusive, `YYYY-MM-DD`; USD only. |
 | `rates [load --file F]` | Show or load the price table. |
 | `sql "SELECT ..."` | Read-only SQL. |
 
@@ -114,6 +114,25 @@ inline in queries. `event_costs` joins the rate in force on each call's date.
   per-token price. `breakeven` reports the API-equivalent run rate next to the
   fees and the share of that run rate an extra subscription would need to absorb.
 - Cache savings = cache-read tokens × (input rate − cache-read rate).
+
+### Real cost (what you actually pay)
+Your plan fee is a flat monthly charge, so it is reported only where it means
+something: **per engine over a period** (`summary` by day/week/month/engine,
+`runrate`, `breakeven`). It is never split across models or sessions — any split
+would give every row the same ratio — so `--split-model`, `--model` and the
+`sessions` list show list price only and leave the real columns blank.
+
+| Column | Meaning |
+|---|---|
+| `real_cost_usd` | Fee accrued over the period: `monthly_fee / days in that month` per day, for each day a plan is active. A full calendar month = the fee. The running period accrues through today. |
+| `real_usd_per_mtok` (**REAL $/MTok**) | `real_cost_usd` ÷ all tokens (fresh + cache read + cache write + output), per 1M. Dominated by cache reads (~97% of tokens), so it is small and depends on how much context is re-read. |
+| `real_usd_per_mtok_noncache` | Same, over fresh input + cache write + output only. |
+| `list_to_real` (**LIST:REAL**) | List-price cost of the same tokens ÷ `real_cost_usd`: list-price dollars each dollar you pay buys. Independent of model mix and caching; the best cross-engine comparison. A lower bound when `unpriced_calls` > 0. |
+
+Set each plan's `--since` (and `--until` if it ended). A plan with no start date
+is assumed to have always existed, so its fee lands on every period shown —
+including months before you subscribed — and the commands warn about it. A
+period with no active plan shows `-`, never zero.
 
 ### Updating prices
 1. Edit `ccc_server/usage_db/rates.json` (or a copy) — one object per

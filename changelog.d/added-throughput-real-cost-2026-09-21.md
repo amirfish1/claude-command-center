@@ -1,0 +1,1 @@
+- Throughput CLI: `summary`, `runrate` and `breakeven` now show what you actually pay — REAL $/MTok (your plan fee ÷ tokens) and LIST:REAL (list-price cost ÷ fee) — with fees accruing daily from each plan's `--since`/`--until` dates. `summary` can slice by model with `--split-model` / `--model` (list price only; the fee is per engine).
