@@ -53,11 +53,11 @@ LABELS = {
     "trailing_30d_list_to_real": "LIST:REAL 30d", "month_to_date_usd": "list_mtd_usd",
     "month_to_date_real_usd": "real_mtd_usd", "month_to_date_list_to_real": "LIST:REAL mtd",
     "month_projected_usd": "list_month_proj_usd", "cache_read_pct": "cache read %",
-    "unpriced_pct": "unpriced %", "trailing_30d_unpriced_pct": "unpriced % 30d",
+    "unpriced_pct": "unpriced %", "list_usd_per_mtok": "list $/MTok", "list_share_pct": "% of list $", "trailing_30d_unpriced_pct": "unpriced % 30d",
 }
 # Unpriced calls are only worth a column when they are a meaningful share of the calls.
 UNPRICED_WARN_PCT = 15.0
-_DECIMALS = {"cache_read_pct": 1, "unpriced_pct": 1, "trailing_30d_unpriced_pct": 1, "real_usd_per_mtok": 4, "real_usd_per_mtok_noncache": 3,
+_DECIMALS = {"list_usd_per_mtok": 3, "list_share_pct": 1, "cache_read_pct": 1, "unpriced_pct": 1, "trailing_30d_unpriced_pct": 1, "real_usd_per_mtok": 4, "real_usd_per_mtok_noncache": 3,
              "trailing_30d_real_usd_per_mtok": 4, "trailing_30d_real_usd_per_mtok_noncache": 3}
 _MULTIPLIERS = {"list_to_real", "trailing_30d_list_to_real", "month_to_date_list_to_real"}
 
@@ -159,24 +159,33 @@ def _fee_notes(conn, rows):
 
 def cmd_summary(args):
     conn = _open(args, True)
-    rows = queries.summarize(conn, args.by, args.since, args.engine, args.model, args.split_model, args.as_of)
+    rows = queries.summarize(conn, args.by, args.since, args.engine, args.model, args.split_model,
+                             args.by_family, args.as_of)
     if args.json:
         print(json.dumps(rows, indent=2, default=str))
         return 0
-    lead = ["engine", "model"] if args.by == "engine" else ["period", "engine"] + (
-        ["model"] if args.split_model else [])
-    cols = lead + ["calls", "total_tokens", "cache_read_pct", "cost_usd_priced",
-                   "real_cost_usd", "real_usd_per_mtok", "list_to_real"]
+    model_view = bool(args.split_model or args.by_family or args.model)
+    lead = ["engine", "model"] if args.by == "engine" else ["period", "engine"] + (["model"] if model_view else [])
+    if model_view and args.by != "engine":
+        # The fee is per engine, so a model view has no REAL columns; show what compares models instead.
+        cols = lead + ["calls", "total_tokens", "cache_read_pct", "cost_usd_priced", "list_share_pct",
+                       "list_usd_per_mtok"]
+    else:
+        cols = lead + ["calls", "total_tokens", "cache_read_pct", "cost_usd_priced", "real_cost_usd",
+                       "list_usd_per_mtok", "real_usd_per_mtok", "list_to_real"]
     shown, cols, flagged = _with_unpriced(rows, cols, "unpriced_pct")
     print_table(shown, cols)
     print("\nlist_usd = API list-price equivalent" + (
         f"; rows with unpriced % shown have more than {UNPRICED_WARN_PCT:.0f}% of calls on models with no "
-        "(complete) price, so list_usd and LIST:REAL there are lower bounds" if flagged else "")
-          + ".\nREAL = what you actually pay: your plan fee accrued daily over the period "
-          "(monthly fee / days in month).\nREAL $/MTok = real_usd / all tokens; LIST:REAL = list_usd / real_usd. "
-          "Days/weeks/months are UTC.")
-    if args.split_model or args.model:
-        print("Model slices show list price only: the fee is per engine, so REAL columns are '-' on them.")
+        "(complete) price, so list_usd and LIST:REAL there are lower bounds" if flagged else "") + ".")
+    if not model_view or args.by == "engine":
+        print("REAL = what you actually pay: your plan fee accrued daily over the period "
+              "(monthly fee / days in month).\nREAL $/MTok = real_usd / all tokens; LIST:REAL = list_usd / "
+              "real_usd. Days/weeks/months are UTC.")
+    if model_view:
+        print("Model views show list price only: the fee is per engine, so REAL columns are '-' on model rows. "
+              "'% of list $' = the row's share of that engine's list cost in the period; "
+              "'list $/MTok' = list_usd / all tokens.")
     for n in _fee_notes(conn, rows):
         print("note: " + n)
     return 0
@@ -283,8 +292,11 @@ def build_parser():
     s = sub.add_parser("summary", help="tokens and cost by day/week/month/engine")
     s.add_argument("--by", choices=["day", "week", "month", "engine"], default="month")
     s.add_argument("--since"); s.add_argument("--engine", type=_engine)
-    s.add_argument("--model", help="only this model (substring of the model id, e.g. opus, fable-5-1, sonnet)")
-    s.add_argument("--split-model", action="store_true", help="one row per model within each period")
+    s.add_argument("--model", help="model name substring(s); comma-separate to compare side by side, "
+                   "one row per name (e.g. sonnet,fable  or  fable-5-1)")
+    s.add_argument("--split-model", action="store_true", help="one row per model version within each period")
+    s.add_argument("--by-family", action="store_true",
+                   help="like --split-model but Claude versions merge into Opus/Sonnet/Fable/Haiku")
     s.add_argument("--as-of", help="treat this UTC timestamp as 'now' (for the fee accrual)")
     s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_summary)
 

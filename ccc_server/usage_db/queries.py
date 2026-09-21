@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from . import fees
+from . import models as models_mod
 
 _PERIODS = {
     "day": "substr(c.ts, 1, 10)",
@@ -110,20 +111,68 @@ def _aggregate(conn, period_expr, split_model, where, args):
         + (" ORDER BY c.engine, period DESC" + (", cost_usd_priced DESC" if split_model else "")
            if period_expr else " ORDER BY c.engine" + (", cost_usd_priced DESC" if split_model else ""))
     )
-    rows = _rows(conn.execute(sql, args))
+    return _rows(conn.execute(sql, args))
+
+
+_SUM_FIELDS = ("calls", "input_tokens", "cache_read_tokens", "cache_creation_tokens", "output_tokens",
+               "total_tokens", "unpriced_calls")
+
+
+def _merge_family(rows):
+    """Merge Claude model versions into their family (Opus/Sonnet/Fable/Haiku); other engines keep per-model rows."""
+    out = {}
     for r in rows:
-        r.update(_NO_REAL)  # filled in only on engine-level rows (see _attach_real)
+        fam = models_mod.family_and_label(r["model"])[0] if r["engine"] == "claude_code" else None
+        key = (r.get("period"), r["engine"], fam or r["model"])
+        a = out.get(key)
+        if a is None:
+            out[key] = dict(r, model=fam or r["model"])
+            continue
+        for f in _SUM_FIELDS:
+            a[f] = (a[f] or 0) + (r[f] or 0)
+        if r["cost_usd_priced"] is not None:
+            a["cost_usd_priced"] = (a["cost_usd_priced"] or 0) + r["cost_usd_priced"]
+        a["first_ts"], a["last_ts"] = min(a["first_ts"], r["first_ts"]), max(a["last_ts"], r["last_ts"])
+    return list(out.values())
+
+
+def _finish(rows, totals=None):
+    """Derived columns. ``totals`` maps (period, engine) -> the engine's whole priced list cost."""
+    for r in rows:
+        for k, v in _NO_REAL.items():
+            r.setdefault(k, v)  # real-cost columns are filled in only on engine-level rows (_attach_real)
+        c = r["cost_usd_priced"]
         r["cache_read_pct"] = _pct(r["cache_read_tokens"], r["total_tokens"])
         r["unpriced_pct"] = _pct(r["unpriced_calls"], r["calls"])
+        r["list_usd_per_mtok"] = round(c * 1e6 / r["total_tokens"], 4) if c is not None and r["total_tokens"] else None
+        if totals is not None and "model" in r and r["model"] != "(all models)":
+            t = totals.get((r.get("period"), r["engine"]))
+            r["list_share_pct"] = _pct(c, t) if c is not None and t else None
     return rows
 
 
-def summarize(conn, by="month", since=None, engine=None, model=None, split_model=False, as_of=None):
+def _sort_period_rows(rows):
+    rows.sort(key=lambda r: r["cost_usd_priced"] or 0, reverse=True)
+    rows.sort(key=lambda r: r["period"], reverse=True)
+    rows.sort(key=lambda r: r["engine"])
+    return rows
+
+
+def summarize(conn, by="month", since=None, engine=None, model=None, split_model=False, by_family=False,
+              as_of=None):
     """Tokens, API-list-price cost and what-you-really-pay per ``day|week|month`` (UTC) or ``engine``.
 
     Real-cost columns (``real_cost_usd``, ``real_usd_per_mtok``, ``real_usd_per_mtok_noncache``,
-    ``list_to_real``) exist only on engine-level rows: the fee is per engine, so slicing by
-    model (``split_model`` / ``model``) shows list price only and leaves them ``None``.
+    ``list_to_real``) exist only on engine-level rows: the fee is per engine, so any model view
+    shows list price only and leaves them ``None``. Model views:
+
+    * ``split_model``: one row per model within each period.
+    * ``by_family``: like ``split_model`` but Claude versions merge into Opus/Sonnet/Fable/Haiku.
+    * ``model="sonnet,fable"``: comma-separated substrings of the model id; one row per name
+      (all matching versions summed), so two families compare side by side. With ``split_model``
+      or ``by_family`` the names only filter.
+
+    ``list_share_pct`` is a model row's share of its engine's list cost in the same period.
     ``by="engine"`` returns each engine's total row (model ``(all models)``) then its models.
     """
     if by != "engine" and by not in _PERIODS:
@@ -133,18 +182,36 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
         where.append("c.ts >= ?"); args.append(since)
     if engine:
         where.append("c.engine = ?"); args.append(engine)
-    if model:
-        where.append("(c.pricing_key LIKE ? OR c.model_id LIKE ?)"); args += [f"%{model}%"] * 2
+    terms = [t.strip() for t in (model or "").split(",") if t.strip()]
     as_of_day = _parse(as_of).date() if as_of else datetime.now(timezone.utc).date()
     period_expr = None if by == "engine" else _PERIODS[by]
-    sliced = bool(model)  # a model subset is not something the flat fee can be attributed to
+    split = split_model or by_family
+    totals = {(r.get("period"), r["engine"]): r["cost_usd_priced"]
+              for r in _aggregate(conn, period_expr, False, where, args)}
+
+    def matching(names):
+        return (where + ["(" + " OR ".join(["(c.pricing_key LIKE ? OR c.model_id LIKE ?)"] * len(names)) + ")"],
+                args + [f"%{n}%" for n in names for _ in (0, 1)])
+
+    def by_model(w, a):
+        rows = _aggregate(conn, period_expr, True, w, a)
+        return _merge_family(rows) if by_family else rows
+
+    if terms and not split:  # compare names side by side
+        rows = []
+        for t in terms:
+            w, a = matching([t])
+            rows += [dict(r, model=t) for r in _aggregate(conn, period_expr, False, w, a)]
+        rows = _finish(rows, totals)
+        return rows if by == "engine" else _sort_period_rows(rows)
+    if terms:
+        rows = _finish(by_model(*matching(terms)), totals)
+        return rows if by == "engine" else _sort_period_rows(rows)
 
     if by == "engine":
-        models = _aggregate(conn, None, True, where, args)
-        if sliced:
-            return models
+        models = _finish(by_model(where, args), totals)
         out = []
-        for tot in _aggregate(conn, None, False, where, args):
+        for tot in _finish(_aggregate(conn, None, False, where, args)):
             tot["model"] = "(all models)"
             _attach_real(conn, tot, fees.parse_day(since or tot["first_ts"]), as_of_day + timedelta(days=1),
                          since, as_of_day)
@@ -152,11 +219,12 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
             out += [m for m in models if m["engine"] == tot["engine"]]
         return out
 
-    rows = _aggregate(conn, period_expr, split_model, where, args)
-    if not (split_model or sliced):
-        for r in rows:
-            start, end = _period_bounds(by, r["period"])
-            _attach_real(conn, r, start, end, since, as_of_day)
+    if split:
+        return _sort_period_rows(_finish(by_model(where, args), totals))
+    rows = _finish(_aggregate(conn, period_expr, False, where, args))
+    for r in rows:
+        start, end = _period_bounds(by, r["period"])
+        _attach_real(conn, r, start, end, since, as_of_day)
     return rows
 
 

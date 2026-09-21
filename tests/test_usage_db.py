@@ -562,7 +562,33 @@ class CostTests(UsageDbCase):
         self.assertEqual(len(only), 1)
         self.assertAlmostEqual(only[0]["cost_usd_priced"], 7.75, places=6)
         eng = queries.summarize(self.conn, "engine", model="sonnet")
-        self.assertEqual([r["model"] for r in eng], ["claude-sonnet-5"])
+        self.assertEqual([r["model"] for r in eng], ["sonnet"])
+
+    def test_compare_names_family_merge_and_share(self):
+        self._priced_month_with_plan(100)
+        self.add_rate("claude-sonnet-4-6", 3.0, 0.3, 3.75, 15.0)
+        _write(os.path.join(self.claude, "proj", "s2.jsonl"),
+               [_claude_user("2026-09-02T10:00:00.000Z"),
+                _claude_msg("m9", "claude-sonnet-4-6", "2026-09-02T10:00:05.000Z", inp=1_000_000, cr=0, cc=0, out=0)])
+        self.run_ingest(engines=["claude_code"])
+        # two names side by side: one row each, versions of a name summed
+        rows = queries.summarize(self.conn, "month", model="sonnet, opus")
+        self.assertEqual(sorted(r["model"] for r in rows), ["opus", "sonnet"])
+        by = {r["model"]: r for r in rows}
+        self.assertAlmostEqual(by["sonnet"]["cost_usd_priced"], 3.4 + 3.0, places=6)  # sonnet-5 + sonnet-4-6
+        self.assertAlmostEqual(by["opus"]["cost_usd_priced"], 7.75, places=6)
+        total = 3.4 + 3.0 + 7.75
+        self.assertAlmostEqual(by["sonnet"]["list_share_pct"], round(100 * 6.4 / total, 1), places=1)
+        self.assertAlmostEqual(by["opus"]["list_usd_per_mtok"], 7.75 * 1e6 / 1_000_000, places=3)
+        # family view merges the two sonnet versions into one row and keeps opus separate
+        fam = {r["model"]: r for r in queries.summarize(self.conn, "month", by_family=True)}
+        self.assertEqual(sorted(fam), ["Opus", "Sonnet"])
+        self.assertAlmostEqual(fam["Sonnet"]["cost_usd_priced"], 6.4, places=6)
+        self.assertEqual(fam["Sonnet"]["calls"], 2)
+        self.assertIsNone(fam["Sonnet"]["real_cost_usd"])
+        # split (per version) keeps them apart
+        split = {r["model"] for r in queries.summarize(self.conn, "month", split_model=True)}
+        self.assertEqual(split, {"claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5"})
 
     def test_no_fee_or_inactive_plan_gives_no_real_cost(self):
         self._two_model_session()
