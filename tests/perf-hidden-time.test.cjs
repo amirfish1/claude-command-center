@@ -10,6 +10,11 @@ const app = fs.readFileSync('static/app.js', 'utf8');
 // samples with status 200 and unsaturated load). Both perf metrics now
 // subtract time spent hidden/frozen and ship the raw wall time as
 // detail.wall_ms.
+//
+// CCC-1181: an occluded window / suspended renderer stops JS for minutes
+// with document.hidden still false — no visibilitychange/freeze fires — so
+// event-driven tracking misses it (143s "cold" archive_load). A heartbeat
+// beat now flags much-larger-than-scheduled gaps as inactive segments.
 
 function loadPerf() {
   const start = app.indexOf('  const _perfHiddenSegs = [];');
@@ -24,10 +29,15 @@ function loadPerf() {
     addEventListener: (ev, fn) => { handlers[ev] = fn; },
   };
   const performance = { now: () => now };
-  const out = new Function('document', 'performance',
-    body + '; return { active: _perfActiveElapsed };')(document, performance);
+  // Shadow setInterval so the heartbeat registers without keeping a real
+  // 2s timer alive past the test run; _perfBeatCheck is driven manually.
+  const setInterval = () => 0;
+  const out = new Function('document', 'performance', 'setInterval',
+    body + '; return { active: _perfActiveElapsed, beat: _perfBeatCheck };')(
+    document, performance, setInterval);
   return {
     active: out.active,
+    beat: out.beat,
     setNow: (v) => { now = v; },
     hide: () => handlers.visibilitychange && (document.hidden = true, handlers.visibilitychange()),
     show: () => handlers.visibilitychange && (document.hidden = false, handlers.visibilitychange()),
@@ -75,6 +85,47 @@ test('freeze/resume cover the no-visibility-transition path', () => {
   p.setNow(100); p.freeze();
   p.setNow(400); p.resume();
   assert.equal(p.active(0, 500), 200);
+});
+
+test('a suspension gap with no lifecycle event is subtracted', () => {
+  const p = loadPerf();
+  p.setNow(2000); p.beat();            // healthy tick records the baseline
+  p.setNow(160000); p.beat();          // page suspended ~158s, no events fired
+  // window [0,165000] -> 2s before the freeze + 5s after the wake
+  assert.equal(p.active(0, 165000), 7000);
+});
+
+test('a sub-threshold heartbeat gap still counts as active', () => {
+  const p = loadPerf();
+  p.setNow(10000); p.beat();           // 10s gap < 15s flag threshold
+  p.setNow(12000); p.beat();
+  assert.equal(p.active(0, 12000), 12000);
+});
+
+test('a suspension gap inside a hidden span is not double-counted', () => {
+  const p = loadPerf();
+  p.setNow(100); p.hide();
+  p.setNow(150000); p.beat();          // beat resumes while still hidden
+  p.setNow(151000); p.show();
+  // hidden [100,151000] -> 100ms before + 1000ms after = 1100
+  assert.equal(p.active(0, 152000), 1100);
+});
+
+test('a suspension segment overlapping only part of the window', () => {
+  const p = loadPerf();
+  p.setNow(5000); p.beat();
+  p.setNow(200000); p.beat();          // gap segment [5000,200000]
+  // window [100000,210000] -> only the post-wake 10s is active
+  assert.equal(p.active(100000, 210000), 10000);
+});
+
+test('a heartbeat gap overlapping a closed hidden span merges, not double-counts', () => {
+  const p = loadPerf();
+  p.setNow(100); p.hide();
+  p.setNow(150000); p.show();          // wake: hidden span [100,150000] closes first
+  p.beat();                            // then the beat flags gap [0,150000]
+  // union is [0,150000] -> 2s of visible time after the wake, not <=0
+  assert.equal(p.active(0, 152000), 2000);
 });
 
 test('both metrics report active ms plus wall_ms/hidden_ms detail', () => {

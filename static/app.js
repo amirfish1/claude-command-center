@@ -122,18 +122,50 @@
     document.addEventListener('freeze', _perfMarkHidden);
     document.addEventListener('resume', _perfMarkVisible);
   } catch (_) {}
-  // Wall-clock elapsed [t0, end] minus the parts the page spent hidden.
+  // Suspension gaps no lifecycle event covers: an occluded window (another
+  // Space, display asleep), a frozen renderer, or system sleep can stop all
+  // JS for minutes while document.hidden stays false — no visibilitychange
+  // or freeze fires, so the trackers above never mark it (the 143s "cold"
+  // archive_load behind CCC-1181 was exactly this). A heartbeat that
+  // notices a much-larger-than-scheduled gap between its own ticks is the
+  // only signal left; record the gap as an inactive segment too.
+  const _PERF_BEAT_MS = 2000;
+  const _PERF_SUSPEND_GAP_MS = 15000;
+  let _perfLastBeat = null;
+  function _perfBeatCheck() {
+    try {
+      const now = performance.now();
+      // Skip while inside a tracked hidden span — it already covers the
+      // gap and pushing here would double-count the overlap.
+      if (_perfLastBeat !== null && _perfHiddenSince === null
+          && now - _perfLastBeat > _PERF_SUSPEND_GAP_MS) {
+        _perfHiddenSegs.push([_perfLastBeat, now]);
+      }
+      _perfLastBeat = now;
+    } catch (_) {}
+  }
+  try {
+    _perfLastBeat = performance.now();
+    setInterval(_perfBeatCheck, _PERF_BEAT_MS);
+  } catch (_) {}
+  // Wall-clock elapsed [t0, end] minus the parts the page spent hidden or
+  // suspended. Segments can overlap — a heartbeat gap and a hidden span
+  // recorded at the same wake both cover the frozen stretch — so merge them
+  // before summing or the overlap double-counts and under-measures.
   function _perfActiveElapsed(t0, end) {
     try {
-      let hidden = 0;
-      for (const seg of _perfHiddenSegs) {
+      const segs = _perfHiddenSegs.slice();
+      if (_perfHiddenSince !== null) segs.push([_perfHiddenSince, Infinity]);
+      segs.sort((a, b) => a[0] - b[0]);
+      let hidden = 0, curS = null, curE = 0;
+      for (const seg of segs) {
         const lo = Math.max(seg[0], t0), hi = Math.min(seg[1], end);
-        if (hi > lo) hidden += hi - lo;
+        if (hi <= lo) continue;
+        if (curS === null) { curS = lo; curE = hi; }
+        else if (lo <= curE) { curE = Math.max(curE, hi); }
+        else { hidden += curE - curS; curS = lo; curE = hi; }
       }
-      if (_perfHiddenSince !== null) {
-        const lo = Math.max(_perfHiddenSince, t0);
-        if (end > lo) hidden += end - lo;
-      }
+      if (curS !== null) hidden += curE - curS;
       return Math.max(0, end - t0 - hidden);
     } catch (_) { return end - t0; }
   }
