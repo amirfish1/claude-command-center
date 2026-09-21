@@ -96,6 +96,21 @@ class FeeTests(unittest.TestCase):
                          (0.5, 2.0, 5.0))
 
 
+class FormatTests(unittest.TestCase):
+    def test_dollars_cents_and_token_formats(self):
+        f = cli._fmt
+        self.assertEqual([f(v, "real_cost_usd") for v in (200.0, 3774.97, 9.5, 3.67, 0.07, 0.0)],
+                         ["$200", "$3,775", "$9.5", "$3.67", "$0.07", "$0"])
+        self.assertEqual([f(v, "real_usd_per_mtok") for v in (0.0231, 0.622, 1.393, 0.0121)],
+                         ["2.31 cents", "62.2 cents", "139 cents", "1.21 cents"])
+        self.assertEqual([f(v, "total_tokens") for v in (1_400_000_000, 230_000_000, 6_066_350_879, 43_857_110_730, 33_900, 512)],
+                         ["1.4B", "230M", "6.1B", "43.9B", "33.9K", "512"])
+        self.assertEqual(f(29.7, "list_to_real"), "29.7x")
+        self.assertEqual(f(None, "total_tokens"), "-")
+        # raw mode (the `sql` command) never reformats
+        self.assertEqual(f(43_857_110_730, "total_tokens", raw=True), "43,857,110,730")
+
+
 class PlansCliTests(UsageDbCase):
     def _cli(self, *argv):
         return cli.main(["--db", os.path.join(self.tmp, "t.sqlite3"), *argv])

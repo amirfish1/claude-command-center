@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -45,48 +46,85 @@ def _open(args, must_exist=False):
 
 # Table headers for the columns that mean "what you actually pay" vs "list price".
 LABELS = {
-    "cost_usd_priced": "list_usd", "cost_usd": "list_usd", "trailing_30d_usd": "list_30d_usd",
-    "real_cost_usd": "real_usd", "real_usd_per_mtok": "REAL $/MTok",
-    "real_usd_per_mtok_noncache": "REAL $/MTok (non-cache)", "list_to_real": "LIST:REAL",
-    "trailing_30d_real_usd": "real_30d_usd", "trailing_30d_real_usd_per_mtok": "REAL $/MTok 30d",
-    "trailing_30d_real_usd_per_mtok_noncache": "REAL $/MTok non-cache 30d",
-    "trailing_30d_list_to_real": "LIST:REAL 30d", "month_to_date_usd": "list_mtd_usd",
-    "month_to_date_real_usd": "real_mtd_usd", "month_to_date_list_to_real": "LIST:REAL mtd",
-    "month_projected_usd": "list_month_proj_usd", "cache_read_pct": "cache read %",
-    "unpriced_pct": "unpriced %", "list_usd_per_mtok": "list $/MTok", "list_share_pct": "% of list $", "trailing_30d_unpriced_pct": "unpriced % 30d",
+    "cost_usd_priced": "list $", "cost_usd": "list $", "trailing_30d_usd": "list $ 30d",
+    "real_cost_usd": "real $", "real_usd_per_mtok": "REAL /MTok",
+    "real_usd_per_mtok_noncache": "REAL /MTok (non-cache)", "list_to_real": "LIST:REAL",
+    "trailing_30d_real_usd": "real $ 30d", "trailing_30d_real_usd_per_mtok": "REAL /MTok 30d",
+    "trailing_30d_real_usd_per_mtok_noncache": "REAL /MTok non-cache 30d",
+    "trailing_30d_list_to_real": "LIST:REAL 30d", "month_to_date_usd": "list $ mtd",
+    "month_to_date_real_usd": "real $ mtd", "month_to_date_list_to_real": "LIST:REAL mtd",
+    "month_projected_usd": "list $ month proj", "cache_read_pct": "cache read %",
+    "unpriced_pct": "unpriced %", "list_usd_per_mtok": "list /MTok", "list_share_pct": "% of list $",
+    "trailing_30d_unpriced_pct": "unpriced % 30d", "monthly_fee": "monthly fee",
 }
 # Unpriced calls are only worth a column when they are a meaningful share of the calls.
 UNPRICED_WARN_PCT = 15.0
-_DECIMALS = {"list_usd_per_mtok": 3, "list_share_pct": 1, "cache_read_pct": 1, "unpriced_pct": 1, "trailing_30d_unpriced_pct": 1, "real_usd_per_mtok": 4, "real_usd_per_mtok_noncache": 3,
-             "trailing_30d_real_usd_per_mtok": 4, "trailing_30d_real_usd_per_mtok_noncache": 3}
+
+_DOLLARS = {"cost_usd_priced", "cost_usd", "trailing_30d_usd", "real_cost_usd", "trailing_30d_real_usd",
+            "month_to_date_usd", "month_to_date_real_usd", "month_projected_usd", "monthly_fee"}
+_PER_MTOK = {"list_usd_per_mtok", "real_usd_per_mtok", "real_usd_per_mtok_noncache",
+             "trailing_30d_real_usd_per_mtok", "trailing_30d_real_usd_per_mtok_noncache"}  # dollars per 1M tokens
+_TOKENS = {"total_tokens", "trailing_30d_tokens"}
 _MULTIPLIERS = {"list_to_real", "trailing_30d_list_to_real", "month_to_date_list_to_real"}
+_PCT = {"cache_read_pct", "unpriced_pct", "list_share_pct", "trailing_30d_unpriced_pct"}
 
 
-def _fmt(v, col=None):
+def _money(v):
+    """``$XX``: whole dollars, with cents only below $10 (``$3.67``, ``$0.07``)."""
+    if abs(v) >= 10:
+        return f"${v:,.0f}"
+    return "$" + f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def _cents(dollars_per_mtok):
+    c = dollars_per_mtok * 100
+    return f"{c:,.0f} cents" if abs(c) >= 100 else f"{c:.1f} cents" if abs(c) >= 10 else f"{c:.2f} cents"
+
+
+def _tokens(n):
+    for div, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(n) >= div:
+            x = n / div
+            return f"{x:.0f}{suffix}" if x >= 100 else f"{x:.1f}{suffix}"
+    return f"{n:,.0f}"
+
+
+def _fmt(v, col=None, raw=False):
     if v is None:
         return "-"
-    if col in _MULTIPLIERS and isinstance(v, (int, float)):
-        return f"{v:,.1f}x"
+    if not raw and isinstance(v, (int, float)) and not isinstance(v, bool):
+        if col in _DOLLARS:
+            return _money(v)
+        if col in _PER_MTOK:
+            return _cents(v)
+        if col in _TOKENS:
+            return _tokens(v)
+        if col in _MULTIPLIERS:
+            return f"{v:,.1f}x"
+        if col in _PCT:
+            return f"{v:.1f}"
     if isinstance(v, float):
-        return f"{v:,.{_DECIMALS.get(col, 2)}f}"
+        return f"{v:,.2f}"
     if isinstance(v, int):
         return f"{v:,}"
     return str(v)
 
 
-def print_table(rows, cols=None, out=sys.stdout):
+_NUMERIC = re.compile(r"-|\$?-?[\d,.]+( cents|[KMBx])?")
+
+
+def print_table(rows, cols=None, out=sys.stdout, raw=False):
     if not rows:
         print("(no rows)", file=out)
         return
     cols = cols or list(rows[0].keys())
-    body = [[_fmt(r.get(c), c) for c in cols] for r in rows]
-    heads = [LABELS.get(c, c) for c in cols]
+    body = [[_fmt(r.get(c), c, raw) for c in cols] for r in rows]
+    heads = [c if raw else LABELS.get(c, c) for c in cols]
     widths = [max(len(h), *(len(b[i]) for b in body)) for i, h in enumerate(heads)]
     print("  ".join(h.ljust(w) for h, w in zip(heads, widths)), file=out)
     print("  ".join("-" * w for w in widths), file=out)
     for b in body:
-        print("  ".join(v.rjust(w) if v.replace(",", "").replace(".", "").replace("-", "").replace("x", "").isdigit() else v.ljust(w)
-                        for v, w in zip(b, widths)), file=out)
+        print("  ".join(v.rjust(w) if _NUMERIC.fullmatch(v) else v.ljust(w) for v, w in zip(b, widths)), file=out)
 
 
 def cmd_ingest(args):
@@ -175,17 +213,17 @@ def cmd_summary(args):
                        "list_usd_per_mtok", "real_usd_per_mtok", "list_to_real"]
     shown, cols, flagged = _with_unpriced(rows, cols, "unpriced_pct")
     print_table(shown, cols)
-    print("\nlist_usd = API list-price equivalent" + (
+    print("\nlist $ = API list-price equivalent" + (
         f"; rows with unpriced % shown have more than {UNPRICED_WARN_PCT:.0f}% of calls on models with no "
-        "(complete) price, so list_usd and LIST:REAL there are lower bounds" if flagged else "") + ".")
+        "(complete) price, so list $ and LIST:REAL there are lower bounds" if flagged else "") + ".")
     if not model_view or args.by == "engine":
         print("REAL = what you actually pay: your plan fee accrued daily over the period "
-              "(monthly fee / days in month).\nREAL $/MTok = real_usd / all tokens; LIST:REAL = list_usd / "
-              "real_usd. Days/weeks/months are UTC.")
+              "(monthly fee / days in month).\nREAL /MTok = real $ / all tokens, in cents; LIST:REAL = list $ / "
+              "real $. Days/weeks/months are UTC.")
     if model_view:
         print("Model views show list price only: the fee is per engine, so REAL columns are '-' on model rows. "
               "'% of list $' = the row's share of that engine's list cost in the period; "
-              "'list $/MTok' = list_usd / all tokens.")
+              "'list /MTok' = list $ / all tokens, in cents.")
     for n in _fee_notes(conn, rows):
         print("note: " + n)
     return 0
@@ -265,7 +303,7 @@ def cmd_rates(args):
 def cmd_sql(args):
     conn = _open(args, True)
     conn.execute("PRAGMA query_only = ON")
-    print_table([dict(r) for r in conn.execute(args.query)])
+    print_table([dict(r) for r in conn.execute(args.query)], raw=True)
     return 0
 
 
