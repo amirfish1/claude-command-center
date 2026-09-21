@@ -77,17 +77,50 @@ def _period_bounds(by, label):
     return d, (d.replace(day=28) + timedelta(days=4)).replace(day=1)
 
 
-def _attach_real(conn, row, start, end, since, as_of_day, until=None):
-    """Add the real-cost columns to an engine-level row (never to a model slice)."""
+def _engine_fee(conn, engine, start, end, since, as_of_day, until=None):
+    """Fee accrued for ``engine`` over ``[start, end)``, clipped to the query window and to today."""
     if since:
         start = max(start, fees.parse_day(since))
     end = min(end, as_of_day + timedelta(days=1))  # a period still running accrues through today
     if until:
         end = min(end, fees.parse_day(until))  # exclusive, like the usage filter
+    return fees.fee_for_range(fees.load_plans(conn, engine), start, end) if start < end else None
+
+
+def _attach_real(conn, row, start, end, since, as_of_day, until=None):
+    """Add the real-cost columns to an engine-level row (never to a model slice)."""
+    fee = _engine_fee(conn, row["engine"], start, end, since, as_of_day, until)
     noncache = (row["input_tokens"] or 0) + (row["cache_creation_tokens"] or 0) + (row["output_tokens"] or 0)
-    fee = fees.fee_for_range(fees.load_plans(conn, row["engine"]), start, end) if start < end else None
     row.update(fees.real_metrics(fee, row["cost_usd_priced"], row["unpriced_calls"],
                                  row["total_tokens"], noncache))
+
+
+def _attach_estimates(conn, rows, by, tot_rows, since, as_of_day, until):
+    """ESTIMATED real cost on model rows: the engine's fee split by each model's share of list cost.
+
+    This is an allocation rule, not a measurement (the flat fee does not say what a model cost).
+    It divides over priced list cost, so a model with no price gets no estimate.
+    """
+    fee_cache = {}
+    for r in rows:
+        if r.get("model") == "(all models)":
+            continue
+        key = (r.get("period"), r["engine"])
+        tot = tot_rows.get(key)
+        if tot is None:
+            continue
+        if key not in fee_cache:
+            if by == "engine":
+                start, end = fees.parse_day(since or tot["first_ts"]), as_of_day + timedelta(days=1)
+            else:
+                start, end = _period_bounds(by, r["period"])
+            fee_cache[key] = _engine_fee(conn, r["engine"], start, end, since, as_of_day, until)
+        fee, c, t = fee_cache[key], r["cost_usd_priced"], tot["cost_usd_priced"]
+        if fee is None or c is None or not t:
+            continue
+        r["est_real_cost_usd"] = round(fee * c / t, 2)
+        if r["total_tokens"]:
+            r["est_real_usd_per_mtok"] = round(fee * c / t * 1e6 / r["total_tokens"], 5)
 
 
 _NO_REAL = fees.real_metrics(None, None, 0, 0, 0)
@@ -143,6 +176,8 @@ def _finish(rows, totals=None):
     for r in rows:
         for k, v in _NO_REAL.items():
             r.setdefault(k, v)  # real-cost columns are filled in only on engine-level rows (_attach_real)
+        r.setdefault("est_real_cost_usd", None)  # filled in only on model rows (_attach_estimates)
+        r.setdefault("est_real_usd_per_mtok", None)
         c = r["cost_usd_priced"]
         r["cache_read_pct"] = _pct(r["cache_read_tokens"], r["total_tokens"])
         r["unpriced_pct"] = _pct(r["unpriced_calls"], r["calls"])
@@ -175,6 +210,8 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
       or ``by_family`` the names only filter.
 
     ``list_share_pct`` is a model row's share of its engine's list cost in the same period.
+    ``est_real_cost_usd`` / ``est_real_usd_per_mtok`` on model rows are ESTIMATES: the engine's fee
+    split in proportion to ``list_share_pct`` (an assumption, not a measurement).
     ``by="engine"`` returns each engine's total row (model ``(all models)``) then its models.
     ``since`` (inclusive) and ``until`` (exclusive) bound the calls, and the fee accrues over the same days.
     """
@@ -191,8 +228,12 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
     as_of_day = _parse(as_of).date() if as_of else datetime.now(timezone.utc).date()
     period_expr = None if by == "engine" else _PERIODS[by]
     split = split_model or by_family
-    totals = {(r.get("period"), r["engine"]): r["cost_usd_priced"]
-              for r in _aggregate(conn, period_expr, False, where, args)}
+    tot_rows = {(r.get("period"), r["engine"]): r for r in _aggregate(conn, period_expr, False, where, args)}
+    totals = {k: r["cost_usd_priced"] for k, r in tot_rows.items()}
+
+    def estimated(rows):
+        _attach_estimates(conn, rows, by, tot_rows, since, as_of_day, until)
+        return rows
 
     def matching(names):
         return (where + ["(" + " OR ".join(["(c.pricing_key LIKE ? OR c.model_id LIKE ?)"] * len(names)) + ")"],
@@ -207,14 +248,14 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
         for t in terms:
             w, a = matching([t])
             rows += [dict(r, model=t) for r in _aggregate(conn, period_expr, False, w, a)]
-        rows = _finish(rows, totals)
+        rows = estimated(_finish(rows, totals))
         return rows if by == "engine" else _sort_period_rows(rows)
     if terms:
-        rows = _finish(by_model(*matching(terms)), totals)
+        rows = estimated(_finish(by_model(*matching(terms)), totals))
         return rows if by == "engine" else _sort_period_rows(rows)
 
     if by == "engine":
-        models = _finish(by_model(where, args), totals)
+        models = estimated(_finish(by_model(where, args), totals))
         out = []
         for tot in _finish(_aggregate(conn, None, False, where, args)):
             tot["model"] = "(all models)"
@@ -225,7 +266,7 @@ def summarize(conn, by="month", since=None, engine=None, model=None, split_model
         return out
 
     if split:
-        return _sort_period_rows(_finish(by_model(where, args), totals))
+        return _sort_period_rows(estimated(_finish(by_model(where, args), totals)))
     rows = _finish(_aggregate(conn, period_expr, False, where, args))
     for r in rows:
         start, end = _period_bounds(by, r["period"])

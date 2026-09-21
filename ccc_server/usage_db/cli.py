@@ -57,14 +57,16 @@ LABELS = {
     "month_projected_usd": "list $ month proj", "cache_read_pct": "cache read %",
     "unpriced_pct": "unpriced %", "list_usd_per_mtok": "list /MTok", "list_share_pct": "% of list $",
     "trailing_30d_unpriced_pct": "unpriced % 30d", "monthly_fee": "monthly fee",
+    "est_real_cost_usd": "est. real $", "est_real_usd_per_mtok": "est. REAL /MTok",
 }
 # Unpriced calls are only worth a column when they are a meaningful share of the calls.
 UNPRICED_WARN_PCT = 15.0
 
 _DOLLARS = {"cost_usd_priced", "cost_usd", "trailing_30d_usd", "real_cost_usd", "trailing_30d_real_usd",
-            "month_to_date_usd", "month_to_date_real_usd", "month_projected_usd", "monthly_fee"}
+            "month_to_date_usd", "month_to_date_real_usd", "month_projected_usd", "monthly_fee", "est_real_cost_usd"}
 _PER_MTOK = {"list_usd_per_mtok", "real_usd_per_mtok", "real_usd_per_mtok_noncache",
-             "trailing_30d_real_usd_per_mtok", "trailing_30d_real_usd_per_mtok_noncache"}  # dollars per 1M tokens
+             "trailing_30d_real_usd_per_mtok", "trailing_30d_real_usd_per_mtok_noncache",
+             "est_real_usd_per_mtok"}  # dollars per 1M tokens
 _TOKENS = {"total_tokens", "trailing_30d_tokens"}
 _MULTIPLIERS = {"list_to_real", "trailing_30d_list_to_real", "month_to_date_list_to_real"}
 _PCT = {"cache_read_pct", "unpriced_pct", "list_share_pct", "trailing_30d_unpriced_pct"}
@@ -228,10 +230,10 @@ def cmd_summary(args):
     if model_view and args.by != "engine":
         # The fee is per engine, so a model view has no REAL columns; show what compares models instead.
         cols = lead + ["calls", "total_tokens", "cache_read_pct", "cost_usd_priced", "list_share_pct",
-                       "list_usd_per_mtok"]
+                       "list_usd_per_mtok", "est_real_cost_usd", "est_real_usd_per_mtok"]
     else:
         cols = lead + ["calls", "total_tokens", "cache_read_pct", "cost_usd_priced", "real_cost_usd",
-                       "list_usd_per_mtok", "real_usd_per_mtok", "list_to_real"]
+                       "list_usd_per_mtok", "real_usd_per_mtok", "list_to_real", "est_real_usd_per_mtok"]
     shown, cols, flagged = _with_unpriced(rows, cols, "unpriced_pct")
     print_table(shown, cols)
     print("\nlist $ = API list-price equivalent" + (
@@ -241,9 +243,11 @@ def cmd_summary(args):
         print("REAL = what you actually pay: your plan fee accrued daily over the period "
               "(monthly fee / days in month).\nREAL /MTok = real $ / all tokens, in cents (dollars from $1); LIST:REAL = list $ / "
               "real $. Days/weeks/months are UTC.")
-    if model_view:
-        print("Model views show list price only: the fee is per engine, so REAL columns are '-' on model rows. "
-              "'% of list $' = the row's share of that engine's list cost in the period; "
+    if model_view or args.by == "engine":
+        print("Model rows: the fee is per engine, so the measured REAL columns are '-' on them. "
+              "'est.' columns are ESTIMATES: the engine's fee split across models in proportion to their list $ "
+              "(assumes quota is consumed in proportion to list price; Anthropic does not publish how Max limits "
+              "weigh models). '% of list $' = share of the engine's list cost in the period; "
               "'list /MTok' = list $ / all tokens, in cents (dollars from $1).")
     for n in _fee_notes(conn, rows):
         print("note: " + n)

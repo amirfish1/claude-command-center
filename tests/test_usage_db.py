@@ -619,6 +619,34 @@ class CostTests(UsageDbCase):
         split = {r["model"] for r in queries.summarize(self.conn, "month", split_model=True)}
         self.assertEqual(split, {"claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5"})
 
+    def test_estimated_real_cost_splits_the_fee_by_list_share(self):
+        self._priced_month_with_plan(100)  # sonnet 3.4 + opus 7.75 = 11.15 list; a full month = $100
+        kw = dict(as_of="2026-09-30T12:00:00Z")
+        fam = {r["model"]: r for r in queries.summarize(self.conn, "month", by_family=True, **kw)}
+        self.assertAlmostEqual(fam["Sonnet"]["est_real_cost_usd"], 100 * 3.4 / 11.15, places=2)
+        self.assertAlmostEqual(fam["Opus"]["est_real_cost_usd"], 100 * 7.75 / 11.15, places=2)
+        self.assertAlmostEqual(fam["Sonnet"]["est_real_cost_usd"] + fam["Opus"]["est_real_cost_usd"], 100.0, places=1)
+        tok = 1_000_000 + 2_000_000 + 100_000  # the sonnet call
+        self.assertAlmostEqual(fam["Sonnet"]["est_real_usd_per_mtok"], 100 * 3.4 / 11.15 * 1e6 / tok, places=3)
+        self.assertIsNone(fam["Sonnet"]["real_cost_usd"])  # the measured column stays empty on model rows
+        # a name filter still divides by the ENGINE's whole list cost, not just the filtered names
+        only = queries.summarize(self.conn, "month", model="opus", **kw)[0]
+        self.assertAlmostEqual(only["est_real_cost_usd"], 100 * 7.75 / 11.15, places=2)
+        # engine-level rows never carry an estimate
+        self.assertIsNone(queries.summarize(self.conn, "month", **kw)[0]["est_real_cost_usd"])
+        # an unpriced model gets no estimate (its list cost is unknown)
+        self.conn.execute("DELETE FROM price_rates WHERE pricing_key = 'claude-opus-5'")
+        rows = {r["model"]: r for r in queries.summarize(self.conn, "month", by_family=True, **kw)}
+        self.assertIsNone(rows["Opus"]["est_real_cost_usd"])
+        self.assertAlmostEqual(rows["Sonnet"]["est_real_cost_usd"], 100.0, places=2)  # all priced cost is sonnet's
+
+    def test_no_fee_means_no_estimate(self):
+        self._two_model_session()
+        self.add_rate("claude-sonnet-5", 2.0, 0.2, 2.5, 10.0)
+        self.add_rate("claude-opus-5", 5.0, 0.5, 6.25, 25.0, cw1h=10.0)
+        for r in queries.summarize(self.conn, "month", by_family=True):
+            self.assertIsNone(r["est_real_cost_usd"])
+
     def test_since_until_bound_usage_and_fee(self):
         self._priced_month_with_plan(100)  # usage on 2026-09-01; plan open-ended
         kw = dict(as_of="2026-09-30T12:00:00Z")
