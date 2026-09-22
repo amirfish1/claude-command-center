@@ -28243,9 +28243,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_json(detail)
         elif path == "/api/media":
-            # Stream a repo-sandboxed video file so mobile clients (and anyone
-            # on a Tailnet/VPN) can click an MP4 link and have the browser
-            # play it instead of trying to open it on the remote macOS host.
+            # Stream a repo-sandboxed video/html file so mobile clients (and
+            # anyone on a Tailnet/VPN) can click a link and have the browser
+            # play/render it instead of trying to open it on the remote host
+            # — /api/open's `open`/xdg-open call only does something useful
+            # when a human is sitting at the server's own display.
             qs = urllib.parse.parse_qs(parsed.query)
             target = (qs.get("path") or [""])[0].strip()
             if not target:
@@ -28267,8 +28269,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": resolved.get("error", "not found")}, status)
                 return
             file_path = Path(resolved["path"])
-            if _categorize_file_target(str(file_path)) != "videos" or not file_path.is_file():
-                self.send_json({"ok": False, "error": "not a video"}, 404)
+            media_category = _categorize_file_target(str(file_path))
+            if media_category not in ("videos", "html") or not file_path.is_file():
+                self.send_json({"ok": False, "error": "not a streamable video/html file"}, 404)
                 return
             try:
                 st = file_path.stat()
@@ -28284,6 +28287,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ".avi": "video/x-msvideo",
                 ".mkv": "video/x-matroska",
                 ".m4v": "video/mp4",
+                ".html": "text/html; charset=utf-8",
+                ".htm": "text/html; charset=utf-8",
             }
             content_type = ct_map.get(ext, "application/octet-stream")
             start, end = 0, max(0, size - 1)
@@ -28313,6 +28318,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Disposition", "inline")
             self.send_header("Cache-Control", "private, max-age=3600")
+            if media_category == "html":
+                # An arbitrary local HTML file rendered same-origin as the
+                # dashboard would otherwise run script with the dashboard's
+                # own ambient authority (cookies, same-origin fetch — which
+                # is exactly what the same-origin POST check trusts). Force
+                # every embedded script into a unique opaque origin: no
+                # same-origin, no forms, no popups, no top navigation.
+                self.send_header("Content-Security-Policy", "sandbox allow-scripts")
+                self.send_header("X-Content-Type-Options", "nosniff")
             if status == 206:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.end_headers()

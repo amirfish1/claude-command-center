@@ -15318,6 +15318,10 @@
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:mp4|mov|webm|avi|mkv|m4v)$/i.test(clean);
   }
+  function _isHtmlDocPath(p) {
+    const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
+    return /\.(?:html|htm)$/i.test(clean);
+  }
   function _pathLinkSessionContext(el) {
     try {
       const paneEl = el && el.closest ? el.closest('.conv-pane[data-pane-id]') : null;
@@ -15353,10 +15357,11 @@
       document.body.removeChild(tmp);
       return;
     }
-    if (_isVideoPath(p)) {
-      // Video links on mobile/Tailnet should stream from the CCC server so
-      // the phone's browser can play them. /api/open would try to open the
-      // file locally on the host Mac, which does nothing useful on a phone.
+    if (_isVideoPath(p) || _isHtmlDocPath(p)) {
+      // Video/HTML links on mobile/Tailnet should stream from the CCC server
+      // so the remote browser can play/render them. /api/open would try to
+      // open the file locally on the host machine, which does nothing useful
+      // for a viewer connected from elsewhere (CCC-30).
       const ctx = _pathLinkSessionContext(a);
       const url = new URL('/api/media', window.location.origin);
       url.searchParams.set('path', p);
