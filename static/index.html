@@ -1122,6 +1122,19 @@
               <path d="M7 1h4v4M11 1 6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
+          <!-- CCC-32: send this conversation into a right-hand split pane and
+               load the next conversation from the sidebar into this one, so
+               triaging a list of sessions one by one keeps the previous one
+               visible for reference instead of replacing it outright. -->
+          <button type="button" class="conv-pane-split-next" data-role="pane-split-next"
+                  title="Move to split view and load the next conversation here"
+                  aria-label="Move to split view and load the next conversation here">
+            <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true">
+              <rect x="1" y="2" width="4" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/>
+              <rect x="7" y="2" width="4" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/>
+              <path d="M2.6 6h2.3m0 0-1-1m1 1-1 1" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
           <!-- Per-pane header actions are compact in split mode / popouts:
                Annotate remains one-click, while recording controls live in
                the adjacent overflow menu. -->

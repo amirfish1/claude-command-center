@@ -2784,6 +2784,37 @@
   }
   .conv-pane-popout svg { display: block; }
   body.conversation-popout .conv-pane-popout { display: none; }
+  .conv-pane-split-next {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .conv-pane-split-next:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  }
+  .conv-pane-split-next:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .conv-pane-split-next svg { display: block; }
+  body.conversation-popout .conv-pane-split-next { display: none; }
+  /* Only the single main pane can hand itself off into a fresh split —
+     once #convSplit actually holds an orientation (two panes exist), the
+     action is either redundant or ambiguous, so hide it everywhere. */
+  #convSplit[data-orientation]:not([data-orientation=""]) .conv-pane-split-next {
+    display: none;
+  }
   @media (min-width: 1201px) {
     .conversations-view .conv-sticky-header { display: none !important; }
   }

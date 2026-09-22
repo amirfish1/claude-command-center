@@ -40532,6 +40532,18 @@
     _advanceMainAfterPopout(convId);
   });
 
+  // CCC-32: pane-header button next to pop-out — sends the main pane's
+  // conversation into a fresh right-hand split pane and loads the next
+  // sidebar conversation into the main pane, so triage keeps the previous
+  // conversation visible instead of just replacing it.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('[data-role="pane-split-next"]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (typeof moveMainConversationToSplitAndAdvance === 'function') moveMainConversationToSplitAndAdvance();
+  });
+
   // The popped-out conversation now lives in its own window — move the main
   // window on to the neighboring conversation so it isn't showing a
   // duplicate of what the user just split off (CCC-118). DOM order matches
@@ -42721,16 +42733,20 @@
 
   // Open `convId` in a new pane, splitting the existing pane in the
   // requested orientation. Used by the drop handler. No-op if the same
-  // conv is already open in the current pane (avoids a duplicate
-  // SSE stream and a confusing UX).
-  async function openConversationInPane(convId, targetPaneId, orientation) {
+  // conv is already open in the current pane (avoids a duplicate SSE stream
+  // and a confusing UX) — unless `opts.skipSameConvGuard` is set, which the
+  // "move to split" pane-header button (CCC-32) needs: its whole point is
+  // to relocate the pane's own current conversation into the new split.
+  async function openConversationInPane(convId, targetPaneId, orientation, opts) {
+    opts = opts || {};
     if (!convId) return;
     if (splitState.orientation && splitState.panes.length >= 2) {
       // Split is already full — caller should not have invoked us, but
       // we guard anyway.
       return;
     }
-    if (splitState.panes.length === 1 && splitState.panes[0].conversationId === convId) {
+    if (!opts.skipSameConvGuard
+        && splitState.panes.length === 1 && splitState.panes[0].conversationId === convId) {
       // Same conversation as the only existing pane — no-op (visible
       // tooltip handled by the caller's UX in Task 8).
       return;
@@ -42749,6 +42765,36 @@
     // Make p2 active and load the conversation in it.
     setActivePaneById(newPane.id, convId);
     await selectConversation(convId, newPane.id);
+  }
+
+  // CCC-32: send the main pane's current conversation into a fresh
+  // right-hand split pane, then load the next conversation from the
+  // sidebar (same DOM-order lookup as the pop-out button's
+  // _advanceMainAfterPopout) into the now-vacated main pane — so triaging
+  // a list of sessions keeps the one just finished visible for reference
+  // instead of replacing it outright.
+  async function moveMainConversationToSplitAndAdvance() {
+    const convId = (typeof currentConversation === 'string' && currentConversation && currentConversation !== '__new__')
+      ? currentConversation : null;
+    if (!convId) {
+      try { showOpToast('No conversation selected to split', 'error'); } catch (_) {}
+      return;
+    }
+    if (splitState.orientation && splitState.panes.length >= 2) {
+      try { showOpToast('Already split into two panes', 'error'); } catch (_) {}
+      return;
+    }
+    const items = [...document.querySelectorAll('.conv-item[data-id]')]
+      .filter(el => el.offsetParent && el.dataset.id);
+    const idx = items.findIndex(el => el.dataset.id === convId);
+    const next = idx >= 0 ? (items[idx + 1] || items[idx - 1]) : null;
+    await openConversationInPane(convId, null, 'vertical', { skipSameConvGuard: true });
+    if (next && next.dataset.id && next.dataset.id !== convId) {
+      await selectConversation(next.dataset.id, 'p1');
+      setActivePaneById('p1');
+    } else {
+      try { showOpToast('No next conversation to load', 'ok'); } catch (_) {}
+    }
   }
 
   function closePane(paneId) {
