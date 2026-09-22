@@ -29438,3 +29438,14 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .rail-log-toolbar .activity-log-scope-btn { padding: 3px 5px; min-width: 0; }
 .rail-log-kind-filters { grid-column: 2; grid-row: 1; display: flex; gap: 4px; }
 .rail-log-filter { grid-column: 1 / -1; grid-row: 2; width: 100%; }
+
+/* Coding / Cozy: keep the quiet unfinished-turn warning beside the title. */
+.conv-stuck-warning {
+  display: inline-flex;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: #eab308;
+  align-self: center;
+}
+.conv-stuck-warning svg { width: 100%; height: 100%; }

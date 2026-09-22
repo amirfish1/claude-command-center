@@ -1,0 +1,1 @@
+- Show a yellow warning triangle beside Coding sessions in Cozy view when an unfinished live turn has no recorded transcript or tool progress for five minutes. The tooltip explains the quiet period; completed turns and sessions waiting for input are excluded.

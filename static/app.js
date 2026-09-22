@@ -2984,6 +2984,43 @@
     } catch (_) {}
     return mode;
   }
+  // A warning, not a failure verdict: long tools can legitimately be quiet.
+  // Do not use last_interacted: opening a row is not agent progress. Keep
+  // unfinished sidecar/tool signals even when the working freshness cap expires.
+  function sessionStuckAge(c, nowSeconds = Date.now() / 1000) {
+    if (!c || !c.is_live || c.archived || c.trashed || c.verified
+        || c.pending_spawn || c.spawn_failed
+        || c.state === 'waiting' || c.state === 'ended'
+        || c.codex_state === 'waiting' || c.codex_state === 'idle'
+        || c.needs_approval || c.question_waiting
+        || c.sidecar_tool === 'AskUserQuestion'
+        || c.sidecar_status === 'waiting' || c.sidecar_status === 'idle'
+        || c.last_event_type === 'result') return 0;
+    const unfinished = c.state === 'working' || c.codex_state === 'working'
+      || c.sidecar_status === 'active' || c.sidecar_in_flight
+      || c.pending_tool || c.stale_tool_call || c.last_event_type === 'user';
+    if (!unfinished) return 0;
+    const progress = Math.max(...[
+      c.transcript_mtime, c.mtime, c.modified, c.last_event_ts,
+      c.sidecar_ts, c.pending_tool_ts, c.codex_app_server_last_activity_at,
+    ].map(value => Number.isFinite(Number(value)) ? Number(value) : 0));
+    const age = progress > 0 ? nowSeconds - progress : 0;
+    return age >= 5 * 60 ? Math.floor(age) : 0;
+  }
+
+  function sessionStuckWarningHtml(c) {
+    if (sessionDensityLane() !== 'coding' || sessionDensity('coding') !== 'cozy') return '';
+    const age = sessionStuckAge(c);
+    if (!age) return '';
+    const label = 'Possibly stuck: no recorded transcript or tool progress for '
+      + Math.floor(age / 60) + ' min while the turn is unfinished. Long-running work can also be quiet.';
+    return '<span class="conv-stuck-warning" role="img" aria-label="' + escapeAttr(label)
+      + '" title="' + escapeAttr(label) + '"><svg viewBox="0 0 20 20" aria-hidden="true">'
+      + '<path d="M10 2 19 18H1Z" fill="currentColor"/>'
+      + '<path d="M10 7v5m0 2v1" stroke="#231b00" stroke-width="2" stroke-linecap="round"/>'
+      + '</svg></span>';
+  }
+
   function setSessionDensity(lane, mode) {
     const next = WORKERS_DENSITY_MODES.includes(mode) ? mode : 'compact';
     if (lane !== 'coding' && lane !== 'workers') return next;
@@ -3331,6 +3368,7 @@
     'question_header', 'question_preamble', 'question_options', 'question_option_details',
     'codex_state', 'codex_fresh', 'codex_state_reason',
     'codex_writer', 'codex_desktop_attached',
+    'transcript_mtime', 'last_event_ts', 'pending_tool_ts', 'codex_app_server_last_activity_at',
   ];
 
   function _liveOverlayFieldsFromRow(c) {
@@ -34612,6 +34650,7 @@
             + _nyaChevronHtml
             + needsYouHtml
             + workingDotHtml
+            + sessionStuckWarningHtml(c)
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             // .conv-meta-col is display:contents everywhere except the Workers
             // table layout, where it becomes the row's single meta CELL. Grid
@@ -67752,6 +67791,8 @@
         // The row's "done" chip ages from this — mtime lags real turn-end for
         // engines whose transcript isn't the row's `modified` source.
         last_event_ts: c.last_event_ts || 0,
+        transcript_mtime: c.transcript_mtime || 0,
+        codex_app_server_last_activity_at: c.codex_app_server_last_activity_at || 0,
         // CCC-863: the epoch a usage-limit-stopped session auto-resumes at.
         // Same allowlist trap as session_state/auto_titled above — drops
         // silently if not named here.
