@@ -3009,7 +3009,15 @@
   }
 
   function sessionStuckWarningHtml(c) {
-    if (sessionDensityLane() !== 'coding' || sessionDensity('coding') !== 'cozy') return '';
+    const lane = sessionDensityLane();
+    if (lane) {
+      if (sessionDensity(lane) === 'compact') return '';
+    } else {
+      let tab = '';
+      try { tab = localStorage.getItem('ccc-sidebar-tab') || ''; } catch (_) {}
+      // Active uses the older Wrap / Details controls for these densities.
+      if (tab !== 'inprogress' || (compactRowsOn() && !wrapTitlesOn())) return '';
+    }
     const age = sessionStuckAge(c);
     if (!age) return '';
     const label = 'Possibly stuck: no recorded transcript or tool progress for '

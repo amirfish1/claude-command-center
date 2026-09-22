@@ -1,0 +1,1 @@
+- Extend quiet unfinished-turn warning triangles to Cozy and Detailed in Coding and Workers, and to Active when Wrap or Details is enabled.

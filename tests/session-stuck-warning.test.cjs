@@ -36,11 +36,22 @@ test('unfinished tool and working states are engine-independent', () => {
     assert.equal(h.sessionStuckAge({ is_live: true, mtime: now - 600, ...signal }, now), 600);
   }
 });
-test('warning has accessible tooltip and is limited to Coding Cozy', () => {
+test('warning covers Cozy and Detailed in Coding, Workers, and Active only', () => {
   const fixture = { ...row, mtime: Date.now() / 1000 - 600 };
-  assert.match(h.sessionStuckWarningHtml(fixture), /role="img" aria-label="Possibly stuck/);
-  for (const [lane, density] of [['coding', 'compact'], ['coding', 'detailed'], ['workers', 'cozy'], ['', 'cozy']]) {
-    h.sessionDensityLane = () => lane; h.sessionDensity = () => density;
+  for (const lane of ['coding', 'workers', '']) {
+    for (const density of ['compact', 'cozy', 'detailed']) {
+      h.sessionDensityLane = () => lane;
+      h.sessionDensity = () => density;
+      h.localStorage = { getItem: () => 'inprogress' };
+      h.compactRowsOn = () => density !== 'detailed';
+      h.wrapTitlesOn = () => density !== 'compact';
+      const html = h.sessionStuckWarningHtml(fixture);
+      if (density === 'compact') assert.equal(html, '');
+      else assert.match(html, /role="img" aria-label="Possibly stuck/);
+    }
+  }
+  for (const tab of ['archived', 'queues', 'issues']) {
+    h.localStorage = { getItem: () => tab };
     assert.equal(h.sessionStuckWarningHtml(fixture), '');
   }
 });
