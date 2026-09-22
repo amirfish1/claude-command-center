@@ -53713,6 +53713,7 @@
       { id: 'gpt-5.3-codex-spark',  label: '5.3 Codex Spark' },
     ],
     cursor: [
+      { id: 'opus-5-5',  label: 'opus-5-5',  oneM: true },
       { id: 'auto',                          label: 'Auto (default)' },
       { id: 'composer-2.5-fast',             label: 'composer-2.5-fast' },
       { id: 'gpt-5.3-codex',                 label: 'gpt-5.3-codex' },
@@ -53763,8 +53764,9 @@
       { id: 'openrouter/openai/gpt-5',                label: 'gpt-5' },
     ],
     devin: [
-      { id: 'adaptive',        label: 'Adaptive (default)' },
-      { id: 'claude-opus-5',   label: 'Claude Opus 5' },
+      { id: 'adaptive',          label: 'Adaptive (default)' },
+      { id: 'claude-opus-5-5',  label: 'Claude Opus 5.5' },
+      { id: 'claude-opus-5',    label: 'Claude Opus 5' },
       { id: 'claude-fable-5',  label: 'Claude Fable 5' },
       { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
       { id: 'gpt-5.6-sol',     label: 'GPT-5.6 Sol' },
@@ -53795,6 +53797,7 @@
 
   const ENGINE_SUPPORTS_CUSTOM_MODEL = {
     claude: true,
+      { id: 'claude-opus-5-5',  label: 'Claude Opus 5.5' },
     codex: false,
     cursor: true,
     gemini: true,
@@ -61443,6 +61446,7 @@
   let _orchSim = null;           // { lanes: [...] } while the Preview plays
   let _orchSimTimers = [];
   let _orchPollTimer = null;
+    { id: 'opus-5-5',      engine: 'claude',      model: 'opus-5-5',              label: 'Opus 5.5',       vendor: 'Claude',      family: 'anthropic' },
 
   function orchExecutor() {
     let id = '';
@@ -77059,6 +77063,7 @@
     if (host._comparisonMarkup === markup) return;
     const scrollTop = host.querySelector('.ns-model-table-wrap')?.scrollTop || 0;
     const focusedModel = host.contains(document.activeElement) ? document.activeElement.dataset.model : null;
+      'opus-5-5': 'Complex coding agents and enterprise tasks.',
     host.innerHTML = markup;
     host._comparisonMarkup = markup;
     host.querySelector('.ns-model-table-wrap').scrollTop = scrollTop;

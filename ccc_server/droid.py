@@ -22,6 +22,7 @@ _DROID_HELP_LOCK = threading.Lock()
 
 _DROID_FACTORY_MODELS = (
     {"id": "claude-fable-5", "label": "Claude Fable 5", "multiplier": 4.0, "droid_core": False, "reasoning_efforts": ("off", "low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high", "notes": "Mythos-class; 30-day data retention"},
+    {"id": "claude-opus-5-5", "label": "Claude Opus 5.5", "multiplier": 2.0, "droid_core": False, "reasoning_efforts": ("off", "low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-5", "label": "Claude Opus 5", "multiplier": 2.0, "droid_core": False, "reasoning_efforts": ("off", "low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-5-fast", "label": "Claude Opus 5 Fast", "multiplier": 4.0, "droid_core": False, "reasoning_efforts": ("off", "low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-4-8", "label": "Claude Opus 4.8", "multiplier": 2.0, "droid_core": False, "reasoning_efforts": ("off", "low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},

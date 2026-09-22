@@ -54,6 +54,14 @@ class TestModelPickerContracts(unittest.TestCase):
         self.assertIn('/api/model-picker/record', app_js)
         self.assertIn('convModelPickerStrip', app_js)
 
+    def test_opus_5_5_is_available_across_model_picker_surfaces(self):
+        self.assertIn("opus-5-5", server._ENGINE_KNOWN_MODELS["claude"])
+        self.assertTrue(server._claude_model_supports_1m("claude-opus-5-5"))
+        self.assertIn("claude-opus-5-5", {model["id"] for model in server._CLAUDE_ANTHROPIC_MODELS})
+        app_js = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("{ id: 'opus-5-5'", app_js)
+        self.assertIn("label: 'Opus 5.5'", app_js)
+
     def test_record_and_get_model_picker_picks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_history = pathlib.Path(tmpdir) / "model-picker-history.json"

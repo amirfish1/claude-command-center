@@ -40,6 +40,18 @@
   },
   {
    "provider": "anthropic",
+   "pricing_key": "claude-opus-5-5",
+   "effective_from": "1970-01-01",
+   "input": 5.0,
+   "cache_read": 0.5,
+   "cache_write_5m": 6.25,
+   "cache_write_1h": 10.0,
+   "output": 25.0,
+   "source_note": "carried over from ccc_server/morning_launch.py _MODEL_RATES; effective date unknown so applied to all time; cache_write_1h = 2x input",
+   "verified_at": null
+  },
+  {
+   "provider": "anthropic",
    "pricing_key": "claude-opus-5",
    "effective_from": "1970-01-01",
    "input": 5.0,

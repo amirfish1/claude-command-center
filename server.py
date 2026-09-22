@@ -5414,7 +5414,7 @@ def _short_model_alias(model):
 
 def _claude_model_supports_1m(model):
     alias = _short_model_alias(model).lower()
-    return alias in ("fable-5", "opus-5", "sonnet-5", "opus-4-8", "opus-4-7")
+    return alias in ("fable-5", "opus-5-5", "opus-5", "sonnet-5", "opus-4-8", "opus-4-7")
 
 
 def _model_context_1m_allowed(model, context_1m, engine="claude"):
@@ -7147,6 +7147,7 @@ def _spawn_fallback_model_for_engine(engine):
 _ENGINE_CURATED_MODELS = {
     "claude": (
         {"id": "fable-5", "label": "fable-5", "oneM": True},
+        {"id": "opus-5-5", "label": "opus-5-5", "oneM": True},
         {"id": "opus-5", "label": "opus-5", "oneM": True},
         {"id": "sonnet-5", "label": "sonnet-5", "oneM": True},
         {"id": "opus-4-8", "label": "opus-4-8", "oneM": True},
@@ -7217,6 +7218,7 @@ _ENGINE_CURATED_MODELS = {
         {"id": "grok-4.5", "label": "Grok 4.5"},
     ),
     "droid": (
+        {"id": "claude-opus-5-5", "label": "Claude Opus 5.5"},
         {"id": "claude-opus-5", "label": "Claude Opus 5"},
         {"id": "claude-sonnet-5", "label": "Claude Sonnet 5"},
         {"id": "gpt-5.4", "label": "GPT-5.4"},
@@ -7229,6 +7231,7 @@ _ENGINE_CURATED_MODELS = {
     ),
     "devin": (
         {"id": "adaptive", "label": "Adaptive (default)"},
+        {"id": "claude-opus-5-5", "label": "Claude Opus 5.5"},
         {"id": "claude-opus-5", "label": "Claude Opus 5"},
         {"id": "claude-fable-5", "label": "Claude Fable 5"},
         {"id": "claude-sonnet-5", "label": "Claude Sonnet 5"},
@@ -7372,6 +7375,7 @@ _CLAUDE_MODEL_CATALOG_FILE = COMMAND_CENTER_STATE_DIR / "claude-models.json"
 _CLAUDE_ANTHROPIC_MODELS = (
     {"id": "claude-fable-5-1", "label": "Claude Fable 5.1", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-fable-5", "label": "Claude Fable 5", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-opus-5-5", "label": "Claude Opus 5.5", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-5", "label": "Claude Opus 5", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-4-8", "label": "Claude Opus 4.8", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-4-7", "label": "Claude Opus 4.7", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
