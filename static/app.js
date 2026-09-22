@@ -42310,6 +42310,15 @@
     const restore = document.getElementById('statusRailRestoreBtn');
     if (rail && rail.parentElement !== pane) pane.appendChild(rail);
     if (restore && restore.parentElement !== pane) pane.appendChild(restore);
+    // CCC-29: the new-session repo/model picker strip is a single global
+    // singleton (only one spawn config exists at a time), statically parked
+    // inside p1's markup. In split view it must follow whichever pane is
+    // actually composing a new session, or the picker stays visually pinned
+    // to the left pane while the right pane shows "New session". CSS lays
+    // it out by flex `order` on `.conv-pane`, so reparenting is safe
+    // regardless of DOM position.
+    const pickerStrip = document.getElementById('convModelPickerStrip');
+    if (pickerStrip && pickerStrip.parentElement !== pane) pane.appendChild(pickerStrip);
     syncAllPaneHasFlags();
   }
 
@@ -77096,6 +77105,10 @@
   function enterNewSessionMode() {
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
+    // CCC-29: entering new-session mode does not always go through
+    // setActivePaneById (e.g. the pane was already active), so the picker
+    // strip's reparent must happen here too, not just on pane-focus change.
+    if (typeof mountStatusRailForPaneId === 'function') mountStatusRailForPaneId(paneId);
     // The queued-steer tray lives beside the persistent composer, outside the
     // transcript replaced below. It belongs to the previously open session,
     // so remove it before exposing a session-less composer.
