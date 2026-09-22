@@ -45847,6 +45847,19 @@
       }
       const $row = ev.target.closest && ev.target.closest('.fq-working-row[data-uxq-working-ref]');
       if (!$row) return;
+      // CCC-26: the session-open arrow button is hover-revealed (opacity: 0
+      // until :hover), so it is effectively invisible/untappable on touch.
+      // On mobile, tapping the row itself should jump straight to the CCC
+      // session instead of silently doing nothing (idle workers have no
+      // ticket ref) or opening the ticket picker.
+      if (_uxqPicker.isMobile) {
+        const rowSid = $row.getAttribute('data-uxq-session') || '';
+        if (rowSid) {
+          if (typeof window.cccOpenSession === 'function') window.cccOpenSession(rowSid);
+          else if (typeof selectConversation === 'function') selectConversation(rowSid);
+          return;
+        }
+      }
       const ref = $row.getAttribute('data-uxq-working-ref');
       if (!ref) return;
       // Find the item to switch queue if needed.
@@ -45988,7 +46001,7 @@
           ? '<button type="button" class="fq-worker-session" data-uxq-open-session="' + escapeAttr(r.sid) + '" title="Open the CCC session this worker is running in" aria-label="Open CCC session">&#8599;</button>'
           : '';
         if (_uxqPicker.isMobile) {
-          return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
+          return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '" data-uxq-session="' + escapeAttr(r.sid) + '">'
             + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
             + r.icon
             + '<span class="fq-working-body">'
