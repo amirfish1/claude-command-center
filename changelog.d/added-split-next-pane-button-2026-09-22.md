@@ -1,0 +1,1 @@
+Added a button next to the pane pop-out button that moves the current conversation into a right-hand split pane and loads the next conversation from the sidebar into the main pane, for triaging sessions one by one without losing the previous one from view.
