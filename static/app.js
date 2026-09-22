@@ -53968,8 +53968,11 @@
       ['max_context_tokens', 'max_output_tokens'].forEach(key => {
         if (row[key] != null) next[key] = Number(row[key]);
       });
-      ['cost_tier', 'cost_summary', 'entitlement', 'entitlement_summary', 'entitlement_source'].forEach(key => {
-        if (row[key]) next[key] = String(row[key]);
+      ['cost_tier', 'cost_summary', 'entitlement', 'entitlement_summary', 'entitlement_source', 'description'].forEach(key => {
+        if (row[key] != null) next[key] = String(row[key]);
+      });
+      ['supports_vision', 'supports_tool_call', 'supports_reasoning'].forEach(key => {
+        if (typeof row[key] === 'boolean') next[key] = row[key];
       });
       byNorm.set(norm, next);
       if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(next);
@@ -54002,6 +54005,7 @@
         }
       });
       applyEffortsByEngine(data && data.efforts_by_engine);
+      syncSpawnEngineDependentUi();
       return data;
     } catch (_) {
       return null;
@@ -68761,6 +68765,7 @@
     if (typeof syncNsModelPickerPillsSelection === 'function') {
       syncNsModelPickerPillsSelection();
     }
+    renderNsModelComparison();
   }
   function setSpawnEngine(v, opts) {
     v = normalizeSpawnDefaultEngine(v);
@@ -77008,6 +77013,80 @@
     });
   }
 
+  // Provider guidance, checked 2026-09-22:
+  // https://platform.claude.com/docs/en/models/overview
+  // Exact IDs only: future models must not inherit an older model's claims.
+  function spawnModelDescription(engine, opt) {
+    if (opt.description) return opt.description;
+    const claudeGuidance = {
+      'fable-5-1': 'Demanding reasoning and long-running agent tasks.',
+      'opus-5': 'Complex coding agents and enterprise tasks.',
+      'sonnet-5': 'Balances speed and intelligence.',
+      'haiku-4-5': 'Lowest latency in the current Claude lineup.',
+    };
+    return (engine === 'claude' && claudeGuidance[_normalizeModelId(opt.id)]) || 'No task guidance in this catalog.';
+  }
+
+  function renderNsModelComparison() {
+    if (currentConversation !== '__new__') return;
+    const host = getConvView()?.querySelector('.ns-model-comparison');
+    if (!host) return;
+    const engine = getSpawnEngine();
+    const selected = $convInputModelSelect?.value || _defaultModelsByEngine[engine] || '';
+    const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+    // Keep catalog order stable as the user compares and selects rows.
+    const engineOptions = Array.from($convInputEngineSelect?.options || [])
+      .filter(o => !o.hidden && !o.disabled)
+      .map(o => '<option value="' + escapeAttr(o.value) + '"' + (o.value === engine ? ' selected' : '') + '>' + escapeHtml(o.textContent) + '</option>').join('');
+    const selectedOption = options.find(opt => _normalizeModelId(opt.id) === _normalizeModelId(selected));
+    const rows = options.map(opt => {
+      const active = _normalizeModelId(opt.id) === _normalizeModelId(selected);
+      const capabilities = [];
+      if (opt.supports_reasoning) capabilities.push('Reasoning');
+      if (opt.supports_vision) capabilities.push('Images');
+      if (opt.supports_tool_call) capabilities.push('Tools');
+      if (opt.max_context_tokens) capabilities.push(_compactTokenLabel(opt.max_context_tokens) + ' context');
+      if (opt.max_output_tokens) capabilities.push(_compactTokenLabel(opt.max_output_tokens) + ' max output');
+      const unavailable = opt.available === false;
+      const status = unavailable ? (opt.availability_reason || 'Unavailable in this engine') : opt.policy_blocked ? 'Requires policy confirmation' : '';
+      return '<tr class="' + (active ? 'is-selected' : '') + '"><td>'
+        + '<button type="button" class="ns-model-choice" data-model="' + escapeAttr(opt.id) + '" aria-pressed="' + active + '"' + (unavailable ? ' disabled' : '') + '>'
+        + escapeHtml(opt.label || opt.id) + (active ? ' ✓' : '') + '</button>'
+        + (status ? '<small>' + escapeHtml(status) + '</small>' : '') + '</td><td>'
+        + escapeHtml(spawnModelDescription(engine, opt))
+        + '<small>' + escapeHtml(capabilities.join(' · ') || 'Capabilities not reported') + '</small></td><td class="ns-model-cost">'
+        + escapeHtml(opt.cost_summary || 'Price not reported')
+        + (opt.entitlement_summary ? '<small>' + escapeHtml(opt.entitlement_summary) + '</small>' : '')
+        + '</td></tr>';
+    }).join('');
+    const markup = '<div class="ns-model-heading"><strong>Compare models</strong><label>Engine <select aria-label="Compare models for engine">'
+      + engineOptions + '</select></label></div>'
+      + '<p class="ns-model-note">Catalog token rates: USD per 1 million tokens where quoted. Subscription charges and quota usage differ; caching, effort, and service tiers can change cost.</p>'
+      + '<p class="ns-model-selected">Selected: ' + escapeHtml(selectedOption?.label || selected || 'Engine default') + ' · ' + escapeHtml(selectedOption?.cost_summary || 'Price not reported') + '</p>'
+      + '<div class="ns-model-table-wrap"><table><thead><tr><th>Model · click to select</th><th>Strengths & capabilities</th><th>Cost / plan</th></tr></thead><tbody>'
+      + (rows || '<tr><td colspan="3">No model details available for this engine.</td></tr>') + '</tbody></table></div>'
+      + '<p class="ns-model-note">Descriptions are provider guidance, not benchmark rankings. Prices reflect the available catalog and may lag provider changes.'
+      + (engine === 'claude' ? ' <a href="https://platform.claude.com/docs/en/models/overview" target="_blank" rel="noopener noreferrer">Claude model guide</a>' : '') + '</p>';
+    // Polling must not replace focused controls when nothing has changed.
+    if (host._comparisonMarkup === markup) return;
+    const scrollTop = host.querySelector('.ns-model-table-wrap')?.scrollTop || 0;
+    const focusedModel = host.contains(document.activeElement) ? document.activeElement.dataset.model : null;
+    host.innerHTML = markup;
+    host._comparisonMarkup = markup;
+    host.querySelector('.ns-model-table-wrap').scrollTop = scrollTop;
+    host.querySelector('select').addEventListener('change', event => {
+      _spawnEngineChosenByUser = true;
+      setSpawnEngine(event.target.value);
+    });
+    host.querySelectorAll('[data-model]').forEach(button => {
+      button.addEventListener('click', () => {
+        setSpawnDefaultModel(engine, button.dataset.model);
+        if (engine === 'claude') scheduleClaudePrewarm();
+      });
+      if (button.dataset.model === focusedModel) button.focus({ preventScroll: true });
+    });
+  }
+
   function enterNewSessionMode() {
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
@@ -77064,6 +77143,7 @@
         + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-stage-title">New session</div>'
         + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
+        + '<section class="ns-model-comparison" aria-label="Compare models"></section>'
         + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
         +   '<summary>Create a fresh folder</summary>'
         +   '<div class="ns-choice-card ns-choice-card-compact" id="nsCardNewProject">'

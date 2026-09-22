@@ -29449,3 +29449,30 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   align-self: center;
 }
 .conv-stuck-warning svg { width: 100%; height: 100%; }
+
+/* Model comparison is part of the new-session decision, before launch. */
+.ns-stage-quiet { padding-top: clamp(16px, 3vh, 32px); }
+.ns-stage-quiet .ns-hero-quiet { width: 100%; min-width: 0; }
+.ns-model-comparison { width: 100%; max-width: 960px; text-align: left; color: var(--text); }
+.ns-model-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+.ns-model-heading label { display: flex; align-items: center; gap: 8px; }
+.ns-model-heading select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 5px; max-width: 200px; }
+.ns-model-note { color: var(--text-muted); font-size: 11px; line-height: 1.5; margin: 8px 0; }
+.ns-model-table-wrap { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.ns-model-comparison table { border-collapse: collapse; width: 100%; font-size: 12px; line-height: 1.45; }
+.ns-model-comparison th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--text-muted); font-size: 11px; z-index: 1; }
+.ns-model-comparison th, .ns-model-comparison td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ns-model-comparison td:first-child { width: 23%; }
+.ns-model-comparison .ns-model-cost { width: 28%; font-variant-numeric: tabular-nums; }
+.ns-model-comparison small { display: block; color: var(--text-muted); font-size: 10px; margin-top: 5px; }
+.ns-model-comparison tr.is-selected { background: color-mix(in srgb, var(--accent, #58a6ff) 12%, transparent); }
+.ns-model-choice { border: 0; background: transparent; color: var(--text); padding: 0; text-align: left; font: inherit; font-weight: 600; cursor: pointer; overflow-wrap: anywhere; }
+.ns-model-choice:hover { color: var(--accent, #58a6ff); text-decoration: underline; }
+.ns-model-choice:focus-visible { outline: 2px solid var(--accent, #58a6ff); outline-offset: 3px; }
+.ns-model-choice:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 600px) {
+  .ns-stage-quiet { padding: 14px 8px; }
+  .ns-model-comparison th, .ns-model-comparison td { padding: 7px 5px; }
+  .ns-model-comparison table { font-size: 11px; }
+}
+.ns-model-selected { font-size: 12px; line-height: 1.5; margin: 10px 0; font-weight: 600; }

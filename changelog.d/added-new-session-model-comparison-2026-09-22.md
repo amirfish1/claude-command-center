@@ -1,0 +1,1 @@
+New Session now compares model strengths, capabilities, context limits, and catalog prices before launch. Select models directly from the comparison and switch engines without losing the shared composer selection. Subscription billing and missing pricing are labeled explicitly.
