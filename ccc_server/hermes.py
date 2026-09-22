@@ -1402,6 +1402,48 @@ def _hermes_session_row(session_id):
         con.close()
 
 
+def _hermes_lineage_chain_lazy(con, session_id):
+    """Same walk as _hermes_lineage_chain, but fetches one row per hop
+    instead of requiring the whole sessions table pre-loaded into rows_by_id.
+
+    A single conversation open only ever needs this session's ancestor
+    chain (typically 1-3 hops), not every session in the DB — see the
+    perf note on _parse_hermes_conversation's caller (CCC-24). Returns
+    (chain, rows_by_id) with rows_by_id containing only the visited rows,
+    so `session_id not in rows_by_id` still detects an unknown session.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return [], {}
+    chain = []
+    seen = set()
+    rows_by_id = {}
+    cur = sid
+    while cur and cur not in seen:
+        row = _hermes_fetch_session_row(con, cur)
+        if not row:
+            if cur == sid:
+                chain.append(cur)
+            break
+        rows_by_id[cur] = row
+        chain.append(cur)
+        seen.add(cur)
+        cur = str(row.get("parent_session_id") or "").strip()
+    chain.reverse()
+    return chain, rows_by_id
+
+
+def _hermes_fetch_session_row(con, session_id):
+    cols = _hermes_columns(con, "sessions")
+    if "id" not in cols:
+        return None
+    try:
+        row = con.execute("SELECT * FROM sessions WHERE id=? LIMIT 1", (session_id,)).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        return None
+
+
 def _hermes_lineage_chain(session_id, rows_by_id):
     sid = str(session_id or "").strip()
     if not sid:
@@ -2063,11 +2105,10 @@ def _parse_hermes_conversation(session_id, after_line=0):
     events = []
     line = 0
     try:
-        sessions = _hermes_fetch_sessions(con, limit=None)
-        rows_by_id = {str(r.get("id")): r for r in sessions if r.get("id")}
+        chain, rows_by_id = _hermes_lineage_chain_lazy(con, session_id)
         if session_id not in rows_by_id:
             return {"events": [], "last_line": 0}
-        chain = _hermes_lineage_chain(session_id, rows_by_id) or [session_id]
+        chain = chain or [session_id]
         # Phase 1: build each segment's event list up front — DB messages merged
         # with failed-turn error records (request_dump files), in chronological
         # order. Successful turns live in the DB; turns whose upstream API call

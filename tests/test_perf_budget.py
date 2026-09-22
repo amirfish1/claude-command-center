@@ -3342,3 +3342,93 @@ def test_ui_trash_is_optimistic():
     assert "item.style.display = 'none'" in app_js, "Trash button must hide row immediately"
     assert "setOptimisticOverride(sessionId, { archived: targetArchived, trashed: wantTrashed })" in app_js
     assert "requestAnimationFrame(() => {" in app_js, "Sidebar re-render must be scheduled without blocking frame"
+
+
+# ── Hermes conv_open lineage lookup (CCC-24) ─────────────────────────────────
+# Opening one Hermes conversation used to `SELECT * FROM sessions` (every
+# column, every row) just to resolve a 1-3 hop parent chain — an O(all
+# sessions) scan on every click that got slower as a profile's Hermes DB
+# grew (714+ rows in production). The fix walks the chain with one
+# targeted `WHERE id=?` fetch per hop instead of preloading the table.
+
+
+def test_hermes_conv_open_does_not_scan_whole_sessions_table(monkeypatch, tmp_path):
+    """A single Hermes conversation open must not load every session row."""
+    import sqlite3
+    import ccc_server.hermes as hermes_mod
+
+    parent = "20260601_120000_parent"
+    child = "20260601_121000_child"
+    db = tmp_path / "state.db"
+    con = sqlite3.connect(db)
+    try:
+        con.executescript("""
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, source TEXT, user_id TEXT, model TEXT,
+                system_prompt TEXT, title TEXT, started_at REAL, ended_at REAL,
+                parent_session_id TEXT, message_count INTEGER,
+                tool_call_count INTEGER, cwd TEXT, archived INTEGER
+            );
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,
+                role TEXT, content TEXT, tool_call_id TEXT, tool_calls TEXT,
+                tool_name TEXT, timestamp REAL, token_count INTEGER,
+                finish_reason TEXT, reasoning TEXT, active INTEGER
+            );
+        """)
+        # A large unrelated corpus (production-scale: 714+ rows) that a
+        # single-session open must never have to read.
+        for i in range(600):
+            con.execute(
+                "INSERT INTO sessions (id, source, started_at, archived) VALUES (?,?,?,0)",
+                (f"unrelated-{i}", "cli", 1780300000.0 + i),
+            )
+        con.execute(
+            "INSERT INTO sessions (id, source, started_at, parent_session_id, archived) VALUES (?,?,?,?,0)",
+            (parent, "cli", 1780315200.0, "", ),
+        )
+        con.execute(
+            "INSERT INTO sessions (id, source, started_at, parent_session_id, archived) VALUES (?,?,?,?,0)",
+            (child, "cli", 1780315800.0, parent),
+        )
+        con.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+            (child, "user", "hi", 1780315810.0),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    orig_db = server.HERMES_STATE_DB
+    orig_gateway = server.HERMES_GATEWAY_SESSIONS
+    server.HERMES_STATE_DB = db
+    server.HERMES_GATEWAY_SESSIONS = tmp_path / "sessions" / "sessions.json"
+    server._HERMES_ID_CACHE["key"] = None
+    server._HERMES_ID_CACHE["ids"] = set()
+    server._HERMES_GATEWAY_CACHE["key"] = None
+    server._HERMES_GATEWAY_CACHE["by_session"] = {}
+    server._ENGINE_DETECT_CACHE.clear()
+    calls = []
+    orig_fetch_sessions = hermes_mod._hermes_fetch_sessions
+
+    def spy_fetch_sessions(*a, **k):
+        calls.append((a, k))
+        return orig_fetch_sessions(*a, **k)
+
+    monkeypatch.setattr(hermes_mod, "_hermes_fetch_sessions", spy_fetch_sessions)
+    try:
+        parsed = server._parse_hermes_conversation(child, after_line=0)
+    finally:
+        server.HERMES_STATE_DB = orig_db
+        server.HERMES_GATEWAY_SESSIONS = orig_gateway
+        server._HERMES_ID_CACHE["key"] = None
+        server._HERMES_ID_CACHE["ids"] = set()
+        server._HERMES_GATEWAY_CACHE["key"] = None
+        server._HERMES_GATEWAY_CACHE["by_session"] = {}
+
+    assert calls == [], (
+        "_parse_hermes_conversation loaded the whole sessions table via "
+        "_hermes_fetch_sessions instead of a targeted per-id lineage walk"
+    )
+    lineage = [e for e in parsed["events"] if e.get("subtype") == "hermes_lineage"]
+    assert lineage and lineage[0]["lineage_session_ids"] == [parent, child]
