@@ -19523,6 +19523,12 @@
     _currentToolCount = 0;
     setCopyableSessionId($cpSessionId, sid || '');
     fetchConversationEvents();
+    // CCC-31: a fresh inline spawn rebinds its optimistic placeholder onto
+    // the real session here, not through selectConversation() — so without
+    // this call the workspace/repo-path pill had no trigger at all and
+    // stayed empty until an unrelated event (tab refocus, manually
+    // reselecting the conversation) happened to fetch it.
+    if (sid && typeof fetchSessionWorkspace === 'function') fetchSessionWorkspace(sid, activePaneId());
     startConvStream();
     if (!keepFirstResponseStream
         && sid && real.source !== 'codex' && real.source !== 'cursor') {
