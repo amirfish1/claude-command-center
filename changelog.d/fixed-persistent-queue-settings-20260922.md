@@ -1,0 +1,1 @@
+- Keep queue settings connected to WatchTower's persistent data directory after removing and reinstalling CCC or WatchTower, including automatic migration from older installations.

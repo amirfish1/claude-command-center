@@ -798,12 +798,9 @@ except Exception as e:
     print(f"  [startup] watchtower.config import failed: {e}", file=sys.stderr)
 
 
-# WatchTower stores its state as plain JSON under ~/.watchtower. CCC is
-# stdlib-only at runtime (no pip deps), and `import watchtower` is NOT available
-# in the deployed server — so rather than depend on the import, read those files
-# DIRECTLY. This is how the dashboard gets durable queue config (drain state)
-# and live worker records (with their cloud session UUID) regardless of whether
-# the watchtower package is importable. Cheap: two small JSON reads.
+# Queue settings live in WatchTower's persistent data directory; transient
+# worker state remains under ~/.watchtower. Resolve settings through WT so
+# both applications agree after migration or a reinstall.
 _WT_HOME = Path(os.environ.get("WATCHTOWER_HOME") or (Path.home() / ".watchtower"))
 
 # Matches the "{ts} UTC  {queue:<14}  {verb:<9}{detail}" format written by
@@ -817,6 +814,15 @@ def _wt_log_line_queue(line):
 
 
 def _wt_config_path():
+    explicit = os.environ.get("WATCHTOWER_CONFIG_FILE")
+    if explicit:
+        return Path(explicit).expanduser()
+    if os.environ.get("WATCHTOWER_HOME"):
+        return _WT_HOME / "queue-config.json"
+    resolve = getattr(_wt_config, "config_path", None)
+    if callable(resolve):
+        return resolve()
+    # Compatibility with WatchTower versions predating persistent storage.
     return Path(os.environ.get("WATCHTOWER_CONFIG_FILE")
                 or (_WT_HOME / "queue-config.json"))
 
