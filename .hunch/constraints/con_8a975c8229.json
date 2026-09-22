@@ -1,0 +1,24 @@
+{
+  "id": "con_8a975c8229",
+  "type": "correctness",
+  "statement": "In this maintainer checkout, completing a fix includes committing it and immediately pushing the commit to origin/main; never leave a completed fix committed but unpushed or wait for a separate push request.",
+  "scope": [
+    "**"
+  ],
+  "severity": "warning",
+  "enforcement": "advisory_v1",
+  "match": null,
+  "forbids": null,
+  "rationale": "AGENTS.md explicitly defines “commit means push” because deployment pulls from origin, so an unpushed commit is undeployed and the fix is not actually complete.",
+  "source_decision": null,
+  "violations": [],
+  "status": "active",
+  "valid_from": "2026-09-22T02:23:49.782Z",
+  "valid_to": null,
+  "provenance": {
+    "source": "agent_recorded",
+    "confidence": 0.75,
+    "evidence": [],
+    "last_verified": "2026-09-22T02:23:49.782Z"
+  }
+}
