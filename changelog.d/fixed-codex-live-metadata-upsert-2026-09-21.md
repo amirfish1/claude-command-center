@@ -1,1 +1,1 @@
-- Prevented active Codex conversation refreshes from accumulating empty action rows or hiding injected and queued messages.
+- Prevented active Codex conversation refreshes from accumulating empty action rows, hiding injected or queued messages, or flickering the live Thinking status.

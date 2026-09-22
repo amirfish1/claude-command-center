@@ -54,7 +54,8 @@ async function fixture(run, input) {
       window.userMessageSteerHtml = () => '';
       window.showOptimisticAgentIndicator = () => {};
       window.clearOptimisticAgentIndicator = () => {};
-      window.clearLiveGeneratingIndicator = () => {};
+      window.clearedGenerating = 0;
+      window.clearLiveGeneratingIndicator = () => { clearedGenerating++; };
       window.scrollConversationToEnd = () => {};
       window.markSessionSending = () => {};
       window.clearedSends = 0;
@@ -281,9 +282,37 @@ test('provisional agent output does not reorder pending input or clear sending s
       pendingBeforeSentinel: pending.element.nextElementSibling === sentinel,
       tracked: _pendingSends.length,
       cleared: clearedSends,
+      generatingClears: clearedGenerating,
     };
   });
-  assert.deepEqual(result, { pendingBeforeSentinel: true, tracked: 1, cleared: 0 });
+  assert.deepEqual(result, {
+    pendingBeforeSentinel: true,
+    tracked: 1,
+    cleared: 0,
+    generatingClears: 0,
+  });
+});
+
+test('durable agent output still clears live indicators and reconciles pending placement', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Injected fixture', 'session', 'main');
+    const sentinel = document.createElement('div');
+    sentinel.id = 'tail-sentinel';
+    getConvView().append(sentinel);
+    runRenderTail(getConvView(), 'main', {}, [{ type: 'assistant' }]);
+    return {
+      pendingAtTail: pending.element === getConvView().lastElementChild,
+      tracked: _pendingSends.length,
+      cleared: clearedSends,
+      generatingClears: clearedGenerating,
+    };
+  });
+  assert.deepEqual(result, {
+    pendingAtTail: true,
+    tracked: 1,
+    cleared: 1,
+    generatingClears: 1,
+  });
 });
 
 test('durable duplicate-collapse ignores provisional live-overlay user rows', () => {

@@ -60303,8 +60303,10 @@
     );
     if (_agentReplied) {
       clearOptimisticAgentIndicator($view);
-      clearLiveGeneratingIndicator($view);
-      if (!opts.provisionalOverlay && currentSession.id) clearSessionSending(currentSession.id);
+      if (!opts.provisionalOverlay) {
+        clearLiveGeneratingIndicator($view);
+        if (currentSession.id) clearSessionSending(currentSession.id);
+      }
     } else {
       const _optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
       if (_optimistic && _optimistic !== $view.lastElementChild) {
