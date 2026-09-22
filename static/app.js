@@ -2138,7 +2138,7 @@
   // MODEL_OPTIONS_BY_ENGINE[engine][0] (fable-5, the priciest tier) for
   // the rest of the tab's life. They now wait for the rows like everything
   // else but replay through the plain fetch, outside the abortable pool.
-  const _startupDirectReplayPaths = ['/api/spawn-defaults', '/api/model-picker/picks'];
+  const _startupDirectReplayPaths = ['/api/spawn-defaults', '/api/model-picker/picks', '/api/repo/list'];
   function _startupApiPath(input, init) {
     const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
     const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
@@ -68220,8 +68220,10 @@
   // ── Known-repos list ─────────────────────────────────────────────────────
   // repoListState powers repo labels, the spawn-cwd suggestions, and
   // rowBelongsToKnownRepo. Loaded lazily by _hydrateArchiveSideData.
-  async function loadRepoList() {
-    const r = await backgroundApiFetch('/api/repo/list');
+  async function loadRepoList({ foreground = false } = {}) {
+    // Opening the composer needs folders even while spawn prewarming aborts
+    // optional background reads. Keep this explicit user request out of that pool.
+    const r = await (foreground ? _startupBaseFetch : backgroundApiFetch)('/api/repo/list');
     const d = await r.json();
     repoListState = {
       repos: d.repos || [],
@@ -75812,6 +75814,7 @@
   const SPAWN_CWD_KEY = 'ccc-spawn-cwd';
   const SPAWN_CWD_CHIP_LIMIT = 10;
   let spawnCwdOptions = [];
+  let spawnCwdAutoDefault = '';
 
   function normalizeSpawnCwdPath(value) {
     return String(value || '').trim();
@@ -75865,16 +75868,22 @@
     // Default selection priority:
     //   1. User's last spawn cwd (localStorage)
     //   2. The popout's pinned repo (conversation popout only)
-    //   3. First known repo option
+    //   3. Most recently used or highest-ranked repo
+    //   4. First known repo option
     let saved = '';
     try { saved = normalizeSpawnCwdPath(localStorage.getItem(SPAWN_CWD_KEY) || ''); } catch (_) {}
     const defaultPath = saved
       || popoutRepoPath()
+      || ((repoListState.recent || [])[0])
+      || ((repoListState.rankings || [])[0] || {}).path
       || (options[0] && (options[0].value || options[0].path))
       || '';
 
     const prevValue = normalizeSpawnCwdPath(sel.value);
-    sel.value = prevValue || defaultPath;
+    if (!prevValue || prevValue === spawnCwdAutoDefault) {
+      sel.value = defaultPath;
+      spawnCwdAutoDefault = defaultPath;
+    }
     if (isSpawnCwdMenuOpen()) renderSpawnCwdMenu('');
     renderSpawnCwdQuickChips();
   }
@@ -75900,52 +75909,29 @@
       out.push(Object.assign({}, opt, { kind: kind || 'production' }));
     };
 
-    // Prefer signal-driven rankings; keep production and dev/test groups
-    // contiguous so the user can scan by purpose.
+    // Rank before grouping: a sparse category must not crowd out more
+    // relevant folders, and unknown folders must not be called production.
     const rankings = (repoListState && repoListState.rankings) || [];
-    if (rankings.length) {
-      const byKind = {};
-      for (const r of rankings) {
-        const k = r.kind || 'production';
-        byKind[k] = byKind[k] || [];
-        byKind[k].push(r);
-      }
-      const activeKinds = Object.keys(byKind).filter(k => byKind[k].length);
-      const perKindCap = activeKinds.length > 1
-        ? Math.ceil(SPAWN_CWD_CHIP_LIMIT / activeKinds.length)
-        : SPAWN_CWD_CHIP_LIMIT;
-      for (const k of ['production', 'dev_test']) {
-        for (const item of (byKind[k] || []).slice(0, perKindCap)) {
-          addPath(item.path, k);
-          if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
-        }
-        if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
-      }
+    const kindFor = path => {
+      const ranked = rankings.find(r => r.path === path);
+      return ranked ? ranked.kind : 'folders';
+    };
+    if (wanted) addPath(wanted, kindFor(wanted));
+    for (const path of ((repoListState && repoListState.recent) || [])) {
+      addPath(path, kindFor(path));
+      if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
     }
-
-    // Fallback to recent + alphabetical when signals are missing / empty.
-    if (!out.length) {
-      for (const path of ((repoListState && repoListState.recent) || [])) {
-        addPath(path, 'production');
-        if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
-      }
+    for (const item of rankings) {
+      if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+      addPath(item.path, item.kind);
     }
-    if (out.length < SPAWN_CWD_CHIP_LIMIT) {
-      for (const opt of (spawnCwdOptions || [])) {
-        addPath(opt && opt.value, 'production');
-        if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
-      }
+    for (const opt of (spawnCwdOptions || [])) {
+      if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+      addPath(opt && opt.value, kindFor(opt && opt.value));
     }
-    if (!out.length) {
-      for (const repo of ((repoListState && repoListState.repos) || [])) {
-        addPath(repo && repo.path, 'production');
-        if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
-      }
-    }
-    if (wanted && !seen.has(wanted)) {
-      const currentOpt = spawnCwdOptionForPath(wanted);
-      if (currentOpt) out.unshift(Object.assign({}, currentOpt, { kind: 'production' }));
-    }
+    // Group only after selecting the most relevant ten; each label appears once.
+    const kinds = [...new Set(out.map(opt => opt.kind))];
+    out.sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind));
     return out.slice(0, SPAWN_CWD_CHIP_LIMIT);
   }
 
@@ -75963,7 +75949,7 @@
       if (opt.kind !== lastKind) {
         const label = document.createElement('span');
         label.className = 'spawn-cwd-chip-group-label';
-        label.textContent = opt.kind === 'dev_test' ? 'Dev & test' : 'Production';
+        label.textContent = opt.kind === 'dev_test' ? 'Dev & test' : (opt.kind === 'production' ? 'Production' : 'Folders');
         wrap.appendChild(label);
         lastKind = opt.kind;
       }
@@ -75997,8 +75983,8 @@
   }
 
   function ensureSpawnCwdOptionsLoaded(paneId) {
-    if (spawnCwdOptions.length || (repoListState && repoListState.repos && repoListState.repos.length)) return;
-    loadRepoList().then(() => {
+    if (repoListState && repoListState.repos && repoListState.repos.length) return;
+    loadRepoList({ foreground: true }).then(() => {
       if (currentConversation !== '__new__') return;
       populateSpawnCwdPicker();
       refreshNewSessionCwdUi(paneId);
@@ -76351,6 +76337,7 @@
   // Persist the user's choice the moment they change it.
   function persistSpawnCwdPickerValue(ev) {
     if (ev.target && ev.target.id === 'spawnCwdPicker') {
+      spawnCwdAutoDefault = '';
       try { localStorage.setItem(SPAWN_CWD_KEY, normalizeSpawnCwdPath(ev.target.value)); } catch (_) {}
       if (isSpawnCwdMenuOpen()) renderSpawnCwdMenu(ev.target.value);
       renderSpawnCwdQuickChips();
@@ -76792,7 +76779,7 @@
 
   async function fetchModelPickerPicksFromServer(force = false) {
     if (_cachedServerModelPicks && !force) return _cachedServerModelPicks;
-    if (_fetchServerModelPicksPromise && !force) return _fetchServerModelPicksPromise;
+    if (_fetchServerModelPicksPromise) return _fetchServerModelPicksPromise;
     _fetchServerModelPicksPromise = (async () => {
       try {
         const res = await fetch('/api/model-picker/picks');
@@ -76945,7 +76932,7 @@
     if (!container) return;
 
     const doRender = (picks) => {
-      if (!Array.isArray(picks) || picks.length === 0) return;
+      if (!Array.isArray(picks)) return;
       const currentEngine = getSpawnEngine();
       const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
         ? $convInputModelSelect.value
@@ -76989,11 +76976,12 @@
     const picks = getTopSpawnPicks();
     if (picks.length > 0) {
       doRender(picks);
-    } else {
-      fetchModelPickerPicksFromServer().then(fetched => {
-        doRender(fetched);
-      });
     }
+    // Cached picks paint immediately, but must not freeze first-launch
+    // defaults forever after history becomes available on the server.
+    fetchModelPickerPicksFromServer(true).then(fetched => {
+      if (currentConversation === '__new__') doRender(fetched);
+    });
   }
 
   function syncNsModelPickerPillsSelection() {

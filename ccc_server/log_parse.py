@@ -454,6 +454,22 @@ def record_model_picker_pick(engine: str, model: str, effort: str = "") -> None:
         pass
 
 
+def _initial_model_picker_picks():
+    """Offer installed engines' defaults without inventing usage history."""
+    defaults = _core._load_spawn_defaults()
+    disabled = set(defaults.get("disabled_engines") or [])
+    engines = [row["engine"] for row in _core._engines_installed().get("engines", [])
+               if row.get("installed") and row.get("kind") == "spawn"
+               and row.get("engine") in _core._ORCHESTRATION_SPAWN_ENGINES
+               and row.get("engine") not in disabled]
+    preferred = defaults.get("engine")
+    engines.sort(key=lambda engine: engine != preferred)
+    return [{"engine": engine,
+             "model": _core._spawn_default_model_for_engine(engine, defaults) or "",
+             "effort": "", "count": 0, "last_used": 0}
+            for engine in engines[:8]]
+
+
 def get_model_picker_picks() -> list:
     """Return top 7-8 model picks based on real disk data from the last 7-30 days."""
     history = []
@@ -506,7 +522,7 @@ def get_model_picker_picks() -> list:
                 last_seen[key] = ts
 
     if not counts:
-        return _core._mine_real_model_history_last_7_days()[:8]
+        return _core._mine_real_model_history_last_7_days()[:8] or _initial_model_picker_picks()
 
     # Order picks primarily by recency (last_seen), with frequency breaking ties.
     # This guarantees that if the user used Antigravity, next time it remains in the

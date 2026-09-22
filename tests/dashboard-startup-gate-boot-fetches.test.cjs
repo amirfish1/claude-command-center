@@ -64,12 +64,14 @@ test('released catalog reads survive the spawn-click pool abort', async () => {
   const ctx = harness();
   const spawnDefaults = ctx.fetchViaGate('/api/spawn-defaults', { cache: 'no-store' });
   const picks = ctx.fetchViaGate('/api/model-picker/picks');
+  const folders = ctx.window.__cccBackgroundApiFetch('/api/repo/list');
   const heartbeat = ctx.fetchViaGate('/api/telemetry/heartbeat', { method: 'POST' });
   ctx.release();
   ctx.abortPool();
-  const responses = await Promise.all([spawnDefaults, picks, heartbeat]);
-  assert.deepEqual(responses.map(r => r.status), [200, 200, 200]);
+  const responses = await Promise.all([spawnDefaults, picks, heartbeat, folders]);
+  assert.deepEqual(responses.map(r => r.status), [200, 200, 200, 200]);
   assert.ok(urls(ctx).includes('GET /api/spawn-defaults'));
   assert.ok(urls(ctx).includes('GET /api/model-picker/picks'));
+  assert.ok(urls(ctx).includes('GET /api/repo/list'));
   assert.ok(urls(ctx).includes('POST /api/telemetry/heartbeat'));
 });

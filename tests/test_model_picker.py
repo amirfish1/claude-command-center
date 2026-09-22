@@ -15,6 +15,30 @@ APP_JS = PROJECT_ROOT / "static" / "app.js"
 
 
 class TestModelPickerContracts(unittest.TestCase):
+    def test_fresh_install_uses_only_enabled_installed_spawn_defaults(self):
+        defaults = {"engine": "codex", "models": {"codex": "configured-model", "claude": ""},
+                    "disabled_engines": ["kimi"]}
+        inventory = {"engines": [
+            {"engine": "claude", "installed": True, "kind": "spawn"},
+            {"engine": "codex", "installed": True, "kind": "spawn"},
+            {"engine": "kimi", "installed": True, "kind": "spawn"},
+            {"engine": "cursor", "installed": False, "kind": "spawn"},
+            {"engine": "copilotchat", "installed": True, "kind": "readonly"},
+        ]}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history = pathlib.Path(tmpdir) / "history.json"
+            with patch.object(server, "MODEL_PICKER_HISTORY_FILE", history), \
+                 patch.object(server, "_mine_real_model_history_last_7_days", return_value=[]), \
+                 patch.object(server, "_load_spawn_defaults", return_value=defaults), \
+                 patch.object(server, "_engines_installed", return_value=inventory):
+                picks = server.get_model_picker_picks()
+                self.assertEqual([(p["engine"], p["model"]) for p in picks],
+                                 [("codex", "configured-model"), ("claude", "")])
+                self.assertTrue(all(p["count"] == 0 for p in picks))
+                self.assertFalse(history.exists(), "Defaults must not become fabricated history")
+                server.record_model_picker_pick("claude", "sonnet-5")
+                self.assertEqual(server.get_model_picker_picks()[0]["model"], "sonnet-5")
+
     def test_dom_and_css_contracts(self):
         index_html = INDEX_HTML.read_text(encoding="utf-8")
         self.assertIn('id="convModelPickerStrip"', index_html)
