@@ -1,0 +1,1 @@
+- `run.sh` now links the `ccc` CLI onto `PATH` (`~/.local/bin/ccc`) itself, shared with `scripts/install.sh` via `scripts/link-ccc-cli.sh`. Previously only the curl installer did this, so a plain `git clone` + `./run.sh` never got the `ccc` command.

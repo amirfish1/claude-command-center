@@ -313,30 +313,28 @@ install_watchtower() {
 
 # ---------------------------------------------------------------------------
 # ccc CLI: symlink the repo-root client onto PATH so `ccc sessions` works
-# from anywhere. Convenience only — never fatal.
+# from anywhere. The chain lives in scripts/link-ccc-cli.sh, which run.sh
+# calls too — one definition, so a curl install and a plain `git clone` +
+# `./run.sh` cannot drift apart. Resolved at call time, not at load time:
+# this script is routinely run as `curl ... | bash` with no checkout on disk
+# at all, and only after sync_repo has run does $INSTALL_DIR/scripts/ exist.
 # ---------------------------------------------------------------------------
 link_ccc_cli() {
-  local bin_dir="$HOME/.local/bin"
-  local target="$INSTALL_DIR/ccc"
-  local link="$bin_dir/ccc"
-  if [ ! -f "$target" ]; then
+  local here script=""
+  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  local candidate
+  for candidate in "$here/link-ccc-cli.sh" \
+                   "$INSTALL_DIR/scripts/link-ccc-cli.sh"; do
+    if [ -f "$candidate" ]; then
+      script="$candidate"
+      break
+    fi
+  done
+  if [ -z "$script" ]; then
     return 0
   fi
-  chmod +x "$target" 2>/dev/null || true
-  mkdir -p "$bin_dir" 2>/dev/null || true
-  if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
-    return 0
-  fi
-  if ln -sfn "$target" "$link" 2>/dev/null; then
-    printf 'install: ccc CLI linked at %s\n' "$link"
-    # shellcheck disable=SC2016
-    case ":$PATH:" in
-      *":$bin_dir:"*) ;;
-      *) printf 'install: note: %s is not on PATH — add it to use `ccc` from anywhere\n' "$bin_dir" ;;
-    esac
-  else
-    printf 'install: could not link ccc CLI — run it as %s\n' "$target"
-  fi
+  CCC_CLI_SOURCE_DIR="$INSTALL_DIR" CCC_CLI_LOG_PREFIX="install: " \
+    bash "$script" || true
 }
 
 # ---------------------------------------------------------------------------

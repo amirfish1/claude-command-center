@@ -729,6 +729,19 @@ ensure_watchtower() {
 }
 ensure_watchtower
 
+# ---------------------------------------------------------------------------
+# ccc CLI: symlink the repo-root client onto PATH. Shared with
+# scripts/install.sh (see scripts/link-ccc-cli.sh) so a plain `git clone` +
+# `./run.sh` — which never touches install.sh — still ends up with `ccc` on
+# PATH, not just the curl-installer path.
+# ---------------------------------------------------------------------------
+link_ccc_cli_script="$HERE/scripts/link-ccc-cli.sh"
+if [ -f "$link_ccc_cli_script" ]; then
+  CCC_CLI_SOURCE_DIR="$HERE" CCC_CLI_LOG_PREFIX="  ccc-cli: " \
+    bash "$link_ccc_cli_script" || true
+fi
+unset link_ccc_cli_script
+
 # Foreground installs do not have launchd/systemd to start the independent
 # execution worker. Ensure one is healthy before replacing this shell with the
 # restartable dashboard. `nohup` + a separate session keeps it alive across the
