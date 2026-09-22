@@ -248,19 +248,31 @@ test('task_complete removes every remaining provisional row for that turn, match
       p2.className = 'event assistant provisional';
       p2.dataset.liveKey = 't5:item-2';
       view.appendChild(p2);
+      const meta = document.createElement('div');
+      meta.className = 'kimi-answer-meta';
+      meta.dataset.liveKey = 't5:item-2';
+      view.appendChild(meta);
       // A provisional row from a DIFFERENT turn must survive.
       const other = document.createElement('div');
       other.className = 'event assistant provisional';
       other.dataset.liveKey = 't6:item-1';
       view.appendChild(other);
+      const otherMeta = document.createElement('div');
+      otherMeta.className = 'kimi-answer-meta';
+      otherMeta.dataset.liveKey = 't6:item-1';
+      view.appendChild(otherMeta);
 
       window.__fns._removeStaleProvisionalsForTurn(view, 't5');
 
       return {
-        remainingLiveKeys: Array.from(view.querySelectorAll('.event[data-live-key]'), (n) => n.dataset.liveKey),
+        remainingEventKeys: Array.from(view.querySelectorAll('.event[data-live-key]'), (n) => n.dataset.liveKey),
+        remainingMetaKeys: Array.from(view.querySelectorAll('.kimi-answer-meta[data-live-key]'), (n) => n.dataset.liveKey),
       };
     });
-    assert.deepEqual(result.remainingLiveKeys, ['t6:item-1']);
+    assert.deepEqual(result, {
+      remainingEventKeys: ['t6:item-1'],
+      remainingMetaKeys: ['t6:item-1'],
+    });
   });
 });
 

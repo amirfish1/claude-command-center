@@ -1,0 +1,1 @@
+- Prevented active Codex conversations from accumulating empty speaker/copy rows on each live-overlay refresh.

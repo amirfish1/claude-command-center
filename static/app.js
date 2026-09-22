@@ -58206,6 +58206,23 @@
           const escTid = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid;
           if (turn.querySelector('.kimi-tool[data-tool-use-id="' + escTid + '"]')) continue;
         }
+      } else if (el.classList.contains('kimi-answer-meta')) {
+        // The Codex live overlay replays its full provisional snapshot on
+        // every poll. Text/tool blocks above already merge idempotently, but
+        // the answer-actions row used to append again each time, producing a
+        // stack of speaker/copy buttons with no accompanying text. Keep one
+        // metadata row per live event and refresh its copy/read payload when
+        // streaming text grows.
+        const liveKey = el.dataset.liveKey || '';
+        if (liveKey) {
+          const escLiveKey = (window.CSS && CSS.escape) ? CSS.escape(liveKey) : liveKey;
+          const existingMeta = turn.querySelector('.kimi-answer-meta[data-live-key="' + escLiveKey + '"]');
+          if (existingMeta) {
+            existingMeta._agentAnswerText = el._agentAnswerText;
+            if (existingMeta.innerHTML !== el.innerHTML) existingMeta.innerHTML = el.innerHTML;
+            continue;
+          }
+        }
       }
       kept.push(el);
     }
@@ -58217,26 +58234,32 @@
   // user bubble, result footer, stream bubble — closes the turn). The event
   // div itself stays as a hidden `.kimi-marker` so data-jsonl-line dedupe,
   // the msg_id stream hand-off, and other .event lookups keep working.
-  function _kimiAppendAssistantEvent($view, marker, blockEls) {
+  function _kimiAppendAssistantEvent($view, marker, blockEls, existingMarker) {
     // The open turn is the last non-stream-bubble child: the live
     // `.stream-bubble` gets re-anchored to the tail after every render, so a
     // naive lastElementChild check would start a fresh turn per poll batch
     // while a stream is in flight. User/result events are real boundaries
     // and stop the backward scan.
-    let turn = null;
-    for (let i = $view.children.length - 1; i >= 0; i--) {
-      const n = $view.children[i];
-      if (!n || !n.classList) break;
-      if (n.classList.contains('stream-bubble')) continue;
-      if (n.classList.contains('kimi-turn')) turn = n;
-      break;
+    // A replayed provisional item already belongs to a turn. Reuse that turn
+    // even when another live turn has since reached the tail of the view.
+    let turn = existingMarker && existingMarker.closest
+      ? existingMarker.closest('.kimi-turn') : null;
+    if (!turn) {
+      for (let i = $view.children.length - 1; i >= 0; i--) {
+        const n = $view.children[i];
+        if (!n || !n.classList) break;
+        if (n.classList.contains('stream-bubble')) continue;
+        if (n.classList.contains('kimi-turn')) turn = n;
+        break;
+      }
     }
     if (!turn) {
       turn = document.createElement('div');
       turn.className = 'kimi-turn';
       $view.appendChild(turn);
     }
-    turn.appendChild(marker);
+    if (existingMarker && existingMarker.parentNode === turn) existingMarker.replaceWith(marker);
+    else turn.appendChild(marker);
     for (const el of _kimiTurnCoveredBlocks(turn, blockEls)) turn.appendChild(el);
     _kimiRegroupTools(turn);
     return turn;
@@ -58516,7 +58539,7 @@
   function _removeStaleProvisionalsForTurn(view, turnId) {
     if (turnId == null) return;
     const prefix = String(turnId) + ':';
-    view.querySelectorAll('.event[data-live-key]').forEach((node) => {
+    view.querySelectorAll('.event[data-live-key], .kimi-answer-meta[data-live-key]').forEach((node) => {
       if (String(node.dataset.liveKey || '').startsWith(prefix)) node.remove();
     });
   }
@@ -59504,6 +59527,7 @@
             const metaEl = document.createElement('div');
             metaEl.className = 'kimi-answer-meta';
             metaEl._agentAnswerText = _kimiAnswerText;
+            if (ev.live_key != null) metaEl.dataset.liveKey = String(ev.live_key);
             // Live (provisional) events carry no jsonl line — omit the tag
             // instead of rendering a literal "Lundefined".
             metaEl.innerHTML = (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
@@ -59532,7 +59556,7 @@
             }
             kimiBlockEls.push(metaEl);
           }
-          _kimiAppendAssistantEvent($view, div, kimiBlockEls);
+          _kimiAppendAssistantEvent($view, div, kimiBlockEls, _existingProvisionalNode);
           // Codex mode-3 presentation artifacts attach to the assistant
           // event — the shared tail below is skipped by this branch.
           attachPresentationArtifactToAssistant($view, div, ev, renderedConversationId);

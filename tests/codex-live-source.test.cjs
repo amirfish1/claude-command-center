@@ -119,9 +119,9 @@ test('stops polling once the turn completes and no requests are pending', async 
   });
 });
 
-test('a generation change clears only provisional (data-live-key) rows, not confirmed rollout rows', async () => {
+test('a generation change clears provisional event and metadata rows, not confirmed rollout rows', async () => {
   await withPage(async (page) => {
-    await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event assistant" data-jsonl-line="5">confirmed</div><div class="event assistant provisional" data-live-key="t1:old">stale provisional</div></div></div>');
+    await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event assistant" data-jsonl-line="5">confirmed</div><div class="event assistant provisional" data-live-key="t1:old">stale provisional</div><div class="kimi-answer-meta" data-live-key="t1:old">stale actions</div></div></div>');
     await page.evaluate(() => { window.CCCCodexRenderLiveEvents = () => {}; });
     await page.addScriptTag({ content: LIVE_SOURCE_JS });
     const result = await page.evaluate(() => {
@@ -142,9 +142,9 @@ test('a generation change clears only provisional (data-live-key) rows, not conf
 // session's stale turn falling off the app-server's live view) used to
 // strand its provisional rows on screen forever — only a generation change
 // cleared them. An empty snapshot now clears them too.
-test('an empty overlay snapshot clears provisional rows even at the same generation', async () => {
+test('an empty overlay snapshot clears provisional event and metadata rows even at the same generation', async () => {
   await withPage(async (page) => {
-    await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event assistant" data-jsonl-line="5">confirmed</div><div class="event assistant provisional" data-live-key="t1:old">ghost turn</div></div></div>');
+    await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event assistant" data-jsonl-line="5">confirmed</div><div class="event assistant provisional" data-live-key="t1:old">ghost turn</div><div class="kimi-answer-meta" data-live-key="t1:old">ghost actions</div></div></div>');
     await page.evaluate(() => { window.CCCCodexRenderLiveEvents = () => {}; });
     await page.addScriptTag({ content: LIVE_SOURCE_JS });
     const result = await page.evaluate(() => {

@@ -96,10 +96,12 @@
   }
 
   // Remove only the provisional overlay -- confirmed (line-keyed) rollout
-  // rows are untouched. Used on a generation change/resync.
+  // rows are untouched. Answer metadata lives beside its hidden event marker
+  // in a merged kimi-turn, so both keyed nodes must leave together.
   function clearProvisional(viewEl) {
     if (!viewEl || typeof viewEl.querySelectorAll !== 'function') return;
-    viewEl.querySelectorAll('.event[data-live-key]').forEach((node) => node.remove());
+    viewEl.querySelectorAll('.event[data-live-key], .kimi-answer-meta[data-live-key]')
+      .forEach((node) => node.remove());
   }
 
   async function fetchLiveTranscript(context) {
