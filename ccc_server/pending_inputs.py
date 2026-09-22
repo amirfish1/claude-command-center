@@ -26,6 +26,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import inject_receipts as _inject_receipts
 from ccc_server import test_isolation_active as _test_isolation_active
 
 _pending_queued_meta: dict = {}
@@ -4846,6 +4847,10 @@ def _drop_dead_terminal_queue(sid, *, code):
     _core._clear_foreign_writer_hold(sid)
     _terminal_queue_clear_hold(sid)
     for dropped_text in dropped:
+        # A dropped entry will never land -- clear its receipt so the
+        # outstanding-inject API stops reporting it once the (louder) Q_DROP
+        # line below has already surfaced the failure.
+        _inject_receipts.close_receipt(sid, text=dropped_text)
         _core._complete_pending_input_handoff(dropped_text)
         try:
             _core._log_activity(
@@ -4942,6 +4947,7 @@ def _maybe_recover_stuck_hold(sid, reason, held_s, now):
         # spent, so the budget still bounds any retry.
         _requeue_terminal_input_front(sid, text)
     else:
+        _inject_receipts.close_receipt(sid, text=text)
         _core._complete_pending_input_handoff(text)
     return True
 
@@ -4976,6 +4982,7 @@ def _force_restart_session(sid):
         _requeue_terminal_input_front(sid, text)
         return {"ok": False, "restarted": True, "redelivered": False,
                 "error": (result or {}).get("error") or "resume failed; message kept queued"}
+    _inject_receipts.close_receipt(sid, text=text)
     _core._complete_pending_input_handoff(text)
     return {"ok": True, "restarted": True, "redelivered": True}
 
@@ -4998,6 +5005,7 @@ def _terminal_queue_hold_or_expire(sid, reason):
     dropped_text = ((transaction.get("value") or [None])[0])
     if dropped_text is None:
         return
+    _inject_receipts.close_receipt(sid, text=dropped_text)
     _core._complete_pending_input_handoff(dropped_text)
     _core._pending_terminal_retry_after.pop(sid, None)
     try:
@@ -5064,6 +5072,7 @@ def _verify_terminal_drain_receipts(now=None):
         rec_status = (rec or {}).get("status") if isinstance(rec, dict) else None
         if rec_status == "landed":
             _core._terminal_drain_receipts.remove(item)
+            _inject_receipts.close_receipt(item["sid"], text=item["text"])
             _core._complete_pending_input_handoff(item["text"])
         elif rec_status == "lost":
             _core._terminal_drain_receipts.remove(item)
@@ -5077,6 +5086,7 @@ def _verify_terminal_drain_receipts(now=None):
             )
         elif now > float(item.get("deadline") or 0.0):
             _core._terminal_drain_receipts.remove(item)
+            _inject_receipts.close_receipt(item["sid"], text=item["text"])
             _core._complete_pending_input_handoff(item["text"])
             print(
                 f"[terminal-queue] wt-send receipt {item['receipt_id']} still "
@@ -5543,6 +5553,12 @@ def _start_resume_queue_watcher() -> None:
                         # The inject re-parked it itself (foreign live writer,
                         # bg-undeliverable, invalid cwd) — entry is safe; back
                         # off so a held session isn't re-driven every 5s tick.
+                        # CCC-28: this branch previously had no log line, so a
+                        # message stuck re-parking itself every tick (never
+                        # reaching a recognized hold reason above, never
+                        # dropped) produced total silence forever — the exact
+                        # "logged INJECT once, then nothing" symptom.
+                        _log_terminal_queue_hold(sid, "requeued_self_queued")
                         _core._complete_pending_input_handoff(text)
                         if result.get("foreign_live_writer"):
                             # CCC-799: a foreign-live-writer re-park here can be
@@ -5577,6 +5593,7 @@ def _start_resume_queue_watcher() -> None:
                         # compact."). It was delivered; the answer is final.
                         # Requeueing would re-send it every backoff window
                         # forever. Consume it, loudly.
+                        _inject_receipts.close_receipt(sid, text=text)
                         _core._complete_pending_input_handoff(text)
                         _core._pending_terminal_retry_after.pop(sid, None)
                         try:
@@ -5590,6 +5607,12 @@ def _start_resume_queue_watcher() -> None:
                         except Exception:
                             pass
                     elif not result.get("ok"):
+                        # CCC-28: a delivery attempt that fails outright
+                        # (rather than being recognized as one of the named
+                        # hold reasons above) also had no log line here,
+                        # so a permanently-failing channel retried forever
+                        # in total silence.
+                        _log_terminal_queue_hold(sid, "requeued_after_failed_delivery")
                         _core._requeue_terminal_input_front(sid, text)
                         _core._mark_terminal_queue_retry(sid)
                     elif result.get("via") == "wt-send" and result.get("receipt_id"):
@@ -5601,6 +5624,7 @@ def _start_resume_queue_watcher() -> None:
                             "last_check": 0.0,
                         })
                     else:
+                        _inject_receipts.close_receipt(sid, text=text)
                         _core._complete_pending_input_handoff(text)
                         _core._pending_terminal_retry_after.pop(sid, None)
                         _core._clear_foreign_writer_hold(sid)

@@ -56,7 +56,7 @@ def test_delivery_failures_are_not_terminal(result):
     assert server._terminal_queue_result_is_terminal(result) is False
 
 
-def test_dead_target_drop_is_loud_and_clears_the_entire_terminal_queue(monkeypatch):
+def test_dead_target_drop_is_loud_and_clears_the_entire_terminal_queue(monkeypatch, tmp_path):
     """A fresh sidecar is not a delivery channel for an exited one-shot run."""
     sid = "dead-cron-session"
     text = "the user message"
@@ -70,6 +70,9 @@ def test_dead_target_drop_is_loud_and_clears_the_entire_terminal_queue(monkeypat
     monkeypatch.setattr(
         server, "_complete_pending_input_handoff", lambda value: completed.append(value),
     )
+    # Isolate the CCC-28 receipt file this now touches from the developer's
+    # real ~/.claude/command-center state.
+    monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(
         server, "_clear_foreign_writer_hold", lambda value: None,
     )
@@ -106,6 +109,31 @@ def test_watcher_drops_a_fresh_but_dead_target_before_retrying_delivery():
     assert status_at != -1
     assert dead_drop_at > status_at
     assert requeue_at > dead_drop_at
+
+
+def test_retry_loop_branches_are_no_longer_silent():
+    """CCC-28: a composer inject was accepted into the terminal queue
+    (`queued=True`, logged once) and then vanished forever -- no Q_HELD, no
+    Q_DROP, no INJECT_STALLED, nothing -- because a retried delivery that
+    re-parks itself (`result["queued"]`) or fails outright (`not
+    result["ok"]`) hit neither of those log sites. Pin that both retry
+    outcomes now call the same throttled hold-logger as every named hold
+    reason above them, so a message stuck in this exact loop leaves a
+    repeating trail instead of silence."""
+    source = inspect.getsource(server._start_resume_queue_watcher)
+    queued_at = source.find('if result.get("queued"):')
+    queued_log_at = source.find(
+        '_log_terminal_queue_hold(sid, "requeued_self_queued")'
+    )
+    not_ok_at = source.find('elif not result.get("ok"):')
+    not_ok_log_at = source.find(
+        '_log_terminal_queue_hold(sid, "requeued_after_failed_delivery")'
+    )
+
+    assert queued_at != -1 and queued_log_at != -1
+    assert not_ok_at != -1 and not_ok_log_at != -1
+    assert queued_at < queued_log_at < not_ok_at
+    assert not_ok_at < not_ok_log_at
 
 
 @pytest.fixture

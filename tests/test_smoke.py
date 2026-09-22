@@ -20110,6 +20110,16 @@ class TestTerminalQueueDrainSafety(unittest.TestCase):
         self.server = server
         self._cleanup_state()
         self.addCleanup(self._cleanup_state)
+        # CCC-28: landing/dropping a receipt-tracked entry now touches
+        # inject-receipts.json — isolate it from the developer's real
+        # ~/.claude/command-center state.
+        self._receipts_tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._receipts_tmpdir.cleanup)
+        self._patch_state_dir = mock.patch.dict(
+            os.environ, {"CCC_STATE_DIR": self._receipts_tmpdir.name},
+        )
+        self._patch_state_dir.start()
+        self.addCleanup(self._patch_state_dir.stop)
 
     def _cleanup_state(self):
         self.server._terminal_drain_receipts.clear()
@@ -20189,6 +20199,15 @@ class TestTerminalQueueHoldTtl(unittest.TestCase):
         self.server = server
         self._cleanup_state()
         self.addCleanup(self._cleanup_state)
+        # CCC-28: the TTL-expiry drop now touches inject-receipts.json --
+        # isolate it from the developer's real ~/.claude/command-center state.
+        self._receipts_tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._receipts_tmpdir.cleanup)
+        self._patch_state_dir = mock.patch.dict(
+            os.environ, {"CCC_STATE_DIR": self._receipts_tmpdir.name},
+        )
+        self._patch_state_dir.start()
+        self.addCleanup(self._patch_state_dir.stop)
 
     def _cleanup_state(self):
         self.server._terminal_queue_hold_since.pop(self.SID, None)

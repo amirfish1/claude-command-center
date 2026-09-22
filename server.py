@@ -26374,6 +26374,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "session_id": sid,
                 "events": _get_queued_events_for_session(sid),
             })
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/inject-receipt$", path):
+            # CCC-28: additive read so an agent (or a human) can ask "is a
+            # message from this session still unproven" directly instead of
+            # inferring it from last-interactions-vs-transcript timing (see
+            # the stuck-session-triage rule). None when nothing is
+            # outstanding, or when it is too fresh to be worth flagging yet.
+            sid = path.rsplit("/", 2)[-2]
+            from ccc_server import inject_receipts as _inject_receipts
+            self.send_json({
+                "ok": True,
+                "session_id": sid,
+                "outstanding": _inject_receipts.outstanding(sid),
+            })
         elif path == "/morning/kanban":
             try:
                 html = (MORNING_STATIC_DIR / "kanban.html").read_text()
@@ -34600,6 +34613,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # copy then survives a successful steer and the queue
                     # pump resends it later, delivering the message twice.
                     result = _finalize_queued_steer_result(sid, text, result)
+                # CCC-28: an "ok" result that is also "queued" reached CCC's
+                # durable queue, not the session. Open a receipt so a future
+                # triage session (or the additive inject-receipt API field)
+                # can prove whether it later landed instead of inferring
+                # "stuck" from last-interactions-vs-transcript timing.
+                if result.get("ok") and result.get("queued"):
+                    from ccc_server import inject_receipts as _inject_receipts
+                    _inject_receipts.open_receipt(
+                        sid,
+                        payload.get("idempotency_key") or uuid.uuid4().hex,
+                        text,
+                        source=str(payload.get("source") or "composer"),
+                    )
                 status_code = (
                     409 if result.get("code") == "queued_message_missing" else 200
                 )
