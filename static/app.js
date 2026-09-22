@@ -3291,7 +3291,19 @@
   // is a hoisted function declaration in this same closure, so this works
   // even though it's defined far below.
   window.CCCCodexRenderLiveEvents = function (paneId, events) {
-    return renderConversationEvents(events, paneId, {});
+    // A live app-server snapshot contains provisional turn items only. It is
+    // not an authoritative snapshot of CCC's pending-input queue, so it must
+    // never retire injected echoes or queued-message cards that are waiting
+    // for the durable rollout / queue APIs to confirm delivery.
+    // User input already has an optimistic/queued UI and a durable rollout
+    // path; replaying app-server userMessage items here creates a competing
+    // transient copy that can blink out when the overlay clears.
+    const agentEvents = (Array.isArray(events) ? events : [])
+      .filter(ev => ev && ev.type !== 'user_text');
+    return renderConversationEvents(agentEvents, paneId, {
+      queueSnapshot: false,
+      provisionalOverlay: true,
+    });
   };
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
   let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
@@ -55711,6 +55723,7 @@
     if (settledSteerRows.length) {
       const durableNow = new Set(Array.from($view.querySelectorAll(
         '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'
+        + ':not(.provisional):not(.peer-message):not(.steering-optimistic)'
       )).map(el => {
         const msg = el.querySelector('.user-msg');
         return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
@@ -55870,7 +55883,7 @@
     // new queued occurrence. Retire a stale card only against a later durable
     // event, and consume each event once. Synthetic queue rows never count.
     const durableRows = Array.from($view.querySelectorAll(
-      '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged):not(.steering-optimistic):not(.peer-message)'));
+      '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged):not(.steering-optimistic):not(.peer-message):not(.provisional)'));
     const usedDurable = new Set();
     tray.querySelectorAll('.event.user_text').forEach(el => {
       const text = queuedRowText(el);
@@ -59249,6 +59262,11 @@
         // (the real event lands in its place below).
         const normed = _normSend(ev.text);
         let _reconciledExact = false;
+        // App-server live-overlay userMessage items are provisional. They can
+        // appear before the rollout JSONL or queue state confirms delivery,
+        // then disappear when the live snapshot clears. Only a durable
+        // transcript event may acknowledge and remove the injected echo.
+        const _authoritativeUserEvent = !ev.peer && !ev.pending && !ev.provisional;
         const sendEventEpoch = ev.ts ? Date.parse(ev.ts) : NaN;
         const canAcknowledgeSend = pending => !Number.isFinite(sendEventEpoch)
           || !Number(pending && pending.ts)
@@ -59257,7 +59275,7 @@
         // never let one clear a pending echo, exact or FIFO.
         // A synthetic queue overlay is still awaiting delivery. It must not
         // acknowledge an echo or remove a card being optimistically steered.
-        const pIdx = (ev.peer || ev.pending) ? -1 : _pendingSends.findIndex(p =>
+        const pIdx = !_authoritativeUserEvent ? -1 : _pendingSends.findIndex(p =>
           _normSend(p.text) === normed && canAcknowledgeSend(p));
         if (pIdx >= 0) {
           const p = _pendingSends[pIdx];
@@ -59280,7 +59298,7 @@
         // wins. Real events never carry these classes, so this can't remove a
         // genuine transcript row.
         const echoScope = $view.closest('.conv-pane') || $view;
-        const echoDivs = (ev.peer || ev.pending || _reconciledExact) ? [] : echoScope.querySelectorAll(
+        const echoDivs = (!_authoritativeUserEvent || _reconciledExact) ? [] : echoScope.querySelectorAll(
           '.event.user_text.pending, .event.user_text.send-queued,'
           + ' .event.user_text.send-delivered, .event.user_text.not-acknowledged');
         for (const pDiv of echoDivs) {
@@ -59309,7 +59327,7 @@
         // nothing is lost. Skip synthetic continuation events so they never
         // consume a genuine pending echo.
         const _isContinuation = /^This session is being continued from a previous conversation\b/.test(ev.text || '');
-        if (!ev.peer && !ev.pending && !_reconciledExact && !_isContinuation
+        if (_authoritativeUserEvent && !_reconciledExact && !_isContinuation
             && _pendingSends.length && canAcknowledgeSend(_pendingSends[0])) {
           const oldest = _pendingSends.shift();
           if (oldest) {
@@ -59329,9 +59347,9 @@
         // AFTER an assistant reply (a `.kimi-turn` sits between the bubbles),
         // so it always renders. (Pending-echo reconciliation above has
         // already run, so the optimistic echo is still cleared.)
-        if (_kimiPane && normed && !ev.pending) {
+        if (_kimiPane && normed && _authoritativeUserEvent) {
           const _userRows = $view.querySelectorAll(
-            '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)');
+            '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged):not(.provisional)');
           const _lastUserRow = _userRows.length ? _userRows[_userRows.length - 1] : null;
           const _lastUserMsg = _lastUserRow && _lastUserRow.querySelector('.user-msg');
           if (_lastUserMsg
@@ -60231,53 +60249,46 @@
         && _streamingBubble !== $view.lastElementChild) {
       $view.appendChild(_streamingBubble);
     }
-    // Keep queued steer candidates at the composer, including durable server
-    // queue events (which are not represented in `_pendingSends`).
-    // Every server fetch includes the current durable pending overlay.  If a
-    // former server card is absent, that absence is authoritative: retaining
-    // it made successfully delivered messages look queued forever.
-    syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || opts.queueSnapshot !== false));
-    // Same story for not-yet-delivered send echoes (`.pending` /
-    // `.send-queued` / `.not-acknowledged`) — a turn that streams in while
-    // the agent hasn't drained the queued input yet would otherwise bury the
-    // message the user is still waiting to have acknowledged, stranding it
-    // mid-transcript instead of right above the input box (CCC-515).
-    //
-    // Self-heal first: a STEERed message lands in the rollout almost
-    // immediately (mid-turn), so its durable `user_text` can render in an
-    // earlier batch than the moment the optimistic echo is created. When that
-    // happens the reconciliation pass at the top of this render (which only
-    // fires while PROCESSING a matching user_text event) never sees the echo,
-    // so the "✓ Steered" ghost stays pinned to the tail forever — the user
-    // sees their message twice (once in place, once floating at the bottom).
-    // Before re-anchoring, drop any echo whose text already exists as a
-    // durable (non-echo) row on screen: the real message is proven present,
-    // so the optimistic copy is redundant.
-    if (_pendingSends.length) {
-      const _durableUserTexts = [];
-      for (const el of $view.querySelectorAll(
-          '.event.user_text:not(.pending):not(.send-queued)'
-          + ':not(.send-delivered):not(.not-acknowledged)')) {
-        const um = el.querySelector('.user-msg');
-        if (um) _durableUserTexts.push(_normSend(um.getAttribute('data-raw-text') || um.textContent));
-      }
-      if (_durableUserTexts.length) {
-        for (const p of _pendingSends.slice()) {
-          if (!p || !p.text) continue;
-          if (_durableUserTexts.indexOf(_normSend(p.text)) < 0) continue;
-          if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
-          if (p.timer) clearTimeout(p.timer);
-          if (p.sid) clearSessionSending(p.sid);
-          const _i = _pendingSends.indexOf(p);
-          if (_i >= 0) _pendingSends.splice(_i, 1);
-          const _pane = paneByPaneId(paneId);
-          if (_pane && currentConversation) syncPendingSendsMapForConv(_pane, currentConversation);
+    // The app-server live overlay is agent-output-only. Queue/input lifecycle
+    // belongs to the durable transcript and pending-input APIs; running these
+    // reconciliation passes on a 900ms provisional snapshot can erase input
+    // and steer cards that snapshot does not own.
+    if (!opts.provisionalOverlay) {
+      // Keep queued steer candidates at the composer, including durable server
+      // queue events (which are not represented in `_pendingSends`).
+      // Every server fetch includes the current durable pending overlay. If a
+      // former server card is absent, that absence is authoritative.
+      syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || opts.queueSnapshot !== false));
+      // Self-heal optimistic echoes only against durable user rows.
+      if (_pendingSends.length) {
+        const _durableUserTexts = [];
+        for (const el of $view.querySelectorAll(
+            '.event.user_text:not(.pending):not(.send-queued)'
+            + ':not(.send-delivered):not(.not-acknowledged):not(.provisional)'
+            + ':not(.peer-message):not(.steering-optimistic)')) {
+          const um = el.querySelector('.user-msg');
+          if (um) _durableUserTexts.push(_normSend(um.getAttribute('data-raw-text') || um.textContent));
+        }
+        if (_durableUserTexts.length) {
+          for (const p of _pendingSends.slice()) {
+            if (!p || !p.text) continue;
+            if (_durableUserTexts.indexOf(_normSend(p.text)) < 0) continue;
+            if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
+            if (p.timer) clearTimeout(p.timer);
+            if (p.sid) clearSessionSending(p.sid);
+            const _i = _pendingSends.indexOf(p);
+            if (_i >= 0) _pendingSends.splice(_i, 1);
+            const _pane = paneByPaneId(paneId);
+            if (_pane && currentConversation) syncPendingSendsMapForConv(_pane, currentConversation);
+          }
         }
       }
     }
-    for (const p of _pendingSends) {
-      if (p.element && p.element.parentNode === $view && p.element !== $view.lastElementChild) {
-        $view.appendChild(p.element);
+    if (!opts.provisionalOverlay) {
+      for (const p of _pendingSends) {
+        if (p.element && p.element.parentNode === $view && p.element !== $view.lastElementChild) {
+          $view.appendChild(p.element);
+        }
       }
     }
     // The optimistic "Sending…" pill needs two things:
@@ -60293,7 +60304,7 @@
     if (_agentReplied) {
       clearOptimisticAgentIndicator($view);
       clearLiveGeneratingIndicator($view);
-      if (currentSession.id) clearSessionSending(currentSession.id);
+      if (!opts.provisionalOverlay && currentSession.id) clearSessionSending(currentSession.id);
     } else {
       const _optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
       if (_optimistic && _optimistic !== $view.lastElementChild) {

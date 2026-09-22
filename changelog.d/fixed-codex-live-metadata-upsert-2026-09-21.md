@@ -1,1 +1,1 @@
-- Prevented active Codex conversations from accumulating empty speaker/copy rows on each live-overlay refresh.
+- Prevented active Codex conversation refreshes from accumulating empty action rows or hiding injected and queued messages.

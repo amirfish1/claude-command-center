@@ -22,6 +22,12 @@ const lifecycle = [
 const reconciliation = between(
   '        const normed = _normSend(ev.text);\n        let _reconciledExact',
   '        // Webui panes: collapse a durable user bubble');
+const renderedUserReconciliation = between(
+  '      if (_pendingSends.length) {\n        const _durableUserTexts',
+  '\n    }\n    if (!opts.provisionalOverlay) {\n      for (const p of _pendingSends) {');
+const renderTail = between(
+  '    // The app-server live overlay is agent-output-only.',
+  '    // Re-evaluate the end-of-session outcome banner');
 let browser;
 before(async () => { browser = await puppeteer.launch({ headless: true }); });
 after(async () => { if (browser) await browser.close(); });
@@ -32,7 +38,7 @@ async function fixture(run, input) {
     await page.setRequestInterception(true);
     page.on('request', request => request.abort());
     await page.setContent('<div class="conv-pane" data-pane-id="main"><div class="conversations-view"></div><div class="conv-input-bar"></div></div>');
-    await page.evaluate(({ lifecycle, reconciliation }) => {
+    await page.evaluate(({ lifecycle, reconciliation, renderedUserReconciliation, renderTail }) => {
       window.currentConversation = 'conversation';
       window._pendingSends = [];
       window._PENDING_SEND_ECHO_MAX_MS = 300000;
@@ -48,10 +54,13 @@ async function fixture(run, input) {
       window.userMessageSteerHtml = () => '';
       window.showOptimisticAgentIndicator = () => {};
       window.clearOptimisticAgentIndicator = () => {};
+      window.clearLiveGeneratingIndicator = () => {};
       window.scrollConversationToEnd = () => {};
       window.markSessionSending = () => {};
       window.clearedSends = 0;
       window.clearSessionSending = () => { clearedSends++; };
+      window.currentSession = { id: 'session' };
+      window._anchorWakeBreakdown = () => {};
       window.markPendingSendDelivered = pending => { pending.entry.delivered = true; };
       window.traySyncs = 0;
       window.syncQueuedSteerTray = view => {
@@ -84,7 +93,9 @@ async function fixture(run, input) {
       };
       (0, eval)(lifecycle);
       window.reconcileUserEvent = new Function('ev', 'paneId', '$view', reconciliation);
-    }, { lifecycle, reconciliation });
+      window.reconcileRenderedUserRows = new Function('$view', 'paneId', renderedUserReconciliation);
+      window.runRenderTail = new Function('$view', 'paneId', 'opts', 'events', renderTail);
+    }, { lifecycle, reconciliation, renderedUserReconciliation, renderTail });
     return await page.evaluate(run, input);
   } finally {
     await page.close();
@@ -191,6 +202,99 @@ for (const incomingText of ['Steering fixture', 'Different queued fixture']) {
     assert.deepEqual(result, { connected: true, tracked: 1, cleared: 0 });
   });
 }
+
+test('provisional Codex live-overlay user event never acknowledges an injected send', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Injected fixture', 'session', 'main');
+    reconcileUserEvent({
+      text: 'Injected fixture',
+      provisional: true,
+      live_key: 'turn-1:user-message-1',
+    }, 'main', getConvView());
+    return {
+      connected: pending.element.isConnected,
+      tracked: _pendingSends.length,
+      cleared: clearedSends,
+    };
+  });
+  assert.deepEqual(result, { connected: true, tracked: 1, cleared: 0 });
+});
+
+test('provisional rendered user bubble is not durable proof for an injected send', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Injected fixture', 'session', 'main');
+    const provisional = document.createElement('div');
+    provisional.className = 'event user_text provisional';
+    provisional.dataset.liveKey = 'turn-1:user-message-1';
+    provisional.innerHTML = '<div class="user-msg" data-raw-text="Injected fixture">Injected fixture</div>';
+    getConvView().append(provisional);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    return {
+      connected: pending.element.isConnected,
+      tracked: _pendingSends.length,
+      cleared: clearedSends,
+    };
+  });
+  assert.deepEqual(result, { connected: true, tracked: 1, cleared: 0 });
+});
+
+test('peer message is not durable proof for an injected send', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Injected fixture', 'session', 'main');
+    const peer = document.createElement('div');
+    peer.className = 'event user_text peer-message';
+    peer.innerHTML = '<div class="user-msg" data-raw-text="Injected fixture">Injected fixture</div>';
+    getConvView().append(peer);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    return {
+      connected: pending.element.isConnected,
+      tracked: _pendingSends.length,
+      cleared: clearedSends,
+    };
+  });
+  assert.deepEqual(result, { connected: true, tracked: 1, cleared: 0 });
+});
+
+test('optimistically steering row is not durable proof for its own pending send', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Steering fixture', 'session', 'main');
+    pending.element.classList.remove('pending');
+    pending.element.classList.add('steering-optimistic');
+    reconcileRenderedUserRows(getConvView(), 'main');
+    return {
+      connected: pending.element.isConnected,
+      tracked: _pendingSends.length,
+      cleared: clearedSends,
+    };
+  });
+  assert.deepEqual(result, { connected: true, tracked: 1, cleared: 0 });
+});
+
+test('provisional agent output does not reorder pending input or clear sending state', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Injected fixture', 'session', 'main');
+    const sentinel = document.createElement('div');
+    sentinel.id = 'tail-sentinel';
+    getConvView().append(sentinel);
+    runRenderTail(getConvView(), 'main', { provisionalOverlay: true }, [{ type: 'assistant' }]);
+    return {
+      pendingBeforeSentinel: pending.element.nextElementSibling === sentinel,
+      tracked: _pendingSends.length,
+      cleared: clearedSends,
+    };
+  });
+  assert.deepEqual(result, { pendingBeforeSentinel: true, tracked: 1, cleared: 0 });
+});
+
+test('durable duplicate-collapse ignores provisional live-overlay user rows', () => {
+  const branch = source.slice(
+    source.indexOf('// Webui panes: collapse a durable user bubble'),
+    source.indexOf('        const imagesHtml = renderImageDescriptors',
+      source.indexOf('// Webui panes: collapse a durable user bubble')),
+  );
+  assert.match(branch,
+    /\.event\.user_text:not\(\.pending\):not\(\.send-queued\):not\(\.send-delivered\):not\(\.not-acknowledged\):not\(\.provisional\)/);
+});
 
 for (const incomingText of ['Again', 'Older different message']) {
   test('older history cannot acknowledge a later queued send: ' + incomingText, async () => {

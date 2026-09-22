@@ -92,6 +92,20 @@ test('one later durable occurrence retires only one stale queued copy',async()=>
   assert.equal(count,1);
  }finally{await page.close();}
 });
+test('a provisional live-overlay bubble cannot retire a queued card',async()=>{
+ const page=await fixture();try{
+  const count=await page.evaluate(()=>{const now=Date.now();makeRow('again','server',now-5000);const provisional=makeRow('again','durable',now);provisional.classList.add('provisional');provisional.dataset.liveKey='turn-1:user-message-1';sync();return queuedSteerCardCount(document.querySelector('.queued-steer-tray'));});
+  assert.equal(count,1);
+ }finally{await page.close();}
+});
+test('peer and optimistic-steer rows cannot retire a settled server steer card',async()=>{
+ for(const cls of ['peer-message','steering-optimistic']){
+  const page=await fixture();try{
+   const connected=await page.evaluate(cls=>{const now=Date.now();const settled=makeRow('same steer','durable',now-5000);settled.dataset.steerSettled='1';settled.classList.add('send-delivered');const proof=makeRow('same steer','durable',now);proof.classList.add(cls);sync();return settled.isConnected;},cls);
+   assert.equal(connected,true,cls);
+  }finally{await page.close();}
+ }
+});
 test('an authoritative queue snapshot retires a server card that was already delivered',async()=>{
  const page=await fixture();try{
   const out=await page.evaluate(()=>{makeRow('already delivered','server');sync();syncQueuedSteerTray(getConvView(),'left',true);return {tray:!!document.querySelector('.queued-steer-tray'),rows:getConvView().querySelectorAll('.event.user_text').length};});
@@ -115,6 +129,20 @@ test('queued Steer button is shown for Codex',async()=>{
 test('conversation rendering treats every fetch response as an authoritative queue snapshot',()=>{
  const source=fs.readFileSync('static/app.js','utf8');
  assert.match(source,/syncQueuedSteerTray\(\$view, paneId, !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\)\)/);
+});
+test('Codex live-overlay forwards only agent events and is non-authoritative for input state',async()=>{
+ const start=app.indexOf('  window.CCCCodexRenderLiveEvents = function');
+ const end=app.indexOf('  // Currently-focused session',start);
+ assert.ok(start>=0&&end>start);
+ const page=await browser.newPage();try{
+  const result=await page.evaluate(code=>{window.renderConversationEvents=(events,paneId,opts)=>({events,paneId,opts});(0,eval)(code);return window.CCCCodexRenderLiveEvents('left',[{type:'user_text',text:'input'},{type:'assistant',blocks:[]}]);},app.slice(start,end));
+  assert.deepEqual(result,{events:[{type:'assistant',blocks:[]}],paneId:'left',opts:{queueSnapshot:false,provisionalOverlay:true}});
+ }finally{await page.close();}
+});
+test('provisional overlay render skips queued-tray and durable-send reconciliation',()=>{
+ const source=fs.readFileSync('static/app.js','utf8');
+ const tail=source.slice(source.indexOf('// The app-server live overlay is agent-output-only'),source.indexOf('// The optimistic "Sending…" pill needs two things:'));
+ assert.match(tail,/if \(!opts\.provisionalOverlay\) \{[\s\S]*syncQueuedSteerTray[\s\S]*if \(_pendingSends\.length\)/);
 });
 test('queued Steer is a distinct keyed action from the Send that created it',async()=>{
  const start=app.indexOf('  async function postInjectInput(');
