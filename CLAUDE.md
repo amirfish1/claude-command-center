@@ -46,8 +46,11 @@ Rules that hold for everyone, agents included:
   (`scripts/pre-push.sh`) with `--no-verify` — fix what it reports.
 - **Commit means push.** On the maintainer's shared clone every commit is
   pushed immediately (`git push origin main`) — deployment pulls from
-  origin, so an unpushed commit is undeployed. If the gate fails, fix it or
-  don't commit. (Fork/PR contributors push their branch, not `main`.)
+  origin, so an unpushed commit is undeployed. After pushing, verify the remote
+  ref matches local `HEAD` (`git rev-parse HEAD` and
+  `git ls-remote origin refs/heads/main`) before reporting completion. If the
+  gate or verification fails, fix it or don't claim the change shipped.
+  (Fork/PR contributors push and verify their branch, not `main`.)
 - `/lean-commit` (`.claude/commands/lean-commit.md`) commits only the paths you
   changed; `scripts/lean-commit.sh` lists candidates with noise filtered.
 
