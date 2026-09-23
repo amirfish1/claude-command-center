@@ -110,6 +110,12 @@ WARMUP_S = _env_int("CCC_PERF_WARMUP_S", 300)
 #     ticket instead of silence, so the overload itself stays visible.
 SATURATED_LOAD_PER_CPU = _env_float("CCC_PERF_SATURATED_LOAD_PER_CPU", 2.0)
 _SINGLE_SAMPLE_BREACH_FACTOR = 3
+# Gross saturation: load this far past the saturation line (per core) means
+# every endpoint stalled at once (CCC-39: load1 ~173 on 8 cores, a 40s
+# conv_open next to 60s /api/queue/context and 30s /api/repo/worktrees). No
+# single sample is attributable to CCC then, so the 3x carve-out above does
+# not apply — the row rolls into the "machine saturated" alert instead.
+GROSS_SATURATION_LOAD_PER_CPU = _env_float("CCC_PERF_GROSS_SATURATION_LOAD_PER_CPU", 8.0)
 # Minimum gap between "still saturated" comments on an already-open
 # saturation ticket — one refresh per few hours, not one per check cycle.
 SAT_COMMENT_MIN_INTERVAL_S = _env_int("CCC_PERF_SAT_COMMENT_INTERVAL_S", 6 * 3600)
@@ -133,6 +139,16 @@ def _load_saturated(load1, ncpu):
         if load1 is None or ncpu is None:
             return False
         return float(load1) >= SATURATED_LOAD_PER_CPU * float(ncpu)
+    except (TypeError, ValueError):
+        return False
+
+
+def _row_grossly_saturated(row):
+    try:
+        load1, ncpu = row.get("load1"), row.get("ncpu")
+        if load1 is None or ncpu is None:
+            return False
+        return float(load1) >= GROSS_SATURATION_LOAD_PER_CPU * float(ncpu)
     except (TypeError, ValueError):
         return False
 
@@ -459,6 +475,7 @@ def evaluate_breach_pattern(events):
         single_3x = any(
             (r.get("ms") or 0)
             >= _SINGLE_SAMPLE_BREACH_FACTOR * (r.get("threshold_ms") or 1)
+            and not _row_grossly_saturated(r)
             for r in rows
         )
         if len(breach_rows) < 2 and not single_3x:
@@ -484,7 +501,7 @@ def evaluate_saturation(events):
         for e in events
         if e.get("breach") and not e.get("warmup") and _row_saturated(e)
     ]
-    if len(saturated) < 2:
+    if len(saturated) < 2 and not any(_row_grossly_saturated(r) for r in saturated):
         return None
     kind_counts = {}
     max_load1 = 0.0
@@ -692,8 +709,9 @@ def _build_saturation_note(sat):
     lines.append("")
     lines.append(
         "Raw samples are still recorded with load1/ncpu; any single sample "
-        "over %dx its threshold still files a normal perf ticket."
-        % _SINGLE_SAMPLE_BREACH_FACTOR
+        "over %dx its threshold still files a normal perf ticket, unless load1 "
+        "was >= %.0f per core (gross saturation)."
+        % (_SINGLE_SAMPLE_BREACH_FACTOR, GROSS_SATURATION_LOAD_PER_CPU)
     )
     return "\n".join(lines)
 

@@ -1,0 +1,1 @@
+Perf-ticket filer no longer files a per-kind slow-open ticket for a lone 3x-threshold sample recorded under gross machine saturation (load1 >= 8 per core); it rolls into the machine-saturated alert instead.

@@ -495,6 +495,18 @@ class TestSaturationDowngrade(PerfEventsTestBase):
         self.assertIsNotNone(pattern)
         self.assertEqual(pattern["kind"], "archive_load")
 
+    def test_grossly_saturated_single_3x_does_not_qualify(self):
+        # CCC-39: load1 ~173 on 8 cores stalled every endpoint; a lone 40s
+        # conv_open then is machine contention, not a CCC regression.
+        now = time.time()
+        row = self._saturated_row(
+            "conv_open", 40844, now, pe.CONV_OPEN_MS, load1=172.9
+        )
+        self.assertIsNone(pe.evaluate_breach_pattern([row]))
+        sat = pe.evaluate_saturation([row])
+        self.assertIsNotNone(sat)
+        self.assertEqual(sat["count"], 1)
+
     def test_one_clean_plus_saturated_does_not_qualify(self):
         now = time.time()
         events = [
