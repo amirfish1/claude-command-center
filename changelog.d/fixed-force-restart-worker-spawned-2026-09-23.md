@@ -1,0 +1,1 @@
+Force-restart and stuck-input auto-recovery now find Claude sessions the worker spawned after the dashboard booted, instead of reporting "no live CCC-owned Claude process" and parking messages forever.

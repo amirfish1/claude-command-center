@@ -4864,7 +4864,23 @@ def _drop_dead_terminal_queue(sid, *, code):
 
 
 # Holds that say "a turn is running" -- the only ones a wedged child can fake.
-_RECOVERABLE_HOLD_REASONS = frozenset({"headless_turn", "tool_child_blocks_inject"})
+_RECOVERABLE_HOLD_REASONS = frozenset({
+    "headless_turn", "tool_child_blocks_inject", "orphaned_spawn",
+})
+
+
+def _live_claude_spawn_for_recovery(sid):
+    """Live Claude child for `sid`: this process's own spawn, else one the
+    worker created after the dashboard booted (only in the shared on-disk
+    registry). Without the fallback, force-restart and auto-recovery are blind
+    to worker-spawned children and a stalled session can't be restarted."""
+    spawn = _core._find_live_spawn_entry_for_session(sid)
+    if spawn is None:
+        from ccc_server import spawn_registry
+        spawn = spawn_registry._disk_spawn_entry_for_session(sid)
+    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+        return None
+    return spawn
 
 
 def _inject_recovery_state_path():
@@ -4884,8 +4900,8 @@ def _maybe_recover_stuck_hold(sid, reason, held_s, now):
     from ccc_server import inject_recovery as ir
     if not ir.enabled():
         return False
-    spawn = _core._find_live_spawn_entry_for_session(sid)
-    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+    spawn = _live_claude_spawn_for_recovery(sid)
+    if spawn is None:
         return False
     with _core._pending_terminal_input_lock:
         queue = _core._pending_terminal_input_queue.get(sid) or []
@@ -4958,8 +4974,8 @@ def _force_restart_session(sid):
     A human asked, so the auto-recovery budget is reset (`inject_stuck`
     cleared). Never touches sessions CCC does not own."""
     from ccc_server import inject_recovery as ir
-    spawn = _core._find_live_spawn_entry_for_session(sid)
-    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+    spawn = _live_claude_spawn_for_recovery(sid)
+    if spawn is None:
         return {"ok": False, "error": "no live CCC-owned Claude process for this session"}
     ir.clear_stuck(sid, _inject_recovery_state_path())
     transaction = _core._apply_pending_input_operations(sid, [{
@@ -5512,6 +5528,13 @@ def _start_resume_queue_watcher() -> None:
                         if (spawn is None and not wt_worker_reachable
                                 and not engine_worker_reachable
                                 and status.get("kind") != "bg" and status.get("pid")):
+                            # A live child CCC itself spawned (worker-created
+                            # after this dashboard booted) is recoverable,
+                            # not foreign: let the hold/recovery path retire
+                            # and resume it instead of parking forever.
+                            if _live_claude_spawn_for_recovery(sid) is not None:
+                                _core._terminal_queue_hold_or_expire(sid, "orphaned_spawn")
+                                continue
                             if _core._note_foreign_writer_hold(sid, status.get("pid")):
                                 _core._log_activity(
                                     "inject", "INJECT_STALLED",

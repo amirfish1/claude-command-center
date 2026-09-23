@@ -80,3 +80,18 @@ def test_wiring_is_exported():
     server = importlib.import_module("server")
     assert callable(server._force_restart_session)
     assert callable(server._maybe_recover_stuck_hold)
+
+
+def test_recovery_finds_worker_spawned_child_via_disk_registry(monkeypatch):
+    """A child the worker spawned after the dashboard booted is absent from the
+    dashboard's in-memory spawn list; force-restart/recovery must still see it."""
+    from ccc_server import pending_inputs, spawn_registry
+    entry = {"pid": 4242, "engine": "claude", "session_id": "sid-1"}
+    monkeypatch.setattr(pending_inputs._core, "_find_live_spawn_entry_for_session", lambda sid: None)
+    monkeypatch.setattr(spawn_registry, "_disk_spawn_entry_for_session", lambda sid: entry)
+    assert pending_inputs._live_claude_spawn_for_recovery("sid-1") is entry
+    entry_codex = dict(entry, engine="codex")
+    monkeypatch.setattr(spawn_registry, "_disk_spawn_entry_for_session", lambda sid: entry_codex)
+    assert pending_inputs._live_claude_spawn_for_recovery("sid-1") is None
+    monkeypatch.setattr(spawn_registry, "_disk_spawn_entry_for_session", lambda sid: None)
+    assert pending_inputs._live_claude_spawn_for_recovery("sid-1") is None
