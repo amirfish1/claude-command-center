@@ -23209,7 +23209,8 @@ body.has-gc-reader .pwa-install-banner {
   background: rgba(248,81,73,0.07);
   border-bottom: 1px solid rgba(248,81,73,0.35);
   box-shadow: inset 3px 0 0 var(--red, #f85149);
-  max-height: 40%; overflow-y: auto;
+  /* ~head + one row; more errors scroll instead of pushing the ticket list off-screen. */
+  max-height: min(112px, 20vh); overflow-y: auto;
 }
 .fq-alerts[hidden] { display: none; }
 .fq-alerts-head {
@@ -23303,6 +23304,10 @@ body.has-gc-reader .pwa-install-banner {
   flex: 0 0 auto;
   display: flex; flex-direction: column;
   overflow-y: auto;
+  /* Default cap: ~3 queue rows (scrolls beyond that) so many configured
+     queues can't starve the ticket list below. A height the user dragged via
+     #queueHealthResizeHandle is applied inline and overrides this. */
+  max-height: min(96px, 18vh);
   border-bottom: 1px solid rgba(139,148,158,0.14);
 }
 .fq-health:empty { display: none; }
