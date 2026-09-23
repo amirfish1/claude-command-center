@@ -16403,6 +16403,9 @@
         if (picker) picker.click();
       } else if (action === 'technical-details') {
         _simpleToggleTechStrip();
+      } else if (action === 'annotate') {
+        const annBtn = document.getElementById('annotationStartBtn');
+        if (annBtn) annBtn.click();
       }
     });
   }

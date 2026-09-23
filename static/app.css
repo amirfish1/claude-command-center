@@ -12448,6 +12448,7 @@
     position: fixed; inset: 0; z-index: 10020;
     cursor: crosshair; background: rgba(13,17,23,0.08);
     user-select: none;
+    touch-action: none;
   }
   .ann-overlay.ann-capturing {
     opacity: 0;
