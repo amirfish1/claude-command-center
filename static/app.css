@@ -23433,8 +23433,8 @@ body.has-gc-reader .pwa-install-banner {
   border: 1px solid rgba(248,81,73,0.40);
 }
 .fq-queue-alarm.is-warn {
-  color: var(--yellow, #d29922);
-  background: rgba(210,153,34,0.10);
+  color: #f0c24b;
+  background: rgba(210,153,34,0.14);
   border: 1px solid rgba(210,153,34,0.35);
 }
 .fq-queue-alarm-title {
@@ -23442,8 +23442,10 @@ body.has-gc-reader .pwa-install-banner {
   margin-bottom: 2px;
 }
 .fq-queue-alarm-line {
-  color: var(--text-muted);
-  font-size: 11.5px;
+  /* Readable body text: --text-muted washed out on the tinted alarm
+     background (near-invisible on dark themes). */
+  color: var(--text, #e6edf3);
+  font-size: 12px;
 }
 .fq-queue-alarm-actions {
   display: flex; gap: 8px;
