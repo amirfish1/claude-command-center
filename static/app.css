@@ -16473,6 +16473,9 @@
   .new-session-primary-row #sidebarNewBtn {
     flex: 0 1 136px;
   }
+  .new-session-primary-row #sidebarNewTicketBtn {
+    flex: 0 0 auto;
+  }
   .new-session-primary-row .search-wrap {
     flex: 1 1 96px;
     min-width: 48px;
@@ -29513,3 +29516,9 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   .ns-model-comparison table { font-size: 11px; }
 }
 .ns-model-selected { font-size: 12px; line-height: 1.5; margin: 10px 0; font-weight: 600; }
+
+.fq-ticket-queue-select {
+  width: 100%; margin-bottom: 10px; padding: 6px 8px; font: inherit;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+}

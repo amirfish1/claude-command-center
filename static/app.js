@@ -39269,6 +39269,7 @@
     // open latest worker session in conversation pane.
     if (!$convList._queueHeaderWired) {
       $convList._queueHeaderWired = true;
+            _ticketQueueUsageRecord(targetProj);
       $convList.addEventListener('click', (ev) => {
         const hdr = ev.target && ev.target.closest && ev.target.closest('.conv-evergreen-queue-header[data-queue-name]');
         if (!hdr) return;
@@ -48605,7 +48606,49 @@
     });
   }
 
-  function openQueueTicketComposer() {
+  // Ticket-filing history behind the global "New ticket" queue picker: per
+  // queue, the timestamps of tickets filed from this dashboard (capped).
+  const _TICKET_QUEUE_USAGE_LS = 'ccc-ticket-queue-usage';
+  function _ticketQueueUsageLoad() {
+    try { return JSON.parse(localStorage.getItem(_TICKET_QUEUE_USAGE_LS) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function _ticketQueueUsageRecord(queue) {
+    const q = String(queue || '').trim();
+    if (!q) return;
+    const map = _ticketQueueUsageLoad();
+    const list = Array.isArray(map[q]) ? map[q] : [];
+    list.push(Date.now());
+    map[q] = list.slice(-50);
+    try { localStorage.setItem(_TICKET_QUEUE_USAGE_LS, JSON.stringify(map)); } catch (_) {}
+  }
+  // Recency-weighted frequency: each past filing counts 0.5^(age_days/7).
+  // Ties break by most recent filing, then alphabetically.
+  function _rankTicketQueues(names) {
+    const usage = _ticketQueueUsageLoad();
+    const now = Date.now();
+    const stat = (n) => {
+      const ts = Array.isArray(usage[n]) ? usage[n] : [];
+      return {
+        score: ts.reduce((a, t) => a + Math.pow(0.5, Math.max(0, now - t) / 86400000 / 7), 0),
+        last: ts.length ? Math.max.apply(null, ts) : 0,
+      };
+    };
+    const rows = names.map(n => Object.assign({ name: n }, stat(n)));
+    const used = rows.filter(r => r.score > 0)
+      .sort((a, b) => (b.score - a.score) || (b.last - a.last) || a.name.localeCompare(b.name));
+    const top = used.slice(0, 3).map(r => r.name);
+    const rest = names.filter(n => !top.includes(n)).sort((a, b) => a.localeCompare(b));
+    return { top, rest };
+  }
+
+  // opts.queues (array of names) adds a Queue <select> ordered top-3-by-use,
+  // divider, then the rest A-Z; the pick is left on
+  // openQueueTicketComposer.lastQueue (resolves with the note text as ever).
+  // Hook for future auto-pick: window.__cccSuggestTicketQueue(text) may return
+  // a queue name; it is applied until the user picks one by hand.
+  function openQueueTicketComposer(opts) {
+    opts = opts || {};
+    openQueueTicketComposer.lastQueue = '';
     return new Promise((resolve) => {
       document.querySelectorAll('.fq-ticket-composer').forEach(n => n.remove());
       const modal = document.createElement('div');
@@ -48624,6 +48667,20 @@
         +   '<div class="upd-actions fq-ticket-actions">'
         +     '<button type="button" class="upd-btn" data-fq-ticket-cancel>Cancel</button>'
         +     '<button type="button" class="upd-btn upd-primary" data-fq-ticket-submit disabled>Add ticket</button>'
+      let queueSelectHtml = '';
+      const queueNames = Array.isArray(opts.queues) ? opts.queues.filter(Boolean) : [];
+      if (queueNames.length) {
+        const { top, rest } = _rankTicketQueues(queueNames);
+        const want = queueNames.includes(opts.defaultQueue) ? opts.defaultQueue : (top[0] || rest[0]);
+        const opt = (n) => '<option value="' + escapeAttr(n) + '"' + (n === want ? ' selected' : '') + '>' + escapeHtml(n) + '</option>';
+        queueSelectHtml =
+            '<label class="fq-ticket-label" for="fqTicketQueue">Queue</label>'
+          + '<select id="fqTicketQueue" class="fq-ticket-queue-select">'
+          + top.map(opt).join('')
+          + (top.length && rest.length ? '<option disabled>──────────</option>' : '')
+          + rest.map(opt).join('')
+          + '</select>';
+      }
         +   '</div>'
         + '</div>';
       document.body.appendChild(modal);
@@ -48634,6 +48691,7 @@
         if (submitBtn && textarea) submitBtn.disabled = !(textarea.value || '').trim();
       };
       const close = (value) => {
+        +     (queueSelectHtml || '')
         if (settled) return;
         settled = true;
         document.removeEventListener('keydown', onKey);
@@ -48652,6 +48710,8 @@
       modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click', () => close('')));
       if (submitBtn) submitBtn.addEventListener('click', submit);
       if (textarea) {
+        const qSel = modal.querySelector('#fqTicketQueue');
+        openQueueTicketComposer.lastQueue = qSel ? qSel.value : '';
         textarea.addEventListener('input', refresh);
         textarea.addEventListener('keydown', (ev) => {
           if (isImeKey(ev)) return;
@@ -48667,8 +48727,18 @@
       }
       document.addEventListener('keydown', onKey);
       refresh();
+      const queueSel = modal.querySelector('#fqTicketQueue');
+      let queuePickedByHand = false;
+      if (queueSel) queueSel.addEventListener('change', () => { queuePickedByHand = true; });
     });
   }
+        textarea.addEventListener('input', () => {
+          if (!queueSel || queuePickedByHand || typeof window.__cccSuggestTicketQueue !== 'function') return;
+          try {
+            const sug = window.__cccSuggestTicketQueue(textarea.value);
+            if (sug && queueNames.includes(sug)) queueSel.value = sug;
+          } catch (_) {}
+        });
 
   // Create and revise the complete durable WatchTower queue configuration.
   // The compact health-row controls remain useful shortcuts; this manager is
@@ -48930,6 +49000,45 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
       });
+  // Top-level "+ Ticket" (sidebar): file into any queue without first
+  // opening it. Reuses the queue ticket composer with its Queue picker.
+  async function _newGlobalTicket() {
+    let health = _uxqHealthCache;
+    if (!(health.queues || []).length) {
+      try { health = await _fetchUxqHealth(false); } catch (_) {}
+    }
+    const names = Array.from(new Set(((health && health.queues) || [])
+      .map(q => String((q && q.queue) || '').trim()).filter(Boolean)));
+    if (!names.length) { showOpToast('No queues yet - create one from the Queue tab', 'error'); return; }
+    const railOnQueue = !!document.querySelector('.status-rail-tab.is-active[data-rail-tab="queue"]');
+    const scoped = railOnQueue ? String(_uxqLastResolvedProject || '').trim() : '';
+    const note = await openQueueTicketComposer({ queues: names, defaultQueue: scoped });
+    if (!note) return;
+    const queue = openQueueTicketComposer.lastQueue;
+    try {
+      const res = await fetch('/api/ux-fixes/enqueue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(queue ? { note, project: queue } : { note }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok) {
+        _ticketQueueUsageRecord(queue);
+        _uxqItemsCache.ts = 0;
+        _uxqHealthCache.ts = 0;
+        showOpToast('Added ' + ((data.item && data.item.ref) || 'ticket') + ' to ' + queue);
+        _renderQueuePanel();
+      } else {
+        showOpToast('Add failed: ' + ((data && data.error) || 'unknown'), 'error');
+      }
+    } catch (e) {
+      showOpToast('Add failed: ' + e, 'error');
+    }
+  }
+  {
+    const $newTicketBtn = document.getElementById('sidebarNewTicketBtn');
+    if ($newTicketBtn) $newTicketBtn.addEventListener('click', () => { _newGlobalTicket(); });
+  }
       const data = await res.json().catch(() => ({}));
       if (data && data.ok) {
         const ref = (data.item && data.item.ref) || 'ticket';
@@ -48949,6 +49058,7 @@
     } catch (e) {
       _uxqPendingQueueAdds.delete(pendingId);
       _renderQueuePanel({ allowStale: true });
+        _ticketQueueUsageRecord(targetProj);
       showOpToast('Add failed: ' + e);
     }
   }
