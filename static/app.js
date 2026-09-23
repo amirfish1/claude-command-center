@@ -8584,6 +8584,13 @@
     return parts.join('\n\n').trim();
   }
 
+  // Rendered .assistant-text nodes of an assistant event, for word-highlighted
+  // read-aloud. Empty when the node isn't a rendered assistant event.
+  function assistantTextElements(node) {
+    if (!node || !node.querySelectorAll) return [];
+    return Array.from(node.querySelectorAll('.assistant-text'));
+  }
+
   function assistantMessageActionsHtml(ev) {
     const hasAssistantText = Array.isArray(ev && ev.blocks)
       && ev.blocks.some((b) => b && b.kind === 'text' && String(b.text || '').trim());
@@ -8594,16 +8601,19 @@
       + '</span>';
   }
 
-  function agentAnswerTextBeforeResult(resultEl) {
+  function agentAnswerNodeBeforeResult(resultEl) {
     let node = resultEl ? resultEl.previousElementSibling : null;
     while (node) {
       if (node.classList && node.classList.contains('assistant')) {
-        const text = assistantNodeTextForCopy(node);
-        if (text) return text;
+        if (assistantNodeTextForCopy(node)) return node;
       }
       node = node.previousElementSibling;
     }
-    return '';
+    return null;
+  }
+
+  function agentAnswerTextBeforeResult(resultEl) {
+    return assistantNodeTextForCopy(agentAnswerNodeBeforeResult(resultEl));
   }
 
   function setCopyableSessionId(el, sid, transcriptPath) {
@@ -8848,7 +8858,7 @@
     const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
     const paneState = paneId && typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
     const convId = (paneState && paneState.conversationId) || currentConversation || '';
-    const ok = speakTextDirect(text, convId, paneId, btn);
+    const ok = speakTextDirect(text, convId, paneId, btn, assistantTextElements(agentAnswerNodeBeforeResult(resultEl)));
     if (!ok) showOpToast('Your browser does not support text-to-speech.', 'error');
   });
 
@@ -9052,7 +9062,7 @@
     const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
     const paneState = paneId && typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
     const convId = (paneState && paneState.conversationId) || currentConversation || '';
-    const ok = speakTextDirect(text, convId, paneId, btn);
+    const ok = speakTextDirect(text, convId, paneId, btn, assistantTextElements(eventEl));
     if (!ok) showOpToast('Your browser does not support text-to-speech.', 'error');
   });
 
@@ -12953,16 +12963,25 @@
     }
   }
 
-  // Speak a captured string directly — no DOM mapping / word highlight.
+  // Speak a captured string directly — word highlight only with domElements.
   // Used when the conversation that produced the reply is not on screen
   // (Submit+ background completion). Honors the same playback state
   // (_ttsUtterance / _ttsActive / _ttsPaused / _ttsActiveConvId) so the
   // floating control and in-bar button stay consistent, and rate changes
   // restart from the current word like the normal path.
-  function speakTextDirect(text, convId, paneId, sourceBtn) {
+  // When `domElements` (rendered message nodes) are given, the read maps
+  // spoken offsets back onto their text nodes so the current word highlights.
+  function speakTextDirect(text, convId, paneId, sourceBtn, domElements) {
     if (!window.speechSynthesis) return false;
-    const clean = _sanitizeTtsText(_stripSessionStateFromText(text));
-    if (!clean) return false;
+    let domData = null;
+    if (domElements && domElements.length) {
+      domData = buildTtsDataFromElements(domElements);
+      if (!domData.text.trim()) domData = null;
+    }
+    const clean = domData
+      ? _sanitizeTtsText(domData.text, true)
+      : _sanitizeTtsText(_stripSessionStateFromText(text));
+    if (!clean.trim()) return false;
     // Starting a fresh read supersedes any prior utterance.
     if (_ttsActive || _ttsPaused || _ttsUtterance) {
       _ttsChunkState = null;
@@ -12970,7 +12989,7 @@
     }
     _setTtsDirectBtnState(sourceBtn || null, sourceBtn ? 'speaking' : null);
     clearTtsHighlight();
-    _ttsTextMapping = [];
+    _ttsTextMapping = domData ? domData.mapping : [];
     _ttsLastCharIndex = 0;
     _ttsPaused = false;
     const clipped = clean.length > TTS_TEXT_MAX_CHARS ? clean.slice(0, TTS_TEXT_MAX_CHARS) : clean;
