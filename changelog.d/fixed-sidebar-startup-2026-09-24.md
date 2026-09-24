@@ -1,0 +1,1 @@
+- Fix dashboard startup failing with an out-of-scope queue-ticket textarea handler, leaving the sidebar stuck on Loading.

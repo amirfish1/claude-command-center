@@ -48754,15 +48754,15 @@
       const queueSel = modal.querySelector('#fqTicketQueue');
       let queuePickedByHand = false;
       if (queueSel) queueSel.addEventListener('change', () => { queuePickedByHand = true; });
+      if (textarea) textarea.addEventListener('input', () => {
+        if (!queueSel || queuePickedByHand || typeof window.__cccSuggestTicketQueue !== 'function') return;
+        try {
+          const sug = window.__cccSuggestTicketQueue(textarea.value);
+          if (sug && queueNames.includes(sug)) queueSel.value = sug;
+        } catch (_) {}
+      });
     });
   }
-        textarea.addEventListener('input', () => {
-          if (!queueSel || queuePickedByHand || typeof window.__cccSuggestTicketQueue !== 'function') return;
-          try {
-            const sug = window.__cccSuggestTicketQueue(textarea.value);
-            if (sug && queueNames.includes(sug)) queueSel.value = sug;
-          } catch (_) {}
-        });
 
   // Create and revise the complete durable WatchTower queue configuration.
   // The compact health-row controls remain useful shortcuts; this manager is
