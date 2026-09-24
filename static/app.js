@@ -53992,6 +53992,7 @@
       { id: 'grok-4.5', label: 'Grok 4.5' },
     ],
     droid: [
+      { id: 'claude-opus-5-5',  label: 'Claude Opus 5.5' },
       { id: 'claude-opus-5',    label: 'Claude Opus 5' },
       { id: 'claude-sonnet-5',  label: 'Claude Sonnet 5' },
       { id: 'gpt-5.4',          label: 'GPT-5.4' },
@@ -54008,7 +54009,6 @@
 
   const ENGINE_SUPPORTS_CUSTOM_MODEL = {
     claude: true,
-      { id: 'claude-opus-5-5',  label: 'Claude Opus 5.5' },
     codex: false,
     cursor: true,
     gemini: true,
@@ -61606,6 +61606,7 @@
   const ORCH_EXECUTORS = [
     { id: 'gpt-6-astra',   engine: 'codex',       model: 'gpt-6-astra',           label: '6 Astra',        vendor: 'Codex',       family: 'openai' },
     { id: 'sonnet-5',      engine: 'claude',      model: 'sonnet-5',              label: 'Sonnet 5',       vendor: 'Claude',      family: 'anthropic' },
+    { id: 'opus-5-5',      engine: 'claude',      model: 'opus-5-5',              label: 'Opus 5.5',       vendor: 'Claude',      family: 'anthropic' },
     { id: 'opus-5',        engine: 'claude',      model: 'opus-5',                label: 'Opus 5',         vendor: 'Claude',      family: 'anthropic' },
     { id: 'gpt-5.6-terra', engine: 'codex',       model: 'gpt-5.6-terra',         label: '5.6 Terra',      vendor: 'Codex',       family: 'openai' },
     { id: 'grok-4.6',      engine: 'grok',        model: 'grok-4.6',              label: 'Grok 4.6',       vendor: 'Grok',        family: 'xai' },
@@ -61657,7 +61658,6 @@
   let _orchSim = null;           // { lanes: [...] } while the Preview plays
   let _orchSimTimers = [];
   let _orchPollTimer = null;
-    { id: 'opus-5-5',      engine: 'claude',      model: 'opus-5-5',              label: 'Opus 5.5',       vendor: 'Claude',      family: 'anthropic' },
 
   function orchExecutor() {
     let id = '';
@@ -77223,6 +77223,7 @@
     if (opt.description) return opt.description;
     const claudeGuidance = {
       'fable-5-1': 'Demanding reasoning and long-running agent tasks.',
+      'opus-5-5': 'Complex coding agents and enterprise tasks.',
       'opus-5': 'Complex coding agents and enterprise tasks.',
       'sonnet-5': 'Balances speed and intelligence.',
       'haiku-4-5': 'Lowest latency in the current Claude lineup.',
@@ -77274,7 +77275,6 @@
     if (host._comparisonMarkup === markup) return;
     const scrollTop = host.querySelector('.ns-model-table-wrap')?.scrollTop || 0;
     const focusedModel = host.contains(document.activeElement) ? document.activeElement.dataset.model : null;
-      'opus-5-5': 'Complex coding agents and enterprise tasks.',
     host.innerHTML = markup;
     host._comparisonMarkup = markup;
     host.querySelector('.ns-model-table-wrap').scrollTop = scrollTop;
