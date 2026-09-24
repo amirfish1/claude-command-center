@@ -10830,7 +10830,11 @@
         ? '<button type="button" class="send-queued-steer" data-steer-queued-message'
           + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
           + ' title="Steer the active turn with this queued message">Steer</button>'
-        : '')
+        : (queuedSource === 'devin-cli'
+          ? '<button type="button" class="send-queued-steer" data-steer-queued-message disabled'
+            + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
+            + ' title="' + escapeAttr(queuedSteerBlockedReason(queuedSource)) + '">Steer</button>'
+          : ''))
       + '<button type="button" class="send-queued-cancel" data-cancel-queued-message'
       + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
       + ' title="Cancel - discard this queued message">✕ Cancel</button>';
@@ -31999,6 +32003,17 @@
     if (source === 'codex' || source === 'kimi' || source === 'grok') return true;
     if (source === 'devin-cli') return !!acpReady || devinSteerCapableNow();
     return false;
+  }
+
+  // Devin rows keep a visibly disabled Steer button (instead of dropping it)
+  // when steer is unavailable, so the user sees why rather than assuming the
+  // control vanished.
+  function queuedSteerBlockedReason(source) {
+    if (source !== 'devin-cli') return '';
+    if (liveStatusMatchesOpenConv() && liveStatus && liveStatus.devinExternalOwner) {
+      return 'Steer unavailable: this Devin session is open in another client (e.g. Devin Desktop). It unlocks when that client lets go.';
+    }
+    return 'Steer unavailable: the shared devin acp connection is not ready for this session.';
   }
 
   function syncUserMessageSteerButtons(root) {
@@ -56148,10 +56163,22 @@
           steer.textContent = 'Steer';
           el.appendChild(steer);
         }
+      } else if (queuedSource === 'devin-cli') {
+        if (!steer) {
+          steer = document.createElement('button');
+          steer.type = 'button';
+          steer.className = 'send-queued-steer';
+          steer.setAttribute('data-steer-queued-message', '');
+          steer.textContent = 'Steer';
+          el.appendChild(steer);
+        }
+        steer.disabled = true;
+        steer.title = queuedSteerBlockedReason(queuedSource);
       } else if (steer) {
         steer.remove();
         steer = null;
       }
+      if (canSteer && steer) { steer.disabled = false; }
       if (!el.querySelector('[data-copy-user-message]')) {
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
