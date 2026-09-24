@@ -46050,8 +46050,20 @@
     const hosts = document.querySelectorAll('[data-role="workers-working-now"], #queueWorkingStrip');
     if (!hosts.length) return;
     const health = _uxqHealthCache || {};
-    const workers = (Array.isArray(health.wt_workers) ? health.wt_workers : [])
-      .filter(w => w && w.alive !== false);
+    // The registry can hold two records for one worker id (a rebind stub plus
+    // the spawn record); merge them so the strip shows one row per worker.
+    const _workersById = new Map();
+    (Array.isArray(health.wt_workers) ? health.wt_workers : [])
+      .filter(w => w && w.alive !== false)
+      .forEach((w, i) => {
+        const key = String(w.worker_id || '') || ('#' + i);
+        const prev = _workersById.get(key);
+        if (!prev) { _workersById.set(key, w); return; }
+        const merged = Object.assign({}, prev);
+        Object.keys(w).forEach(k => { if (w[k] !== '' && w[k] != null) merged[k] = w[k]; });
+        _workersById.set(key, merged);
+      });
+    const workers = [..._workersById.values()];
     _uxqRenderWorkersQueueHealth(health, workers);
     const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
     const queues = Array.isArray(health.queues) ? health.queues : [];
