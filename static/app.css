@@ -29524,3 +29524,15 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   background: var(--surface-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
 }
+
+/* A steer the engine rejected stays on its queued card until the next attempt. */
+.queued-steer-tray .send-queued-error {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--red, #e5534b);
+  border-radius: 6px;
+  color: var(--red, #e5534b);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}

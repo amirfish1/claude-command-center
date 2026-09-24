@@ -9088,6 +9088,7 @@
     btn.textContent = 'Steering…';
     const $view = trayConversationView(btn.closest('.queued-steer-tray'));
     markSteerInFlight(sid, [text]);
+    clearQueuedSteerError(sid, text);
     const moved = beginOptimisticSteerMove([row], $view);
     // Release the in-flight hold BEFORE reverting: the reverted card is a
     // queued candidate again, and the in-flight filter would delete it.
@@ -9104,6 +9105,7 @@
         return;
       }
       if (data && data.queued_preserved) {
+        if (data.error) setQueuedSteerError(sid, text, data.error);
         giveBack();
         showOpToast(data.error ? ('Still queued: ' + data.error) : 'Queued', 'error');
         setTimeout(refreshConversationList, 500);
@@ -9127,6 +9129,7 @@
       showOpToast(steeredToastText(data));
       setTimeout(refreshConversationList, 500);
     } catch (err) {
+      setQueuedSteerError(sid, text, (err && err.message) || 'steer failed');
       giveBack();
       btn.textContent = '!';
       showOpToast('Steer failed: ' + ((err && err.message) || 'unknown'), 'error');
@@ -9243,6 +9246,7 @@
     btn.textContent = 'Steering…';
     const $view = trayConversationView(tray);
     markSteerInFlight(sid, texts);
+    clearQueuedSteerError(sid, texts);
     const moved = beginOptimisticSteerMove(rows, $view);
     const giveBack = () => {
       clearSteerInFlight(sid, texts);
@@ -9271,6 +9275,7 @@
       showOpToast('Steered ' + texts.length + ' queued messages as one turn.');
       setTimeout(refreshConversationList, 500);
     } catch (err) {
+      setQueuedSteerError(sid, texts, (err && err.message) || 'steer failed');
       giveBack();
       btn.textContent = '!';
       showOpToast('Steer all failed: ' + ((err && err.message) || 'unknown'), 'error');
@@ -55875,6 +55880,45 @@
     return !!key && set.has(key);
   }
 
+  // A failed steer must stay visible on its card. The toast is gone in seconds
+  // and the card reverts to plain "queued", so without this a rejected steer
+  // (e.g. the engine is unavailable) looks like a message that is merely slow.
+  const _queuedSteerErrors = new Map();
+
+  function queuedSteerErrorKey(sid, text) {
+    const norm = _normSend(String(text || ''));
+    return sid && norm ? sid + '\u0000' + norm : '';
+  }
+
+  function setQueuedSteerError(sid, texts, message) {
+    (Array.isArray(texts) ? texts : [texts]).forEach(text => {
+      const key = queuedSteerErrorKey(sid, text);
+      if (key) _queuedSteerErrors.set(key, String(message || 'Steer failed'));
+    });
+  }
+
+  function clearQueuedSteerError(sid, texts) {
+    (Array.isArray(texts) ? texts : [texts]).forEach(text => {
+      const key = queuedSteerErrorKey(sid, text);
+      if (key) _queuedSteerErrors.delete(key);
+    });
+  }
+
+  function applyQueuedSteerError(el, sid) {
+    const msg = el.querySelector('.user-msg');
+    const text = msg && (msg.getAttribute('data-raw-text') || msg.textContent);
+    const message = _queuedSteerErrors.get(queuedSteerErrorKey(sid, text));
+    let box = el.querySelector('.send-queued-error');
+    if (!message) { if (box) box.remove(); return; }
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'send-queued-error';
+      box.setAttribute('role', 'alert');
+      el.appendChild(box);
+    }
+    box.textContent = 'Not delivered: ' + message;
+  }
+
   function beginOptimisticSteerMove(rows, $view) {
     const moved = [];
     (rows || []).forEach(row => {
@@ -56141,6 +56185,7 @@
       // line instead of a text row stacked over a button row.
       const queuedNote = el.querySelector('.send-queued-note');
       (queuedNote || el).appendChild(actions);
+      applyQueuedSteerError(el, sessionId);
       tray.appendChild(el);
     });
     if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
