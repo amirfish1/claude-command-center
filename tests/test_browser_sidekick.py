@@ -354,7 +354,7 @@ class ProxyEndToEndTest(unittest.TestCase):
         from urllib.parse import urlsplit
         p = urlsplit(self.proxy("/"))
         s = socket.create_connection((p.hostname, p.port), timeout=5)
-        s.sendall(b"GET /hmr HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        s.sendall(b"GET /hmr HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                   b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
         head = b""
         while b"\r\n\r\n" not in head:
@@ -373,6 +373,16 @@ class ProxyEndToEndTest(unittest.TestCase):
             rest += chunk
         s.close()
         self.assertIn(b"echo:ping", rest)
+
+    def test_proxy_rejects_rebound_host_header(self):
+        from urllib.parse import urlsplit
+        p = urlsplit(self.proxy("/"))
+        conn = http.client.HTTPConnection(p.hostname, p.port, timeout=5)
+        conn.request("GET", "/", headers={"Host": f"attacker.example:{p.port}"})
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 403)
 
     def test_proxy_refuses_non_loopback_target(self):
         self.assertFalse(bs.ensure_proxy("http://example.com:80/")["ok"])

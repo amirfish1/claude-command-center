@@ -27,8 +27,10 @@ has open. Transcript scans resume from the last byte read, keyed by
 (path, size, mtime); the lsof/ps snapshots are shared across sessions and
 cached for a few seconds, so a poll never forks per row.
 
-Security: the proxy and the probe only ever target loopback hosts, and the
-proxy binds 127.0.0.1 regardless of CCC_BIND_HOST.
+Security: the proxy and the probe only ever target loopback hosts, the
+proxy binds 127.0.0.1 regardless of CCC_BIND_HOST, and it refuses requests
+whose Host is not a loopback name (DNS rebinding). Its frame-ancestors
+policy admits loopback parents only.
 """
 
 from __future__ import annotations
@@ -607,7 +609,26 @@ def _make_handler(scheme, host, port):
                     pass
                 self.close_connection = True
 
+        def _host_ok(self):
+            """DNS-rebinding guard. The proxy rewrites Host for the dev
+            server, which would defeat that server's own rebinding check
+            (e.g. Vite's allowedHosts), so enforce it here: only a loopback
+            Host may use the proxy."""
+            host = (self.headers.get("Host") or "").strip().lower()
+            name = host.rsplit(":", 1)[0] if not host.endswith("]") else host
+            return name in ("127.0.0.1", "localhost", "[::1]")
+
         def _forward(self):
+            if not self._host_ok():
+                msg = b"CCC browser proxy: loopback Host required."
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(msg)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(msg)
+                self.close_connection = True
+                return
             if (self.headers.get("Upgrade") or "").strip():
                 self._tunnel()
                 return
