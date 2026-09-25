@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import statistics
 import subprocess
@@ -44,11 +45,30 @@ PROTOCOL_VERSION = "2024-11-05"
 
 DEFAULT_BASE = "http://127.0.0.1:8090"
 PORT_FILE = Path.home() / ".claude" / "command-center" / "port.txt"
-INDEX_BIN = os.environ.get(
-    "CLAUDE_INDEX_BIN", "/Users/amirfish/dev/tools/indexing/.venv/bin/claude-index")
+
+
+def _resolve_index_bin() -> str | None:
+    """The claude-index CLI: $CLAUDE_INDEX_BIN, else `claude-index` on PATH.
+
+    None means session-history search is off; Ask still answers fleet
+    questions and says history search is unavailable."""
+    env = os.environ.get("CLAUDE_INDEX_BIN")
+    if env:
+        return env if os.access(env, os.X_OK) else None
+    return shutil.which("claude-index")
+
+
+INDEX_BIN = _resolve_index_bin()
 INDEX_DB = os.environ.get("CLAUDE_INDEX_DB", str(Path.home() / ".claude-index" / "index.db"))
-CHECKIN_PATH = os.environ.get(
-    "CCC_DAILY_CHECKIN_FILE", str(Path.home() / "MyOfficeMgr" / "daily-checkin.md"))
+# Optional standing agenda. The daily_checkin tool is only offered to the
+# model when this is configured or the default file exists.
+CHECKIN_ENV = "CCC_DAILY_CHECKIN_FILE"
+CHECKIN_DEFAULT = Path.home() / ".claude" / "command-center" / "daily-checkin.md"
+CHECKIN_PATH = os.environ.get(CHECKIN_ENV) or str(CHECKIN_DEFAULT)
+
+
+def checkin_enabled() -> bool:
+    return bool(os.environ.get(CHECKIN_ENV)) or os.path.isfile(CHECKIN_PATH)
 CLAUDE_BIN_FALLBACK = str(Path.home() / ".local" / "bin" / "claude")
 
 MAZKIR_MODEL = os.environ.get("CCC_ASK_MODEL", "sonnet")
@@ -247,7 +267,7 @@ def fleet_diagnostics(census: dict, live: dict, window30: dict, now: float | Non
 
 
 # ---------------------------------------------------------------------------
-# Daily check-in agenda (~/MyOfficeMgr/daily-checkin.md)
+# Daily check-in agenda (optional markdown file, see CHECKIN_PATH)
 # ---------------------------------------------------------------------------
 
 CHECKIN_OPEN_STATES = ("open", "today", "active")
@@ -427,11 +447,12 @@ TOOLS = [
                     "which are waiting on a question/approval, and which are burning tokens "
                     "(>3× fleet median over the last 30 min). Call this first for 'is anything "
                     "stuck / burning / waiting on me?'.",
-     "inputSchema": {"type": "object", "properties": {}}},    {"name": "daily_checkin",
-     "description": "Amir's standing daily check-in agenda (~/MyOfficeMgr/daily-checkin.md): open items "
-                    "grouped by section (immediate, Becky/BYM product, CCC/Mazkir tooling, growth) with "
-                    "ids, status and notes, plus the recent discussion log. Call this for 'daily check-in', "
-                    "'morning review', 'what's on my agenda', 'what should we discuss'.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "daily_checkin",
+     "description": "The user's standing daily check-in agenda (a markdown file): open items "
+                    "grouped by section with ids, status and notes, plus the recent discussion "
+                    "log. Call this for 'daily check-in', 'morning review', 'what's on my agenda', "
+                    "'what should we discuss'.",
      "inputSchema": {"type": "object", "properties": {
          "include_closed": {"type": "boolean", "default": False,
                             "description": "Also return done/dropped items."}}}},
@@ -527,6 +548,8 @@ class CccState:
                 return {"session_id": sid, "known": False}
             return {"session_id": sid, "known": True, "census": row, "live": live, "throughput_24h": tp}
         if name == "daily_checkin":
+            if not checkin_enabled():
+                raise KeyError(name)
             return tool_daily_checkin(include_closed=bool(args.get("include_closed")))
         if name == "daily_brief":
             return tool_daily_brief()
@@ -556,6 +579,11 @@ class CccState:
         raise KeyError(name)
 
 
+def available_tools() -> list[dict]:
+    """TOOLS minus the ones whose backing data this machine doesn't have."""
+    return [t for t in TOOLS if t["name"] != "daily_checkin" or checkin_enabled()]
+
+
 def handle_request(state: CccState, req: dict) -> dict | None:
     """One JSON-RPC request -> response dict (None for notifications)."""
     method = req.get("method")
@@ -571,7 +599,7 @@ def handle_request(state: CccState, req: dict) -> dict | None:
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}}
+        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": available_tools()}}
     if method == "tools/call":
         name = params.get("name")
         try:
@@ -612,12 +640,12 @@ def serve_stdio(base: str | None = None) -> None:
 # Mazkir: the Ask agent
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are Mazkir, the memory and fleet assistant inside Claude Command Center (CCC) for Amir.
-You answer questions about Amir's past work (across Claude Code, Codex, Kimi, Antigravity sessions and pulled Gmail threads) and about the live agent fleet.
+SYSTEM_PROMPT = """You are Mazkir, the memory and fleet assistant inside Claude Command Center (CCC).
+You answer questions about the user's past work (across Claude Code, Codex, Kimi, Antigravity sessions and pulled Gmail threads) and about the live agent fleet.
 
 Tools:
 - claude-index: search_sessions (find which sessions are about X), search (specific facts/strings), session_info (confirm a session, see how it ended), show_message, recent_sessions.
-- ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail., daily_checkin (Amir's standing agenda).
+- ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail.
 - ccc-state (brief + why): daily_brief (the proactive morning brief: changes, stuck items, numbered proposed tickets), hunch_why (recorded decisions and invariants for a repo's files or a topic).
 - ccc-state (actions, propose only): propose_spawn_session, propose_inject, propose_wt_add, propose_wt_comment. These never act; the user confirms in CCC.
 
@@ -627,9 +655,8 @@ Method:
 3. Trust the candidate order: it already ranks by relevance with only a small recency tie-break, and demotes planning-only/self-referential sessions. Don't override it just because a lower-ranked candidate is more recent.
 4. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
 5. Be honest: if nothing matches, say what you searched and that you found nothing.
-6. For a daily check-in / morning review / "what should we discuss", call daily_checkin once, then walk every open item by section as "id — item — one-line status or note", lead with the "today" items, and end by asking which item to pull in first. The 110-word cap does not apply to that answer.
-7. For a daily brief / "what happened overnight", call daily_brief once and lead with its headline, then stuck items, then the numbered proposals.
-8. Acting: you cannot start, send, file, or post anything yourself. When the user asks you to (start a session, steer or message a session, file or comment on a ticket, "file proposal 2"), call the matching propose_* tool once with complete parameters, put [[action:confirm:ACTION_ID]] on its own line, and say it is waiting for their Confirm. Never say it was done. Don't propose actions the user did not ask for.
+6. For a daily brief / "what happened overnight", call daily_brief once and lead with its headline, then stuck items, then the numbered proposals.
+7. Acting: you cannot start, send, file, or post anything yourself. When the user asks you to (start a session, steer or message a session, file or comment on a ticket, "file proposal 2"), call the matching propose_* tool once with complete parameters, put [[action:confirm:ACTION_ID]] on its own line, and say it is waiting for their Confirm. Never say it was done. Don't propose actions the user did not ask for.
 
 Answer format (plain text, no markdown headers):
 - Lead with the answer in one or two sentences, then 1-4 short supporting lines.
@@ -639,13 +666,27 @@ Answer format (plain text, no markdown headers):
 - If a session should be resumed to continue that work, append [[action:spawn-continue:SESSION_ID]] on its own line.
 - Keep the whole answer under 110 words."""
 
+_CHECKIN_PROMPT = """
+
+Daily check-in: ccc-state also has daily_checkin (the user's standing agenda). For a daily check-in / morning review / "what should we discuss", call it once, then walk every open item by section as "id — item — one-line status or note", lead with the "today" items, and end by asking which item to pull in first. The 110-word cap does not apply to that answer."""
+
+_NO_INDEX_PROMPT = """
+
+claude-index is not installed on this machine, so the search_sessions/search/session_info tools do not exist. CANDIDATES come from CCC's built-in keyword search (titles and short snippets only) and you cannot search further. Answer from them when they fit; otherwise say what was searched and that nothing matched, and mention once that installing claude-index enables deeper history search. Never invent past sessions."""
+
+
+def system_prompt(index_bin: str | None = INDEX_BIN) -> str:
+    return SYSTEM_PROMPT + (_CHECKIN_PROMPT if checkin_enabled() else "") + ("" if index_bin else _NO_INDEX_PROMPT)
+
 
 def _range_to_since(range_key) -> str | None:
     return {"24h": "1d", "7d": "7d", "30d": "30d"}.get(str(range_key or "any").lower())
 
 
-def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: str = INDEX_BIN,
+def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: str | None = INDEX_BIN,
                       limit: int = PREFETCH_LIMIT, exclude_session_ids=None) -> list[dict]:
+    if not index_bin:
+        return []
     argv = [index_bin, "sessions", question, "--json", "-n", str(limit), "--excerpts", "3"]
     if since:
         argv += ["--since", since]
@@ -663,6 +704,44 @@ def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: 
     except ValueError:
         return []
     return [d for d in data if isinstance(d, dict) and d.get("session_id")] if isinstance(data, list) else []
+
+
+def builtin_prefetch(question: str, range_key: str | None, exclude_session_ids=None,
+                     limit: int = PREFETCH_LIMIT) -> list[dict]:
+    """Candidates from CCC's own session search, for machines without
+    claude-index. Same warm, cached searches the legacy Ask path uses."""
+    try:
+        from ccc_server import ask as _ask
+        from ccc_server import core as _core
+    except Exception:
+        return []
+    query = " ".join(_ask.extract_ask_terms(question))
+    if not query:
+        return []
+    days, since = _ask._ask_range_window(range_key)
+    try:
+        recent = (_core.search_recent_sessions(query, days=days, limit=limit * 2) or {}).get("results") or []
+    except Exception:
+        recent = []
+    try:
+        hist = (_core.search_conversation_history(query, limit=limit * 2, since=since) or {}).get("results") or []
+    except Exception:
+        hist = []
+    try:
+        hits = _ask.enrich_ask_hits(_ask.merge_ask_hits(recent, hist, cap=limit * 2))
+    except Exception:
+        return []
+    skip = set(exclude_session_ids or ())
+    out = []
+    for h in hits:
+        if h.get("id") in skip:
+            continue
+        ts = h.get("ts_unix")
+        day = time.strftime("%Y-%m-%d", time.localtime(ts)) if ts else ""
+        out.append({"session_id": h["id"], "title": h.get("title") or "", "cwd": h.get("cwd") or "",
+                    "best_snippet": h.get("snippet") or "", "first_ts": day, "last_ts": day,
+                    "ts_unix": ts, "harness": "claude"})
+    return out[:limit]
 
 
 SNAPSHOT_TIMEOUT_SEC = 2.0  # the snapshot is a nicety; Mazkir can call ccc-state itself
@@ -684,7 +763,7 @@ def fleet_snapshot(base: str | None = None, fetch=None) -> str:
         if s.get("question_waiting") or s.get("needs_approval"):
             waiting += 1
     parts = ", ".join(f"{k}={v}" for k, v in sorted(by_state.items()))
-    return f"fleet: {len(census.get('sessions') or [])} sessions ({parts}); waiting on Amir: {waiting}"
+    return f"fleet: {len(census.get('sessions') or [])} sessions ({parts}); waiting on you: {waiting}"
 
 
 def _fmt_candidate(i: int, s: dict) -> str:
@@ -705,7 +784,7 @@ def _fmt_candidate(i: int, s: dict) -> str:
 
 
 def build_prompt(question: str, history: list, candidates: list[dict], snapshot: str,
-                 range_key: str | None) -> str:
+                 range_key: str | None, index_available: bool = True) -> str:
     lines = []
     if history:
         lines.append("Earlier in this conversation:")
@@ -722,9 +801,12 @@ def build_prompt(question: str, history: list, candidates: list[dict], snapshot:
     lines.append(snapshot)
     lines.append("")
     if candidates:
-        lines.append(f"CANDIDATES (pre-fetched from claude-index search_sessions, best first):")
+        src = "claude-index search_sessions" if index_available else "CCC's built-in session search"
+        lines.append(f"CANDIDATES (pre-fetched from {src}, best first):")
         for i, s in enumerate(candidates, 1):
             lines.append(_fmt_candidate(i, s))
+    elif not index_available:
+        lines.append("CANDIDATES: none (CCC's built-in keyword search found nothing; claude-index is not installed).")
     else:
         lines.append("CANDIDATES: none pre-fetched (index search found nothing for the literal question).")
     lines.append("")
@@ -732,11 +814,13 @@ def build_prompt(question: str, history: list, candidates: list[dict], snapshot:
     return "\n".join(lines)
 
 
-def mcp_config(base: str, index_bin: str = INDEX_BIN) -> str:
-    return json.dumps({"mcpServers": {
-        "claude-index": {"command": index_bin, "args": ["mcp", "--lite"]},
-        MCP_SERVER_NAME: {"command": sys.executable, "args": [os.path.abspath(__file__), "mcp", "--base", base]},
-    }})
+def mcp_config(base: str, index_bin: str | None = INDEX_BIN) -> str:
+    servers = {}
+    if index_bin:
+        servers["claude-index"] = {"command": index_bin, "args": ["mcp", "--lite"]}
+    servers[MCP_SERVER_NAME] = {"command": sys.executable,
+                                "args": [os.path.abspath(__file__), "mcp", "--base", base]}
+    return json.dumps({"mcpServers": servers})
 
 
 # Every built-in Claude Code tool is off (`--tools ""`); the deny list is
@@ -751,7 +835,7 @@ _DISALLOWED = ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Gl
 
 
 def mazkir_argv(claude_bin: str, base: str, session_id: str | None, model: str = MAZKIR_MODEL,
-                index_bin: str = INDEX_BIN) -> list[str]:
+                index_bin: str | None = INDEX_BIN) -> list[str]:
     """One-shot argv. `session_id=None` lets the CLI pick one (the warm
     process gets a new id per /clear and reports each on its init event)."""
     return [
@@ -762,11 +846,11 @@ def mazkir_argv(claude_bin: str, base: str, session_id: str | None, model: str =
         "--output-format", "json",
         "--permission-mode", "dontAsk",
         "--max-turns", str(MAZKIR_MAX_TURNS),
-        "--system-prompt", SYSTEM_PROMPT,
+        "--system-prompt", system_prompt(index_bin),
         "--mcp-config", mcp_config(base, index_bin),
         "--strict-mcp-config",
         "--tools", "",
-        "--allowedTools", "mcp__claude-index", f"mcp__{MCP_SERVER_NAME}",
+        "--allowedTools", *(["mcp__claude-index"] if index_bin else []), f"mcp__{MCP_SERVER_NAME}",
         "--disallowedTools", *_DISALLOWED,
     ]
 
@@ -896,8 +980,12 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         import concurrent.futures as _cf
         with _cf.ThreadPoolExecutor(max_workers=1) as ex:
             snap_f = ex.submit(fleet_snapshot, base, fetch)
-            cands = prefetch_sessions(question, since, runner=prefetch_runner,
-                                      exclude_session_ids=live_ids)
+            if INDEX_BIN or prefetch_runner is not None:
+                cands = prefetch_sessions(question, since, runner=prefetch_runner,
+                                          index_bin=INDEX_BIN or "claude-index",
+                                          exclude_session_ids=live_ids)
+            else:
+                cands = builtin_prefetch(question, range_key, exclude_session_ids=live_ids)
             try:
                 snap = snap_f.result(timeout=SNAPSHOT_TIMEOUT_SEC + 1)
             except Exception:
@@ -905,7 +993,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         return cands, snap
 
     def make_prompt(cands: list[dict], snap: str) -> str:
-        return build_prompt(question, history, cands, snap, range_key)
+        return build_prompt(question, history, cands, snap, range_key, index_available=bool(INDEX_BIN))
 
     cwd = _scratch_dir()
     env = dict(os.environ)
@@ -984,6 +1072,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         "answer": answer,
         "sources": sources[:12],
         "hit_count": len(candidates),
+        "history_search": bool(INDEX_BIN),
         "cited": cited,
         "actions": actions,
         "confirm_actions": confirm_actions,
