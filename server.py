@@ -18803,9 +18803,12 @@ def _resolve_apps(include_disabled=False):
     apps.append({"id": "decision-inbox", "label": "Decisions",
                  "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
                  "builtin": False})
-    apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
-                 "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
-                 "builtin": False})
+    # Spawn Ledger reads a grade ledger written by an external tool; list it
+    # only on machines that have one (SPAWN_LEDGER_PATH or the default file).
+    if spawn_ledger_path().is_file():
+        apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
+                     "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
+                     "builtin": False})
     # Pipeline Canvas: the fleet-topology node graph over WatchTower truth
     # (spec: 2026-09-15-pipeline-canvas-design.md). Not core navigation —
     # switchable from the Applications page like the other satellites.

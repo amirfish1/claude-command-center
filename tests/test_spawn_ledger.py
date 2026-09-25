@@ -64,3 +64,13 @@ class SpawnLedgerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpawnLedgerRailTests(unittest.TestCase):
+    def test_rail_lists_spawn_ledger_only_when_a_ledger_exists(self):
+        import server as _server
+        ids = lambda: [a["id"] for a in _server._resolve_apps(include_disabled=True)]  # noqa: E731
+        with mock.patch.dict(os.environ, {"SPAWN_LEDGER_PATH": str(FIXTURE)}):
+            self.assertIn("spawn-ledger", ids())
+        with mock.patch.dict(os.environ, {"SPAWN_LEDGER_PATH": str(FIXTURE.with_name("absent.jsonl"))}):
+            self.assertNotIn("spawn-ledger", ids())
