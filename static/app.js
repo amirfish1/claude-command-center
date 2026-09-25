@@ -61389,6 +61389,7 @@
     // 'files' is a legacy value (the Files tab folded into Metadata); the
     // files panel now lives at the bottom of the Metadata pane.
     const next = (tab === 'queue' || tab === 'orchestration' || tab === 'ask' || tab === 'log') ? tab : 'metadata';
+    if (next === 'ask' && typeof askWarmUp === 'function') askWarmUp();
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);
@@ -63004,49 +63005,64 @@
     return d.getDate() + ' ' + ASK_MONTHS[d.getMonth()];
   }
 
-  function askResultHtml(src, selectedId) {
-    const title = askNeutralizeMarkers(src.title || (src.repo ? src.repo + ' session' : 'session'));
-    const repo = askNeutralizeMarkers(src.repo || '');
-    const live = src.status === 'live';
-    const sel = selectedId && src.id === selectedId ? ' is-selected' : '';
-    const time = askResultTime(src.ts_unix);
-    const snippet = askNeutralizeMarkers(src.snippet || '');
-    return '<div class="ask-result' + sel + '" data-ask-open="' + askEscapeHtml(src.id) +
-      '" data-ask-title="' + askEscapeHtml(title) + '" data-ask-cwd="' + askEscapeHtml(src.cwd || '') +
-      '" title="Click to open · ⌘-click to select">' +
-      '<div class="ask-result-head">' +
-      '<span class="ask-dot' + (live ? ' is-live' : '') + '"></span>' +
-      '<span class="ask-result-title">' + askEscapeHtml(title) + '</span>' +
-      (time ? '<span class="ask-result-time">' + askEscapeHtml(time) + '</span>' : '') +
-      '</div>' +
-      '<div class="ask-result-meta">' +
-      (repo ? '<span class="ask-repo-badge">' + askEscapeHtml(repo) + '</span>' : '') +
-      '<span class="ask-status-badge ' + (live ? 'is-live-status' : '') + '">' + (live ? 'working' : 'idle') + '</span>' +
-      '<span class="ask-sid-badge">' + askEscapeHtml(src.id.slice(0, 8)) + '</span>' +
-      '</div>' +
-      (snippet ? '<div class="ask-result-snippet">' + askEscapeHtml(snippet) + '</div>' : '') +
-      '</div>';
-  }
-
+  // Every source is a session chip, always visible: cited sessions first (the
+  // server orders them), then the other candidates. No collapsed list; the
+  // chip's title tooltip carries the repo, time and best-match snippet.
   function askResultsHtml(t, selectedId) {
     const sources = t.sources || [];
     if (!sources.length) return '';
     const count = Number.isFinite(t.hitCount) ? t.hitCount : sources.length;
-    const elapsed = Number.isFinite(t.elapsedMs) ? (t.elapsedMs / 1000).toFixed(1) + 's' : '';
-    const list = '<div class="ask-results">' + sources.map(s => askResultHtml(s, selectedId)).join('') + '</div>';
-    const summary = '<button type="button" class="ask-result-count" data-ask-toggle-sources aria-expanded="false">' +
-      '<span class="ask-toggle-caret">▸</span> ' + count + (count === 1 ? ' source' : ' sources') + ' found' +
-      (elapsed ? ' · ' + elapsed : '') + '</button>';
-    const top = '<div class="ask-top-sources" aria-label="Top relevant sessions">'
-      + sources.slice(0, 2).map(src => askSessionChipHtml(src, selectedId)).join('') + '</div>';
-    return '<div class="ask-sources">' + top + summary + list + '</div>';
+    const bits = [count + (count === 1 ? ' source' : ' sources')];
+    if (Number.isFinite(t.ttftMs)) bits.push('first token ' + (t.ttftMs / 1000).toFixed(1) + 's');
+    if (t.processMode === 'warm') bits.push('warm');
+    const chips = sources.map(src => askSessionChipHtml(src, selectedId)).join('');
+    return '<div class="ask-sources" aria-label="Sources">'
+      + '<div class="ask-top-sources">' + chips + '</div>'
+      + '<div class="ask-result-count">' + askEscapeHtml(bits.join(' · ')) + '</div></div>';
+  }
+
+  // Confirm cards for actions Mazkir proposed. The text is server-written
+  // (assistant_actions.describe), never model prose, and nothing runs until
+  // Confirm posts the one-time token back.
+  function askConfirmCardsHtml(t) {
+    const acts = t.confirmActions || [];
+    if (!acts.length) return '';
+    return '<div class="ask-confirms">' + acts.map(a => {
+      const pending = a.status === 'proposed';
+      const res = a.result || {};
+      let status = '';
+      if (a.status === 'done') status = '✓ Done' + (res.ref ? ' · ' + res.ref : '') + (res.session_id ? ' · ' + String(res.session_id).slice(0, 8) : '');
+      else if (a.status === 'failed') status = '✗ ' + (res.error || 'failed');
+      else if (a.status === 'dismissed') status = 'Dismissed';
+      else if (a.status === 'running') status = 'Running…';
+      else if (a.status === 'expired') status = 'Expired: ask again';
+      return '<div class="ask-confirm is-' + askEscapeHtml(a.status) + '" data-ask-action-id="' + askEscapeHtml(a.id) + '">'
+        + '<div class="ask-confirm-head"><span class="ask-confirm-label">' + askEscapeHtml(a.label || a.kind) + '</span>'
+        + '<span class="ask-confirm-effect">' + askEscapeHtml(askNeutralizeMarkers(a.effect || '')) + '</span></div>'
+        + (a.detail ? '<pre class="ask-confirm-detail">' + askEscapeHtml(askNeutralizeMarkers(a.detail)) + '</pre>' : '')
+        + '<div class="ask-confirm-actions">'
+        + (pending
+          ? '<button type="button" class="ask-action" data-ask-confirm="' + askEscapeHtml(a.id) + '">Confirm</button>'
+            + '<button type="button" class="ask-sel-btn" data-ask-dismiss="' + askEscapeHtml(a.id) + '">Dismiss</button>'
+          : '<span class="ask-confirm-status">' + askEscapeHtml(status) + '</span>')
+        + '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  const ASK_CONFIRM_MARKER_RE = /\[\[action:confirm:[0-9A-Za-z_]{4,40}\]\]/g;
+
+  function askChipTooltip(src, title) {
+    const meta = [src.repo, askResultTime(src.ts_unix), src.status === 'live' ? 'working' : '', (src.id || '').slice(0, 8)]
+      .filter(Boolean).join(' · ');
+    const snippet = askNeutralizeMarkers(src.snippet || '');
+    return 'Open session: ' + title + (meta ? '\n' + meta : '') + (snippet ? '\n' + snippet : '') + '\n⌘-click to select';
   }
 
   function askSessionChipHtml(src, selectedId) {
     const title = askNeutralizeMarkers(src.title || src.id.slice(0, 8));
     return '<button type="button" class="ask-session-chip' + (src.id === selectedId ? ' is-selected' : '') + '"'
       + ' data-ask-open="' + askEscapeHtml(src.id) + '" data-ask-title="' + askEscapeHtml(title) + '"'
-      + ' data-ask-cwd="' + askEscapeHtml(src.cwd || '') + '" title="Open session: ' + askEscapeHtml(title) + '">'
+      + ' data-ask-cwd="' + askEscapeHtml(src.cwd || '') + '" title="' + askEscapeHtml(askChipTooltip(src, title)) + '">'
       + '<span class="ask-dot' + (src.status === 'live' ? ' is-live' : '') + '"></span>'
       + '<span>' + askEscapeHtml(title) + '</span></button>';
   }
@@ -63066,7 +63082,7 @@
     const token = /\[\[(session|action:spawn-continue):([0-9A-Za-z_.-]{5,128})\]\]/;
     const pattern = new RegExp(token.source + (titles.length ? '|' + titles.map(escapeRx).join('|') : ''), 'g');
     const template = document.createElement('template');
-    template.innerHTML = renderMarkdown(String(answer || '').trim());
+    template.innerHTML = renderMarkdown(String(answer || '').replace(ASK_CONFIRM_MARKER_RE, '').trim());
     const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) {
@@ -63307,6 +63323,7 @@
           '<div class="ask-assistant-header"><span class="ask-assistant-glyph">M</span><span class="ask-assistant-name">Mazkir</span>' + (elapsedSec ? '<span class="ask-turn-time">' + elapsedSec + '</span>' : '') + '</div>' +
           '<div class="ask-turn-body">' + (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) + '</div>' +
           (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') + '</div>' +
+          (t.error ? '' : askConfirmCardsHtml(t)) +
           (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
           '</div>';
       }).join('');
@@ -63316,7 +63333,7 @@
       // rendered markup (which would include button labels, table pipes…).
       log.querySelectorAll('.ask-turn-a').forEach((el, idx) => {
         const t = turns[idx];
-        if (t && !t.error && !t.pending) el._agentAnswerText = String(t.a || '').trim();
+        if (t && !t.error && !t.pending) el._agentAnswerText = String(t.a || '').replace(ASK_CONFIRM_MARKER_RE, '').trim();
       });
       if (stickToBottom) log.scrollTop = log.scrollHeight;
       drawSelBar();
@@ -63333,10 +63350,28 @@
         return;
       }
 
-      const toggleBtn = ev.target.closest('[data-ask-toggle-sources]');
-      if (toggleBtn) {
-        const wrap = toggleBtn.closest('.ask-sources');
-        if (wrap) toggleBtn.setAttribute('aria-expanded', String(wrap.classList.toggle('is-expanded')));
+      const decideBtn = ev.target.closest('[data-ask-confirm], [data-ask-dismiss]');
+      if (decideBtn && !decideBtn.disabled) {
+        const confirm = decideBtn.hasAttribute('data-ask-confirm');
+        const aid = decideBtn.getAttribute(confirm ? 'data-ask-confirm' : 'data-ask-dismiss');
+        const turnEl = decideBtn.closest('[data-ask-turn-index]');
+        const turn = turns[turnEl ? parseInt(turnEl.getAttribute('data-ask-turn-index'), 10) : -1];
+        const act = turn && (turn.confirmActions || []).find(a => a.id === aid);
+        if (!act) return;
+        decideBtn.disabled = true;
+        // Recorded on the turn (not just the DOM) so a redraw can't re-enable
+        // the button and fire the action twice.
+        act.status = confirm ? 'running' : 'dismissed';
+        draw();
+        ccPostJson('/api/assistant/actions/' + encodeURIComponent(aid) + (confirm ? '/confirm' : '/dismiss'),
+          { token: act.confirm_token })
+          .then(d => {
+            const next = (d && d.action) || {};
+            act.status = next.status || (confirm ? 'failed' : 'dismissed');
+            act.result = next.result || (d && d.ok ? null : { error: (d && d.error) || 'failed' });
+          })
+          .catch(e => { act.status = 'failed'; act.result = { error: e.message || String(e) }; })
+          .finally(() => { delete act.confirm_token; askSaveHistory(turns); draw(); });
         return;
       }
 
@@ -63485,6 +63520,9 @@
           turn.sources = data.sources || [];
           turn.hitCount = data.hit_count;
           turn.elapsedMs = data.elapsed_ms;
+          turn.ttftMs = data.ttft_ms;
+          turn.processMode = data.process_mode;
+          turn.confirmActions = data.confirm_actions || [];
           // CCC-1048: "File an issue" embeds when/id in the ticket context.
           turn.at = Date.now();
           turn.id = turn.at.toString(36) + '-' + Math.random().toString(36).slice(2, 8);
@@ -63518,9 +63556,22 @@
       askSaveHistory(turns);
       draw();
     });
+    // Boot the warm Mazkir process before the first question: the CLI and its
+    // MCP servers take seconds to start. Idempotent server-side; throttled here.
+    let lastWarm = 0;
+    const warmUp = () => {
+      if (Date.now() - lastWarm < 60000) return;
+      lastWarm = Date.now();
+      ccPostJson('/api/assistant/warm', {}).catch(() => {});
+    };
+    input.addEventListener('focus', warmUp);
+    askWarmUp = warmUp;
+    const askPane = document.querySelector('[data-rail-pane="ask"]');
+    if (askPane && !askPane.hidden) warmUp();
     drawRangeBtn();
     draw();
   }
+  let askWarmUp = null;
 
   // Wire pill click + start polling once on first JS load.
   document.addEventListener('DOMContentLoaded', () => {

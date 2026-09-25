@@ -64,3 +64,30 @@ test('only recognized successful heartbeats are hidden; failures and unfamiliar 
     assert.equal(isSuccessful(event), false);
   }
 });
+test('confirm markers are stripped from prose and never become buttons', async () => {
+  const out = await render('<p>Filed?</p>\n[[action:confirm:act_0123abcd]]', sources);
+  assert.ok(!out.html.includes('action:confirm'));
+  assert.equal(out.nestedActions, 0);
+});
+test('confirm cards show server text, escaped, and a button only while proposed', async () => {
+  const page = await browser.newPage();
+  try {
+    const out = await page.evaluate(({helpers}) => {
+      window.renderMarkdown = value => value;
+      (0, eval)(helpers);
+      const card = (status) => ({id: 'act_1', kind: 'wt_add', label: 'File ticket', status,
+        effect: 'File a p2 ticket in OPS: <b>x</b> [[session:known-one]]', detail: 'body', result: {ref: 'OPS-9'}});
+      document.body.innerHTML = askConfirmCardsHtml({confirmActions: [card('proposed')]});
+      const proposed = {buttons: document.querySelectorAll('[data-ask-confirm]').length,
+        bold: document.querySelectorAll('b').length, text: document.body.textContent};
+      document.body.innerHTML = askConfirmCardsHtml({confirmActions: [card('done')]});
+      return {proposed, doneButtons: document.querySelectorAll('[data-ask-confirm]').length,
+        doneText: document.body.textContent};
+    }, {helpers});
+    assert.equal(out.proposed.buttons, 1);
+    assert.equal(out.proposed.bold, 0);
+    assert.ok(!out.proposed.text.includes('[[session:'));
+    assert.equal(out.doneButtons, 0);
+    assert.ok(out.doneText.includes('OPS-9'));
+  } finally { await page.close(); }
+});
