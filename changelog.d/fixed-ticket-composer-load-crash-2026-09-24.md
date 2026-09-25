@@ -1,0 +1,1 @@
+- Fixed a dashboard load crash: the queue-ticket composer's input listener sat outside its function, so `textarea is not defined` stopped the rest of the app script from running (conversations stuck on "Loading", later panels uninitialised). The composer's Queue picker also renders and remembers the chosen queue again.

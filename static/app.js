@@ -48705,20 +48705,6 @@
       document.querySelectorAll('.fq-ticket-composer').forEach(n => n.remove());
       const modal = document.createElement('div');
       modal.className = 'upd-overlay fq-ticket-composer open';
-      modal.innerHTML =
-          '<div class="upd-backdrop" data-fq-ticket-cancel></div>'
-        + '<div class="upd-dialog fq-ticket-dialog" role="dialog" aria-modal="true" aria-labelledby="fqTicketTitle">'
-        +   '<div class="fq-ticket-header">'
-        +     '<h2 class="upd-title" id="fqTicketTitle">New queue ticket</h2>'
-        +     '<button type="button" class="fq-ticket-close" data-fq-ticket-cancel aria-label="Close">&times;</button>'
-        +   '</div>'
-        +   '<div class="fq-ticket-body">'
-        +     '<label class="fq-ticket-label" for="fqTicketNote">Describe the fix</label>'
-        +     '<textarea id="fqTicketNote" class="fq-ticket-textarea" rows="7" placeholder="Describe the fix..."></textarea>'
-        +   '</div>'
-        +   '<div class="upd-actions fq-ticket-actions">'
-        +     '<button type="button" class="upd-btn" data-fq-ticket-cancel>Cancel</button>'
-        +     '<button type="button" class="upd-btn upd-primary" data-fq-ticket-submit disabled>Add ticket</button>'
       let queueSelectHtml = '';
       const queueNames = Array.isArray(opts.queues) ? opts.queues.filter(Boolean) : [];
       if (queueNames.length) {
@@ -48733,19 +48719,36 @@
           + rest.map(opt).join('')
           + '</select>';
       }
+      modal.innerHTML =
+          '<div class="upd-backdrop" data-fq-ticket-cancel></div>'
+        + '<div class="upd-dialog fq-ticket-dialog" role="dialog" aria-modal="true" aria-labelledby="fqTicketTitle">'
+        +   '<div class="fq-ticket-header">'
+        +     '<h2 class="upd-title" id="fqTicketTitle">New queue ticket</h2>'
+        +     '<button type="button" class="fq-ticket-close" data-fq-ticket-cancel aria-label="Close">&times;</button>'
+        +   '</div>'
+        +   '<div class="fq-ticket-body">'
+        +     '<label class="fq-ticket-label" for="fqTicketNote">Describe the fix</label>'
+        +     '<textarea id="fqTicketNote" class="fq-ticket-textarea" rows="7" placeholder="Describe the fix..."></textarea>'
+        +     queueSelectHtml
+        +   '</div>'
+        +   '<div class="upd-actions fq-ticket-actions">'
+        +     '<button type="button" class="upd-btn" data-fq-ticket-cancel>Cancel</button>'
+        +     '<button type="button" class="upd-btn upd-primary" data-fq-ticket-submit disabled>Add ticket</button>'
         +   '</div>'
         + '</div>';
       document.body.appendChild(modal);
       const textarea = modal.querySelector('#fqTicketNote');
       const submitBtn = modal.querySelector('[data-fq-ticket-submit]');
+      const queueSel = modal.querySelector('#fqTicketQueue');
+      let queuePickedByHand = false;
       let settled = false;
       const refresh = () => {
         if (submitBtn && textarea) submitBtn.disabled = !(textarea.value || '').trim();
       };
       const close = (value) => {
-        +     (queueSelectHtml || '')
         if (settled) return;
         settled = true;
+        openQueueTicketComposer.lastQueue = queueSel ? queueSel.value : '';
         document.removeEventListener('keydown', onKey);
         modal.remove();
         resolve(String(value || '').trim());
@@ -48761,10 +48764,16 @@
       }
       modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click', () => close('')));
       if (submitBtn) submitBtn.addEventListener('click', submit);
+      if (queueSel) queueSel.addEventListener('change', () => { queuePickedByHand = true; });
       if (textarea) {
-        const qSel = modal.querySelector('#fqTicketQueue');
-        openQueueTicketComposer.lastQueue = qSel ? qSel.value : '';
         textarea.addEventListener('input', refresh);
+        textarea.addEventListener('input', () => {
+          if (!queueSel || queuePickedByHand || typeof window.__cccSuggestTicketQueue !== 'function') return;
+          try {
+            const sug = window.__cccSuggestTicketQueue(textarea.value);
+            if (sug && queueNames.includes(sug)) queueSel.value = sug;
+          } catch (_) {}
+        });
         textarea.addEventListener('keydown', (ev) => {
           if (isImeKey(ev)) return;
           if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') {
@@ -48779,18 +48788,8 @@
       }
       document.addEventListener('keydown', onKey);
       refresh();
-      const queueSel = modal.querySelector('#fqTicketQueue');
-      let queuePickedByHand = false;
-      if (queueSel) queueSel.addEventListener('change', () => { queuePickedByHand = true; });
     });
   }
-        textarea.addEventListener('input', () => {
-          if (!queueSel || queuePickedByHand || typeof window.__cccSuggestTicketQueue !== 'function') return;
-          try {
-            const sug = window.__cccSuggestTicketQueue(textarea.value);
-            if (sug && queueNames.includes(sug)) queueSel.value = sug;
-          } catch (_) {}
-        });
 
   // Create and revise the complete durable WatchTower queue configuration.
   // The compact health-row controls remain useful shortcuts; this manager is
