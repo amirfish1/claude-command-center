@@ -37,7 +37,7 @@ test('late rankings improve an automatic default without replacing a typed folde
   const context = {
     document: {getElementById: () => input},
     repoListState: {repos: [{path: '/alpha'}], recent: [], rankings: []},
-    spawnCwdAutoDefault: '', spawnCwdOptions: [], SPAWN_CWD_KEY: 'cwd',
+    spawnCwdAutoDefault: '', spawnCwdOptions: [], SPAWN_CWD_KEY: 'cwd', spawnCwdMissing: new Set(),
     localStorage: {getItem: () => ''}, popoutRepoPath: () => '',
     normalizeSpawnCwdPath: value => value || '',
     isSpawnCwdMenuOpen: () => false, renderSpawnCwdQuickChips: () => {},
@@ -75,7 +75,7 @@ test('zero-history default folder is the most recently active workspace repo', (
   const context = {
     document: {getElementById: () => input},
     repoListState: {repos: [], recent: [], rankings: [], suggested: [{path: '/w/Apps/fresh', label: 'fresh'}]},
-    spawnCwdAutoDefault: '', spawnCwdOptions: [], SPAWN_CWD_KEY: 'cwd',
+    spawnCwdAutoDefault: '', spawnCwdOptions: [], SPAWN_CWD_KEY: 'cwd', spawnCwdMissing: new Set(),
     localStorage: {getItem: () => ''}, popoutRepoPath: () => '',
     normalizeSpawnCwdPath: value => value || '',
     isSpawnCwdMenuOpen: () => false, renderSpawnCwdQuickChips: () => {},

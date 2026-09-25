@@ -76176,9 +76176,53 @@
   const SPAWN_CWD_CHIP_LIMIT = 10;
   let spawnCwdOptions = [];
   let spawnCwdAutoDefault = '';
+  // The saved cwd outlives the folder it names: localStorage survives a
+  // reinstall or a deleted repo/worktree, and every spawn from it then fails
+  // with "invalid cwd: path does not exist". Folders found missing this page
+  // load are never offered as the default again.
+  const spawnCwdMissing = new Set();
+  const spawnCwdChecked = new Set();
 
   function normalizeSpawnCwdPath(value) {
     return String(value || '').trim();
+  }
+
+  // Every path list /api/repo/list returns is already filtered to existing
+  // directories, so a hit there needs no extra round trip.
+  function spawnCwdKnownToExist(path) {
+    const s = repoListState || {};
+    const hit = list => (list || []).some(r => r && (r === path || r.path === path));
+    return hit(s.repos) || hit(s.recent) || hit(s.rankings) || hit(s.suggested);
+  }
+
+  function forgetMissingSpawnCwd(path) {
+    const wanted = normalizeSpawnCwdPath(path);
+    if (!wanted) return;
+    spawnCwdMissing.add(wanted);
+    try {
+      if (normalizeSpawnCwdPath(localStorage.getItem(SPAWN_CWD_KEY) || '') === wanted) {
+        localStorage.removeItem(SPAWN_CWD_KEY);
+      }
+    } catch (_) {}
+    const sel = document.getElementById('spawnCwdPicker');
+    if (sel && normalizeSpawnCwdPath(sel.value) === wanted) {
+      sel.value = '';
+      spawnCwdAutoDefault = '';
+    }
+    populateSpawnCwdPicker();
+    updateNewSessionCwdNotice();
+  }
+
+  // Check a restored cwd once per page load; drop it if it no longer exists.
+  function verifySavedSpawnCwd(path) {
+    if (!path || spawnCwdChecked.has(path) || spawnCwdKnownToExist(path)) return;
+    spawnCwdChecked.add(path);
+    fetch('/api/fs/list?path=' + encodeURIComponent(path), { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.ok === false && /^not a directory/.test(d.error || '')) forgetMissingSpawnCwd(path);
+      })
+      .catch(() => {});
   }
 
   function findSpawnCwdRepo(path) {
@@ -76239,6 +76283,7 @@
     //   5. First known repo option
     let saved = '';
     try { saved = normalizeSpawnCwdPath(localStorage.getItem(SPAWN_CWD_KEY) || ''); } catch (_) {}
+    if (spawnCwdMissing.has(saved)) saved = '';
     const defaultPath = saved
       || popoutRepoPath()
       || ((repoListState.recent || [])[0])
@@ -76252,6 +76297,7 @@
       sel.value = defaultPath;
       spawnCwdAutoDefault = defaultPath;
     }
+    if (saved && normalizeSpawnCwdPath(sel.value) === saved) verifySavedSpawnCwd(saved);
     if (isSpawnCwdMenuOpen()) renderSpawnCwdMenu('');
     renderSpawnCwdQuickChips();
   }
@@ -77898,9 +77944,15 @@
         chasePendingSpawn(tempPid, { sessionId: data && data.session_id });
       } else {
         releaseClaudeSpawnPaintGate('', tempPid);
+        // The folder vanished after the picker was filled: drop it so the
+        // retry does not fail the same way.
+        const missingCwd = /^invalid cwd: (path does not exist|not a directory)/.test(data.error || '');
+        if (missingCwd) forgetMissingSpawnCwd(launchCwd);
         restoreDraftAfterFailure();
         flashRed();
-        showOpToast('Spawn failed: ' + (data.error || 'HTTP ' + res.status), 'error');
+        showOpToast(missingCwd
+          ? 'Spawn failed: folder no longer exists (' + launchCwd + '). Pick a folder and send again.'
+          : 'Spawn failed: ' + (data.error || 'HTTP ' + res.status), 'error');
         console.error('[New session] spawn failed', data);
       }
     } catch (err) {

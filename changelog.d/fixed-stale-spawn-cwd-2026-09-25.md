@@ -1,0 +1,1 @@
+- New Session no longer fails with "Spawn failed: invalid cwd: path does not exist" after a reinstall or a deleted repo. The folder picker used to restore the last folder from browser storage without checking it; it now drops a folder that no longer exists and falls back to one that does, and a spawn that fails for that reason clears it so the retry works.
