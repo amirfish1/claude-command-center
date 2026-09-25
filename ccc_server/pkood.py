@@ -92,7 +92,7 @@ def _pkood_bridge_session_id(agent_id):
 def _pkood_log_cwd(agent_id):
     """Extract the cwd from a pkood agent's log file header.
 
-    Claude Code prints the cwd right under its banner (e.g. "~/MyOfficeMgr"
+    Claude Code prints the cwd right under its banner (e.g. "~/my-project"
     or an absolute path), typically on the third visible line. To avoid
     matching stray paths further down the log (prompts, tool output), we
     clip the text at the first horizontal rule the banner draws (a run of

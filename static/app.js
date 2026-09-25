@@ -5273,7 +5273,7 @@
              ' && cd ' + quotedCwd + ' && ' + resumeCmd;
     }
     // Missing dir that isn't a `.claude/worktrees/` path (e.g. a custom
-    // worktree like `BYM-Finie-push-reschedule-sGH1nB` cleaned up off
+    // worktree like `myapp-push-reschedule-sGH1nB` cleaned up off
     // the books). `cd` would fail and `&&` would block the resume,
     // dropping the user in their home dir. Fall back to the session's
     // repo root if we know one — that's almost always still on disk —
@@ -44395,7 +44395,7 @@
 
   function _wtLogRowHtml(p, now) {
     const utcMs = p.utcMs;
-    // Pull a leading ticket ref (e.g. BYM-33) out of the detail — used both
+    // Pull a leading ticket ref (e.g. APP-33) out of the detail — used both
     // for the ref column below and to group the stream by issue item.
     const refM = p.detail.match(/^([A-Z]+-\d+)\b[ ]*(?:—[ ]*)?/);
     const ref = refM ? refM[1] : '';
@@ -45176,7 +45176,7 @@
     return _UXQ_PROJECT_ALIASES[key] || key;
   }
   // A queue's candidate family root is its FIRST hyphen-delimited segment, so
-  // "BYM-PR-REVIEW" belongs to "BYM" and never to "BYM-PR" — one level of
+  // "APP-PR-REVIEW" belongs to "APP" and never to "APP-PR" — one level of
   // nesting, which is all `_uxqInScope` and the scope picker model.
   function _uxqFamilyCandidate(name) {
     const key = _uxqProjectKey(name);
@@ -64876,7 +64876,7 @@
   // Identity of the context the cached target/command were resolved FOR.
   // _localhostTargetPath et al. are module-level and used to be refreshed only
   // on a successful 200 poll, so after a session switch the previous repo
-  // (e.g. "/Users/amirfish/dev/hermes") kept showing in the pill title and the
+  // (e.g. "/Users/me/dev/my-project") kept showing in the pill title and the
   // click-handler alert until — and only if — the next poll happened to land on
   // a 200. Any early return (no-repo / unreachable / 400) left the leaked path
   // in place. Tracking the resolved context here lets us drop the stale target
@@ -66538,7 +66538,7 @@
   // ── End unified dashboard events ──────────────────────────────────────
 
   // A worker may claim with EITHER its real session UUID or its made-up CCC
-  // name (e.g. "BYM UX-fixes-queue"). To let the badge match either, reduce
+  // name (e.g. "APP UX-fixes-queue"). To let the badge match either, reduce
   // both `claimed_by` and each candidate row identity to the same key:
   // lowercased, with runs of space/dash/underscore collapsed to one space.
   function _uxFixesIdentityKey(value) {
@@ -66959,7 +66959,7 @@
     // 2) Project-named worker rows should show the latest project close, even
     // when this visual row's own session id last closed an older ticket. Queue
     // draining can move across worker identities, but the project worker row is
-    // the thing the user scans for up-to-date CCC/BYM progress.
+    // the thing the user scans for up-to-date project progress.
     const projectLastFix = uxFixesQueueMeta.lastFixByProject || new Map();
     if (projectHint) {
       const done = projectLastFix.get(projectHint);

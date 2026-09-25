@@ -6,8 +6,8 @@
 # genuinely new findings backed by evidence from the log.
 set -euo pipefail
 
-CLAUDE_BIN="/Users/amirfish/.local/bin/claude"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
 
 PROMPT=$(cat <<'EOF'
 You are doing a scheduled daily health-check of Claude Command Center's

@@ -1655,7 +1655,7 @@ def _extract_first_message(session_id):
 # AI-summarized GitHub issue titles
 # ────────────────────────────────────────────────────────────────────────
 # Backlog cards show raw GH issue titles, which are often verbose
-# ("[BYM Problem] Tried to add Ricki Silveria to 10am class as a drop in
+# ("[Bug] Tried to add a customer to the 10am class as a drop-in
 # but got an error message."). This sidecar caches AI-summarized versions
 # so the kanban can render compact titles without re-calling claude every
 # request. Format: {"194": {"title": "...", "generated_at": "..."}, ...}
@@ -1719,7 +1719,7 @@ def summarize_issue_title(issue_number, repo_path):
     instruction = (
         "Produce a concise 4-8 word title for the GitHub issue below. "
         "No quotes, no trailing punctuation, just the title on a single line. "
-        "Skip image references, project tags like '[BYM Problem]', and "
+        "Skip image references, project tags like '[Bug]', and "
         "boilerplate. The output should read like a kanban card title.\n\n"
         f"Issue title: {raw_title}\n\nIssue body:\n{body[:1500]}\n\nTitle:"
     )
@@ -5010,7 +5010,7 @@ def _relocate_missing_session_cwd(session_id, cwd):
     # Per-root visit cap. Dialed down from 8000 → 2000: even with the
     # per-request time budget guarding overall latency, a single root with
     # 8000 dirs of unrelated content can stall this loop for seconds. 2000
-    # is enough to cover normal worktree layouts (BYM+Finie's worst case is
+    # is enough to cover normal worktree layouts (one real repo's worst case is
     # ~150 dirs per root) while keeping pathological roots bounded.
     try:
         visit_cap = int(os.environ.get("CCC_CWD_RELOCATION_VISIT_CAP", "2000"))

@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_SPAWN_LEDGER_PATH = Path("/Users/amirfish/MyOfficeMgr/projects/spawn-ledger/ledger.jsonl")
+DEFAULT_SPAWN_LEDGER_PATH = Path.home() / ".claude" / "command-center" / "spawn-ledger.jsonl"
 
 LEDGER_FIELDS = (
     "ts", "session_id", "engine", "model", "effort", "task_type", "lane",
