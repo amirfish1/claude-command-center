@@ -63283,6 +63283,8 @@
     // Sticky-bottom: auto-scroll on every redraw, EXCEPT once the user has
     // deliberately scrolled up to read something earlier — then leave the
     // view alone until they scroll back near the bottom themselves.
+    // Set from /api/assistant/warm: true only where a check-in agenda exists.
+    let askCheckinEnabled = false;
     let stickToBottom = true;
     log.addEventListener('scroll', () => {
       stickToBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 40;
@@ -63296,9 +63298,9 @@
           '<div class="ask-empty-title">Ask Mazkir</div>' +
           '<div class="ask-empty-desc">Search conversation transcripts, sessions, and fleet history across all your projects.</div>' +
           '<div class="ask-empty-prompts">' +
-          '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">Daily check-in</button>' +
+          (askCheckinEnabled ? '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">Daily check-in</button>' : '') +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="What did I work on today?">What did I work on today?</button>' +
-          '<button type="button" class="ask-prompt-chip" data-ask-prompt="What sessions worked on the model picker recently?">Sessions on model picker</button>' +
+          '<button type="button" class="ask-prompt-chip" data-ask-prompt="Is anything stuck or waiting on me?">Anything stuck?</button>' +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="Show recent Antigravity sessions">Recent Antigravity sessions</button>' +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="Which sessions are currently working?">Working sessions</button>' +
           '</div>' +
@@ -63309,7 +63311,7 @@
       // Quick prompts stay reachable after the first turn: the empty state
       // (with the full chip list) never shows again once history exists.
       const quickStrip = '<div class="ask-quick-prompts">' +
-        '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">☀️ Daily check-in</button>' +
+        (askCheckinEnabled ? '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">☀️ Daily check-in</button>' : '') +
         '<button type="button" class="ask-prompt-chip" data-ask-prompt="What did I work on today?">Today</button>' +
         '<button type="button" class="ask-prompt-chip" data-ask-prompt="Which sessions are currently working?">Working</button>' +
         '</div>';
@@ -63568,7 +63570,11 @@
     const warmUp = () => {
       if (Date.now() - lastWarm < 60000) return;
       lastWarm = Date.now();
-      ccPostJson('/api/assistant/warm', {}).catch(() => {});
+      ccPostJson('/api/assistant/warm', {}).then((d) => {
+        // The check-in chip only makes sense where an agenda file exists.
+        const on = !!(d && d.daily_checkin);
+        if (on !== askCheckinEnabled) { askCheckinEnabled = on; draw(); }
+      }).catch(() => {});
     };
     input.addEventListener('focus', warmUp);
     askWarmUp = warmUp;

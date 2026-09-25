@@ -707,12 +707,16 @@ def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: 
 
 
 def builtin_prefetch(question: str, range_key: str | None, exclude_session_ids=None,
-                     limit: int = PREFETCH_LIMIT) -> list[dict]:
+                     limit: int = PREFETCH_LIMIT, search_recent=None, search_history=None,
+                     enrich=None) -> list[dict]:
     """Candidates from CCC's own session search, for machines without
     claude-index. Same warm, cached searches the legacy Ask path uses."""
     try:
         from ccc_server import ask as _ask
-        from ccc_server import core as _core
+        if search_recent is None or search_history is None:
+            from ccc_server import core as _core
+            search_recent = search_recent or _core.search_recent_sessions
+            search_history = search_history or _core.search_conversation_history
     except Exception:
         return []
     query = " ".join(_ask.extract_ask_terms(question))
@@ -720,15 +724,15 @@ def builtin_prefetch(question: str, range_key: str | None, exclude_session_ids=N
         return []
     days, since = _ask._ask_range_window(range_key)
     try:
-        recent = (_core.search_recent_sessions(query, days=days, limit=limit * 2) or {}).get("results") or []
+        recent = (search_recent(query, days=days, limit=limit * 2) or {}).get("results") or []
     except Exception:
         recent = []
     try:
-        hist = (_core.search_conversation_history(query, limit=limit * 2, since=since) or {}).get("results") or []
+        hist = (search_history(query, limit=limit * 2, since=since) or {}).get("results") or []
     except Exception:
         hist = []
     try:
-        hits = _ask.enrich_ask_hits(_ask.merge_ask_hits(recent, hist, cap=limit * 2))
+        hits = (enrich or _ask.enrich_ask_hits)(_ask.merge_ask_hits(recent, hist, cap=limit * 2))
     except Exception:
         return []
     skip = set(exclude_session_ids or ())
@@ -1005,7 +1009,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         # cannot be fed after a slow prefetch.
         session_id = str(uuid.uuid4())
         _mark_spawn(session_id)
-        argv = mazkir_argv(claude_bin, base, session_id)
+        argv = mazkir_argv(claude_bin, base, session_id, index_bin=INDEX_BIN)
         try:
             candidates, snapshot = do_prefetch()
             prefetch_ms = int((time.time() - t0) * 1000)
@@ -1025,7 +1029,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         # Stream-json mode: the process waits on stdin indefinitely, so it can
         # boot (claude + both MCP servers) while the prefetch runs.
         from ccc_server import mazkir_warm as _warm
-        argv = _warm.stream_argv(mazkir_argv(claude_bin, base, None))
+        argv = _warm.stream_argv(mazkir_argv(claude_bin, base, None, index_bin=INDEX_BIN))
         use_warm = _warm.warm_enabled()
         cold = None
         if use_warm:
@@ -1064,6 +1068,8 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
                 cold.close()
         res.update({"mode": mode, "fallback": fallback})
 
+    if res.get("is_error") and _AUTH_ERROR_RE.search(res.get("answer") or ""):
+        return {"ok": False, "code": "ask_engine_unauthenticated", "error": NOT_SIGNED_IN}, 401
     answer = res["answer"] or "(no answer)"
     sources, cited, actions = assemble_sources(answer, candidates, db_path, live_ids)
     confirm_actions = collect_confirm_actions(answer, t0)
@@ -1090,6 +1096,11 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     }, 200
 
 
+_AUTH_ERROR_RE = re.compile(r"not logged in|/login|invalid api key|authentication_error|oauth token", re.I)
+NOT_SIGNED_IN = ("Ask uses Claude Code, which is installed but not signed in. Run `claude` in a "
+                 "terminal, sign in with /login, then ask again.")
+
+
 _CONFIRM_RE = re.compile(r"\[\[action:confirm:(act_[0-9a-f]{6,32})\]\]")
 
 
@@ -1112,18 +1123,22 @@ def collect_confirm_actions(answer: str, t0: float, store=None) -> list[dict]:
 
 
 def warm_up(base: str | None = None) -> dict:
-    """Boot the warm process ahead of the first Ask (the Ask tab opening)."""
+    """Boot the warm process ahead of the first Ask (the Ask tab opening).
+
+    Also reports which optional Ask features this machine has, so the tab
+    only offers prompts that can work."""
     from ccc_server import mazkir_warm as _warm
+    features = {"daily_checkin": checkin_enabled(), "history_search": bool(INDEX_BIN)}
     if not _warm.warm_enabled():
-        return {"ok": True, "warm": False, "reason": "disabled"}
+        return {"ok": True, "warm": False, "reason": "disabled", **features}
     claude_bin = os.environ.get("CCC_CLAUDE_BIN") or _find_claude_bin()
     if not claude_bin:
-        return {"ok": False, "code": "ask_engine_unavailable", "error": "claude binary not found"}
+        return {"ok": False, "code": "ask_engine_unavailable", "error": "claude binary not found", **features}
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
-    argv = _warm.stream_argv(mazkir_argv(claude_bin, resolve_base(base), None))
+    argv = _warm.stream_argv(mazkir_argv(claude_bin, resolve_base(base), None, index_bin=INDEX_BIN))
     started = _warm.pool().warm(argv, cwd=_scratch_dir(), env=env, on_session=_mark_spawn)
-    return {"ok": True, "warm": started, **_warm.pool().status()}
+    return {"ok": True, "warm": started, **_warm.pool().status(), **features}
 
 
 # --- CCC-internal seams (lazy so the MCP half runs as a bare script) --------

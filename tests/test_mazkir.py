@@ -137,9 +137,10 @@ class RunMazkirTest(unittest.TestCase):
                                                       "[[action:spawn-continue:c-100001]]",
                                             "num_turns": 2, "total_cost_usd": 0.01}))
 
-        body, status = mazkir.run_mazkir("Where did I work on the Ask tab?", [{"q": "hi", "a": "yo"}], "7d",
-                                         runner=runner, base="http://x", claude_bin="/x/claude",
-                                         fetch=fake_fetch, prefetch_runner=prefetch, db_path=dbp)
+        with mock.patch.object(mazkir, "INDEX_BIN", "/x/claude-index"):
+            body, status = mazkir.run_mazkir("Where did I work on the Ask tab?", [{"q": "hi", "a": "yo"}], "7d",
+                                             runner=runner, base="http://x", claude_bin="/x/claude",
+                                             fetch=fake_fetch, prefetch_runner=prefetch, db_path=dbp)
         self.assertEqual(status, 200)
         self.assertEqual(body["agent"], "mazkir")
         self.assertEqual(body["cited"], ["c-100001", "kimi-1"])
@@ -171,6 +172,25 @@ class RunMazkirTest(unittest.TestCase):
         with mock.patch.object(mazkir, "_find_claude_bin", lambda: None):
             body, status = mazkir.run_mazkir("q", base="http://x", fetch=fake_fetch, prefetch_runner=prefetch)
         self.assertEqual(status, 503)
+
+    def test_signed_out_claude_is_a_clear_401(self):
+        prefetch = lambda argv, **kw: _Proc(stdout="[]")
+        out = json.dumps({"result": "Not logged in · Please run /login", "is_error": True})
+        body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=out), base="http://x",
+                                         claude_bin="/x/claude", fetch=fake_fetch,
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+        self.assertEqual((status, body["code"]), (401, "ask_engine_unauthenticated"))
+        self.assertIn("/login", body["error"])
+        self.assertFalse(body["ok"])
+
+    def test_warm_up_reports_optional_features(self):
+        with mock.patch.object(mazkir, "checkin_enabled", return_value=False), \
+                mock.patch.object(mazkir, "INDEX_BIN", None), \
+                mock.patch.object(mazkir, "_find_claude_bin", lambda: None), \
+                mock.patch.dict(os.environ, {"CCC_CLAUDE_BIN": "", "CCC_ASK_WARM": "1"}):
+            out = mazkir.warm_up("http://x")
+        self.assertEqual((out["daily_checkin"], out["history_search"]), (False, False))
+        self.assertEqual(out["code"], "ask_engine_unavailable")
 
     def test_uncited_unknown_ids_are_dropped(self):
         sources, cited, actions = mazkir.assemble_sources("see [[session:nope-1]]", [], "/nonexistent.db")
@@ -223,14 +243,16 @@ class OutsideUserDefaultsTest(unittest.TestCase):
             self.assertIn("daily_checkin", mazkir.system_prompt("/x/claude-index"))
 
     def test_builtin_prefetch_maps_ccc_search_rows(self):
-        from ccc_server import core as _core
         recent = {"results": [{"session_id": "sess-aaaaaa", "cwd": "/r/a", "ts_unix": 1700000000,
                                "snippet": "fixed the <mark>ask</mark> tab"}]}
-        with mock.patch.object(_core, "search_recent_sessions", return_value=recent, create=True), \
-                mock.patch.object(_core, "search_conversation_history", side_effect=OSError, create=True), \
-                mock.patch("ccc_server.ask.enrich_ask_hits", side_effect=lambda h: h):
-            out = mazkir.builtin_prefetch("ask tab fix", "7d")
-            self.assertEqual(mazkir.builtin_prefetch("ask tab fix", "7d", exclude_session_ids={"sess-aaaaaa"}), [])
+
+        def history(*a, **k):
+            raise OSError("index locked")
+        seams = {"search_recent": lambda *a, **k: recent, "search_history": history,
+                 "enrich": lambda hits: hits}
+        out = mazkir.builtin_prefetch("ask tab fix", "7d", **seams)
+        self.assertEqual(mazkir.builtin_prefetch("ask tab fix", "7d", exclude_session_ids={"sess-aaaaaa"},
+                                                 **seams), [])
         self.assertEqual(out[0]["session_id"], "sess-aaaaaa")
         self.assertEqual(out[0]["best_snippet"], "fixed the ask tab")
         self.assertRegex(out[0]["last_ts"], r"^\d{4}-\d{2}-\d{2}$")
