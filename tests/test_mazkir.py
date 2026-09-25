@@ -182,6 +182,12 @@ class RunMazkirTest(unittest.TestCase):
         self.assertEqual((status, body["code"]), (401, "ask_engine_unauthenticated"))
         self.assertIn("/login", body["error"])
         self.assertFalse(body["ok"])
+        expired = json.dumps({"result": "Failed to authenticate: OAuth session expired and could not be refreshed",
+                              "is_error": True})
+        body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=expired), base="http://x",
+                                         claude_bin="/x/claude", fetch=fake_fetch,
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+        self.assertEqual(status, 401)
 
     def test_warm_up_reports_optional_features(self):
         with mock.patch.object(mazkir, "checkin_enabled", return_value=False), \

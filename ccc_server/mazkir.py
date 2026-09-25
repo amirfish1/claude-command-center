@@ -1096,7 +1096,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     }, 200
 
 
-_AUTH_ERROR_RE = re.compile(r"not logged in|/login|invalid api key|authentication_error|oauth token", re.I)
+_AUTH_ERROR_RE = re.compile(r"not logged in|/login|invalid api key|failed to authenticate|authentication_error|oauth", re.I)
 NOT_SIGNED_IN = ("Ask uses Claude Code, which is installed but not signed in. Run `claude` in a "
                  "terminal, sign in with /login, then ask again.")
 
