@@ -6345,6 +6345,13 @@
   #convList .conv-subagent-cluster .conv-item.is-current-child-row .conv-title {
     font-size: 12.5px !important;
     line-height: 1.3 !important;
+    /* Large Bright (the default preset since bcbb3cc9) pins weight 500 and a
+       bright colour with !important, which made child rows read bold. */
+    font-weight: 450 !important;
+    color: var(--text-secondary) !important;
+  }
+  :root:not([data-theme="light"]) #convList .conv-subagent-cluster .conv-item.is-current-child-row .conv-title {
+    color: color-mix(in srgb, #f0f4fb 65%, transparent) !important;
   }
   .conv-current-sessions-scroll .conv-item .conv-title-row,
   .conv-current-sessions-scroll .conv-item .conv-main-row {
@@ -14314,6 +14321,7 @@
   .ship-act-approve:disabled, .ship-act-reject:disabled { opacity: 0.4; cursor: default; }
   #convList .conv-folder-group.collapsed > .conv-item,
   #convList .conv-folder-group.collapsed > .conv-subagent-cluster,
+  #convList .conv-folder-group.collapsed > .conv-repeat-group,
   #convList .conv-folder-group.collapsed > .conv-gap-separator,
   #convList .conv-folder-group.collapsed > .conv-draft-row,
   #convList .conv-folder-group.collapsed > .conv-object-empty-hint,
@@ -14321,6 +14329,7 @@
   .conv-folder-group.is-subtree-hidden { display: none; }
   #convList .conv-folder-group.sessions-collapsed > .conv-item,
   #convList .conv-folder-group.sessions-collapsed > .conv-subagent-cluster,
+  #convList .conv-folder-group.sessions-collapsed > .conv-repeat-group,
   #convList .conv-folder-group.sessions-collapsed > .conv-gap-separator,
   #convList .conv-folder-group.sessions-collapsed > .conv-draft-row,
   #convList .conv-folder-group.sessions-collapsed > .conv-object-empty-hint,

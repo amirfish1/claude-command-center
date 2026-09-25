@@ -38157,7 +38157,10 @@
         const raw = opt.getAttribute('data-grouping');
         const value = (raw === 'time' || raw === 'cost') ? raw : 'project';
         try { localStorage.setItem('ccc-archived-grouping', value); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        // Force: a click is user intent, and the pause gate (New Session pane
+        // open, row hovered, ...) would otherwise save the choice but skip
+        // the repaint, so "by project" looked dead.
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     });
     // 1d / 7d / All time-window toggle for the Archived view. Mirrors the In
@@ -38300,7 +38303,7 @@
             else localStorage.setItem(key, '1');
           } catch (_) {}
         });
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       };
       $archivedExpandAll.addEventListener('click', (ev) => { ev.stopPropagation(); apply(); });
       $archivedExpandAll.addEventListener('keydown', (ev) => {
@@ -39068,6 +39071,9 @@
         }
       });
       hdr.addEventListener('dragleave', () => hdr.classList.remove('is-drop-target', 'drop-above', 'drop-below'));
+      // Drop renders are forced (CCC-1135): the pointer sits on a row at drop
+      // time, and the CCC-1007 `.conv-item:hover` pause would otherwise skip
+      // the repaint, so a saved move looked like it never happened.
       hdr.addEventListener('drop', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
@@ -39083,7 +39089,7 @@
           if (draggedNode.indexOf('draft-session:') === 0) {
             if (setDraftNodeParent(draggedNode, target)) {
               showOpToast('Moved task', 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
@@ -39093,13 +39099,13 @@
             if (target === 'unclassified') {
               if (_setObjectParent(dragged, '')) {
                 showOpToast('Moved to top level', 'success');
-                renderArchiveList(document.getElementById('convSearch')?.value || '');
+                renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
               }
               return;
             }
             if (_nestObjectUnder(dragged, target)) {
               showOpToast('Nested under ' + (hdr.textContent || '').trim().slice(0, 40), 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
@@ -39113,20 +39119,20 @@
             .map(n => n.getAttribute('data-object-drop'))
             .filter(id => id && id !== dragged);
           const at = ids.indexOf(target);
-          if (at === -1) { renderArchiveList(document.getElementById('convSearch')?.value || ''); return; }
+          if (at === -1) { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); return; }
           ids.splice(zone === 'above' ? at : at + 1, 0, dragged);
           const order = {};
           ids.forEach((id, i) => { order[id] = i; });
           try { localStorage.setItem('ccc-objects-order', JSON.stringify(order)); } catch (_) {}
           syncObjectsToServer();
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
           return;
         }
         // ── Session-row drop: reparent the session under this group ──
         const convIds = readConvIdsFromDrop(ev);
         if (!convIds.length) return;
         if (reparentConversationIdsToObject(target, convIds)) {
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
         }
       });
     });
@@ -39155,7 +39161,7 @@
           if (draggedNode.indexOf('draft-session:') === 0) {
             if (setDraftNodeParent(draggedNode, target)) {
               showOpToast('Moved task', 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
@@ -39164,14 +39170,14 @@
           if (target === 'unclassified') {
             if (_setObjectParent(dragged, '')) {
               showOpToast('Moved to top level', 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
           if (_nestObjectUnder(dragged, target)) {
             const label = (zone.querySelector('.conv-folder-group-chip')?.textContent || '').trim().slice(0, 40);
             showOpToast('Nested under ' + label, 'success');
-            renderArchiveList(document.getElementById('convSearch')?.value || '');
+            renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
           }
           return;
         }
@@ -39180,7 +39186,7 @@
         ev.preventDefault();
         ev.stopPropagation();
         if (reparentConversationIdsToObject(target, convIds)) {
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
         }
       });
     });
@@ -39193,7 +39199,7 @@
         const nextCompact = opt.getAttribute('data-rows-compact') === '1';
         try { localStorage.setItem('ccc-compact-rows', nextCompact ? '1' : '0'); } catch (_) {}
         $convList.classList.toggle('compact-rows', nextCompact);
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     }
     // Per-row NYA collapse chevron. Delegated on the stable $convList, attached
@@ -40859,7 +40865,7 @@
       const objectDropGroup = el.closest('[data-object-drop-zone]');
       if (objectDropGroup) {
         if (reorderObjectSessionRows(el, readConvIdsFromDrop(ev), before ? 'before' : 'after')) {
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
         }
         return;
       }
