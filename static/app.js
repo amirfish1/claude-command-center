@@ -18699,6 +18699,7 @@
     }
     try { updateSubagentsPanel(convId); } catch (_) { /* defensive - panel is non-critical */ }
     try { if (typeof updateOrchestrationPane === 'function') updateOrchestrationPane(convId); } catch (_) {}
+    try { if (typeof updateBrowserPane === 'function') updateBrowserPane(convId); } catch (_) {}
   }
 
   // Populate the status-rail Subagents panel from the active conversation's
@@ -61336,7 +61337,7 @@
     const queuePane = rail.querySelector('#statusRailQueuePane');
     // 'files' is a legacy value (the Files tab folded into Metadata); the
     // files panel now lives at the bottom of the Metadata pane.
-    const next = (tab === 'queue' || tab === 'orchestration' || tab === 'ask' || tab === 'log') ? tab : 'metadata';
+    const next = (tab === 'queue' || tab === 'orchestration' || tab === 'ask' || tab === 'log' || tab === 'browser') ? tab : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);
@@ -61360,6 +61361,7 @@
       // The pane was hidden until now — lay the lane map out for real.
       requestAnimationFrame(() => updateOrchestrationPane(currentConversation));
     }
+    if (typeof browserPaneTabChanged === 'function') browserPaneTabChanged(next === 'browser');
     if (next === 'log' && typeof refreshRailLogPane === 'function') {
       // Pane was hidden until now (or the user switched back to it) — pull
       // fresh events immediately instead of waiting for the next poll tick.
@@ -63167,6 +63169,332 @@
     try { localStorage.setItem(ASK_HISTORY_KEY, JSON.stringify(turns.slice(-12))); } catch (_) {}
   }
 
+  // ── Browser sidekick (right-rail Browser tab) ─────────────────────────
+  // Previews the local dev server the active session is serving. The server
+  // detects candidates (/api/session/<sid>/dev-urls: listening ports in the
+  // session's process tree or directory, plus loopback URLs in the
+  // transcript). A URL that appears while you watch a session opens here on
+  // its own (Auto-open). Pages that refuse to be framed load through CCC's
+  // loopback proxy (/api/browser/proxy). The iframe only gets a src while the
+  // tab is showing, so a hidden dev app never runs in the background.
+  const BROWSER_STATE_KEY = 'ccc-browser-state';
+  const BROWSER_AUTO_KEY = 'ccc-browser-autoopen';
+  const BROWSER_POLL_MS = 5000;
+  const BROWSER_STATE_CAP = 60;
+  let _browserSid = null;
+  let _browserUrl = '';          // what the address bar says (logical URL)
+  let _browserProxy = false;     // user forced the proxy for this session
+  let _browserFrameSrc = '';     // what the iframe actually loaded
+  let _browserPending = '';      // navigate once the tab becomes visible
+  let _browserBaseline = null;   // Set of URLs present when the session opened
+  let _browserPollTimer = null;
+  let _browserPollInFlight = false;
+  let _browserNavSeq = 0;
+  let _browserLastUrls = [];
+
+  function _browserEls() {
+    return {
+      pane: document.getElementById('statusRailBrowserPane'),
+      tab: document.getElementById('statusRailBrowserTab'),
+      input: document.getElementById('browserUrl'),
+      proxyBtn: document.getElementById('browserProxyBtn'),
+      openBtn: document.getElementById('browserOpenBtn'),
+      detected: document.getElementById('browserDetected'),
+      chips: document.getElementById('browserChips'),
+      auto: document.getElementById('browserAutoOpen'),
+      status: document.getElementById('browserStatus'),
+      frame: document.getElementById('browserFrame'),
+      empty: document.getElementById('browserEmpty'),
+    };
+  }
+
+  function _browserLoadState() {
+    try { return JSON.parse(localStorage.getItem(BROWSER_STATE_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function _browserSaveSession(sid, patch) {
+    if (!sid) return;
+    const all = _browserLoadState();
+    all[sid] = Object.assign({}, all[sid] || {}, patch, { ts: Date.now() });
+    const keys = Object.keys(all);
+    if (keys.length > BROWSER_STATE_CAP) {
+      keys.sort((a, b) => (all[a].ts || 0) - (all[b].ts || 0));
+      keys.slice(0, keys.length - BROWSER_STATE_CAP).forEach(k => { delete all[k]; });
+    }
+    try { localStorage.setItem(BROWSER_STATE_KEY, JSON.stringify(all)); } catch (_) {}
+  }
+  function _browserAutoOpen() {
+    try { return localStorage.getItem(BROWSER_AUTO_KEY) !== '0'; } catch (_) { return true; }
+  }
+
+  // "3000" -> http://localhost:3000/, "localhost:5173/x" -> http://..., a bare
+  // domain gets https. Returns '' for input that is not a URL.
+  function browserNormalizeUrl(raw) {
+    let v = String(raw || '').trim();
+    if (!v) return '';
+    if (/^\d{2,5}$/.test(v)) v = 'localhost:' + v;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) {
+      const loop = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(v);
+      v = (loop ? 'http://' : 'https://') + v;
+    }
+    let u;
+    try { u = new URL(v); } catch (_) { return ''; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    if (u.hostname === '0.0.0.0') u.hostname = 'localhost';
+    return u.href;
+  }
+  function browserIsLoopback(url) {
+    try {
+      const h = new URL(url).hostname;
+      return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+    } catch (_) { return false; }
+  }
+
+  function _browserPaneShowing() {
+    const { pane } = _browserEls();
+    return !!(pane && !pane.hidden && pane.offsetParent !== null);
+  }
+  function _browserRailShowing() {
+    const rail = document.getElementById('statusRail');
+    return !!(rail && rail.offsetParent !== null && !document.body.classList.contains('status-rail-collapsed'));
+  }
+
+  function _browserSetStatus(text, tone) {
+    const { status } = _browserEls();
+    if (!status) return;
+    status.hidden = !text;
+    status.textContent = text || '';
+    status.dataset.tone = tone || '';
+  }
+
+  function _browserSetFrame(src) {
+    const { frame, empty } = _browserEls();
+    if (!frame) return;
+    _browserFrameSrc = src || '';
+    if (!src) {
+      frame.hidden = true;
+      frame.removeAttribute('src');
+      if (empty) empty.hidden = false;
+      return;
+    }
+    if (empty) empty.hidden = true;
+    frame.hidden = false;
+    // Assigning the same src does not reload; Enter in the bar should.
+    if (frame.getAttribute('src') === src) {
+      frame.setAttribute('src', 'about:blank');
+      requestAnimationFrame(() => frame.setAttribute('src', src));
+    } else {
+      frame.setAttribute('src', src);
+    }
+  }
+
+  function _browserSyncControls() {
+    const { input, proxyBtn, openBtn } = _browserEls();
+    if (input && document.activeElement !== input) input.value = _browserUrl;
+    if (proxyBtn) {
+      const loop = browserIsLoopback(_browserUrl);
+      proxyBtn.disabled = !!_browserUrl && !loop;
+      proxyBtn.setAttribute('aria-pressed', _browserProxy ? 'true' : 'false');
+      proxyBtn.classList.toggle('is-on', _browserProxy);
+    }
+    if (openBtn) openBtn.disabled = !_browserUrl;
+  }
+
+  // Load `url` into the pane. Loopback pages are probed first; a page that
+  // refuses framing (or the user's Proxy toggle) goes through the proxy.
+  async function browserNavigate(url, opts) {
+    opts = opts || {};
+    const norm = browserNormalizeUrl(url);
+    _browserUrl = norm;
+    if (opts.proxy !== undefined) _browserProxy = !!opts.proxy;
+    _browserSyncControls();
+    if (_browserSid && !opts.noSave) _browserSaveSession(_browserSid, { url: norm, proxy: _browserProxy });
+    if (!norm) { _browserSetFrame(''); _browserSetStatus(''); return; }
+    if (!_browserPaneShowing()) { _browserPending = norm; return; }
+    _browserPending = '';
+    const seq = ++_browserNavSeq;
+    if (!browserIsLoopback(norm)) {
+      _browserSetStatus('External sites often refuse to be embedded. If the page stays blank, use ↗ to open it in your browser.', 'info');
+      _browserSetFrame(norm);
+      return;
+    }
+    let useProxy = _browserProxy;
+    let reason = '';
+    if (!useProxy) {
+      try {
+        const r = await fetch('/api/browser/probe?url=' + encodeURIComponent(norm), { headers: { 'X-CCC-Background': '1' } });
+        const probe = await r.json();
+        if (seq !== _browserNavSeq) return;
+        if (probe && probe.checked && !probe.reachable) {
+          _browserSetStatus('Nothing is answering at ' + norm + ' yet.', 'warn');
+        } else if (probe && probe.frame_blocked) {
+          useProxy = true;
+          reason = probe.reason || 'frame-blocking headers';
+        } else {
+          _browserSetStatus('');
+        }
+      } catch (_) { /* probe is advisory; try the page directly */ }
+    }
+    if (useProxy) {
+      try {
+        const r = await fetch('/api/browser/proxy', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: norm }),
+        });
+        const data = await r.json();
+        if (seq !== _browserNavSeq) return;
+        if (data && data.ok && data.proxy_url) {
+          _browserSetStatus(reason
+            ? 'Loaded through CCC’s proxy: the page sends ' + reason + '.'
+            : 'Loaded through CCC’s proxy.', 'info');
+          _browserSetFrame(data.proxy_url);
+          return;
+        }
+        _browserSetStatus('Proxy unavailable: ' + ((data && data.error) || 'unknown error'), 'warn');
+      } catch (_) {
+        if (seq !== _browserNavSeq) return;
+        _browserSetStatus('Proxy unavailable. Loading the page directly.', 'warn');
+      }
+    }
+    _browserSetFrame(norm);
+  }
+
+  function _browserRenderChips(urls) {
+    const { detected, chips, auto } = _browserEls();
+    if (!detected || !chips) return;
+    _browserLastUrls = urls || [];
+    detected.hidden = !_browserLastUrls.length;
+    if (auto) auto.checked = _browserAutoOpen();
+    const SOURCE_LABEL = {
+      process: 'listening in this session’s process tree',
+      cwd: 'listening in a process inside this session’s directory',
+      transcript: 'mentioned in the transcript',
+    };
+    chips.innerHTML = _browserLastUrls.map(it => {
+      let label = it.url;
+      try { const u = new URL(it.url); label = u.host + (u.pathname !== '/' ? u.pathname : ''); } catch (_) {}
+      const title = it.url + ' · ' + (SOURCE_LABEL[it.source] || it.source) + (it.live ? '' : ' · not answering now');
+      const active = it.url === _browserUrl ? ' is-active' : '';
+      return '<button type="button" role="listitem" class="browser-chip' + (it.live ? ' is-live' : ' is-stale') + active +
+        '" data-browser-url="' + escapeHtml(it.url) + '" title="' + escapeHtml(title) + '">' +
+        '<span class="browser-chip-dot" aria-hidden="true"></span>' + escapeHtml(label) + '</button>';
+    }).join('');
+  }
+
+  function _browserMarkTab(on) {
+    const { tab } = _browserEls();
+    if (tab) tab.classList.toggle('has-news', !!on);
+  }
+
+  async function browserPoll() {
+    const sid = _browserSid;
+    if (!sid || _browserPollInFlight || document.hidden || !_browserRailShowing()) return;
+    _browserPollInFlight = true;
+    let data = null;
+    try {
+      const r = await fetch('/api/session/' + encodeURIComponent(sid) + '/dev-urls', { headers: { 'X-CCC-Background': '1' } });
+      if (r.ok) data = await r.json();
+    } catch (_) { data = null; }
+    _browserPollInFlight = false;
+    if (!data || sid !== _browserSid) return;
+    const urls = Array.isArray(data.urls) ? data.urls : [];
+    _browserRenderChips(urls);
+    const live = urls.filter(it => it.live);
+    if (_browserBaseline === null) {
+      // First look at this session: remember what was already running, and
+      // pre-fill an empty pane with the best live candidate without stealing
+      // the tab.
+      _browserBaseline = new Set(live.map(it => it.url));
+      if (!_browserUrl && live.length) {
+        browserNavigate(live[0].url, { noSave: true });
+        if (!_browserPaneShowing()) _browserMarkTab(true);
+      }
+      return;
+    }
+    const fresh = live.find(it => !_browserBaseline.has(it.url));
+    live.forEach(it => _browserBaseline.add(it.url));
+    if (!fresh || !_browserAutoOpen()) return;
+    const { input } = _browserEls();
+    if (input && document.activeElement === input) return; // user is typing
+    browserNavigate(fresh.url);
+    if (_browserRailShowing() && !_browserPaneShowing() && typeof setStatusRailTab === 'function') {
+      setStatusRailTab('browser');
+    }
+  }
+
+  function _browserEnsurePolling() {
+    if (_browserPollTimer) return;
+    _browserPollTimer = setInterval(browserPoll, BROWSER_POLL_MS);
+  }
+
+  function browserSidIsSession(sid) {
+    return !!sid && typeof sid === 'string' && /^[A-Za-z0-9_:.-]+$/.test(sid) && !/^backlog-/.test(sid);
+  }
+
+  // Conversation switched (or re-announced). Restores that session's page.
+  function updateBrowserPane(convId) {
+    const sid = browserSidIsSession(convId) ? convId : null;
+    if (sid === _browserSid) return;
+    _browserSid = sid;
+    _browserBaseline = null;
+    _browserNavSeq++;
+    _browserMarkTab(false);
+    _browserRenderChips([]);
+    _browserSetStatus('');
+    const saved = sid ? (_browserLoadState()[sid] || {}) : {};
+    _browserProxy = !!saved.proxy;
+    _browserUrl = '';
+    _browserPending = '';
+    if (saved.url) browserNavigate(saved.url, { noSave: true });
+    else { _browserSetFrame(''); _browserSyncControls(); }
+    if (sid) { _browserEnsurePolling(); browserPoll(); }
+  }
+
+  function browserPaneTabChanged(active) {
+    if (!active) return;
+    _browserMarkTab(false);
+    if (_browserPending) browserNavigate(_browserPending, { noSave: true });
+    else if (!_browserFrameSrc && _browserUrl) browserNavigate(_browserUrl, { noSave: true });
+    browserPoll();
+  }
+
+  function initBrowserPane() {
+    const els = _browserEls();
+    if (!els.pane || !els.input) return;
+    const bar = document.getElementById('browserBar');
+    if (bar) bar.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const url = browserNormalizeUrl(els.input.value);
+      if (!url) { _browserSetStatus('That does not look like a URL.', 'warn'); return; }
+      els.input.blur();
+      browserNavigate(url);
+    });
+    els.input.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
+      if (e.key === 'Escape') { els.input.value = _browserUrl; els.input.blur(); }
+    });
+    if (els.proxyBtn) els.proxyBtn.addEventListener('click', () => {
+      if (!_browserUrl) { _browserProxy = !_browserProxy; _browserSyncControls(); return; }
+      browserNavigate(_browserUrl, { proxy: !_browserProxy });
+    });
+    if (els.openBtn) els.openBtn.addEventListener('click', () => {
+      if (_browserUrl) window.open(_browserUrl, '_blank', 'noopener');
+    });
+    if (els.chips) els.chips.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-browser-url]');
+      if (!chip) return;
+      browserNavigate(chip.getAttribute('data-browser-url'));
+      _browserRenderChips(_browserLastUrls);
+    });
+    if (els.auto) {
+      els.auto.checked = _browserAutoOpen();
+      els.auto.addEventListener('change', () => {
+        try { localStorage.setItem(BROWSER_AUTO_KEY, els.auto.checked ? '1' : '0'); } catch (_) {}
+      });
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) browserPoll(); });
+    _browserSyncControls();
+    if (typeof currentConversation !== 'undefined' && currentConversation) updateBrowserPane(currentConversation);
+  }
+
   function initAskPane() {
     const log = document.getElementById('askLog');
     const form = document.getElementById('askForm');
@@ -63493,6 +63821,7 @@
     }
     initAskPane();
     initRailLogPane();
+    initBrowserPane();
 
     const $fileViewerClose = document.getElementById('fileViewerCloseBtn');
     if ($fileViewerClose) {

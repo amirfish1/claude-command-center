@@ -26374,6 +26374,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "session_id": sid,
                 "events": _get_queued_events_for_session(sid),
             })
+        elif re.match(r"^/api/session/[a-zA-Z0-9_:.-]+/dev-urls$", path):
+            # Browser sidekick (right-rail Browser tab): local dev-server
+            # URLs this session is serving. Single-session work, cached by
+            # transcript (size, mtime) and a shared few-second lsof/ps
+            # snapshot -- never per row.
+            sid = path.rsplit("/", 2)[-2]
+            from ccc_server import browser_sidekick as _browser_sidekick
+            self.send_json(_browser_sidekick.session_dev_urls(
+                sid, exclude_ports=(self.server.server_address[1], PORT)))
+        elif path == "/api/browser/probe":
+            # Browser sidekick: can this loopback URL render in an iframe?
+            # Loopback targets only; anything else reports checked=False.
+            from ccc_server import browser_sidekick as _browser_sidekick
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_browser_sidekick.probe((qs.get("url") or [""])[-1]))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/inject-receipt$", path):
             # CCC-28: additive read so an agent (or a human) can ask "is a
             # message from this session still unproven" directly instead of
@@ -28542,6 +28557,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        if path == "/api/browser/proxy":
+            # Browser sidekick: start (or reuse) a 127.0.0.1-only proxy that
+            # lets a frame-blocking loopback dev server render in the rail.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import browser_sidekick as _browser_sidekick
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            resp = _browser_sidekick.ensure_proxy(str((data or {}).get("url") or ""))
+            self.send_json(resp, 200 if resp.get("ok") else 400)
             return
 
         if path == "/api/assistant/ask":

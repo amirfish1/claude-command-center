@@ -1273,6 +1273,7 @@
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue" data-tour="queue">Queue</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailAskPane" data-rail-tab="ask">Ask</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailLogPane" data-rail-tab="log">Log</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailBrowserPane" data-rail-tab="browser" id="statusRailBrowserTab">Browser</button>
             </div>
             <div class="status-rail-pane is-active" id="statusRailOrchestrationPane" role="tabpanel" data-rail-pane="orchestration">
               <div class="orch-pane" id="orchPane">
@@ -1488,6 +1489,33 @@
                 </div>
                 <div class="rail-log-body" id="railLogBody" aria-live="polite">
                   <div class="activity-log-empty">Loading…</div>
+                </div>
+              </div>
+            </div>
+            <!-- Browser sidekick: previews the local dev server the active
+                 session is serving. URLs are detected server-side
+                 (/api/session/<sid>/dev-urls); frame-blocking pages go
+                 through a loopback proxy (/api/browser/proxy). -->
+            <div class="status-rail-pane" id="statusRailBrowserPane" role="tabpanel" data-rail-pane="browser" hidden>
+              <div class="browser-pane">
+                <form class="browser-bar" id="browserBar" autocomplete="off">
+                  <input type="text" id="browserUrl" class="browser-url" placeholder="localhost:3000 or any URL, Enter to load" spellcheck="false" autocapitalize="off" aria-label="Browser address">
+                  <button type="button" class="browser-btn" id="browserProxyBtn" aria-pressed="false" title="Load through CCC's loopback proxy, which lets pages that refuse to be framed (X-Frame-Options / CSP frame-ancestors) render here">Proxy</button>
+                  <button type="button" class="browser-btn" id="browserOpenBtn" title="Open this page in your own browser" aria-label="Open in your browser">&#8599;</button>
+                </form>
+                <div class="browser-detected" id="browserDetected" hidden>
+                  <div class="browser-chips" id="browserChips" role="list" aria-label="Dev servers detected for this session"></div>
+                  <label class="browser-auto" title="Open newly detected dev servers here automatically"><input type="checkbox" id="browserAutoOpen"> Auto-open</label>
+                </div>
+                <div class="browser-status" id="browserStatus" role="status" hidden></div>
+                <div class="browser-viewport" id="browserViewport">
+                  <iframe id="browserFrame" class="browser-frame" title="Session browser" hidden
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-popups-to-escape-sandbox"
+                    referrerpolicy="no-referrer"></iframe>
+                  <div class="browser-empty" id="browserEmpty">
+                    <div class="browser-empty-title">No page yet</div>
+                    <div class="browser-empty-body">When this session starts a local dev server, its page opens here. You can also type a URL above.</div>
+                  </div>
                 </div>
               </div>
             </div>
