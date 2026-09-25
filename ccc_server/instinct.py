@@ -110,9 +110,16 @@ ATTENTION_KINDS = {
     "soft_block": ("Ended its turn waiting on you", "medium"),
     "sidecar_waiting": ("Side question waiting", "medium"),
     "stale_tool_call": ("Tool call looks hung", "medium"),
-    "inject_stuck": ("Queued message never landed", "high"),
-    "error": ("Errored", "high"),
+    "pushed_open": ("Pushed; PR still open", "low"),
+    "uncommitted_edits": ("Left uncommitted edits", "low"),
+    "needs_attention_label": ("Labelled needs-attention", "low"),
+    "open_backlog": ("Open backlog item", "low"),
 }
+# Unknown kinds are low: a new server-side kind shows up in the list without
+# crowding real blockers out of "What to do next".
+_UNKNOWN_KIND = ("Needs attention", "low")
+# Instinct's priority words -> ``wt add --priority`` (p0 highest .. p4 lowest).
+WT_PRIORITY = {"high": "p1", "normal": "p2", "low": "p3"}
 
 
 # ---------------------------------------------------------------- config ---
@@ -188,6 +195,19 @@ def _age(seconds) -> str:
     return f"{s // 86400}d{(s % 86400) // 3600:02d}h"
 
 
+def _num(v, default=0.0) -> float:
+    """Tolerant float(): feeds are JSON from other processes, so a null or a
+    string where a number belongs must not crash the whole brief."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dicts(v) -> list:
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
 def _iso_to_ts(s):
     if not s:
         return None
@@ -231,10 +251,10 @@ def discover_repos(cfg, repo_list_payload=None) -> list[dict]:
     if cfg.get("auto_discover_repos") and isinstance(repo_list_payload, dict):
         repos = [r for r in repo_list_payload.get("repos") or [] if isinstance(r, dict)]
         active = [r for r in repos
-                  if ((r.get("signals") or {}).get("d7") or {}).get("sessions", 0) > 0]
-        active.sort(key=lambda r: -float(r.get("score") or 0))
+                  if r.get("path") and _num(((r.get("signals") or {}).get("d7") or {}).get("sessions")) > 0]
+        active.sort(key=lambda r: -_num(r.get("score")))
         for r in active:
-            add(r.get("path") or "", r.get("label"), "ccc")
+            add(r["path"], r.get("label"), "ccc")
     return out
 
 
@@ -262,11 +282,13 @@ def collect_git(repo: dict, since_ts: float, cfg) -> dict:
         files = [f for f in rest.splitlines() if f.strip()]
         if any(author.endswith(sfx) for sfx in cfg.get("ignore_author_suffixes") or []):
             continue
-        # --branches sees a rebased commit on both the old and new branch;
-        # log is newest-first, so keep the first copy of each (author, subject).
-        if (author, subject) in seen:
+        # --branches sees a rebased commit on both the old and new branch. A
+        # rebase or cherry-pick keeps the author date, so (author, author
+        # date, subject) identifies the copies without a patch-id pass; two
+        # genuinely different "wip" commits have different author dates.
+        if (author, ts, subject) in seen:
             continue
-        seen.add((author, subject))
+        seen.add((author, ts, subject))
         c = {"sha": sha, "short": sha[:8], "author": author, "ts": int(ts),
              "subject": subject, "files": files}
         c.update(parse_conventional(subject))
@@ -280,7 +302,12 @@ def collect_git(repo: dict, since_ts: float, cfg) -> dict:
     if lines and lines[0].startswith("## "):
         head = lines[0][3:]
         branch, _, tail = head.partition("...")
-        info["branch"] = branch.strip()
+        branch = branch.strip()
+        if branch.startswith("No commits yet on "):
+            branch = branch[len("No commits yet on "):]
+        elif branch.startswith("HEAD (no branch)"):
+            branch = "(detached)"
+        info["branch"] = branch
         if tail:
             info["upstream"] = tail.split(" ", 1)[0]
             a, b = _AHEAD_RE.search(tail), _BEHIND_RE.search(tail)
@@ -357,7 +384,7 @@ _BOILERPLATE_RE = re.compile(r"^(changed code in|changed \S+:)", re.I)
 def _decision_weight(d: dict, prov: dict) -> float:
     """Rank decisions so a recorded trade-off beats an auto-captured diff note."""
     text = str(d.get("decision") or "")
-    w = float(prov.get("confidence") or 0.5)
+    w = _num(prov.get("confidence"), 0.5)
     w += 1.0 if d.get("alternatives_rejected") else 0.0
     w += min(len(text), 600) / 600.0
     if _BOILERPLATE_RE.match(text.strip()):
@@ -386,7 +413,10 @@ def collect_wt(cfg) -> dict:
         except ValueError as e:
             res["errors"].append(f"wt {key} --json: bad JSON ({e})")
             continue
-        res[key] = val if isinstance(val, list) else []
+        if not isinstance(val, list):
+            res["errors"].append(f"wt {key} --json: expected a list, got {type(val).__name__}")
+            continue
+        res[key] = val
     return res
 
 
@@ -470,9 +500,8 @@ def _is_test_path(path: str) -> bool:
 
 
 def _proposal(queue, title, text, rationale, evidence, key, priority="normal"):
-    argv = ["wt", "add", "-q", queue or "<QUEUE>", "--title", title, "--text", text]
-    if priority and priority != "normal":
-        argv += ["--priority", priority]
+    argv = ["wt", "add", "-q", queue or "<QUEUE>", "--title", title, "--text", text,
+            "--priority", WT_PRIORITY.get(priority, "p2")]
     return {"queue": queue, "title": title, "text": text, "priority": priority,
             "rationale": rationale, "evidence": evidence, "key": key,
             "wt_command": " ".join(shlex.quote(a) for a in argv)}
@@ -511,13 +540,13 @@ def analyze(snap: dict, cfg: dict, memory: dict | None = None) -> dict:
         })
 
     # -- what's stuck: sessions -----------------------------------------
-    for it in snap.get("sessions") or []:
+    for it in _dicts(snap.get("sessions")):
         kind = it.get("kind") or "attention"
-        label, sev = ATTENTION_KINDS.get(kind, ("Needs attention", "medium"))
-        age = now - float(it.get("mtime") or now)
+        label, sev = ATTENTION_KINDS.get(kind, _UNKNOWN_KIND)
+        age = max(0.0, now - _num(it.get("mtime"), now))
         stuck.append({
             "source": "session", "severity": sev, "kind": kind,
-            "title": f"{it.get('name') or it.get('session_id', '')[:8]}: {label}",
+            "title": f"{it.get('name') or str(it.get('session_id') or '')[:8] or 'session'}: {label}",
             "repo": it.get("repo") or it.get("folder_label") or "",
             "detail": it.get("question_text") or it.get("next_step") or it.get("where") or "",
             "age": _age(age), "age_s": age, "ref": it.get("session_id") or "",
@@ -526,7 +555,7 @@ def analyze(snap: dict, cfg: dict, memory: dict | None = None) -> dict:
     # -- what's stuck: WatchTower ----------------------------------------
     wt = snap.get("wt") or {}
     stale_blocked_s = float(cfg["stale_blocked_days"]) * 86400
-    for t in wt.get("blocked") or []:
+    for t in _dicts(wt.get("blocked")):
         ts = _iso_to_ts(t.get("blocked_at") or t.get("claimed_at") or t.get("created_at"))
         age = now - ts if ts else 0
         stale = age >= stale_blocked_s
@@ -538,7 +567,7 @@ def analyze(snap: dict, cfg: dict, memory: dict | None = None) -> dict:
             "detail": t.get("block_question") or "Waiting on a human answer.",
             "age": _age(age), "age_s": age, "ref": t.get("ref") or "",
         })
-    for t in wt.get("gated") or []:
+    for t in _dicts(wt.get("gated")):
         ts = _iso_to_ts(t.get("created_at"))
         age = now - ts if ts else 0
         stuck.append({
@@ -549,9 +578,14 @@ def analyze(snap: dict, cfg: dict, memory: dict | None = None) -> dict:
             "age": _age(age), "age_s": age, "ref": t.get("ref") or "",
         })
     stuck_days = float(cfg["stuck_queue_days"])
-    for q in wt.get("status") or []:
-        idle = float(q.get("since_progress_s") or 0)
-        if not q.get("depth") or idle < stuck_days * 86400:
+    for q in _dicts(wt.get("status")):
+        # Stalled = the queue has had open work for the whole threshold AND
+        # nothing moved in it. A fresh ticket in a long-idle queue is not
+        # stalled yet; a queue that never progressed counts as idle since its
+        # oldest ticket.
+        oldest = _num(q.get("oldest_open_age_s"))
+        idle = _num(q.get("since_progress_s"), oldest)
+        if not _num(q.get("depth")) or min(idle, oldest) < stuck_days * 86400:
             continue
         name = q.get("queue") or "?"
         why = ("auto-drain is off" if not q.get("auto_drain")
@@ -660,11 +694,11 @@ def analyze(snap: dict, cfg: dict, memory: dict | None = None) -> dict:
                 shas[:8], f"hunch-drift:{r['path']}", "low"))
 
     # Mark proposals already shown recently so the brief can say "still open".
-    cutoff = now - PROPOSAL_MEMORY_DAYS * 86400
+    known = _proposal_memory(memory)
     for p in proposals:
-        first = (memory.get("proposals") or {}).get(p["key"])
-        p["first_seen_ts"] = first if first and first >= cutoff else now
-        p["seen_before"] = bool(first and first >= cutoff and first < now)
+        rec = known.get(p["key"])
+        p["first_seen_ts"] = rec["first"] if rec else now
+        p["seen_before"] = bool(rec and rec["first"] < now)
     proposals.sort(key=lambda p: (p["seen_before"], {"high": 0, "normal": 1, "low": 2}.get(p["priority"], 1)))
 
     # -- what to do next ---------------------------------------------------
@@ -684,7 +718,6 @@ def analyze(snap: dict, cfg: dict, memory: dict | None = None) -> dict:
             "soft_block": "Reply so it can continue",
             "sidecar_waiting": "Answer the side question",
             "stale_tool_call": "Check whether the tool call is hung",
-            "inject_stuck": "Check the undelivered message (inject-receipt)",
             "queue_stalled": f"Triage queue {s['ref']}",
             "unpushed": "Push (or discard) the local commits",
         }.get(s["kind"], "Take a look")
@@ -883,12 +916,15 @@ def render_html(brief: dict) -> str:
 
 # ----------------------------------------------------------------- state ---
 
-def _write_private(path: Path, text: str):
+def _write_private(path: Path, text: str, *, private_dir: bool = False):
+    """Atomic 0600 write. ``private_dir`` also locks the parent to 0700 --
+    only for Instinct's own output dir, never a caller-chosen directory."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
+    if private_dir:
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w") as f:
@@ -917,19 +953,35 @@ def window_start(state: dict, cfg: dict, now: float, since_hours=None) -> float:
         return now - float(since_hours) * 3600
     last = state.get("last_run_ts")
     floor = now - float(cfg["max_window_hours"]) * 3600
-    if isinstance(last, (int, float)) and floor <= last < now:
-        return float(last)
+    if isinstance(last, (int, float)) and last < now:
+        return max(float(last), floor)  # a long gap is capped, not reset
     return now - float(cfg["window_hours"]) * 3600
 
 
-def next_state(state: dict, brief: dict) -> dict:
+def _proposal_memory(state: dict) -> dict:
+    """``{key: {"first", "last"}}``. A proposal is forgotten only after it
+    has not been re-proposed for ``PROPOSAL_MEMORY_DAYS`` -- so one that stays
+    relevant stays "still open" instead of flipping back to "new" weekly."""
+    out = {}
+    for k, v in (state.get("proposals") or {}).items():
+        if isinstance(v, (int, float)):  # schema-1 state: first-seen only
+            v = {"first": v, "last": v}
+        if isinstance(v, dict) and isinstance(v.get("first"), (int, float)):
+            out[k] = {"first": float(v["first"]), "last": _num(v.get("last"), v["first"])}
+    return out
+
+
+def next_state(state: dict, brief: dict, *, advance: bool = True) -> dict:
+    """``advance=False`` keeps the window start where it was, so a brief that
+    could not read every repo (or a replayed snapshot) never skips commits."""
     now = brief["generated_ts"]
     cutoff = now - PROPOSAL_MEMORY_DAYS * 86400
-    props = {k: v for k, v in (state.get("proposals") or {}).items()
-             if isinstance(v, (int, float)) and v >= cutoff}
+    props = {k: v for k, v in _proposal_memory(state).items() if v["last"] >= cutoff}
     for p in brief["proposals"]:
-        props.setdefault(p["key"], p["first_seen_ts"])
-    return {"last_run_ts": now, "proposals": props}
+        rec = props.setdefault(p["key"], {"first": p["first_seen_ts"], "last": now})
+        rec["last"] = now
+    last_run = now if advance else state.get("last_run_ts")
+    return {"last_run_ts": last_run, "proposals": props}
 
 
 def publish(cfg: dict, html_path: Path, title: str) -> tuple[str | None, str | None]:
@@ -950,16 +1002,22 @@ def publish(cfg: dict, html_path: Path, title: str) -> tuple[str | None, str | N
 # ------------------------------------------------------------------- cli ---
 
 def run_brief(cfg: dict, out_dir: Path, *, since_hours=None, use_ccc=True, use_wt=True,
-              snapshot=None, do_publish=False, now=None) -> dict:
+              snapshot=None, live=None, do_publish=False, now=None) -> dict:
+    """``live`` says whether ``snapshot`` was just collected (default: only
+    when this call collects it). Only a live brief whose git reads all
+    succeeded moves the window forward."""
     state = load_state(out_dir)
+    if live is None:
+        live = snapshot is None
     if snapshot is None:
         now = now or time.time()
         snapshot = collect(cfg, window_start(state, cfg, now, since_hours),
                            use_ccc=use_ccc, use_wt=use_wt)
+    git_ok = not any(r.get("error") for r in snapshot.get("repos") or [])
     brief = analyze(snapshot, cfg, state)
     day = _dt.datetime.fromtimestamp(brief["generated_ts"]).strftime("%Y-%m-%d")
     html_path = out_dir / f"brief-{day}.html"
-    _write_private(html_path, render_html(brief))
+    _write_private(html_path, render_html(brief), private_dir=True)
     _write_private(out_dir / f"brief-{day}.json", json.dumps(brief, indent=2, default=str))
     _write_private(out_dir / f"proposals-{day}.json",
                    json.dumps(brief["proposals"], indent=2, default=str))
@@ -968,7 +1026,8 @@ def run_brief(cfg: dict, out_dir: Path, *, since_hours=None, use_ccc=True, use_w
     if do_publish:
         url, err = publish(cfg, html_path, f"Instinct brief {day}")
         brief["published_url"], brief["publish_error"] = url, err
-    _write_private(out_dir / "state.json", json.dumps(next_state(state, brief), indent=2))
+    _write_private(out_dir / "state.json",
+                   json.dumps(next_state(state, brief, advance=live and git_ok), indent=2))
     return brief
 
 
@@ -1007,7 +1066,7 @@ def main(argv=None) -> int:
 
     cfg = load_config(args.config)
     out_dir = args.out_dir or DEFAULT_OUT_DIR
-    snapshot = None
+    snapshot, live = None, None
     if args.snapshot:
         snapshot = json.loads(args.snapshot.read_text())
     elif args.save_snapshot:
@@ -1016,8 +1075,10 @@ def main(argv=None) -> int:
         snapshot = collect(cfg, window_start(state, cfg, now, args.since),
                            use_ccc=not args.no_ccc, use_wt=not args.no_wt)
         _write_private(args.save_snapshot, json.dumps(snapshot, indent=2, default=str))
+        live = True
     brief = run_brief(cfg, out_dir, since_hours=args.since, use_ccc=not args.no_ccc,
-                      use_wt=not args.no_wt, snapshot=snapshot, do_publish=args.publish)
+                      use_wt=not args.no_wt, snapshot=snapshot, live=live,
+                      do_publish=args.publish)
     if args.json:
         print(json.dumps(brief, indent=2, default=str))
     else:

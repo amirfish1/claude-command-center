@@ -32,7 +32,7 @@ Open the printed path, or `latest.html` in the same folder. Other options:
 
 | Flag | Effect |
 |---|---|
-| `--since HOURS` | Override the window. The default is "since the last brief", capped at a week. |
+| `--since HOURS` | Override the window. The default is "since the last brief", capped at a week. The window only moves forward after a live run that could read every repo, so a git timeout never makes a day's commits disappear. |
 | `--json` | Also print the brief as JSON, for other agents to consume. |
 | `--no-ccc` / `--no-wt` | Skip a source. |
 | `--save-snapshot F` / `--snapshot F` | Record the raw inputs, or re-render from them. Useful for demos and bug reports. |
@@ -55,7 +55,7 @@ python3 -m ccc_server.instinct init-config   # writes ~/.claude/command-center/i
 | `max_repos` | `12` | Upper bound on repos per brief. |
 | `ccc_url` | `$CCC_URL` or `http://127.0.0.1:$PORT` | Your local dashboard. |
 | `repo_queues` | `{}` | `{"/path/to/repo": "QUEUE"}`: where proposals for that repo go. When a repo isn't listed, Instinct matches its `origin` against WatchTower's `github_repo` queue config. If nothing matches, the command shows `<QUEUE>`. |
-| `stuck_queue_days` | `3` | A non-empty queue with no progress for this long is flagged. |
+| `stuck_queue_days` | `3` | A queue is flagged when its oldest open ticket is at least this old and nothing has moved in it for this long. |
 | `stale_blocked_days` | `14` | Tickets blocked longer than this are rolled into one "sweep" action instead of cluttering the top of the list. |
 | `unpushed_hours` | `12` | Flags commits that have sat unpushed this long. |
 | `hotspot_fix_count` | `3` | Proposes a root-cause ticket when this many `fix` commits touch one file (tests excluded). |
@@ -70,8 +70,9 @@ python3 -m ccc_server.instinct init-config   # writes ~/.claude/command-center/i
 | A file that anchors Hunch decisions changed after they were recorded | *Re-verify N Hunch decisions* (one ticket per repo) |
 | A queue has been stalled for days | *Triage the backlog* |
 
-A proposal seen in the last 7 days is labelled "still open from an earlier
-brief" instead of "new", so the brief doesn't nag.
+Proposal priorities map to `wt add --priority`: normal is `p2`, low is `p3`.
+A proposal that keeps recurring is labelled "still open from an earlier brief"
+instead of "new". It is forgotten once it hasn't come up for 7 days.
 
 ## Run it daily
 
@@ -80,6 +81,9 @@ scripts/instinct-schedule.sh              # print the systemd timer / LaunchAgen
 scripts/instinct-schedule.sh --install    # enable it (INSTINCT_AT=07:30 to change the time)
 scripts/instinct-schedule.sh --uninstall
 ```
+
+On Linux, user timers stop when you log out unless lingering is on
+(`loginctl enable-linger "$USER"`). The installer reminds you.
 
 `instinct.py` is a standalone CLI. The dashboard doesn't import it, so
 enabling it needs no restart.

@@ -118,10 +118,24 @@ class GitCollectorTests(TmpCase):
         _commit(repo, "a.py", "fix: real", ts=NOW - 3600)
         _commit(repo, "s.svg", "chore: update star history", author="github-actions[bot]", ts=NOW - 3000)
         _git(repo, "checkout", "-q", "-b", "rebased", "HEAD~2")
-        _commit(repo, "a.py", "fix: real", ts=NOW - 1000, content="again")
+        env = dict(os.environ, GIT_COMMITTER_DATE=f"@{int(NOW - 500)} +0000",
+                   GIT_COMMITTER_NAME="Dev", GIT_COMMITTER_EMAIL="dev@example.com")
+        _git(repo, "cherry-pick", "main~1", env=env)  # keeps the author date
         info = instinct.collect_git({"path": str(repo), "label": "app"}, NOW - DAY, _cfg())
         subjects = [c["subject"] for c in info["commits"]]
         self.assertEqual(subjects, ["fix: real"])
+
+    def test_same_subject_distinct_commits_are_kept(self):
+        repo = self.make_repo()
+        _commit(repo, "a.py", "wip", ts=NOW - 3600, content="one")
+        _commit(repo, "a.py", "wip", ts=NOW - 1800, content="two")
+        info = instinct.collect_git({"path": str(repo), "label": "app"}, NOW - DAY, _cfg())
+        self.assertEqual(len(info["commits"]), 2)
+
+    def test_unborn_branch_header(self):
+        repo = self.make_repo()
+        info = instinct.collect_git({"path": str(repo), "label": "app"}, NOW - DAY, _cfg())
+        self.assertEqual(info["branch"], "main")
 
     def test_counts_unpushed_commits_against_upstream(self):
         remote = self.tmp / "remote.git"
@@ -203,6 +217,18 @@ class DiscoverReposTests(TmpCase):
         repos = instinct.discover_repos(_cfg(repos=[str(a)], exclude_repo_globs=[]), payload)
         self.assertEqual([(r["label"], r["source"]) for r in repos], [("a", "config"), ("b", "ccc")])
 
+    def test_tolerates_null_signals_and_missing_path(self):
+        a = self.make_repo("a")
+        payload = {"repos": [{"label": "nopath", "signals": {"d7": {"sessions": 5}}},
+                             {"path": str(a), "signals": {"d7": {"sessions": None}}},
+                             {"path": str(a), "score": None, "signals": None}]}
+        cwd = os.getcwd()
+        try:
+            os.chdir(a)  # a missing path must not resolve to the cwd repo
+            self.assertEqual(instinct.discover_repos(_cfg(exclude_repo_globs=[]), payload), [])
+        finally:
+            os.chdir(cwd)
+
     def test_exclude_globs_and_cap(self):
         a, b = self.make_repo("a"), self.make_repo("b")
         cfg = _cfg(repos=[str(a), str(b)], max_repos=1, exclude_repo_globs=[])
@@ -234,9 +260,12 @@ class AnalyzeTests(unittest.TestCase):
         ]
         wt = {"status": [
             {"queue": "OPS", "depth": 4, "since_progress_s": 5 * DAY, "auto_drain": False,
-             "oldest_open_age": "9d"},
+             "oldest_open_age": "9d", "oldest_open_age_s": 9 * DAY},
             {"queue": "FRESH", "depth": 4, "since_progress_s": 3600, "auto_drain": True},
             {"queue": "EMPTY", "depth": 0, "since_progress_s": 90 * DAY},
+            # A ticket filed 5h ago into a queue idle for months is not stalled.
+            {"queue": "NEWTICKET", "depth": 1, "since_progress_s": 90 * DAY,
+             "oldest_open_age_s": 5 * 3600},
         ], "blocked": [
             {"ref": "OPS-1", "title": "Need approval", "queue": "OPS",
              "block_question": "Ship it?", "blocked_at": "2026-09-21T00:00:00Z"},
@@ -250,7 +279,7 @@ class AnalyzeTests(unittest.TestCase):
         self.assertIn("queue_stalled", kinds)
         self.assertIn("unpushed", kinds)
         self.assertIn("gated", kinds)
-        self.assertEqual(kinds.count("queue_stalled"), 1)  # FRESH/EMPTY are fine
+        self.assertEqual(kinds.count("queue_stalled"), 1)  # FRESH/EMPTY/NEWTICKET are fine
         self.assertEqual(brief["stuck"][-1]["kind"], "blocked_stale")
         blocked_next = [n for n in brief["next"] if n["action"] == "Answer OPS-1"]
         self.assertEqual(blocked_next[0]["command"], "wt answer OPS-1")
@@ -270,6 +299,9 @@ class AnalyzeTests(unittest.TestCase):
         hot = next(p for p in brief["proposals"] if p["title"].startswith("Fix hotspot"))
         self.assertEqual(hot["queue"], "APP")
         self.assertTrue(hot["wt_command"].startswith("wt add -q APP --title "))
+        self.assertTrue(hot["wt_command"].endswith("--priority p2"))
+        for p in brief["proposals"]:
+            self.assertRegex(p["wt_command"], r"--priority p[0-4]$")
 
     def test_unmapped_queue_uses_placeholder(self):
         fixes = [_commit_rec(f"f{i}f{i}f{i}f{i}", f"fix: bug {i}", ["core.py"]) for i in range(3)]
@@ -296,16 +328,56 @@ class AnalyzeTests(unittest.TestCase):
         brief = instinct.analyze(_snapshot(repos=[repo]), _cfg())
         self.assertEqual(brief["proposals"], [])
 
+    def test_malformed_feed_items_do_not_crash(self):
+        sessions = [{"kind": "soft_block", "session_id": None, "mtime": "soon"},
+                    "not-a-dict", {"kind": "brand_new_kind", "mtime": None}]
+        wt = {"status": [{"queue": "Q", "depth": "3", "since_progress_s": "x"}, 7],
+              "blocked": ["OPS-1"], "gated": None}
+        brief = instinct.analyze(_snapshot(sessions=sessions, wt=wt), _cfg())
+        self.assertEqual(len(brief["stuck"]), 2)
+        self.assertEqual(brief["stuck"][0]["title"], "session: Ended its turn waiting on you")
+        self.assertEqual(brief["stuck"][1]["severity"], "low")  # unknown kind
+
+    def test_low_signal_session_kinds_stay_out_of_next(self):
+        sessions = [{"kind": k, "session_id": f"s{i}", "name": f"lane {i}", "mtime": NOW}
+                    for i, k in enumerate(["pushed_open", "uncommitted_edits", "open_backlog"])]
+        brief = instinct.analyze(_snapshot(sessions=sessions), _cfg())
+        self.assertEqual(len(brief["stuck"]), 3)
+        self.assertEqual(brief["next"], [])
+
     def test_memory_marks_repeat_proposals(self):
         fixes = [_commit_rec(f"f{i}f{i}f{i}f{i}", f"fix: bug {i}", ["core.py"]) for i in range(3)]
         snap = _snapshot(repos=[_repo_rec(commits=fixes)])
         first = instinct.analyze(snap, _cfg())
         memory = instinct.next_state({}, first)
-        memory["proposals"] = {k: v - DAY for k, v in memory["proposals"].items()}
+        memory["proposals"] = {k: {"first": v["first"] - DAY, "last": v["last"] - DAY}
+                               for k, v in memory["proposals"].items()}
         second = instinct.analyze(snap, _cfg(), memory)
         self.assertFalse(first["proposals"][0]["seen_before"])
         self.assertTrue(second["proposals"][0]["seen_before"])
         self.assertEqual(second["totals"]["proposals_new"], 0)
+
+    def test_memory_keeps_a_proposal_seen_while_it_recurs(self):
+        fixes = [_commit_rec(f"f{i}f{i}f{i}f{i}", f"fix: bug {i}", ["core.py"]) for i in range(3)]
+        state, flags = {}, []
+        for day in range(10):
+            snap = _snapshot(repos=[_repo_rec(commits=fixes)])
+            snap["generated_ts"] = NOW + day * DAY
+            brief = instinct.analyze(snap, _cfg(), state)
+            flags.append(brief["proposals"][0]["seen_before"])
+            state = instinct.next_state(state, brief)
+        self.assertEqual(flags, [False] + [True] * 9)
+        # ...and it is forgotten once it stops recurring for a week.
+        quiet = _snapshot()
+        quiet["generated_ts"] = NOW + 20 * DAY
+        self.assertEqual(instinct.next_state(state, instinct.analyze(quiet, _cfg(), state))["proposals"], {})
+
+    def test_reads_schema1_float_memory(self):
+        fixes = [_commit_rec(f"f{i}f{i}f{i}f{i}", f"fix: bug {i}", ["core.py"]) for i in range(3)]
+        snap = _snapshot(repos=[_repo_rec(commits=fixes)])
+        key = instinct.analyze(snap, _cfg())["proposals"][0]["key"]
+        brief = instinct.analyze(snap, _cfg(), {"proposals": {key: NOW - DAY}})
+        self.assertTrue(brief["proposals"][0]["seen_before"])
 
     def test_empty_snapshot_is_calm(self):
         brief = instinct.analyze(_snapshot(), _cfg())
@@ -338,7 +410,7 @@ class RunBriefTests(TmpCase):
         out = self.tmp / "out"
         fixes = [_commit_rec(f"f{i}f{i}f{i}f{i}", f"fix: bug {i}", ["core.py"]) for i in range(3)]
         snap = _snapshot(repos=[_repo_rec(commits=fixes)])
-        brief = instinct.run_brief(_cfg(), out, snapshot=snap)
+        brief = instinct.run_brief(_cfg(), out, snapshot=snap, live=True)
         html_path = pathlib.Path(brief["html_path"])
         self.assertTrue(html_path.is_file())
         self.assertTrue((out / "latest.html").is_file())
@@ -354,8 +426,29 @@ class RunBriefTests(TmpCase):
         cfg = _cfg()
         self.assertEqual(instinct.window_start({"last_run_ts": NOW - 3600}, cfg, NOW), NOW - 3600)
         self.assertEqual(instinct.window_start({}, cfg, NOW), NOW - DAY)
-        self.assertEqual(instinct.window_start({"last_run_ts": NOW - 30 * DAY}, cfg, NOW), NOW - DAY)
+        # A long gap is capped at max_window_hours (a week), not reset to a day.
+        self.assertEqual(instinct.window_start({"last_run_ts": NOW - 30 * DAY}, cfg, NOW), NOW - 7 * DAY)
         self.assertEqual(instinct.window_start({"last_run_ts": NOW - 60}, cfg, NOW, 48), NOW - 2 * DAY)
+
+    def test_window_does_not_advance_on_git_error_or_replay(self):
+        out = self.tmp / "out"
+        (out).mkdir()
+        (out / "state.json").write_text(json.dumps({"last_run_ts": NOW - DAY}))
+        broken = _snapshot(repos=[_repo_rec(error="git log: timed out after 20s")])
+        instinct.run_brief(_cfg(), out, snapshot=broken, live=True)
+        self.assertEqual(instinct.load_state(out)["last_run_ts"], NOW - DAY)
+        instinct.run_brief(_cfg(), out, snapshot=_snapshot())  # replay
+        self.assertEqual(instinct.load_state(out)["last_run_ts"], NOW - DAY)
+        instinct.run_brief(_cfg(), out, snapshot=_snapshot(), live=True)
+        self.assertEqual(instinct.load_state(out)["last_run_ts"], NOW)
+
+    def test_caller_directories_keep_their_permissions(self):
+        shared = self.tmp / "shared"
+        shared.mkdir(mode=0o755)
+        os.chmod(shared, 0o755)
+        self.assertEqual(instinct.main(["init-config", "--config", str(shared / "c.json")]), 0)
+        self.assertEqual(stat.S_IMODE(shared.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((shared / "c.json").stat().st_mode), 0o600)
 
     def test_publish_hook_returns_last_line_as_url(self):
         script = self.tmp / "pub.py"
