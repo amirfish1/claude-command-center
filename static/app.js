@@ -39294,6 +39294,7 @@
           if (data && data.ok) {
             const ref = (data.item && data.item.ref) || 'ticket';
             showOpToast('Added ' + ref + ' to ' + queueName);
+            _ticketQueueUsageRecord(targetProj);
             _uxqItemsCache.ts = 0;
             _uxqHealthCache.ts = 0;
             _renderQueuePanel();
@@ -39309,7 +39310,6 @@
     // open latest worker session in conversation pane.
     if (!$convList._queueHeaderWired) {
       $convList._queueHeaderWired = true;
-            _ticketQueueUsageRecord(targetProj);
       $convList.addEventListener('click', (ev) => {
         const hdr = ev.target && ev.target.closest && ev.target.closest('.conv-evergreen-queue-header[data-queue-name]');
         if (!hdr) return;
@@ -49051,6 +49051,30 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok) {
+        const ref = (data.item && data.item.ref) || 'ticket';
+        showOpToast('Added ' + ref + ' to queue');
+        _ticketQueueUsageRecord(targetProj);
+        _uxqItemsCache.ts = 0;  // bust cache so the new row shows
+        _uxqHealthCache.ts = 0;
+        _uxqPrepareNewTicketView(data.item, targetProj);
+        await _renderQueuePanel();
+        _uxqPendingQueueAdds.delete(pendingId);
+        await _renderQueuePanel({ allowStale: true });
+        _uxqRevealNewTicket(ref);
+      } else {
+        _uxqPendingQueueAdds.delete(pendingId);
+        _renderQueuePanel({ allowStale: true });
+        showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
+      }
+    } catch (e) {
+      _uxqPendingQueueAdds.delete(pendingId);
+      _renderQueuePanel({ allowStale: true });
+      showOpToast('Add failed: ' + e);
+    }
+  }
+
   // Top-level "+ Ticket" (sidebar): file into any queue without first
   // opening it. Reuses the queue ticket composer with its Queue picker.
   async function _newGlobalTicket() {
@@ -49089,29 +49113,6 @@
   {
     const $newTicketBtn = document.getElementById('sidebarNewTicketBtn');
     if ($newTicketBtn) $newTicketBtn.addEventListener('click', () => { _newGlobalTicket(); });
-  }
-      const data = await res.json().catch(() => ({}));
-      if (data && data.ok) {
-        const ref = (data.item && data.item.ref) || 'ticket';
-        showOpToast('Added ' + ref + ' to queue');
-        _uxqItemsCache.ts = 0;  // bust cache so the new row shows
-        _uxqHealthCache.ts = 0;
-        _uxqPrepareNewTicketView(data.item, targetProj);
-        await _renderQueuePanel();
-        _uxqPendingQueueAdds.delete(pendingId);
-        await _renderQueuePanel({ allowStale: true });
-        _uxqRevealNewTicket(ref);
-      } else {
-        _uxqPendingQueueAdds.delete(pendingId);
-        _renderQueuePanel({ allowStale: true });
-        showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
-      }
-    } catch (e) {
-      _uxqPendingQueueAdds.delete(pendingId);
-      _renderQueuePanel({ allowStale: true });
-        _ticketQueueUsageRecord(targetProj);
-      showOpToast('Add failed: ' + e);
-    }
   }
 
   // "Create queue for this session" (CCC-769): a one-click way to spin up a
