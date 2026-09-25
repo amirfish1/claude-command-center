@@ -454,6 +454,9 @@ def record_model_picker_pick(engine: str, model: str, effort: str = "") -> None:
         pass
 
 
+_INITIAL_MODEL_PICKS_LIMIT = 6
+
+
 def _initial_model_picker_picks():
     """Offer installed engines' defaults without inventing usage history."""
     defaults = _core._load_spawn_defaults()
@@ -464,10 +467,12 @@ def _initial_model_picker_picks():
                and row.get("engine") not in disabled]
     preferred = defaults.get("engine")
     engines.sort(key=lambda engine: engine != preferred)
+    # One row of chips: the preferred engine, then the rest in catalog order
+    # (mainstream CLIs first). History replaces these after the first spawn.
     return [{"engine": engine,
              "model": _core._spawn_default_model_for_engine(engine, defaults) or "",
              "effort": "", "count": 0, "last_used": 0}
-            for engine in engines[:8]]
+            for engine in engines[:_INITIAL_MODEL_PICKS_LIMIT]]
 
 
 def get_model_picker_picks() -> list:

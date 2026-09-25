@@ -10,6 +10,7 @@ adopted ccc_server modules when `server` is absent.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -85,6 +86,106 @@ class RepoContextError(ValueError):
 
 def repo_log_dir(repo_path):
     return Path(repo_path).expanduser().resolve() / ".claude" / "logs"
+
+
+# First-run folder suggestions. With no CCC or Claude Code history yet, the
+# picker would otherwise offer only the server's own cwd. Look one level into
+# $HOME and the folders people conventionally keep checkouts in, and rank the
+# git repos found there by how recently git touched them. Deliberately kept out
+# of _known_repo_paths: that list drives per-repo work (gh issue fan-out,
+# fleet scans), which must not grow with every checkout on the disk.
+# CCC_WORKSPACE_ROOTS (os.pathsep-separated) replaces the conventional roots.
+_WORKSPACE_ROOT_NAMES = (
+    "Apps", "apps", "projects", "Projects", "code", "Code", "src", "dev",
+    "Developer", "git", "repos", "workspace", "work", "GitHub", "github",
+    "Documents/GitHub", "Documents/Projects",
+)
+_WORKSPACE_REPOS_TTL_S = 60.0
+_WORKSPACE_REPOS_ENTRY_CAP = 300  # directory entries read per root
+_WORKSPACE_REPOS_LIMIT = 40
+_WORKSPACE_REPOS_CACHE = {"at": 0.0, "key": None, "repos": None}
+_WORKSPACE_REPOS_LOCK = threading.Lock()
+
+
+def _workspace_roots():
+    home = Path.home()
+    raw = os.environ.get("CCC_WORKSPACE_ROOTS", "")
+    if raw.strip():
+        names = [part for part in raw.split(os.pathsep) if part.strip()]
+        return [Path(name.strip()).expanduser() for name in names]
+    return [home] + [home / name for name in _WORKSPACE_ROOT_NAMES]
+
+
+def _git_activity_mtime(repo):
+    """Latest mtime of the files git rewrites on commit/checkout/status. HEAD
+    only as a last resort: it keeps its clone-time mtime for months."""
+    git = repo / ".git"
+    best = 0.0
+    for candidate in (git / "logs" / "HEAD", git / "index"):
+        try:
+            best = max(best, candidate.stat().st_mtime)
+        except OSError:
+            continue
+    if not best:
+        try:
+            best = (git / "HEAD").stat().st_mtime
+        except OSError:
+            pass
+    return best
+
+
+def _scan_workspace_repos():
+    found = {}
+    seen_roots = set()
+    for root in _workspace_roots():
+        try:
+            resolved_root = root.resolve()
+            st = resolved_root.stat()
+        except (OSError, RuntimeError):
+            continue
+        # Case-insensitive filesystems (macOS default) resolve Apps and apps
+        # to one folder under two spellings; identify roots by inode.
+        key = (st.st_dev, st.st_ino)
+        if key in seen_roots or not resolved_root.is_dir():
+            continue
+        seen_roots.add(key)
+        try:
+            entries = os.scandir(resolved_root)
+        except OSError:
+            continue
+        with entries:
+            for count, entry in enumerate(entries):
+                if count >= _WORKSPACE_REPOS_ENTRY_CAP:
+                    break
+                if entry.name.startswith("."):
+                    continue
+                try:
+                    if not entry.is_dir() or not os.path.exists(os.path.join(entry.path, ".git")):
+                        continue
+                    repo = Path(entry.path).resolve()
+                except OSError:
+                    continue
+                path = str(repo)
+                if path not in found:
+                    found[path] = _git_activity_mtime(repo)
+    ranked = sorted(found.items(), key=lambda item: (-item[1], item[0].lower()))
+    return [{"path": path, "label": Path(path).name, "git_activity": mtime}
+            for path, mtime in ranked[:_WORKSPACE_REPOS_LIMIT]]
+
+
+def _discover_workspace_repos():
+    """Git repos under $HOME and conventional workspace roots, most recently
+    active first. Memoised; a directory listing per root, no subprocesses."""
+    key = (str(Path.home()), os.environ.get("CCC_WORKSPACE_ROOTS", ""))
+    now = time.time()
+    with _WORKSPACE_REPOS_LOCK:
+        cache = _WORKSPACE_REPOS_CACHE
+        if cache["repos"] is not None and cache["key"] == key and now - cache["at"] < _WORKSPACE_REPOS_TTL_S:
+            return [dict(repo) for repo in cache["repos"]]
+    repos = _scan_workspace_repos()
+    with _WORKSPACE_REPOS_LOCK:
+        _WORKSPACE_REPOS_CACHE.update({"at": now, "key": key, "repos": repos})
+    return [dict(repo) for repo in repos]
 
 
 # _known_repo_paths walks every known/recent/custom repo AND rediscovers repos

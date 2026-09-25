@@ -68531,6 +68531,7 @@
       recent: d.recent || [],
       rankings: d.rankings || [],
       by_kind: d.by_kind || {},
+      suggested: d.suggested || [],
     };
     try {
       if (currentConversation === '__new__') populateSpawnCwdPicker();
@@ -69034,6 +69035,15 @@
           placeholder.value = '';
           placeholder.textContent = 'Loading default…';
           $convInputModelSelect.insertBefore(placeholder, $convInputModelSelect.firstChild);
+          $convInputModelSelect.value = '';
+        } else if (!defaultModel) {
+          // A blank saved default (a fresh install's Claude) means "let the
+          // CLI use its own configured model". Say so, instead of falling
+          // through to allModels[0], the priciest tier.
+          const cliDefault = document.createElement('option');
+          cliDefault.value = '';
+          cliDefault.textContent = formatModelNameForBadge(engine, '');
+          $convInputModelSelect.insertBefore(cliDefault, $convInputModelSelect.firstChild);
           $convInputModelSelect.value = '';
         } else if (fallbackOpt) {
           $convInputModelSelect.value = fallbackOpt.id;
@@ -76151,6 +76161,11 @@
         value: r.path, path: r.path, label: r.label || r.path,
       }));
     }
+    // Git repos found in conventional workspace folders: all a fresh install
+    // has to offer before any session history exists.
+    for (const r of ((repoListState && repoListState.suggested) || [])) {
+      if (r && r.path) options.push({ value: r.path, path: r.path, label: r.label || r.path });
+    }
     // Deduplicate by path — folder filter and repoListState can overlap.
     const seen = new Set();
     options = options.filter(o => {
@@ -76169,13 +76184,15 @@
     //   1. User's last spawn cwd (localStorage)
     //   2. The popout's pinned repo (conversation popout only)
     //   3. Most recently used or highest-ranked repo
-    //   4. First known repo option
+    //   4. Most recently active git repo in a workspace folder
+    //   5. First known repo option
     let saved = '';
     try { saved = normalizeSpawnCwdPath(localStorage.getItem(SPAWN_CWD_KEY) || ''); } catch (_) {}
     const defaultPath = saved
       || popoutRepoPath()
       || ((repoListState.recent || [])[0])
       || ((repoListState.rankings || [])[0] || {}).path
+      || ((repoListState.suggested || [])[0] || {}).path
       || (options[0] && (options[0].value || options[0].path))
       || '';
 
@@ -76225,8 +76242,15 @@
       if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
       addPath(item.path, item.kind);
     }
+    for (const item of ((repoListState && repoListState.suggested) || [])) {
+      if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+      addPath(item && item.path, kindFor(item && item.path));
+    }
     for (const opt of (spawnCwdOptions || [])) {
       if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+      // A transcript recorded at the filesystem root is not a place to
+      // suggest starting new work.
+      if (opt && opt.value === '/') continue;
       addPath(opt && opt.value, kindFor(opt && opt.value));
     }
     // Group only after selecting the most relevant ten; each label appears once.
@@ -76283,7 +76307,7 @@
   }
 
   function ensureSpawnCwdOptionsLoaded(paneId) {
-    if (repoListState && repoListState.repos && repoListState.repos.length) return;
+    if (repoListState && ((repoListState.repos || []).length || (repoListState.suggested || []).length)) return;
     loadRepoList({ foreground: true }).then(() => {
       if (currentConversation !== '__new__') return;
       populateSpawnCwdPicker();
@@ -77168,7 +77192,12 @@
   }
 
   function formatModelNameForBadge(engine, modelId) {
-    if (!modelId) return 'Default';
+    // A blank model runs the engine's own configured default; name the engine
+    // so first-run chips (one per installed engine) are distinguishable.
+    if (!modelId) {
+      const engineName = spawnEngineLabel(engine);
+      return (engineName === 'Claude' && engine !== 'claude' ? engine : engineName) + ' default';
+    }
     const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
     const found = options.find(o => o.id === modelId);
     if (found && found.label) {

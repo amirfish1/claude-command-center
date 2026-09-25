@@ -15832,7 +15832,9 @@ def load_known_repos():
         pass
     if not repos:
         cwd = Path.cwd().resolve()
-        repos.append({"path": str(cwd), "label": cwd.name})
+        # Flagged so the new-session picker can prefer real repos over the
+        # server's own launch folder once workspace discovery finds some.
+        repos.append({"path": str(cwd), "label": cwd.name, "fallback": True})
     # Merge in user-picked repos (folders outside $HOME, or nested ones the scan
     # missed). Label with parent dir when it disambiguates a duplicate name.
     scanned_paths = {r["path"] for r in repos}
@@ -27941,6 +27943,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             for r in rankings:
                 by_kind.setdefault(r["kind"], []).append(r)
 
+            # suggested[] is git repos found under $HOME and conventional
+            # workspace folders, most recently active first. It is what a
+            # fresh install offers before recent[]/rankings[] have any data.
+            suggested = _discover_workspace_repos()
+            if suggested:
+                repos = [r for r in repos if not r.get("fallback")]
+
             # recent[] is the subset of repos ordered by last use; the
             # client uses it to surface a "Recent" group in the picker modal.
             self.send_json({
@@ -27949,6 +27958,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "recent": _load_recent_repos(),
                 "rankings": rankings,
                 "by_kind": by_kind,
+                "suggested": suggested,
             })
         elif path == "/api/registry":
             # Multi-repo peer discovery: list every CCC server live on this
