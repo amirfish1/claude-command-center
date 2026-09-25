@@ -434,6 +434,7 @@ def session_dev_urls(session_id, exclude_ports=()):
 def is_loopback_url(url):
     try:
         parts = urlsplit(str(url or ""))
+        parts.port  # raises on "localhost:3000.evil.com"; hostname alone does not
     except ValueError:
         return False
     if parts.scheme not in ("http", "https"):
@@ -526,8 +527,9 @@ def rewrite_response_headers(headers, target_origins, proxy_origin):
             value, saw_csp = rewrite_csp(value), True
         elif low == "location":
             for origin in target_origins:
-                if value.startswith(origin):
-                    value = proxy_origin + value[len(origin):]
+                rest = value[len(origin):]
+                if value.startswith(origin) and (not rest or rest[0] in "/?#"):
+                    value = proxy_origin + rest
                     break
         out.append((name, value))
     if not saw_csp:

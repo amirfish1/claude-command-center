@@ -243,6 +243,19 @@ class FrameHeadersTest(unittest.TestCase):
         self.assertEqual(out["Location"], "http://127.0.0.1:55555/login?next=/")
         self.assertEqual(out["Set-Cookie"], "a=1")
 
+    def test_location_rewrite_respects_origin_boundary(self):
+        origins = ("http://localhost:3000",)
+        rewrite = lambda loc: dict(bs.rewrite_response_headers(
+            [("Location", loc)], origins, "http://127.0.0.1:55555"))["Location"]
+        self.assertEqual(rewrite("http://localhost:30000/foo"), "http://localhost:30000/foo")
+        self.assertEqual(rewrite("http://localhost:3000"), "http://127.0.0.1:55555")
+        self.assertEqual(rewrite("http://localhost:3000?x=1"), "http://127.0.0.1:55555?x=1")
+
+    def test_malformed_port_is_not_loopback(self):
+        for url in ("http://localhost:3000.evil.com/", "http://127.0.0.1:1y/", "http://localhost:99999/"):
+            self.assertFalse(bs.is_loopback_url(url), url)
+            self.assertFalse(bs.probe(url)["checked"], url)
+
 
 class _DevServer(BaseHTTPRequestHandler):
     """A dev server that refuses framing, redirects, and speaks a toy upgrade."""
