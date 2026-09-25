@@ -1415,6 +1415,12 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     server._ARCHIVE_BUILD_LOCKS.clear()
     server._archive_serve_cache.clear()
     server._archive_serve_refreshing.clear()
+    # The detached-refresh spawn is load-gated (CCC-1154 option C) on the
+    # host's real 1-minute loadavg. Pin it to "not saturated" so these tests
+    # assert CCC's scheduling, not the CI box's load: on a busy VM (load 30 on
+    # 8 cores) the gate suppressed every spawn and 4 tests failed there only.
+    # Tests of the gate itself override this with their own setattr.
+    monkeypatch.setattr(server, "machine_saturated", lambda: False)
     # Short-TTL memos (corpus signature + per-session liveness) are module
     # globals; reset them so a leaked sig/liveness entry from a prior test can't
     # make a signature-gated assertion order-dependent.
@@ -3314,26 +3320,77 @@ def test_system_services_does_not_probe_watchtower_api_synchronously(monkeypatch
     server._system_services_cache = {"ts": 0.0, "payload": None}
 
 
-def test_trash_conversation_execution_time_under_100ms(tmp_path, monkeypatch):
-    """Trashing a conversation must complete in <100ms."""
-    server._session_graph.load()
-    sid = "test-sid-perf-" + uuid.uuid4().hex[:8]
+def test_trash_conversation_stays_o_this_session(
+    isolated_archive_cache, tmp_path, monkeypatch,
+):
+    """Trashing a conversation must do work proportional to that one session.
 
-    # Run through the backend trash flow
-    t0 = time.perf_counter()
-    res = server._set_conversation_trashed(sid, True)
-    cascaded = res.get("cascaded") or []
-    mutated = {sid, *cascaded}
-    server._restamp_archive_serve_cache_after_mutation(
-        archived_set=mutated,
-        trashed_set=mutated,
-        mutated_sids=mutated,
+    This used to assert a <100ms wall clock against the real ~/.claude state:
+    it flaked on a loaded VM and wrote test sids into the user's archived and
+    trashed lists. The regressions 52a5b437 fixed are call-count shaped, so
+    guard those instead: no subprocess (ps/pgrep) on the trash path, the
+    lifecycle sidecars served from their (mtime, size) cache rather than
+    re-parsed, and the continuation-ancestor transcript search memoised
+    instead of re-scanning every project folder on each click.
+    """
+    from ccc_server.session_graph import _SessionGraph
+
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
+    # A built graph (one unrelated edge) so a leaf's empty descendant set is
+    # answered from the graph, as in production after startup.
+    graph = _SessionGraph(tmp_path / "session_graph.json")
+    graph.add_edge("other-parent", "other-child", source="test")
+    monkeypatch.setattr(server, "_session_graph", graph)
+
+    all_project_scans = []
+    monkeypatch.setattr(server, "_find_session_jsonl", lambda sid: None)
+    monkeypatch.setattr(
+        server, "_find_session_jsonl_any_project",
+        lambda sid: all_project_scans.append(sid) or None,
     )
-    duration_ms = (time.perf_counter() - t0) * 1000
-    assert duration_ms < 100.0, f"Trashing session took {duration_ms:.2f}ms, expected <100ms"
+    spawns = []
 
-    # Clean up
-    server._set_conversation_trashed(sid, False)
+    def _no_spawn(*args, **kwargs):
+        spawns.append(args[0] if args else kwargs.get("args"))
+        raise AssertionError(f"trash path spawned a subprocess: {spawns[-1]!r}")
+
+    monkeypatch.setattr(subprocess, "Popen", _no_spawn)
+    sidecar_reads = []
+    real_read_text = Path.read_text
+    watched = {tmp_path / "archived.json", tmp_path / "trashed.json"}
+
+    def _counting_read_text(self, *args, **kwargs):
+        if self in watched:
+            sidecar_reads.append(self.name)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _counting_read_text)
+
+    sid = "test-sid-perf-" + uuid.uuid4().hex[:8]
+    for _ in range(3):
+        res = server._set_conversation_trashed(sid, True)
+        mutated = {sid, *(res.get("cascaded") or [])}
+        server._restamp_archive_serve_cache_after_mutation(
+            archived_set=mutated, trashed_set=mutated, mutated_sids=mutated,
+        )
+        assert res["trashed"] is True
+        server._set_conversation_trashed(sid, False)
+
+    assert spawns == []
+    assert len(all_project_scans) <= 1, (
+        f"continuation-ancestor lookup scanned every project {len(all_project_scans)}x "
+        "for one sid across 3 trash clicks — the origin memo is gone"
+    )
+    assert sidecar_reads == [], (
+        f"lifecycle sidecars re-parsed {sidecar_reads} although CCC wrote them "
+        "itself — the (mtime, size) cache is not covering the trash path"
+    )
 
 
 def test_ui_trash_is_optimistic():

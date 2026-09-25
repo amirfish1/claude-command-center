@@ -174,7 +174,8 @@ Rules when touching any path that scans `~/.claude/projects` or session state:
 
 `tests/test_perf_budget.py` enforces this with call-count invariants (not just
 latency). The committed `scripts/pre-push.sh` runs it before every push (shared
-gate via `.git/hooks/pre-push`). If it fails, restore the gate — don't relax the
+gate via `.git/hooks/pre-push`; a fresh clone has no hook until you run
+`scripts/install-git-hooks.sh`). If it fails, restore the gate — don't relax the
 bound. Add a call-count test there for any new all-conversations/all-sessions path.
 
 ## Restart matrix — report this on EVERY fix

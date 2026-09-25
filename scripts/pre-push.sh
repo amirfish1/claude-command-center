@@ -2,7 +2,8 @@
 # Performance-regression gate. Runs the perf-budget tests before any push so a
 # sibling session can't ship an ungated O(all-conversations) hot path (the
 # recurring "CCC is slow" bug class). Fast (~6s); committed so every clone gets
-# the same gate. Installed at .git/hooks/pre-push (a thin shim calls this).
+# the same gate. A thin .git/hooks/pre-push shim calls this; hooks are not
+# versioned, so install it per clone with scripts/install-git-hooks.sh.
 #
 # Bypass for a genuine emergency: git push --no-verify
 set -euo pipefail
