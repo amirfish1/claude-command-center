@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 import tempfile
 
@@ -291,8 +291,9 @@ class _DevServer(BaseHTTPRequestHandler):
 class ProxyEndToEndTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.dev = ThreadingHTTPServer(("127.0.0.1", 0), _DevServer)
-        cls.dev.daemon_threads = True
+        # Same quiet server class as the proxy: the proxy drops upstream
+        # keep-alive sockets, which a stock server reports as a traceback.
+        cls.dev = bs._ProxyServer(("127.0.0.1", 0), _DevServer)
         cls.port = cls.dev.server_address[1]
         threading.Thread(target=cls.dev.serve_forever, daemon=True).start()
 

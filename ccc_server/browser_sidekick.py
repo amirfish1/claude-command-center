@@ -41,6 +41,7 @@ import re
 import select
 import socket
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -534,6 +535,23 @@ def rewrite_response_headers(headers, target_origins, proxy_origin):
     return out
 
 
+class _ProxyServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        # Browsers drop idle keep-alive sockets all the time; that is not an
+        # error worth a traceback in the service log.
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
+def _retire_proxy(server):
+    server.shutdown()
+    server.server_close()
+
+
 def _make_handler(scheme, host, port):
     target_netloc = f"{host}:{port}" if ":" not in host else f"[{host}]:{port}"
     display_host = "localhost" if host in ("127.0.0.1", "localhost") else target_netloc.rsplit(":", 1)[0]
@@ -697,9 +715,8 @@ def ensure_proxy(url):
             if len(_proxies) >= _PROXY_CAP:
                 oldest = min(_proxies, key=lambda k: _proxies[k]["ts"])
                 old = _proxies.pop(oldest)
-                threading.Thread(target=old["server"].shutdown, daemon=True).start()
-            server = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(parts.scheme, host, port))
-            server.daemon_threads = True
+                threading.Thread(target=_retire_proxy, args=(old["server"],), daemon=True).start()
+            server = _ProxyServer(("127.0.0.1", 0), _make_handler(parts.scheme, host, port))
             threading.Thread(target=server.serve_forever, name=f"ccc-browser-proxy-{port}",
                              daemon=True).start()
             entry = {"server": server, "port": server.server_address[1], "ts": 0.0}
