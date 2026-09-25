@@ -1,0 +1,1 @@
+- Dashboard no longer hangs on "Loading conversations..." after the + Ticket queue picker landed: its code had been spliced into the wrong functions, threw on page load, and never showed the Queue select.
