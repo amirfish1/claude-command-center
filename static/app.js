@@ -63420,9 +63420,15 @@
     }
   }
 
+  // Fast while the Browser tab is showing; slower (auto-open still works)
+  // while another rail tab is up.
+  let _browserPollTick = 0;
   function _browserEnsurePolling() {
     if (_browserPollTimer) return;
-    _browserPollTimer = setInterval(browserPoll, BROWSER_POLL_MS);
+    _browserPollTimer = setInterval(() => {
+      _browserPollTick++;
+      if (_browserPaneShowing() || _browserPollTick % 3 === 0) browserPoll();
+    }, BROWSER_POLL_MS);
   }
 
   function browserSidIsSession(sid) {

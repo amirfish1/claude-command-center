@@ -3432,3 +3432,28 @@ def test_hermes_conv_open_does_not_scan_whole_sessions_table(monkeypatch, tmp_pa
     )
     lineage = [e for e in parsed["events"] if e.get("subtype") == "hermes_lineage"]
     assert lineage and lineage[0]["lineage_session_ids"] == [parent, child]
+
+
+def test_browser_dev_urls_polls_share_one_process_snapshot(monkeypatch, tmp_path):
+    """The Browser tab polls /api/session/<sid>/dev-urls every few seconds.
+    Detection must fork a bounded number of lsof/ps calls per snapshot
+    window no matter how many sessions or polls ask -- never one per poll."""
+    from ccc_server import browser_sidekick as bs
+
+    forks = []
+
+    def fake_run(argv, timeout=4.0):
+        forks.append(tuple(argv[:3]))
+        if "-sTCP:LISTEN" in argv:
+            return "p200\nn*:3000\np300\nn*:9999\n"
+        if "-d" in argv:
+            return "p200\nn%s\np300\nn/elsewhere\n" % (tmp_path / "repo" / "web")
+        return "200 1\n300 1\n"
+
+    monkeypatch.setattr(bs, "_run", fake_run)
+    monkeypatch.setattr(bs, "_snap", {"ts": 0.0, "listen": {}, "ppid": {}, "cwds": {}})
+    (tmp_path / "repo").mkdir()
+    for _ in range(25):
+        items = bs.detect_dev_urls(pid=100, cwd=str(tmp_path / "repo"), is_open=lambda p: False)
+    assert [i["port"] for i in items] == [3000]
+    assert len(forks) <= 3, forks

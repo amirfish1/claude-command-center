@@ -59,11 +59,16 @@ _URL_RE = re.compile(
 # bytes appended since.
 _FIRST_SCAN_BYTES = 4 * 1024 * 1024
 _URL_CAP = 12
-_SNAPSHOT_TTL_S = 3.0
+_SNAPSHOT_TTL_S = 8.0
+# A session counts as a live-process candidate only if its transcript moved
+# this recently; older sessions still get transcript + port-open detection.
+_LIVE_CANDIDATE_WINDOW_S = 30 * 60
+_PID_CACHE_TTL_S = 30.0
 _PROBE_TIMEOUT_S = 2.0
 
 _LSOF = next((p for p in ("/usr/sbin/lsof", "/usr/bin/lsof", "/bin/lsof") if os.path.exists(p)), "lsof")
 _PS = next((p for p in ("/bin/ps", "/usr/bin/ps") if os.path.exists(p)), "ps")
+_NETSTAT = next((p for p in ("/usr/sbin/netstat",) if os.path.exists(p)), "")
 
 
 # ── URL extraction ─────────────────────────────────────────────────────
@@ -153,7 +158,7 @@ def _ordered(entry):
 # ── Process / socket snapshots (shared, short-TTL) ─────────────────────
 
 _snap_lock = threading.Lock()
-_snap = {"ts": 0.0, "listen": {}, "ppid": {}}
+_snap = {"ts": 0.0, "listen": {}, "ppid": {}, "cwds": {}}
 
 
 def _run(argv, timeout=4.0):
@@ -181,6 +186,34 @@ def parse_lsof_listen(output):
     return result
 
 
+def parse_netstat_listen(output):
+    """macOS `netstat -anv -p tcp` -> {pid: set(port)}.
+
+    ~15x cheaper than lsof on a busy Mac. The local address ends in
+    `.<port>`; the process column is `<name>:<pid>` (names may contain
+    spaces), followed by the hex `state` column."""
+    result = {}
+    for line in (output or "").splitlines():
+        if " LISTEN " not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        m_port = re.search(r"\.(\d+)$", parts[3])
+        m_pid = re.search(r":(\d+)\s+[0-9a-fA-F]{5}\s", line)
+        if m_port and m_pid:
+            result.setdefault(int(m_pid.group(1)), set()).add(int(m_port.group(1)))
+    return result
+
+
+def _listen_map():
+    if _NETSTAT and os.uname().sysname == "Darwin":
+        out = _run([_NETSTAT, "-anv", "-p", "tcp"])
+        if "process:pid" in out:
+            return parse_netstat_listen(out)
+    return parse_lsof_listen(_run([_LSOF, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"]))
+
+
 def parse_ps_ppid(output):
     """`ps -A -o pid=,ppid=` output -> {pid: ppid}."""
     result = {}
@@ -195,16 +228,17 @@ def parse_ps_ppid(output):
 
 
 def _snapshots(now=None):
-    """(listen map, ppid map) — ONE lsof + ONE ps, cached for a few seconds
-    and shared by every session asking."""
+    """(listen map, ppid map) — ONE netstat/lsof + ONE ps, cached for a few
+    seconds and shared by every session asking."""
     now = time.monotonic() if now is None else now
     with _snap_lock:
         if now - _snap["ts"] < _SNAPSHOT_TTL_S:
             return _snap["listen"], _snap["ppid"]
-    listen = parse_lsof_listen(_run([_LSOF, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"]))
+    listen = _listen_map()
     ppid = parse_ps_ppid(_run([_PS, "-A", "-o", "pid=,ppid="]))
     with _snap_lock:
-        _snap.update(ts=now, listen=listen, ppid=ppid)
+        # A new snapshot drops memoised cwds: pids are reused over time.
+        _snap.update(ts=now, listen=listen, ppid=ppid, cwds={})
     return listen, ppid
 
 
@@ -224,10 +258,24 @@ def descendants(root_pid, ppid_map):
 
 
 def _pid_cwds(pids):
-    """{pid: cwd} for a handful of pids (one lsof call)."""
+    """{pid: cwd} for listening pids. Memoised inside the snapshot window, so
+    a poll only forks lsof for pids it has not resolved yet."""
     pids = sorted(int(p) for p in pids)[:64]
-    if not pids:
-        return {}
+    with _snap_lock:
+        known = _snap.setdefault("cwds", {})
+        missing = [p for p in pids if p not in known]
+    if missing:
+        fetched = _lsof_cwds(missing)
+        with _snap_lock:
+            known = _snap.setdefault("cwds", {})
+            for p in missing:
+                known[p] = fetched.get(p, "")
+    with _snap_lock:
+        known = _snap.get("cwds", {})
+        return {p: known[p] for p in pids if known.get(p)}
+
+
+def _lsof_cwds(pids):
     out = _run([_LSOF, "-a", "-d", "cwd", "-p", ",".join(str(p) for p in pids), "-F", "pn"])
     result, pid = {}, None
     for line in out.splitlines():
@@ -327,12 +375,42 @@ def detect_dev_urls(*, transcript_path=None, pid=None, cwd=None, exclude_ports=(
     return items[:_URL_CAP]
 
 
+_pid_cache = {}  # sid -> (monotonic ts, pid or None)
+
+
+def _session_pid(core, sid, cwd, transcript, now=None):
+    """The session's live pid, or None. Gated by candidacy: a transcript
+    idle past the window is not looked up at all (session_live_status can
+    fork ps), and answers are cached per session for a short TTL."""
+    now = time.monotonic() if now is None else now
+    try:
+        idle = time.time() - os.stat(transcript).st_mtime if transcript else None
+    except OSError:
+        idle = None
+    if idle is not None and idle > _LIVE_CANDIDATE_WINDOW_S:
+        return None
+    hit = _pid_cache.get(sid)
+    if hit and now - hit[0] < _PID_CACHE_TTL_S:
+        return hit[1]
+    pid = None
+    try:
+        status = core.session_live_status(sid, cwd) or {}
+        if status.get("live") and status.get("pid"):
+            pid = int(status["pid"])
+    except Exception:
+        pid = None
+    _pid_cache[sid] = (now, pid)
+    if len(_pid_cache) > 256:
+        _pid_cache.pop(next(iter(_pid_cache)))
+    return pid
+
+
 def session_dev_urls(session_id, exclude_ports=()):
     """GET /api/session/<sid>/dev-urls body."""
     from ccc_server import core as _core
 
     sid = str(session_id or "").strip()
-    transcript, pid, cwd = "", None, None
+    transcript, cwd = "", None
     try:
         transcript = _core.conversation_transcript_path(sid)
     except Exception:
@@ -341,13 +419,7 @@ def session_dev_urls(session_id, exclude_ports=()):
         cwd = _core.find_session_cwd(sid)
     except Exception:
         cwd = None
-    try:
-        status = _core.session_live_status(sid, cwd) or {}
-        if status.get("live") and status.get("pid"):
-            pid = int(status["pid"])
-        cwd = cwd or status.get("cwd")
-    except Exception:
-        pid = None
+    pid = _session_pid(_core, sid, cwd, transcript)
     urls = detect_dev_urls(transcript_path=transcript, pid=pid, cwd=cwd,
                            exclude_ports=exclude_ports)
     return {"ok": True, "session_id": sid, "live": bool(pid), "urls": urls}
