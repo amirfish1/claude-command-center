@@ -132,6 +132,16 @@ class MazkirArgvTest(unittest.TestCase):
             self.assertIn(tool, denied)
 
 
+class ResolveBaseTest(unittest.TestCase):
+    def test_reads_url_or_bare_port_from_port_file(self):
+        tmp = Path(tempfile.mkdtemp()) / "port.txt"
+        with mock.patch.object(mazkir, "PORT_FILE", tmp), mock.patch.dict(os.environ, {"CCC_BASE_URL": ""}):
+            tmp.write_text("http://127.0.0.1:8123\n")
+            self.assertEqual(mazkir.resolve_base(), "http://127.0.0.1:8123")
+            tmp.write_text("8124")
+            self.assertEqual(mazkir.resolve_base(), "http://127.0.0.1:8124")
+
+
 class RunMazkirWarmTest(unittest.TestCase):
     def test_pipeline_through_the_warm_pool(self):
         tmp = tempfile.mkdtemp()

@@ -79,6 +79,8 @@ def resolve_base(base: str | None = None) -> str:
         port = PORT_FILE.read_text().strip()
         if port.isdigit():
             return f"http://127.0.0.1:{port}"
+        if port.startswith(("http://127.0.0.1:", "http://localhost:")):  # write_port_file() form
+            return port.rstrip("/")
     except OSError:
         pass
     return DEFAULT_BASE
