@@ -1,0 +1,1 @@
+- Sidebar: "by project", expand/collapse-all and dragging a session onto another project or object now repaint right away. Before, the choice was saved but the list didn't change while the New Session pane was open or the pointer was over a row.

@@ -11,3 +11,12 @@ def test_collapsed_project_hides_direct_subagent_cluster():
 
     assert "#convList .conv-folder-group.collapsed > .conv-subagent-cluster" in app_css
     assert "#convList .conv-folder-group.sessions-collapsed > .conv-subagent-cluster" in app_css
+
+
+def test_collapsed_project_hides_direct_repeat_group():
+    # Repeat groups became direct children of folder groups in 56fb99d1 and
+    # stayed visible when their project was collapsed.
+    app_css = APP_CSS.read_text(encoding="utf-8")
+
+    assert "#convList .conv-folder-group.collapsed > .conv-repeat-group" in app_css
+    assert "#convList .conv-folder-group.sessions-collapsed > .conv-repeat-group" in app_css
