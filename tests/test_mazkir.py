@@ -77,7 +77,9 @@ class McpProtocolTest(unittest.TestCase):
         self.assertIsNone(mazkir.handle_request(self.state, {"jsonrpc": "2.0", "method": "notifications/initialized"}))
         names = [t["name"] for t in self.rpc("tools/list")["result"]["tools"]]
         self.assertEqual(names, ["list_sessions", "live_activity", "throughput_window", "queue_status",
-                                 "session_detail", "fleet_diagnostics", "daily_checkin"])
+                                 "session_detail", "fleet_diagnostics", "daily_checkin", "daily_brief",
+                                 "hunch_why", "propose_spawn_session", "propose_inject",
+                                 "propose_wt_add", "propose_wt_comment"])
 
     def test_tools_call_and_errors(self):
         r = self.rpc("tools/call", {"name": "queue_status", "arguments": {}})

@@ -28569,6 +28569,56 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(resp, status)
             return
 
+        if path == "/api/assistant/warm":
+            # Ask tab opened: boot the warm Mazkir process before the first
+            # question so it doesn't pay the CLI + MCP boot. Idempotent.
+            from ccc_server import mazkir as _mazkir
+            try:
+                self.send_json(_mazkir.warm_up())
+            except Exception as e:  # never let a warm-up hint 500 the tab
+                self.send_json({"ok": False, "error": str(e)[:200]}, 200)
+            return
+
+        if path.startswith("/api/assistant/actions/"):
+            # Mazkir's hands: `propose` is what the ccc-state MCP calls (no
+            # token back); `<id>/confirm` and `<id>/dismiss` need the token
+            # that only the /api/assistant/ask response to the browser carries.
+            # See ccc_server/assistant_actions.py.
+            from ccc_server import assistant_actions as _aa
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(data, dict):
+                data = {}
+            rest = path[len("/api/assistant/actions/"):].strip("/")
+            try:
+                if rest == "propose":
+                    self.send_json(_aa.store().propose(str(data.get("kind") or ""),
+                                                       data.get("params") or {},
+                                                       str(data.get("reason") or "")))
+                    return
+                aid, _, verb = rest.partition("/")
+                if verb == "confirm":
+                    base = f"http://127.0.0.1:{self.server.server_address[1]}"
+                    item = _aa.store().confirm(aid, str(data.get("token") or ""),
+                                               _aa.make_executor(base))
+                    _log_activity("assistant", "ACTION", f"kind={item['kind']} id={aid} status={item['status']}")
+                    self.send_json({"ok": item["status"] == "done", "action": item})
+                    return
+                if verb == "dismiss":
+                    self.send_json({"ok": True, "action": _aa.store().dismiss(aid, str(data.get("token") or ""))})
+                    return
+                self.send_json({"ok": False, "error": "unknown action route"}, 404)
+            except PermissionError as e:
+                self.send_json({"ok": False, "error": str(e)}, 403)
+            except _aa.ActionError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+
         if path == "/api/model-picker/record":
             try:
                 content_len = int(self.headers.get("Content-Length", 0) or 0)
