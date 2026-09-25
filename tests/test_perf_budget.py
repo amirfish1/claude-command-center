@@ -3444,7 +3444,11 @@ def test_browser_dev_urls_polls_share_one_process_snapshot(monkeypatch, tmp_path
 
     def fake_run(argv, timeout=4.0):
         forks.append(tuple(argv[:3]))
-        if "-sTCP:LISTEN" in argv:
+        if "-anv" in argv:  # macOS netstat
+            return ("Proto Local-Address Foreign (state) rx tx rh sh process:pid state\n"
+                    "tcp4 0 0 *.3000 *.* LISTEN 0 0 1 1 node:200  00000 00000006\n"
+                    "tcp4 0 0 *.9999 *.* LISTEN 0 0 1 1 other:300  00000 00000006\n")
+        if "-sTCP:LISTEN" in argv:  # lsof (Linux / fallback)
             return "p200\nn*:3000\np300\nn*:9999\n"
         if "-d" in argv:
             return "p200\nn%s\np300\nn/elsewhere\n" % (tmp_path / "repo" / "web")
