@@ -13411,7 +13411,9 @@ def find_all_conversations(
 # v8: Codex rows now carry a computed cost_usd/cost_breakdown_usd; bump so
 # persisted rows from before that row-shaping change get rebuilt instead of
 # permanently reusing their stale (cost-less) dict.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 8
+# v9: Codex subagent rows (guardian auto-reviews) now carry parent_session_id
+# from the rollout's session_meta; cached v8 rows would stay parent-less.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 9
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
