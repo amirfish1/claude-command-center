@@ -1,0 +1,1 @@
+- Instinct daily brief: `python3 -m ccc_server.instinct brief` writes a local HTML page covering what changed (commits, with the Hunch "why"), what's stuck (sessions, blocked tickets, stalled queues, unpushed commits), and what to do next, plus dry-run ticket proposals. `scripts/instinct-schedule.sh --install` runs it every morning. See `docs/instinct.md`.
