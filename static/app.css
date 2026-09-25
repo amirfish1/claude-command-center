@@ -29519,6 +29519,75 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 }
 .ns-model-selected { font-size: 12px; line-height: 1.5; margin: 10px 0; font-weight: 600; }
 
+/* Codex reader: quiet message chrome, readable actions, bounded attachments. */
+.conv-pane.is-codex-session .kimi-turn .assistant-text {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.conv-pane.is-codex-session .kimi-answer-meta {
+  opacity: 1;
+  color: var(--kw-muted);
+  gap: 10px;
+  margin-top: 6px;
+}
+.conv-pane.is-codex-session .kimi-answer-meta .line-num { display: none; }
+.conv-pane.is-codex-session .kimi-answer-meta .assistant-message-action {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+.conv-pane.is-codex-session .assistant-message-action:focus-visible,
+.conv-pane.is-codex-session .codex-attachment:focus-visible {
+  outline: 2px solid var(--kw-accent);
+  outline-offset: 3px;
+}
+.conv-pane.is-codex-session .codex-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 7px 11px;
+  border: 1px solid var(--kw-accent-bd);
+  border-radius: 8px;
+  background: var(--kw-accent-soft);
+  color: inherit;
+  font: inherit;
+  letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.conv-pane.is-codex-session .event.result .assistant-message-actions { display: none; }
+.conv-pane.is-codex-session .conversations-view > .event.user_text { margin-block: 24px 18px; }
+/* The terminal theme's full-width gradient competes with the conversation.
+   Keep its palette, while letting Codex use the same rounded message shape. */
+.conv-pane.is-codex-session[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky):not(.peer-message) {
+  clip-path: none !important;
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+.conv-pane.is-codex-session[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky):not(.peer-message) .user-msg {
+  max-width: min(88%, 70ch) !important;
+  padding: 12px 16px !important;
+  border: 1px solid var(--kw-accent-bd) !important;
+  border-radius: 16px 16px 4px 16px !important;
+  background: var(--kw-accent-soft) !important;
+  letter-spacing: normal !important;
+}
+.conv-pane.is-codex-session[data-conv-bg="stitch"] .conversations-view .event.user_text .user-msg::after { content: none; }
+@media (max-width: 600px) {
+  .conv-pane.is-codex-session .conversations-view { padding-inline: 12px; }
+  .conv-pane.is-codex-session .event.user_text .user-msg { max-width: 94%; }
+}
+.conv-pane.is-webui-session .kimi-tool-head[role="button"]:focus-visible,
+.conv-pane.is-webui-session .kimi-tool-group-head:focus-visible {
+  outline: 2px solid var(--kw-accent);
+  outline-offset: -3px;
+  border-radius: 6px;
+}
+
 .fq-ticket-queue-select {
   width: 100%; margin-bottom: 10px; padding: 6px 8px; font: inherit;
   background: var(--surface-2); color: var(--text);

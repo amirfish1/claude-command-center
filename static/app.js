@@ -13675,6 +13675,22 @@
     return html;
   }
 
+  // Keep the full attachment path available to the existing file opener and
+  // copy-message action, but show a readable filename in the conversation.
+  function renderCodexUserText(text) {
+    const parts = String(text || '').split(/((?:\/|~\/)[^\s<>"']*\/command-center\/attachments\/[^\s<>"']+)/g);
+    return parts.map((part, index) => {
+      if (index % 2 === 0) return linkifyPastedImages(escapeHtml(part));
+      const filename = part.split('/').pop();
+      const extension = (filename.match(/\.([a-z0-9]{1,10})$/i) || [])[1];
+      const label = /^attachment-[a-f0-9]{16,}\./i.test(filename)
+        ? (extension ? extension.toUpperCase() + ' attachment' : 'Attachment') : filename;
+      return '<a role="button" tabindex="0" class="path-link codex-attachment" data-path="'
+        + escapeAttr(part) + '" title="' + escapeAttr(part) + '">'
+        + '<span aria-hidden="true">▤</span> ' + escapeHtml(label) + '</a>';
+    }).join('');
+  }
+
   // Subtle timestamp span shown next to line-num. Returns '' when ts is missing/unparseable.
   // Tiers:
   //   < 1m        → "just now"
@@ -58398,7 +58414,7 @@
     return '<div class="kimi-tool' + (status === 'error' ? ' err' : '') + (open ? ' open' : '')
       + (b.approval_required ? ' acp-needs-approval' : '') + '"'
       + (toolUseId ? ' data-tool-use-id="' + escapeAttr(toolUseId) + '"' : '') + '>'
-      + '<div class="kimi-tool-head"' + (expandable ? ' onclick="this.parentElement.classList.toggle(\'open\')"' : '') + '>'
+      + '<div class="kimi-tool-head"' + (expandable ? ' role="button" tabindex="0" aria-expanded="' + String(open) + '" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();this.click()}" onclick="this.setAttribute(\'aria-expanded\',this.parentElement.classList.toggle(\'open\'))"' : '') + '>'
       + '<span class="kimi-tool-glyph">' + _kimiToolGlyph(b.name) + '</span>'
       + '<span class="kimi-tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
       + (summary ? '<span class="kimi-tool-arg" title="' + escapeAttr(summary) + '">' + escapeHtml(summary) + '</span>' : '')
@@ -58457,7 +58473,7 @@
         // Default to collapsed: only stay open when the run's rows carry an
         // explicit "was expanded" flag from a prior regroup.
         if (run.every(r => r.dataset.kimiCollapsed !== '0')) grp.classList.add('collapsed');
-        grp.innerHTML = '<div class="kimi-tool-group-head" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
+        grp.innerHTML = '<div class="kimi-tool-group-head" role="button" tabindex="0" aria-expanded="' + String(!grp.classList.contains('collapsed')) + '" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();this.click()}" onclick="this.setAttribute(\'aria-expanded\',!this.parentElement.classList.toggle(\'collapsed\'))">'
           + '<span class="kimi-tg-dot"></span>'
           + '<span class="kimi-tg-ic">' + _KIMI_GLYPHS['list'] + '</span>'
           + '<span class="kimi-tg-title"></span>'
@@ -58553,6 +58569,7 @@
           if (prev === inc
               || prev.indexOf(inc) === 0
               || (inc.length >= 80 && prev.indexOf(inc) !== -1)) {
+            if (!el.dataset.liveKey) delete ex.dataset.liveKey;
             absorbed = true;  // existing block already covers the incoming one
             break;
           }
@@ -58567,7 +58584,11 @@
         const tid = el.getAttribute('data-tool-use-id') || '';
         if (tid) {
           const escTid = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid;
-          if (turn.querySelector('.kimi-tool[data-tool-use-id="' + escTid + '"]')) continue;
+          const existingTool = turn.querySelector('.kimi-tool[data-tool-use-id="' + escTid + '"]');
+          if (existingTool) {
+            if (!el.dataset.liveKey) delete existingTool.dataset.liveKey;
+            continue;
+          }
         }
       } else if (el.classList.contains('kimi-answer-meta')) {
         // The Codex live overlay replays its full provisional snapshot on
@@ -58598,6 +58619,33 @@
   // div itself stays as a hidden `.kimi-marker` so data-jsonl-line dedupe,
   // the msg_id stream hand-off, and other .event lookups keep working.
   function _kimiAppendAssistantEvent($view, marker, blockEls, existingMarker) {
+    // The merged renderer returns before the generic event reconciliation.
+    // Match both arrival orders here, using the answer payload rather than
+    // DOM text (which also contains timestamps and action labels).
+    const answer = _kimiNormBlockText(marker._agentAnswerText);
+    if (marker.dataset.turnId && answer) {
+      for (const candidate of $view.querySelectorAll('.kimi-marker.assistant')) {
+        if (candidate.dataset.turnId !== marker.dataset.turnId
+            || !!candidate.dataset.liveKey === !!marker.dataset.liveKey) continue;
+        const previousAnswer = _kimiNormBlockText(candidate._agentAnswerText);
+        const liveAnswer = marker.dataset.liveKey ? answer : previousAnswer;
+        const savedAnswer = marker.dataset.liveKey ? previousAnswer : answer;
+        if (savedAnswer !== liveAnswer
+            && !(liveAnswer.length >= 24 && savedAnswer.startsWith(liveAnswer))) continue;
+        if (marker.dataset.liveKey) return candidate.closest('.kimi-turn');
+        existingMarker = candidate;
+        const liveKey = candidate.dataset.liveKey;
+        const oldTurn = candidate.closest('.kimi-turn');
+        if (oldTurn) {
+          for (const block of oldTurn.querySelectorAll('[data-live-key]')) {
+            if (block.dataset.liveKey !== liveKey || block === candidate) continue;
+            if (block.classList.contains('kimi-answer-meta')) block.remove();
+            else delete block.dataset.liveKey;
+          }
+        }
+        break;
+      }
+    }
     // The open turn is the last non-stream-bubble child: the live
     // `.stream-bubble` gets re-anchored to the tail after every render, so a
     // naive lastElementChild check would start a fresh turn per poll batch
@@ -58623,6 +58671,9 @@
     }
     if (existingMarker && existingMarker.parentNode === turn) existingMarker.replaceWith(marker);
     else turn.appendChild(marker);
+    if (marker.dataset.liveKey) {
+      for (const el of blockEls) el.dataset.liveKey = marker.dataset.liveKey;
+    }
     for (const el of _kimiTurnCoveredBlocks(turn, blockEls)) turn.appendChild(el);
     _kimiRegroupTools(turn);
     return turn;
@@ -58902,7 +58953,7 @@
   function _removeStaleProvisionalsForTurn(view, turnId) {
     if (turnId == null) return;
     const prefix = String(turnId) + ':';
-    view.querySelectorAll('.event[data-live-key], .kimi-answer-meta[data-live-key]').forEach((node) => {
+    view.querySelectorAll('[data-live-key]').forEach((node) => {
       if (String(node.dataset.liveKey || '').startsWith(prefix)) node.remove();
     });
   }
@@ -59780,12 +59831,12 @@
             const _imagesHtml = renderImageDescriptors(ev.images);
             textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">'
               + bridgeSenderHtml
-              + '<span class="ask-first">' + linkifyPastedImages(escapeHtml(_parts[0])) + '</span>'
-              + (_parts[1] ? '<span class="ask-rest">' + linkifyPastedImages(escapeHtml(_parts[1])) + '</span>' : '')
+              + '<span class="ask-first">' + (_codexPane ? renderCodexUserText(_parts[0]) : linkifyPastedImages(escapeHtml(_parts[0]))) + '</span>'
+              + (_parts[1] ? '<span class="ask-rest">' + (_codexPane ? renderCodexUserText(_parts[1]) : linkifyPastedImages(escapeHtml(_parts[1]))) + '</span>' : '')
               + _imagesHtml
               + '</div>';
           } else {
-            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>';
+            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + (_codexPane ? renderCodexUserText(cleanedText) : linkifyPastedImages(escapeHtml(cleanedText))) + '</div>';
           }
         } else {
           textHtml = bridgeSenderHtml ? '<div class="user-msg" dir="auto" data-raw-text="">' + bridgeSenderHtml + '</div>' : '';

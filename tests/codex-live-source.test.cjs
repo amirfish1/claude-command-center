@@ -250,3 +250,27 @@ test('three-tier dedupe order against a mock rollout state (call_id, then turn_i
     assert.deepEqual(result, { tier1Ok: true, tier2Ok: true, tier3Ok: true, remainingProvisional: 0 });
   });
 });
+
+test('a delayed response cannot paint into a reused pane', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conv-pane"><div class="conversations-view"></div></div>');
+    await page.evaluate(() => {
+      window.__context = { paneId: 'p1', threadId: 'old', repoPath: '/repo' };
+      window.__rendered = [];
+      window.CCCCodexClientContext = () => window.__context;
+      window.CCCCodexRenderLiveEvents = (_pane, events) => window.__rendered.push(events);
+      window.fetch = () => new Promise(resolve => { window.__resolveOld = resolve; });
+    });
+    await page.addScriptTag({ content: LIVE_SOURCE_JS });
+    await page.evaluate(() => window.CCCCodexLiveSource.start(document.querySelector('.conv-pane')));
+    await page.evaluate(async () => {
+      window.__context = { paneId: 'p1', threadId: 'new', repoPath: '/repo' };
+      window.__resolveOld({ ok: true, json: async () => ({
+        generation: 'g1', turns: [{ status: 'completed', events: [{ text: 'stale reply' }] }],
+      }) });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      window.CCCCodexLiveSource.stop(document.querySelector('.conv-pane'));
+    });
+    assert.deepEqual(await page.evaluate(() => window.__rendered), []);
+  });
+});

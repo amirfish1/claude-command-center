@@ -1,0 +1,1 @@
+Fix duplicate Codex replies and action rows during live-to-saved handoff, discard delayed updates after switching sessions, and clear obsolete live content. Improve conversation spacing, attachment chips, readable metadata, and keyboard access to tool details.

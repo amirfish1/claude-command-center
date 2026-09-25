@@ -6322,7 +6322,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("for (const b of assistantBlocks)", app_js)
         self.assertIn("function whatsappBridgeSenderHtml(ev)", app_js)
         self.assertIn("ev.sender_name || ev.pushName || ev.sender_id", app_js)
-        self.assertIn("bridgeSenderHtml + linkifyPastedImages", app_js)
+        self.assertIn("bridgeSenderHtml + (_codexPane ? renderCodexUserText(cleanedText) : linkifyPastedImages(escapeHtml(cleanedText)))", app_js)
         self.assertIn(".assistant-message-actions", app_css)
         self.assertIn(".assistant-message-action", app_css)
         self.assertIn(".conversations-view .whatsapp-bridge-sender", app_css)

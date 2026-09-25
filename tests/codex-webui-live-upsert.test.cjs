@@ -131,3 +131,77 @@ test('different provisional assistant events keep distinct metadata rows', async
     assert.deepEqual(result, { markers: 2, metas: 2 });
   });
 });
+
+for (const liveFirst of [true, false]) {
+  test(`saved/live reconciliation preserves one answer and actions (${liveFirst ? 'live' : 'saved'} first)`, async () => {
+    await withPage(async page => {
+      await page.setContent('<div class="conversations-view"></div>');
+      await loadHelpers(page);
+      const result = await page.evaluate(liveFirst => {
+        const view = document.querySelector('.conversations-view');
+        function append(live, turnId = 'turn-1') {
+          const marker = document.createElement('div');
+          marker.className = 'event assistant kimi-marker';
+          marker.dataset.turnId = turnId;
+          marker._agentAnswerText = 'I will inspect the CSV.';
+          if (live) marker.dataset.liveKey = turnId + ':reply';
+          else marker.dataset.jsonlLine = '60';
+          const text = document.createElement('div');
+          text.className = 'assistant-text';
+          text.textContent = marker._agentAnswerText;
+          const meta = document.createElement('div');
+          meta.className = 'kimi-answer-meta';
+          meta._agentAnswerText = marker._agentAnswerText;
+          meta.innerHTML = '<button>Copy</button>';
+          if (live) meta.dataset.liveKey = marker.dataset.liveKey;
+          window.__fns._kimiAppendAssistantEvent(view, marker, [text, meta], null);
+        }
+        append(liveFirst);
+        const originalText = view.querySelector('.assistant-text');
+        // A result or user bubble may have moved the current append position.
+        const boundary = document.createElement('div');
+        boundary.className = 'event user_text';
+        view.appendChild(boundary);
+        append(!liveFirst);
+        append(true); // replaying a full live snapshot must remain idempotent
+        const first = {
+          texts: view.querySelectorAll('.assistant-text').length,
+          metas: view.querySelectorAll('.kimi-answer-meta').length,
+          live: view.querySelectorAll('[data-live-key]').length,
+          saved: view.querySelectorAll('[data-jsonl-line]').length,
+          stable: originalText === view.querySelector('.assistant-text'),
+        };
+        append(false, 'turn-2'); // identical words in another turn are legitimate
+        return { first, textsAfterNewTurn: view.querySelectorAll('.assistant-text').length };
+      }, liveFirst);
+      assert.deepEqual(result, {
+        first: { texts: 1, metas: 1, live: 0, saved: 1, stable: true },
+        textsAfterNewTurn: 2,
+      });
+    });
+  });
+}
+
+test('saved tools adopt live rows before obsolete overlay cleanup', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conversations-view"></div>');
+    await loadHelpers(page);
+    const result = await page.evaluate(() => {
+      const view = document.querySelector('.conversations-view');
+      for (const live of [true, false]) {
+        const marker = document.createElement('div');
+        marker.className = 'event assistant kimi-marker';
+        if (live) marker.dataset.liveKey = 't:tool';
+        else marker.dataset.jsonlLine = '10';
+        const tool = document.createElement('div');
+        tool.className = 'kimi-tool';
+        tool.dataset.toolUseId = 'read-file';
+        tool.textContent = 'Read records.csv';
+        window.__fns._kimiAppendAssistantEvent(view, marker, [tool], null);
+      }
+      view.querySelectorAll('[data-live-key]').forEach(el => el.remove());
+      return view.querySelectorAll('.kimi-tool').length;
+    });
+    assert.equal(result, 1);
+  });
+});

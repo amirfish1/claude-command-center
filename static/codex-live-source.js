@@ -100,8 +100,13 @@
   // in a merged kimi-turn, so both keyed nodes must leave together.
   function clearProvisional(viewEl) {
     if (!viewEl || typeof viewEl.querySelectorAll !== 'function') return;
-    viewEl.querySelectorAll('.event[data-live-key], .kimi-answer-meta[data-live-key]')
+    viewEl.querySelectorAll('[data-live-key]')
       .forEach((node) => node.remove());
+  }
+
+  function sameContext(a, b) {
+    return !!a && !!b && a.threadId === b.threadId
+      && a.repoPath === b.repoPath && a.environmentId === b.environmentId;
   }
 
   async function fetchLiveTranscript(context) {
@@ -153,7 +158,7 @@
     if (entry.inFlight) return;
     if (!entry.paneEl || !entry.paneEl.isConnected) { stop(entry.paneEl); return; }
     const freshContext = contextFor(entry.paneEl);
-    if (!freshContext || freshContext.threadId !== entry.context.threadId) {
+    if (!sameContext(freshContext, entry.context)) {
       // The pane moved to a different thread (or lost engine context)
       // underneath us -- a future start() call re-establishes a fresh entry
       // for whatever thread is there now.
@@ -166,6 +171,10 @@
     if (typeof window._pollerTickManual === 'function') { try { window._pollerTickManual(POLLER_NAME); } catch (_) {} }
     try {
       const data = await fetchLiveTranscript(entry.context);
+      // A response belongs to the context that requested it, even if the
+      // same pane DOM has since been reused for a different conversation.
+      if (panes.get(entry.paneEl) !== entry
+          || !sameContext(contextFor(entry.paneEl), entry.context)) return;
       entry.failures = 0;
       entry.active = applySnapshot(entry, data);
     } catch (_) {
@@ -181,7 +190,7 @@
   function schedule(entry) {
     window.clearTimeout(entry.timer);
     entry.timer = null;
-    if (!panes.has(entry.paneEl)) return;
+    if (panes.get(entry.paneEl) !== entry) return;
     if (pollerOff()) { stop(entry.paneEl); return; }
     if (!entry.active) return; // idle: nothing running, nothing pending. A later start() resumes it.
     const backoffSteps = Math.min(entry.failures || 0, MAX_FAILURE_BACKOFF_STEPS);
@@ -200,6 +209,11 @@
     const context = contextFor(paneEl);
     if (!context) return;
     let entry = panes.get(paneEl);
+    if (entry && !sameContext(entry.context, context)) {
+      stop(paneEl);
+      clearProvisional(paneEl.querySelector('.conversations-view'));
+      entry = null;
+    }
     if (!entry) {
       entry = {
         paneEl, paneId: context.paneId, context,
