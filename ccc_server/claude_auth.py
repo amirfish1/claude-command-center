@@ -39,7 +39,8 @@ import federation
 from ccc_server import core as _core
 
 CLAUDE_AUTH_FLAG = "claude_reauth"
-CLAUDE_AUTH_TMUX_SESSION = "ccc-claude-auth"
+# Override only to keep test/second-instance logins apart on one tmux server.
+CLAUDE_AUTH_TMUX_SESSION = (os.environ.get("CCC_CLAUDE_AUTH_TMUX_SESSION") or "").strip() or "ccc-claude-auth"
 _CLAUDE_AUTH_TMUX_BUFFER = "ccc-claude-auth-code"
 # An attempt older than this is treated as abandoned: the next Start replaces
 # it instead of handing back a URL whose PKCE state may have expired.
