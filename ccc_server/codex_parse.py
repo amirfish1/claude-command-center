@@ -7,10 +7,55 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 import time
 
 from ccc_server import core as _core
+
+# rollout path -> parent thread id read from its session_meta line. The first
+# line of a rollout never changes, so one read per subagent file per process.
+_CODEX_SESSION_META_PARENT_CACHE = {}
+
+
+def _codex_subagent_parent_id(row, path):
+    """Parent thread of a Codex subagent thread, or ''.
+
+    Spawned agents carry it in ``threads.source`` (subagent.thread_spawn).
+    Guardian auto-reviews (``thread_source='guardian_review'``, first seen in
+    Codex 0.155) record it only in the rollout's session_meta line and never in
+    ``thread_spawn_edges``, so without this they render as loose top-level rows
+    instead of nesting as slim child rows under the session they review.
+    Only subagent rows reach the file read (candidacy gate, perf budget).
+    """
+    raw = row.get("source")
+    if not raw or "subagent" not in str(raw):
+        return ""
+    try:
+        source = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return ""
+    sub = source.get("subagent") if isinstance(source, dict) else None
+    if not isinstance(sub, dict):
+        return ""
+    spawn = sub.get("thread_spawn")
+    if isinstance(spawn, dict) and spawn.get("parent_thread_id"):
+        return str(spawn["parent_thread_id"]).strip()
+    key = str(path)
+    if key in _CODEX_SESSION_META_PARENT_CACHE:
+        return _CODEX_SESSION_META_PARENT_CACHE[key]
+    parent = ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            first = json.loads(fh.readline() or "{}")
+        payload = first.get("payload") if first.get("type") == "session_meta" else None
+        if isinstance(payload, dict):
+            parent = str(payload.get("parent_thread_id") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+    _CODEX_SESSION_META_PARENT_CACHE[key] = parent
+    return parent
+
 
 def find_codex_conversations(
     repo_path=None,
@@ -255,6 +300,7 @@ def find_codex_conversations(
                 codex_parent_by_child.get(sid)
                 or codex_durable_parents.get(sid)
                 or spawn_info.get("parent_session_id")
+                or _codex_subagent_parent_id(row, path)
                 or ""
             ),
             **codex_activity,

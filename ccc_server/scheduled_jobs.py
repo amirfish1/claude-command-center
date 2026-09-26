@@ -230,15 +230,11 @@ def _collect_hermes_systemd_jobs(timeout_s=4):
         host_info["error"] = str(e)
         return jobs, host_info
 
-    # Filter for project/user timers (bym-*, stramp-*, ccc-*, etc.)
+    # Keep project/user timers; drop the distro's own housekeeping timers.
     target_timers = []
     for item in timers_raw:
-        activates = item.get("activates") or ""
         unit = item.get("unit") or ""
-        # Keep bym, ccc, stramp, watchtower, or custom user services
-        if any(prefix in activates or prefix in unit for prefix in ("bym-", "stramp-", "ccc-", "watchtower-")):
-            target_timers.append(item)
-        elif not any(unit.startswith(sys_prefix) for sys_prefix in ("apt-", "dpkg-", "fstrim", "man-db", "logrotate", "systemd-", "update-notifier-", "motd-", "e2scrub")):
+        if not any(unit.startswith(sys_prefix) for sys_prefix in ("apt-", "dpkg-", "fstrim", "man-db", "logrotate", "systemd-", "update-notifier-", "motd-", "e2scrub")):
             target_timers.append(item)
 
     if not target_timers:

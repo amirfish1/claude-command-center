@@ -72,7 +72,7 @@ _CWD_RELOCATION_CACHE_FILE = (
 )
 _CWD_RELOCATION_CACHE_SCHEMA = 1
 # Per-request budget for _relocate_missing_session_cwd's filesystem walks.
-# A single cold scan of a worktree-heavy repo (e.g. BYM+Finie with 128 missing
+# A single cold scan of a worktree-heavy repo (e.g. one with 128 missing
 # cwds) used to burn ~40s here. Once exceeded, individual relocations return
 # None and the row falls back to the recorded cwd; subsequent requests pick
 # up the slack as the cache fills.
@@ -576,7 +576,7 @@ def get_model_picker_picks() -> list:
 
 # {path: {mtime, custom_title, last_prompt, agent_name, ...}}
 # Persistent across restarts via _CONV_META_CACHE_FILE — without it, every
-# repo switch on a project with hundreds of large JSONLs (BYM+Finie has
+# repo switch on a project with hundreds of large JSONLs (one real repo has
 # 1.8 GB of conversation logs) re-walks every file and the API stalls
 # for a minute or more. The cache is mtime-keyed so admin writes
 # (custom-title, /rename) correctly invalidate the entry; bump

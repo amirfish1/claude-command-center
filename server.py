@@ -13413,7 +13413,9 @@ def find_all_conversations(
 # v8: Codex rows now carry a computed cost_usd/cost_breakdown_usd; bump so
 # persisted rows from before that row-shaping change get rebuilt instead of
 # permanently reusing their stale (cost-less) dict.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 8
+# v9: Codex subagent rows (guardian auto-reviews) now carry parent_session_id
+# from the rollout's session_meta; cached v8 rows would stay parent-less.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 9
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
@@ -18804,9 +18806,12 @@ def _resolve_apps(include_disabled=False):
     apps.append({"id": "decision-inbox", "label": "Decisions",
                  "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
                  "builtin": False})
-    apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
-                 "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
-                 "builtin": False})
+    # Spawn Ledger reads a grade ledger written by an external tool; list it
+    # only on machines that have one (SPAWN_LEDGER_PATH or the default file).
+    if spawn_ledger_path().is_file():
+        apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
+                     "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
+                     "builtin": False})
     # Pipeline Canvas: the fleet-topology node graph over WatchTower truth
     # (spec: 2026-09-15-pipeline-canvas-design.md). Not core navigation —
     # switchable from the Applications page like the other satellites.
@@ -28578,6 +28583,56 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             resp, status = handle_assistant_ask(data)
             self.send_json(resp, status)
+            return
+
+        if path == "/api/assistant/warm":
+            # Ask tab opened: boot the warm Mazkir process before the first
+            # question so it doesn't pay the CLI + MCP boot. Idempotent.
+            from ccc_server import mazkir as _mazkir
+            try:
+                self.send_json(_mazkir.warm_up())
+            except Exception as e:  # never let a warm-up hint 500 the tab
+                self.send_json({"ok": False, "error": str(e)[:200]}, 200)
+            return
+
+        if path.startswith("/api/assistant/actions/"):
+            # Mazkir's hands: `propose` is what the ccc-state MCP calls (no
+            # token back); `<id>/confirm` and `<id>/dismiss` need the token
+            # that only the /api/assistant/ask response to the browser carries.
+            # See ccc_server/assistant_actions.py.
+            from ccc_server import assistant_actions as _aa
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(data, dict):
+                data = {}
+            rest = path[len("/api/assistant/actions/"):].strip("/")
+            try:
+                if rest == "propose":
+                    self.send_json(_aa.store().propose(str(data.get("kind") or ""),
+                                                       data.get("params") or {},
+                                                       str(data.get("reason") or "")))
+                    return
+                aid, _, verb = rest.partition("/")
+                if verb == "confirm":
+                    base = f"http://127.0.0.1:{self.server.server_address[1]}"
+                    item = _aa.store().confirm(aid, str(data.get("token") or ""),
+                                               _aa.make_executor(base))
+                    _log_activity("assistant", "ACTION", f"kind={item['kind']} id={aid} status={item['status']}")
+                    self.send_json({"ok": item["status"] == "done", "action": item})
+                    return
+                if verb == "dismiss":
+                    self.send_json({"ok": True, "action": _aa.store().dismiss(aid, str(data.get("token") or ""))})
+                    return
+                self.send_json({"ok": False, "error": "unknown action route"}, 404)
+            except PermissionError as e:
+                self.send_json({"ok": False, "error": str(e)}, 403)
+            except _aa.ActionError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             return
 
         if path == "/api/model-picker/record":

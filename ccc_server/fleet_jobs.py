@@ -1430,8 +1430,14 @@ def _check_duplicate_repo_instance():
     mine = _git_common_dir(_core.CCC_ROOT)
     if not mine:
         return
+    self_pid = os.getpid()
     for entry in _read_registry_pruned():
         if not isinstance(entry, dict):
+            continue
+        if entry.get("pid") == self_pid:
+            # Our own entry from before an in-place os.execvp restart (the pid
+            # survives the exec). We aren't listening yet, so the reap below
+            # would SIGTERM this very process.
             continue
         other = entry.get("repo_common_dir")
         if not other:

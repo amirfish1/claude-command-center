@@ -1,0 +1,3 @@
+- Ask no longer ships maintainer-specific defaults: claude-index is found via `CLAUDE_INDEX_BIN` or `PATH` (without it, Ask searches with CCC's built-in session search), and the daily check-in tool only appears when `CCC_DAILY_CHECKIN_FILE` is set or `~/.claude/command-center/daily-checkin.md` exists. The spawn-ledger default moved to `~/.claude/command-center/spawn-ledger.jsonl` (override with `SPAWN_LEDGER_PATH`).
+- Ask now says plainly when Claude Code is installed but not signed in, instead of showing the CLI's raw "Not logged in" line as an answer. The Daily check-in prompt chip only appears where a check-in agenda is configured.
+- The Spawn Ledger rail app only appears when a spawn ledger file exists.

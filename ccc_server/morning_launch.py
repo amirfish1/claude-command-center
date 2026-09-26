@@ -834,10 +834,10 @@ def _remap_stale_path(path, literal_cwd, cd_targets):
     longer exists there, try prefix-substitution against each known
     `cd <target>` redirect — return the first variant that exists.
 
-    This catches the BYM+Finie pattern: session launched from
-    `~/my-finance-app` (an empty stub), then ran `cd ~/Apps/BYM+Finie`,
+    This catches the stub-then-cd pattern: session launched from
+    `~/my-finance-app` (an empty stub), then ran `cd ~/Apps/foo+bar`,
     then issued Reads with paths like `~/my-finance-app/apps/...` which
-    actually live under `~/Apps/BYM+Finie/apps/...`.
+    actually live under `~/Apps/foo+bar/apps/...`.
 
     Returns the remapped path or None if no candidate works.
     """
@@ -1447,7 +1447,7 @@ def extract_session_workspace(session_id):
 
     # Don't early-exit on non-repo cwd: we still want to run tool-call
     # inference for sessions whose launch cwd is an empty stub directory
-    # but whose actual edits land in a real repo elsewhere (the BYM+Finie
+    # but whose actual edits land in a real repo elsewhere (the foo+bar
     # case). The git()-on-cwd block below is harmless to skip in that case.
 
     def git(*args, timeout=2):

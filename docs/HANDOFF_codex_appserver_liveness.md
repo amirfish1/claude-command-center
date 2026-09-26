@@ -25,7 +25,7 @@ that proves it) or clearly marked as a hypothesis.
 ## Where the code lives
 
 - Shared clone (always `main`, do not branch here):
-  `/Users/amirfish/Apps/claude-command-center`
+  the repo root
 - Per CLAUDE.md hygiene, every fix this session was made in its own git
   worktree, tested, then merged into the shared clone's `main` and deployed.
   Worktrees from this session (safe to remove once you've read them, or

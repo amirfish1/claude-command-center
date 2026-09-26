@@ -406,7 +406,7 @@ def resolve_repo_path(value):
 
     # Fallback for JSON-body over-encoding. A caller may URL-encode the
     # repo_path VALUE inside a JSON body (wrong: JSON values are not percent-
-    # encoded), so /Users/.../BYM+Finie arrives as /Users/.../BYM%2BFinie. If
+    # encoded), so /Users/.../foo+bar arrives as /Users/.../foo%2Bbar. If
     # the as-given raw failed but its percent-decoded form resolves to a known
     # repo, accept that. Only fires when raw carries a literal '%' escape, so a
     # legitimate path is never altered.
@@ -418,8 +418,8 @@ def resolve_repo_path(value):
             if cand_err is None and cand:
                 return cand
 
-    # Fallback for query-string `+` decoding. A repo at /Users/.../BYM+Finie
-    # arrives over the wire as /Users/.../BYM Finie because `+` decodes to a
+    # Fallback for query-string `+` decoding. A repo at /Users/.../foo+bar
+    # arrives over the wire as /Users/.../foo bar because `+` decodes to a
     # space in a URL query. Try restoring `+` in space positions and see if
     # exactly one variant resolves to a real or known repo. Skip the raw
     # since we already tried it.

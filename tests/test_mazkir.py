@@ -75,9 +75,12 @@ class McpProtocolTest(unittest.TestCase):
         self.assertEqual(init["result"]["serverInfo"]["name"], "ccc-state")
         self.assertEqual(init["result"]["protocolVersion"], "2025-06-18")
         self.assertIsNone(mazkir.handle_request(self.state, {"jsonrpc": "2.0", "method": "notifications/initialized"}))
-        names = [t["name"] for t in self.rpc("tools/list")["result"]["tools"]]
+        with mock.patch.object(mazkir, "checkin_enabled", return_value=True):
+            names = [t["name"] for t in self.rpc("tools/list")["result"]["tools"]]
         self.assertEqual(names, ["list_sessions", "live_activity", "throughput_window", "queue_status",
-                                 "session_detail", "fleet_diagnostics", "daily_checkin"])
+                                 "session_detail", "fleet_diagnostics", "daily_checkin", "daily_brief",
+                                 "hunch_why", "propose_spawn_session", "propose_inject",
+                                 "propose_wt_add", "propose_wt_comment"])
 
     def test_tools_call_and_errors(self):
         r = self.rpc("tools/call", {"name": "queue_status", "arguments": {}})
@@ -134,9 +137,10 @@ class RunMazkirTest(unittest.TestCase):
                                                       "[[action:spawn-continue:c-100001]]",
                                             "num_turns": 2, "total_cost_usd": 0.01}))
 
-        body, status = mazkir.run_mazkir("Where did I work on the Ask tab?", [{"q": "hi", "a": "yo"}], "7d",
-                                         runner=runner, base="http://x", claude_bin="/x/claude",
-                                         fetch=fake_fetch, prefetch_runner=prefetch, db_path=dbp)
+        with mock.patch.object(mazkir, "INDEX_BIN", "/x/claude-index"):
+            body, status = mazkir.run_mazkir("Where did I work on the Ask tab?", [{"q": "hi", "a": "yo"}], "7d",
+                                             runner=runner, base="http://x", claude_bin="/x/claude",
+                                             fetch=fake_fetch, prefetch_runner=prefetch, db_path=dbp)
         self.assertEqual(status, 200)
         self.assertEqual(body["agent"], "mazkir")
         self.assertEqual(body["cited"], ["c-100001", "kimi-1"])
@@ -169,9 +173,95 @@ class RunMazkirTest(unittest.TestCase):
             body, status = mazkir.run_mazkir("q", base="http://x", fetch=fake_fetch, prefetch_runner=prefetch)
         self.assertEqual(status, 503)
 
+    def test_signed_out_claude_is_a_clear_401(self):
+        prefetch = lambda argv, **kw: _Proc(stdout="[]")
+        out = json.dumps({"result": "Not logged in · Please run /login", "is_error": True})
+        body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=out), base="http://x",
+                                         claude_bin="/x/claude", fetch=fake_fetch,
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+        self.assertEqual((status, body["code"]), (401, "ask_engine_unauthenticated"))
+        self.assertIn("/login", body["error"])
+        self.assertFalse(body["ok"])
+        expired = json.dumps({"result": "Failed to authenticate: OAuth session expired and could not be refreshed",
+                              "is_error": True})
+        body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=expired), base="http://x",
+                                         claude_bin="/x/claude", fetch=fake_fetch,
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+        self.assertEqual(status, 401)
+
+    def test_warm_up_reports_optional_features(self):
+        with mock.patch.object(mazkir, "checkin_enabled", return_value=False), \
+                mock.patch.object(mazkir, "INDEX_BIN", None), \
+                mock.patch.object(mazkir, "_find_claude_bin", lambda: None), \
+                mock.patch.dict(os.environ, {"CCC_CLAUDE_BIN": "", "CCC_ASK_WARM": "1"}):
+            out = mazkir.warm_up("http://x")
+        self.assertEqual((out["daily_checkin"], out["history_search"]), (False, False))
+        self.assertEqual(out["code"], "ask_engine_unavailable")
+
     def test_uncited_unknown_ids_are_dropped(self):
         sources, cited, actions = mazkir.assemble_sources("see [[session:nope-1]]", [], "/nonexistent.db")
         self.assertEqual((sources, cited, actions), ([], [], []))
+
+
+
+class OutsideUserDefaultsTest(unittest.TestCase):
+    """No maintainer paths/names; optional pieces switch off cleanly."""
+
+    def test_no_personal_defaults_in_source(self):
+        src = Path(mazkir.__file__).read_text(encoding="utf-8")
+        for needle in ("/Users/", "MyOfficeMgr", "Amir", "Becky", "BYM"):
+            self.assertNotIn(needle, src)
+
+    def test_index_bin_from_env_then_path_else_off(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_INDEX_BIN": sys.executable}):
+            self.assertEqual(mazkir._resolve_index_bin(), sys.executable)
+        with mock.patch.dict(os.environ, {"CLAUDE_INDEX_BIN": "/nonexistent/claude-index"}):
+            self.assertIsNone(mazkir._resolve_index_bin())
+        with mock.patch.dict(os.environ, {"CLAUDE_INDEX_BIN": ""}), \
+                mock.patch.object(mazkir.shutil, "which", return_value=None):
+            self.assertIsNone(mazkir._resolve_index_bin())
+
+    def test_without_index_no_index_mcp_and_prompt_says_so(self):
+        cfg = json.loads(mazkir.mcp_config("http://x", index_bin=None))
+        self.assertEqual(list(cfg["mcpServers"]), ["ccc-state"])
+        argv = mazkir.mazkir_argv("/x/claude", "http://x", None, index_bin=None)
+        allowed = argv[argv.index("--allowedTools") + 1:argv.index("--disallowedTools")]
+        self.assertEqual(allowed, ["mcp__ccc-state"])
+        self.assertIn("claude-index is not installed", argv[argv.index("--system-prompt") + 1])
+        self.assertEqual(mazkir.prefetch_sessions("q", None, index_bin=None), [])
+        with_index = mazkir.mazkir_argv("/x/claude", "http://x", None, index_bin="/x/claude-index")
+        self.assertIn("mcp__claude-index", with_index)
+        self.assertIn("claude-index", json.loads(mazkir.mcp_config("http://x", "/x/claude-index"))["mcpServers"])
+
+    def test_checkin_only_offered_when_configured(self):
+        missing = str(Path(tempfile.mkdtemp()) / "none.md")
+        with mock.patch.dict(os.environ, {"CCC_DAILY_CHECKIN_FILE": ""}), \
+                mock.patch.object(mazkir, "CHECKIN_PATH", missing):
+            self.assertFalse(mazkir.checkin_enabled())
+            self.assertNotIn("daily_checkin", [t["name"] for t in mazkir.available_tools()])
+            self.assertNotIn("daily_checkin", mazkir.system_prompt("/x/claude-index"))
+            st = mazkir.CccState("http://x", fetch=fake_fetch)
+            r = mazkir.handle_request(st, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                           "params": {"name": "daily_checkin", "arguments": {}}})
+            self.assertEqual(r["error"]["code"], -32602)
+        with mock.patch.dict(os.environ, {"CCC_DAILY_CHECKIN_FILE": missing}):
+            self.assertTrue(mazkir.checkin_enabled())
+            self.assertIn("daily_checkin", mazkir.system_prompt("/x/claude-index"))
+
+    def test_builtin_prefetch_maps_ccc_search_rows(self):
+        recent = {"results": [{"session_id": "sess-aaaaaa", "cwd": "/r/a", "ts_unix": 1700000000,
+                               "snippet": "fixed the <mark>ask</mark> tab"}]}
+
+        def history(*a, **k):
+            raise OSError("index locked")
+        seams = {"search_recent": lambda *a, **k: recent, "search_history": history,
+                 "enrich": lambda hits: hits}
+        out = mazkir.builtin_prefetch("ask tab fix", "7d", **seams)
+        self.assertEqual(mazkir.builtin_prefetch("ask tab fix", "7d", exclude_session_ids={"sess-aaaaaa"},
+                                                 **seams), [])
+        self.assertEqual(out[0]["session_id"], "sess-aaaaaa")
+        self.assertEqual(out[0]["best_snippet"], "fixed the ask tab")
+        self.assertRegex(out[0]["last_ts"], r"^\d{4}-\d{2}-\d{2}$")
 
 
 if __name__ == "__main__":
@@ -225,8 +315,9 @@ class DailyCheckinTest(unittest.TestCase):
 
     def test_mcp_dispatch(self):
         st = mazkir.CccState("http://x", fetch=fake_fetch)
-        r = mazkir.handle_request(st, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                                       "params": {"name": "daily_checkin", "arguments": {}}})
+        with mock.patch.object(mazkir, "checkin_enabled", return_value=True):
+            r = mazkir.handle_request(st, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                           "params": {"name": "daily_checkin", "arguments": {}}})
         body = json.loads(r["result"]["content"][0]["text"])
         self.assertIn("open_count", body)
         self.assertIn("path", body)

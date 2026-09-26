@@ -5273,7 +5273,7 @@
              ' && cd ' + quotedCwd + ' && ' + resumeCmd;
     }
     // Missing dir that isn't a `.claude/worktrees/` path (e.g. a custom
-    // worktree like `BYM-Finie-push-reschedule-sGH1nB` cleaned up off
+    // worktree like `myapp-push-reschedule-sGH1nB` cleaned up off
     // the books). `cd` would fail and `&&` would block the resume,
     // dropping the user in their home dir. Fall back to the session's
     // repo root if we know one — that's almost always still on disk —
@@ -38158,7 +38158,10 @@
         const raw = opt.getAttribute('data-grouping');
         const value = (raw === 'time' || raw === 'cost') ? raw : 'project';
         try { localStorage.setItem('ccc-archived-grouping', value); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        // Force: a click is user intent, and the pause gate (New Session pane
+        // open, row hovered, ...) would otherwise save the choice but skip
+        // the repaint, so "by project" looked dead.
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     });
     // 1d / 7d / All time-window toggle for the Archived view. Mirrors the In
@@ -38301,7 +38304,7 @@
             else localStorage.setItem(key, '1');
           } catch (_) {}
         });
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       };
       $archivedExpandAll.addEventListener('click', (ev) => { ev.stopPropagation(); apply(); });
       $archivedExpandAll.addEventListener('keydown', (ev) => {
@@ -39069,6 +39072,9 @@
         }
       });
       hdr.addEventListener('dragleave', () => hdr.classList.remove('is-drop-target', 'drop-above', 'drop-below'));
+      // Drop renders are forced (CCC-1135): the pointer sits on a row at drop
+      // time, and the CCC-1007 `.conv-item:hover` pause would otherwise skip
+      // the repaint, so a saved move looked like it never happened.
       hdr.addEventListener('drop', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
@@ -39084,7 +39090,7 @@
           if (draggedNode.indexOf('draft-session:') === 0) {
             if (setDraftNodeParent(draggedNode, target)) {
               showOpToast('Moved task', 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
@@ -39094,13 +39100,13 @@
             if (target === 'unclassified') {
               if (_setObjectParent(dragged, '')) {
                 showOpToast('Moved to top level', 'success');
-                renderArchiveList(document.getElementById('convSearch')?.value || '');
+                renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
               }
               return;
             }
             if (_nestObjectUnder(dragged, target)) {
               showOpToast('Nested under ' + (hdr.textContent || '').trim().slice(0, 40), 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
@@ -39114,20 +39120,20 @@
             .map(n => n.getAttribute('data-object-drop'))
             .filter(id => id && id !== dragged);
           const at = ids.indexOf(target);
-          if (at === -1) { renderArchiveList(document.getElementById('convSearch')?.value || ''); return; }
+          if (at === -1) { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); return; }
           ids.splice(zone === 'above' ? at : at + 1, 0, dragged);
           const order = {};
           ids.forEach((id, i) => { order[id] = i; });
           try { localStorage.setItem('ccc-objects-order', JSON.stringify(order)); } catch (_) {}
           syncObjectsToServer();
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
           return;
         }
         // ── Session-row drop: reparent the session under this group ──
         const convIds = readConvIdsFromDrop(ev);
         if (!convIds.length) return;
         if (reparentConversationIdsToObject(target, convIds)) {
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
         }
       });
     });
@@ -39156,7 +39162,7 @@
           if (draggedNode.indexOf('draft-session:') === 0) {
             if (setDraftNodeParent(draggedNode, target)) {
               showOpToast('Moved task', 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
@@ -39165,14 +39171,14 @@
           if (target === 'unclassified') {
             if (_setObjectParent(dragged, '')) {
               showOpToast('Moved to top level', 'success');
-              renderArchiveList(document.getElementById('convSearch')?.value || '');
+              renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
             }
             return;
           }
           if (_nestObjectUnder(dragged, target)) {
             const label = (zone.querySelector('.conv-folder-group-chip')?.textContent || '').trim().slice(0, 40);
             showOpToast('Nested under ' + label, 'success');
-            renderArchiveList(document.getElementById('convSearch')?.value || '');
+            renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
           }
           return;
         }
@@ -39181,7 +39187,7 @@
         ev.preventDefault();
         ev.stopPropagation();
         if (reparentConversationIdsToObject(target, convIds)) {
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
         }
       });
     });
@@ -39194,7 +39200,7 @@
         const nextCompact = opt.getAttribute('data-rows-compact') === '1';
         try { localStorage.setItem('ccc-compact-rows', nextCompact ? '1' : '0'); } catch (_) {}
         $convList.classList.toggle('compact-rows', nextCompact);
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     }
     // Per-row NYA collapse chevron. Delegated on the stable $convList, attached
@@ -40860,7 +40866,7 @@
       const objectDropGroup = el.closest('[data-object-drop-zone]');
       if (objectDropGroup) {
         if (reorderObjectSessionRows(el, readConvIdsFromDrop(ev), before ? 'before' : 'after')) {
-          renderArchiveList(document.getElementById('convSearch')?.value || '');
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
         }
         return;
       }
@@ -44390,7 +44396,7 @@
 
   function _wtLogRowHtml(p, now) {
     const utcMs = p.utcMs;
-    // Pull a leading ticket ref (e.g. BYM-33) out of the detail — used both
+    // Pull a leading ticket ref (e.g. APP-33) out of the detail — used both
     // for the ref column below and to group the stream by issue item.
     const refM = p.detail.match(/^([A-Z]+-\d+)\b[ ]*(?:—[ ]*)?/);
     const ref = refM ? refM[1] : '';
@@ -45171,7 +45177,7 @@
     return _UXQ_PROJECT_ALIASES[key] || key;
   }
   // A queue's candidate family root is its FIRST hyphen-delimited segment, so
-  // "BYM-PR-REVIEW" belongs to "BYM" and never to "BYM-PR" — one level of
+  // "APP-PR-REVIEW" belongs to "APP" and never to "APP-PR" — one level of
   // nesting, which is all `_uxqInScope` and the scope picker model.
   function _uxqFamilyCandidate(name) {
     const key = _uxqProjectKey(name);
@@ -61390,6 +61396,7 @@
     // 'files' is a legacy value (the Files tab folded into Metadata); the
     // files panel now lives at the bottom of the Metadata pane.
     const next = (tab === 'queue' || tab === 'orchestration' || tab === 'ask' || tab === 'log') ? tab : 'metadata';
+    if (next === 'ask' && typeof askWarmUp === 'function') askWarmUp();
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);
@@ -63005,49 +63012,64 @@
     return d.getDate() + ' ' + ASK_MONTHS[d.getMonth()];
   }
 
-  function askResultHtml(src, selectedId) {
-    const title = askNeutralizeMarkers(src.title || (src.repo ? src.repo + ' session' : 'session'));
-    const repo = askNeutralizeMarkers(src.repo || '');
-    const live = src.status === 'live';
-    const sel = selectedId && src.id === selectedId ? ' is-selected' : '';
-    const time = askResultTime(src.ts_unix);
-    const snippet = askNeutralizeMarkers(src.snippet || '');
-    return '<div class="ask-result' + sel + '" data-ask-open="' + askEscapeHtml(src.id) +
-      '" data-ask-title="' + askEscapeHtml(title) + '" data-ask-cwd="' + askEscapeHtml(src.cwd || '') +
-      '" title="Click to open · ⌘-click to select">' +
-      '<div class="ask-result-head">' +
-      '<span class="ask-dot' + (live ? ' is-live' : '') + '"></span>' +
-      '<span class="ask-result-title">' + askEscapeHtml(title) + '</span>' +
-      (time ? '<span class="ask-result-time">' + askEscapeHtml(time) + '</span>' : '') +
-      '</div>' +
-      '<div class="ask-result-meta">' +
-      (repo ? '<span class="ask-repo-badge">' + askEscapeHtml(repo) + '</span>' : '') +
-      '<span class="ask-status-badge ' + (live ? 'is-live-status' : '') + '">' + (live ? 'working' : 'idle') + '</span>' +
-      '<span class="ask-sid-badge">' + askEscapeHtml(src.id.slice(0, 8)) + '</span>' +
-      '</div>' +
-      (snippet ? '<div class="ask-result-snippet">' + askEscapeHtml(snippet) + '</div>' : '') +
-      '</div>';
-  }
-
+  // Every source is a session chip, always visible: cited sessions first (the
+  // server orders them), then the other candidates. No collapsed list; the
+  // chip's title tooltip carries the repo, time and best-match snippet.
   function askResultsHtml(t, selectedId) {
     const sources = t.sources || [];
     if (!sources.length) return '';
     const count = Number.isFinite(t.hitCount) ? t.hitCount : sources.length;
-    const elapsed = Number.isFinite(t.elapsedMs) ? (t.elapsedMs / 1000).toFixed(1) + 's' : '';
-    const list = '<div class="ask-results">' + sources.map(s => askResultHtml(s, selectedId)).join('') + '</div>';
-    const summary = '<button type="button" class="ask-result-count" data-ask-toggle-sources aria-expanded="false">' +
-      '<span class="ask-toggle-caret">▸</span> ' + count + (count === 1 ? ' source' : ' sources') + ' found' +
-      (elapsed ? ' · ' + elapsed : '') + '</button>';
-    const top = '<div class="ask-top-sources" aria-label="Top relevant sessions">'
-      + sources.slice(0, 2).map(src => askSessionChipHtml(src, selectedId)).join('') + '</div>';
-    return '<div class="ask-sources">' + top + summary + list + '</div>';
+    const bits = [count + (count === 1 ? ' source' : ' sources')];
+    if (Number.isFinite(t.ttftMs)) bits.push('first token ' + (t.ttftMs / 1000).toFixed(1) + 's');
+    if (t.processMode === 'warm') bits.push('warm');
+    const chips = sources.map(src => askSessionChipHtml(src, selectedId)).join('');
+    return '<div class="ask-sources" aria-label="Sources">'
+      + '<div class="ask-top-sources">' + chips + '</div>'
+      + '<div class="ask-result-count">' + askEscapeHtml(bits.join(' · ')) + '</div></div>';
+  }
+
+  // Confirm cards for actions Mazkir proposed. The text is server-written
+  // (assistant_actions.describe), never model prose, and nothing runs until
+  // Confirm posts the one-time token back.
+  function askConfirmCardsHtml(t) {
+    const acts = t.confirmActions || [];
+    if (!acts.length) return '';
+    return '<div class="ask-confirms">' + acts.map(a => {
+      const pending = a.status === 'proposed';
+      const res = a.result || {};
+      let status = '';
+      if (a.status === 'done') status = '✓ Done' + (res.ref ? ' · ' + res.ref : '') + (res.session_id ? ' · ' + String(res.session_id).slice(0, 8) : '');
+      else if (a.status === 'failed') status = '✗ ' + (res.error || 'failed');
+      else if (a.status === 'dismissed') status = 'Dismissed';
+      else if (a.status === 'running') status = 'Running…';
+      else if (a.status === 'expired') status = 'Expired: ask again';
+      return '<div class="ask-confirm is-' + askEscapeHtml(a.status) + '" data-ask-action-id="' + askEscapeHtml(a.id) + '">'
+        + '<div class="ask-confirm-head"><span class="ask-confirm-label">' + askEscapeHtml(a.label || a.kind) + '</span>'
+        + '<span class="ask-confirm-effect">' + askEscapeHtml(askNeutralizeMarkers(a.effect || '')) + '</span></div>'
+        + (a.detail ? '<pre class="ask-confirm-detail">' + askEscapeHtml(askNeutralizeMarkers(a.detail)) + '</pre>' : '')
+        + '<div class="ask-confirm-actions">'
+        + (pending
+          ? '<button type="button" class="ask-action" data-ask-confirm="' + askEscapeHtml(a.id) + '">Confirm</button>'
+            + '<button type="button" class="ask-sel-btn" data-ask-dismiss="' + askEscapeHtml(a.id) + '">Dismiss</button>'
+          : '<span class="ask-confirm-status">' + askEscapeHtml(status) + '</span>')
+        + '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  const ASK_CONFIRM_MARKER_RE = /\[\[action:confirm:[0-9A-Za-z_]{4,40}\]\]/g;
+
+  function askChipTooltip(src, title) {
+    const meta = [src.repo, askResultTime(src.ts_unix), src.status === 'live' ? 'working' : '', (src.id || '').slice(0, 8)]
+      .filter(Boolean).join(' · ');
+    const snippet = askNeutralizeMarkers(src.snippet || '');
+    return 'Open session: ' + title + (meta ? '\n' + meta : '') + (snippet ? '\n' + snippet : '') + '\n⌘-click to select';
   }
 
   function askSessionChipHtml(src, selectedId) {
     const title = askNeutralizeMarkers(src.title || src.id.slice(0, 8));
     return '<button type="button" class="ask-session-chip' + (src.id === selectedId ? ' is-selected' : '') + '"'
       + ' data-ask-open="' + askEscapeHtml(src.id) + '" data-ask-title="' + askEscapeHtml(title) + '"'
-      + ' data-ask-cwd="' + askEscapeHtml(src.cwd || '') + '" title="Open session: ' + askEscapeHtml(title) + '">'
+      + ' data-ask-cwd="' + askEscapeHtml(src.cwd || '') + '" title="' + askEscapeHtml(askChipTooltip(src, title)) + '">'
       + '<span class="ask-dot' + (src.status === 'live' ? ' is-live' : '') + '"></span>'
       + '<span>' + askEscapeHtml(title) + '</span></button>';
   }
@@ -63067,7 +63089,7 @@
     const token = /\[\[(session|action:spawn-continue):([0-9A-Za-z_.-]{5,128})\]\]/;
     const pattern = new RegExp(token.source + (titles.length ? '|' + titles.map(escapeRx).join('|') : ''), 'g');
     const template = document.createElement('template');
-    template.innerHTML = renderMarkdown(String(answer || '').trim());
+    template.innerHTML = renderMarkdown(String(answer || '').replace(ASK_CONFIRM_MARKER_RE, '').trim());
     const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) {
@@ -63262,6 +63284,8 @@
     // Sticky-bottom: auto-scroll on every redraw, EXCEPT once the user has
     // deliberately scrolled up to read something earlier — then leave the
     // view alone until they scroll back near the bottom themselves.
+    // Set from /api/assistant/warm: true only where a check-in agenda exists.
+    let askCheckinEnabled = false;
     let stickToBottom = true;
     log.addEventListener('scroll', () => {
       stickToBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 40;
@@ -63275,9 +63299,9 @@
           '<div class="ask-empty-title">Ask Mazkir</div>' +
           '<div class="ask-empty-desc">Search conversation transcripts, sessions, and fleet history across all your projects.</div>' +
           '<div class="ask-empty-prompts">' +
-          '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">Daily check-in</button>' +
+          (askCheckinEnabled ? '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">Daily check-in</button>' : '') +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="What did I work on today?">What did I work on today?</button>' +
-          '<button type="button" class="ask-prompt-chip" data-ask-prompt="What sessions worked on the model picker recently?">Sessions on model picker</button>' +
+          '<button type="button" class="ask-prompt-chip" data-ask-prompt="Is anything stuck or waiting on me?">Anything stuck?</button>' +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="Show recent Antigravity sessions">Recent Antigravity sessions</button>' +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="Which sessions are currently working?">Working sessions</button>' +
           '</div>' +
@@ -63288,7 +63312,7 @@
       // Quick prompts stay reachable after the first turn: the empty state
       // (with the full chip list) never shows again once history exists.
       const quickStrip = '<div class="ask-quick-prompts">' +
-        '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">☀️ Daily check-in</button>' +
+        (askCheckinEnabled ? '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">☀️ Daily check-in</button>' : '') +
         '<button type="button" class="ask-prompt-chip" data-ask-prompt="What did I work on today?">Today</button>' +
         '<button type="button" class="ask-prompt-chip" data-ask-prompt="Which sessions are currently working?">Working</button>' +
         '</div>';
@@ -63308,6 +63332,7 @@
           '<div class="ask-assistant-header"><span class="ask-assistant-glyph">M</span><span class="ask-assistant-name">Mazkir</span>' + (elapsedSec ? '<span class="ask-turn-time">' + elapsedSec + '</span>' : '') + '</div>' +
           '<div class="ask-turn-body">' + (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) + '</div>' +
           (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') + '</div>' +
+          (t.error ? '' : askConfirmCardsHtml(t)) +
           (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
           '</div>';
       }).join('');
@@ -63317,7 +63342,7 @@
       // rendered markup (which would include button labels, table pipes…).
       log.querySelectorAll('.ask-turn-a').forEach((el, idx) => {
         const t = turns[idx];
-        if (t && !t.error && !t.pending) el._agentAnswerText = String(t.a || '').trim();
+        if (t && !t.error && !t.pending) el._agentAnswerText = String(t.a || '').replace(ASK_CONFIRM_MARKER_RE, '').trim();
       });
       if (stickToBottom) log.scrollTop = log.scrollHeight;
       drawSelBar();
@@ -63334,10 +63359,28 @@
         return;
       }
 
-      const toggleBtn = ev.target.closest('[data-ask-toggle-sources]');
-      if (toggleBtn) {
-        const wrap = toggleBtn.closest('.ask-sources');
-        if (wrap) toggleBtn.setAttribute('aria-expanded', String(wrap.classList.toggle('is-expanded')));
+      const decideBtn = ev.target.closest('[data-ask-confirm], [data-ask-dismiss]');
+      if (decideBtn && !decideBtn.disabled) {
+        const confirm = decideBtn.hasAttribute('data-ask-confirm');
+        const aid = decideBtn.getAttribute(confirm ? 'data-ask-confirm' : 'data-ask-dismiss');
+        const turnEl = decideBtn.closest('[data-ask-turn-index]');
+        const turn = turns[turnEl ? parseInt(turnEl.getAttribute('data-ask-turn-index'), 10) : -1];
+        const act = turn && (turn.confirmActions || []).find(a => a.id === aid);
+        if (!act) return;
+        decideBtn.disabled = true;
+        // Recorded on the turn (not just the DOM) so a redraw can't re-enable
+        // the button and fire the action twice.
+        act.status = confirm ? 'running' : 'dismissed';
+        draw();
+        ccPostJson('/api/assistant/actions/' + encodeURIComponent(aid) + (confirm ? '/confirm' : '/dismiss'),
+          { token: act.confirm_token })
+          .then(d => {
+            const next = (d && d.action) || {};
+            act.status = next.status || (confirm ? 'failed' : 'dismissed');
+            act.result = next.result || (d && d.ok ? null : { error: (d && d.error) || 'failed' });
+          })
+          .catch(e => { act.status = 'failed'; act.result = { error: e.message || String(e) }; })
+          .finally(() => { delete act.confirm_token; askSaveHistory(turns); draw(); });
         return;
       }
 
@@ -63486,6 +63529,9 @@
           turn.sources = data.sources || [];
           turn.hitCount = data.hit_count;
           turn.elapsedMs = data.elapsed_ms;
+          turn.ttftMs = data.ttft_ms;
+          turn.processMode = data.process_mode;
+          turn.confirmActions = data.confirm_actions || [];
           // CCC-1048: "File an issue" embeds when/id in the ticket context.
           turn.at = Date.now();
           turn.id = turn.at.toString(36) + '-' + Math.random().toString(36).slice(2, 8);
@@ -63519,9 +63565,26 @@
       askSaveHistory(turns);
       draw();
     });
+    // Boot the warm Mazkir process before the first question: the CLI and its
+    // MCP servers take seconds to start. Idempotent server-side; throttled here.
+    let lastWarm = 0;
+    const warmUp = () => {
+      if (Date.now() - lastWarm < 60000) return;
+      lastWarm = Date.now();
+      ccPostJson('/api/assistant/warm', {}).then((d) => {
+        // The check-in chip only makes sense where an agenda file exists.
+        const on = !!(d && d.daily_checkin);
+        if (on !== askCheckinEnabled) { askCheckinEnabled = on; draw(); }
+      }).catch(() => {});
+    };
+    input.addEventListener('focus', warmUp);
+    askWarmUp = warmUp;
+    const askPane = document.querySelector('[data-rail-pane="ask"]');
+    if (askPane && !askPane.hidden) warmUp();
     drawRangeBtn();
     draw();
   }
+  let askWarmUp = null;
 
   // Wire pill click + start polling once on first JS load.
   document.addEventListener('DOMContentLoaded', () => {
@@ -64820,7 +64883,7 @@
   // Identity of the context the cached target/command were resolved FOR.
   // _localhostTargetPath et al. are module-level and used to be refreshed only
   // on a successful 200 poll, so after a session switch the previous repo
-  // (e.g. "/Users/amirfish/dev/hermes") kept showing in the pill title and the
+  // (e.g. "/Users/me/dev/my-project") kept showing in the pill title and the
   // click-handler alert until — and only if — the next poll happened to land on
   // a 200. Any early return (no-repo / unreachable / 400) left the leaked path
   // in place. Tracking the resolved context here lets us drop the stale target
@@ -66482,7 +66545,7 @@
   // ── End unified dashboard events ──────────────────────────────────────
 
   // A worker may claim with EITHER its real session UUID or its made-up CCC
-  // name (e.g. "BYM UX-fixes-queue"). To let the badge match either, reduce
+  // name (e.g. "APP UX-fixes-queue"). To let the badge match either, reduce
   // both `claimed_by` and each candidate row identity to the same key:
   // lowercased, with runs of space/dash/underscore collapsed to one space.
   function _uxFixesIdentityKey(value) {
@@ -66903,7 +66966,7 @@
     // 2) Project-named worker rows should show the latest project close, even
     // when this visual row's own session id last closed an older ticket. Queue
     // draining can move across worker identities, but the project worker row is
-    // the thing the user scans for up-to-date CCC/BYM progress.
+    // the thing the user scans for up-to-date project progress.
     const projectLastFix = uxFixesQueueMeta.lastFixByProject || new Map();
     if (projectHint) {
       const done = projectLastFix.get(projectHint);

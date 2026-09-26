@@ -20,3 +20,11 @@ def test_dynamic_earlier_ask_updates_the_same_text_cache():
     dynamic_apply = app_js[start:end]
 
     assert "st.earlierFirst.dataset.rawText = text;" in dynamic_apply
+
+
+def test_daily_checkin_chip_is_gated_on_server_feature_flag():
+    src = (Path(__file__).parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+    chips = [line for line in src.splitlines() if "Daily check-in</button>" in line]
+    assert chips, "check-in chip markup moved; update this test"
+    assert all("askCheckinEnabled ?" in line for line in chips)
+    assert "askCheckinEnabled = on" in src

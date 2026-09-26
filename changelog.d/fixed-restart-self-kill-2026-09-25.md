@@ -1,0 +1,1 @@
+- The dashboard no longer shuts itself down during an in-place restart (Settings restart or in-app update) when run from the Mac app.

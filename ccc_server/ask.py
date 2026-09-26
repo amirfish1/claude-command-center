@@ -631,7 +631,7 @@ def handle_assistant_ask(payload, runner=None):
         try:
             from ccc_server import mazkir as _mazkir
             body, status = _mazkir.run_mazkir(question, history, payload.get("range"))
-            if status in (200, 400, 504):
+            if status in (200, 400, 401, 504):
                 return body, status
         except Exception:
             pass
