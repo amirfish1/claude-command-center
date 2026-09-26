@@ -130,8 +130,11 @@
       if (ok) html += '<span class="fleet-node-status ok" title="reachable">✓</span>';
       else html += '<span class="fleet-node-status err" title="' + fedEsc(n.detail || n.error || 'unreachable') + '">✗ ' + fedEsc(n.error || 'error') + '</span>';
       if (n.stale) html += '<span class="fleet-stale-badge" title="' + fedEsc(fleetObsTitle('', n.observed_at)) + '">stale: ' + fedEsc(fleetRel(n.observed_at)) + '</span>';
-      return '<div class="' + cls + '">' + html + '</div>';
+      return '<div class="' + cls + '" data-fleet-node-id="' + fedEsc(n.node_id) + '" data-fleet-node-name="' + fedEsc(name) + '">' + html + '</div>';
     }).join('');
+    // Node-level "Re-authenticate (N)" when sessions there hit a Claude
+    // Code auth failure (preview flag claude_reauth; static/claude-reauth.js).
+    if (window.cccClaudeReauth) window.cccClaudeReauth.decorateFleetNodes($fleetHealthStrip);
   }
 
   // ── Repo matrix ──

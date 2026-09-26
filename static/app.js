@@ -34728,6 +34728,7 @@
             + needsYouHtml
             + workingDotHtml
             + sessionStuckWarningHtml(c)
+            + (window.cccClaudeReauth ? window.cccClaudeReauth.rowChipHtml(c) : '')
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             // .conv-meta-col is display:contents everywhere except the Workers
             // table layout, where it becomes the row's single meta CELL. Grid
@@ -68160,6 +68161,10 @@
         // Same allowlist trap as session_state/auto_titled above — drops
         // silently if not named here.
         usage_limit_resume_at: typeof c.usage_limit_resume_at === 'number' ? c.usage_limit_resume_at : null,
+        // Claude Code lost its login on this node (synthetic
+        // authentication_failed turn). Drives the Re-authenticate chip
+        // (static/claude-reauth.js); same allowlist trap as above.
+        claude_auth_failed: !!c.claude_auth_failed,
         needs_approval: !!c.needs_approval,
         needs_approval_message: c.needs_approval_message || '',
         question_waiting: !!c.question_waiting,
