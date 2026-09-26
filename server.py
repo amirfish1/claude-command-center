@@ -14400,6 +14400,7 @@ _ARCHIVE_LIST_FIELDS = (
     "codex_fresh", "codex_state_reason", "codex_writer", "codex_desktop_attached",
     "bridge_session_id", "registry_status", "registry_status_updated_at",
     "registry_tmux", "messaging_socket_path", "usage_limit_resume_at",
+    "claude_auth_failed",
 )
 
 

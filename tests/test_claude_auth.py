@@ -202,3 +202,9 @@ def test_ui_is_wired_and_never_persists_the_code():
     assert '/static/claude-reauth.js' in _read("static/index.html")
     assert '/static/claude-reauth.js' in _read("static/fleet.html")
     assert "decorateFleetNodes" in _read("static/fleet.js")
+
+
+def test_sidebar_list_projection_keeps_the_flag():
+    # /api/conversations/list serializes only _ARCHIVE_LIST_FIELDS; a field
+    # missing here silently never reaches the row chip.
+    assert "claude_auth_failed" in server._ARCHIVE_LIST_FIELDS
