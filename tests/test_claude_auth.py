@@ -183,3 +183,22 @@ def test_missing_tmux_is_a_typed_error(monkeypatch):
     out = ca.claude_auth_start()
     assert out == {"ok": False, "error": "tmux_missing", "detail": out["detail"]}
 
+
+
+# -- static wiring -----------------------------------------------------------
+
+def _read(rel):
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / rel).read_text(encoding="utf-8")
+
+
+def test_ui_is_wired_and_never_persists_the_code():
+    js = _read("static/claude-reauth.js")
+    assert "claude_reauth" in js and "/api/claude-auth/" in js
+    assert "localStorage" not in js and "sessionStorage" not in js
+    assert "console.log" not in js
+    assert "claude_auth_failed: !!c.claude_auth_failed" in _read("static/app.js")
+    assert "cccClaudeReauth.rowChipHtml(c)" in _read("static/app.js")
+    assert '/static/claude-reauth.js' in _read("static/index.html")
+    assert '/static/claude-reauth.js' in _read("static/fleet.html")
+    assert "decorateFleetNodes" in _read("static/fleet.js")
