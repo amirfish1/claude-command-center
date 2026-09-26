@@ -68,6 +68,8 @@ _CLAUDE_AUTH_SUCCESS_RE = re.compile(r"(login successful|logged in as|successful
 _CLAUDE_AUTH_ERROR_RE = re.compile(r"(invalid code|invalid_grant|error|failed|expired)", re.IGNORECASE)
 
 _claude_auth_lock = threading.Lock()
+# Held for a whole start() so two clicks can't both kill/recreate the session.
+_claude_auth_start_lock = threading.Lock()
 _claude_auth_state = {
     "state": "idle",  # idle | awaiting_code | verifying | succeeded | failed
     "attempt_id": None,
@@ -258,10 +260,13 @@ def claude_auth_smoke(timeout=90):
     claude = _claude_auth_claude_bin()
     if not claude:
         return {"ok": False, "detail": "claude CLI not found"}
-    cmd = [*_claude_auth_run_as_prefix(), claude, "-p", "reply with exactly: ok"]
+    prefix = _claude_auth_run_as_prefix()
+    cmd = [*prefix, claude, "-p", "reply with exactly: ok"]
+    # Under sudo the target user may not be able to read our home directory.
+    cwd = "/" if prefix else str(Path.home())
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL, cwd=str(Path.home()))
+                           stdin=subprocess.DEVNULL, cwd=cwd)
     except subprocess.TimeoutExpired:
         return {"ok": False, "detail": f"claude -p timed out after {timeout}s"}
     except OSError as e:
@@ -285,6 +290,11 @@ def claude_auth_start(force=False):
     SAME attempt: restarting would mint new PKCE state and silently invalidate
     the code the user is about to paste.
     """
+    with _claude_auth_start_lock:
+        return _claude_auth_start_locked(force)
+
+
+def _claude_auth_start_locked(force):
     with _claude_auth_lock:
         cur = dict(_claude_auth_state)
     fresh_enough = (
@@ -346,22 +356,28 @@ def claude_auth_start(force=False):
 def claude_auth_submit(attempt_id, code, smoke=True):
     """Paste the one-time code into the waiting login and verify the result."""
     code = (code or "").strip()
+    stale = {"ok": False, "error": "stale_attempt",
+             "detail": "That sign-in attempt is no longer waiting for a code. "
+                       "Start again and use the code from the new page."}
     with _claude_auth_lock:
         cur = dict(_claude_auth_state)
     if not attempt_id or attempt_id != cur.get("attempt_id") or cur.get("state") != "awaiting_code":
-        return {"ok": False, "error": "stale_attempt",
-                "detail": "That sign-in attempt is no longer waiting for a code. "
-                          "Start again and use the code from the new page."}
-    if not _claude_auth_session_alive():
-        _claude_auth_set(state="failed", error="login prompt exited", finished_at=time.time())
-        return {"ok": False, "error": "stale_attempt",
-                "detail": "The login prompt exited before the code arrived. Start again."}
+        return stale
     if not _CLAUDE_AUTH_CODE_RE.match(code):
         # Stay in awaiting_code: a mistyped paste should not burn the attempt.
         return {"ok": False, "error": "bad_code",
                 "detail": "That does not look like a sign-in code (expected <code>#<state>)."}
-
-    _claude_auth_set(state="verifying")
+    if not _claude_auth_session_alive():
+        _claude_auth_set(state="failed", error="login prompt exited", finished_at=time.time())
+        return {"ok": False, "error": "stale_attempt",
+                "detail": "The login prompt exited before the code arrived. Start again."}
+    # Check-and-set under one lock: a double-clicked Submit must not paste
+    # the code into the prompt twice.
+    with _claude_auth_lock:
+        if (_claude_auth_state.get("attempt_id") != attempt_id
+                or _claude_auth_state.get("state") != "awaiting_code"):
+            return stale
+        _claude_auth_state["state"] = "verifying"
     try:
         # stdin, not argv: the code must not show up in `ps` or any log.
         r = _claude_auth_tmux("load-buffer", "-b", _CLAUDE_AUTH_TMUX_BUFFER, "-", input_text=code)
