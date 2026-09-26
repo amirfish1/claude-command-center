@@ -516,7 +516,8 @@ def claude_auth_handle(sub, data):
     if not data.get("via_route") and not _core._feature_flag(CLAUDE_AUTH_FLAG):
         return {"ok": False, "error": "feature_disabled",
                 "detail": "Turn on \"Claude re-authenticate\" in Settings > Experimental"}, 403
-    node = str(data.get("node_id") or "").strip()
+    # A routed call always runs on THIS node: never let a peer chain it onward.
+    node = "" if data.get("via_route") else str(data.get("node_id") or "").strip()
     if node and node != federation.node_id():
         args = {k: v for k, v in data.items() if k not in ("node_id", "via_route")}
         timeout = 240.0 if sub == "submit" else 90.0
