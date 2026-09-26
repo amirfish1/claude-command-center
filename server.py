@@ -12467,6 +12467,7 @@ def _claude_task_agent_row(
         "subagent_recent": tail_meta.get("subagent_recent", []),
         "workflows": [],
         "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+        "claude_auth_failed": claude_auth_failed_from_meta(tail_meta),
         "goal": "",
         "goal_status": "",
         "parent_session_id": parent_sid,
@@ -13099,6 +13100,7 @@ def find_all_conversations(
                     if session_id in _ARCHIVE_WORKFLOW_SESSION_DIRS else []
                 ),
                 "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+                "claude_auth_failed": claude_auth_failed_from_meta(tail_meta),
                 "goal": tail_meta.get("goal") or "",
                 "goal_status": tail_meta.get("goal_status") or "",
                 "parent_session_id": parent_session_id,
@@ -20811,6 +20813,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             # pass. See find_all_conversations for the broader rationale.
             "pr_state": None,
             "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+            "claude_auth_failed": claude_auth_failed_from_meta(tail_meta),
             "goal": tail_meta.get("goal") or "",
             "goal_status": tail_meta.get("goal_status") or "",
             "parent_session_id": parent_session_id,
@@ -28133,6 +28136,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "version": __version__,
                 "node_id": federation.node_identity()["node_id"],
             })
+        elif path == "/api/claude-auth/status":
+            # Claude Code login state for this node (or ?node_id=<peer>).
+            # Preview-gated; returns no tokens, only loggedIn/email/attempt.
+            qs_ca = urllib.parse.parse_qs(parsed.query)
+            payload, status = claude_auth_handle("status", {
+                "node_id": (qs_ca.get("node_id") or [""])[0].strip()})
+            self.send_json(payload, status)
         elif path == "/api/federation/v1/hello":
             # Unauthenticated identity card — pairing preflight. No secrets.
             self.send_json(_federation_self_hello())
@@ -28892,6 +28902,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(_fleet_attribute_path(str(repo_path), target))
             else:
                 self.send_json({"ok": False, "error": "not_found"}, 404)
+            return
+
+        if path.startswith("/api/claude-auth/"):
+            # One-click Claude Code re-login (ccc_server/claude_auth.py).
+            # Same-origin enforced above. The one-time code in /submit is
+            # never logged: it goes straight to tmux over stdin.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError) as e:
+                self.send_json({"error": f"invalid JSON: {e}"}, 400)
+                return
+            payload, status = claude_auth_handle(path[len("/api/claude-auth/"):], data)
+            self.send_json(payload, status)
             return
 
         if path.startswith("/api/federation/"):
@@ -38390,6 +38415,7 @@ _adopt_ccc_module("fleet")
 _adopt_ccc_module("fleet_reco")
 
 _adopt_ccc_module("fleet_jobs")
+_adopt_ccc_module("claude_auth")
 
 def main():
     # State files, logs and transcripts hold secrets: create everything owner-only.

@@ -167,6 +167,13 @@ _PREVIEW_FLAGS = {
         "label": "$ cost in bottom bar",
         "desc": "Show the API list-price cost pill next to token usage in the input bar.",
     },
+    "claude_reauth": {
+        "default": False,
+        "label": "Claude re-authenticate",
+        "desc": "Show a Re-authenticate action when a session or node fails with "
+                "\"Failed to authenticate\" / \"Not logged in\", and run the "
+                "Claude Code login on that node (local or paired peer) from the browser.",
+    },
     # "flow_v2": {
     #     "default": False,
     #     "label": "Flow v2 canvas",
@@ -1057,6 +1064,10 @@ def _extract_tail_meta(path):
         "pending_tool": None,     # tool awaiting approval (last assistant had tool_use, no result yet)
         "pending_file": None,     # file path from pending tool
         "last_assistant_text": None,  # last text block from an assistant message (the "outcome")
+        # Claude Code's synthetic API-error turn (isApiErrorMessage) carries a
+        # machine-readable `error`, e.g. "authentication_failed". Cleared by the
+        # next real assistant turn. Drives the Re-authenticate row action.
+        "last_api_error": None,
         "model": None,
         "latest_input_tokens": 0,
         "peak_input_tokens": 0,
@@ -1292,6 +1303,10 @@ def _extract_tail_meta(path):
                         content = []
                     last_tool_name = None
                     last_tool_file = None
+                    if ev.get("isApiErrorMessage"):
+                        meta["last_api_error"] = str(ev.get("error") or "api_error")[:64]
+                    else:
+                        meta["last_api_error"] = None
                     # Capture last text block from this assistant turn as the "outcome"
                     for block in content:
                         if block.get("type") == "text":

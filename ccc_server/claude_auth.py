@@ -458,3 +458,66 @@ def claude_auth_nudge(session_ids, inject_fn):
         results.append({"session_id": sid, "ok": bool(res.get("ok", True)) and not res.get("error"),
                         "error": res.get("error")})
     return {"ok": True, "nudged": sum(1 for r in results if r["ok"]), "results": results}
+
+
+# ---------------------------------------------------------------------------
+# HTTP surface: /api/claude-auth/<sub>
+# ---------------------------------------------------------------------------
+
+# sub -> federation route action (see _FEDERATION_ROUTE_ACTIONS in fleet.py)
+CLAUDE_AUTH_ROUTE_ACTIONS = {
+    "status": "claude_auth_status",
+    "start": "claude_auth_start",
+    "submit": "claude_auth_submit",
+    "cancel": "claude_auth_cancel",
+    "nudge": "claude_auth_nudge",
+}
+
+
+def _claude_auth_local_inject(sid, text):
+    return _core._federation_self_api("POST", "/api/inject-input", body={
+        "session_id": sid,
+        "text": text,
+        "announced_from": "CCC re-authenticate",
+    }, timeout=30.0)
+
+
+def claude_auth_handle(sub, data):
+    """Dispatch one /api/claude-auth/<sub> call. Returns (payload, status).
+
+    ``node_id`` naming a paired peer proxies the call to that peer's own
+    loopback over the federation route envelope; the peer then runs the flow
+    as its own user. ``via_route`` is stamped by the route executor so a
+    peer honours a request from a node that has the preview enabled even
+    when the peer's own Settings toggle is off (the pairing secret, not the
+    UI flag, is what authorises a routed call).
+    """
+    if not isinstance(data, dict):
+        data = {}
+    if sub not in CLAUDE_AUTH_ROUTE_ACTIONS:
+        return {"ok": False, "error": "not_found"}, 404
+    if not data.get("via_route") and not _core._feature_flag(CLAUDE_AUTH_FLAG):
+        return {"ok": False, "error": "feature_disabled",
+                "detail": "Turn on \"Claude re-authenticate\" in Settings > Experimental"}, 403
+    node = str(data.get("node_id") or "").strip()
+    if node and node != federation.node_id():
+        args = {k: v for k, v in data.items() if k not in ("node_id", "via_route")}
+        timeout = 240.0 if sub == "submit" else 90.0
+        result = _core._federation_proxy_session_action(
+            node, CLAUDE_AUTH_ROUTE_ACTIONS[sub], args, timeout=timeout)
+        return result, 200
+    if sub == "status":
+        return claude_auth_overview(), 200
+    if sub == "start":
+        return claude_auth_start(force=bool(data.get("force"))), 200
+    if sub == "submit":
+        result = claude_auth_submit(str(data.get("attempt_id") or ""),
+                                    str(data.get("code") or ""),
+                                    smoke=data.get("smoke", True) is not False)
+        return result, 200
+    if sub == "cancel":
+        return claude_auth_cancel(), 200
+    ids = data.get("session_ids")
+    if not isinstance(ids, list):
+        return {"ok": False, "error": "bad_request", "detail": "session_ids must be a list"}, 400
+    return claude_auth_nudge(ids, _claude_auth_local_inject), 200
