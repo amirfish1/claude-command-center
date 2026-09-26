@@ -28296,8 +28296,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             file_path = Path(resolved["path"])
             media_category = _categorize_file_target(str(file_path))
-            if media_category not in ("videos", "html") or not file_path.is_file():
-                self.send_json({"ok": False, "error": "not a streamable video/html file"}, 404)
+            if media_category not in ("videos", "html", "images", "pdfs") or not file_path.is_file():
+                self.send_json({"ok": False, "error": "not a streamable media file"}, 404)
                 return
             try:
                 st = file_path.stat()
@@ -28315,8 +28315,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ".m4v": "video/mp4",
                 ".html": "text/html; charset=utf-8",
                 ".htm": "text/html; charset=utf-8",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".svg": "image/svg+xml",
+                ".pdf": "application/pdf",
             }
-            content_type = ct_map.get(ext, "application/octet-stream")
+            content_type = ct_map.get(ext)
+            if content_type is None:
+                # Whitelisted extension without a known type (e.g. .heic,
+                # .avif): don't guess — force a download, never render it.
+                content_type = "application/octet-stream"
             start, end = 0, max(0, size - 1)
             status = 200
             range_header = self.headers.get("Range")
@@ -28344,7 +28355,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Disposition", "inline")
             self.send_header("Cache-Control", "private, max-age=3600")
-            if media_category == "html":
+            if media_category == "html" or ext == ".svg":
                 # An arbitrary local HTML file rendered same-origin as the
                 # dashboard would otherwise run script with the dashboard's
                 # own ambient authority (cookies, same-origin fetch — which

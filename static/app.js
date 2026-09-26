@@ -15362,6 +15362,10 @@
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:mp4|mov|webm|avi|mkv|m4v)$/i.test(clean);
   }
+  function _isImageOrPdfPath(p) {
+    const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
+    return /\.(?:png|jpe?g|gif|webp|svg|pdf)$/i.test(clean);
+  }
   function _isHtmlDocPath(p) {
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:html|htm)$/i.test(clean);
@@ -15401,8 +15405,8 @@
       document.body.removeChild(tmp);
       return;
     }
-    if (_isVideoPath(p) || _isHtmlDocPath(p)) {
-      // Video/HTML links on mobile/Tailnet should stream from the CCC server
+    if (_isVideoPath(p) || _isHtmlDocPath(p) || _isImageOrPdfPath(p)) {
+      // Video/HTML/image/PDF links on mobile/Tailnet should stream from the CCC server
       // so the remote browser can play/render them. /api/open would try to
       // open the file locally on the host machine, which does nothing useful
       // for a viewer connected from elsewhere (CCC-30).
