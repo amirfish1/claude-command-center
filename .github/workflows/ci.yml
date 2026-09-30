@@ -62,7 +62,24 @@ jobs:
         run: |
           python -m pip install pytest
           WATCHTOWER_REF=221260bbc5d31ae57eeacde542154c1c9ad5f3c6 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
-          python -m pytest -q --tb=no tests/
+          python -m pytest -q --tb=short -rf --junitxml="$RUNNER_TEMP/junit.xml" tests/
+      # The short summary above can be cut off by log truncation when many
+      # tests fail; the junit file is the reliable list of what failed.
+      - name: List failed tests
+        if: failure()
+        run: |
+          python - <<'PY'
+          import os, sys
+          import xml.etree.ElementTree as ET
+          path = os.path.join(os.environ["RUNNER_TEMP"], "junit.xml")
+          if not os.path.exists(path):
+              sys.exit(0)
+          for case in ET.parse(path).getroot().iter("testcase"):
+              for child in case:
+                  if child.tag in ("failure", "error"):
+                      msg = (child.get("message") or "").splitlines()
+                      print("FAILED", case.get("classname"), case.get("name"), "-", (msg[0] if msg else "")[:200])
+          PY
 
   # Cheap smoke test: boot the server on a free port, hit a few read-only
   # endpoints, and verify they return 2xx. Nothing that requires gh auth.
