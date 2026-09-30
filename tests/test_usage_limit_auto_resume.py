@@ -20,10 +20,28 @@ from pathlib import Path
 from unittest import mock
 
 
+_FRESH_MODULES = ("server", "morning", "morning_store")
+_ORIGINAL_MODULES = {m: sys.modules[m] for m in _FRESH_MODULES if m in sys.modules}
+
+
 def _fresh_server():
-    for mod in ("server", "morning", "morning_store"):
+    for mod in _FRESH_MODULES:
         sys.modules.pop(mod, None)
     return importlib.import_module("server")
+
+
+def tearDownModule():
+    # Each `_fresh_server()` re-executes server.py, and that reloads every
+    # ccc_server module, so the `server` object other test modules imported at
+    # collection time is left pointing at stale copies of that shared state.
+    # Put the original module back and reload it in place so it is wired to the
+    # current ccc_server modules again.
+    for mod in _FRESH_MODULES:
+        sys.modules.pop(mod, None)
+    sys.modules.update(_ORIGINAL_MODULES)
+    original = _ORIGINAL_MODULES.get("server")
+    if original is not None:
+        importlib.reload(original)
 
 
 class UsageLimitAutoResumeDisabledTests(unittest.TestCase):
