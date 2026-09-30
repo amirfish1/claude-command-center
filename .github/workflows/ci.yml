@@ -96,7 +96,13 @@ jobs:
           WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           PORT=18090 CCC_BIND_HOST=127.0.0.1 python server.py > /tmp/server.log 2>&1 &
           SERVER_PID=$!
-          sleep 3
+          # The server takes more than 3 s to bind on a cold runner; wait for
+          # /api/features (up to 90 s) instead of a fixed sleep.
+          for _ in $(seq 1 90); do
+            kill -0 $SERVER_PID 2>/dev/null || break
+            curl -sf -o /dev/null http://localhost:18090/api/features && break
+            sleep 1
+          done
           set -x
           # Server must still be alive — exits with non-zero if not.
           ps -p $SERVER_PID > /dev/null
