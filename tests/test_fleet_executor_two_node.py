@@ -197,7 +197,7 @@ class TestFleetExecutorTwoNode(unittest.TestCase):
             "type": "user", "cwd": repo, "sessionId": sid_weak,
             "message": {"role": "user", "content": "unrelated work"}}) + "\n")
 
-        # The session list behind attribution is cache-backed (2s serve TTL)
+        # The session list behind attribution is cache-backed (short serve TTL set by the harness)
         # — poll briefly until the freshly-written transcripts are visible.
         deadline = time.time() + 12
         result = None

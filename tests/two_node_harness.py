@@ -85,6 +85,10 @@ class CCCNode:
             "CCC_SKIP_SKILL_INSTALL": "1",
             "CCC_TELEMETRY_DISABLED": "1",
             "CCC_CHAT_ORCHESTRATOR": "builtin",
+            # The archive row snapshot is served stale-while-revalidate for
+            # 300s by default; tests write transcripts and expect the next
+            # poll cycle to see them, so keep the snapshot short-lived here.
+            "CCC_ARCHIVE_SERVE_TTL_SEC": "1",
         }
         env.pop("CCC_SSH_HOST", None)  # never let dev env leak a remote redirect
         # server.py hard-requires `watchtower`. When it's only pip-installed

@@ -367,7 +367,8 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None,
         # The one explicitly-requested mutation-adjacent step a scan may do:
         # refresh remote refs. Never touches the working tree.
         _core._git(["fetch", "--quiet", "--prune", "origin"], repo_path, timeout=60)
-    wt_payload = _core.list_repo_worktrees(repo_path, include_prs=include_prs)
+    wt_payload = _core.list_repo_worktrees(
+        repo_path, include_prs=include_prs, fresh=True)
     worktrees = []
     for wt in wt_payload.get("worktrees", []):
         entry = dict(wt)

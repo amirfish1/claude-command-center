@@ -4024,9 +4024,10 @@ def _pump_devin_resume_queue(session_id):
                 else {"field": "resume", "action": "pop_head_if_matching",
                       "match": text}
             )
-            _core._apply_pending_input_operations(session_id, [drop])
+            drop_tx = _core._apply_pending_input_operations(session_id, [drop])
             return {"ok": True, "started": True, "via": "acp-prompt",
-                    "result": acp_result}
+                    "result": acp_result,
+                    "queue_cleanup_ok": bool((drop_tx or {}).get("ok"))}
 
         result = _core.resume_session_devin(
             session_id, text, _delivery_slot=delivery_slot,

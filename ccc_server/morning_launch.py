@@ -1162,7 +1162,7 @@ def _worktree_dirty_cached(path, event_ts):
     return dirty
 
 
-def list_repo_worktrees(repo_top, include_prs=True):
+def list_repo_worktrees(repo_top, include_prs=True, fresh=False):
     """Return all worktrees for a repo with a `dirty` flag (uncommitted
     changes). Powers the topbar's "open worktrees" modal.
 
@@ -1175,8 +1175,16 @@ def list_repo_worktrees(repo_top, include_prs=True):
     Fleet view's first pass uses it: `gh` is a network round-trip (~5s
     cold) and a fleet scan touches every mapped repo, so PR data is
     fetched in a second, enriching pass rather than blocking first paint.
+
+    `fresh=True` drops the short-TTL `git worktree list` cache first. Fleet
+    inventory scans are explicit "look now" operations whose recommendations
+    (e.g. removing a merged worktree) must not miss a worktree created within
+    the last few seconds.
     """
     repo_top = _core.resolve_repo_path(repo_top)
+    if fresh:
+        with _WORKTREE_LIST_LOCK:
+            _WORKTREE_LIST_CACHE.pop(str(repo_top), None)
     wts = _list_worktrees(repo_top)
     dirty_n = 0
     agent_n = 0
