@@ -190,6 +190,10 @@ def mock_where_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
     monkeypatch.setenv("CCC_SESSION_FTS_EMBED", "0")
     monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path / "state"))
+    # Isolate the Hermes messages_fts channel so a real ~/.hermes can't
+    # answer an unrelated query.
+    monkeypatch.setattr(server, "HERMES_STATE_DB", tmp_path / "hermes" / "state.db")
+    monkeypatch.setattr(server, "HERMES_PROFILES_DIR", tmp_path / "hermes" / "profiles")
 
     for mod in (ship_graph, session_fts):
         if hasattr(mod._tls, "conn") and mod._tls.conn:

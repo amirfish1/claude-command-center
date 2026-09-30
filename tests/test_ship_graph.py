@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import ccc_server.ship_graph as ship_graph
+import server  # binds the hermes channel's lazy `_core` proxy
 
 
 @pytest.fixture
@@ -105,6 +106,10 @@ def mock_graph_env(tmp_path, monkeypatch):
     # tmp_path too, or it syncs (and migrates) the real on-disk one.
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(tmp_path / "session_fts.sqlite"))
     monkeypatch.setenv("CCC_SESSION_FTS_EMBED", "0")
+    # Isolate the Hermes messages_fts channel: search_sessions() merges it in,
+    # so a real ~/.hermes would inject foreign session ids.
+    monkeypatch.setattr(server, "HERMES_STATE_DB", tmp_path / "hermes" / "state.db")
+    monkeypatch.setattr(server, "HERMES_PROFILES_DIR", tmp_path / "hermes" / "profiles")
     monkeypatch.setattr(ship_graph, "_base_search_sessions", None)
     monkeypatch.setenv("WATCHTOWER_DB", str(wt_db_path))
     monkeypatch.setenv("CCC_PROJECTS_ROOT", str(projects_dir))

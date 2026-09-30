@@ -124,7 +124,8 @@ def test_parse_kimi_reads_cwd_from_state_json(fts_env):
     assert r is not None
     assert r["cwd"] == "/Users/x/dev/proj"
     assert r["engine"] == "kimi"
-    assert r["sid"] == "session_11111111-1111-1111-1111-111111111111"
+    # Kimi's on-disk dir is `session_<uuid>`; the recall index stores the bare UUID.
+    assert r["sid"] == "11111111-1111-1111-1111-111111111111"
 
 
 def test_parse_kimi_extracts_prompt_and_tool_output(fts_env):
@@ -305,7 +306,7 @@ def test_search_sessions_finds_kimi_gemini_and_cursor_sessions(fts_env, tmp_path
 
     results = session_fts.search_sessions("frobnicator timeout")
     sids = {r["session_id"] for r in results}
-    assert "session_55555555-5555-5555-5555-555555555555" in sids
+    assert "55555555-5555-5555-5555-555555555555" in sids
     assert "66666666-6666-6666-6666-666666666666" in sids
     assert "77777777-7777-7777-7777-777777777777" in sids
 
@@ -343,9 +344,10 @@ def test_file_cache_schema_migration_adds_cwd_and_engine_columns(fts_env):
 
 
 def test_search_sessions_enriched_reports_cwd_engine_and_snippet(fts_env):
-    sid = "session_88888888-8888-8888-8888-888888888888"
+    dir_sid = "session_88888888-8888-8888-8888-888888888888"
+    sid = dir_sid[len("session_"):]  # index normalizes Kimi ids to bare UUID
     _write_kimi_session(
-        fts_env["kimi"], "wd_proj_enrich", sid, "/Users/x/dev/enrichproj",
+        fts_env["kimi"], "wd_proj_enrich", dir_sid, "/Users/x/dev/enrichproj",
         [_kimi_prompt_event("investigate the widget rendering glitch")],
     )
     out = session_fts.search_sessions_enriched("widget rendering glitch", limit=5)
@@ -381,9 +383,10 @@ def test_search_sessions_enriched_cwd_like_filters_results(fts_env):
 
 
 def test_search_sessions_enriched_since_ts_excludes_old_sessions(fts_env):
-    sid = "session_aaaaaaaa-0000-0000-0000-000000000001"
+    dir_sid = "session_aaaaaaaa-0000-0000-0000-000000000001"
+    sid = dir_sid[len("session_"):]  # index normalizes Kimi ids to bare UUID
     wire = _write_kimi_session(
-        fts_env["kimi"], "wd_old", sid, "/Users/x/dev/oldproj",
+        fts_env["kimi"], "wd_old", dir_sid, "/Users/x/dev/oldproj",
         [_kimi_prompt_event("zzzfoo stale marker term")],
     )
     old_ts = time.time() - 30 * 86400

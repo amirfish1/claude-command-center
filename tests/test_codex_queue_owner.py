@@ -51,6 +51,7 @@ class QueueOwnershipTests(unittest.TestCase):
         self.assertFalse(owner.native_queue_owned('task'))
     def test_pending_native_action_blocks_owner_switch(self):
         with mock.patch.object(client, '_client_scope', return_value={}), \
+             mock.patch.object(client, '_client_desktop_mode', return_value=False), \
              mock.patch.object(client, '_CLIENT_ACTIONS', {'receipt':{'method':'thread/queue/add','thread_id':'task','state':'uncertain'}}):
             result=client.codex_client_dispatch('queue-owner',{'owner':'ccc','context':{'thread_id':'task','repo_path':str(self.root)}})
         self.assertFalse(result['ok'])
