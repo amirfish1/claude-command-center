@@ -164,6 +164,17 @@ def clean_pending_queues(monkeypatch):
         suppressions.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_worker_compat(monkeypatch):
+    """Keep these tests hermetic from a real CCC worker on the dev machine.
+
+    resume_session_codex refuses to run when a reachable worker lacks the
+    pending-input CAS capability; a stale worker left running on a developer
+    box made the queue-pump tests fail locally while CI (no worker) passed.
+    """
+    monkeypatch.setattr(server, "_get_worker_compat_cache", lambda *a, **k: {})
+
+
 @pytest.fixture
 def router_env(monkeypatch):
     resume = mock.Mock()
