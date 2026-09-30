@@ -305,7 +305,7 @@ launch_server() {
 # has run does $INSTALL_DIR/scripts/ exist.
 install_watchtower() {
   local here script=""
-  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  here="$(if cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null; then pwd; fi)"
   local candidate
   for candidate in "$here/install-watchtower.sh" \
                    "$INSTALL_DIR/scripts/install-watchtower.sh"; do
@@ -341,7 +341,7 @@ install_watchtower() {
 # ---------------------------------------------------------------------------
 link_ccc_cli() {
   local here script=""
-  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  here="$(if cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null; then pwd; fi)"
   local candidate
   for candidate in "$here/link-ccc-cli.sh" \
                    "$INSTALL_DIR/scripts/link-ccc-cli.sh"; do

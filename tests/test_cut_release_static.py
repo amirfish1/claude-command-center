@@ -44,7 +44,7 @@ def test_homebrew_publish_syncs_and_verifies_the_remote_formula():
     script = (ROOT / "scripts" / "cut-release.sh").read_text(encoding="utf-8")
 
     rebase = 'git -C "${BREW_TAP}" pull --rebase origin main'
-    formula_update = 'sed -i \'\' -E "s#archive/refs/tags/v[0-9.]+\\.tar\\.gz#archive/refs/tags/v${VERSION}.tar.gz#"'
+    formula_update = 'sed_i -E "s#archive/refs/tags/v[0-9.]+\\.tar\\.gz#archive/refs/tags/v${VERSION}.tar.gz#"'
 
     assert rebase in script
     assert script.index(rebase) < script.index(formula_update)
