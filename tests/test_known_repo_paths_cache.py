@@ -71,6 +71,11 @@ def test_expired_known_repo_paths_serve_the_last_list_while_one_thread_rebuilds(
 
     assert stale == ["/repo/old"]
     assert elapsed < 0.5
+    # The expired-memo call rebuilds on its own daemon thread, so joining
+    # `rebuilder` proves nothing about the rebuild; wait for it to land.
+    deadline = time.time() + 5
+    while time.time() < deadline and server._KNOWN_REPO_PATHS_CACHE["paths"] != ["/repo/new"]:
+        time.sleep(0.01)
     assert server._known_repo_paths() == ["/repo/new"]
     _reset_cache()
 

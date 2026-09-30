@@ -61,7 +61,7 @@ jobs:
       - name: Install pytest and run tests
         run: |
           python -m pip install pytest
-          WATCHTOWER_REF=221260bbc5d31ae57eeacde542154c1c9ad5f3c6 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           python -m pytest -q --tb=short -rf --junitxml="$RUNNER_TEMP/junit.xml" tests/
       # The short summary above can be cut off by log truncation when many
       # tests fail; the junit file is the reliable list of what failed.
@@ -93,7 +93,7 @@ jobs:
           python-version: "3.12"
       - name: Boot server and probe endpoints
         run: |
-          WATCHTOWER_REF=221260bbc5d31ae57eeacde542154c1c9ad5f3c6 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           PORT=18090 CCC_BIND_HOST=127.0.0.1 python server.py > /tmp/server.log 2>&1 &
           SERVER_PID=$!
           sleep 3
@@ -127,7 +127,7 @@ jobs:
           python-version: "3.9"
       - name: Import and boot with Python 3.9
         run: |
-          WATCHTOWER_REF=221260bbc5d31ae57eeacde542154c1c9ad5f3c6 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           python -c 'import server; print(server.__version__)'
           PORT=18091 CCC_BIND_HOST=127.0.0.1 python server.py >/tmp/ccc-python39.log 2>&1 &
           SERVER_PID=$!

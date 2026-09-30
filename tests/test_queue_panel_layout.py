@@ -546,7 +546,7 @@ for (const [key, expected] of Object.entries(cases)) {
   if (JSON.stringify(got) !== JSON.stringify(expected)) throw new Error(key + ': ' + JSON.stringify(got));
 }
 """ % json.dumps(helper)
-        subprocess.run(["node", "-e", node_program], cwd=PROJECT_ROOT, check=True)
+        subprocess.run(["node", "-"], input=node_program, text=True, cwd=PROJECT_ROOT, check=True)
 
     def test_wrap_mode_pins_queue_age_and_status_to_the_right_rail(self):
         """Wrapping a title must not let it displace the row's right-edge signals."""
