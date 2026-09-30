@@ -518,15 +518,15 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("const _sessionProvenanceChipHtml = (c) => {", app_js)
-        self.assertIn("Spawned by ", app_js)
+        self.assertIn("const _sessionProvenanceChipHtml = (c, suppressSpawnChip) => {", app_js)
+        self.assertIn("Subagent spawned by ", app_js)
         self.assertIn("Started by CCC; no parent session recorded", app_js)
         self.assertGreaterEqual(
             app_js.count("thread_source: c.thread_source || ''"),
             2,
             "Every archive-row shaping branch must preserve thread provenance.",
         )
-        self.assertIn("= _sessionProvenanceChipHtml(c);", app_js)
+        self.assertIn("= _sessionProvenanceChipHtml(c, Number(opts.currentChildDepth || 0) > 0);", app_js)
         self.assertIn("+ sessionProvenanceChipHtml", app_js)
         self.assertIn(".conv-session-origin-chip {", app_css)
 
@@ -701,21 +701,27 @@ class TestServerImports(unittest.TestCase):
         """Production vs dev/test classification respects explicit overrides
         and common path-name heuristics."""
         server = importlib.import_module("server")
-        with tempfile.TemporaryDirectory() as td:
-            prod = pathlib.Path(td, "my-app")
-            prod.mkdir()
-            self.assertEqual(server._repo_kind_for_path(str(prod)), "production")
+        # The system temp dir is itself a dev/test path segment on Linux
+        # (/tmp), which would classify every child as dev_test. Root the
+        # fixtures somewhere neutral: a uniquely named dir under $HOME.
+        import shutil, uuid
+        td = str(pathlib.Path.home() / f".ccc-kindtest-{uuid.uuid4().hex}")
+        os.makedirs(td)
+        self.addCleanup(shutil.rmtree, td, True)
+        prod = pathlib.Path(td, "my-app")
+        prod.mkdir()
+        self.assertEqual(server._repo_kind_for_path(str(prod)), "production")
 
-            test_repo = pathlib.Path(td, "my-app-test")
-            test_repo.mkdir()
-            self.assertEqual(server._repo_kind_for_path(str(test_repo)), "dev_test")
+        test_repo = pathlib.Path(td, "my-app-test")
+        test_repo.mkdir()
+        self.assertEqual(server._repo_kind_for_path(str(test_repo)), "dev_test")
 
-            sandbox = pathlib.Path(td, "sandbox")
-            sandbox.mkdir()
-            override = sandbox / ".ccc" / "project-type"
-            override.parent.mkdir(parents=True)
-            override.write_text("production\n")
-            self.assertEqual(server._repo_kind_for_path(str(sandbox)), "production")
+        sandbox = pathlib.Path(td, "sandbox")
+        sandbox.mkdir()
+        override = sandbox / ".ccc" / "project-type"
+        override.parent.mkdir(parents=True)
+        override.write_text("production\n")
+        self.assertEqual(server._repo_kind_for_path(str(sandbox)), "production")
 
     def test_import_doc_parser_and_path_clamp(self):
         """Plan-to-fleet (W51): the `wt import` stdout parser and the doc-path
@@ -3203,7 +3209,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief || _isSearchHit);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
