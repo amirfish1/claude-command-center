@@ -46,8 +46,8 @@ def test_productivity_page_distinguishes_unavailable_sources_from_zero():
     assert "Presence sampling unavailable" in html
     assert "renderSummary(data.summary || {}, data.coverage || {})" in html
     assert "renderDaily(data.daily || [], deliveryIndex.byDate, data.coverage || {})" in html
-    assert "watchtower.available === false ? '—'" in html
-    assert "presenceAvailable ? compact(summary.focus_hours) : '—'" in html
+    assert "watchtower.available === false ? '-'" in html
+    assert "presenceAvailable ? compact(summary.focus_hours) : '-'" in html
 
 
 def test_existing_surfaces_link_to_productivity():

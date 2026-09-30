@@ -504,7 +504,7 @@ def test_build_snapshot_caps_repository_warning_details(monkeypatch):
 
 
 def test_productivity_route_is_additive_and_range_limited():
-    source = inspect.getsource(server.CommandCenterHandler.do_GET)
+    source = inspect.getsource(server.CommandCenterHandler._do_GET)
     assert 'path == "/api/productivity"' in source
     assert "(6, 8, 12, 16)" in source
     assert 'path == "/productivity.html"' in source
