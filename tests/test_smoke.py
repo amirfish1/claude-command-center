@@ -2500,7 +2500,8 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("function toolCallCarriesConversationContext(toolCall)", app_js)
-        self.assertIn("key === 'ask_user_question' || key.startsWith('kanban_')", app_js)
+        self.assertIn("key === 'ask_user_question' || key === 'sidekick'", app_js)
+        self.assertIn("|| key === 'run_subagent' || key.startsWith('kanban_');", app_js)
         self.assertIn("if (!on && toolGroupCarriesConversationContext(g)) return;", app_js)
         self.assertIn("if (toolGroupCarriesConversationContext(_currentToolGroup))", app_js)
 
@@ -3669,22 +3670,26 @@ class TestServerImports(unittest.TestCase):
                 server._MODEL_CATALOG_CACHE.update(old_cache)
 
         codex_ids = payload["engines"]["codex"]
+        # Cache-prioritised rows sort first; unprioritised curated rows keep
+        # their catalog order; gpt-5.4 is flagged superseded by gpt-5.5 and
+        # dropped; o3 is listed by the (temp) Codex CLI cache, so it is
+        # surfaced (CLI-visible models are accepted the day they ship).
         self.assertEqual(codex_ids, [
+            "gpt-5.4-mini",
             "gpt-6-astra",
             "gpt-5.5",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
-            "gpt-5.4",
-            "gpt-5.4-mini",
             "gpt-5.3-codex-spark",
+            "o3",
         ])
-        self.assertNotIn("o3", codex_ids)
+        self.assertNotIn("gpt-5.4", codex_ids)
         self.assertNotIn("codex-hidden-test", codex_ids)
         self.assertEqual(payload["enforced"], [])
         self.assertFalse(payload["catalog"]["codex"]["supports_custom"])
         labels = [m["label"] for m in payload["catalog"]["codex"]["models"]]
-        self.assertEqual(labels[:5], ["6 Astra", "5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
+        self.assertEqual(labels[1:6], ["6 Astra", "5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
         mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
@@ -3769,8 +3774,8 @@ class TestServerImports(unittest.TestCase):
         try:
             with mock.patch.object(server, "_load_claude_model_catalog_records", return_value=[
                 {
-                    "id": "opus-5",
-                    "label": "opus-5",
+                    "id": "opus-5-5",
+                    "label": "opus-5-5",
                     "oneM": True,
                     "source": "anthropic-models-overview",
                 },
@@ -3788,7 +3793,7 @@ class TestServerImports(unittest.TestCase):
             server._MODEL_CATALOG_CACHE.clear()
             server._MODEL_CATALOG_CACHE.update(old_cache)
 
-        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5-5")
         self.assertTrue(opus["oneM"])
         self.assertIn("anthropic-models-overview", opus["sources"])
         self.assertNotIn(mock.call("claude"), harness.call_args_list)
@@ -3803,8 +3808,8 @@ class TestServerImports(unittest.TestCase):
             {"engine": "claude", "id": "opus", "label": "opus", "source": "session-override"},
             {
                 "engine": "claude",
-                "id": "claude-opus-5",
-                "label": "claude-opus-5",
+                "id": "claude-opus-5-5",
+                "label": "claude-opus-5-5",
                 "source": "session-override",
             },
         ]
@@ -3822,9 +3827,9 @@ class TestServerImports(unittest.TestCase):
 
         ids = payload["engines"]["claude"]
         self.assertNotIn("opus", ids)
-        self.assertNotIn("claude-opus-5", ids)
-        self.assertEqual(ids.count("opus-5"), 1)
-        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        self.assertNotIn("claude-opus-5-5", ids)
+        self.assertEqual(ids.count("opus-5-5"), 1)
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5-5")
         self.assertIn("session-override", opus["sources"])
 
     def test_engine_update_pass_runs_confirmed_noninteractive_command(self):
@@ -6040,7 +6045,8 @@ class TestServerImports(unittest.TestCase):
             app_js.index("function _renderQueuePanel", app_js.index("function _uxqOpenItemModal(item)"))
         ]
 
-        self.assertIn("status === 'blocked' ? 'Agent needs your input' : 'Open'", modal_js)
+        self.assertIn("status === 'blocked' ? 'Agent needs your input'", modal_js)
+        self.assertIn("'Open';", modal_js)
 
     def test_queue_item_payload_keeps_close_report_without_watchtower_import(self):
         """CCC's stdlib-only queue fallback must still expose a worker's
@@ -6111,7 +6117,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("function openQueueTicketComposer()", app_js)
+        self.assertIn("function openQueueTicketComposer(opts)", app_js)
         self.assertIn("const note = await openQueueTicketComposer();", app_js)
         self.assertNotIn("window.prompt('New queue ticket", app_js)
         self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
@@ -6220,7 +6226,8 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
-        self.assertIn("if (railTitleEl) railTitleEl.textContent = railTitle;", app_js)
+        self.assertIn("if (railTitleEl && !railTitleEl.querySelector('.status-rail-title-input')) {", app_js)
+        self.assertIn("railTitleEl.textContent = railTitle;", app_js)
         self.assertIn(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {", app_css)
         self.assertIn("display: none;", app_css[
             app_css.index(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {"):
@@ -6291,13 +6298,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const btn = ev.target.closest('[data-copy-assistant-message]');", app_js)
         self.assertIn("const btn = ev.target.closest('[data-read-assistant-message]');", app_js)
         self.assertIn("assistantNodeTextForCopy(eventEl)", app_js)
-        self.assertIn("speakTextDirect(text, convId, paneId, btn)", app_js)
+        self.assertIn("speakTextDirect(text, convId, paneId, btn, assistantTextElements(eventEl))", app_js)
         self.assertIn("let html = assistantMessageActionsHtml(ev)", app_js)
         self.assertIn("const assistantBlocks = Array.isArray(ev.blocks)", app_js)
         self.assertIn("for (const b of assistantBlocks)", app_js)
         self.assertIn("function whatsappBridgeSenderHtml(ev)", app_js)
         self.assertIn("ev.sender_name || ev.pushName || ev.sender_id", app_js)
-        self.assertIn("bridgeSenderHtml + (_codexPane ? renderCodexUserText(cleanedText) : linkifyPastedImages(escapeHtml(cleanedText)))", app_js)
+        self.assertIn("bridgeSenderHtml + (_peerHtml || (_codexPane ? renderCodexUserText(cleanedText) : linkifyPastedImages(escapeHtml(cleanedText))))", app_js)
         self.assertIn(".assistant-message-actions", app_css)
         self.assertIn(".assistant-message-action", app_css)
         self.assertIn(".conversations-view .whatsapp-bridge-sender", app_css)
