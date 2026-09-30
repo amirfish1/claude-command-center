@@ -207,6 +207,13 @@ class KimiSteerCancelResendTests(unittest.TestCase):
             ),
             "inject:abc",
         )
+        # The first delivery is now remembered by the duplicate-suppression
+        # window (a replay inside it is answered without reaching the harness).
+        # Forget it so this exercises the resend key derivation on a replay
+        # that arrives after the window, which is what the test is about.
+        server = importlib.import_module("server")
+        with server._inject_dedupe_lock:
+            server._inject_dedupe_recent.clear()
         _, second = self._run_steer(
             lambda n: (
                 {"ok": False, "code": "busy", "error": "turn already in progress"}

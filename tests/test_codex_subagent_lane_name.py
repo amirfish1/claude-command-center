@@ -13,8 +13,11 @@ class CodexSubagentLaneNameTests(unittest.TestCase):
 
     def test_edge_name_uses_agent_path_leaf(self):
         with mock.patch.object(
-            server, "_codex_thread_row",
-            return_value={"agent_path": "/root/pr113_independent_review"},
+            server, "_codex_fetch_threads",
+            return_value=[{
+                "id": "01a0533c-5f5d-7fb0-b5f2-125f50a10dd3",
+                "agent_path": "/root/pr113_independent_review",
+            }],
         ):
             name = server._codex_spawn_edge_name("01a0533c-5f5d-7fb0-b5f2-125f50a10dd3")
 
@@ -22,13 +25,13 @@ class CodexSubagentLaneNameTests(unittest.TestCase):
         self.assertNotEqual(name.lower(), "root")
 
     def test_edge_name_blank_when_thread_row_missing(self):
-        with mock.patch.object(server, "_codex_thread_row", return_value=None):
+        with mock.patch.object(server, "_codex_fetch_threads", return_value=[]):
             name = server._codex_spawn_edge_name("unknown-thread")
 
         self.assertEqual(name, "")
 
     def test_edge_name_swallows_lookup_errors(self):
-        with mock.patch.object(server, "_codex_thread_row", side_effect=RuntimeError("boom")):
+        with mock.patch.object(server, "_codex_fetch_threads", side_effect=RuntimeError("boom")):
             name = server._codex_spawn_edge_name("01a0533c-5f5d-7fb0-b5f2-125f50a10dd3")
 
         self.assertEqual(name, "")
