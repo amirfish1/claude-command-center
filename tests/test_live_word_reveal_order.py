@@ -1,6 +1,7 @@
 """Regression coverage for live transcript word-reveal ordering."""
 
 import pathlib
+import shutil
 import subprocess
 import textwrap
 import unittest
@@ -9,6 +10,36 @@ import unittest
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def _browser_harness_unavailable():
+    """Reason string when node + puppeteer + a local Chrome are not all present.
+
+    The word-reveal helper is DOM code, so this test drives a real browser via
+    the repo's puppeteer harness. Puppeteer and Chrome are dev-machine installs
+    (no npm step in CI), so without them there is nothing to run against.
+    """
+    if shutil.which("node") is None:
+        return "node is not installed"
+    probe = (
+        "require('./require-puppeteer.js');"
+        "const {findChromePath}=require('./puppeteer-browser-config.js');"
+        "if(!findChromePath()) process.exit(3);"
+    )
+    try:
+        done = subprocess.run(
+            ["node", "-e", probe], cwd=PROJECT_ROOT,
+            capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "node could not run the puppeteer probe"
+    if done.returncode != 0:
+        return "puppeteer or a local Chrome/headless-shell is not installed"
+    return None
+
+
+_HARNESS_MISSING = _browser_harness_unavailable()
+
+
+@unittest.skipIf(_HARNESS_MISSING, _HARNESS_MISSING or "")
 class TestLiveWordRevealOrder(unittest.TestCase):
     def test_inline_code_keeps_document_order_during_reveal(self):
         """Code chips must not reveal before prose that precedes them."""

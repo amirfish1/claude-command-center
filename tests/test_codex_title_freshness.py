@@ -14,6 +14,8 @@ time. These pin that, and pin the cheap spawn probe that replaced a full
 """
 
 import importlib
+import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -226,10 +228,17 @@ class CodexSignatureExtraKeysTests(unittest.TestCase):
 
     def test_every_codex_key_is_one_the_signature_tracks(self):
         server = self.server
-        _sig, _files, extras = server._archive_corpus_signature_parts()
-        keys = server._archive_codex_extra_keys()
-        self.assertTrue(keys, "no codex extra keys at all")
-        present = [k for k in keys if k in extras]
+        # The signature only folds in paths that exist, so on a machine with
+        # no ~/.codex (CI) the check is vacuous. Give it a throwaway HOME
+        # that has today's rollout dirs.
+        with tempfile.TemporaryDirectory() as home, \
+                mock.patch.dict(os.environ, {"HOME": home}):
+            for day_dir in server._codex_rollout_day_dirs():
+                day_dir.mkdir(parents=True, exist_ok=True)
+            _sig, _files, extras = server._archive_corpus_signature_parts()
+            keys = server._archive_codex_extra_keys()
+            self.assertTrue(keys, "no codex extra keys at all")
+            present = [k for k in keys if k in extras]
         self.assertTrue(
             present,
             "none of _archive_codex_extra_keys() appear in the signature extras; "
