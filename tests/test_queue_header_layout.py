@@ -77,7 +77,7 @@ class TestQueueHeaderLayout(unittest.TestCase):
         # The more-menu open/close chrome still exists.
         more = app_js[
             app_js.index("const $queueMoreBtn = document.getElementById('queueMoreBtn');"):
-            app_js.index('function openQueueTicketComposer()', app_js.index("const $queueMoreBtn = document.getElementById('queueMoreBtn');"))
+            app_js.index('function openQueueTicketComposer(', app_js.index("const $queueMoreBtn = document.getElementById('queueMoreBtn');"))
         ]
         self.assertIn('function _closeQueueMoreMenu()', more)
         self.assertIn("$queueMoreMenu.classList.add('open');", more)
