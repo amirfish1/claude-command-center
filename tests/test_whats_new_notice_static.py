@@ -1,8 +1,16 @@
 import pathlib
+import re
 import unittest
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _current_version():
+    """(full 'X.Y.Z', 'X.Y') of the current release, from pyproject.toml."""
+    text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"', text, re.M)
+    return f"{m.group(1)}.{m.group(2)}.{m.group(3)}", f"{m.group(1)}.{m.group(2)}"
 
 
 class WhatsNewNoticeStaticTests(unittest.TestCase):
@@ -59,25 +67,25 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         self.assertIn("every-model-in-one-place", features)
         self.assertIn("find-recent-work-fast", features)
         self.assertNotIn("mobile-responsiveness-pass", features)
-        self.assertIn('<span class="ver">v5.29.0</span>', landing_page)
-        self.assertIn("Simple Mode for the whole fleet", landing_page)
-        self.assertIn('<span class="version">v5.29</span>', landing_page)
-        self.assertIn('<span class="badge">v5.29</span>', landing_page)
-        self.assertIn("https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0", landing_page)
-        self.assertIn("v5.29.0 source and Homebrew release", landing_page)
+        full, mm = _current_version()
+        self.assertIn(f'<span class="ver">v{full}</span>', landing_page)
+        self.assertIn(f'<span class="version">v{mm}</span>', landing_page)
+        self.assertIn(f'<span class="badge">v{mm}</span>', landing_page)
+        self.assertIn(f"v{full} macOS app, source, and Homebrew release", landing_page)
 
     def test_current_release_screenshot_is_used_on_public_surfaces(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         landing_page = (PROJECT_ROOT / "docs" / "index.html").read_text(
             encoding="utf-8"
         )
-        screenshot = (
-            PROJECT_ROOT / "docs" / "images" / "ccc-v5-29-orchestration-final.png"
-        )
+        _, mm = _current_version()
+        slug = mm.replace(".", "-")
+        rel = f"images/ccc-v{slug}-hero.png"
+        screenshot = PROJECT_ROOT / "docs" / rel
 
         self.assertTrue(screenshot.exists())
-        self.assertIn("docs/images/ccc-v5-29-orchestration-final.png", readme)
-        self.assertIn("./images/ccc-v5-29-orchestration-final.png", landing_page)
+        self.assertIn(f"docs/{rel}", readme)
+        self.assertIn(f"./{rel}", landing_page)
 
 
 if __name__ == "__main__":

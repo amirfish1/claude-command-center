@@ -30,7 +30,7 @@ One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor*
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
-![CCC v5.29 showing the session fleet, an active agent conversation, one-tap orchestration controls, and a live lane map](docs/images/ccc-v5-29-orchestration-final.png)
+![CCC v5.35 showing the session fleet in the compact list, an active agent conversation, and the composer](docs/images/ccc-v5-35-hero.png)
 
 Install with curl:
 
