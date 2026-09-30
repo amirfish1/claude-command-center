@@ -14,7 +14,7 @@ class TestQueueTicketEditRefresh(unittest.TestCase):
         helper_end = app_js.index("async function _uxqOpenItemDetail", helper_start)
         helper = app_js[helper_start:helper_end]
         self.assertIn("freshItems[index] = item;", helper)
-        self.assertIn("_uxqItemsCache = { ts: Date.now(), items: freshItems };", helper)
+        self.assertIn("_uxqItemsCache = { ts: Date.now(), items: freshItems, syncedAt: _uxqItemsCache.syncedAt };", helper)
 
         save_start = app_js.index("async function _uxqSaveField(ref, field, value)")
         save_end = app_js.index("function _uxqRelTime", save_start)
