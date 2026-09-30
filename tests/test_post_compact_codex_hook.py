@@ -206,7 +206,7 @@ def test_prints_via_stdin(tmp_path):
     elapsed = time.time() - t0
 
     assert proc.returncode == 0
-    assert elapsed < 1.0
+    assert elapsed < 3.0  # "exits fast"; 1s flaked on loaded runners (interpreter startup)
     assert "MEMO-FIX-16" in proc.stdout
     assert "Codex hook parity" in proc.stdout
     assert "ccc recall" in proc.stdout
