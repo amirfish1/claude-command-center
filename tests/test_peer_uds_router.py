@@ -659,6 +659,13 @@ def test_ccc_send_forwards_peer_sender_sid(monkeypatch):
         queue = False
         sender = "sender-sid-cli"
         json = False
+        new_if_large_and_stale = False
+        large_threshold = 150_000
+        stale_seconds = 3600
+        dry_run = False
+        model = None
+        effort = None
+        report_to = None
 
     def fake_post(base, endpoint, payload, **kw):
         posted.append(payload)
