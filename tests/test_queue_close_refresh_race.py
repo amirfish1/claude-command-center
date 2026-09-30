@@ -34,7 +34,7 @@ class TestQueueCloseRefreshRace(unittest.TestCase):
         self.assertIn("if (_uxqReplaceCachedItem(d.item))", close_handler)
         self.assertIn("_renderQueuePanel({ allowStale: true });", close_handler)
 
-        fetch_start = app_js.index("let _uxqItemsCache = { ts: 0, items: [] };")
+        fetch_start = app_js.index("let _uxqItemsCache = { ts: 0, items: [], syncedAt: 0 };")
         fetch_end = app_js.index("// Per-project queue-health snapshot", fetch_start)
         fetch_code = app_js[fetch_start:fetch_end]
         item_ref_start = app_js.index("function _uxqItemRef(item)")
@@ -49,7 +49,7 @@ let calls = 0;
 const older = new Promise(resolve => { resolveOlder = resolve; });
 const context = {
   Date, Set, Map, Promise,
-  fetch: async () => {
+  backgroundApiFetch: async () => {
     calls += 1;
     if (calls === 1) return older;
     return { json: async () => ({ items: [{ ref: 'CCC-9', status: 'closed' }] }) };
