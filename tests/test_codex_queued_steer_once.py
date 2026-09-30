@@ -178,6 +178,13 @@ def _no_live_worker_compat(monkeypatch):
 @pytest.fixture
 def router_env(monkeypatch):
     resume = mock.Mock()
+    # A Codex Desktop on the dev machine (~/.codex/ipc) would own delivery.
+    monkeypatch.setenv("CCC_CODEX_DESKTOP_IPC", "0")
+    # Never reach the real Codex CLI health probe (subprocess, up to 5s).
+    monkeypatch.setattr(
+        server, "_resolve_codex_bin",
+        lambda: {"available": True, "bin": "/usr/bin/codex-test"},
+    )
     monkeypatch.setattr(
         server, "_persist_pending_inputs_current", mock.Mock(return_value=True),
     )
@@ -871,8 +878,11 @@ def test_second_explicit_steer_cannot_deliver_after_first_claim(router_env):
     assert router_env.resume.call_count == 1
 
 
-def test_direct_steer_excludes_codex_resume_queue_pump(router_env):
+def test_direct_steer_excludes_codex_resume_queue_pump(router_env, monkeypatch):
     sid = "steer-vs-pump"
+    # The pump's busy probe would start a real Codex app-server and lsof the
+    # host's ~/.codex state db; this test is about lock exclusion only.
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
     server._pending_resume_queue[sid] = ["target", "next"]
     entered = threading.Event()
     release = threading.Event()
@@ -2569,6 +2579,7 @@ def test_resume_queue_insert_front_dedupe_skips_existing_value(monkeypatch, tmp_
 def test_fifo_pump_native_delivery_preserves_queue_origin(monkeypatch, tmp_path, engine_busy):
     """Exercise the real native wrapper, including rollback when Codex is busy."""
     sid = "fifo-native-origin"
+    monkeypatch.setenv("CCC_CODEX_DESKTOP_IPC", "0")  # ignore a live Codex Desktop
     monkeypatch.setattr(server, "_schedule_codex_queue_pump", lambda sid: None)
     monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
     monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs")
