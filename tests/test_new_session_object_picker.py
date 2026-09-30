@@ -20,7 +20,12 @@ class NewSessionObjectPickerTest(unittest.TestCase):
         self.assertIn("function recordSpawnChoice", app_js)
         self.assertIn("function getTopSpawnPicks", app_js)
         self.assertIn("function renderNsModelPickerPills", app_js)
-        self.assertIn("class=\"ns-model-picker\"", app_js)
+        # The pills now mount into a static container in index.html and
+        # render as orch-tier-chip buttons.
+        index_html = (PROJECT_ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="nsModelPickerPills"', index_html)
+        self.assertIn("document.getElementById('nsModelPickerPills')", app_js)
+        self.assertIn("'<button type=\"button\" class=\"orch-tier-chip'", app_js)
 
 
 if __name__ == "__main__":
