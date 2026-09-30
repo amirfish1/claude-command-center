@@ -401,7 +401,7 @@ class RestartRoutingTests(unittest.TestCase):
         src = pathlib.Path(self.server.__file__).read_text()
         block = src[src.index('if path in ("/api/restart", "/api/restart/all"):'):]
         handoff = block.index("_safe_worker_restart_precheck(")
-        kick = block.index("worker_outcome = _restart_worker_process() if restart_all else None")
+        kick = block.index("if restart_all:\n                worker_outcome = _restart_worker_process()")
         self.assertLess(
             handoff, kick,
             "the worker restart must come after the safety precheck (which "
