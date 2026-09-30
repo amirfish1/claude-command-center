@@ -7668,6 +7668,12 @@ class TestRepoContextHelpers(unittest.TestCase):
         for mod in self._WATCHTOWER_MODULES:
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
+        # Under a test runner the pending-input queue file is one per-process
+        # path in the system temp dir, so durable rows a test queued for a
+        # reused session id leaked into later tests (queues doubled up).
+        # Give every test its own file and handoff dir.
+        self.server.PENDING_INPUTS_FILE = pathlib.Path(self.tmp_home, "pending-inputs.json")
+        self.server.PENDING_INPUT_HANDOFF_DIR = pathlib.Path(self.tmp_home, "pending-handoffs")
         self.repo = pathlib.Path(self.tmp_home, "demo-repo").resolve()
         self.repo.mkdir()
         (self.repo / ".git").mkdir()
