@@ -14,9 +14,19 @@ if sys.platform != "win32":
     import importlib.machinery
     import importlib.util
 
-    # Exclude sys.path[0] (this directory) to locate the real stdlib fcntl
-    _stdlib_paths = [p for p in sys.path if p and p != sys.path[0]]
+    import os
+
+    # Exclude every sys.path entry that resolves to this directory (not just
+    # sys.path[0]: with PYTHONPATH or `python -c` the repo root can sit
+    # elsewhere in sys.path, and finding this file again recurses forever).
+    _here = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+    _stdlib_paths = [
+        p for p in sys.path
+        if p and os.path.realpath(p) != _here
+    ]
     _spec = importlib.machinery.PathFinder.find_spec("fcntl", _stdlib_paths)
+    if _spec and _spec.origin and os.path.realpath(_spec.origin) == os.path.realpath(__file__):
+        _spec = None
     if _spec and _spec.loader:
         _mod = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
