@@ -41,6 +41,10 @@ class TestFindContinuationAncestors(unittest.TestCase):
             server._find_session_jsonl_any_project
         )
         self._paths = {}
+        # Process-wide sid -> origin memo; the tests reuse sids with different
+        # chains, so a stale entry from a sibling test would leak in.
+        server._continuation_origin_cache.clear()
+        self.addCleanup(server._continuation_origin_cache.clear)
         server._find_session_jsonl = self._fake_find_session_jsonl
         server._find_session_jsonl_any_project = self._fake_find_session_jsonl
         self.addCleanup(self._restore)
