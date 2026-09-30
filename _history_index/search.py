@@ -211,6 +211,7 @@ def _title_row_hits(
     # wider pool before filtering in Python against the cached id set — no
     # per-request table scan.
     first_ids = _first_user_message_ids(conn)
+    params.append(max(cap * 20, 500))
     try:
         rows = [r for r in conn.execute(sql, params) if r["id"] in first_ids]
     except sqlite3.OperationalError:

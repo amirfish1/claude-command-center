@@ -9,17 +9,25 @@ DMG_URL = (
 )
 
 
+def _current_mm():
+    """Current release as 'major.minor' (v5.35.0 -> '5.35'), from pyproject."""
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    ver = re.search(r'^version = "(\d+)\.(\d+)\.', text, re.M)
+    return f"{ver.group(1)}.{ver.group(2)}"
+
+
 def _hero(page):
     return page.split('<section class="hero"', 1)[1].split("</section>", 1)[0]
 
 
 def test_landing_hero_uses_public_safe_product_screenshot():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
-    asset = ROOT / "docs" / "images" / "ccc-v5-33-hero.png"
+    slug = _current_mm().replace(".", "-")
+    asset = ROOT / "docs" / "images" / f"ccc-v{slug}-hero.png"
 
     assert asset.is_file()
-    assert './images/ccc-v5-33-hero.png' in page
-    assert "CCC v5.33 showing the session fleet" in page
+    assert f'./images/ccc-v{slug}-hero.png' in page
+    assert f"CCC v{_current_mm()} showing the session fleet" in page
 
 
 def test_landing_page_declares_its_existing_favicon():
@@ -52,7 +60,7 @@ def test_landing_hero_has_one_direct_download_cta():
 def test_landing_page_names_current_release():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
 
-    assert "v5.33" in page
+    assert f"v{_current_mm()}" in page
     assert "v5.8" not in page
 
 
