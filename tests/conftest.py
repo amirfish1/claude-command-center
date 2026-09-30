@@ -56,6 +56,34 @@ def _reset_inject_dedupe_window():
     _reset()
 
 
+def _restore_server(orig):
+    """Re-register `orig` as "server" and re-sync the extracted modules to it.
+
+    A fresh `import server` reloads every ccc_server.* module in place
+    (see server._adopt_ccc_module), so restoring only sys.modules leaves
+    `orig` holding stale copies of module state (queues, classes, caches)
+    that the reloaded modules no longer share. Reload the modules again with
+    `orig` registered and re-adopt their names onto it, so both sides see
+    one consistent set of objects.
+    """
+    import importlib
+    import ccc_server
+    sys.modules["server"] = orig
+    seen = []
+    for mod in list(ccc_server._registry.values()):
+        if mod not in seen:
+            seen.append(mod)
+    seen.sort(key=lambda m: list(sys.modules).index(m.__name__)
+              if m.__name__ in sys.modules else 0)
+    for mod in seen:
+        if sys.modules.get(mod.__name__) is not mod:
+            continue
+        mod = importlib.reload(mod)
+        for k, v in vars(mod).items():
+            if not k.startswith("__") and k != "_core":
+                setattr(orig, k, v)
+
+
 @pytest.fixture(autouse=True)
 def _restore_canonical_server_module():
     """Undo per-test server re-imports at teardown.
@@ -70,7 +98,7 @@ def _restore_canonical_server_module():
     orig = sys.modules.get("server")
     yield
     if orig is not None and sys.modules.get("server") is not orig:
-        sys.modules["server"] = orig
+        _restore_server(orig)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -83,4 +111,4 @@ def _restore_canonical_server_module_after_file():
     orig = sys.modules.get("server")
     yield
     if orig is not None and sys.modules.get("server") is not orig:
-        sys.modules["server"] = orig
+        _restore_server(orig)
