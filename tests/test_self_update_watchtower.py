@@ -21,6 +21,7 @@ behaviour under test.
 """
 import shutil
 import subprocess
+import sysconfig
 import sys
 from pathlib import Path
 
@@ -217,8 +218,16 @@ def test_dead_workers_do_not_block_the_bounce(harness):
     assert [c[-1] for c in _cmds(harness["log"]) if c[-1] in ("stop", "start")] == ["stop", "start"]
 
 
-def test_falls_back_to_workers_json_when_the_wt_cli_is_missing(harness):
+def _no_wt_anywhere(harness):
+    """`wt` neither on PATH nor in the interpreter's user scripts dir (the
+    real one on a dev machine may hold a genuine install)."""
     harness["monkeypatch"].setattr(server, "shutil", _ShutilShim(None))
+    harness["monkeypatch"].setattr(
+        sysconfig, "get_path", lambda *a, **k: str(harness["dir"] / "no-user-scripts"))
+
+
+def test_falls_back_to_workers_json_when_the_wt_cli_is_missing(harness):
+    _no_wt_anywhere(harness)
     harness["monkeypatch"].setattr(
         server, "_wt_read_workers",
         lambda: [{"worker_id": "w-9", "queue": "CCC", "alive": True}],
@@ -233,7 +242,7 @@ def test_falls_back_to_workers_json_when_the_wt_cli_is_missing(harness):
 
 
 def test_uses_the_module_form_of_wt_when_it_is_not_on_path(harness):
-    harness["monkeypatch"].setattr(server, "shutil", _ShutilShim(None))
+    _no_wt_anywhere(harness)
 
     server._self_update()
 

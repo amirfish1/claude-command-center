@@ -525,12 +525,17 @@ def test_resume_omits_the_model_flag_when_nothing_is_known(
 def test_resume_queues_the_prompt_while_a_turn_is_still_running(
         monkeypatch, tmp_path, recording_opencode_bin):
     running = {"engine": "opencode", "resumed_sid": "ses_1", "pid": 4242}
-    saved = []
-    stub, _ = _resume_core(
+    applied = []
+
+    def _apply(session_id, operations):
+        applied.append((session_id, operations))
+        return {"ok": True}
+
+    _resume_core(
         monkeypatch, tmp_path,
         _spawned_sessions=[running],
         _poll_spawn_entry=lambda entry: None,  # None == still running
-        _save_pending_inputs=lambda: saved.append(True),
+        _apply_pending_input_operations=_apply,
     )
 
     result = opencode.resume_session_opencode("ses_1", "follow-up")
@@ -539,8 +544,9 @@ def test_resume_queues_the_prompt_while_a_turn_is_still_running(
         "queued_reason": "waiting for the current OpenCode turn to finish",
         "engine": "opencode",
     }
-    assert stub._pending_resume_queue == {"ses_1": ["follow-up"]}
-    assert saved == [True], "the queue must be persisted, not just held in memory"
+    assert applied == [("ses_1", [{
+        "field": "resume", "action": "append_tail", "value": "follow-up",
+    }])], "the prompt must be persisted through the authoritative pending-input store"
     assert not recording_opencode_bin.exists(), "no second CLI process while queued"
 
 

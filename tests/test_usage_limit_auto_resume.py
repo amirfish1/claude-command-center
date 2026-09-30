@@ -371,6 +371,11 @@ class UsageLimitAutoResumeDisabledTests(unittest.TestCase):
 
 class CodexUnconfirmedResumeDoesNotRequeueTests(unittest.TestCase):
     def setUp(self):
+        # A Codex Desktop running on the dev machine exposes ~/.codex/ipc and
+        # would take over delivery; these tests exercise the app-server path.
+        env = mock.patch.dict(os.environ, {"CCC_CODEX_DESKTOP_IPC": "0"})
+        env.start()
+        self.addCleanup(env.stop)
         self.server = _fresh_server()
         self.tmp_dir = tempfile.mkdtemp(prefix="ccc-codex-requeue-")
         self.server.PENDING_INPUTS_FILE = Path(self.tmp_dir) / "pending-inputs.json"
