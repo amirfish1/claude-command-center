@@ -153,7 +153,7 @@ def test_panel_names_each_fix_with_share_and_dollars():
     out = _render(_waste()._session_waste_slim(ANALYSIS))
     assert '<span class="waste-score bad">38/100</span>' in out
     assert "$118 list ≈ $5.90 real" in out
-    assert "1. Switch from pull to push while waiting</span> — 30% of spend ($35 list ≈ $1.75 real)" in out
+    assert "1. Switch from pull to push while waiting</span> - 30% of spend ($35 list ≈ $1.75 real)" in out
     assert "went to: checking on progress 48%" in out
 
 

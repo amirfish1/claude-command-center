@@ -522,7 +522,7 @@
       ' time(s) in the last hour across ' + sessions + ' session(s). Latest: ' +
       (latest.reason || 'limit') + ' (' + latest.count + '/' + latest.limit + ') on session ' +
       (latest.session_id || '?') + (latest.source ? (' via ' + latest.source) : '') +
-      (latest.preview ? (' — "' + latest.preview + '"') : '');
+      (latest.preview ? (' - "' + latest.preview + '"') : '');
     $pill.title = detail;
     if (!$pill._runawayClickBound) {
       $pill._runawayClickBound = true;
@@ -3704,7 +3704,7 @@
       lines.push(
         'Retrieve context SELECTIVELY. Never open or Read the whole transcript',
         '(it is ~' + f2FmtTokens(gate.tokens) + ' tokens). Pull only the slice you need:',
-        '  - run `ccc brief ' + sid + '` first — it already has the last asks, last',
+        '  - run `ccc brief ' + sid + '` first - it already has the last asks, last',
         '    reply, commits, and files touched without reading the transcript',
         '  - tail -n 80 the transcript for the most recent turns (cut by',
         '    lines, not bytes: a byte cut splits a JSON line), then jq the',
@@ -4631,7 +4631,7 @@
       const body = document.createElement('div');
       body.style.cssText = 'font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.5;';
       body.textContent = 'Idle ' + ageLabel + ' with ~' + tokensLabel + ' tokens of context'
-        + (gate.cache && gate.cache.verdictNote ? ' — ' + gate.cache.verdictNote + '.' : '. Resuming here likely reloads most of it.');
+        + (gate.cache && gate.cache.verdictNote ? ' - ' + gate.cache.verdictNote + '.' : '. Resuming here likely reloads most of it.');
       const btnRow = document.createElement('div');
       btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
       const mkBtn = (label, kind) => {
@@ -5989,7 +5989,7 @@
         _pendingSends
           .filter(p => p && p.sid === _fetchedFor && !p.delivered && p.entry)
           .forEach(p => markPendingSendQueued(p, "Queued - no delivery channel found for this session "
-            + "(it's live, but CCC lost its spawn registry entry — open a real terminal to it to unblock)."));
+            + "(it's live, but CCC lost its spawn registry entry - open a real terminal to it to unblock)."));
       }
       // A Devin session parked behind another ACP host gets the same
       // treatment — "queued" alone looks identical to a busy-turn wait,
@@ -8355,7 +8355,7 @@
       const _silenceSec = (_liveMatches && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
       const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress;
       const _wakeBtnHtml = showGeneratingWakeBtn
-        ? '<button type="button" class="cl-working-wake-btn" title="No output for ' + Math.max(1, Math.floor(_silenceSec / 60)) + 'm — click to send a status check / wake input">Wake up</button>'
+        ? '<button type="button" class="cl-working-wake-btn" title="No output for ' + Math.max(1, Math.floor(_silenceSec / 60)) + 'm - click to send a status check / wake input">Wake up</button>'
         : '';
       inline.className = 'conv-live-tool-inline is-generating' + (_activeItem.label ? ' in-flight' : '');
       // Webui panes get the kimi-web moon-phases waiting spinner (honest
@@ -8424,7 +8424,7 @@
       + (isQuestion ? '' : expandedDetailHtml)
       + '<span class="cl-age">' + ageLbl + '</span>'
       + (isQuestion ? detailHtml : '')
-      + (showWakeBtn ? '<button type="button" class="cl-working-wake-btn cl-agy-wake-btn" title="Session has had no output for ' + dur + ' — click to push a wake message">Wake up</button>' : '');
+      + (showWakeBtn ? '<button type="button" class="cl-working-wake-btn cl-agy-wake-btn" title="Session has had no output for ' + dur + ' - click to push a wake message">Wake up</button>' : '');
     inline.innerHTML = expandHtml;
     _reanchorToTailUnlessOnlyTransientBetween($view, inline);
     _liveStripShown = true;
@@ -8704,7 +8704,7 @@
     const verb = contId ? 'Continued from' : 'Spawned by';
     return '<span class="ccc-breadcrumb-spawned-by' + (contId ? ' is-successor' : ' is-parent') + '"'
       + ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(parentId) + '"'
-      + ' title="' + escapeAttr(verb + ': ' + label + ' (' + parentId + ') — click to open') + '">'
+      + ' title="' + escapeAttr(verb + ': ' + label + ' (' + parentId + ') - click to open') + '">'
       + (contId ? '⤴ ' : '↳ ') + escapeHtml(label)
       + '</span>';
   }
@@ -8717,7 +8717,7 @@
   const RAIL_SPAWNED_VIA_LABELS = {
     cli: ['CLI', 'Spawned from the ccc CLI.'],
     ui: ['UI', 'Spawned from the CCC dashboard UI.'],
-    'ui-automated': ['UI · automated', 'Spawned from a browser tab under automation control (navigator.webdriver) — e.g. a Playwright/Puppeteer-driven session, not necessarily a human click.'],
+    'ui-automated': ['UI · automated', 'Spawned from a browser tab under automation control (navigator.webdriver) - e.g. a Playwright/Puppeteer-driven session, not necessarily a human click.'],
     api: ['API', 'Spawned via a direct API call with no browser Origin/Referer.'],
     terminal: ['Terminal', 'Started from an interactive terminal session outside CCC.'],
     subagent: ['Subagent', 'Spawned as a subagent by another session.'],
@@ -10110,7 +10110,7 @@
       } else if (isDevinCli) {
         activeInputControls.ttyLabel.textContent = devinCliExtOwned ? 'external' : 'devin';
         if (activeInput) activeInput.placeholder = devinCliExtOwned
-          ? 'Managed externally — open in another client (e.g. Devin Desktop); sends queue until it lets go…'
+          ? 'Managed externally - open in another client (e.g. Devin Desktop); sends queue until it lets go…'
           : (liveStatus.live ? 'Send to Devin session…' : 'Resume Devin and send…');
       } else if (live) {
         activeInputControls.ttyLabel.textContent = liveStatus.tty;
@@ -11448,7 +11448,7 @@
       // /compact here doesn't start a fresh one, it gets queued server-side
       // and fires the moment the first compact finishes (CCC-982: read as
       // "will this drive ANOTHER compact right after?"). Block it instead.
-      showOpToast('Already compacting this session — wait for it to finish.', 'error');
+      showOpToast('Already compacting this session - wait for it to finish.', 'error');
       return;
     }
     // The F2 cold gate is purely informational — the verdict line states the
@@ -14153,7 +14153,7 @@
       glyph = '⚠';
       title = 'Compaction didn’t run';
       note = escapeHtml(run.error || 'The engine did not confirm the compaction.')
-        + ' <span class="compact-run-quiet">Nothing was changed — your conversation is intact.</span>';
+        + ' <span class="compact-run-quiet">Nothing was changed - your conversation is intact.</span>';
       extra = '<button type="button" class="compact-run-retry">Try /compact again</button>';
     } else if (run.stage === 'unconfirmed') {
       // CCC-1188: the engine's turn ended but it never reported a compaction.
@@ -14203,7 +14203,7 @@
         + ' · <span class="compact-run-elapsed">' + escapeHtml(elapsed) + '</span> elapsed</div>'
       : '';
     const slowNote = run.slow
-      ? '<div class="compact-run-slownote">Longer than usual — still watching. If the engine'
+      ? '<div class="compact-run-slownote">Longer than usual - still watching. If the engine'
         + ' went idle, re-running <code>/compact</code> is safe.'
         + '<button type="button" class="compact-run-retry">Run /compact again</button></div>'
       : '';
@@ -17129,7 +17129,7 @@
     const btn = document.getElementById('simpleStartBtn');
     const prompt = (input && input.value || '').trim();
     if (!prompt) {
-      _simpleToast('Tell me what you need first — one sentence is plenty.', true);
+      _simpleToast('Tell me what you need first - one sentence is plenty.', true);
       if (input) input.focus();
       return;
     }
@@ -17154,7 +17154,7 @@
       if (res.ok && data && data.ok !== false) {
         if (input) input.value = '';
         const name = _SIMPLE_ENGINE_LABELS[engine] || engine;
-        _simpleToast('Started — ' + name + ' is on it. It will show up under "Working on it" below.');
+        _simpleToast('Started - ' + name + ' is on it. It will show up under "Working on it" below.');
         setTimeout(() => { try { _simpleHomeRefresh(); } catch (_) {} }, 1500);
         setTimeout(() => { try { _simpleHomeRefresh(); } catch (_) {} }, 5000);
       } else {
@@ -17318,7 +17318,7 @@
     const pct = _simpleMemoryPercent(row);
     if (pct === null) return 'Memory: not reported yet';
     const p = Math.round(pct);
-    return 'Memory ' + p + '% full — ' + _simpleMemoryPhrase(p);
+    return 'Memory ' + p + '% full - ' + _simpleMemoryPhrase(p);
   }
   function _simpleBaseName(p) {
     const s = String(p || '');
@@ -17331,7 +17331,7 @@
       || ['running', 'working', 'active'].indexOf(String(row.status || row.session_state || '')) !== -1);
     let line = live ? 'Working' : 'Recently active';
     const file = row.pending_file || row.sidecar_file || '';
-    if (live && file) line += ' — editing ' + _simpleBaseName(file);
+    if (live && file) line += ' - editing ' + _simpleBaseName(file);
     const folder = row.folder_label || _simpleBaseName(row.folder_path || '');
     if (folder) line += ' · ' + folder;
     return line;
@@ -17567,7 +17567,7 @@
       if (pct === null) text = 'Memory: not measured yet.';
       else {
         const p = Math.round(pct);
-        text = 'Memory: ' + p + '% full — ' + _simpleMemoryPhrase(p) + '.';
+        text = 'Memory: ' + p + '% full - ' + _simpleMemoryPhrase(p) + '.';
       }
       if (cost !== null) text += ' About $' + cost.toFixed(2) + ' spent so far.';
       el.textContent = text;
@@ -17963,10 +17963,10 @@
   function _simpleAutomationStatusLine(q) {
     const depth = Number(q.depth) || 0;
     const workers = Number(q.workers) || 0;
-    if (q.stuck) return 'Needs attention — something looks stuck';
+    if (q.stuck) return 'Needs attention - something looks stuck';
     if (workers > 0) return 'Working on it now (' + workers + (workers === 1 ? ' helper' : ' helpers') + ')';
-    if (depth > 0 && q.auto_drain) return depth + ' waiting — a helper will pick them up';
-    if (depth > 0) return depth + (depth === 1 ? ' job waiting' : ' jobs waiting') + ' — nobody on it yet';
+    if (depth > 0 && q.auto_drain) return depth + ' waiting - a helper will pick them up';
+    if (depth > 0) return depth + (depth === 1 ? ' job waiting' : ' jobs waiting') + ' - nobody on it yet';
     return 'Nothing waiting';
   }
   // ISO timestamp (queue items use "2026-07-24T20:04:32Z") → plain age via
@@ -17987,7 +17987,7 @@
     let statusLine;
     if (isOpen) {
       statusLine = it.claimed_by
-        ? 'Someone is already on it' + (it.claimed_at ? ' — since ' + _simplePlainAgeIso(it.claimed_at) : '')
+        ? 'Someone is already on it' + (it.claimed_at ? ' - since ' + _simplePlainAgeIso(it.claimed_at) : '')
         : 'Waiting' + (it.created_at ? ' since ' + _simplePlainAgeIso(it.created_at) : '');
     } else {
       statusLine = 'Finished' + (it.closed_at ? ' ' + _simplePlainAgeIso(it.closed_at) : '');
@@ -18009,7 +18009,7 @@
     return '<div class="simple-card simple-nya-card simple-queue-alert-card" data-simple-queue-alert="' + escapeAttr(name) + '">'
       + '<div class="simple-nya-title">Needs attention</div>'
       + '<div class="simple-card-name">' + escapeHtml(name.charAt(0) + name.slice(1).toLowerCase()) + '</div>'
-      + '<div class="simple-nya-need">Jobs are waiting but nobody’s on them — tap to see what’s stuck.</div>'
+      + '<div class="simple-nya-need">Jobs are waiting but nobody’s on them - tap to see what’s stuck.</div>'
       + '</div>';
   }
   function _simpleAutomationCardHtml(q) {
@@ -18138,7 +18138,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
-      _simpleToast('On it — an extra helper just started on ' + queue.charAt(0) + queue.slice(1).toLowerCase() + '.');
+      _simpleToast('On it - an extra helper just started on ' + queue.charAt(0) + queue.slice(1).toLowerCase() + '.');
     } catch (e) {
       if (typeof showOpToast === 'function') {
         showOpToast('Could not get help: ' + ((e && e.message) || 'unknown'), 'error');
@@ -20144,7 +20144,7 @@
         if (typeof isSpawnLogPlaceholderSource === 'function' && !isSpawnLogPlaceholderSource(card.source)) {
           _watchPendingSpawnRegistration(spawnId || pid, card.id);
         }
-        if (typeof showOpToast === 'function') showOpToast('Spawn retried — waiting for the session to register.', 'success');
+        if (typeof showOpToast === 'function') showOpToast('Spawn retried - waiting for the session to register.', 'success');
         setTimeout(refreshConversationList, 600);
         chasePendingSpawn(pid, { sessionId: d && d.session_id });
       } else {
@@ -30962,11 +30962,11 @@
     }
     if (c.needs_approval) {
       const msg = c.needs_approval_message || '';
-      return { state: 'idle', word: 'Idle', detail: 'needs approval' + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+      return { state: 'idle', word: 'Idle', detail: 'needs approval' + (msg ? ' - ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
     }
     if (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')) {
       const msg = c.sidecar_file || c.question_text || '';
-      return { state: 'idle', word: 'Idle', detail: 'has a question' + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+      return { state: 'idle', word: 'Idle', detail: 'has a question' + (msg ? ' - ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
     }
     if (trulyActiveCls) {
       const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
@@ -30988,7 +30988,7 @@
     return '<div class="mobile-status-line is-' + status.state + '">'
       + '<span class="mobile-status-dot" aria-hidden="true"></span>'
       + '<span class="mobile-status-word">' + escapeHtml(word) + '</span>'
-      + (status.detail ? '<span class="mobile-status-detail">— ' + escapeHtml(status.detail) + '</span>' : '')
+      + (status.detail ? '<span class="mobile-status-detail">- ' + escapeHtml(status.detail) + '</span>' : '')
       + '</div>';
   }
 
@@ -31009,7 +31009,7 @@
     if (isWaitingForUser) {
       const msg = c.question_text || c.needs_approval_message || c.sidecar_file || '';
       const label = (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')) ? 'has a question' : 'needs approval';
-      return { state: 'idle', word: 'Idle', detail: label + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+      return { state: 'idle', word: 'Idle', detail: label + (msg ? ' - ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
     }
     if (isAgentRunning) {
       const detail = knownTool ? liveActivityToolLabel(knownTool) : '';
@@ -32618,7 +32618,7 @@
         const short = binding.indexOf('acp:') === 0 ? 'acp' : binding;
         html += pill0(true, true, 'runtime: ' + short,
           'This session is bound to the "' + binding + '" runtime, a virtual runtime with no fs/process '
-          + 'capabilities — over kap the model has no Bash, Read, Write, Edit, Glob or Grep. CCC rebinds '
+          + 'capabilities - over kap the model has no Bash, Read, Write, Edit, Glob or Grep. CCC rebinds '
           + 'to local on the next prompt or conversation open.',
           true);
       }
@@ -41288,7 +41288,7 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       }
     } else if (rejected && typeof showOpToast === 'function') {
-      showOpToast('Drop onto a real session row — and no circular links', 'error');
+      showOpToast('Drop onto a real session row - and no circular links', 'error');
     }
   }
 
@@ -46335,7 +46335,7 @@
   function _uxqPickerQueueRow(q, opts) {
     const o = opts || {};
     const isChild = !!q.parent && !o.flat;
-    const openLabel = q.openCount > 0 ? String(q.openCount) : '—';
+    const openLabel = q.openCount > 0 ? String(q.openCount) : '-';
     const last = _uxqPickerLastActivity(q);
     const needsLabel = q.needsInputCount > 0 ? (q.needsInputCount + ' need you') : '';
     const subsLabel = q.subQueueCount > 0 ? ('+' + q.subQueueCount) : '';
@@ -46486,8 +46486,8 @@
     const subsHtml = q && q.subQueueCount > 0
       ? '<span class="fq-qp-trig-subs' + (noSubsOn ? ' is-nosubs' : '') + '" data-uxq-nosubs-toggle="' + escapeAttr(q.name) + '"'
         + ' title="' + escapeAttr(noSubsOn
-          ? ('Showing ' + q.name + ' only — click to include ' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's'))
-          : ('Includes ' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's') + ' — click to view ' + q.name + ' only'))
+          ? ('Showing ' + q.name + ' only - click to include ' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's'))
+          : ('Includes ' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's') + ' - click to view ' + q.name + ' only'))
         + '">' + escapeHtml(noSubsOn ? (q.name + ' only') : ('+' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's'))) + '</span>'
       : '';
     const ghHtml = q && q.githubLinked
@@ -46766,7 +46766,7 @@
       chips.push(chip('is-warn', '<b>' + loopers.length + '</b> long-running',
         'Alive for over 3h, which is the shape of a loop burning tokens: '
         + names(loopers, 'worker_id')
-        + '\n\nAdvisory only — a genuinely long ticket looks the same.'));
+        + '\n\nAdvisory only - a genuinely long ticket looks the same.'));
     }
     const html = chips.join('');
     hosts.forEach($el => {
@@ -46844,7 +46844,7 @@
         // CCC-1050: one-click kill — releases the worker from queue staffing
         // and terminates its process (server route does both, release first).
         const killBtn = r.pid
-          ? '<button type="button" class="fq-worker-kill" data-uxq-kill-worker="' + escapeAttr(r.workerId) + '" data-uxq-kill-pid="' + r.pid + '" title="Kill worker ' + escapeAttr(r.worker) + ' (pid ' + r.pid + ') — releases it from queue staffing and terminates its process" aria-label="Kill worker">&#10005;</button>'
+          ? '<button type="button" class="fq-worker-kill" data-uxq-kill-worker="' + escapeAttr(r.workerId) + '" data-uxq-kill-pid="' + r.pid + '" title="Kill worker ' + escapeAttr(r.worker) + ' (pid ' + r.pid + ') - releases it from queue staffing and terminates its process" aria-label="Kill worker">&#10005;</button>'
           : '';
         // CCC-1148: jump straight to the CCC session the worker is running
         // in. Hover-revealed like the kill button; never rendered without a
@@ -46854,7 +46854,7 @@
           : '';
         if (_uxqPicker.isMobile) {
           return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '" data-uxq-session="' + escapeAttr(r.sid) + '">'
-            + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
+            + '<span class="fq-working-id">' + escapeHtml(r.ref || '-') + '</span>'
             + r.icon
             + '<span class="fq-working-body">'
             + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
@@ -46866,7 +46866,7 @@
             + '</div>';
         }
         return '<div class="fq-working-row" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
-          + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
+          + '<span class="fq-working-id">' + escapeHtml(r.ref || '-') + '</span>'
           + r.icon
           + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
           + '<span class="fq-working-right">'
@@ -48153,7 +48153,7 @@
             // GitHub-backed tickets relay text only; pasted-image path tokens
             // are stripped server-side rather than failing (issue #101).
             showOpToast(d.images_stripped
-              ? 'Comment added — images not supported for GitHub-backed tickets, text sent without them'
+              ? 'Comment added - images not supported for GitHub-backed tickets, text sent without them'
               : 'Comment added', 'success');
             _uxqItemsCache.ts = 0;
             _renderQueuePanel();
@@ -48296,7 +48296,7 @@
     }
     if (gateAckPlusBtn) {
       gateAckPlusBtn.addEventListener('click', async () => {
-        const comment = prompt('Ack with comment — steering note for the worker:');
+        const comment = prompt('Ack with comment - steering note for the worker:');
         if (comment === null) return;
         gateAckPlusBtn.disabled = true;
         try {
@@ -48322,7 +48322,7 @@
     }
     if (gateNackBtn) {
       gateNackBtn.addEventListener('click', async () => {
-        const reason = prompt('Nack — WHY is this not being built? (required)');
+        const reason = prompt('Nack - WHY is this not being built? (required)');
         if (!reason) return;
         const closeTicket = confirm('OK = icebox (not now).\nCancel then re-Nack with --close in the CLI for "not ever".\n\nIcebox this ticket?');
         if (!closeTicket) return;
@@ -48406,7 +48406,7 @@
     const syncNoticeHtml = syncDegraded
       ? '<div class="fq-status-sync-notice" role="status" title="'
         + escapeAttr('GitHub API rate limit hit' + (retryLabel ? ('. Retrying around ' + retryLabel) : '') + '. Showing last-synced data.')
-        + '">GitHub sync paused — API rate limit'
+        + '">GitHub sync paused - API rate limit'
         + (retryLabel ? (', retrying ~' + escapeHtml(retryLabel)) : '')
         + '. Showing last-synced data.</div>'
       : '';
@@ -48416,7 +48416,7 @@
         + '">Synced ' + escapeHtml(timeAgo(syncedAtMs)) + '</span>'
       : '';
     const refreshTitle = syncDegraded
-      ? ('GitHub rate-limited — retry ~' + (retryLabel || 'soon') + '. Manual refresh disabled to avoid hammering the API.')
+      ? ('GitHub rate-limited - retry ~' + (retryLabel || 'soon') + '. Manual refresh disabled to avoid hammering the API.')
       : 'Refresh this queue now (bypasses the cache)';
     const refreshBtn = '<button type="button" class="fq-status-refresh-toggle" data-refresh-queue="' + escapeAttr(key) + '"'
       + (syncDegraded ? ' disabled' : '')
@@ -48449,7 +48449,7 @@
         + '<div class="fq-queue-alarm-actions">'
         + '<button type="button" class="fq-queue-alarm-btn" data-alarm-retry="' + escapeAttr(key) + '"'
         + (q && q.repo_path ? '' : ' disabled')
-        + ' title="Spawn a fresh worker for this queue now — the same action the reconciler retries on its tick">Spawn worker now</button>'
+        + ' title="Spawn a fresh worker for this queue now - the same action the reconciler retries on its tick">Spawn worker now</button>'
         + '<button type="button" class="fq-queue-alarm-btn" data-alarm-inspect="' + escapeAttr(key) + '"'
         + ' title="Open this queue\'s WatchTower activity log (spawns, nudges, reaps)">Open queue activity log</button>'
         + '</div></div>';
@@ -48485,7 +48485,7 @@
       ccc_worker_default: 'CCC worker default (Spawn defaults)',
       ccc_default: 'CCC new-session default (Spawn defaults)',
       fallback: 'WatchTower fallback (codex if on PATH, else claude)',
-      engine_default: 'not configured — the engine CLI\'s own default',
+      engine_default: 'not configured - the engine CLI\'s own default',
     };
     const src = k => sourceLabel[String(plan[k + '_source'] || '')] || String(plan[k + '_source'] || '');
     // Short display forms: the conv list shows "fable-5-1", not
@@ -48497,9 +48497,9 @@
     if (plan.effort) parts.push(String(plan.effort));
     const label = (plan.is_default ? 'default · ' : '') + parts.join(' · ');
     const title = 'Next worker spawned on ' + queue + ' runs as:'
-      + '\nengine: ' + plan.engine + ' — ' + src('engine')
-      + '\nmodel: ' + (plan.model || '(engine default)') + ' — ' + src('model')
-      + '\neffort: ' + (plan.effort || '(engine default)') + ' — ' + src('effort')
+      + '\nengine: ' + plan.engine + ' - ' + src('engine')
+      + '\nmodel: ' + (plan.model || '(engine default)') + ' - ' + src('model')
+      + '\neffort: ' + (plan.effort || '(engine default)') + ' - ' + src('effort')
       + '\nClick to change.';
     return '<button type="button" class="fq-status-plan' + (plan.is_default ? ' is-default' : '') + '"'
       + ' data-fq-config-queue="' + escapeAttr(queue) + '"'
@@ -49241,7 +49241,7 @@
           .find(x => x && _uxqProjectKey(x.queue) === queue);
         const repoPath = (qrow && qrow.repo_path) || '';
         if (!repoPath) {
-          showOpToast('No repo path configured for ' + queue + ' — set one in the queue gear dialog first.', 'error');
+          showOpToast('No repo path configured for ' + queue + ' - set one in the queue gear dialog first.', 'error');
           return;
         }
         btn.disabled = true;
@@ -49252,7 +49252,7 @@
           });
           const d = await res.json().catch(() => ({}));
           if (res.ok && d && d.ok !== false) {
-            showOpToast('Worker spawn requested for ' + queue + ' — it should claim work within a minute.', 'success');
+            showOpToast('Worker spawn requested for ' + queue + ' - it should claim work within a minute.', 'success');
             _uxqHealthCache.ts = 0;
             void _uxqRefreshQueueStrips();
           } else {
@@ -49719,7 +49719,7 @@
       const isBlocked = (id) => typeof spawnDefaultsState === 'object' && spawnDefaultsState.blockedModels instanceof Set
         && spawnDefaultsState.blockedModels.has(String(id || '').trim().toLowerCase());
       fields.model.innerHTML = '<option value="">CCC spawn default</option>'
-        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice) + (isBlocked(choice) ? ' — ⚠ policy blocked, asks to confirm' : '')) + '</option>').join('')
+        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice) + (isBlocked(choice) ? ' - ⚠ policy blocked, asks to confirm' : '')) + '</option>').join('')
         + '<option value="__custom__">Custom model…</option>';
       fields.model.value = known ? selected : '__custom__';
       fields.customModel.hidden = known;
@@ -53249,7 +53249,7 @@
     const _branchSubsumes = pillBranch && _pathTail
       && pillBranch.toLowerCase().includes(_pathTail.toLowerCase());
     if (!_branchSubsumes) {
-      parts.push('<span class="wp-path" data-action="reveal-path" data-path="' + escapeAttr(pillPath) + '" role="button" tabindex="0" title="' + escapeHtml(pillPath) + ' — click to reveal in Finder">' + escapeHtml(tilde) + '</span>');
+      parts.push('<span class="wp-path" data-action="reveal-path" data-path="' + escapeAttr(pillPath) + '" role="button" tabindex="0" title="' + escapeHtml(pillPath) + ' - click to reveal in Finder">' + escapeHtml(tilde) + '</span>');
     }
 
     // Sibling-worktrees pill removed — topbar Worktrees button is the
@@ -54181,7 +54181,7 @@
     const costLabel = isProvisional ? 'Estimated subscription cost' : 'Allocated subscription cost';
     const allocated = '$' + presentation.allocatedCost.toFixed(2);
     const title = (isProvisional
-        ? 'Provisional rate (calibration not yet confirmed — ' + sampleDays + ' of 2+ clean days banked): '
+        ? 'Provisional rate (calibration not yet confirmed - ' + sampleDays + ' of 2+ clean days banked): '
         : 'Historical rate: ')
       + rate.toFixed(4) + '% per $1 API list price. '
       + 'Sample: ' + sampleDays + ' days, $' + (Number.isFinite(sampledCost) ? sampledCost.toFixed(4) : 'Unavailable')
@@ -60728,7 +60728,7 @@
             + '<div class="session-interrupted-msg">'
             + '<span class="session-interrupted-title">⏸ Session interrupted</span>'
             + '<span class="session-interrupted-sub">Claude\'s turn was cut off mid-response'
-            + ' (a kill, an approved interrupt, or Esc) — this reflects the transcript itself,'
+            + ' (a kill, an approved interrupt, or Esc) - this reflects the transcript itself,'
             + ' not a hook. Send a message to pick it back up.</span>'
             + '</div>';
         } else {
@@ -60857,7 +60857,7 @@
         const _actorChip = (ev.actor === 'sidekick' || ev.actor === 'lead')
           ? '<span class="actor-chip actor-' + ev.actor + '" title="'
             + escapeAttr(ev.actor === 'sidekick'
-              ? (ev.subagent_report ? 'Sidekick subagent — completion report' : 'Sidekick subagent turn (Fusion)')
+              ? (ev.subagent_report ? 'Sidekick subagent - completion report' : 'Sidekick subagent turn (Fusion)')
               : 'Lead model turn (Fusion)')
             + '">' + escapeHtml(ev.subagent_report ? 'sidekick ▸ report' : ev.actor) + '</span>'
           : '';
@@ -62525,9 +62525,9 @@
     else if (verb === 'CCC-PEER-AUTH-FAIL') headline = 'Peer message authentication failed';
     else if (verb === 'CCC-PEER-FAIL' || verb === 'CCC-PEER-ERR') headline = 'Peer connection failed';
     else if (verb === 'CCC-PEER-ASK-REPLY') headline = 'Peer reply received';
-    else if (verb === 'CCC-PEER-') headline = 'Peer event — older log name was truncated';
+    else if (verb === 'CCC-PEER-') headline = 'Peer event - older log name was truncated';
     else if (verb === 'SHARED_STATE_BLOCK') headline = 'Shared state already owned; private connection skipped';
-    else if (verb === 'SHARED_ST') headline = 'Shared-state event — older log name was truncated';
+    else if (verb === 'SHARED_ST') headline = 'Shared-state event - older log name was truncated';
     else if (detail) headline += ': ' + detail.replace(/^error=/, '');
     if (!origin && sid) origin = sessionTail() + ' · ' + (category || 'Activity') + ' · ' + verb;
     // Only known repeated RPC diagnostics share a key despite differing ids
@@ -64272,7 +64272,7 @@
     modal.innerHTML =
       '<div class="ann-ux-preview-card">' +
         '<div class="ann-ux-preview-title">File an issue (Mazkir queue)</div>' +
-        '<div class="ann-ux-preview-label">Issue — the question, response, time, and ids below are included automatically. Paste an image with ⌥-V:</div>' +
+        '<div class="ann-ux-preview-label">Issue - the question, response, time, and ids below are included automatically. Paste an image with ⌥-V:</div>' +
         '<textarea class="ann-ux-preview-text" rows="5" id="askIssueText" placeholder="Describe the issue…"></textarea>' +
         '<div class="ann-ux-preview-label">Included automatically:</div>' +
         '<textarea class="ann-ux-preview-text" rows="12" spellcheck="false" readonly></textarea>' +
@@ -72293,7 +72293,7 @@
       if (state === 'online') {
         text = 'Routing target for kap-driven Kimi sessions.';
       } else if (state === 'offline') {
-        text = 'kap routing is on but no daemon is live — Kimi sessions fall back to the ACP transport. Start one with `kimi web`.';
+        text = 'kap routing is on but no daemon is live - Kimi sessions fall back to the ACP transport. Start one with `kimi web`.';
       } else if (state === 'degraded') {
         if (svc.pinned) {
           text = 'CCC_KIMI_KAP_SERVER pins a daemon that is not currently live.';
@@ -72302,7 +72302,7 @@
         } else if (svc.instances > 1) {
           text = svc.instances + ' live daemons are registered; routing picks the newest heartbeat, which can be the TUI\u2019s embedded server. Pin one with CCC_KIMI_KAP_SERVER=<port>.';
         } else {
-          text = 'A registered daemon has a stale heartbeat or a dead pid — restart `kimi web`.';
+          text = 'A registered daemon has a stale heartbeat or a dead pid - restart `kimi web`.';
         }
       } else if (state === 'idle') {
         text = svc.kap_enabled

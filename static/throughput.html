@@ -2848,7 +2848,7 @@
 
         document.getElementById('lbl-card4').textContent = 'PLAN COST';
         document.getElementById('val-out-throughput').textContent =
-          sessionMetrics.plan_cost_usd == null ? '—' : fmtCost(sessionMetrics.plan_cost_usd);
+          sessionMetrics.plan_cost_usd == null ? '-' : fmtCost(sessionMetrics.plan_cost_usd);
         document.getElementById('val-out-tps').textContent =
           actualPct == null
             ? 'Quota calibration unavailable'
@@ -2937,7 +2937,7 @@
       if (acts.length) html += `<div class="waste-muted" style="padding-top:6px">went to: ${esc(acts.join(' · '))}</div>`;
       (w.findings || []).forEach((f, i) => {
         html += `<div class="waste-finding"><div><span class="waste-finding-title">${i + 1}. ${esc(f.title)}</span>`
-          + ` — ${esc(Math.round(f.share_pct))}% of spend (${esc(pair(f))})</div>`
+          + ` - ${esc(Math.round(f.share_pct))}% of spend (${esc(pair(f))})</div>`
           + `<div class="waste-fix">${esc(f.fix || '')}</div></div>`;
       });
       if (w.score != null && !(w.findings || []).length) {
@@ -4892,7 +4892,7 @@
       if (!meterEl) return;
       meterEl.classList.toggle('is-stale', !!stale);
       meterEl.title = stale
-        ? `${label} usage snapshot is stale — the provider has not reported fresh usage recently`
+        ? `${label} usage snapshot is stale - the provider has not reported fresh usage recently`
         : '';
       if (!pctEl) return;
       const existing = pctEl.querySelector('.weekly-stale-tag');
