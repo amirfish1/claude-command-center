@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import signal
+import site
 import socket
 import subprocess
 import sys
@@ -969,6 +970,11 @@ for line in sys.stdin:
             "CCC_CLAUDE_BIN": str(self.fake_claude),
             "CCC_SKIP_SKILL_INSTALL": "1",
         })
+        # The worker hard-requires `watchtower`. Overriding HOME for state
+        # isolation also hides a user-site (pip --user / editable) install,
+        # because Python derives that path from $HOME at startup. Pin the
+        # user base to the real one so the child still finds it.
+        self.env.setdefault("PYTHONUSERBASE", site.getuserbase())
         self.worker = None
         self.child_pid = None
         self._start_worker()
