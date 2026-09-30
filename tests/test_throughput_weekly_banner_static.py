@@ -36,7 +36,7 @@ def test_weekly_banner_uses_non_overlapping_compact_layout():
     assert "grid-template-columns: minmax(460px, 1fr) minmax(240px, 340px) auto;" in throughput_html
     assert 'id="weekly-sync-line"' in throughput_html
     assert 'id="weekly-reset-line"' in throughput_html
-    assert ".weekly-sub-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }" in throughput_html
+    assert ".weekly-sub-line { overflow-wrap: anywhere; }" in throughput_html
     assert ".weekly-meter {\n    flex: 1 1 0;" in throughput_html
     assert "min-width: 0;" in throughput_html
 

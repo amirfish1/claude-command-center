@@ -20,12 +20,16 @@ def test_throughput_page_exposes_claude_codex_tabs_and_passes_engine_param():
 
 
 def test_server_throughput_aggregate_cache_and_payload_are_engine_aware():
-    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    # Throughput logic moved out of server.py into ccc_server/usage_stats.py;
+    # the HTTP routes in server.py still pass engine_filter through.
+    server_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "usage_stats.py").read_text(encoding="utf-8")
+    route_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
 
     assert "def _throughput_engine_filter(value):" in server_py
     assert "def _throughput_aggregate_cache_key(session_id, engine_filter=None):" in server_py
-    assert "_throughput_aggregate_cache_key(session_id, engine_filter)" in server_py
-    assert "engine_filter=engine_filter" in server_py
+    assert "_core._throughput_aggregate_cache_key(" in server_py
+    assert "f\"{session_id}:{range_key or ''}\", engine_filter" in server_py
+    assert "engine_filter=engine_filter" in route_py
     assert "\"engine\": engine_filter or \"claude\"" in server_py
     assert "if engine_filter == \"codex\":" in server_py
     assert 'elif engine_filter == "kimi":' in server_py

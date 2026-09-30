@@ -116,5 +116,6 @@ def test_provider_quota_context_survives_a_stale_snapshot_refresh():
     assert "function stabilizeWeeklyQuota(" in throughput_html
     assert "function isUsableWeeklyQuota(" in throughput_html
     assert "ccc-throughput-last-quota" in throughput_html
-    assert "weeklyData = stabilizeWeeklyQuota(model.weekly)" in throughput_html
+    assert "weeklyData = stabilizeWeeklyQuota(overlayLiveCodexWeeklyQuota(" in throughput_html
+    assert "model.weekly, latestLiveCodexWeeklyQuota" in throughput_html
     assert "weeklyData = stabilizeWeeklyQuota(d && typeof d === 'object' ? d : {})" in throughput_html
