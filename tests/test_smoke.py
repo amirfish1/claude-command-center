@@ -10935,6 +10935,16 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.server,
                 "list_spawned_sessions",
                 return_value=[{"spawn_id": "123", "engine": "codex"}],
+            ), mock.patch.object(
+                # The persisted response cache is signature-gated by the real
+                # transcript corpus. On a machine with no transcripts (CI) an
+                # earlier test's empty entry matches this test's signature and
+                # is served instead of the stubbed build; force the build.
+                self.server, "_archive_response_cache_get", return_value=None,
+            ), mock.patch.object(
+                self.server, "_archive_response_cache_put",
+            ), mock.patch.object(
+                self.server, "_save_conv_meta_cache",
             ):
                 with urllib.request.urlopen(base + "/api/sessions?all=1&engine=codex", timeout=5) as res:
                     body = json.loads(res.read().decode("utf-8"))
