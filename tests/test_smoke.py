@@ -18891,9 +18891,9 @@ class TestQuestionRelay(unittest.TestCase):
                 if "command-center/hooks/" in h.get("command", "")
             ]
             # 4 pre-seeded (PreToolUse/PostToolUse/Notification/Stop, migrated
-            # to an absolute interpreter) + 2 freshly installed (PreCompact/
-            # PostCompact, absent from the fixture above).
-            self.assertEqual(len(commands), 6)
+            # to an absolute interpreter) + 3 freshly installed (SessionStart/
+            # PreCompact/PostCompact, absent from the fixture above).
+            self.assertEqual(len(commands), 7)
             expected_python = "/usr/bin/python3" if self.server.sys.platform == "darwin" else "/opt/ccc-test/python3"
             for command in commands:
                 self.assertTrue(command.startswith(expected_python + " "), command)
@@ -19407,7 +19407,10 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
     def test_wt_cli_unavailable_reports_disabled(self):
         """Flag on but `wt` missing from PATH -> _wt_cli_available() is False,
         so the hooks fall through to the native path."""
-        with mock.patch("shutil.which", return_value=None):
+        # Also hide the interpreter's user-scripts dir: _find_wt_cli falls
+        # back to it, and a dev machine (or CI pip install) may have `wt` there.
+        with mock.patch("shutil.which", return_value=None), \
+             mock.patch("sysconfig.get_path", return_value="/nonexistent-scripts-dir"):
             self.server._WT_CLI_PATH_CACHE = None
             self.assertFalse(self.server._wt_cli_available())
 
@@ -19552,6 +19555,7 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
         returns None without shelling out."""
         with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "wt"}), \
              mock.patch("shutil.which", return_value=None), \
+             mock.patch("sysconfig.get_path", return_value="/nonexistent-scripts-dir"), \
              mock.patch("subprocess.run") as run:
             self.server._WT_CLI_PATH_CACHE = None
             result = self.server._try_wt_ask_for_headless_delivery("sid-123", "hi", 5000)
