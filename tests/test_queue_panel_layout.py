@@ -73,7 +73,12 @@ class TestQueuePanelLayout(unittest.TestCase):
             "var recentClosed = closed.filter(function (it) { return isRecentClosed(it) || unresolvedNotes(it).length > 0; });",
             q2_js,
         )
-        self.assertIn("state.showClosed ? closed.slice(0, state.closedCap) : recentClosed", q2_js)
+        # The default view admits recent/unresolved rows via pickShownClosed,
+        # which also lets each "Show more" click widen the window (CCC-1167).
+        self.assertIn("var shownClosed = state.viewAll ? [] : (state.showClosed", q2_js)
+        self.assertIn("? closed.slice(0, state.closedCap)", q2_js)
+        self.assertIn(": pickShownClosed(closed, function (it) {", q2_js)
+        self.assertIn("return isRecentClosed(it) || unresolvedNotes(it).length > 0;", q2_js)
         self.assertIn("Recent closed", q2_js)
 
     def test_standalone_queue_glows_a_newly_filed_ticket(self):
@@ -265,6 +270,7 @@ class TestQueuePanelLayout(unittest.TestCase):
         )
         self.assertIn(
             "$convList.innerHTML = _convListHtml;\n"
+            "    _convListRenderVersion++;\n"
             "    _updateConvTabBarHeightVar($convList);\n"
             "    _mountSharedQueuePanel();",
             app_js,
