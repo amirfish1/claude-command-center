@@ -38,7 +38,7 @@ class SnapshotHarnessTests(unittest.TestCase):
         self.assertIn("`page.evaluate()` with DOM selectors", guidance)
 
     def test_breadcrumb_probe_uses_dom_state_not_private_conversation_cache(self):
-        source = (ROOT / "probe-ccc-1051.js").read_text()
+        source = (ROOT / "scripts" / "dev" / "probe-ccc-1051.js").read_text()
 
         self.assertNotIn("conversationsData", source)
         self.assertIn("el.dataset.copySessionId", source)

@@ -1,6 +1,6 @@
 // Probe the pipeline canvas: console errors, node/edge counts, positions.
-const puppeteer = require('./require-puppeteer.js');
-const { findChromePath } = require('./puppeteer-browser-config.js');
+const puppeteer = require('../../require-puppeteer.js');
+const { findChromePath } = require('../../puppeteer-browser-config.js');
 
 (async () => {
   const browser = await puppeteer.launch({

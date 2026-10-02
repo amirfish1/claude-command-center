@@ -1,5 +1,5 @@
-const puppeteer = require('./require-puppeteer.js');
-const { findChromePath } = require('./puppeteer-browser-config.js');
+const puppeteer = require('../../require-puppeteer.js');
+const { findChromePath } = require('../../puppeteer-browser-config.js');
 (async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
