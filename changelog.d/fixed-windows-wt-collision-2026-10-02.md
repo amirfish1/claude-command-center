@@ -1,0 +1,1 @@
+- On Windows, CCC no longer launches Windows Terminal (`error 0x80070002 when launching 'skills status'` / `'status --json'`) when it means to run WatchTower's `wt` CLI; every `wt` call now uses WatchTower's `wt.exe` from Python's Scripts folder.

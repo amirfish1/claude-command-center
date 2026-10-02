@@ -368,6 +368,10 @@ def board_candidates(cfg, *, now):
 # ── source 2: WatchTower queues ──────────────────────────────────────────────
 
 def _wt_bin():
+    if os.name == "nt":
+        # Bare `wt` on Windows is Windows Terminal; use the WatchTower-aware
+        # resolver (finds wt.exe in Python's Scripts dir).
+        return _core._wt_cli_path() or None
     for cand in ("wt", "/opt/homebrew/bin/wt", "/usr/local/bin/wt",
                  str(Path.home() / ".local" / "bin" / "wt")):
         found = shutil.which(cand) if "/" not in cand else (cand if os.access(cand, os.X_OK) else None)
