@@ -57,8 +57,8 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const puppeteer = require('./require-puppeteer.js');
-const { findChromePath } = require('./puppeteer-browser-config.js');
+const puppeteer = require('../../require-puppeteer.js');
+const { findChromePath } = require('../../puppeteer-browser-config.js');
 
 const DEFAULT_URL = 'http://127.0.0.1:8090';
 const MAX_CLICKS = 3;
@@ -490,8 +490,8 @@ async function resolveBaseUrl() {
   console.log(`${results.length - fails.length - skips.length} pass, ${fails.length} fail, ${skips.length} skip (max ${MAX_CLICKS} clicks)`);
 
   try {
-    fs.mkdirSync(path.join(__dirname, 'scratch'), { recursive: true });
-    fs.writeFileSync(path.join(__dirname, 'scratch', 'simple-ui-clicks-results.json'),
+    fs.mkdirSync(path.join(__dirname, '..', '..', 'scratch'), { recursive: true });
+    fs.writeFileSync(path.join(__dirname, '..', '..', 'scratch', 'simple-ui-clicks-results.json'),
       JSON.stringify({ when: new Date().toISOString(), url, maxClicks: MAX_CLICKS, results }, null, 2));
   } catch (_) {}
 
