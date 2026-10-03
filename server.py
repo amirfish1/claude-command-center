@@ -26710,7 +26710,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     proc = subprocess.run(
-                        ["wt", "receipts", "get", rid],
+                        [_wt_cli_path() or "wt", "receipts", "get", rid],
                         capture_output=True, text=True, timeout=15,
                     )
                 except (OSError, subprocess.TimeoutExpired, ValueError) as e:

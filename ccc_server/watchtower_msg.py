@@ -125,14 +125,24 @@ def _find_wt_cli():
     not installed" in the dashboard, `wt` start/restart fails, and every
     queue affordance silently disables itself."""
     found = _core.shutil.which("wt") or ""
+    # On Windows, `wt` on PATH is usually Windows Terminal's app alias
+    # (...\WindowsApps\wt.exe), which treats `wt skills status` as a command
+    # line to open in a new tab. Never mistake it for WatchTower's CLI.
+    if found and os.name == "nt" and "\\windowsapps\\" in found.lower():
+        found = ""
     if not found:
-        try:
-            scheme = "posix_user" if os.name == "posix" else "nt_user"
-            candidate = os.path.join(sysconfig.get_path("scripts", scheme=scheme), "wt")
+        name = "wt.exe" if os.name == "nt" else "wt"
+        schemes = ("posix_user",) if os.name == "posix" else ("nt_user", None)
+        for scheme in schemes:
+            try:
+                scripts = (sysconfig.get_path("scripts", scheme=scheme) if scheme
+                           else sysconfig.get_path("scripts"))
+                candidate = os.path.join(scripts, name)
+            except Exception:
+                continue
             if os.access(candidate, os.X_OK):
                 found = candidate
-        except Exception:
-            pass
+                break
     return found
 
 
@@ -170,7 +180,7 @@ def _wt_import_available():
         if _core._wt_cli_available():
             try:
                 proc = _core.subprocess.run(
-                    ["wt", "import", "--help"],
+                    [_core._wt_cli_path(), "import", "--help"],
                     capture_output=True, text=True, timeout=10,
                 )
                 _core._WT_IMPORT_AVAILABLE_CACHE = proc.returncode == 0
@@ -298,7 +308,7 @@ def _run_wt_import(doc_path, queue, *, apply=False, item_type=None):
     argv list only (never a shell string), so path/queue can't inject shell.
     Mirrors `_try_wt_send_for_headless_delivery`'s subprocess posture: bounded
     timeout, catch the OS/timeout family, degrade to a clear error dict."""
-    cmd = ["wt", "import", str(doc_path), "-q", queue]
+    cmd = [_core._wt_cli_path() or "wt", "import", str(doc_path), "-q", queue]
     if apply:
         cmd.append("--apply")
     if item_type in ("bug", "feature"):
@@ -768,7 +778,7 @@ def _try_wt_send_for_headless_delivery(session_id, text):
     env["WATCHTOWER_DELEGATE_URL"] = "off"
     try:
         proc = _core.subprocess.run(
-            ["wt", "send", session_id, text, "--no-queue", "--json"],
+            [_core._wt_cli_path() or "wt", "send", session_id, text, "--no-queue", "--json"],
             capture_output=True, text=True, timeout=30, env=env,
         )
     except (OSError, _core.subprocess.TimeoutExpired, ValueError):
@@ -856,7 +866,7 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
     timeout_s = max(1, math.ceil(timeout_ms / 1000.0))
     try:
         proc = _core.subprocess.run(
-            ["wt", "ask", session_id, text, "--timeout", str(timeout_s), "--json"],
+            [_core._wt_cli_path() or "wt", "ask", session_id, text, "--timeout", str(timeout_s), "--json"],
             capture_output=True, text=True, timeout=timeout_s + 15,
         )
     except (OSError, _core.subprocess.TimeoutExpired, ValueError):

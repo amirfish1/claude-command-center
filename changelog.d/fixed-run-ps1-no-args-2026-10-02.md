@@ -1,0 +1,1 @@
+- `.\run.ps1` on Windows no longer exits immediately with "Cannot index into a null array" when started without arguments.

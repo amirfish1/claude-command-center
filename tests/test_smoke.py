@@ -21048,7 +21048,7 @@ def test_wt_receipt_route_and_staged_send_feedback():
     wt_msg_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "watchtower_msg.py").read_text(encoding="utf-8")
     assert '"--no-queue", "--json"' in wt_msg_py
     assert 'elif path.startswith("/api/wt/receipt/"):' in server_py
-    assert '["wt", "receipts", "get", rid]' in server_py
+    assert '"wt", "receipts", "get", rid]' in server_py
     assert '"skip_wt": bool(payload.get("skip_wt"))' in server_py
     assert "**inject_options" in server_py
     app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

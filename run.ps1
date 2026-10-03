@@ -95,7 +95,9 @@ if (-not $env:PORT) {
     $env:PORT = "8090"
 }
 
-switch ($RemainingArgs[0]) {
+$firstArg = if ($RemainingArgs) { $RemainingArgs[0] } else { $null }
+
+switch ($firstArg) {
     "--help" {
         Show-Help
         exit 0
