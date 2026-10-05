@@ -26225,6 +26225,7 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/system/scheduled-jobs",
     "/api/jobs",
     "/api/throughput/daily",
+    "/api/throughput/share",
     "/api/titler-turns",
     "/api/vercel-deploy",
     "/api/watchtower/service/status",
@@ -27654,6 +27655,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload, status = _throughput_window_payload(
                 start, end, engine_filter=engine_filter, limit=limit
             )
+            self.send_json(payload, status)
+            return
+        elif path == "/api/throughput/share":
+            # Totals-only 365-day daily buckets for the share card. Never
+            # includes session names, titles, paths or repos.
+            payload, status = _throughput_share_payload()
             self.send_json(payload, status)
             return
         elif path == "/api/throughput/daily":

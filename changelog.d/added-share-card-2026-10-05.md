@@ -1,0 +1,1 @@
+- Throughput page: new Share button opens a share screen that renders a 1200x630 or 1080x1080 card (activity heatmap, one headline number, three small stats) with Copy image, Download PNG, and compose links for X, LinkedIn, Bluesky and Threads. The card holds totals only, never session names or paths.

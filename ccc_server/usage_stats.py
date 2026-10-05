@@ -3136,6 +3136,118 @@ def _throughput_window_payload(start, end, engine_filter=None, limit=50):
     return payload, 200
 
 
+# ---------------------------------------------------------------------------
+# Share card — 365 days of totals-only daily buckets for the throughput page's
+# "Share" screen. Reads through the same (mtime,size) per-transcript turn cache
+# as the window/daily digests (discovery is gated by the 365-day mtime cutoff),
+# then keeps only numbers: no session ids, names, titles, paths or repos ever
+# enter the payload. A cold cache can mean parsing many transcripts, so the
+# build runs single-flight on a background thread and callers poll.
+# ---------------------------------------------------------------------------
+
+_THROUGHPUT_SHARE_DAYS = 365
+_THROUGHPUT_SHARE_ENGINES = ("claude", "codex", "kimi")
+_THROUGHPUT_SHARE_TTL = 300
+_THROUGHPUT_SHARE_CACHE = {"ts": 0.0, "payload": None}
+_THROUGHPUT_SHARE_LOCK = threading.Lock()
+_THROUGHPUT_SHARE_JOB = {"thread": None}
+
+
+def _throughput_share_aggregate(turns_by_engine, now=None):
+    """Totals-only daily buckets from {engine: [turn, ...]}.
+
+    Pure function: the only per-turn fields read are numeric usage fields and
+    the end timestamp, so nothing identifying can reach the output.
+    """
+    now = time.time() if now is None else now
+    start_day = (datetime.fromtimestamp(now).astimezone()
+                 - timedelta(days=_THROUGHPUT_SHARE_DAYS - 1)).strftime("%Y-%m-%d")
+    days = {}
+    engines_seen = set()
+    for engine, turns in turns_by_engine.items():
+        for t in turns:
+            t_end = _stats_parse_ts(t.get("t_end"))
+            if not t_end:
+                continue
+            day = t_end.strftime("%Y-%m-%d")
+            if day < start_day:
+                continue
+            row = days.get(day)
+            if row is None:
+                row = days[day] = {
+                    "day": day, "tokens": 0, "raw_context_tokens": 0,
+                    "cache_read_tokens": 0, "turns": 0,
+                    "active_duration_sec": 0.0, "cost_usd": 0.0,
+                    "engine_tokens": {},
+                }
+            tokens = (t.get("tokens_in") or 0) + (t.get("tokens_out") or 0)
+            row["tokens"] += tokens
+            row["raw_context_tokens"] += t.get("raw_context_tokens") or t.get("tokens_in") or 0
+            row["cache_read_tokens"] += t.get("cache_read_tokens") or 0
+            row["turns"] += 1
+            row["active_duration_sec"] += t.get("dur_sec") or 0
+            row["cost_usd"] += t.get("cost_usd") or 0.0
+            row["engine_tokens"][engine] = row["engine_tokens"].get(engine, 0) + tokens
+            if tokens:
+                engines_seen.add(engine)
+    daily = []
+    for day in sorted(days):
+        row = days[day]
+        row["active_duration_sec"] = round(row["active_duration_sec"], 2)
+        row["cost_usd"] = round(row["cost_usd"], 4)
+        daily.append(row)
+    return {
+        "ok": True,
+        "pending": False,
+        "days": _THROUGHPUT_SHARE_DAYS,
+        "generated_at": now,
+        "engines": sorted(engines_seen),
+        "daily": daily,
+    }
+
+
+def _throughput_share_build(now=None):
+    now = time.time() if now is None else now
+    start_epoch = now - _THROUGHPUT_SHARE_DAYS * 86400
+    turns_by_engine = {}
+    for engine in _THROUGHPUT_SHARE_ENGINES:
+        try:
+            turns_by_engine[engine] = _throughput_window_turns(start_epoch, now + 60, engine)
+        except Exception:
+            turns_by_engine[engine] = []
+    payload = _throughput_share_aggregate(turns_by_engine, now=now)
+    _THROUGHPUT_SHARE_CACHE["payload"] = payload
+    _THROUGHPUT_SHARE_CACHE["ts"] = time.time()
+    return payload
+
+
+def _throughput_share_payload(wait=2.0):
+    """Cached 365-day totals for the share card.
+
+    Fresh cache -> returned directly. Otherwise a single background build is
+    started (one at a time) and we wait up to ``wait`` seconds for it; if it
+    is still running the caller gets the stale payload (if any) or
+    ``{"pending": True}`` and polls again.
+    """
+    cached = _THROUGHPUT_SHARE_CACHE.get("payload")
+    if cached and time.time() - _THROUGHPUT_SHARE_CACHE["ts"] < _THROUGHPUT_SHARE_TTL:
+        return cached, 200
+    with _THROUGHPUT_SHARE_LOCK:
+        job = _THROUGHPUT_SHARE_JOB.get("thread")
+        if job is None or not job.is_alive():
+            job = threading.Thread(
+                target=_throughput_share_build, name="throughput-share", daemon=True
+            )
+            _THROUGHPUT_SHARE_JOB["thread"] = job
+            job.start()
+    job.join(timeout=max(0.0, wait))
+    cached = _THROUGHPUT_SHARE_CACHE.get("payload")
+    if cached:
+        fresh = time.time() - _THROUGHPUT_SHARE_CACHE["ts"] < _THROUGHPUT_SHARE_TTL
+        return (cached if fresh else dict(cached, stale=True)), 200
+    return {"ok": True, "pending": True, "daily": [], "engines": []}, 200
+
+
 _TITLER_TURNS_CACHE = {"ts": 0.0, "payload": None}
 _TITLER_TURNS_CACHE_TTL = 15
 _TITLER_TURNS_LIMIT = 40

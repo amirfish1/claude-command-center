@@ -424,6 +424,43 @@
     .turn-list { max-height: 55vh; overflow-y: auto; }
   }
 
+  /* ── Share card ── */
+  .btn-share { border-color: var(--border-active); color: var(--accent); }
+  .sh-overlay { position: fixed; inset: 0; z-index: 9300; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(4, 6, 10, 0.78); }
+  .sh-overlay.open { display: flex; }
+  .sh-modal { width: min(1180px, 96vw); max-height: 94vh; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 340px; background: #11131b; border: 1px solid #262b40; border-radius: 20px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6); }
+  .sh-left { padding: 26px 28px; border-right: 1px solid #1f2335; min-width: 0; }
+  .sh-right { padding: 26px 24px; background: #0f1118; border-radius: 0 20px 20px 0; }
+  .sh-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .sh-hdr h2 { font-size: 20px; font-weight: 600; }
+  .sh-hdr h3 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b7290; font-weight: 600; }
+  .sh-x { background: none; border: 0; color: #6b7290; font-size: 22px; cursor: pointer; line-height: 1; }
+  .sh-x:hover { color: var(--text); }
+  .sh-seg { display: inline-flex; flex-wrap: wrap; background: #191c28; border-radius: 10px; padding: 3px; margin: 0 10px 12px 0; }
+  .sh-seg button { padding: 6px 12px; border: 0; border-radius: 8px; font: 500 12.5px var(--font-ui); color: #8a91a5; background: transparent; cursor: pointer; }
+  .sh-seg button.on { background: #2a2f45; color: #e8eaf0; }
+  .sh-seg button:disabled { opacity: 0.35; cursor: default; }
+  .sh-stage { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid #23302a; background: #0d1110; line-height: 0; }
+  .sh-stage canvas { width: 100%; height: auto; display: block; }
+  .sh-stage.square { max-width: 560px; margin: 0 auto; }
+  .sh-status { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 14px; line-height: 1.5; color: #cfe3d6; background: rgba(13, 17, 16, 0.86); }
+  .sh-status.on { display: flex; }
+  .sh-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 16px; font-size: 13px; color: #aab1c5; align-items: center; }
+  .sh-opts label { display: flex; gap: 7px; align-items: center; cursor: pointer; }
+  .sh-opts input[type=checkbox] { accent-color: #26a641; }
+  .sh-pseudo { display: flex; gap: 6px; align-items: center; }
+  .sh-pseudo input[type=text] { width: 150px; background: #0b0d14; border: 1px solid #23283a; border-radius: 8px; padding: 6px 9px; color: #e8eaf0; font-size: 12.5px; }
+  .sh-pseudo button { background: #1c2030; border: 1px solid #2a2f45; border-radius: 8px; padding: 5px 9px; color: #cfd4e6; cursor: pointer; font-size: 12px; }
+  .sh-privacy { margin-top: 14px; font-size: 12px; color: #6b7290; }
+  .sh-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 18px; }
+  .sh-tile { background: #191c28; border: 1px solid #23283a; border-radius: 12px; padding: 12px 8px; text-align: center; font: 500 12.5px var(--font-ui); color: #cfd4e6; cursor: pointer; }
+  .sh-tile:hover:not(:disabled) { border-color: #39d353; }
+  .sh-tile:disabled { opacity: 0.45; cursor: default; }
+  .sh-ico { width: 30px; height: 30px; border-radius: 8px; margin: 0 auto 6px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; color: #fff; background: #2a2f45; }
+  .sh-note { font-size: 12px; color: #8a91a5; line-height: 1.5; min-height: 36px; }
+  .sh-text { width: 100%; background: #0b0d14; border: 1px solid #20253a; border-radius: 8px; padding: 9px 10px; font: 12px/1.5 var(--font-ui); color: #9fe0b0; resize: none; margin-bottom: 14px; }
+  @media (max-width: 900px) { .sh-modal { grid-template-columns: 1fr; } .sh-left { border-right: 0; } .sh-right { border-radius: 0 0 20px 20px; } }
+
   /* Empty state */
   .empty-state {
     display: flex;
@@ -1206,9 +1243,61 @@
       <button class="btn btn-primary" onclick="refreshThroughput()">
         <span>↻</span> Refresh Data
       </button>
+      <button class="btn btn-share" id="share-btn" title="Make a shareable card of your agent activity">
+        <span>&#8599;</span> Share
+      </button>
       <button class="btn" id="annotate-btn" onclick="openAnnotate()" title="File a bug or note to the THROUGHPUT queue">
         <span>📝</span> Annotate
       </button>
+    </div>
+  </div>
+
+  <!-- Share card -->
+  <div class="sh-overlay" id="share-overlay" role="dialog" aria-modal="true" aria-labelledby="share-title">
+    <div class="sh-modal">
+      <div class="sh-left">
+        <div class="sh-hdr"><h2 id="share-title">Share your agent fleet</h2></div>
+        <div class="sh-seg" id="sh-period" role="group" aria-label="Period">
+          <button type="button" data-v="week">This week</button>
+          <button type="button" data-v="month">This month</button>
+          <button type="button" data-v="year">Last 12 months</button>
+        </div>
+        <div class="sh-seg" id="sh-metric" role="group" aria-label="Headline number">
+          <button type="button" data-v="tokens">Tokens</button>
+          <button type="button" data-v="hours">Agent hours</button>
+          <button type="button" data-v="plan">Plan used</button>
+          <button type="button" data-v="cache">Cache hits</button>
+        </div>
+        <div class="sh-seg" id="sh-size" role="group" aria-label="Card size">
+          <button type="button" data-v="wide">Card 1200x630</button>
+          <button type="button" data-v="square">Square 1080x1080</button>
+        </div>
+        <div class="sh-stage" id="sh-stage">
+          <canvas id="sh-canvas" width="1200" height="630"></canvas>
+          <div class="sh-status" id="sh-status"></div>
+        </div>
+        <div class="sh-opts">
+          <label><input type="checkbox" id="sh-opt-pseudo"> Show pseudonym</label>
+          <span class="sh-pseudo"><input type="text" id="sh-pseudo-input" maxlength="24" aria-label="Pseudonym"><button type="button" id="sh-pseudo-roll" title="New random name">Roll</button></span>
+          <label><input type="checkbox" id="sh-opt-streak"> Show streak</label>
+          <label><input type="checkbox" id="sh-opt-cost"> Show $ value at API prices</label>
+          <label><input type="checkbox" id="sh-opt-engines"> Show engines used</label>
+        </div>
+        <div class="sh-privacy">The card contains only the totals you see. No prompts, code, file paths, session names, or project names.</div>
+      </div>
+      <div class="sh-right">
+        <div class="sh-hdr"><h3>Share</h3><button type="button" class="sh-x" id="sh-close" aria-label="Close">&times;</button></div>
+        <textarea class="sh-text" id="sh-text" rows="4" aria-label="Post text"></textarea>
+        <div class="sh-grid">
+          <button type="button" class="sh-tile" data-net="x"><div class="sh-ico" style="background:#000;border:1px solid #333">X</div>X</button>
+          <button type="button" class="sh-tile" data-net="linkedin"><div class="sh-ico" style="background:#0a66c2">in</div>LinkedIn</button>
+          <button type="button" class="sh-tile" data-net="bluesky"><div class="sh-ico" style="background:#1185fe">B</div>Bluesky</button>
+          <button type="button" class="sh-tile" data-net="threads"><div class="sh-ico" style="background:#000;border:1px solid #333">@</div>Threads</button>
+          <button type="button" class="sh-tile" id="sh-copy"><div class="sh-ico">&#10697;</div>Copy image</button>
+          <button type="button" class="sh-tile" id="sh-download"><div class="sh-ico">&#10515;</div>Download PNG</button>
+        </div>
+        <div class="sh-note" id="sh-note">Posting opens a composer in a new tab with the text above. Your card image is copied first, so paste it into the post.</div>
+      </div>
     </div>
   </div>
 
@@ -5599,6 +5688,443 @@
       resizeT = setTimeout(renderL1, 220);
     });
   })();
+  </script>
+  <script>
+  // SHARE-CARD:BEGIN
+  // Share card: reads only the totals-only /api/throughput/share payload
+  // (daily numeric buckets). It never touches session lists, so no session
+  // names, titles, paths or repo names can reach the canvas.
+  (function () {
+    const REPO_URL = 'https://github.com/amirfish1/claude-command-center';
+    const SITE = 'getccc.dev';
+    const LS_KEY = 'ccc.share.v1';
+    const ADJ = ['amber', 'brisk', 'calm', 'dusty', 'eager', 'fuzzy', 'gentle', 'hasty', 'icy', 'jolly', 'keen', 'lucky', 'mellow', 'nimble', 'odd', 'plucky', 'quiet', 'rapid', 'sunny', 'tidy', 'upbeat', 'vivid', 'witty', 'zesty'];
+    const ANI = ['falcon', 'otter', 'lynx', 'heron', 'badger', 'gecko', 'ibis', 'koala', 'lemur', 'marten', 'newt', 'osprey', 'panda', 'quail', 'raven', 'stoat', 'tapir', 'urchin', 'viper', 'wombat', 'yak', 'zebra'];
+    const LEVELS = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
+    const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Inter, sans-serif';
+    const PERIODS = {
+      week: { days: 7, kicker: 'last 7 days', phrase: 'this week' },
+      month: { days: 30, kicker: 'last 30 days', phrase: 'this month' },
+      year: { days: 365, kicker: 'last 12 months', phrase: 'in the last 12 months' },
+    };
+    const ENGINE_NAMES = { claude: 'Claude', codex: 'Codex', kimi: 'Kimi' };
+    const NET_URLS = {
+      x: (t) => 'https://x.com/intent/post?text=' + encodeURIComponent(t),
+      linkedin: (t) => 'https://www.linkedin.com/feed/?shareActive=true&text=' + encodeURIComponent(t),
+      bluesky: (t) => 'https://bsky.app/intent/compose?text=' + encodeURIComponent(t),
+      threads: (t) => 'https://www.threads.net/intent/post?text=' + encodeURIComponent(t),
+    };
+
+    const $ = (id) => document.getElementById(id);
+    let data = null;          // last /api/throughput/share payload
+    let dataAt = 0;
+    let pollTimer = null;
+    let state = loadState();
+
+    function randomName() {
+      return ADJ[Math.floor(Math.random() * ADJ.length)] + '-' + ANI[Math.floor(Math.random() * ANI.length)];
+    }
+    function loadState() {
+      const base = { period: 'week', metric: 'tokens', size: 'wide', pseudo: true, streak: true, cost: false, engines: false, name: '' };
+      try { Object.assign(base, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* ignore */ }
+      if (!PERIODS[base.period]) base.period = 'week';
+      if (!base.name) base.name = randomName();
+      return base;
+    }
+    function saveState() {
+      try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+    }
+
+    // ── Aggregation (pure; exposed for tests/snapshots) ──
+    function dayKey(d) {
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + m + '-' + dd;
+    }
+    function addDays(d, n) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); return x; }
+
+    function summarize(payload, periodKey, today) {
+      const daily = (payload && payload.daily) || [];
+      const byDay = {};
+      daily.forEach((r) => { byDay[r.day] = r; });
+      const days = PERIODS[periodKey].days;
+      const sum = { tokens: 0, hours: 0, calls: 0, cost: 0, raw: 0, cacheRead: 0, engineTokens: {} };
+      for (let i = 0; i < days; i++) {
+        const r = byDay[dayKey(addDays(today, -i))];
+        if (!r) continue;
+        sum.tokens += r.tokens || 0;
+        sum.hours += (r.active_duration_sec || 0) / 3600;
+        sum.calls += r.turns || 0;
+        sum.cost += r.cost_usd || 0;
+        sum.raw += r.raw_context_tokens || 0;
+        sum.cacheRead += r.cache_read_tokens || 0;
+        Object.keys(r.engine_tokens || {}).forEach((e) => {
+          sum.engineTokens[e] = (sum.engineTokens[e] || 0) + (r.engine_tokens[e] || 0);
+        });
+      }
+      sum.cachePct = sum.raw > 0 ? Math.round((sum.cacheRead / sum.raw) * 100) : 0;
+      // Streak: consecutive active days ending today (or yesterday if today is still empty).
+      let streak = 0;
+      let cur = today;
+      if (!(byDay[dayKey(cur)] && byDay[dayKey(cur)].tokens > 0)) cur = addDays(cur, -1);
+      while (byDay[dayKey(cur)] && byDay[dayKey(cur)].tokens > 0) { streak++; cur = addDays(cur, -1); }
+      sum.streak = streak;
+      sum.engines = Object.keys(sum.engineTokens).filter((e) => sum.engineTokens[e] > 0).sort();
+      return sum;
+    }
+
+    // 53 week-columns (Sunday first) ending with the current week; null = future day.
+    function heatmapCells(payload, today) {
+      const byDay = {};
+      ((payload && payload.daily) || []).forEach((r) => { byDay[r.day] = r.tokens || 0; });
+      const lastColStart = addDays(today, -today.getDay());
+      const firstColStart = addDays(lastColStart, -52 * 7);
+      const cols = [];
+      const vals = [];
+      for (let w = 0; w < 53; w++) {
+        const col = [];
+        for (let d = 0; d < 7; d++) {
+          const day = addDays(firstColStart, w * 7 + d);
+          if (day > today) { col.push(null); continue; }
+          const v = byDay[dayKey(day)] || 0;
+          col.push(v);
+          if (v > 0) vals.push(v);
+        }
+        cols.push(col);
+      }
+      vals.sort((a, b) => a - b);
+      const q = (p) => (vals.length ? vals[Math.min(vals.length - 1, Math.floor(vals.length * p))] : 0);
+      const cuts = [q(0.25), q(0.5), q(0.75)];
+      const level = (v) => (v <= 0 ? 0 : v <= cuts[0] ? 1 : v <= cuts[1] ? 2 : v <= cuts[2] ? 3 : 4);
+      return cols.map((col) => col.map((v) => (v === null ? -1 : level(v))));
+    }
+
+    function fmtBig(n) {
+      const abs = Math.abs(n);
+      const f = (v, s) => {
+        const t = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+        return t.replace(/\.?0+$/, '') + s;
+      };
+      if (abs >= 1e12) return { num: f(n / 1e12, 'T') };
+      if (abs >= 1e9) return { num: f(n / 1e9, 'B') };
+      if (abs >= 1e6) return { num: f(n / 1e6, 'M') };
+      if (abs >= 1e3) return { num: f(n / 1e3, 'K') };
+      return { num: String(Math.round(n)) };
+    }
+    const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
+    function fmtUsd(n) {
+      if (n >= 1e6) return '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (n >= 1e4) return '$' + (n / 1e3).toFixed(0) + 'K';
+      return '$' + fmtInt(n);
+    }
+
+    // The card model: everything drawn comes from here.
+    function cardModel(payload, st, today, planPct) {
+      const p = PERIODS[st.period];
+      const s = summarize(payload, st.period, today);
+      const stat = {
+        tokens: { num: fmtBig(s.tokens).num, unit: 'tokens processed' },
+        hours: { num: fmtInt(s.hours), unit: 'agent hours' },
+        cache: { num: s.cachePct + '%', unit: 'cache hit rate' },
+        plan: { num: planPct == null ? '0%' : Math.round(planPct) + '%', unit: 'of my weekly plan used' },
+      };
+      let metric = st.metric;
+      if (metric === 'plan' && planPct == null) metric = 'tokens';
+      const small = {
+        tokens: fmtBig(s.tokens).num + ' tokens',
+        hours: fmtInt(s.hours) + ' agent hours',
+        cache: s.cachePct + '% cache hits',
+        calls: fmtInt(s.calls) + ' calls',
+      };
+      const order = { tokens: ['hours', 'cache', 'calls'], hours: ['tokens', 'cache', 'calls'], cache: ['tokens', 'hours', 'calls'], plan: ['tokens', 'hours', 'cache'] }[metric];
+      const extras = [];
+      if (st.streak && s.streak > 0) extras.push(s.streak + ' day streak');
+      if (st.cost && s.cost > 0) extras.push('about ' + fmtUsd(s.cost) + ' at API prices');
+      const engineText = st.engines && s.engines.length ? s.engines.map((e) => ENGINE_NAMES[e] || e).join(' + ') : '';
+      const who = st.pseudo && st.name.trim() ? st.name.trim() + "'s AI agent fleet" : 'My AI agent fleet';
+      return {
+        kicker: who + ' · ' + p.kicker + (engineText ? ' · ' + engineText : ''),
+        big: stat[metric].num,
+        unit: stat[metric].unit,
+        line: order.map((k) => small[k]),
+        extras: extras,
+        cells: heatmapCells(payload, today),
+        metric: metric,
+        raw: s,
+      };
+    }
+
+    function shareText(model, st) {
+      const phrase = PERIODS[st.period].phrase;
+      let lead;
+      if (model.metric === 'hours') lead = 'My AI agents worked ' + model.big + ' hours ' + phrase + '.';
+      else if (model.metric === 'cache') lead = 'My AI agents hit a ' + model.big + ' cache rate ' + phrase + '.';
+      else if (model.metric === 'plan') lead = 'I used ' + model.big + ' of my weekly AI plan with my agent fleet.';
+      else lead = 'My AI agents processed ' + model.big + ' tokens ' + phrase + '.';
+      return lead + ' Run your own fleet: ' + SITE + ' ' + REPO_URL;
+    }
+
+    // ── Canvas drawing ──
+    function rrect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+    // Draw text, shrinking the font until it fits maxW.
+    function fitText(ctx, text, x, y, weight, size, maxW, color, align) {
+      let sz = size;
+      ctx.font = weight + ' ' + sz + 'px ' + FONT;
+      while (sz > 10 && ctx.measureText(text).width > maxW) { sz -= 1; ctx.font = weight + ' ' + sz + 'px ' + FONT; }
+      ctx.fillStyle = color;
+      ctx.textAlign = align || 'left';
+      ctx.fillText(text, x, y);
+      return ctx.measureText(text).width;
+    }
+    function drawHeat(ctx, cols, x, y, pitch, from, to) {
+      const cell = pitch * 0.84;
+      const r = Math.max(2, cell * 0.16);
+      for (let w = from; w < to; w++) {
+        for (let d = 0; d < 7; d++) {
+          const lv = cols[w][d];
+          if (lv < 0) continue;
+          ctx.fillStyle = LEVELS[lv];
+          rrect(ctx, x + (w - from) * pitch, y + d * pitch, cell, cell, r);
+          ctx.fill();
+        }
+      }
+    }
+    function drawLegend(ctx, xRight, y, pitch) {
+      const cell = pitch * 0.84;
+      const gap = pitch * 0.16 + 2;
+      const total = LEVELS.length * (cell + gap);
+      let x = xRight - total;
+      ctx.font = '500 ' + Math.round(cell * 0.85) + 'px ' + FONT;
+      ctx.fillStyle = '#7d9886';
+      ctx.textAlign = 'right';
+      ctx.fillText('Less', x - 8, y + cell * 0.82);
+      LEVELS.forEach((c) => { ctx.fillStyle = c; rrect(ctx, x, y, cell, cell, 3); ctx.fill(); x += cell + gap; });
+      ctx.fillStyle = '#7d9886';
+      ctx.textAlign = 'left';
+      ctx.fillText('More', xRight + 8, y + cell * 0.82);
+    }
+    function drawFooter(ctx, w, y, pad, scale) {
+      const logo = 26 * scale;
+      const g = ctx.createLinearGradient(pad, y - logo, pad + logo, y);
+      g.addColorStop(0, '#7c8cff');
+      g.addColorStop(1, '#4fd1c5');
+      ctx.fillStyle = g;
+      rrect(ctx, pad, y - logo + 4 * scale, logo, logo, 7 * scale);
+      ctx.fill();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#e8eaf0';
+      ctx.font = '700 ' + 24 * scale + 'px ' + FONT;
+      ctx.fillText('CCC', pad + logo + 10 * scale, y);
+      const right = w - pad;
+      ctx.textAlign = 'right';
+      const repoText = 'github.com/amirfish1/claude-command-center';
+      const sz = 19 * scale;
+      ctx.font = '500 ' + sz + 'px ' + FONT;
+      const repoW = ctx.measureText('★ ' + repoText).width;
+      ctx.fillStyle = '#7d9886';
+      ctx.fillText('★ ' + repoText, right, y);
+      ctx.font = '700 ' + sz + 'px ' + FONT;
+      const siteW = ctx.measureText(SITE).width;
+      ctx.fillStyle = '#e8eaf0';
+      ctx.fillText(SITE, right - repoW - 22 * scale, y);
+      ctx.font = '500 ' + sz + 'px ' + FONT;
+      ctx.fillStyle = '#7d9886';
+      ctx.fillText('Run your own fleet:', right - repoW - 22 * scale - siteW - 8 * scale, y);
+    }
+    function drawBackground(ctx, w, h) {
+      ctx.fillStyle = '#0d1110';
+      ctx.fillRect(0, 0, w, h);
+      const g = ctx.createRadialGradient(w * 0.85, -h * 0.1, 0, w * 0.85, -h * 0.1, w * 0.8);
+      g.addColorStop(0, '#1d3a2a');
+      g.addColorStop(0.55, '#121a17');
+      g.addColorStop(1, '#0d1110');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    function drawCard(canvas, model, size) {
+      const wide = size !== 'square';
+      const w = wide ? 1200 : 1080;
+      const h = wide ? 630 : 1080;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      drawBackground(ctx, w, h);
+      const pad = wide ? 60 : 64;
+      const inner = w - pad * 2;
+      ctx.textBaseline = 'alphabetic';
+      if (wide) {
+        fitText(ctx, model.kicker, pad, 90, 500, 24, inner, '#8fb59d');
+        const bigW = fitText(ctx, model.big, pad, 214, 800, 128, inner * 0.55, '#f2f5f3');
+        fitText(ctx, model.unit, pad + bigW + 18, 214, 700, 40, inner - bigW - 18, '#8fb59d');
+        fitText(ctx, model.line.join('   ·   '), pad, 270, 500, 30, inner, '#cfe3d6');
+        if (model.extras.length) fitText(ctx, model.extras.join('   ·   '), pad, 308, 500, 22, inner, '#8fb59d');
+        const pitch = inner / 53;
+        drawHeat(ctx, model.cells, pad, 338, pitch, 0, 53);
+        drawLegend(ctx, w - pad - 140, 338 + 7 * pitch + 14, pitch);
+        drawFooter(ctx, w, h - 36, pad, 1);
+      } else {
+        fitText(ctx, model.kicker, pad, 100, 500, 30, inner, '#8fb59d');
+        fitText(ctx, model.big, pad, 290, 800, 190, inner, '#f2f5f3');
+        fitText(ctx, model.unit, pad, 352, 700, 50, inner, '#8fb59d');
+        fitText(ctx, model.line.join('  \u00b7  '), pad, 418, 500, 34, inner, '#cfe3d6');
+        if (model.extras.length) fitText(ctx, model.extras.join('  \u00b7  '), pad, 458, 500, 26, inner, '#8fb59d');
+        // 53 weeks as two stacked bands so the cells stay large.
+        const pitch = Math.floor((990 - 496 - 18) / 14);
+        const x0 = pad + (inner - 27 * pitch) / 2;
+        drawHeat(ctx, model.cells, x0, 496, pitch, 0, 27);
+        drawHeat(ctx, model.cells, x0, 496 + 7 * pitch + 18, pitch, 27, 53);
+        drawFooter(ctx, w, h - 40, pad, 1);
+      }
+    }
+
+    // ── UI ──
+    function planPct() {
+      try {
+        if (typeof weeklyData !== 'undefined' && weeklyData && weeklyData.weekly_pct != null && !isNaN(Number(weeklyData.weekly_pct))) {
+          return Number(weeklyData.weekly_pct);
+        }
+      } catch (e) { /* weeklyData not declared yet */ }
+      return null;
+    }
+    function setStatus(msg) {
+      const el = $('sh-status');
+      el.textContent = msg || '';
+      el.classList.toggle('on', !!msg);
+    }
+    function syncControls() {
+      ['period', 'metric', 'size'].forEach((k) => {
+        document.querySelectorAll('#sh-' + k + ' button').forEach((b) => b.classList.toggle('on', b.dataset.v === state[k]));
+      });
+      const hasPlan = planPct() != null;
+      const planBtn = document.querySelector('#sh-metric button[data-v="plan"]');
+      planBtn.disabled = !hasPlan;
+      planBtn.title = hasPlan ? '' : 'Plan usage is not available yet';
+      $('sh-opt-pseudo').checked = state.pseudo;
+      $('sh-opt-streak').checked = state.streak;
+      $('sh-opt-cost').checked = state.cost;
+      $('sh-opt-engines').checked = state.engines;
+      $('sh-pseudo-input').value = state.name;
+      $('sh-pseudo-input').disabled = !state.pseudo;
+      $('sh-stage').classList.toggle('square', state.size === 'square');
+    }
+    let lastModel = null;
+    function render() {
+      syncControls();
+      const model = cardModel(data || { daily: [] }, state, new Date(), planPct());
+      lastModel = model;
+      drawCard($('sh-canvas'), model, state.size);
+      $('sh-text').value = shareText(model, state);
+      const empty = data && !data.pending && !(data.daily || []).length;
+      if (!data || data.pending) setStatus('Counting 12 months of agent activity. The first run can take a minute.');
+      else if (empty) setStatus('No agent activity found yet. Run a session and come back.');
+      else setStatus('');
+    }
+
+    async function loadData(force) {
+      clearTimeout(pollTimer);
+      if (!force && data && !data.pending && Date.now() - dataAt < 60000) { render(); return; }
+      try {
+        const res = await fetch('/api/throughput/share', { cache: 'no-store' });
+        const d = await res.json();
+        data = d;
+        if (!d.pending) dataAt = Date.now();
+      } catch (e) {
+        data = null;
+        setStatus('Could not load activity totals. Reload the page and try again.');
+        return;
+      }
+      render();
+      if (data && data.pending && $('share-overlay').classList.contains('open')) {
+        pollTimer = setTimeout(() => loadData(true), 2500);
+      }
+    }
+
+    function canvasBlob() {
+      return new Promise((resolve) => $('sh-canvas').toBlob(resolve, 'image/png'));
+    }
+    function note(msg) { $('sh-note').textContent = msg; }
+    async function copyImage() {
+      try {
+        const blob = await canvasBlob();
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        note('Image copied. Paste it into your post.');
+        return true;
+      } catch (e) {
+        note('Could not copy the image here. Use Download PNG instead.');
+        return false;
+      }
+    }
+    async function download() {
+      const blob = await canvasBlob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'ccc-fleet-' + state.period + '-' + (state.size === 'square' ? '1080x1080' : '1200x630') + '.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      note('Saved ' + a.download + '.');
+    }
+    async function post(net) {
+      const text = $('sh-text').value;
+      const url = NET_URLS[net](text);
+      const copied = await copyImage();
+      window.open(url, '_blank', 'noopener');
+      if (copied) note('Composer opened. Image copied: paste it into the post.');
+    }
+
+    function open() {
+      $('share-overlay').classList.add('open');
+      render();
+      loadData(false);
+      if (!weeklyData && typeof loadWeeklyUsage === 'function') {
+        loadWeeklyUsage().then(syncControls);
+      }
+    }
+    function close() {
+      $('share-overlay').classList.remove('open');
+      clearTimeout(pollTimer);
+    }
+
+    function wire() {
+      $('share-btn').addEventListener('click', open);
+      $('sh-close').addEventListener('click', close);
+      $('share-overlay').addEventListener('click', (e) => { if (e.target === $('share-overlay')) close(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('share-overlay').classList.contains('open')) close(); });
+      ['period', 'metric', 'size'].forEach((k) => {
+        $('sh-' + k).addEventListener('click', (e) => {
+          const b = e.target.closest('button');
+          if (!b || b.disabled) return;
+          state[k] = b.dataset.v;
+          // Plan used is a weekly figure, so keep period and metric consistent.
+          if (k === 'metric' && state.metric === 'plan') state.period = 'week';
+          if (k === 'period' && state.period !== 'week' && state.metric === 'plan') state.metric = 'tokens';
+          saveState();
+          render();
+        });
+      });
+      [['pseudo', 'sh-opt-pseudo'], ['streak', 'sh-opt-streak'], ['cost', 'sh-opt-cost'], ['engines', 'sh-opt-engines']].forEach(([k, id]) => {
+        $(id).addEventListener('change', (e) => { state[k] = e.target.checked; saveState(); render(); });
+      });
+      $('sh-pseudo-input').addEventListener('input', (e) => { state.name = e.target.value; saveState(); render(); });
+      $('sh-pseudo-roll').addEventListener('click', () => { state.name = randomName(); saveState(); render(); });
+      $('sh-copy').addEventListener('click', copyImage);
+      $('sh-download').addEventListener('click', download);
+      document.querySelectorAll('.sh-tile[data-net]').forEach((t) => t.addEventListener('click', () => post(t.dataset.net)));
+    }
+    wire();
+    window.CCCShare = { summarize, heatmapCells, cardModel, shareText, drawCard, NET_URLS, open, close };
+  })();
+  // SHARE-CARD:END
   </script>
 </body>
 </html>
