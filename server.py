@@ -26582,6 +26582,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(free_provider_catalog())
             return
 
+        # Settings > Free models panel (ccc_server/free_settings.py owns it).
+        if path.startswith("/api/free-settings"):
+            from ccc_server import free_settings as _free_settings
+            _free_settings.handle(self, "GET")
+            return
+
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
@@ -30767,6 +30773,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "router_rejected": 502,
             }.get(result.get("code"), 400)
             self.send_json(result, status)
+            return
+
+        # Settings > Free models panel (ccc_server/free_settings.py owns it).
+        if path.startswith("/api/free-settings"):
+            from ccc_server import free_settings as _free_settings
+            _free_settings.handle(self, "POST")
             return
 
         if path == "/api/assistant/ask":
