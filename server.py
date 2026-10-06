@@ -30131,6 +30131,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         remaining -= len(chunk)
             except OSError:
                 pass
+        elif path == "/free-models" or path == "/free-models.html":
+            # Free-model leaderboard page (narrow route — the generic static
+            # handler refuses arbitrary *.html), mirroring /throughput.
+            try:
+                body = (STATIC_DIR / "free-models.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "free-models.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/free-router/models":
+            # L05 contract: bare list of catalog rows merged with eval scores.
+            from ccc_server import free_eval
+            self.send_json(free_eval.models_payload())
+        elif path == "/api/free-router/eval/status":
+            # Small status blob for the leaderboard page (additive).
+            from ccc_server import free_eval
+            self.send_json(free_eval.eval_info())
+        elif path.startswith("/api/free-router/eval/"):
+            from ccc_server import free_eval
+            job_id = path.rsplit("/", 1)[-1]
+            status = free_eval.job_status(job_id)
+            if status is None:
+                self.send_json({"ok": False, "error": "unknown job"}, 404)
+            else:
+                self.send_json(status)
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -37500,6 +37534,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             with _TERM_LOCK:
                 killed = _term_kill_running(_term_state(ctx["repo_path"]))
             self.send_json({"ok": killed})
+        elif path == "/api/free-router/eval":
+            # L05 contract: kick off a benchmark run -> {job_id}.
+            from ccc_server import free_eval
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            body = self.rfile.read(length) if 0 < length <= 1024 * 1024 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            model_ids = payload.get("models")
+            if model_ids is not None and not isinstance(model_ids, list):
+                self.send_json({"ok": False, "error": "models must be a list of ids"}, 400)
+                return
+            if isinstance(model_ids, list):
+                model_ids = [str(m) for m in model_ids][:64]
+            result, status = free_eval.start_eval(model_ids)
+            self.send_json(result, status)
+        elif path == "/api/free-router/prefer":
+            # Pin a catalog model as the router's default (leaderboard action).
+            from ccc_server import free_eval
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            body = self.rfile.read(length) if 0 < length <= 1024 * 1024 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            result, status = free_eval.prefer_model(payload.get("model"))
+            self.send_json(result, status)
         else:
             self.send_json({"error": "Not found"}, 404)
 
