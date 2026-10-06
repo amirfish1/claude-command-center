@@ -17,6 +17,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import share_savings
 
 # ---------------------------------------------------------------------------
 # Global usage stats — aggregated across every transcript under PROJECTS_ROOT.
@@ -3216,6 +3217,9 @@ def _throughput_share_build(now=None):
         except Exception:
             turns_by_engine[engine] = []
     payload = _throughput_share_aggregate(turns_by_engine, now=now)
+    payload = share_savings.annotate_share_payload(
+        payload, turns_by_engine, now=now
+    )
     _THROUGHPUT_SHARE_CACHE["payload"] = payload
     _THROUGHPUT_SHARE_CACHE["ts"] = time.time()
     return payload

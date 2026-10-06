@@ -1,0 +1,1 @@
+- Added a limit-hit approval card: when a session stops on a usage limit (now including Devin's free-model wall, with its reset time parsed from the error), you can continue it on a free model, schedule it to resume automatically when the limit resets (staggered at most 5 per minute), or do nothing. Once the reset passes, a running-free session offers to switch back to your plan.

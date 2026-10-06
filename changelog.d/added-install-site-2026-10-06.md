@@ -1,0 +1,1 @@
+- Installer now speaks in plain numbered steps and opens `/?onboarding=1` (the guided setup tour) instead of the bare dashboard for anyone who has not finished onboarding yet; the site gains a "free AI dev team in 5 minutes" hero with a CSS-only install animation and a dedicated /install/ page with copy-to-clipboard one-liners.

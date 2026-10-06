@@ -177,9 +177,25 @@ Install-Watchtower -Python $python
 
 $env:PORT = [string]$Port
 $dashboardUrl = "http://localhost:$Port"
+
+# First-time installs land on the guided setup tour (/?onboarding=1); anyone
+# who already finished onboarding gets the dashboard itself. Mirrors
+# dashboard_open_url() in scripts/install.sh.
+$openUrl = $dashboardUrl
+$onboardingFile = Join-Path $env:USERPROFILE ".claude\command-center\onboarding.json"
+try {
+    $onboarded = $false
+    if (Test-Path -LiteralPath $onboardingFile) {
+        $onboarded = [bool]((Get-Content -LiteralPath $onboardingFile -Raw | ConvertFrom-Json).completed)
+    }
+    if (-not $onboarded) { $openUrl = "$dashboardUrl/?onboarding=1" }
+} catch {
+    $openUrl = "$dashboardUrl/?onboarding=1"
+}
+
 Write-Output "install: launching .\run.ps1 on port $Port"
 Write-Output "install: keep this PowerShell window open while CCC is running."
-Open-WhenReady -TargetPort $Port -Url $dashboardUrl
+Open-WhenReady -TargetPort $Port -Url $openUrl
 Set-Location -LiteralPath $InstallDir
 & (Join-Path $InstallDir "run.ps1")
 exit $LASTEXITCODE

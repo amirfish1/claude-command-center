@@ -1,0 +1,1 @@
+- New "free $0" option when starting a session: with the free router running, a spawned Claude, OpenCode or Aider session runs on free models instead of your paid plan. Free sessions show a "$0 free" badge on their card and in the session rail, and a spawn that can't reach the router refuses rather than silently billing you.

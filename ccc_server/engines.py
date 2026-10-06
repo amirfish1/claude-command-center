@@ -33,6 +33,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import free_runtime as _free_runtime
 
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
@@ -3426,7 +3427,7 @@ def _start_devin_delivery_proof_watchdog(
     ).start()
 
 
-def resume_session_devin(session_id, text, _delivery_slot="resume"):
+def resume_session_devin(session_id, text, _delivery_slot="resume", model=None):
     """Resume a Devin CLI session with a one-shot headless prompt.
 
     Uses `devin --resume <id> -p "text" --permission-mode dangerous`.
@@ -3494,7 +3495,9 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
         "--resume", raw_id,
     ]
     override = _core._get_session_override(session_id)
-    model = (override or {}).get("model") if override else None
+    # Caller-specified model (e.g. a limit-hit failover's free pick) beats the
+    # session override, which beats the global CCC_DEVIN_MODEL default.
+    model = model or ((override or {}).get("model") if override else None)
     if not model:
         model = os.environ.get("CCC_DEVIN_MODEL")
     if model:
@@ -5804,12 +5807,20 @@ def _unexpected_keyword_argument(result):
     return match.group(1) if match else ""
 
 
-def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_key=None):
+def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_key=None, required_keys=()):
     """Route one Claude engine call, shedding args an older worker rejects.
 
     Returns (result, dropped_keys). Each retry gets a fresh action id so the
     previous worker's durable failed work item is not replayed.
+
+    ``required_keys`` are args the caller must NOT shed: when an older worker
+    rejects one, the call returns a synthetic ``engine_kwarg_unsupported``
+    failure instead of silently retrying without it — a dropped "runtime" key
+    would otherwise launch the session on the paid path the caller opted out
+    of. The rejection happens at Python call binding, before any work ran, so
+    refusing here is clean.
     """
+    required = frozenset(required_keys or ())
     result = _core._control_plane_engine_call(
         "claude", operation, dict(route_args), idempotency_key=idempotency_key,
     )
@@ -5821,6 +5832,16 @@ def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_ke
         stale_key = _unexpected_keyword_argument(result)
         if not stale_key or stale_key not in retry_args:
             return result, dropped
+        if stale_key in required:
+            return {
+                "ok": False,
+                "error": (
+                    f"the running CCC worker does not support the '{stale_key}' "
+                    "spawn option - restart CCC so the worker picks up this version"
+                ),
+                "code": "engine_kwarg_unsupported",
+                "missing_kwarg": stale_key,
+            }, dropped
         retry_args.pop(stale_key)
         dropped.append(stale_key)
         retried = _core._control_plane_engine_call(
@@ -5833,7 +5854,7 @@ def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_ke
 
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
                   parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None,
-                  auto_compact_k=None, reasoning_effort=""):
+                  auto_compact_k=None, reasoning_effort="", runtime=""):
     """Spawn a headless Claude Code session and return tracking info.
 
     The spawned subprocess requires an explicit cwd or repo_path.
@@ -5842,12 +5863,18 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     is fixed at launch: headless Claude has no live effort switch, so the
     picker's later changes take effect on the next resume.
 
+    `runtime="free"` launches the child on the CCC free router ($0) instead of
+    the user's paid Anthropic credentials. A free spawn never claims a prewarm
+    reservation (those launch with paid env) and never silently falls back —
+    an unready router is an error, not a paid run.
+
     If `worktree=True`, create a fresh git worktree off the launch cwd on a
     `feat/<slug>` branch and run the spawned session there. The worktree path
     + branch are returned in the response under
       `worktree_path` / `worktree_branch` so the UI can show them.
     """
     reasoning_effort = _core._validate_reasoning_effort(reasoning_effort, "claude")
+    runtime = str(runtime or "").strip().lower()
     route_args = {
         "prompt": prompt,
         "name": name,
@@ -5861,10 +5888,21 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "auto_compact_k": auto_compact_k,
         "reasoning_effort": reasoning_effort,
     }
+    if runtime:
+        # Only sent when non-empty: an older worker without the kwarg rejects
+        # it (loudly) rather than every spawn paying one compat retry.
+        route_args["runtime"] = runtime
     routed, dropped = _route_claude_call_with_kwarg_fallback(
         "spawn", route_args, idempotency_key=_core._take_control_plane_action_id(),
+        required_keys=("runtime",) if runtime else (),
     )
     if routed is not None:
+        if isinstance(routed, dict) and routed.get("code") == "engine_kwarg_unsupported":
+            # The worker predates the runtime kwarg — refusing is the only
+            # honest answer; the shed-and-retry path would have run paid.
+            return _free_runtime.unavailable_result(
+                "claude", "the CCC worker needs a restart to run sessions free",
+            )
         if isinstance(routed, dict) and routed.get("ok") and "prewarm_id" in dropped:
             # The retry that succeeded ran cold, so the UI can explain why this
             # spawn was slower than the reserved one it was promised.
@@ -5874,6 +5912,12 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         try:
             import ssh_multiplexer
             if ssh_multiplexer.get_global_multiplexer():
+                if runtime:
+                    # The free router binds 127.0.0.1 on THIS host — a remote
+                    # child could never reach it. Refuse, not fall back.
+                    return _free_runtime.unavailable_result(
+                        "claude", "the free runtime only works for local sessions",
+                    )
                 return spawn_session_remote(
                     prompt, name=name, cwd=cwd, repo_path=repo_path, worktree=worktree,
                     model=model, parent_session_id=parent_session_id,
@@ -5882,7 +5926,16 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         except Exception:
             pass
     prompt = _core._strip_ccc_session_state_instruction(prompt)
-    model_to_use = _core._cli_model_flag(_core._spawn_model_for_engine("claude", model) or "opus")
+    free_overlay = {}
+    if runtime:
+        free_overlay = _free_runtime.spawn_env("claude", model=model)
+        if not free_overlay:
+            return _free_runtime.unavailable_result("claude")
+        model_to_use = _core._cli_model_flag(
+            _free_runtime.model_for("claude", model, env=free_overlay)
+        )
+    else:
+        model_to_use = _core._cli_model_flag(_core._spawn_model_for_engine("claude", model) or "opus")
     # The reservation launches with this exact native Claude name. Claiming is
     # therefore name-sensitive as well as cwd/model-sensitive: a stale process
     # must never surface under the wrong title in Claude's own resume picker or
@@ -5890,7 +5943,9 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     session_name = _core._slugify(name or prompt)
     if not session_name:
         session_name = "unnamed"
-    entry = None if worktree else _core._take_claude_prewarm_for_request(
+    # A prewarm reservation launched with paid env — claiming one for a $0
+    # spawn would bill the user's plan on a session sold as free.
+    entry = None if (worktree or runtime) else _core._take_claude_prewarm_for_request(
         prewarm_id,
         cwd=cwd,
         repo_path=repo_path,
@@ -6001,13 +6056,29 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         # Claude process starts. No-op when not a worktree spawn. See #47.
         if worktree_path:
             _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+        if runtime:
+            # Head-of-log marker: the spawned log is the closest thing to a
+            # transcript a headless run has before the projects jsonl exists.
+            try:
+                log_fh.write(json.dumps(
+                    _free_runtime.spawn_log_marker_event(model_to_use)
+                ) + "\n")
+                log_fh.flush()
+            except OSError:
+                pass
+        child_env = _core._spawn_env(auto_compact_k=auto_compact_k)
+        if runtime:
+            # apply_to_env also scrubs inherited Anthropic credentials so the
+            # child's only auth is the router's unified key.
+            _free_runtime.scrub_paid_env(child_env)
+            child_env.update(free_overlay)
         fifo_path, child_stdin_fd = _core._make_stdin_fifo(log_path)
         popen_kwargs = dict(
             stdout=log_fh,
             stderr=subprocess.STDOUT,
             cwd=spawn_cwd,
             start_new_session=True,
-            env=_core._spawn_env(auto_compact_k=auto_compact_k),
+            env=child_env,
         )
         popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
         if session_id:
@@ -6062,6 +6133,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "prewarmed": False,
             "reasoning_effort": reasoning_effort,
             "auto_compact_k": auto_compact_k,
+            "runtime": runtime,
         }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
@@ -6123,6 +6195,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         parent_session_id=parent_session_id,
         reasoning_effort=reasoning_effort,
         auto_compact_k=auto_compact_k,
+        runtime=runtime,
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
         input_command_uuids=entry.get("input_command_uuids"),
@@ -6152,12 +6225,20 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     if session_id:
         _core._spawn_timeline_mark(session_id, "spawn_response_sent")
         _core._spawn_timeline_save()
-    return _finalize_spawn_response(
+    final = _finalize_spawn_response(
         resp,
         entry,
         ctx,
         wait_for_session_id=not bool(session_id),
     )
+    if runtime:
+        # Marker + registry tag: the archive overlay and /api/sessions/spawned
+        # rows both read these. Works here (dashboard) and in the worker.
+        _free_runtime.mark_spawned(
+            final.get("session_id") or session_id, pid=proc.pid,
+        )
+        final["runtime"] = runtime
+    return final
 
 
 def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None):
@@ -6315,14 +6396,19 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None):
+def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None, runtime=""):
     """Spawn a headless OpenCode CLI run and return tracking info.
 
     ``env``, when given, is merged over the inherited process environment —
     used by the BYOK layer (ccc_server/byok.py) to hand OpenCode a
     provider API key for this one spawn without touching global state.
+
+    ``runtime="free"`` points the run at the CCC free router's OpenAI endpoint
+    (``/v1``) instead of the user's paid provider. An unready router refuses
+    the spawn outright — never a silent paid run.
     """
     prompt = _core._strip_ccc_session_state_instruction(prompt)
+    runtime = str(runtime or "").strip().lower()
     resolved = _core._resolve_opencode_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
@@ -6332,7 +6418,14 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
     session_name = _core._slugify(name or prompt) or "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-opencode-{session_name}-{timestamp}.log"
-    model_to_use = _core._spawn_model_for_engine("opencode", model) or os.environ.get("CCC_OPENCODE_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
+    if runtime:
+        free_overlay = _free_runtime.spawn_env("opencode", model=model)
+        if not free_overlay:
+            return _free_runtime.unavailable_result("opencode")
+        model_to_use = _free_runtime.model_for("opencode", model)
+        env = {**(env or {}), **free_overlay}
+    else:
+        model_to_use = _core._spawn_model_for_engine("opencode", model) or os.environ.get("CCC_OPENCODE_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
     if model_to_use:
         _core._set_session_model(log_filename[:-4], model_to_use, False)
     log_dir = _core.repo_log_dir(repo_for_logs)
@@ -6353,7 +6446,17 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
     log_fh = open(log_path, "w")
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+    if runtime:
+        try:
+            log_fh.write(json.dumps(
+                _free_runtime.spawn_log_marker_event(model_to_use)
+            ) + "\n")
+            log_fh.flush()
+        except OSError:
+            pass
     popen_env = {**os.environ, **env} if env else None
+    if runtime and popen_env is not None:
+        _free_runtime.scrub_paid_env(popen_env)
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
@@ -6371,19 +6474,24 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
         "log_fh": log_fh, "fifo": None, "stdin_fd": None,
         "engine": "opencode", "cwd": spawn_cwd, "repo_path": repo_for_logs,
         "model": model_to_use or "", "parent_session_id": parent_session_id or "",
+        "runtime": runtime,
     }
     _core._spawned_sessions.append(entry)
     _core._record_spawn_to_registry(
         pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
         spawned_at=timestamp, command_summary=prompt[:200],
         fifo=None, engine="opencode", repo_path=repo_for_logs, model=model_to_use,
-        parent_session_id=parent_session_id,
+        parent_session_id=parent_session_id, runtime=runtime,
     )
     resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "opencode-spawn"}
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
-    return _finalize_spawn_response(resp, entry, ctx)
+    final = _finalize_spawn_response(resp, entry, ctx)
+    if runtime:
+        _free_runtime.mark_spawned(final.get("session_id"), pid=proc.pid)
+        final["runtime"] = runtime
+    return final
 
 
 def spawn_session_kimi(
@@ -7929,11 +8037,21 @@ def _start_headless_staleness_watcher() -> None:
     ).start()
 
 
-def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
+def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, runtime="", extra_env=None):
     """Resume a dormant session headlessly (`claude --resume`) and send text.
 
     If we already resumed this session and the process is still alive, reuse it.
     Optional `cwd` parameter allows bypassing session lookup (useful in remote envs).
+
+    `runtime="free"` runs the resumed process on the free router. When left
+    empty, the session's born-with runtime (recorded in its spawn marker) is
+    inherited — a session created for $0 stays $0 across resumes, and an
+    unavailable router refuses rather than silently billing the user.
+
+    `extra_env` (e.g. a free-router env for a limit-hit failover) is merged
+    into the child env on a FRESH resume only — a live process can't change
+    its env, so passing it also skips the warm-reuse path entirely rather
+    than silently answering on the old env.
     """
     # Claude Task-tool children have their own JSONL transcripts but cannot be
     # resumed independently. Some automatic callers invoke this lower-level
@@ -7943,12 +8061,25 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     # Resolved before control-plane routing so a remote node receives the
     # parent id too.
     session_id = _core._claude_subagent_parent_session_id(session_id) or session_id
+    runtime = str(runtime or "").strip().lower()
+    if not runtime:
+        try:
+            runtime = _free_runtime.session_runtime(session_id)
+        except Exception:
+            runtime = ""
+    routed_args = {
+        "session_id": session_id,
+        "text": text,
+        "cwd": cwd,
+    }
+    if runtime:
+        routed_args["runtime"] = runtime
+    if extra_env:
+        # The worker owns engine processes; the failover env has to ride the
+        # control-plane call or the child would spawn with the paid endpoint.
+        routed_args["extra_env"] = dict(extra_env)
     routed = _core._control_plane_engine_call(
-        "claude", "resume", {
-            "session_id": session_id,
-            "text": text,
-            "cwd": cwd,
-        },
+        "claude", "resume", routed_args,
         idempotency_key=idempotency_key,
     )
     if routed is not None:
@@ -7956,12 +8087,22 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     text = _core._strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
-    # Reuse existing resumed process
+    # Reuse existing resumed process — but only when it runs the requested
+    # runtime (a warm paid process must never serve a turn sold as $0), and
+    # never for an extra_env resume: the live process still carries the old
+    # env, so reuse would answer on the wrong meter.
     for s in list(_core._spawned_sessions):
         if (
-            (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
+            not extra_env
+            and (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
             and _core._poll_spawn_entry(s) is None
         ):
+            if runtime and str(s.get("runtime") or "") != runtime:
+                return _free_runtime.unavailable_result(
+                    "claude",
+                    "this session already has a live process on a different "
+                    "runtime — let it finish or start a new session",
+                )
             ok = _core._write_stream_json_user_message(s, text)
             if ok:
                 _se = _core._resume_entry_started_epoch(s)
@@ -8034,7 +8175,11 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     # also expands versioned short aliases (e.g. sonnet-4-6 → claude-sonnet-4-6)
     # since the --model flag does not accept bare versioned aliases for 4.x models.
     override = _core._get_session_override(session_id)
-    if override and override.get("model"):
+    if override and override.get("model") and not extra_env and not runtime:
+        # extra_env (a limit-hit failover's free-router wiring) or a free
+        # runtime owns the model
+        # selection for this child — passing the session's paid --model alias
+        # too would send a paid-only id to the free endpoint.
         alias = _core._cli_model_flag(override["model"])  # strips [1m], normalizes to full ID
         if alias:
             cmd.extend(["--model", alias])
@@ -8049,14 +8194,42 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     _core._resume_ledger_append("reuse_miss", sid=session_id, reason="no_live_entry")
     _spawn_started_epoch = time.time()
 
+    free_overlay = {}
+    if runtime:
+        free_overlay = _free_runtime.spawn_env("claude")
+        if not free_overlay:
+            return _free_runtime.unavailable_result("claude")
     log_fh = open(log_path, "w")
+    if runtime:
+        try:
+            log_fh.write(json.dumps(
+                _free_runtime.spawn_log_marker_event()
+            ) + "\n")
+            log_fh.flush()
+        except OSError:
+            pass
+    child_env = _core._question_relay_env()
+    if runtime:
+        _free_runtime.scrub_paid_env(child_env)
+        child_env.update(free_overlay)
     fifo_path, child_stdin_fd = _core._make_stdin_fifo(log_path)
+    if extra_env:
+        # Caller-provided child env wins (e.g. the free-router ANTHROPIC_*
+        # vars of a limit-hit failover). Scrub the inherited Anthropic vars
+        # first so only the caller's values apply — a stray ANTHROPIC_API_KEY
+        # in the parent shell must never leak into router-bound traffic.
+        for _k in (
+            "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+        ):
+            child_env.pop(_k, None)
+        child_env.update(extra_env)
     popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         cwd=cwd,
         start_new_session=True,
-        env=_core._question_relay_env(),
+        env=child_env,
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
@@ -8092,6 +8265,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         "engine": "claude",
         "cwd": cwd,
         "repo_path": ctx["repo_path"],
+        "runtime": runtime,
     }
     ok = _core._write_stream_json_user_message(entry, text, timeout=30)
     if not ok:
@@ -8124,10 +8298,13 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         engine="claude",
         session_id=session_id,
         repo_path=ctx["repo_path"],
+        runtime=runtime,
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
         input_command_uuids=entry.get("input_command_uuids"),
     )
+    if runtime:
+        _free_runtime.mark_spawned(session_id, pid=proc.pid)
     # Diagnostic: a fresh warm process is now live. Record the gap since this
     # sid's last exit/cold_resume — a short gap right after `server_start`
     # implicates a restart-EOF killing the previous warm process.

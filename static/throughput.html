@@ -452,6 +452,11 @@
   .sh-pseudo input[type=text] { width: 150px; background: #0b0d14; border: 1px solid #23283a; border-radius: 8px; padding: 6px 9px; color: #e8eaf0; font-size: 12.5px; }
   .sh-pseudo button { background: #1c2030; border: 1px solid #2a2f45; border-radius: 8px; padding: 5px 9px; color: #cfd4e6; cursor: pointer; font-size: 12px; }
   .sh-privacy { margin-top: 14px; font-size: 12px; color: #6b7290; }
+  .sh-milestone { display: none; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: linear-gradient(90deg, #14281d, #101a2b); border: 1px solid #1f4d33; color: #9fe0b0; font-size: 13px; font-weight: 500; }
+  .sh-milestone.on { display: block; }
+  .btn-share.attn { border-color: #39d353; color: #9fe0b0; animation: shPulse 2.2s ease-out infinite; }
+  @keyframes shPulse { 0% { box-shadow: 0 0 0 0 rgba(57, 211, 83, 0.45); } 70% { box-shadow: 0 0 0 9px rgba(57, 211, 83, 0); } 100% { box-shadow: 0 0 0 0 rgba(57, 211, 83, 0); } }
+  @media (prefers-reduced-motion: reduce) { .btn-share.attn { animation: none; } }
   .sh-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 18px; }
   .sh-tile { background: #191c28; border: 1px solid #23283a; border-radius: 12px; padding: 12px 8px; text-align: center; font: 500 12.5px var(--font-ui); color: #cfd4e6; cursor: pointer; }
   .sh-tile:hover:not(:disabled) { border-color: #39d353; }
@@ -1257,6 +1262,7 @@
     <div class="sh-modal">
       <div class="sh-left">
         <div class="sh-hdr"><h2 id="share-title">Share your agent fleet</h2></div>
+        <div class="sh-milestone" id="sh-milestone" role="status"></div>
         <div class="sh-seg" id="sh-period" role="group" aria-label="Period">
           <button type="button" data-v="week">This week</button>
           <button type="button" data-v="month">This month</button>
@@ -1267,6 +1273,8 @@
           <button type="button" data-v="hours">Agent hours</button>
           <button type="button" data-v="plan">Plan used</button>
           <button type="button" data-v="cache">Cache hits</button>
+          <button type="button" data-v="saved">$ saved</button>
+          <button type="button" data-v="runs">$0 runs</button>
         </div>
         <div class="sh-seg" id="sh-size" role="group" aria-label="Card size">
           <button type="button" data-v="wide">Card 1200x630</button>
@@ -1281,6 +1289,7 @@
           <span class="sh-pseudo"><input type="text" id="sh-pseudo-input" maxlength="24" aria-label="Pseudonym"><button type="button" id="sh-pseudo-roll" title="New random name">Roll</button></span>
           <label><input type="checkbox" id="sh-opt-streak"> Show streak</label>
           <label><input type="checkbox" id="sh-opt-cost"> Show $ value at API prices</label>
+          <label><input type="checkbox" id="sh-opt-saved"> Show $0 savings</label>
           <label><input type="checkbox" id="sh-opt-engines"> Show engines used</label>
         </div>
         <div class="sh-privacy">The card contains only the totals you see. No prompts, code, file paths, session names, or project names.</div>
@@ -5731,7 +5740,7 @@
       return ADJ[Math.floor(Math.random() * ADJ.length)] + '-' + ANI[Math.floor(Math.random() * ANI.length)];
     }
     function loadState() {
-      const base = { period: 'week', metric: 'tokens', size: 'wide', pseudo: true, streak: true, cost: false, engines: false, name: '' };
+      const base = { period: 'week', metric: 'tokens', size: 'wide', pseudo: true, streak: true, cost: false, saved: true, engines: false, name: '' };
       try { Object.assign(base, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* ignore */ }
       if (!PERIODS[base.period]) base.period = 'week';
       if (!base.name) base.name = randomName();
@@ -5754,9 +5763,18 @@
       const byDay = {};
       daily.forEach((r) => { byDay[r.day] = r; });
       const days = PERIODS[periodKey].days;
-      const sum = { tokens: 0, hours: 0, calls: 0, cost: 0, raw: 0, cacheRead: 0, engineTokens: {} };
+      const freeByDay = {};
+      ((((payload || {}).savings) || {}).daily || []).forEach((r) => { freeByDay[r.day] = r; });
+      const sum = { tokens: 0, hours: 0, calls: 0, cost: 0, raw: 0, cacheRead: 0, engineTokens: {}, freeSaved: 0, freeRuns: 0, freeTokens: 0 };
       for (let i = 0; i < days; i++) {
-        const r = byDay[dayKey(addDays(today, -i))];
+        const dk = dayKey(addDays(today, -i));
+        const fr = freeByDay[dk];
+        if (fr) {
+          sum.freeSaved += fr.free_saved_usd || 0;
+          sum.freeRuns += fr.free_runs || 0;
+          sum.freeTokens += fr.free_tokens || 0;
+        }
+        const r = byDay[dk];
         if (!r) continue;
         sum.tokens += r.tokens || 0;
         sum.hours += (r.active_duration_sec || 0) / 3600;
@@ -5833,19 +5851,25 @@
         hours: { num: fmtInt(s.hours), unit: 'agent hours' },
         cache: { num: s.cachePct + '%', unit: 'cache hit rate' },
         plan: { num: planPct == null ? '0%' : Math.round(planPct) + '%', unit: 'of my weekly plan used' },
+        saved: { num: fmtUsd(s.freeSaved), unit: 'of work for $0' },
+        runs: { num: fmtInt(s.freeRuns), unit: 'runs for $0' },
       };
       let metric = st.metric;
       if (metric === 'plan' && planPct == null) metric = 'tokens';
+      if ((metric === 'saved' || metric === 'runs') && !(s.freeRuns > 0 || s.freeSaved > 0)) metric = 'tokens';
       const small = {
         tokens: fmtBig(s.tokens).num + ' tokens',
         hours: fmtInt(s.hours) + ' agent hours',
         cache: s.cachePct + '% cache hits',
         calls: fmtInt(s.calls) + ' calls',
+        saved: fmtUsd(s.freeSaved) + ' saved',
+        runs: fmtInt(s.freeRuns) + ' runs for $0',
       };
-      const order = { tokens: ['hours', 'cache', 'calls'], hours: ['tokens', 'cache', 'calls'], cache: ['tokens', 'hours', 'calls'], plan: ['tokens', 'hours', 'cache'] }[metric];
+      const order = { tokens: ['hours', 'cache', 'calls'], hours: ['tokens', 'cache', 'calls'], cache: ['tokens', 'hours', 'calls'], plan: ['tokens', 'hours', 'cache'], saved: ['runs', 'tokens', 'hours'], runs: ['saved', 'tokens', 'hours'] }[metric];
       const extras = [];
       if (st.streak && s.streak > 0) extras.push(s.streak + ' day streak');
       if (st.cost && s.cost > 0) extras.push('about ' + fmtUsd(s.cost) + ' at API prices');
+      if (st.saved && metric !== 'saved' && s.freeSaved > 0) extras.push('saved ' + fmtUsd(s.freeSaved) + (s.freeRuns > 0 ? ' on ' + fmtInt(s.freeRuns) + ' $0 runs' : ''));
       const engineText = st.engines && s.engines.length ? s.engines.map((e) => ENGINE_NAMES[e] || e).join(' + ') : '';
       const who = st.pseudo && st.name.trim() ? st.name.trim() + "'s AI agent fleet" : 'My AI agent fleet';
       return {
@@ -5866,6 +5890,8 @@
       if (model.metric === 'hours') lead = 'My AI agents worked ' + model.big + ' hours ' + phrase + '.';
       else if (model.metric === 'cache') lead = 'My AI agents hit a ' + model.big + ' cache rate ' + phrase + '.';
       else if (model.metric === 'plan') lead = 'I used ' + model.big + ' of my weekly AI plan with my agent fleet.';
+      else if (model.metric === 'saved') lead = 'My AI agents did ' + model.big + ' of work for $0 ' + phrase + '.';
+      else if (model.metric === 'runs') lead = 'My AI agents finished ' + model.big + ' runs for $0 ' + phrase + '.';
       else lead = 'My AI agents processed ' + model.big + ' tokens ' + phrase + '.';
       return lead;
     }
@@ -6031,9 +6057,18 @@
       const planBtn = document.querySelector('#sh-metric button[data-v="plan"]');
       planBtn.disabled = !hasPlan;
       planBtn.title = hasPlan ? '' : 'Plan usage is not available yet';
+      const sv = ((data || {}).savings) || {};
+      const hasSavings = (sv.free_runs || 0) > 0 || (sv.free_saved_usd || 0) > 0;
+      ['saved', 'runs'].forEach((v) => {
+        const b = document.querySelector('#sh-metric button[data-v="' + v + '"]');
+        if (!b) return;
+        b.disabled = !hasSavings;
+        b.title = hasSavings ? '' : 'No $0 runs yet. Run a session on the free runtime to see this.';
+      });
       $('sh-opt-pseudo').checked = state.pseudo;
       $('sh-opt-streak').checked = state.streak;
       $('sh-opt-cost').checked = state.cost;
+      $('sh-opt-saved').checked = state.saved;
       $('sh-opt-engines').checked = state.engines;
       $('sh-pseudo-input').value = state.name;
       $('sh-pseudo-input').disabled = !state.pseudo;
@@ -6052,6 +6087,8 @@
       if (!data || data.pending) setStatus('Counting 12 months of agent activity. The first run can take a minute.');
       else if (empty) setStatus('No agent activity found yet. Run a session and come back.');
       else setStatus('');
+      refreshMilestoneAttn();
+      maybePromptMilestone();
     }
 
     async function loadData(force) {
@@ -6178,6 +6215,74 @@
     function close() {
       $('share-overlay').classList.remove('open');
       clearTimeout(pollTimer);
+      $('sh-milestone').classList.remove('on');
+      milestoneShown = 0;
+    }
+
+    // Savings milestones: once per new threshold the Share button pulses, and
+    // the next time the card opens it lands on the $ saved view with a
+    // celebratory banner. Purely local state, seen markers in localStorage.
+    const MILESTONES = [10, 100, 1000, 10000];
+    const LS_MILESTONE = 'ccc.share.savingsMilestone';
+    function milestoneSeen() {
+      try { return Number(localStorage.getItem(LS_MILESTONE) || 0) || 0; } catch (e) { return 0; }
+    }
+    function pendingMilestone() {
+      const total = (((data || {}).savings) || {}).free_saved_usd || 0;
+      let hit = 0;
+      MILESTONES.forEach((m) => { if (total >= m) hit = m; });
+      return hit > milestoneSeen() ? hit : 0;
+    }
+    function refreshMilestoneAttn() {
+      const pending = pendingMilestone();
+      const btn = $('share-btn');
+      if (!btn) return;
+      btn.classList.toggle('attn', pending > 0);
+      btn.title = pending
+        ? 'You passed ' + fmtUsd(pending) + ' saved on $0 runs. Share it.'
+        : 'Make a shareable card of your agent activity';
+    }
+    let milestoneBusy = false;
+    let milestoneShown = 0;   // banner stays up for the rest of this open
+    function maybePromptMilestone() {
+      if (milestoneBusy) return;
+      const el = $('sh-milestone');
+      if (!el) return;
+      const open = $('share-overlay').classList.contains('open');
+      const pending = pendingMilestone();
+      if (pending && open) {
+        milestoneBusy = true;
+        try {
+          try { localStorage.setItem(LS_MILESTONE, String(pending)); } catch (e) { /* ignore */ }
+          milestoneShown = pending;
+          refreshMilestoneAttn();
+          if (state.metric === 'tokens') { state.metric = 'saved'; saveState(); }
+          el.textContent = 'You just passed ' + fmtUsd(pending) + ' saved on $0 runs. This card says it best.';
+          el.classList.add('on');
+          try {
+            if (window.cccFx && typeof window.cccFx.confetti === 'function' && !(window.cccFx.reducedMotion && window.cccFx.reducedMotion())) {
+              window.cccFx.confetti();
+            }
+          } catch (e) { /* fx kit is optional */ }
+          render();
+        } finally {
+          milestoneBusy = false;
+        }
+        return;
+      }
+      if (!open || !milestoneShown) el.classList.remove('on');
+    }
+
+    // Entry point for milestone toasts and share CTAs elsewhere in CCC:
+    // open the card straight on the savings numbers.
+    function openSavings() {
+      const sv = ((data || {}).savings) || {};
+      if ((sv.free_saved_usd || 0) > 0) state.metric = 'saved';
+      else if ((sv.free_runs || 0) > 0) state.metric = 'runs';
+      else state.metric = 'saved';
+      saveState();
+      open();
+      return state.metric;
     }
 
     function wire() {
@@ -6197,7 +6302,7 @@
           render();
         });
       });
-      [['pseudo', 'sh-opt-pseudo'], ['streak', 'sh-opt-streak'], ['cost', 'sh-opt-cost'], ['engines', 'sh-opt-engines']].forEach(([k, id]) => {
+      [['pseudo', 'sh-opt-pseudo'], ['streak', 'sh-opt-streak'], ['cost', 'sh-opt-cost'], ['saved', 'sh-opt-saved'], ['engines', 'sh-opt-engines']].forEach(([k, id]) => {
         $(id).addEventListener('change', (e) => { state[k] = e.target.checked; saveState(); render(); });
       });
       $('sh-pseudo-input').addEventListener('input', (e) => { state.name = e.target.value; saveState(); render(); });
@@ -6209,7 +6314,26 @@
       document.querySelectorAll('.sh-tile[data-net]').forEach((t) => t.addEventListener('click', () => post(t.dataset.net)));
     }
     wire();
+    // Deep link: /throughput.html?share=1 opens the share overlay directly
+    // (the savings panel and milestone celebrations land here).
+    if (new URLSearchParams(location.search).has('share')) open();
     window.CCCShare = { summarize, heatmapCells, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close };
+    // /throughput?share=1 opens the card; ?share=saved|runs lands on a metric.
+    // This is the deep link milestone prompts and other CCC views point at.
+    try {
+      const shareParam = new URLSearchParams(window.location.search).get('share');
+      if (shareParam) {
+        if (['tokens', 'hours', 'plan', 'cache', 'saved', 'runs'].indexOf(shareParam) !== -1) {
+          state.metric = shareParam;
+          saveState();
+        }
+        open();
+      }
+    } catch (e) { /* ignore */ }
+    // Prefetch the totals so a pending milestone can light up the Share
+    // button before the user ever opens the card.
+    if (!$('share-overlay').classList.contains('open')) loadData(false);
+    window.CCCShare = { summarize, heatmapCells, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close, openSavings, pendingMilestone, loadData };
   })();
   // SHARE-CARD:END
   </script>
