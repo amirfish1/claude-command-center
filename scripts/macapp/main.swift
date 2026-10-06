@@ -20,6 +20,7 @@
 import Cocoa
 import WebKit
 import Sparkle
+import UserNotifications
 
 // MARK: - Constants
 
@@ -40,6 +41,10 @@ let CCC_CAR_MODE_CMD = NSString(string: "~/.ccc/car-mode.command").expandingTild
 // item's UserDefaults value > the local default. Both overrides are unset
 // out of the box, so an existing user sees no behavior change.
 let CCC_REMOTE_URL_DEFAULTS_KEY = "CCCRemoteServerURL"
+// Set the first time the main web view finishes a dashboard load. Until then
+// every loadDashboard() call is allowed to consider the Moment Zero
+// deep-link — see resolveFirstDashboardURL().
+let CCC_DID_OPEN_DASHBOARD_KEY = "CCCDidOpenDashboard"
 
 func resolveCCCTargetURL() -> URL {
     if let envValue = CCC_ENV["CCC_REMOTE_URL"], !envValue.isEmpty, let url = URL(string: envValue) {
@@ -140,6 +145,136 @@ func diskCodeRev() -> String {
         return ""
     }
 }
+
+// ccc-slice-begin: first-run helpers
+//
+// The block between the `ccc-slice` markers is extracted and compiled
+// standalone by tests/test_macapp_first_launch.py — keep it Foundation-only
+// (no Cocoa / WebKit / Sparkle symbols) so it builds on any platform.
+
+/// What the `cccNotify` script message handler accepts from the page
+/// (posted as window.webkit.messageHandlers.cccNotify.postMessage({...})).
+/// Field names mirror the web helper window.cccNotify: `title`, `body`,
+/// `kind` ("success", "error", "silent", ...) and `url` (relative path or
+/// absolute dashboard URL opened when the notification is clicked). `tag`
+/// collapses repeated notifications with the same tag into one banner.
+struct CCCNotifyRequest: Equatable {
+    var title: String
+    var body: String
+    var kind: String
+    var url: String
+    var tag: String
+}
+
+/// `base` with `?onboarding=1` merged into its query — the Moment Zero
+/// deep-link the dashboard understands. Existing query items are kept and
+/// the flag is never duplicated.
+func dashboardURLWithOnboarding(_ base: URL) -> URL {
+    guard var comp = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+        return base
+    }
+    // "http://host?x" is legal but routes oddly; the dashboard lives at "/".
+    if comp.path.isEmpty { comp.path = "/" }
+    var items = comp.queryItems ?? []
+    if !items.contains(where: { $0.name == "onboarding" }) {
+        items.append(URLQueryItem(name: "onboarding", value: "1"))
+    }
+    comp.queryItems = items
+    return comp.url ?? base
+}
+
+/// Should this dashboard load deep-link into Moment Zero onboarding?
+///
+/// `didInstallThisLaunch` covers the straight DMG path: the install dir was
+/// absent and we just ran the bundled installer, so this user is new by
+/// definition. Otherwise only the app's first-ever dashboard load (before
+/// CCCDidOpenDashboard is written) may route to onboarding, and only when
+/// the server itself reports onboarding unfinished (`completed == false`)
+/// with no agent CLI logged in — a logged-in engine means a returning user
+/// who skipped the old first-run guide, not a novice.
+///
+/// `onboardingCompleted` is nil when the status endpoint was unreachable or
+/// too old to have the field — unknown means "don't force it", the page's
+/// own new-user heuristics still apply.
+func shouldOpenOnboardingOnLaunch(didInstallThisLaunch: Bool,
+                                  didOpenDashboardBefore: Bool,
+                                  onboardingCompleted: Bool?,
+                                  anyEngineLoggedIn: Bool) -> Bool {
+    if didInstallThisLaunch { return true }
+    if didOpenDashboardBefore { return false }
+    guard let completed = onboardingCompleted else { return false }
+    return !completed && !anyEngineLoggedIn
+}
+
+/// Parse the parts of GET /api/onboarding/status we need: (completed?,
+/// anyEngineLoggedIn). `completed` stays nil when the key is absent.
+func parseOnboardingStatusHint(_ json: [String: Any]) -> (completed: Bool?, anyLoggedIn: Bool) {
+    let completed = json["completed"] as? Bool
+    let clis = json["clis"] as? [String: Any] ?? [:]
+    let anyLoggedIn = clis.values.contains { entry in
+        (entry as? [String: Any])?["logged_in"] as? Bool == true
+    }
+    return (completed, anyLoggedIn)
+}
+
+/// Build CCC_URL + an absolute API path, preserving a path prefix when the
+/// target is mounted under one (remote mode behind a reverse proxy).
+func dashboardAPIURL(_ base: URL, path: String) -> URL? {
+    guard var comp = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+        return nil
+    }
+    let basePath = comp.path.hasSuffix("/") ? String(comp.path.dropLast()) : comp.path
+    comp.path = basePath + path
+    comp.query = nil
+    comp.fragment = nil
+    return comp.url
+}
+
+/// Parse a cccNotify postMessage body. Accepts the dict form L14 emits
+/// ({title, body, kind, url, tag}) and tolerates a bare string as `body`.
+/// Returns nil when nothing displayable was sent.
+func parseCCCNotifyMessage(_ body: Any?) -> CCCNotifyRequest? {
+    func clean(_ v: Any?) -> String {
+        (v as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+    var req = CCCNotifyRequest(title: "CCC", body: "", kind: "", url: "", tag: "")
+    if let dict = body as? [String: Any] {
+        let t = clean(dict["title"])
+        if !t.isEmpty { req.title = t }
+        req.body = clean(dict["body"])
+        req.kind = clean(dict["kind"])
+        req.url = clean(dict["url"])
+        req.tag = clean(dict["tag"])
+        // No point posting a banner with literally nothing to say.
+        if t.isEmpty && req.body.isEmpty && req.url.isEmpty { return nil }
+    } else if let text = body as? String {
+        req.body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if req.body.isEmpty { return nil }
+    } else {
+        return nil
+    }
+    return req
+}
+
+/// Resolve the `url` field of a cccNotify message against the dashboard
+/// origin. Absolute http(s) URLs pass through; site-relative paths ("/…" or
+/// "?…") resolve against `base`; anything else (javascript:, data:, empty)
+/// is rejected.
+func resolveNotifyURL(_ raw: String, base: URL) -> URL? {
+    let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if t.isEmpty { return nil }
+    if let url = URL(string: t), let scheme = url.scheme {
+        let s = scheme.lowercased()
+        return (s == "http" || s == "https") ? url : nil
+    }
+    if t.hasPrefix("/") || t.hasPrefix("?") || t.hasPrefix("#"),
+       let url = URL(string: t, relativeTo: base) {
+        return url.absoluteURL
+    }
+    return nil
+}
+
+// ccc-slice-end: first-run helpers
 
 /// Blocking GET /api/version on the local server; call off the main thread.
 func fetchLocalServerVersion(timeout: TimeInterval = 3) -> ServerVersionInfo? {
@@ -294,6 +429,20 @@ func logTail(_ path: String, lines: Int = 12) -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
+/// Honor the system "Reduce motion" accessibility setting for the native
+/// splash animations (the web side reads prefers-reduced-motion itself).
+/// NSWorkspace exposes the flag only on macOS 14+; on 11-13 fall back to the
+/// universalaccess preference domain directly.
+func cccPrefersReducedMotion() -> Bool {
+    if #available(macOS 14.0, *) {
+        return NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+    return (CFPreferencesCopyAppValue(
+        "reduceMotion" as CFString,
+        "com.apple.universalaccess" as CFString
+    ) as? Bool) ?? false
+}
+
 func isLocalDashboardURL(_ url: URL) -> Bool {
     let scheme = (url.scheme ?? "").lowercased()
     if scheme == "about" || scheme == "data" || scheme == "blob" { return true }
@@ -364,12 +513,278 @@ final class CCCNativeBridge: NSObject, WKScriptMessageHandler {
     }
 }
 
+// MARK: - Native notification bridge (JS → macOS banners)
+//
+// The dashboard's notify layer (window.cccNotify) detects
+// window.webkit.messageHandlers.cccNotify and posts {title, body, kind,
+// url, tag} here instead of using a Web Notification. We turn each message
+// into a real macOS banner; clicking it focuses the app and opens `url`.
+// Delivery and click handling live on AppDelegate.deliverNativeNotification
+// / CCCNotificationDelegate below.
+
+final class CCCNotifyBridge: NSObject, WKScriptMessageHandler {
+    weak var appDelegate: AppDelegate?
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard message.name == "cccNotify",
+              let req = parseCCCNotifyMessage(message.body) else { return }
+        NSLog("CCC: cccNotify received \"%@\"", req.title)
+        DispatchQueue.main.async { [weak self] in
+            self?.appDelegate?.deliverNativeNotification(req)
+        }
+    }
+}
+
+/// Presents banners even while CCC is frontmost (the in-app toast may not
+/// be on screen) and routes notification clicks back into the dashboard.
+final class CCCNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    weak var appDelegate: AppDelegate?
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        if #available(macOS 12.0, *) {
+            completionHandler([.banner, .sound, .list])
+        } else {
+            completionHandler([.banner, .sound])
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let urlString = response.notification.request.content.userInfo["url"] as? String
+        DispatchQueue.main.async { [weak self] in
+            self?.appDelegate?.handleNotificationOpen(urlString: urlString)
+        }
+        completionHandler()
+    }
+}
+
+// MARK: - First-launch splash
+//
+// A native cover over the main WebView from launch until the first
+// dashboard navigation finishes. It replaces the old bare "Starting CCC
+// server…" label with something worth a Moment Zero: app icon with a soft
+// glow, wordmark, tagline, spinner, the live status line, and a rotating
+// tip while long operations (first-time install, server start) run.
+// Everything honors Reduce Motion; hide(animated:) is a short cross-fade
+// straight into the loaded page.
+
+final class CCCSplashView: NSView {
+    let statusLabel: NSTextField
+    private let tipLabel: NSTextField
+    private let iconView: NSImageView?
+    private var tipTimer: Timer?
+    private var tipIndex = 0
+
+    private static let tips = [
+        "Setting things up on this Mac. Nothing leaves your computer.",
+        "Your agents, one inbox. First setup takes a few minutes.",
+        "CCC can run coding agents on free models that cost $0.",
+        "Almost there. Good things are loading.",
+    ]
+
+    override init(frame: NSRect) {
+        // Stored-property setup only above super.init; the layer itself is
+        // configured after it (self is off-limits until then).
+
+        let icon: NSImageView?
+        if let appIcon = NSApp.applicationIconImage {
+            let iv = NSImageView(image: appIcon)
+            iv.translatesAutoresizingMaskIntoConstraints = false
+            iv.imageScaling = .scaleProportionallyUpOrDown
+            iv.wantsLayer = true
+            // Soft halo in the accent color — the one flourish that makes the
+            // first-launch screen feel alive instead of a progress dialog.
+            let glow = NSShadow()
+            glow.shadowColor = NSColor(
+                srgbRed: 0x6e / 255, green: 0x8c / 255, blue: 0xaf / 255, alpha: 0.6
+            )
+            glow.shadowBlurRadius = 30
+            glow.shadowOffset = .zero
+            iv.shadow = glow
+            NSLayoutConstraint.activate([
+                iv.widthAnchor.constraint(equalToConstant: 112),
+                iv.heightAnchor.constraint(equalToConstant: 112),
+            ])
+            icon = iv
+        } else {
+            icon = nil
+        }
+        iconView = icon
+
+        let title = NSTextField(labelWithString: "CCC")
+        title.font = NSFont.systemFont(ofSize: 38, weight: .bold)
+        title.textColor = .white
+
+        let tagline = NSTextField(labelWithString: "One inbox for all your AI agents.")
+        tagline.font = NSFont.systemFont(ofSize: 15, weight: .regular)
+        tagline.textColor = NSColor.white.withAlphaComponent(0.72)
+
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            spinner.widthAnchor.constraint(equalToConstant: 22),
+            spinner.heightAnchor.constraint(equalToConstant: 22),
+        ])
+        spinner.startAnimation(nil)
+
+        let status = NSTextField(labelWithString: "Starting CCC server…")
+        status.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        status.textColor = NSColor.white.withAlphaComponent(0.85)
+        status.alignment = .center
+        status.maximumNumberOfLines = 0
+        status.lineBreakMode = .byWordWrapping
+        status.preferredMaxLayoutWidth = 480
+        statusLabel = status
+
+        let tip = NSTextField(labelWithString: CCCSplashView.tips[0])
+        tip.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        tip.textColor = NSColor.white.withAlphaComponent(0.45)
+        tip.alignment = .center
+        tip.maximumNumberOfLines = 0
+        tip.lineBreakMode = .byWordWrapping
+        tip.preferredMaxLayoutWidth = 440
+        tipLabel = tip
+
+        super.init(frame: frame)
+
+        wantsLayer = true
+        // Match the dashboard's dark theme (--bg #0d1117) so the handoff to
+        // the loaded page reads as one continuous surface, not a white flash.
+        layer?.backgroundColor = NSColor(
+            srgbRed: 0x0d / 255, green: 0x11 / 255, blue: 0x17 / 255, alpha: 1
+        ).cgColor
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        if let icon = icon { stack.addArrangedSubview(icon) }
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(tagline)
+        stack.addArrangedSubview(spinner)
+        stack.addArrangedSubview(status)
+        stack.addArrangedSubview(tip)
+        stack.setCustomSpacing(6, after: title)
+        stack.setCustomSpacing(26, after: tagline)
+        stack.setCustomSpacing(14, after: spinner)
+        stack.setCustomSpacing(30, after: status)
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -24),
+            stack.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -80),
+        ])
+
+        // A gentle breathing loop on the icon — skipped entirely under
+        // Reduce Motion.
+        if let layer = icon?.layer, !cccPrefersReducedMotion() {
+            let pulse = CABasicAnimation(keyPath: "transform.scale")
+            pulse.fromValue = 1.0
+            pulse.toValue = 1.05
+            pulse.duration = 1.7
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(pulse, forKey: "cccSplashPulse")
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("CCCSplashView is created in code")
+    }
+
+    deinit {
+        tipTimer?.invalidate()
+    }
+
+    func setStatus(_ text: String) {
+        statusLabel.stringValue = text
+    }
+
+    /// The view the splash covers — set once by the window, used by show()
+    /// to re-attach after a hide() removed us.
+    weak var hostView: NSView?
+
+    /// Put the splash back on screen (server restart, lost connection).
+    /// Instant re-show: a recovery screen should not animate in.
+    func show() {
+        guard superview == nil else { return }
+        guard let host = hostView else { return }
+        alphaValue = 1
+        isHidden = false
+        translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(self)
+        NSLayoutConstraint.activate([
+            leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            topAnchor.constraint(equalTo: host.topAnchor),
+            bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+        startTipRotation()
+    }
+
+    /// Fade out into the loaded page — instant under Reduce Motion.
+    /// didFinish fires for every navigation, so no-op once detached.
+    func hide(animated: Bool = true) {
+        tipTimer?.invalidate()
+        tipTimer = nil
+        guard superview != nil else { return }
+        guard animated, !cccPrefersReducedMotion() else {
+            removeFromSuperview()
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.45
+            ctx.allowsImplicitAnimation = true
+            self.animator().alphaValue = 0
+        }, completionHandler: {
+            self.removeFromSuperview()
+        })
+    }
+
+    /// Cycle through the friendly tip lines while long operations run.
+    /// Called when the splash becomes visible; the timer stops on hide().
+    func startTipRotation() {
+        guard tipTimer == nil else { return }
+        tipTimer = Timer.scheduledTimer(withTimeInterval: 9.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            self.tipIndex = (self.tipIndex + 1) % CCCSplashView.tips.count
+            let next = CCCSplashView.tips[self.tipIndex]
+            if cccPrefersReducedMotion() {
+                self.tipLabel.stringValue = next
+                return
+            }
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.3
+                self.tipLabel.animator().alphaValue = 0
+            }, completionHandler: {
+                self.tipLabel.stringValue = next
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.3
+                    self.tipLabel.animator().alphaValue = 1
+                }
+            })
+        }
+    }
+}
+
 // MARK: - Dashboard web window (main shell + conversation pop-outs)
 
 final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let window: NSWindow
     let webView: WKWebView
-    let loadingLabel: NSTextField?
+    /// Native cover over the WebView until the first navigation finishes
+    /// (main window only). `loadingLabel` stays the status line inside it so
+    /// every existing `loadingLabel.stringValue = …` call site still works.
+    let splashView: CCCSplashView?
+    var loadingLabel: NSTextField? { splashView?.statusLabel }
     private weak var appDelegate: AppDelegate?
     private let isMain: Bool
 
@@ -463,23 +878,23 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
         webView = view
 
         if isMain {
-            let label = NSTextField(labelWithString: "Starting CCC server…")
-            label.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-            label.textColor = .secondaryLabelColor
-            label.alignment = .center
-            label.maximumNumberOfLines = 0
-            label.lineBreakMode = .byWordWrapping
-            label.preferredMaxLayoutWidth = 480
-            label.translatesAutoresizingMaskIntoConstraints = false
-            loadingLabel = label
+            // Splash covers the WebView (still empty until the first page
+            // paints) and hides itself on didFinish — see CCCSplashView.
+            let splash = CCCSplashView(frame: win.contentView!.bounds)
+            splash.translatesAutoresizingMaskIntoConstraints = false
+            splash.hostView = win.contentView
+            splashView = splash
             win.contentView!.addSubview(view)
-            win.contentView!.addSubview(label)
+            win.contentView!.addSubview(splash)
             NSLayoutConstraint.activate([
-                label.centerXAnchor.constraint(equalTo: win.contentView!.centerXAnchor),
-                label.centerYAnchor.constraint(equalTo: win.contentView!.centerYAnchor),
+                splash.leadingAnchor.constraint(equalTo: win.contentView!.leadingAnchor),
+                splash.trailingAnchor.constraint(equalTo: win.contentView!.trailingAnchor),
+                splash.topAnchor.constraint(equalTo: win.contentView!.topAnchor),
+                splash.bottomAnchor.constraint(equalTo: win.contentView!.bottomAnchor),
             ])
+            splash.startTipRotation()
         } else {
-            loadingLabel = nil
+            splashView = nil
             win.contentView!.addSubview(view)
             // Only load manually on the bridge path (configuration == nil).
             // When this window is born from createWebViewWith (window.open),
@@ -538,11 +953,29 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
         appDelegate?.onMainWebViewDidFail()
     }
 
+    /// Show the splash again (recovering from a dead server) and update the
+    /// status line when given one.
+    func showSplash(status: String? = nil) {
+        guard let splash = splashView else { return }
+        if let status = status { splash.setStatus(status) }
+        splash.show()
+    }
+
+    /// Cross-fade the splash away once the first page has painted.
+    func hideSplash() {
+        splashView?.hide(animated: true)
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loadingLabel?.isHidden = true
         stampMacAppFlag(on: webView)
         if isMain {
+            hideSplash()
+            // The app has successfully shown the dashboard once — later
+            // launches never deep-link into onboarding again.
+            UserDefaults.standard.set(true, forKey: CCC_DID_OPEN_DASHBOARD_KEY)
             appDelegate?.startUpdaterAfterBootstrap()
+            appDelegate?.flushPendingNotificationURL()
         }
         // A reused named popout (window.open with an existing target name)
         // re-navigates without passing through createWebViewWith, so nothing
@@ -683,9 +1116,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBusyCount = 0
     var statusPulseOn = false
     var statusLiveWorkers: [[String: Any]] = []
+    // First-run state (Moment Zero deep-link): runInstaller() flips
+    // didInstallThisLaunch; the first-ever dashboard load may carry
+    // ?onboarding=1 — see loadDashboard().
+    var didInstallThisLaunch = false
+    var onboardingDeepLinkUsed = false
+    // cccNotify → UNUserNotificationCenter bridge. Delegate must be set at
+    // launch so clicks on banners posted before a quit still reach us.
+    private var notifyBridge: CCCNotifyBridge?
+    let notificationDelegate = CCCNotificationDelegate()
+    // A notification clicked before the main web view exists is replayed
+    // after the first didFinish (flushPendingNotificationURL).
+    var pendingNotificationURL: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignalHandlers()
+        // A bare dev binary (swiftc output, no bundle id) cannot use
+        // UNUserNotificationCenter — the web app falls back to in-app toasts.
+        if Bundle.main.bundleIdentifier != nil {
+            notificationDelegate.appDelegate = self
+            UNUserNotificationCenter.current().delegate = notificationDelegate
+        }
         updaterController = SPUStandardUpdaterController(
             // Sparkle can present first-run modal UI. Starting it while a
             // bootstrap error alert is active stops that app-global modal
@@ -1231,9 +1682,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bridge.appDelegate = self
             nativeBridge = bridge
         }
-        guard let bridge = nativeBridge else { return }
-        controller.add(bridge, name: "cccNative")
+        if notifyBridge == nil {
+            let nb = CCCNotifyBridge()
+            nb.appDelegate = self
+            notifyBridge = nb
+        }
+        if let bridge = nativeBridge {
+            controller.add(bridge, name: "cccNative")
+        }
+        if let nb = notifyBridge {
+            controller.add(nb, name: "cccNotify")
+        }
         bridgedContentControllers.insert(key)
+    }
+
+    // MARK: cccNotify → macOS banners
+
+    /// Deliver a dashboard notification as a real macOS banner. Permission
+    /// is requested lazily on the first notification, at whatever "success
+    /// moment" the page chose to fire it; until then nothing prompts.
+    func deliverNativeNotification(_ req: CCCNotifyRequest) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { [weak self] settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                self?.postNotification(req, to: center)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted { self?.postNotification(req, to: center) }
+                }
+            default:
+                break  // denied — the in-app toast remains the visible path
+            }
+        }
+    }
+
+    private func postNotification(_ req: CCCNotifyRequest, to center: UNUserNotificationCenter) {
+        let content = UNMutableNotificationContent()
+        content.title = req.title
+        if !req.body.isEmpty { content.body = req.body }
+        if req.kind != "silent" { content.sound = .default }
+        if !req.kind.isEmpty { content.threadIdentifier = "ccc-\(req.kind)" }
+        if !req.url.isEmpty { content.userInfo = ["url": req.url] }
+        // Same tag → replace the earlier banner instead of piling up.
+        let identifier = req.tag.isEmpty ? UUID().uuidString : "ccc-\(req.tag)"
+        NSLog("CCC: posting notification \"%@\" (kind=%@)", req.title, req.kind.isEmpty ? "default" : req.kind)
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil)) { error in
+            if let error = error {
+                NSLog("CCC: notification delivery failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    /// Clicked banner: bring CCC forward and open the linked page. A click
+    /// that arrives before the window exists is remembered and flushed by
+    /// the first didFinish.
+    func handleNotificationOpen(urlString: String?) {
+        NSApp.activate(ignoringOtherApps: true)
+        mainWebWindow?.window.makeKeyAndOrderFront(nil)
+        guard let raw = urlString,
+              let url = resolveNotifyURL(raw, base: CCC_URL) else { return }
+        if isLocalDashboardURL(url) {
+            if let web = mainWebWindow?.webView {
+                web.load(URLRequest(url: url))
+            } else {
+                pendingNotificationURL = url
+            }
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Called from the main window's first didFinish: if a notification was
+    /// clicked during boot, navigate to its page now.
+    func flushPendingNotificationURL() {
+        guard let url = pendingNotificationURL,
+              let web = mainWebWindow?.webView else { return }
+        pendingNotificationURL = nil
+        web.load(URLRequest(url: url))
     }
 
     func trackPopout(_ win: CCCWebWindow) {
@@ -1250,7 +1777,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func onMainWebViewDidFail() {
-        loadingLabel.isHidden = false
+        mainWebWindow.showSplash()
         loadingLabel.stringValue = "Lost the server. Reconnecting…"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.bootstrap()
@@ -1372,7 +1899,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func waitForDeveloperTools() {
         if waitingForDeveloperTools { return }
         waitingForDeveloperTools = true
-        loadingLabel.isHidden = false
+        mainWebWindow.showSplash()
         loadingLabel.stringValue =
             "CCC needs Apple's free Command Line Tools (they include Python and Git). "
             + "In the Apple window that just opened, click Install, then Agree. "
@@ -1424,8 +1951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             DispatchQueue.main.async {
-                self?.loadingLabel.isHidden = false
-                self?.loadingLabel.stringValue = "Updating Command Center…"
+                self?.mainWebWindow.showSplash(status: "Updating Command Center…")
             }
             var done = false
             if requestLocalServerRestart() {
@@ -1466,7 +1992,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             return
         }
-        loadingLabel.stringValue = "Installing Command Center…"
+        // Remember the installer ran: this launch's first dashboard load is
+        // entitled to the Moment Zero onboarding deep-link regardless of any
+        // later server-side check.
+        didInstallThisLaunch = true
+        loadingLabel.stringValue = "Setting up Command Center for the first time…"
 
         let proc = Process()
         proc.launchPath = "/bin/bash"
@@ -1577,9 +2107,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func loadDashboard() {
-        loadingLabel.isHidden = true
-        webView.load(URLRequest(url: CCC_URL))
-        startWatchdog()
+        // The splash keeps covering the WebView until the first navigation
+        // finishes — no white flash between "server bound" and first paint.
+        resolveFirstDashboardURL { [weak self] url in
+            guard let self = self else { return }
+            self.webView.load(URLRequest(url: url))
+            self.startWatchdog()
+        }
+    }
+
+    // MARK: First-launch onboarding deep-link (Moment Zero)
+
+    /// The first dashboard load of a brand-new user goes straight to
+    /// /?onboarding=1 so Moment Zero opens full-screen. Two ways in:
+    ///   1. We ran the bundled installer this launch (didInstallThisLaunch)
+    ///      — a fresh DMG install is a new user by definition.
+    ///   2. The app's first-ever dashboard load (CCCDidOpenDashboard unset)
+    ///      on a server that reports onboarding unfinished and no agent
+    ///      engine logged in — a curl/brew user who never got this flow.
+    /// The deep-link is spent once per launch; every uncertainty (endpoint
+    /// missing, server unreachable, veteran machine) resolves to the plain
+    /// dashboard and the page's own new-user heuristics take over.
+    func resolveFirstDashboardURL(_ done: @escaping (URL) -> Void) {
+        let didOpenBefore = UserDefaults.standard.bool(forKey: CCC_DID_OPEN_DASHBOARD_KEY)
+        if onboardingDeepLinkUsed || (didOpenBefore && !didInstallThisLaunch) {
+            done(CCC_URL)
+            return
+        }
+        if didInstallThisLaunch {
+            onboardingDeepLinkUsed = true
+            NSLog("CCC: first launch after install — loading /?onboarding=1")
+            done(dashboardURLWithOnboarding(CCC_URL))
+            return
+        }
+        // First-ever dashboard load on an existing install: ask the server
+        // whether onboarding ever completed before deciding. Short timeout —
+        // a slow answer must not hold the first paint hostage.
+        loadingLabel.stringValue = "Loading your dashboard…"
+        fetchOnboardingStatusHint { [weak self] completed, anyLoggedIn in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let open = shouldOpenOnboardingOnLaunch(
+                    didInstallThisLaunch: false,
+                    didOpenDashboardBefore: didOpenBefore,
+                    onboardingCompleted: completed,
+                    anyEngineLoggedIn: anyLoggedIn)
+                if open {
+                    self.onboardingDeepLinkUsed = true
+                    NSLog("CCC: first launch on an un-onboarded server — loading /?onboarding=1")
+                }
+                done(open ? dashboardURLWithOnboarding(CCC_URL) : CCC_URL)
+            }
+        }
+    }
+
+    /// GET <CCC_URL>/api/onboarding/status with a short timeout; calls back
+    /// on a background queue with (completed?, anyEngineLoggedIn). `completed`
+    /// is nil on any failure — callers treat nil as "unknown".
+    func fetchOnboardingStatusHint(_ done: @escaping (Bool?, Bool) -> Void) {
+        guard let url = dashboardAPIURL(CCC_URL, path: "/api/onboarding/status") else {
+            done(nil, false)
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 4
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: req) { data, resp, _ in
+            var completed: Bool?
+            var anyLoggedIn = false
+            if let http = resp as? HTTPURLResponse, http.statusCode == 200,
+               let data = data,
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                (completed, anyLoggedIn) = parseOnboardingStatusHint(obj)
+            }
+            done(completed, anyLoggedIn)
+        }.resume()
     }
 
     // MARK: Watchdog — recover a stuck dashboard
@@ -1633,17 +2235,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // escalating past the reload and surface a network-facing message.
             if self.watchdogReloaded && !self.watchdogRestarted && CCC_TARGET_IS_REMOTE {
                 self.stopWatchdog()
-                self.loadingLabel.isHidden = false
-                self.loadingLabel.stringValue =
-                    "Can't reach \(CCC_URL.absoluteString) — check your network/Tailscale connection."
+                self.mainWebWindow.showSplash(status:
+                    "Can't reach \(CCC_URL.absoluteString) — check your network/Tailscale connection.")
                 return
             }
             if self.watchdogReloaded && !self.watchdogRestarted {
                 guard self.watchdogRestartCount < 2 else {
                     self.stopWatchdog()
-                    self.loadingLabel.isHidden = false
-                    self.loadingLabel.stringValue =
-                        "Server keeps stalling — check ~/.claude/command-center/logs/app-server.log"
+                    self.mainWebWindow.showSplash(status:
+                        "Server keeps stalling — check ~/.claude/command-center/logs/app-server.log")
                     return
                 }
                 self.watchdogRestarted = true
@@ -1665,7 +2265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // who launched it), wait for the new process to bind, then reload + re-arm
     // the watchdog so a still-broken server escalates again up to the cap.
     func restartServerThenReload() {
-        loadingLabel.isHidden = false
+        mainWebWindow.showSplash()
         loadingLabel.stringValue = "Server stuck — restarting…"
         guard let url = URL(string: "http://127.0.0.1:\(CCC_PORT)/api/restart") else { return }
         var req = URLRequest(url: url)
@@ -1674,9 +2274,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         req.timeoutInterval = 10
         URLSession.shared.dataTask(with: req) { [weak self] _, _, _ in
             // The socket can drop mid-execvp — that's expected, not an error.
+            // The splash stays up through the reload and fades on didFinish.
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 guard let self = self else { return }
-                self.loadingLabel.isHidden = true
                 self.webView.reload()
                 self.startWatchdog()
             }
