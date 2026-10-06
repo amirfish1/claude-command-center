@@ -64,6 +64,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/savings.css">
 <!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
      file's diff against upstream stays small — see simple.css's own header
      comment. Loaded unconditionally; it's inert (never matches) outside
@@ -3706,6 +3707,7 @@
 <!-- Moment Zero must load before app.js so window.cccOnboarding.claimFirstRun
      exists when the engines first-run check fires 300ms after eval. -->
 <script src="/static/onboarding/onboarding.js"></script>
+<script src="/static/savings.js"></script>
 <script src="/static/free-runtime.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/codex-live-source.js"></script>
