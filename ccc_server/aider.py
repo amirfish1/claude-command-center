@@ -17,6 +17,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import free_runtime as _free_runtime
 
 
 _AIDER_OUTPUT_LIMIT = 24_000
@@ -152,7 +153,7 @@ def _aider_finish_turn(entry, transcript_path):
         _aider_append(transcript_path, _aider_result_event(session_id, exit_code))
 
 
-def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", parent_session_id=None, env=None):
+def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", parent_session_id=None, env=None, runtime=""):
     resolved = _resolve_aider_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
@@ -167,10 +168,20 @@ def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", paren
     if model:
         cmd.extend(["--model", model])
     log_fh = open(log_path, "w", encoding="utf-8")
+    if runtime:
+        try:
+            log_fh.write(json.dumps(
+                _free_runtime.spawn_log_marker_event(model)
+            ) + "\n")
+            log_fh.flush()
+        except OSError:
+            pass
     # `env`, when given, is merged over the inherited process environment --
     # used by the BYOK layer (ccc_server/byok.py) to hand Aider a provider
     # API key for this one spawn without touching global state.
     popen_env = {**os.environ, **env} if env else None
+    if runtime and popen_env is not None:
+        _free_runtime.scrub_paid_env(popen_env)
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
@@ -184,14 +195,17 @@ def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", paren
         "started": timestamp, "proc": proc, "log_fh": log_fh, "fifo": None,
         "stdin_fd": None, "engine": "aider", "session_id": session_id,
         "cwd": cwd, "repo_path": repo_path, "model": model or "",
-        "parent_session_id": parent_session_id or "",
+        "parent_session_id": parent_session_id or "", "runtime": runtime,
     }
     _core._spawned_sessions.append(entry)
     _core._record_spawn_to_registry(
         pid=proc.pid, name=name, log_path=log_path, cwd=cwd, spawned_at=timestamp,
         command_summary=text[:200], fifo=None, engine="aider", session_id=session_id,
         repo_path=repo_path, model=model, parent_session_id=parent_session_id,
+        runtime=runtime,
     )
+    if runtime:
+        _free_runtime.mark_spawned(session_id, pid=proc.pid)
     threading.Thread(
         target=_aider_finish_turn, args=(entry, transcript_path), daemon=True,
         name=f"ccc-aider-{session_id[:8]}",
@@ -202,18 +216,33 @@ def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", paren
     )
 
 
-def spawn_session_aider(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None):
+def spawn_session_aider(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None, runtime=""):
     """Start an Aider one-shot run with a CCC-owned durable session UUID.
 
     ``env``, when given, is merged over the inherited process environment --
     used by the BYOK layer to hand this one spawn a provider API key.
+
+    ``runtime="free"`` routes the run through the CCC free router's
+    OpenAI-compatible endpoint ($0). An unready router refuses the spawn —
+    a $0 request never silently becomes a paid run.
     """
     prompt = _core._strip_ccc_session_state_instruction(prompt)
     if not prompt:
         return {"ok": False, "error": "missing prompt"}
+    runtime = str(runtime or "").strip().lower()
     ctx = _core._spawn_repo_context(cwd=cwd, repo_path=repo_path)
     spawn_cwd = ctx["cwd"]
     session_name = _core._slugify(name or prompt) or "aider"
+    if runtime:
+        # Resolve before worktree creation: a refused $0 spawn must not leave
+        # an orphaned worktree behind.
+        free_overlay = _free_runtime.spawn_env("aider", model=model)
+        if not free_overlay:
+            return _free_runtime.unavailable_result("aider")
+        model_to_use = _free_runtime.model_for("aider", model)
+        env = {**(env or {}), **free_overlay}
+    else:
+        model_to_use = _core._spawn_model_for_engine("aider", model)
     worktree_path = worktree_branch = None
     if worktree:
         try:
@@ -223,19 +252,18 @@ def spawn_session_aider(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             return {"ok": False, "error": f"worktree creation failed: {exc}"}
     session_id = str(uuid.uuid4())
     transcript_path = _aider_session_path(session_id)
-    model_to_use = _core._spawn_model_for_engine("aider", model)
     with _aider_session_lock(session_id):
         if not _aider_append(transcript_path, {
             "type": "aider_session_meta", "session_id": session_id,
             "engine": "aider", "cwd": spawn_cwd, "repo_path": ctx["repo_path"],
             "name": session_name, "model": model_to_use or "", "created_at": _aider_iso_now(),
-            "parent_session_id": parent_session_id or "",
+            "parent_session_id": parent_session_id or "", "runtime": runtime,
         }):
             return {"ok": False, "error": "could not create Aider session transcript"}
         _aider_append(transcript_path, _aider_user_event(session_id, prompt))
     result = _aider_start_turn(
         session_id, prompt, cwd=spawn_cwd, repo_path=ctx["repo_path"], name=session_name,
-        model=model_to_use, parent_session_id=parent_session_id, env=env,
+        model=model_to_use, parent_session_id=parent_session_id, env=env, runtime=runtime,
     )
     if result.get("ok") and worktree_path:
         result["worktree_path"] = worktree_path
@@ -341,12 +369,22 @@ def resume_session_aider(session_id, text):
     if not Path(cwd).is_dir():
         cwd = str(Path.home())
     repo_path = meta.get("repo_path") or _core._git_toplevel_for_existing_dir(cwd) or cwd
+    # A session born free keeps running free: the next turn re-resolves the
+    # router overlay instead of inheriting the dashboard's paid credentials.
+    runtime = str(meta.get("runtime") or "").strip().lower()
+    env = None
+    if runtime == _free_runtime.FREE_RUNTIME:
+        overlay = _free_runtime.spawn_env("aider", model=meta.get("model") or "")
+        if not overlay:
+            return _free_runtime.unavailable_result("aider")
+        env = overlay
     with _aider_session_lock(session_id):
         _aider_append(path, _aider_user_event(session_id, text))
     result = _aider_start_turn(
         session_id, text, cwd=cwd, repo_path=repo_path,
         name=meta.get("name") or f"resume-aider-{session_id[:8]}",
         model=(meta.get("model") or ""), parent_session_id=meta.get("parent_session_id") or "",
+        env=env, runtime=runtime,
     )
     if result.get("ok"):
         result["resumed"] = True

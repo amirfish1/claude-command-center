@@ -53,6 +53,18 @@ Or download the macOS DMG and drag `CCC.app` to Applications:
 
 Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) (or [amirfish1.github.io/claude-command-center/demo](https://amirfish1.github.io/claude-command-center/demo/)) - the full dashboard with seeded fake data, no install required.
 
+## Start free in 5 minutes
+
+Fresh install? The first-run wizard does the boring parts for you: it
+checks your machine, installs what an agent needs (Node, the Claude Code
+CLI, a local free-model router), and runs your first real task on a **$0 model**.
+One consent click per step, nothing installs without you, and it ends with
+the honest math: *"This run cost $0. At API prices it would have cost $X."*
+
+The tour: [`docs/onboarding.md`](docs/onboarding.md) · how $0 runs route
+through free providers, and the privacy tradeoffs:
+[`docs/free-models.md`](docs/free-models.md)
+
 ## See CCC at work
 
 <table>
@@ -178,6 +190,7 @@ The whole fleet on your phone — monitor sessions, answer agents, and steer fro
 - **`/compact` as a card** — one self-narrating card with stage names, a live clock, and the tokens-freed payoff, instead of a spinner that could report a slow compaction as failed.
 - **Workers tab** — Compact/Cozy/Detailed densities, a fixed-column grid, a WORKING NOW strip, and worker rows that appear before the engine session exists.
 - **Self-attaching agents** — headless sessions launched outside CCC discover their parent session via process ancestry; `ccc spawn` and queue lanes appear in the list the moment they start.
+- **$0 runs on free models** — a managed local router (loopback-only [freellmapi](https://github.com/tashfeenahmed/freellmapi)) runs sessions on free-tier providers; the spawn dialog's **Free ($0)** option, `$0` session badges, a savings ticker, and a "continue free?" offer when a paid session hits its limit. See [`docs/free-models.md`](docs/free-models.md).
 
 All captures use seeded demo data.
 
