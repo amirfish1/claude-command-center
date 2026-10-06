@@ -72,6 +72,11 @@
 <!-- Shared ticket body / transcript renderer, also used by q2.html — keeps
      the two ticket views from drifting on how a ticket reads. -->
 <link rel="stylesheet" href="/static/ticket-prose.css">
+<!-- Sound + motion kit (window.cccFx): confetti canvas + shimmer/glow/pop helpers. -->
+<link rel="stylesheet" href="/static/fx.css">
+<!-- Moment Zero onboarding shell: always-dark cinematic overlay. Scoped
+     under #cccMomentZero; inert unless the overlay opens. -->
+<link rel="stylesheet" href="/static/onboarding/onboarding.css">
 <style>
   body.hide-gh-issues .is-github-issue {
     display: none !important;
@@ -3163,6 +3168,19 @@
               </div>
             </div>
 
+            <!-- Moment Zero: the cinematic welcome + free-model setup shell.
+                 The click binding lives in static/onboarding/onboarding.js so
+                 this row is the whole Settings integration. -->
+            <div class="settings-row" data-keywords="welcome free setup moment zero onboarding install">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Welcome &amp; free setup</div>
+                <div class="settings-row-desc">Replay the cinematic welcome and the free-model setup flow.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="momentZeroBtn">Open</button>
+              </div>
+            </div>
+
             <a class="settings-row settings-row-link" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener" data-keywords="get help readme docs documentation support">
               <div class="settings-row-main">
                 <div class="settings-row-label">Get help</div>
@@ -3678,10 +3696,16 @@
 <script src="/static/claude-reauth.js"></script>
 <script src="/static/phone-access.js"></script>
 <script src="/static/config-consent.js"></script>
+<script src="/static/free-key-wizard.js" defer></script>
 <script src="/static/federated-sidebar.js"></script>
 <script src="/static/q2-worker-idle.js"></script>
 <script src="/static/wt-log-bursts.js"></script>
 <script src="/static/ticket-prose.js"></script>
+<script src="/static/fx.js"></script>
+<script src="/static/free-router.js"></script>
+<!-- Moment Zero must load before app.js so window.cccOnboarding.claimFirstRun
+     exists when the engines first-run check fires 300ms after eval. -->
+<script src="/static/onboarding/onboarding.js"></script>
 <script src="/static/free-runtime.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/codex-live-source.js"></script>

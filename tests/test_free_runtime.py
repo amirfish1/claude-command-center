@@ -40,13 +40,23 @@ def _write_state(path, **fields):
 
 
 class _FreeStateCase(unittest.TestCase):
-    """Base: point the runtime at a tmp state file, never the real one."""
+    """Base: point the runtime at a tmp state file, never the real one.
+
+    ccc_server.free_router exists in this checkout, so spawn_env/readiness
+    would delegate to its HTTP probes by default. These fixtures exercise the
+    state-file fallback path, so the owner module is patched away; the
+    delegate path gets its own case below.
+    """
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.state = Path(self._tmpdir.name) / "free-router.json"
         self._old = os.environ.get("CCC_FREE_ROUTER_STATE")
         os.environ["CCC_FREE_ROUTER_STATE"] = str(self.state)
+        self._owner_patch = mock.patch.object(
+            free_runtime, "_free_router_module", return_value=None)
+        self._owner_patch.start()
+        self.addCleanup(self._owner_patch.stop)
 
     def tearDown(self):
         if self._old is None:
@@ -137,6 +147,74 @@ class TestSpawnEnv(_FreeStateCase):
         _write_state(self.state, port=self.port)
         ok, reason = free_runtime.readiness("claude")
         self.assertTrue(ok, reason)
+
+
+class TestOwnerDelegate(_FreeStateCase):
+    """With ccc_server.free_router importable it owns can-serve: its
+    spawn_env/status answers win and the state file is not a backdoor."""
+
+    def _owner(self, env=None, status=None):
+        class _Owner:
+            def spawn_env(self, model=None):
+                return dict(env) if env else {}
+            def status(self):
+                return dict(status or {})
+        return _Owner()
+
+    def test_claude_env_comes_from_owner(self):
+        env = {
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:3017",
+            "ANTHROPIC_AUTH_TOKEN": "unified-x",
+            "ANTHROPIC_MODEL": "router/auto",
+        }
+        with mock.patch.object(
+            free_runtime, "_free_router_module",
+            return_value=self._owner(env=env),
+        ):
+            out = free_runtime.spawn_env("claude")
+        self.assertEqual(out["ANTHROPIC_AUTH_TOKEN"], "unified-x")
+        self.assertEqual(out["CCC_SESSION_RUNTIME"], "free")
+
+    def test_owner_refusal_beats_state_file(self):
+        # Router says not-ready: refuse even though a state file with a
+        # listening port exists. The owner's /readyz knows better.
+        _write_state(self.state, port=1)
+        with mock.patch.object(
+            free_runtime, "_free_router_module", return_value=self._owner()
+        ):
+            self.assertEqual(free_runtime.spawn_env("claude"), {})
+            self.assertEqual(free_runtime.spawn_env("opencode"), {})
+
+    def test_openai_overlay_built_from_state_when_owner_ready(self):
+        env = {
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:3017",
+            "ANTHROPIC_AUTH_TOKEN": "unified-x",
+        }
+        _write_state(self.state, port=3017)
+        with mock.patch.object(
+            free_runtime, "_free_router_module",
+            return_value=self._owner(env=env),
+        ):
+            out = free_runtime.spawn_env("opencode")
+        self.assertEqual(out["OPENAI_BASE_URL"], "http://127.0.0.1:3017/v1")
+        self.assertEqual(out["OPENAI_API_KEY"], "ccc-free-test-key")
+
+    def test_readiness_uses_owner_status(self):
+        with mock.patch.object(
+            free_runtime, "_free_router_module",
+            return_value=self._owner(status={"ready": True, "state": "ready"}),
+        ):
+            ok, _ = free_runtime.readiness("claude")
+        self.assertTrue(ok)
+
+    def test_readiness_maps_owner_state_reason(self):
+        with mock.patch.object(
+            free_runtime, "_free_router_module",
+            return_value=self._owner(status={"ready": False, "state": "needs_key"}),
+        ):
+            ok, reason = free_runtime.readiness("claude")
+        self.assertFalse(ok)
+        self.assertIn("key", reason)
 
 
 class TestModelResolution(_FreeStateCase):
@@ -288,7 +366,11 @@ class TestSpawnRefusals(unittest.TestCase):
         self.server = _fresh_server()
 
     def test_free_claude_refuses_without_router(self):
-        with tempfile.TemporaryDirectory() as td:
+        # Patch the router owner away too: a real free_router on this machine
+        # would make the delegate check succeed and turn this into a pass.
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            free_runtime, "_free_router_module", return_value=None
+        ):
             os.environ["CCC_FREE_ROUTER_STATE"] = str(Path(td) / "missing.json")
             os.environ["CCC_CONTROL_PLANE_ENGINES"] = "0"  # in-process path
             os.environ.pop("CCC_SSH_HOST", None)

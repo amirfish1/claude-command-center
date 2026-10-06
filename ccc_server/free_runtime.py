@@ -61,6 +61,10 @@ def _state_file():
     override = os.environ.get("CCC_FREE_ROUTER_STATE")
     if override:
         return Path(override)
+    # The router owner honors CCC_FREE_ROUTER_HOME for its whole state dir.
+    home = os.environ.get("CCC_FREE_ROUTER_HOME", "").strip()
+    if home:
+        return Path(os.path.expanduser(home)) / "free-router.json"
     return Path.home() / ".ccc" / "free-router.json"
 
 
@@ -185,26 +189,37 @@ def spawn_env(engine, model=None):
     ``model`` is the caller's explicit pick (or None for the router default).
     The returned dict never contains a paid-provider credential and is safe
     to merge over the inherited environment after ``scrub_paid_env``.
+
+    When ``ccc_server.free_router`` (the router owner) is importable its
+    ``spawn_env`` is the authoritative can-serve check — it probes /readyz,
+    so "up but no upstream can serve" refuses like "down" does. The
+    state-file fallback only covers checkouts where the owner is absent.
     """
     engine = str(engine or "").strip().lower()
     if engine not in FREE_RUNTIME_ENGINES:
         return {}
+    owner = _free_router_module()
+    state = router_state()
     if engine == "claude":
-        env = _delegate_spawn_env(model)
-        if env:
-            out = dict(env)
+        if owner is not None:
+            out = dict(_delegate_spawn_env(model))
         else:
-            state = router_state()
             out = _claude_env_from_state(state, model)
             if out and not router_listening(state):
                 return {}
         if not out.get("ANTHROPIC_BASE_URL") or not out.get("ANTHROPIC_AUTH_TOKEN"):
             return {}
     else:
-        state = router_state()
-        out = _openai_env_from_state(state)
-        if out and not router_listening(state):
-            return {}
+        if owner is not None:
+            # The delegate env is Anthropic-shaped; here it is only the
+            # can-serve signal. The OpenAI overlay still comes from state.
+            if not _delegate_spawn_env(model):
+                return {}
+            out = _openai_env_from_state(state)
+        else:
+            out = _openai_env_from_state(state)
+            if out and not router_listening(state):
+                return {}
     if not out:
         return {}
     out[RUNTIME_ENV_VAR] = FREE_RUNTIME
@@ -258,18 +273,45 @@ def _default_router_model():
     return _state_value(state, "default_model", "model")
 
 
+# free_router.status() lifecycle states -> novice-facing refusal reason.
+_OWNER_STATE_REASONS = {
+    "missing": "the free router is not installed yet",
+    "stopped": "the free router is not running",
+    "starting": "the free router is still starting up",
+    "needs_setup": "the free router needs its setup finished",
+    "needs_key": "the free router has no free-model key yet",
+    "degraded": "the free router is up but no free model can serve yet",
+}
+
+
 def readiness(engine):
-    """(ready, reason) for the free runtime on ``engine`` — cheap, spawn-safe."""
+    """(ready, reason) for the free runtime on ``engine`` — cheap, spawn-safe.
+
+    With the router owner importable, its ``status()`` answer is
+    authoritative (cached ~2.5s there). Without it, a state-file read plus
+    one loopback TCP probe stands in.
+    """
     engine = str(engine or "").strip().lower()
     if engine not in FREE_RUNTIME_ENGINES:
         return False, f"the free runtime does not support the {engine or '?'} engine"
+    owner = _free_router_module()
+    if owner is not None:
+        try:
+            st = owner.status() or {}
+        except Exception:
+            st = {}
+        if st.get("ready"):
+            return True, ""
+        reason = str(st.get("ready_reason") or "").strip()
+        if not reason:
+            reason = _OWNER_STATE_REASONS.get(
+                str(st.get("state") or ""), "the free router is not ready")
+        return False, reason
     state = router_state()
     if not state:
         return False, "the free router is not installed yet"
     if not unified_key(state):
         return False, "the free router has no inference key yet"
-    if engine == "claude" and _delegate_spawn_env(None):
-        return True, ""
     if not router_listening(state):
         return False, "the free router is not running"
     return True, ""
