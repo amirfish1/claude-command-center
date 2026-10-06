@@ -1,0 +1,1 @@
+- Settings gains a "Free models" panel: start or stop the local free-model router, add and remove provider keys, see per-provider usage and the dollar value of work done for $0, and pick which free model your agents run on.

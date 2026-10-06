@@ -6314,6 +6314,10 @@
       document.querySelectorAll('.sh-tile[data-net]').forEach((t) => t.addEventListener('click', () => post(t.dataset.net)));
     }
     wire();
+    // Deep link: /throughput.html?share=1 opens the share overlay directly
+    // (the savings panel and milestone celebrations land here).
+    if (new URLSearchParams(location.search).has('share')) open();
+    window.CCCShare = { summarize, heatmapCells, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close };
     // /throughput?share=1 opens the card; ?share=saved|runs lands on a metric.
     // This is the deep link milestone prompts and other CCC views point at.
     try {

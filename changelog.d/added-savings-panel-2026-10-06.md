@@ -1,0 +1,1 @@
+- Added a Savings page (`/savings`, also in the app rail) with `GET /api/savings`: API-priced value of agent work vs your plan cost, ROI, and free-router $0 savings with an editable monthly plan (`POST /api/savings/plan`). Backed by an incremental sqlite ledger so unchanged transcripts are never re-parsed.

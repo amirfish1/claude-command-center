@@ -1,0 +1,1 @@
+First magic task during onboarding: creates ~/CCC-Playground (a tiny site with a failing test), then runs one of three starter tasks on a live agent with streamed progress and a "cost $0, worth $X at API prices" celebration. Adds `POST/GET /api/onboarding/first-task*` and `window.cccFirstTask` (`/?first-task=1` opens it standalone).
