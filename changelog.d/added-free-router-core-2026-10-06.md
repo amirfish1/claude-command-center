@@ -1,0 +1,1 @@
+Added a managed free-model router: CCC can now install, start, stop and supervise a private freellmapi on loopback (`/api/free-router/*`, `ccc_server/free_router.py`, `spawn_env()` for $0 agent runs) with a friendly status page at `/free-router`.
