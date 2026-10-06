@@ -275,7 +275,8 @@
         onLine: logLine,
         onUpdate: function (j) {
           $("progressBar").style.width = Math.round((j.progress || 0) * 100) + "%";
-          if (j.step) $("stateDetail").textContent = j.step;
+          var step = j.step_label || j.step;
+          if (step) $("stateDetail").textContent = step;
         },
       });
       if (job.status === "done") {
