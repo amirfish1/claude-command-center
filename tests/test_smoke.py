@@ -3209,7 +3209,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief || _isSearchHit);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief || _isSearchHit);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
@@ -11251,7 +11251,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(list(sig.parameters), [
             "prompt", "name", "cwd", "repo_path", "worktree", "model",
             "parent_session_id", "timeline_t0_epoch_ms", "prewarm_id",
-            "auto_compact_k", "reasoning_effort",
+            "auto_compact_k", "reasoning_effort", "runtime",
         ])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)

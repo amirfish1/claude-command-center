@@ -8967,6 +8967,9 @@
   };
   function _renderRailSpawnedVia(row) {
     const el = document.getElementById('railSpawnedVia');
+    if (window.CCCFreeRuntime && typeof CCCFreeRuntime.renderRailRuntime === 'function') {
+      CCCFreeRuntime.renderRailRuntime(row);
+    }
     if (!el) return;
     if (!row) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
     let via = String(row.spawned_via || '').trim().toLowerCase();
@@ -19248,11 +19251,26 @@
   // against. A counter is correct under overlap; only 0 means "no restore
   // in flight anywhere."
   let _qfBootRestoreDepth = 0;
+  // ?session=<id> deep link (notification clicks, share links): one-shot —
+  // wins over the saved restore when the session exists, gives up once the
+  // archive list has landed and it still isn't there.
+  let _deepLinkedSession = false;
   async function restoreLastConversation() {
     if (CONV_POPOUT_MODE) return;
     if (!conversationsLoaded) return;
     _qfBootRestoreDepth++;
     try {
+      const deepSid = (_bootUrlParams.get('session') || '').trim();
+      if (deepSid && !_deepLinkedSession) {
+        const found = conversationRowsContainId(conversationsData, deepSid)
+          || (archiveLoaded && conversationRowsContainId(archiveData, deepSid));
+        if (found) {
+          _deepLinkedSession = true;
+          await selectConversation(deepSid);
+          return;
+        }
+        if (archiveLoaded) _deepLinkedSession = true;
+      }
       let anyRestored = false;
       const savedActiveIndex = splitState.activeIndex;
 
@@ -19965,7 +19983,9 @@
     });
     const cwd = card.spawn_cwd || card.repo_path || card.folder_path || card.cwd || '';
     const cwdLabel = cwd ? (_pathLeaf(cwd) || cwd) : '';
-    const meta = [engineLabel + ' session', modelEffort, cwdLabel].filter(Boolean).join(' · ');
+    const runtimeBit = (window.CCCFreeRuntime && typeof CCCFreeRuntime.pendingCardRuntimeBit === 'function')
+      ? CCCFreeRuntime.pendingCardRuntimeBit(card) : '';
+    const meta = [engineLabel + ' session', modelEffort, cwdLabel, runtimeBit].filter(Boolean).join(' · ');
     const promptHtml = prompt
       ? linkifyPastedImages(escapeHtml(prompt))
       : escapeHtml(card.display_name || 'New session');
@@ -20612,6 +20632,7 @@
         parent_session_id: sp.parent_session_id || '',
         expected_session_id: sid,
         spawned_via: sp.spawned_via || '',
+        runtime: sp.runtime || '',
         no_auto_select: true,
         external_spawn: true,
       });
@@ -31559,6 +31580,9 @@
         // branch are enough for scanning cards.
         const metaParts = ['<span class="meta-rel">' + escapeHtml(rel) + '</span>'];
         if (branch) metaParts.push('<span class="meta-branch">' + escapeHtml(branch) + '</span>');
+        if (c.runtime === 'free') {
+          metaParts.push('<span class="meta-runtime-free" title="This session runs on CCC’s free router - it costs $0.">$0 free</span>');
+        }
         const colKey = classifyKanbanColumn(c);
         let stageLabel, stageCls;
         // Column-derived stage overrides the raw session stage
@@ -35320,9 +35344,14 @@
           + ' data-where-sid="' + escapeHtml(_briefSid) + '"'
           + ' title="Where are we? Plain-language status, action items, and a continue prompt">Where?</button>'
         : '';
+      // $0 chip for sessions running on CCC's free router — sits with the
+      // other provenance chips on the hover meta row.
+      const _runtimeFreeChipHtml = (c.runtime === 'free')
+        ? '<span class="meta-runtime-free" title="This session runs on CCC’s free router - it costs $0.">$0</span>'
+        : '';
       // Meta row: always shown when there are chips, a brief chevron, or
       // (MEMORY-2) a search-hit Where? button with nothing else to anchor it.
-      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief || _isSearchHit);
+      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief || _isSearchHit);
       const hoverMetaRowHtml = _hasMetaContent
         ? '<div class="conv-hover-meta-row">'
           + _briefChevronHtml
@@ -35330,6 +35359,7 @@
           + _hmObjectChip
           + _hmFolderChip
           + sessionProvenanceChipHtml
+          + _runtimeFreeChipHtml
           + sessionIdChipHtml
           + goalMetaHtml
           + pinnedHtml
@@ -35490,6 +35520,7 @@
             + historyChainBadgeHtml
             + repoBadgeHtml
             + emptySessionChipHtml
+            + (window.cccSavings ? window.cccSavings.rowChipHtml(c) : '')
             + (opts.evergreenAgent ? '' : rowMetaHtml)
             // Context-utilized % sits just left of the elapsed-time slot, in the
             // always-visible main row (not the hover row) — it's important enough
@@ -68688,6 +68719,9 @@
 
     if (event.topic === 'conversation.patch') _applyDashboardConversationPatch(event);
     else if (event.topic === 'session.patch') _applyDashboardSessionPatch(event);
+    else if (event.topic === 'notify.request') {
+      try { if (window.cccNotify) window.cccNotify._deliver(event.patch || {}); } catch (_) {}
+    }
     else if (event.topic === 'queue.patch' || event.topic === 'queue.remove') {
       scheduleDashboardInvalidation('queue', event.entity && event.entity.id);
     } else if (event.topic === 'worker.patch') {
@@ -70496,6 +70530,8 @@
         // Same allowlist trap as goal/parent_session_id above: silently
         // dropped (and the rail chip never renders) if not named here.
         spawned_via: c.spawned_via || '',
+        // $0 spawn runtime ("free") — the $0 chip on rows/rail reads this.
+        runtime: c.runtime || '',
         hermes_parent_session_id: c.hermes_parent_session_id || c.parent_session_id || '',
         // CCC-945: do NOT fall back to parent_session_id here. That field is
         // an orchestration spawn edge (e.g. Codex's thread_spawn_edges) --
@@ -71114,6 +71150,14 @@
     if (o.worktree !== undefined && spawnSupportsWorktree(engine)) {
       body.worktree = !!o.worktree;
     }
+    // $0 runtime: an explicit o.runtime wins; otherwise the composer's Free
+    // chip decides. runtimeForSpawn returns '' for unsupported engines, so
+    // a chip left on while switching engines never breaks a paid spawn.
+    const spawnRuntime = (o.runtime !== undefined)
+      ? String(o.runtime || '').trim()
+      : ((window.CCCFreeRuntime && typeof CCCFreeRuntime.runtimeForSpawn === 'function')
+          ? CCCFreeRuntime.runtimeForSpawn(engine) : '');
+    if (spawnRuntime) body.runtime = spawnRuntime;
     return body;
   }
 
@@ -71424,6 +71468,9 @@
     }
     if (typeof syncNsModelPickerPillsSelection === 'function') {
       syncNsModelPickerPillsSelection();
+    }
+    if (window.CCCFreeRuntime && typeof CCCFreeRuntime.sync === 'function') {
+      CCCFreeRuntime.sync(engine);
     }
     renderNsModelComparison();
   }
@@ -81910,7 +81957,8 @@
         idempotency_key: durableActionId('spawn'),
       }, Number.isFinite(autoCompactK) && autoCompactK > 0 ? { auto_compact_k: autoCompactK } : {}));
       if (engine === 'claude') abortBackgroundApiReadsForSpawn();
-      if (engine === 'claude' && !useWorktree) {
+      // A prewarm reservation boots with paid env - a $0 spawn must not claim it.
+      if (engine === 'claude' && !useWorktree && spawnBody.runtime !== 'free') {
         const prewarm = await claudePrewarmPromise;
         if (prewarm && prewarm.prewarm_id) spawnBody.prewarm_id = prewarm.prewarm_id;
         _claudePrewarmKey = '';
@@ -84250,7 +84298,17 @@
     if (window.__cccEnginesFirstRun && tailscaleStepPending() && showTailscaleStep()) return;
     closeSettingsModal();
   });
-  if (window.__cccEnginesFirstRun) setTimeout(openEnginesFirstRun, 300);
+  // Moment Zero (static/onboarding/onboarding.js) owns first-run for fresh
+  // installs. claimFirstRun() resolves true when it takes over — including
+  // the explicit ?onboarding=1 route — in which case this screen never runs.
+  if (window.__cccEnginesFirstRun) {
+    setTimeout(() => {
+      const claim = (window.cccOnboarding && typeof window.cccOnboarding.claimFirstRun === 'function')
+        ? window.cccOnboarding.claimFirstRun()
+        : null;
+      Promise.resolve(claim).then(handled => { if (!handled) openEnginesFirstRun(); });
+    }, 300);
+  }
 
   function closeSettingsModal() {
     if (!$settingsModal) return;
