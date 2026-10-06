@@ -866,6 +866,11 @@ def _usage_limit_scan_once(now=None):
         if newest_mtime and newest_mtime > entry.get("detected_at", 0) + 5:
             _clear_usage_limit_resume(sid)
             continue
+        # A user-approved auto-resume (free-failover lane) owns this entry:
+        # it fires at its staggered slot, so leave `fired` untouched here.
+        armed_fn = getattr(_core, "_free_failover_is_armed", None)
+        if callable(armed_fn) and armed_fn(sid):
+            continue
         if not _mark_usage_limit_resume_fired(sid):
             continue  # a sibling thread/process won the race
         # Auto-send is killed. Detection and the countdown banner remain so
@@ -880,6 +885,16 @@ def _usage_limit_scan_once(now=None):
                 f"session={sid} engine={entry.get('engine')} "
                 f"resume_at={resume_at}",
             )
+        except Exception:
+            pass
+
+    # Limit-hit failover lane: Devin transcript detection, approved
+    # auto-resume slots, "always" opt-in and pending switch-backs all ride
+    # this same 45s cadence. Guarded so the module stays optional.
+    auto_pass = getattr(_core, "_free_failover_auto_pass", None)
+    if callable(auto_pass):
+        try:
+            auto_pass(now)
         except Exception:
             pass
 
@@ -1077,7 +1092,7 @@ def _record_spawn_to_registry(
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
     reasoning_effort="", auto_compact_k=None, created_at_epoch=None,
     input_result_target=None, input_accepted_at=None, input_command_uuids=None,
-    spawned_via="",
+    spawned_via="", runtime="",
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -1116,6 +1131,11 @@ def _record_spawn_to_registry(
         "parent_session_id": parent_session_id or "",
         "spawned_via": clean_via,
     }
+    clean_runtime = str(runtime or "").strip()[:32]
+    if clean_runtime:
+        # Only stamped for non-default runtimes (e.g. "free") — paid/default
+        # rows stay field-free so old entries and new ones look alike.
+        record["runtime"] = clean_runtime
     for _meta_key in _SPAWN_TASK_META_FIELDS:
         _meta_val = _spawn_request_meta().get(_meta_key)
         if _meta_val:
@@ -1829,6 +1849,7 @@ def list_spawned_sessions():
                 "task_key": entry.get("task_key") or "",
                 "task_summary": entry.get("task_summary") or "",
                 "prompt_hash": entry.get("prompt_hash") or "",
+                "runtime": entry.get("runtime") or "",
                 "running": running,
                 "exit_code": None,
                 "status": "running" if running else "finished",
@@ -1862,6 +1883,7 @@ def list_spawned_sessions():
             "task_key": s.get("task_key") or "",
             "task_summary": s.get("task_summary") or "",
             "prompt_hash": s.get("prompt_hash") or "",
+            "runtime": s.get("runtime") or "",
             "running": poll is None,
             "exit_code": poll,
             "status": "running" if poll is None else f"finished (exit {poll})",

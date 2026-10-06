@@ -95,6 +95,23 @@ def _claude_env(pid):
         return ""
 
 
+def _read_marker(marker_path):
+    try:
+        with open(marker_path) as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_marker(marker_path, data):
+    os.makedirs(MARKERS_DIR, exist_ok=True)
+    tmp = marker_path + ".%d.tmp" % os.getpid()
+    with open(tmp, "w") as f:
+        json.dump(data, f, sort_keys=True)
+    os.replace(tmp, marker_path)
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -104,53 +121,69 @@ def main():
     if not SESSION_ID_RE.match(sid):
         return
     marker_path = os.path.join(MARKERS_DIR, sid + ".json")
-    if os.path.exists(marker_path):
-        return
+    # A $0 spawn carries CCC_SESSION_RUNTIME in its env (set per-child by
+    # CCC's free-runtime overlay). It rides the marker so the dashboard can
+    # show the runtime, and prints as context so the session itself knows.
+    runtime = str(os.environ.get("CCC_SESSION_RUNTIME") or "").strip().lower()
+    existing = _read_marker(marker_path)
 
-    table = _ps_table()
-    pid = os.getppid()
-    claude_pid = None
-    for _ in range(8):
-        entry = table.get(pid)
-        if not entry:
-            break
-        if _is_claude(entry[1]):
-            claude_pid = pid
-            break
-        pid = entry[0]
-    if claude_pid is None:
-        return
-
-    env = _claude_env(claude_pid)
-    parent = ""
-    m = ENV_PARENT_RE.search(env) or ENV_SID_RE.search(env)
-    if m and m.group(1) != sid:
-        parent = m.group(1)
     caller = ""
-    m = ENV_CALLER_RE.search(env)
-    if m:
-        caller = m.group(1)
-    if not caller:
-        pid = table[claude_pid][0]
-        for _ in range(10):
+    parent = ""
+    # A runtime-only marker (a $0 spawn stamped before this hook ran) still
+    # needs caller/parent detection; only skip when attribution already landed.
+    if not (existing.get("caller") or existing.get("parent_session_id")):
+        table = _ps_table()
+        pid = os.getppid()
+        claude_pid = None
+        for _ in range(8):
             entry = table.get(pid)
-            if not entry or pid <= 1:
+            if not entry:
                 break
-            caller = _label(entry[1])
-            if caller:
+            if _is_claude(entry[1]):
+                claude_pid = pid
                 break
             pid = entry[0]
-    if not caller and not parent:
-        return
+        if claude_pid is not None:
+            env = _claude_env(claude_pid)
+            m = ENV_PARENT_RE.search(env) or ENV_SID_RE.search(env)
+            if m and m.group(1) != sid:
+                parent = m.group(1)
+            m = ENV_CALLER_RE.search(env)
+            if m:
+                caller = m.group(1)
+            if not caller:
+                pid = table[claude_pid][0]
+                for _ in range(10):
+                    entry = table.get(pid)
+                    if not entry or pid <= 1:
+                        break
+                    caller = _label(entry[1])
+                    if caller:
+                        break
+                    pid = entry[0]
 
-    data = {"caller": caller[:80]}
+    # Merge, never clobber: CCC may have stamped runtime before the hook ran,
+    # and an earlier start may already own caller/parent_session_id.
+    data = dict(existing)
+    if caller:
+        data["caller"] = caller[:80]
     if parent:
         data["parent_session_id"] = parent
-    os.makedirs(MARKERS_DIR, exist_ok=True)
-    tmp = marker_path + ".%d.tmp" % os.getpid()
-    with open(tmp, "w") as f:
-        json.dump(data, f, sort_keys=True)
-    os.replace(tmp, marker_path)
+    if runtime:
+        data["runtime"] = runtime
+    if data and data != existing:
+        _write_marker(marker_path, data)
+
+    if runtime == "free":
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": (
+                    "This session runs on a free model ($0) through the CCC "
+                    "free router. It does not use the user's paid plan."
+                ),
+            }
+        }))
 
 
 if __name__ == "__main__":
