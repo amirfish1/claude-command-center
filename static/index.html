@@ -64,6 +64,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/savings.css">
 <!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
      file's diff against upstream stays small — see simple.css's own header
      comment. Loaded unconditionally; it's inert (never matches) outside
@@ -72,6 +73,14 @@
 <!-- Shared ticket body / transcript renderer, also used by q2.html — keeps
      the two ticket views from drifting on how a ticket reads. -->
 <link rel="stylesheet" href="/static/ticket-prose.css">
+<!-- Sound + motion kit (window.cccFx): confetti canvas + shimmer/glow/pop helpers. -->
+<link rel="stylesheet" href="/static/fx.css">
+<!-- Moment Zero onboarding shell: always-dark cinematic overlay. Scoped
+     under #cccMomentZero; inert unless the overlay opens. -->
+<link rel="stylesheet" href="/static/onboarding/onboarding.css">
+<link rel="stylesheet" href="/static/star-ask.css">
+<!-- Limit-hit failover card (see static/limit-failover.js). -->
+<link rel="stylesheet" href="/static/limit-failover.css">
 <style>
   body.hide-gh-issues .is-github-issue {
     display: none !important;
@@ -487,6 +496,9 @@
        now the fixed 52px column on the left edge, shared with q2.html and
        /view/<app> pages. See static/app-rail.js. -->
   <script src="/static/app-rail.js" defer></script>
+  <!-- Limit-hit failover approval card: self-contained poller + stack,
+       inert on servers without /api/free-failover/status. -->
+  <script src="/static/limit-failover.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
@@ -2443,6 +2455,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             <span>Layout &amp; View</span>
           </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-notifications" data-section-target="notifications" role="tab" aria-selected="false" aria-controls="settingsSection-notifications">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+            <span>Notifications</span>
+          </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-engines" data-section-target="engines" role="tab" aria-selected="false" aria-controls="settingsSection-engines">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
             <span>Engines</span>
@@ -2638,6 +2654,68 @@
 
             <div class="settings-reset-row">
               <button type="button" class="settings-reset-btn" id="settingsResetLayout">Reset Layout &amp; View to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-notifications" data-section-id="notifications" role="tabpanel" aria-labelledby="settingsRailTab-notifications">
+            <div class="settings-section-eyebrow">Notifications</div>
+
+            <div class="settings-row" data-keywords="notification notify ping alert all master on off">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Notifications</div>
+                <div class="settings-row-desc">Ping you when agents finish, need your input, or hit a milestone.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyEnabledToggle" data-notify-pref="enabled" role="switch" aria-checked="true" aria-label="Notifications">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="task done finished complete working waiting input ping">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Task finished and needs you</div>
+                <div class="settings-row-desc">Tell you when an agent finishes real work or stops to ask for input.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyTasksToggle" data-notify-pref="tasks" role="switch" aria-checked="true" aria-label="Task finished and needs you">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="digest daily summary 6pm report today work">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Daily digest</div>
+                <div class="settings-row-desc">One 6pm summary of what your agents got done today.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyDigestToggle" data-notify-pref="digest" role="switch" aria-checked="true" aria-label="Daily digest">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="milestone celebrate savings free models tokens work value">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Milestones</div>
+                <div class="settings-row-desc">Celebrate when your agents pass savings and work milestones.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyMilestonesToggle" data-notify-pref="milestones" role="switch" aria-checked="true" aria-label="Milestones">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="browser system permission alerts banner allow enable">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Browser notifications</div>
+                <div class="settings-row-desc">Show alerts even when this tab is in the background. <span id="notifyBrowserPermStatus" class="settings-row-desc">Checking…</span></div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="notifyBrowserPermBtn">Turn on</button>
+              </div>
             </div>
           </section>
 
@@ -3163,6 +3241,19 @@
               </div>
             </div>
 
+            <!-- Moment Zero: the cinematic welcome + free-model setup shell.
+                 The click binding lives in static/onboarding/onboarding.js so
+                 this row is the whole Settings integration. -->
+            <div class="settings-row" data-keywords="welcome free setup moment zero onboarding install">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Welcome &amp; free setup</div>
+                <div class="settings-row-desc">Replay the cinematic welcome and the free-model setup flow.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="momentZeroBtn">Open</button>
+              </div>
+            </div>
+
             <a class="settings-row settings-row-link" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener" data-keywords="get help readme docs documentation support">
               <div class="settings-row-main">
                 <div class="settings-row-label">Get help</div>
@@ -3678,14 +3769,26 @@
 <script src="/static/claude-reauth.js"></script>
 <script src="/static/phone-access.js"></script>
 <script src="/static/config-consent.js"></script>
+<script src="/static/free-key-wizard.js" defer></script>
 <script src="/static/federated-sidebar.js"></script>
 <script src="/static/q2-worker-idle.js"></script>
 <script src="/static/wt-log-bursts.js"></script>
 <script src="/static/ticket-prose.js"></script>
+<script src="/static/fx.js"></script>
+<script src="/static/free-router.js"></script>
+<!-- Moment Zero must load before app.js so window.cccOnboarding.claimFirstRun
+     exists when the engines first-run check fires 300ms after eval. -->
+<script src="/static/onboarding/onboarding.js"></script>
+<script src="/static/savings.js"></script>
+<script src="/static/free-runtime.js"></script>
+<script src="/static/notify.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/free-settings.js" defer></script>
 <script src="/static/codex-live-source.js"></script>
 <script src="/static/scheduled-jobs.js"></script>
 <script src="/static/jobs-tab.js"></script>
+<script src="/static/first-task.js" defer></script>
+<script src="/static/star-ask.js"></script>
 
 <!-- ── In-UI terminal panel ──────────────────────────────────────────────
      A small one-shot terminal: type a command, hit Enter, output streams

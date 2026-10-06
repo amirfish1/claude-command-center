@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get set up · Claude Command Center</title>
+<link rel="stylesheet" href="/static/setup.css">
+<style>
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    padding: 32px 16px;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(124, 92, 255, 0.18), transparent 60%),
+      radial-gradient(900px 500px at 110% 110%, rgba(79, 141, 255, 0.16), transparent 55%),
+      #f4f4fb;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+      Roboto, Helvetica, Arial, sans-serif;
+  }
+  .brand {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: rgba(28, 28, 40, 0.45);
+  }
+</style>
+</head>
+<body>
+<div class="brand">Claude Command Center</div>
+<main id="setup-root" aria-live="polite"></main>
+<script src="/static/setup.js"></script>
+<script>
+  window.cccSetup.mountInto(document.getElementById("setup-root"), {
+    onDone: function () { document.title = "All set · Claude Command Center"; }
+  });
+</script>
+</body>
+</html>

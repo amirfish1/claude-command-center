@@ -1,0 +1,110 @@
+/* Limit-hit failover card (static/limit-failover.js).
+ * Fixed stack, bottom-right — the voice panel owns 9500, overlays 9990+.
+ */
+.ccc-failover-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9400;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none; /* cards re-enable per-element */
+}
+.ccc-failover-stack[hidden] { display: none; }
+
+.ccc-failover-card {
+  pointer-events: auto;
+  background: var(--panel-bg, #1e1f24);
+  border: 1px solid var(--border, #33353c);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text, #e6e6e9);
+}
+.ccc-failover-card.ccc-fo-limited { border-color: rgba(240, 173, 78, 0.55); }
+.ccc-failover-card.ccc-fo-armed   { border-color: rgba(120, 170, 255, 0.45); }
+.ccc-failover-card.ccc-fo-free    { border-color: rgba(88, 200, 140, 0.45); }
+.ccc-failover-card.ccc-fo-free:not(:has(.ccc-fo-actions)) {
+  padding: 8px 12px; /* quiet chip form */
+}
+
+.ccc-fo-enter { animation: cccFoIn 260ms ease-out; }
+@keyframes cccFoIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ccc-fo-enter { animation: none; }
+}
+
+.ccc-fo-head { display: flex; align-items: flex-start; gap: 10px; }
+.ccc-fo-icon { font-size: 15px; line-height: 20px; }
+.ccc-fo-limited .ccc-fo-icon { color: #f0ad4e; }
+.ccc-fo-armed   .ccc-fo-icon { color: #78aaff; }
+.ccc-fo-icon-free, .ccc-fo-free .ccc-fo-icon { color: #58c88c; }
+
+.ccc-fo-titleblock { flex: 1; min-width: 0; }
+.ccc-fo-title { font-weight: 600; }
+.ccc-fo-subtitle { color: var(--muted, #9a9ba2); font-size: 12px; margin-top: 1px; }
+.ccc-fo-name {
+  background: none; border: none; padding: 0; margin: 0;
+  color: inherit; font: inherit; font-weight: 600;
+  cursor: pointer; text-decoration: underline;
+  text-decoration-color: transparent;
+}
+.ccc-fo-name:hover { text-decoration-color: currentColor; }
+
+.ccc-fo-x {
+  background: none; border: none; color: var(--muted, #9a9ba2);
+  font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer;
+  border-radius: 6px;
+}
+.ccc-fo-x:hover { color: var(--text, #e6e6e9); background: rgba(255,255,255,0.06); }
+
+.ccc-fo-body { margin: 8px 0 2px; color: var(--muted, #b9bac2); }
+.ccc-fo-freenote { margin-top: 6px; font-size: 12px; color: var(--muted, #9a9ba2); }
+.ccc-fo-link {
+  background: none; border: none; padding: 0; color: #78aaff;
+  font: inherit; cursor: pointer; text-decoration: underline;
+}
+
+.ccc-fo-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.ccc-fo-btn {
+  border-radius: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600;
+  cursor: pointer; border: 1px solid transparent;
+}
+.ccc-fo-primary {
+  background: #58c88c; color: #0c1a12; border-color: transparent;
+}
+.ccc-fo-primary:hover { background: #6ad69e; }
+.ccc-fo-ghost {
+  background: transparent; color: var(--text, #e6e6e9);
+  border-color: var(--border, #3a3c44);
+}
+.ccc-fo-ghost:hover { background: rgba(255,255,255,0.05); }
+.ccc-fo-btn:disabled { opacity: 0.5; cursor: default; }
+
+.ccc-fo-always {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 8px; font-size: 12px; color: var(--muted, #9a9ba2);
+  cursor: pointer; user-select: none;
+}
+.ccc-fo-always input { margin: 0; accent-color: #58c88c; }
+
+.ccc-fo-error {
+  margin-top: 8px; font-size: 12px; color: #f08a8a;
+}
+
+/* Transcript marker row (subtype ccc_free_runtime). */
+.ccc-free-runtime .ccoord-icon { color: #58c88c; }
+.ccc-free-runtime .ccoord-text { color: var(--muted, #9a9ba2); }
+
+/* Simple-mode: cards sit above the bottom nav rail. */
+@media (max-width: 720px) {
+  .ccc-failover-stack { right: 10px; left: 10px; width: auto; bottom: 10px; }
+}
