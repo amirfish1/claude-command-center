@@ -1,0 +1,1 @@
+Share card gains "$ saved" and "$0 runs" headline metrics plus a savings extras line, a milestone share prompt (Share button pulses when you pass $10/$100/$1k/$10k saved on $0 runs), and a `?share=saved` deep link so other views can open the card straight on the savings numbers.
