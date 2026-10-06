@@ -26773,6 +26773,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # it may auto-open. Cached on directory mtimes; bounded scan.
             from ccc_server.moment_zero import moment_zero_state
             self.send_json(moment_zero_state())
+        elif path == "/api/onboarding/first-task":
+            # First magic task: playground state + starter tasks + job snapshots
+            # for the onboarding step UI (static/first-task.js).
+            from ccc_server import first_task
+            self.send_json(first_task.status())
+        elif path.startswith("/api/onboarding/first-task/"):
+            from ccc_server import first_task
+            job = first_task.get_job(path.rsplit("/", 1)[-1])
+            if job:
+                self.send_json({"ok": True, "job": job})
+            else:
+                self.send_json({"ok": False, "error": "no such job"}, 404)
         elif path == "/api/onboarding/login/status":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
@@ -31433,6 +31445,53 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(res)
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            return
+        if path.startswith("/api/onboarding/first-task/"):
+            # First magic task (ccc_server/first_task.py). Local-only: these
+            # launch a headless agent process / `open` on the host — a phone or
+            # tunnel peer must not start them.
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "first task is local-only"}, 403)
+                return
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            from ccc_server import first_task
+            action = path.rsplit("/", 1)[-1]
+            if action == "cancel":
+                self.send_json(first_task.cancel_job(payload.get("job_id")))
+            elif action == "open":
+                res = first_task.open_result(payload.get("job_id"))
+                self.send_json(res, 200 if res.get("ok") else 400)
+            else:
+                self.send_json({"ok": False, "error": "unknown action"}, 404)
+            return
+        if path == "/api/onboarding/first-task":
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "first task is local-only"}, 403)
+                return
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            from ccc_server import first_task
+            job, err = first_task.start_task(payload.get("task_id"))
+            if err:
+                code = err.get("code")
+                self.send_json(err, 409 if code == "busy" else 400)
+            else:
+                self.send_json({"ok": True, "job": job})
             return
         if path == "/api/run-in-terminal":
             # "Run" on a Needs-you card (CCC-1218): types a user-confirmed
