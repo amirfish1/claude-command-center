@@ -26665,6 +26665,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
             self.send_json(_get_onboarding_status())
+        elif path == "/api/onboarding/moment-zero":
+            # Moment Zero shell: "is this a fresh install?" — answers whether
+            # any agent session history exists, so the overlay knows whether
+            # it may auto-open. Cached on directory mtimes; bounded scan.
+            from ccc_server.moment_zero import moment_zero_state
+            self.send_json(moment_zero_state())
         elif path == "/api/onboarding/login/status":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
