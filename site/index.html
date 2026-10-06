@@ -1,9 +1,9 @@
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CCC — Claude Command Center</title>
-<meta name="description" content="One local dashboard for every Claude Code, Codex, Cursor, and Antigravity session on your Mac. Attach, don't own.">
-<meta property="og:title" content="CCC — Claude Command Center">
-<meta property="og:description" content="One local board for every coding agent on your Mac. Attach, don't own.">
+<title>CCC: a free AI dev team in 5 minutes</title>
+<meta name="description" content="One local dashboard for every Claude Code, Codex, Cursor, and Antigravity session on your Mac. Installs itself, sets up a free model, your first task costs $0.">
+<meta property="og:title" content="CCC: a free AI dev team in 5 minutes">
+<meta property="og:description" content="One local board for every coding agent on your Mac. Installs itself, sets up a free model, your first task costs $0.">
 <meta property="og:type" content="website">
 <link rel="stylesheet" href="/assets/css/site.css">
 </head><body>
@@ -26,14 +26,64 @@
 <section class="section" style="padding-top:72px">
  <div class="wrap reveal">
   <a class="pill" href="/changelog/">● CCC v4.6.0 — see what's new →</a>
-  <h1 class="h1">Every coding agent on your Mac.<br><span class="accent">One board.</span></h1>
-  <p class="lede">CCC attaches to every Claude Code, Codex, Cursor, and Antigravity session already running on your machine — terminal, headless, or dashboard-spawned — and turns them into one live kanban. Start the next while the first still builds.</p>
-  <div style="display:flex;gap:12px;margin-top:28px;flex-wrap:wrap">
-    <a class="btn btn-primary" href="/install/">Download for macOS</a>
-    <a class="btn btn-ghost" href="/demo/">Try the live demo →</a>
+  <h1 class="h1">A free AI dev team.<br><span class="accent">Running in 5 minutes.</span></h1>
+  <p class="lede">Paste one line. CCC installs everything for you, opens a friendly setup tour, and runs your first task on a $0 model. After that it keeps every coding agent on your Mac on one live board.</p>
+  <div class="install-line" style="margin-top:28px;max-width:640px">
+    <code>curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing-hero bash</code>
+    <button class="btn btn-primary" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing-hero bash">Copy</button>
+  </div>
+  <div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap">
+    <a class="btn btn-ghost" href="/install/">All install options →</a>
+    <a class="btn btn-ghost" href="/demo/">Try the live demo</a>
   </div>
   <p class="mono" style="color:var(--fg-dim);margin-top:28px;font-size:.85rem">
-    Works with Claude Code · Codex · Cursor · Antigravity · Kilo Code</p>
+    No account · no card · works with Claude Code · Codex · Cursor · Antigravity</p>
+ </div>
+</section>
+
+<!-- THE FIRST FIVE MINUTES (pure-CSS animation, no assets) -->
+<section class="section" style="padding-top:0" id="first-five">
+ <div class="wrap">
+  <p class="eyebrow reveal">What those 5 minutes look like</p>
+  <h2 class="h2 reveal">Paste a line. Watch it set itself up.</h2>
+  <div class="demo reveal" role="img" aria-label="Animated preview: the installer runs four steps in a terminal, the browser opens a setup tour that installs Node, Claude Code and a free model, then a first task finishes for $0 and the savings counter ticks up">
+    <div class="demo-term">
+      <div class="demo-titlebar"><i></i><i></i><i></i><span>Terminal</span></div>
+      <div class="demo-body">
+        <div><span class="t-prompt">$ </span><span class="t-typed">curl -fsSL …/install.sh | bash</span></div>
+        <div class="t-line l1"><b>==&gt;</b> Step 1 of 4: checking this computer <i>✓</i></div>
+        <div class="t-line l2"><b>==&gt;</b> Step 2 of 4: downloading CCC <i>✓</i></div>
+        <div class="t-line l3"><b>==&gt;</b> Step 3 of 4: installing helper tools <i>✓</i></div>
+        <div class="t-line l4"><b>==&gt;</b> Step 4 of 4: starting CCC <i>✓</i></div>
+      </div>
+    </div>
+    <div class="demo-board">
+      <div class="demo-titlebar"><i></i><i></i><i></i><span>localhost:8090/?onboarding=1</span></div>
+      <div class="demo-body">
+        <div class="tour-card">
+          <h4>Welcome! Setting up your free dev team</h4>
+          <ul>
+            <li class="tl1"><span>Node.js</span><i>✓</i></li>
+            <li class="tl2"><span>Claude Code</span><i>✓</i></li>
+            <li class="tl3"><span>Free model</span><i>✓</i></li>
+          </ul>
+        </div>
+        <div class="mini-board">
+          <div class="col"><span>Working</span></div>
+          <div class="col col-done"><span>Done</span></div>
+          <div class="mini-card">my first task</div>
+        </div>
+        <div class="save-line">
+          <span class="s0">cost so far: $0.00</span>
+          <span class="s1">cost so far: $0.00</span>
+          <span class="s2">saved $1.20</span>
+          <span class="s3">saved $2.40</span>
+        </div>
+      </div>
+    </div>
+    <div class="demo-confetti"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
+  <p class="demo-caption reveal">That is the whole install. No account, no card, no terminal knowledge needed.</p>
  </div>
 </section>
 
@@ -116,8 +166,9 @@
 <section class="section" style="background:var(--bg-2)">
  <div class="wrap reveal" style="text-align:center">
   <h2 class="h2">Install in one line.</h2>
+  <p class="lede" style="margin:0 auto 22px">The installer downloads CCC and opens a guided tour that sets up the rest for you.</p>
   <pre class="mono" style="display:inline-block;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 22px;overflow-x:auto;max-width:100%"><code># macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing-hero bash
 
 # Windows PowerShell
 irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex</code></pre>

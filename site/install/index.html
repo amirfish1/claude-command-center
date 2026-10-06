@@ -1,0 +1,164 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Install CCC: free AI dev team in 5 minutes</title>
+<meta name="description" content="Install Claude Command Center with one line. The setup tour installs the rest: Node, Claude Code, and a free model. Your first task costs $0.">
+<meta property="og:title" content="Install CCC: free AI dev team in 5 minutes">
+<meta property="og:description" content="One line installs CCC. A guided tour sets up a free model and runs your first task for $0.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="/assets/css/site.css">
+</head><body>
+<header class="site-nav"><div class="nav-inner">
+  <a class="nav-brand" href="/">▦ CCC</a>
+  <nav class="nav-links">
+    <a href="/features/">Features</a>
+    <a href="/compare/">Compare</a>
+    <a href="/why/">Why CCC</a>
+    <a href="/changelog/">Changelog</a>
+    <a href="/roadmap/">Roadmap</a>
+    <a href="https://github.com/amirfish1/claude-command-center">GitHub ★ <span data-gh-stars>star</span></a>
+    <a class="btn btn-primary nav-cta" href="/install/">Download</a>
+  </nav>
+  <button class="nav-toggle" aria-label="Menu">☰</button>
+</div></header>
+
+<main>
+<!-- HERO -->
+<section class="section" style="padding-top:72px;padding-bottom:56px">
+ <div class="wrap reveal" style="text-align:center">
+  <p class="eyebrow">Install</p>
+  <h1 class="h1">One line. Five minutes.<br><span class="accent">Free model included.</span></h1>
+  <p class="lede" style="margin:0 auto">Works on macOS and Linux. No account, no card. The installer puts CCC on your machine, then a short tour in your browser sets up everything else, one click at a time.</p>
+ </div>
+</section>
+
+<!-- THE ONE LINE -->
+<section class="section" style="padding-top:0">
+ <div class="wrap reveal" style="max-width:820px">
+  <div class="install-line" style="margin:0 auto">
+    <code>curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing-hero bash</code>
+    <button class="btn btn-primary" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing-hero bash">Copy</button>
+  </div>
+  <p style="text-align:center;color:var(--fg-dim);margin-top:14px;font-size:.9rem">
+    macOS and Linux. On Windows, use the PowerShell line further down.</p>
+ </div>
+</section>
+
+<!-- HOW TO RUN IT -->
+<section class="section" style="background:var(--bg-2);padding-top:72px;padding-bottom:72px">
+ <div class="wrap">
+  <p class="eyebrow reveal">Never used a terminal? This is all of it.</p>
+  <h2 class="h2 reveal">Three small steps.</h2>
+  <ol class="steps reveal">
+    <li>
+      <h3>Open Terminal</h3>
+      <p>On a Mac: press <span class="kbd">⌘ Cmd</span> + <span class="kbd">Space</span>, type <code>Terminal</code>, press <span class="kbd">Enter</span>. On Linux, open whatever terminal app you have.</p>
+    </li>
+    <li>
+      <h3>Paste the line, press Enter</h3>
+      <p>CCC downloads itself into <code>~/.ccc</code> and asks you one yes/no question: whether to keep running in the background. Say yes.</p>
+    </li>
+    <li>
+      <h3>Your browser opens the setup tour</h3>
+      <p>A friendly full-screen tour installs the rest (Node, Claude Code, a free model). Every step asks your OK first. Nothing happens silently.</p>
+    </li>
+  </ol>
+ </div>
+</section>
+
+<!-- WHAT THE TOUR SETS UP -->
+<section class="section">
+ <div class="wrap">
+  <p class="eyebrow reveal">What the tour installs for you</p>
+  <h2 class="h2 reveal">Everything a coding agent needs.</h2>
+  <div class="card-grid reveal" style="margin-top:28px">
+    <div class="card"><h3>Node.js</h3><p style="color:var(--fg-dim)">The runtime the agent tools need. CCC downloads the official LTS release into its own folder. Your system stays untouched, no admin password.</p></div>
+    <div class="card"><h3>Claude Code</h3><p style="color:var(--fg-dim)">The agent that does the work. Installed by the official installer, launched for you. You can also drive Codex, Cursor, and Antigravity from the same board.</p></div>
+    <div class="card"><h3>A free model</h3><p style="color:var(--fg-dim)">CCC sets up a local free-model router so your first tasks cost $0. The keyless option logs prompts for training; the tour tells you and asks before turning it on.</p></div>
+    <div class="card"><h3>Your first task</h3><p style="color:var(--fg-dim)">A small real change in a playground project, run on the free model. When it finishes you see exactly what it would have cost at API prices. Spoiler: you paid $0.</p></div>
+  </div>
+ </div>
+</section>
+
+<!-- OTHER WAYS -->
+<section class="section" style="background:var(--bg-2)">
+ <div class="wrap">
+  <p class="eyebrow reveal">Other ways to install</p>
+  <h2 class="h2 reveal">Pick what fits.</h2>
+  <div class="card-grid reveal" style="margin-top:28px">
+    <div class="card">
+      <h3>Mac app (easiest)</h3>
+      <p style="color:var(--fg-dim)">A signed, notarized <code>CCC.app</code> that lives in your menu bar and updates itself. Download the DMG, drag to Applications, done.</p>
+      <p style="margin-top:14px"><a class="btn btn-primary" href="https://github.com/amirfish1/claude-command-center/releases/latest">Download the DMG</a></p>
+    </div>
+    <div class="card">
+      <h3>Homebrew</h3>
+      <p style="color:var(--fg-dim)">For people who already live in brew. Upgrade later with <code>brew upgrade ccc</code>.</p>
+      <div class="cmd-block" style="margin-top:14px">brew tap amirfish1/ccc
+brew install ccc</div>
+    </div>
+    <div class="card">
+      <h3>Windows</h3>
+      <p style="color:var(--fg-dim)">Native PowerShell one-liner, or run the bash line inside WSL2.</p>
+      <div class="cmd-block" style="margin-top:14px">irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex</div>
+    </div>
+    <div class="card">
+      <h3>From source</h3>
+      <p style="color:var(--fg-dim)">Same result, you just clone first. Re-running the installer or a <code>git pull</code> updates CCC.</p>
+      <div class="cmd-block" style="margin-top:14px">git clone https://github.com/amirfish1/claude-command-center
+cd claude-command-center
+./scripts/install.sh --from=readme</div>
+    </div>
+  </div>
+ </div>
+</section>
+
+<!-- AFTER INSTALL -->
+<section class="section">
+ <div class="wrap reveal" style="text-align:center">
+  <p class="eyebrow">After install</p>
+  <p class="lede" style="margin:0 auto">CCC runs locally at <strong>localhost:8090</strong>. It lives in <code>~/.ccc</code>, phones home nowhere, and every agent it shows is one that is actually on your machine.</p>
+ </div>
+</section>
+
+<!-- FAQ -->
+<section class="section" style="padding-top:0">
+ <div class="wrap" style="max-width:820px">
+  <h2 class="h2 reveal">Fair questions.</h2>
+  <div class="reveal">
+    <details class="faq">
+      <summary>Is "curl | bash" safe?</summary>
+      <p>Fair to ask. The installer is a short readable script in the same public repo it installs: read it first at github.com/amirfish1/claude-command-center (scripts/install.sh). It never uses sudo, installs under your home folder only, and every extra component the setup tour adds asks your OK first. Prefer a signed app? Use the DMG above.</p>
+    </details>
+    <details class="faq">
+      <summary>Where does everything go?</summary>
+      <p>CCC itself: <code>~/.ccc/claude-command-center</code>. Its settings and state: <code>~/.claude/command-center</code>. The free-model router it can install: <code>~/.ccc/freellmapi</code>. Nothing touches system folders.</p>
+    </details>
+    <details class="faq">
+      <summary>What does the free model really cost?</summary>
+      <p>$0. The first stop is a keyless provider that needs no signup. The catch, told to you plainly in the tour: that provider logs prompts to train its models, so keep secrets out of it. You can add a free API key from Google, Groq, Cerebras, or OpenRouter for better quality, still $0. Or point CCC at your paid Claude login whenever you like; it works with both.</p>
+    </details>
+    <details class="faq">
+      <summary>How do I update or uninstall?</summary>
+      <p>Update: re-run the same install line, or <code>git pull</code> in the install folder, or <code>brew upgrade ccc</code>. Uninstall: quit CCC, then delete <code>~/.ccc/claude-command-center</code>. If you installed the background service, run <code>./run.sh --uninstall-service</code> first.</p>
+    </details>
+    <details class="faq">
+      <summary>Something failed. Now what?</summary>
+      <p>The installer prints what it was doing when it stopped, in plain words. Most failures are a missing Xcode Command Line Tools popup on a fresh Mac: run <code>xcode-select --install</code>, wait for it, and run the line again. Still stuck? Open an issue on GitHub and paste the output.</p>
+    </details>
+  </div>
+ </div>
+</section>
+</main>
+
+<footer class="site-footer"><div class="wrap footer-cols">
+  <div><a class="nav-brand" href="/">▦ CCC</a><p style="color:var(--fg-dim);max-width:30ch">
+    A local command center for every coding agent on your machine. Open source.</p></div>
+  <div><h4>Product</h4><a href="/features/">Features</a><a href="/why/">Why CCC</a><a href="/install/">Download</a><a href="/demo/">Live demo</a></div>
+  <div><h4>Resources</h4><a href="/changelog/">Changelog</a><a href="/roadmap/">Roadmap</a><a href="https://github.com/amirfish1/claude-command-center">GitHub</a></div>
+  <div><h4>Compare</h4><a href="/compare/">All tools</a><a href="/compare/vibe-kanban/">vs Vibe Kanban</a><a href="/compare/conductor/">vs Conductor</a><a href="/compare/omnara/">vs Omnara</a></div>
+  <div><h4>Connect</h4><a href="https://github.com/amirfish1/claude-command-center/issues">Issues</a><a href="https://github.com/amirfish1/claude-command-center/releases">Releases</a></div>
+</div>
+<div class="footer-base"><span>© 2026 Claude Command Center · MIT</span><span class="mono">Built with CCC.</span></div>
+</footer>
+<script src="/assets/js/site.js"></script>
+</body></html>
