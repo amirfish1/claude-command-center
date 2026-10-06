@@ -1,0 +1,1 @@
+- New free-key wizard (`GET /api/free-router/providers`, `POST /api/free-router/keys`, `static/free-key-wizard.js`): provider cards with signup links, paste-and-verify key setup, and one-click keyless enable so new users can reach a $0 model fast.
