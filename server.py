@@ -29367,6 +29367,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 days = 30
             self.send_json(byok_usage_summary(days=days))
+        elif path == "/api/free-router/detected":
+            # L20: loopback probes for routers the user already runs
+            # (freellmapi :3001, 9router/OmniRoute :20128, free-claude-code
+            # :8082, Ollama :11434, LM Studio :1234) plus OpenRouter keys in
+            # BYOK. TTL-cached, parallel, never raises. ccc_server/router_detect.py.
+            from ccc_server import router_detect as _router_detect
+            _q = urllib.parse.parse_qs(parsed.query)
+            _fresh = (_q.get("fresh") or [""])[0] in ("1", "true", "yes")
+            self.send_json(_router_detect.detect_routers(fresh=_fresh))
+        elif path == "/api/free-router/engine-config":
+            # L20: masked preview of "engine X on the free router" — env var
+            # names, generated config snippet, file it would write. No writes,
+            # no secrets. ccc_server/free_engines.py.
+            from ccc_server import free_engines as _free_engines
+            _q = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_free_engines.engine_config_preview(
+                (_q.get("engine") or [""])[0],
+                base_url=(_q.get("base_url") or [""])[0] or None,
+                model=(_q.get("model") or [""])[0] or None,
+            ))
         elif path == "/api/vault":
             # Vault metadata + existing BYOK keys for Settings > Vault.
             # Write-only by design: no endpoint ever returns a secret value
@@ -31609,6 +31629,61 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 byok_delete_profile(profile)
             self.send_json({"ok": True})
+            return
+        if path == "/api/free-router/detected/prefer":
+            # L20: "Use this router" from the existing-router card. Persists
+            # the pick (and an optional router key, stored 0600, never
+            # echoed) so free spawns route through it. {"id": null} clears.
+            from ccc_server import router_detect as _router_detect
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid payload"}, 400)
+                return
+            rid = payload.get("id")
+            if rid is not None:
+                rid = str(rid).strip() or None
+            if rid and not _router_detect.router_by_id(rid):
+                self.send_json({"ok": False, "error": f"router not detected: {rid}"}, 404)
+                return
+            # Optional router key — persisted inside the same 0600 choice
+            # file; free_engines reads it at spawn. Never returned by API.
+            stored = _router_detect.set_preferred_router(rid, key=payload.get("key"))
+            self.send_json({"ok": True, "preferred": stored})
+            return
+        if path == "/api/free-router/engine-setup":
+            # L20: apply free-router config for one engine (codex writes a
+            # marker-delimited provider block into ~/.codex/config.toml with
+            # a backup; opencode writes a CCC-managed config file; aider and
+            # claude are env-only and need no write). User action required —
+            # nothing here runs unprompted.
+            from ccc_server import free_engines as _free_engines
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid payload"}, 400)
+                return
+            engine = (payload.get("engine") or "").strip().lower()
+            if not engine:
+                self.send_json({"ok": False, "error": "engine is required"}, 400)
+                return
+            res = _free_engines.engine_setup(
+                engine,
+                base_url=(payload.get("base_url") or "").strip() or None,
+                api_key=(payload.get("api_key") or "").strip() or None,
+                model=(payload.get("model") or "").strip() or None,
+            )
+            self.send_json(res, 200 if res.get("ok") else 400)
             return
         if path in ("/api/vault/entries", "/api/vault/entries/update",
                     "/api/vault/entries/delete", "/api/vault/import-byok"):
@@ -34010,6 +34085,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 )
             if confirm_blocked_model and _model_policy_blocks(model):
                 _log_activity("spawn", "CONFIRM_BLOCKED", f"engine={engine} model={model}")
+            # Free runtime (L20): payload "runtime":"free" routes env-injectable
+            # engines (aider, opencode) at the chosen or CCC-managed router for
+            # this child only. Claude's free env belongs to L01/L04's
+            # free_router.spawn_env wiring; codex is config-file based
+            # (engine-setup). Never silently falls back: no router => no env
+            # merge, and the child fails visibly against its normal provider.
+            if str(payload.get("runtime") or "").strip().lower() == "free":
+                from ccc_server import free_engines as _free_engines
+                _free_spawn = _free_engines.spawn_env_for_payload(engine, model, payload)
+                if _free_spawn:
+                    model = _free_spawn.get("model") or model
+                    byok_extra_env = {**byok_extra_env, **(_free_spawn.get("env") or {})}
             report_to, report_to_error = _normalize_return_address(payload)
             parent_session_id, parent_session_error = _normalize_spawn_parent_session_id(
                 payload,
