@@ -26177,6 +26177,14 @@ def _load_index_html():
             f'href="{_static_asset_url("simple.css")}"',
         )
         html_text = html_text.replace(
+            'href="/static/fx.css"',
+            f'href="{_static_asset_url("fx.css")}"',
+        )
+        html_text = html_text.replace(
+            'src="/static/fx.js"',
+            f'src="{_static_asset_url("fx.js")}"',
+        )
+        html_text = html_text.replace(
             'src="/static/app.js"',
             f'src="{_static_asset_url("app.js")}"',
         )
@@ -29137,6 +29145,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "canvas.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "canvas.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/fx-demo.html" or path == "/fx-demo":
+            # Sound + motion kit playground (window.cccFx). Same narrow-route
+            # pattern as /q2.html: the /static/ handler refuses *.html, so a
+            # standalone page needs its own route. Loads no app.js/app.css.
+            try:
+                body = (STATIC_DIR / "fx-demo.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "fx-demo.html missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
