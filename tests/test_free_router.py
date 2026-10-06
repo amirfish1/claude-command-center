@@ -10,6 +10,7 @@ the unified-key handshake end to end.
 import json
 import os
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -397,6 +398,48 @@ def test_install_lifecycle(env, handler):
     assert free_router._ping() is True
 
 
+def test_install_delegates_to_setup_jobs(env, handler, monkeypatch):
+    """With L02's runner present, install lands in the shared registry so
+    /api/setup/jobs/<id> answers for it, and a second POST returns the same
+    job instead of starting a duplicate install."""
+    try:
+        from ccc_server import setup_jobs
+    except Exception:
+        pytest.skip("setup_jobs not present in this tree")
+    gate = threading.Event()
+    real_build = free_router._step_build
+    def slow_build(log):
+        gate.wait(20)
+        real_build(log)
+    monkeypatch.setattr(free_router, "_step_build", slow_build)
+    try:
+        assert free_router.handle_api_post(handler, "/api/free-router/install") is True
+        _code, data = handler.last
+        jid = data["job_id"]
+        assert not data.get("already_running")
+        # the shared runner owns and describes this job
+        desc = setup_jobs.describe_job(jid)
+        assert desc is not None and desc["status"] == "running"
+        assert desc["kind"] == "install"
+        # my jobs endpoint resolves it too
+        mine = free_router.get_job(jid)
+        assert mine is not None and mine["job_id"] == jid
+        # double-install guard returns the same job
+        assert free_router.handle_api_post(handler, "/api/free-router/install") is True
+        _c2, data2 = handler.last
+        assert data2["job_id"] == jid and data2.get("already_running") is True
+    finally:
+        gate.set()
+    deadline = time.time() + 120
+    job = None
+    while time.time() < deadline:
+        job = free_router.get_job(jid)
+        if job and job["status"] != "running":
+            break
+        time.sleep(0.5)
+    assert job is not None and job["status"] == "done", job and job.get("error")
+
+
 def test_install_refuses_foreign_dir(env, handler):
     # a non-CCC directory at the install path must never be deleted
     dest = free_router.install_dir()
@@ -414,6 +457,40 @@ def test_uninstall_only_managed(env, handler):
     res = free_router.uninstall()
     assert res["ok"] is False
     assert dest.exists()  # still there
+
+
+def test_unmarked_upstream_clone_is_adopted(env, handler):
+    # a leftover clone of the upstream repo inside ~/.ccc (e.g. a partial
+    # install killed before the marker was written) is provably CCC's own
+    # work — adopt and remove it instead of refusing forever
+    dest = free_router.install_dir()
+    dest.mkdir(parents=True)
+    subprocess.run(["git", "init", str(dest)], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(dest), "remote", "add", "origin",
+                    "https://github.com/tashfeenahmed/freellmapi.git"],
+                   check=True, capture_output=True)
+    (dest / "partial.txt").write_text("stale")
+    assert free_router._looks_like_our_clone(dest)
+    res = free_router.uninstall()
+    assert res["ok"] is True
+    assert not dest.exists()
+
+
+def test_wrong_remote_is_not_adopted(env, handler):
+    # a clone of some other repo at the install path is foreign — never delete
+    dest = free_router.install_dir()
+    dest.mkdir(parents=True)
+    subprocess.run(["git", "init", str(dest)], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(dest), "remote", "add", "origin",
+                    "https://github.com/example/unrelated.git"],
+                   check=True, capture_output=True)
+    (dest / "precious.txt").write_text("do not touch")
+    assert not free_router._looks_like_our_clone(dest)
+    res = free_router.uninstall()
+    assert res["ok"] is False
+    assert dest.exists()
 
 
 def test_admin_login_uses_config_creds(env, handler):

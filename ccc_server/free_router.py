@@ -505,10 +505,35 @@ def installed() -> bool:
     return (install_dir() / "server" / "dist" / "index.js").is_file()
 
 
+def _looks_like_our_clone(dest: Path) -> bool:
+    """True when `dest` is a git clone of the upstream repo — adopted safely:
+    inside ~/.ccc a freellmapi clone can only have come from an earlier CCC
+    attempt, so treating it as managed never deletes a user's own files."""
+    if not (dest / ".git").is_dir():
+        return False
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(dest), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if out.returncode != 0:
+        return False
+    url = out.stdout.strip().lower().rstrip("/")
+    return url in {
+        "https://github.com/tashfeenahmed/freellmapi",
+        "https://github.com/tashfeenahmed/freellmapi.git",
+        "git@github.com:tashfeenahmed/freellmapi.git",
+    }
+
+
 def _copy_source(src: Path, log) -> None:
     dest = install_dir()
     if dest.exists():
-        if _is_managed():
+        # A freellmapi clone inside ~/.ccc can only have come from an earlier
+        # CCC attempt — same trust level as the managed marker.
+        if _is_managed() or _looks_like_our_clone(dest):
             shutil.rmtree(dest)
         elif not any(dest.iterdir()):
             pass  # empty dir is safe to fill
@@ -517,21 +542,34 @@ def _copy_source(src: Path, log) -> None:
                 f"{dest} already exists and was not installed by CCC. "
                 "Move it aside or remove it, then try again."
             )
-    shutil.copytree(src, dest, ignore=_COPY_IGNORE)
+    try:
+        shutil.copytree(src, dest, ignore=_COPY_IGNORE)
+    except Exception:
+        # We created (or emptied into) dest — a partial copy must not turn
+        # into an unmarked foreign-looking dir that blocks every retry.
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
     _mark_managed(PINNED_REV)
 
 
 def _clone_source(log) -> None:
     dest = install_dir()
     if dest.exists():
-        if _is_managed() and (dest / ".git").is_dir():
+        managed = _is_managed()
+        if not managed and _looks_like_our_clone(dest):
+            log("adopting the existing freellmapi checkout")
+            _mark_managed(PINNED_REV)
+            managed = True
+        if managed and (dest / ".git").is_dir():
+            rc = _run(["git", "-C", str(dest), "fetch", "origin", PINNED_REV],
+                      log=log, timeout=300)
             rc = _run(["git", "-C", str(dest), "checkout", "--detach", PINNED_REV],
-                      log=log, timeout=120)
+                      log=log, timeout=120) if rc == 0 else rc
             if rc == 0:
                 return
             log("checkout failed, fetching a fresh copy")
             shutil.rmtree(dest)
-        elif _is_managed():
+        elif managed:
             shutil.rmtree(dest)
         elif not any(dest.iterdir()):
             pass
@@ -542,11 +580,14 @@ def _clone_source(log) -> None:
             )
     rc = _run(["git", "clone", REPO_URL, str(dest)], log=log, timeout=900)
     if rc != 0:
+        shutil.rmtree(dest, ignore_errors=True)
         raise RuntimeError("git clone failed — check your internet connection and try again")
     rc = _run(["git", "-C", str(dest), "checkout", "--detach", PINNED_REV],
               log=log, timeout=120)
     if rc != 0:
+        shutil.rmtree(dest, ignore_errors=True)
         raise RuntimeError("could not check out the pinned router version")
+    _mark_managed(PINNED_REV)
 
 
 def _normalize_lockfiles(log) -> None:
@@ -709,6 +750,9 @@ def install_steps():
 _JOB_MAX_LINES = 400
 _JOBS: dict = {}
 _JOBS_LOCK = threading.Lock()
+# kind -> job_id for jobs running inside the shared setup_jobs registry,
+# so the double-install guard sees delegated jobs too.
+_DELEGATED: dict = {}
 
 
 class _Job:
@@ -778,30 +822,55 @@ def _active_job(kind: str):
         for job in _JOBS.values():
             if job.kind == kind and job.status == "running":
                 return job
+        delegated = _DELEGATED.get(kind)
+    if delegated:
+        data = get_job(delegated)
+        if data and data.get("status") == "running":
+            return type("DelegatedJob", (), {"id": delegated, "kind": kind})()
     return None
+
+
+def _as_setup_step(fn):
+    """Adapt a free_router step `fn(log)` to setup_jobs' `fn(job)` shape.
+
+    The shared job object emits streamed lines through `job.emit(text)` —
+    the same one-callable signature my steps take — and supports
+    cooperative cancellation between steps via `check_cancelled()`.
+    """
+    def _wrapped(job):
+        fn(job.emit)
+        check = getattr(job, "check_cancelled", None)
+        if callable(check):
+            check()
+    return _wrapped
 
 
 def _submit_job(kind: str, steps) -> str:
     """Start a job and return its id.
 
-    When L02's ccc_server.setup_jobs is present and exposes a compatible
-    `run_steps(kind, steps)` entry point, the job lands in the shared
-    registry and /api/setup/jobs/<id> answers for it. Otherwise an internal
-    thread registry serves /api/free-router/jobs/<id> with the same shape.
+    When ccc_server.setup_jobs is present (L02's runner), the job lands in
+    the shared registry and `/api/setup/jobs/<id>` answers for it — the
+    onboarding step machine polls one place for every install. Without it,
+    an internal thread registry serves `/api/free-router/jobs/<id>` with
+    the same response shape, so the endpoint works standalone.
     """
     try:
         from ccc_server import setup_jobs as _sj  # type: ignore
     except Exception:
         _sj = None
     if _sj is not None:
-        runner = getattr(_sj, "run_steps", None)
-        if callable(runner):
+        starter = getattr(_sj, "start_job", None)
+        if callable(starter):
             try:
-                jid = runner(kind, steps)
+                wrapped = [(sid, label, _as_setup_step(fn))
+                           for sid, label, fn in steps]
+                jid = starter(f"free_router:{kind}", wrapped, kind=kind)
                 if isinstance(jid, str) and jid:
+                    with _JOBS_LOCK:
+                        _DELEGATED[kind] = jid
                     return jid
-            except TypeError:
-                pass  # signature mismatch — keep the internal runner
+            except Exception:
+                pass  # runner signature changed — keep the internal one
     job = _Job(kind)
     with _JOBS_LOCK:
         _JOBS[job.id] = job
@@ -826,10 +895,12 @@ def get_job(job_id: str):
         return job.as_dict()
     try:
         from ccc_server import setup_jobs as _sj  # type: ignore
-        getter = getattr(_sj, "get_job", None) if _sj is not None else None
+        getter = getattr(_sj, "describe_job", None) if _sj is not None else None
         if callable(getter):
             data = getter(job_id)
             if isinstance(data, dict):
+                if "job_id" not in data:
+                    data["job_id"] = data.get("id") or job_id
                 return data
     except Exception:
         pass
@@ -1050,7 +1121,7 @@ def uninstall(log=None) -> dict:
     removed = False
     dest = install_dir()
     if dest.exists():
-        if not _is_managed():
+        if not (_is_managed() or _looks_like_our_clone(dest)):
             return {"ok": False,
                     "error": f"{dest} was not installed by CCC — not touching it"}
         shutil.rmtree(dest)
