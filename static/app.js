@@ -35488,6 +35488,7 @@
             + historyChainBadgeHtml
             + repoBadgeHtml
             + emptySessionChipHtml
+            + (window.cccSavings ? window.cccSavings.rowChipHtml(c) : '')
             + (opts.evergreenAgent ? '' : rowMetaHtml)
             // Context-utilized % sits just left of the elapsed-time slot, in the
             // always-visible main row (not the hover row) — it's important enough
