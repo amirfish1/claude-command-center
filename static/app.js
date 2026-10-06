@@ -6194,6 +6194,8 @@
         } else if (wasLive && !isLive) {
           _cccPlayDone();
           _cccGlowCompletedConversation(_fetchedFor);
+          // Success moment for the star-ask card (static/star-ask.js listens).
+          try { document.dispatchEvent(new CustomEvent('ccc:success-moment', { detail: { kind: 'task_done', session_id: _fetchedFor } })); } catch (_) {}
         }
       }
       maybeCatchUpCodexConversationFromAppServer(_fetchedFor, data);

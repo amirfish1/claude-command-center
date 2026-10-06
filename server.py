@@ -26653,6 +26653,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             payload = _onboarding_login_status(session_id, offset=offset)
             self.send_json(payload, 200 if payload.get("ok") else 404)
+        elif path == "/api/star":
+            from ccc_server import star_ask as _star_ask
+            self.send_json(_star_ask.status())
         elif path == "/api/flow/index":
             self.send_json(_flow_index_payload())
         elif path == "/api/flow/node":
@@ -30502,6 +30505,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+
+        if path == "/api/star":
+            # Star-ask prompt (Q17): shown/later/never update the persisted
+            # ask ledger; "star" runs `gh api -X PUT user/starred/<repo>`.
+            # Same-origin was already enforced at the top of do_POST.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            from ccc_server import star_ask as _star_ask
+            payload, code = _star_ask.handle_action(
+                data.get("action") if isinstance(data, dict) else None)
+            self.send_json(payload, code)
             return
 
         if path == "/api/injection-health/ack":
