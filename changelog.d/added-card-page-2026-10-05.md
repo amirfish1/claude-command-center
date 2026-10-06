@@ -1,0 +1,1 @@
+- Throughput share screen: posting to X, LinkedIn, Bluesky or Threads, or the new Copy link button, uploads only the card PNG and its headline to a hosted card page, then shares that link so the post shows your card image. If the upload fails, CCC falls back to the repo link and the copied image. See SECURITY.md.

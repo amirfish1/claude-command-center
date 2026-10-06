@@ -2,6 +2,8 @@
 import importlib
 import json
 import sys
+import shutil
+import subprocess
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -132,3 +134,27 @@ def test_share_copy_has_no_em_dashes():
     end = html.index("// SHARE-CARD:END")
     assert "—" not in html[start:end]
     assert "&mdash;" not in html[start:end]
+
+
+def _node(*args):
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node not installed")
+    return subprocess.run([node, *args], cwd=ROOT, capture_output=True, text=True, timeout=120)
+
+
+def test_share_text_uses_card_url_when_upload_succeeds():
+    """Card page URL is the only link on success; repo link fallback on failure."""
+    r = _node("tests/share_card_upload_harness.cjs")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_card_worker_unit_tests():
+    r = _node("--test", "infra/card-worker/index.test.mjs")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_share_screen_discloses_upload():
+    html = (ROOT / "static" / "throughput.html").read_text()
+    assert "Sharing uploads only this image to make the link preview." in html

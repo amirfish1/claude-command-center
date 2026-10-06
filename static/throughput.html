@@ -1284,6 +1284,7 @@
           <label><input type="checkbox" id="sh-opt-engines"> Show engines used</label>
         </div>
         <div class="sh-privacy">The card contains only the totals you see. No prompts, code, file paths, session names, or project names.</div>
+        <div class="sh-privacy" id="sh-upload-note">Sharing uploads only this image to make the link preview.</div>
       </div>
       <div class="sh-right">
         <div class="sh-hdr"><h3>Share</h3><button type="button" class="sh-x" id="sh-close" aria-label="Close">&times;</button></div>
@@ -1293,10 +1294,11 @@
           <button type="button" class="sh-tile" data-net="linkedin"><div class="sh-ico" style="background:#0a66c2">in</div>LinkedIn</button>
           <button type="button" class="sh-tile" data-net="bluesky"><div class="sh-ico" style="background:#1185fe">B</div>Bluesky</button>
           <button type="button" class="sh-tile" data-net="threads"><div class="sh-ico" style="background:#000;border:1px solid #333">@</div>Threads</button>
+          <button type="button" class="sh-tile" id="sh-copylink"><div class="sh-ico">&#128279;</div>Copy link</button>
           <button type="button" class="sh-tile" id="sh-copy"><div class="sh-ico">&#10697;</div>Copy image</button>
           <button type="button" class="sh-tile" id="sh-download"><div class="sh-ico">&#10515;</div>Download PNG</button>
         </div>
-        <div class="sh-note" id="sh-note">Posting opens a composer in a new tab with the text above. Your card image is copied first, so paste it into the post.</div>
+        <div class="sh-note" id="sh-note">Posting uploads the card to make a link preview, then opens a composer with the link. The image is also copied, in case you would rather paste it.</div>
       </div>
     </div>
   </div>
@@ -5698,6 +5700,10 @@
     const REPO_URL = 'https://github.com/amirfish1/claude-command-center';
     const SITE = 'getccc.dev';
     const LS_KEY = 'ccc.share.v1';
+    // Hosted card page (infra/card-worker). Intents cannot attach images, so the
+    // card PNG is uploaded here and the page URL is what gets shared.
+    const CARD_BASE_DEFAULT = 'https://ccc-card.claude-command-center.workers.dev';
+    const LS_CARD_BASE = 'ccc.share.cardBase';
     const ADJ = ['amber', 'brisk', 'calm', 'dusty', 'eager', 'fuzzy', 'gentle', 'hasty', 'icy', 'jolly', 'keen', 'lucky', 'mellow', 'nimble', 'odd', 'plucky', 'quiet', 'rapid', 'sunny', 'tidy', 'upbeat', 'vivid', 'witty', 'zesty'];
     const ANI = ['falcon', 'otter', 'lynx', 'heron', 'badger', 'gecko', 'ibis', 'koala', 'lemur', 'marten', 'newt', 'osprey', 'panda', 'quail', 'raven', 'stoat', 'tapir', 'urchin', 'viper', 'wombat', 'yak', 'zebra'];
     const LEVELS = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
@@ -5854,14 +5860,31 @@
       };
     }
 
-    function shareText(model, st) {
+    function shareLead(model, st) {
       const phrase = PERIODS[st.period].phrase;
       let lead;
       if (model.metric === 'hours') lead = 'My AI agents worked ' + model.big + ' hours ' + phrase + '.';
       else if (model.metric === 'cache') lead = 'My AI agents hit a ' + model.big + ' cache rate ' + phrase + '.';
       else if (model.metric === 'plan') lead = 'I used ' + model.big + ' of my weekly AI plan with my agent fleet.';
       else lead = 'My AI agents processed ' + model.big + ' tokens ' + phrase + '.';
+      return lead;
+    }
+    // With a card page URL it is the only link (the card page unfurls); the
+    // site name stays as plain text. Without one, fall back to the repo link.
+    function shareText(model, st, cardUrl) {
+      const lead = shareLead(model, st);
+      if (cardUrl) return lead + ' Run your own fleet: ' + SITE + ' ' + cardUrl;
       return lead + ' Run your own fleet: ' + SITE + ' ' + REPO_URL;
+    }
+    // Headline for the card page's og:title (no links, no personal data).
+    function cardTitle(model, st) {
+      return shareLead(model, st);
+    }
+    function cardBase() {
+      let v = '';
+      try { v = localStorage.getItem(LS_CARD_BASE) || ''; } catch (e) { /* ignore */ }
+      v = (v || CARD_BASE_DEFAULT).replace(/\/+$/, '');
+      return /^https:\/\//.test(v) ? v : CARD_BASE_DEFAULT;
     }
 
     // ── Canvas drawing ──
@@ -6017,12 +6040,14 @@
       $('sh-stage').classList.toggle('square', state.size === 'square');
     }
     let lastModel = null;
+    let textEdited = false;   // user typed in the post text, so keep their words
+    let lastUpload = null;    // {sig, url}: avoids re-uploading an identical card
     function render() {
       syncControls();
       const model = cardModel(data || { daily: [] }, state, new Date(), planPct());
       lastModel = model;
       drawCard($('sh-canvas'), model, state.size);
-      $('sh-text').value = shareText(model, state);
+      if (!textEdited) $('sh-text').value = shareText(model, state);
       const empty = data && !data.pending && !(data.daily || []).length;
       if (!data || data.pending) setStatus('Counting 12 months of agent activity. The first run can take a minute.');
       else if (empty) setStatus('No agent activity found yet. Run a session and come back.');
@@ -6074,12 +6099,72 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
       note('Saved ' + a.download + '.');
     }
+    async function sha256Hex(blob) {
+      if (!(window.crypto && crypto.subtle)) return '';
+      const d = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+      return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    // Uploads only the PNG and the headline. Resolves to the card page URL, or
+    // null when the upload fails for any reason (callers fall back).
+    async function uploadCard() {
+      const base = cardBase();
+      const blob = await canvasBlob();
+      if (!blob) return null;
+      const title = lastModel ? cardTitle(lastModel, state) : '';
+      const sig = await sha256Hex(blob);
+      if (sig && lastUpload && lastUpload.sig === sig + '|' + title && lastUpload.base === base) return lastUpload.url;
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 20000);
+      try {
+        const fd = new FormData();
+        fd.append('image', blob, 'card.png');
+        fd.append('title', title);
+        const res = await fetch(base + '/c', { method: 'POST', body: fd, signal: ctl.signal });
+        if (!res.ok) return null;
+        const j = await res.json();
+        if (!j || typeof j.url !== 'string' || j.url.indexOf(base + '/c/') !== 0) return null;
+        if (sig) lastUpload = { sig: sig + '|' + title, base: base, url: j.url };
+        return j.url;
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // Post text carrying the card page URL as its only link.
+    function textWithCard(cardUrl) {
+      const typed = $('sh-text').value;
+      if (!textEdited || !lastModel) return lastModel ? shareText(lastModel, state, cardUrl) : typed;
+      if (typed.indexOf(REPO_URL) !== -1) return typed.split(REPO_URL).join(cardUrl);
+      return typed.replace(/\s+$/, '') + ' ' + cardUrl;
+    }
     async function post(net) {
-      const text = $('sh-text').value;
-      const url = NET_URLS[net](text);
+      // Open the tab now (inside the click) so the upload wait cannot get it
+      // blocked as a popup; point it at the composer once the link exists.
+      const tab = window.open('', '_blank');
+      if (tab) { try { tab.opener = null; } catch (e) { /* ignore */ } }
+      note('Uploading the card to make a link preview...');
       const copied = await copyImage();
-      window.open(url, '_blank', 'noopener');
-      if (copied) note('Composer opened. Image copied: paste it into the post.');
+      const cardUrl = await uploadCard();
+      const text = cardUrl ? textWithCard(cardUrl) : $('sh-text').value;
+      const url = NET_URLS[net](text);
+      if (tab) tab.location.href = url; else window.open(url, '_blank', 'noopener');
+      if (cardUrl) note('Composer opened with your card link.' + (copied ? ' The image is also copied.' : ''));
+      else if (copied) note('Could not upload the card, so the link will not show it. Composer opened. Image copied: paste it into the post.');
+      else note('Could not upload the card. Composer opened. Use Download PNG and attach the image.');
+    }
+    async function copyLink() {
+      note('Uploading the card to make a link...');
+      const cardUrl = await uploadCard();
+      if (!cardUrl) { note('Could not upload the card. Use Copy image or Download PNG instead.'); return; }
+      try {
+        await navigator.clipboard.writeText(cardUrl);
+        note('Link copied. It previews as your card when pasted into a post.');
+      } catch (e) {
+        $('sh-text').value = cardUrl;
+        textEdited = true;
+        note('Could not copy automatically. The link is in the text box above.');
+      }
     }
 
     function open() {
@@ -6117,12 +6202,14 @@
       });
       $('sh-pseudo-input').addEventListener('input', (e) => { state.name = e.target.value; saveState(); render(); });
       $('sh-pseudo-roll').addEventListener('click', () => { state.name = randomName(); saveState(); render(); });
+      $('sh-text').addEventListener('input', () => { textEdited = true; });
+      $('sh-copylink').addEventListener('click', copyLink);
       $('sh-copy').addEventListener('click', copyImage);
       $('sh-download').addEventListener('click', download);
       document.querySelectorAll('.sh-tile[data-net]').forEach((t) => t.addEventListener('click', () => post(t.dataset.net)));
     }
     wire();
-    window.CCCShare = { summarize, heatmapCells, cardModel, shareText, drawCard, NET_URLS, open, close };
+    window.CCCShare = { summarize, heatmapCells, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close };
   })();
   // SHARE-CARD:END
   </script>
