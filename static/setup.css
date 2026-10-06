@@ -1,0 +1,328 @@
+/* First-run setup wizard — scoped under .ccc-setup so it can be embedded
+   inside the onboarding shell without leaking styles. No em-dashes in copy;
+   motion respects prefers-reduced-motion. */
+
+.ccc-setup {
+  --cc-accent: #7c5cff;
+  --cc-accent-2: #4f8dff;
+  --cc-good: #2fbf71;
+  --cc-warn: #e6a23c;
+  --cc-bad: #e55c5c;
+  --cc-ink: #1c1c28;
+  --cc-ink-soft: #5a5a72;
+  --cc-line: rgba(28, 28, 40, 0.1);
+  --cc-card: #ffffff;
+  --cc-bg: #f4f4fb;
+  color: var(--cc-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+}
+
+.ccc-setup * { box-sizing: border-box; }
+
+.ccc-setup-card {
+  background: var(--cc-card);
+  border: 1px solid var(--cc-line);
+  border-radius: 18px;
+  padding: 28px 26px 22px;
+  box-shadow: 0 12px 40px rgba(60, 50, 140, 0.10);
+  max-width: 620px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ccc-setup-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+}
+
+.ccc-setup-sub {
+  font-size: 14.5px;
+  color: var(--cc-ink-soft);
+  margin: 0 0 18px;
+  line-height: 1.45;
+}
+
+.ccc-setup-progress {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(124, 92, 255, 0.12);
+  overflow: hidden;
+  margin: 4px 0 18px;
+}
+
+.ccc-setup-progress > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--cc-accent), var(--cc-accent-2));
+  transition: width 0.5s ease;
+}
+
+.ccc-setup.running .ccc-setup-progress > i {
+  background-image: linear-gradient(
+    90deg,
+    var(--cc-accent) 0%,
+    var(--cc-accent-2) 50%,
+    var(--cc-accent) 100%
+  );
+  background-size: 200% 100%;
+  animation: ccc-setup-shimmer 1.6s linear infinite;
+}
+
+@keyframes ccc-setup-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.ccc-setup-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.ccc-setup-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--cc-line);
+  border-radius: 13px;
+  background: #fbfbfe;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.ccc-setup-step[data-state="running"] {
+  border-color: var(--cc-accent);
+  background: rgba(124, 92, 255, 0.06);
+}
+
+.ccc-setup-step[data-state="done"] {
+  border-color: rgba(47, 191, 113, 0.4);
+  background: rgba(47, 191, 113, 0.05);
+}
+
+.ccc-setup-step[data-state="error"] {
+  border-color: rgba(229, 92, 92, 0.5);
+  background: rgba(229, 92, 92, 0.05);
+}
+
+.ccc-setup-step[data-state="skipped"] { opacity: 0.75; }
+
+.ccc-setup-step.dim { opacity: 0.55; }
+
+.ccc-setup-badge {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  margin-top: 1px;
+  background: rgba(28, 28, 40, 0.06);
+  color: var(--cc-ink-soft);
+}
+
+.ccc-setup-badge.ok { background: rgba(47, 191, 113, 0.15); color: var(--cc-good); }
+.ccc-setup-badge.need { background: rgba(230, 162, 60, 0.18); color: var(--cc-warn); }
+.ccc-setup-badge.err { background: rgba(229, 92, 92, 0.15); color: var(--cc-bad); }
+.ccc-setup-badge.run { background: rgba(124, 92, 255, 0.15); color: var(--cc-accent); }
+
+.ccc-setup-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(124, 92, 255, 0.25);
+  border-top-color: var(--cc-accent);
+  animation: ccc-setup-spin 0.8s linear infinite;
+}
+
+@keyframes ccc-setup-spin {
+  to { transform: rotate(360deg); }
+}
+
+.ccc-setup-step-body { flex: 1; min-width: 0; }
+
+.ccc-setup-step-name {
+  font-size: 14.5px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ccc-setup-pill {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(28, 28, 40, 0.07);
+  color: var(--cc-ink-soft);
+}
+
+.ccc-setup-pill.opt { background: rgba(79, 141, 255, 0.14); color: var(--cc-accent-2); }
+.ccc-setup-pill.ext { background: rgba(124, 92, 255, 0.12); color: var(--cc-accent); }
+
+.ccc-setup-step-why {
+  font-size: 13px;
+  color: var(--cc-ink-soft);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.ccc-setup-consent {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--cc-ink-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ccc-setup-consent input {
+  accent-color: var(--cc-accent);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.ccc-setup-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px;
+}
+
+.ccc-setup-btn {
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 12px 22px;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(135deg, var(--cc-accent), var(--cc-accent-2));
+  box-shadow: 0 6px 20px rgba(124, 92, 255, 0.35);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.15s ease;
+}
+
+.ccc-setup-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 26px rgba(124, 92, 255, 0.45);
+}
+
+.ccc-setup-btn:active:not(:disabled) { transform: translateY(0); }
+.ccc-setup-btn:disabled { opacity: 0.55; cursor: default; }
+
+.ccc-setup-btn.ghost {
+  background: transparent;
+  color: var(--cc-ink-soft);
+  box-shadow: none;
+  border: 1px solid var(--cc-line);
+  font-weight: 600;
+}
+
+.ccc-setup-status-line {
+  font-size: 13px;
+  color: var(--cc-ink-soft);
+  min-height: 18px;
+}
+
+.ccc-setup-logwrap { margin-top: 4px; }
+
+.ccc-setup-logtoggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--cc-ink-soft);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ccc-setup-logtoggle::before {
+  content: "▸";
+  font-size: 11px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+
+.ccc-setup-logwrap.open .ccc-setup-logtoggle::before { transform: rotate(90deg); }
+
+.ccc-setup-log {
+  display: none;
+  margin-top: 8px;
+  max-height: 190px;
+  overflow-y: auto;
+  background: #14141f;
+  color: #c9e7c9;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ccc-setup-logwrap.open .ccc-setup-log { display: block; }
+
+.ccc-setup-banner {
+  border-radius: 13px;
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+
+.ccc-setup-banner.win {
+  background: rgba(47, 191, 113, 0.1);
+  border: 1px solid rgba(47, 191, 113, 0.35);
+  color: #1e7a4a;
+}
+
+.ccc-setup-banner.snag {
+  background: rgba(229, 92, 92, 0.08);
+  border: 1px solid rgba(229, 92, 92, 0.35);
+  color: #a33b3b;
+}
+
+.ccc-setup-banner .small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  opacity: 0.85;
+}
+
+.ccc-setup-foot {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--cc-ink-soft);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccc-setup *,
+  .ccc-setup *::before,
+  .ccc-setup *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+}
