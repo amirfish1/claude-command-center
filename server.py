@@ -20008,6 +20008,12 @@ def _resolve_apps(include_disabled=False):
         apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
                      "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
                      "builtin": False})
+    # Savings: "what your agents did vs what you paid" — API-priced value,
+    # plan cost, and free-router $0 savings (ccc_server/savings.py). A
+    # satellite like the others: toggleable from the Applications page.
+    apps.append({"id": "savings", "label": "Savings",
+                 "icon": "\N{MONEY BAG}", "url": "/savings",
+                 "builtin": False})
     # Pipeline Canvas: the fleet-topology node graph over WatchTower truth
     # (spec: 2026-09-15-pipeline-canvas-design.md). Not core navigation —
     # switchable from the Applications page like the other satellites.
@@ -26133,6 +26139,10 @@ _WEEKLY_PCT_FILE = Path.home() / ".cache" / "claude-usage-pct.json"
 
 _adopt_ccc_module("usage_stats")
 
+# Savings engine — /api/savings: API-priced value of agent work, plan cost,
+# ROI, and free-router $0 savings (incremental sqlite ledger over transcripts).
+_adopt_ccc_module("savings")
+
 _adopt_ccc_module("productivity")
 
 _adopt_ccc_module("terminal")
@@ -27772,6 +27782,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             )
             self.send_json(payload, status)
             return
+        elif path == "/api/savings":
+            # Savings engine: API-priced value of agent work vs plan cost and
+            # free-router $0 savings. ?range=today|week|month|all, &refresh=1.
+            qs = urllib.parse.parse_qs(parsed.query)
+            range_key = (qs.get("range", ["today"])[0] or "today").strip()
+            force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
+                "1", "true", "yes"
+            )
+            payload, status = savings_payload(range_key, refresh=force)
+            self.send_json(payload, status)
+            return
         elif path == "/api/weekly_usage":
             # Claude-only weekly burn since reset, in the same %-of-weekly unit
             # the macOS menu bar shows. Independent of the throughput range so
@@ -29097,6 +29118,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "spawn-ledger.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "spawn-ledger.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path in ("/savings", "/savings.html"):
+            # Standalone Savings page — "what your agents did vs what you paid".
+            # Same narrow-route pattern as /spawn-ledger.html: self-contained,
+            # no app.js/app.css, so it cannot affect the main dashboard.
+            try:
+                body = (STATIC_DIR / "savings.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "savings.html missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
@@ -37500,6 +37540,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             with _TERM_LOCK:
                 killed = _term_kill_running(_term_state(ctx["repo_path"]))
             self.send_json({"ok": killed})
+        elif path == "/api/savings/plan":
+            # Savings panel: set or reset the user's plan ($/mo). Writes the
+            # panel-owned row in subscription_plans; plans added via the
+            # `throughput plans` CLI are never touched.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            payload, status = handle_plan_post(data)
+            self.send_json(payload, status)
         else:
             self.send_json({"error": "Not found"}, 404)
 
