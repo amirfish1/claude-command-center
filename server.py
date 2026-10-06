@@ -26073,6 +26073,9 @@ _adopt_ccc_module("engines")
 _adopt_ccc_module("spawn_registry")
 # ---------------------------------------------------------------------------
 _adopt_ccc_module("usage_limit")
+# Limit-hit failover with approval (continue on a $0 model / approved
+# auto-resume at reset, staggered). Rides the usage-limit watcher's cadence.
+_adopt_ccc_module("free_failover")
 # ---------------------------------------------------------------------------
 # Background coordination watcher
 # Tracks active group-chat coordinations and nudges participant sessions
@@ -27238,6 +27241,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 since_s = None
             self.send_json(build_session_census(since_s=since_s))
+        elif path == "/api/free-failover/status":
+            # ccc_server/free_failover.py — per-session limit/failover state
+            # plus free-model readiness for the approval card. Reads only the
+            # two cached JSON stores + the TTL'd router probe.
+            self.send_json(free_failover_status())
         elif re.match(r"^/api/sessions/continuation-decision/.+$", path):
             # ccc_server/continuation.py — "resume in place, or spawn a fresh
             # session that continues it?" for one session, from cached
@@ -36965,6 +36973,45 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "session_id": sid,
                         "cancelled_queued": result.get("cancelled_queued", 0),
                     })
+        elif path.startswith("/api/free-failover/"):
+            # ccc_server/free_failover.py — the limit-hit approval card's
+            # actions. Every one of these is a user-initiated write:
+            #   continue    {session_id, always?}  resume now on a free model
+            #   arm         {session_id, armed?}   approve/cancel auto-resume
+            #                                       at the limit's reset
+            #   dismiss     {session_id, offer?}   hide the card for this stop
+            #   switch-back {session_id}           return to the paid plan
+            #                                       once the reset passed
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            elif path == "/api/free-failover/continue":
+                result = free_failover_continue(
+                    sid, always=bool(payload.get("always"))
+                )
+                self.send_json(result, 200 if result.get("ok") else 409)
+            elif path == "/api/free-failover/arm":
+                result = free_failover_arm(
+                    sid, armed=bool(payload.get("armed", True))
+                )
+                self.send_json(result, 200 if result.get("ok") else 409)
+            elif path == "/api/free-failover/dismiss":
+                self.send_json(free_failover_dismiss(
+                    sid, offer=str(payload.get("offer") or "failover"),
+                ))
+            elif path == "/api/free-failover/switch-back":
+                result = free_failover_switch_back(sid)
+                self.send_json(result, 200 if result.get("ok") else 409)
+            else:
+                self.send_json({"ok": False, "error": "unknown endpoint"}, 404)
         elif path == "/api/sessions/spawn-continue-from":
             # ccc_server/continuation.py — `ccc spawn --continue-from`: spawn
             # a fresh session pointed at <sid>'s latest continuation

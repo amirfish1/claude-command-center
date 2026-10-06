@@ -3426,7 +3426,7 @@ def _start_devin_delivery_proof_watchdog(
     ).start()
 
 
-def resume_session_devin(session_id, text, _delivery_slot="resume"):
+def resume_session_devin(session_id, text, _delivery_slot="resume", model=None):
     """Resume a Devin CLI session with a one-shot headless prompt.
 
     Uses `devin --resume <id> -p "text" --permission-mode dangerous`.
@@ -3494,7 +3494,9 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
         "--resume", raw_id,
     ]
     override = _core._get_session_override(session_id)
-    model = (override or {}).get("model") if override else None
+    # Caller-specified model (e.g. a limit-hit failover's free pick) beats the
+    # session override, which beats the global CCC_DEVIN_MODEL default.
+    model = model or ((override or {}).get("model") if override else None)
     if not model:
         model = os.environ.get("CCC_DEVIN_MODEL")
     if model:
@@ -7929,11 +7931,16 @@ def _start_headless_staleness_watcher() -> None:
     ).start()
 
 
-def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
+def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, extra_env=None):
     """Resume a dormant session headlessly (`claude --resume`) and send text.
 
     If we already resumed this session and the process is still alive, reuse it.
     Optional `cwd` parameter allows bypassing session lookup (useful in remote envs).
+
+    `extra_env` (e.g. a free-router env for a limit-hit failover) is merged
+    into the child env on a FRESH resume only — a live process can't change
+    its env, so passing it also skips the warm-reuse path entirely rather
+    than silently answering on the old env.
     """
     # Claude Task-tool children have their own JSONL transcripts but cannot be
     # resumed independently. Some automatic callers invoke this lower-level
@@ -7943,12 +7950,17 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     # Resolved before control-plane routing so a remote node receives the
     # parent id too.
     session_id = _core._claude_subagent_parent_session_id(session_id) or session_id
+    routed_args = {
+        "session_id": session_id,
+        "text": text,
+        "cwd": cwd,
+    }
+    if extra_env:
+        # The worker owns engine processes; the failover env has to ride the
+        # control-plane call or the child would spawn with the paid endpoint.
+        routed_args["extra_env"] = dict(extra_env)
     routed = _core._control_plane_engine_call(
-        "claude", "resume", {
-            "session_id": session_id,
-            "text": text,
-            "cwd": cwd,
-        },
+        "claude", "resume", routed_args,
         idempotency_key=idempotency_key,
     )
     if routed is not None:
@@ -7956,10 +7968,14 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     text = _core._strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
-    # Reuse existing resumed process
+    # Reuse existing resumed process — but never for an extra_env resume:
+    # the live process still carries the old env (e.g. the paid endpoint a
+    # limit-hit failover is switching away from), so reuse would answer on
+    # the wrong meter.
     for s in list(_core._spawned_sessions):
         if (
-            (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
+            not extra_env
+            and (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
             and _core._poll_spawn_entry(s) is None
         ):
             ok = _core._write_stream_json_user_message(s, text)
@@ -8034,7 +8050,10 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     # also expands versioned short aliases (e.g. sonnet-4-6 → claude-sonnet-4-6)
     # since the --model flag does not accept bare versioned aliases for 4.x models.
     override = _core._get_session_override(session_id)
-    if override and override.get("model"):
+    if override and override.get("model") and not extra_env:
+        # extra_env (a limit-hit failover's free-router wiring) owns the model
+        # selection for this child — passing the session's paid --model alias
+        # too would send a paid-only id to the free endpoint.
         alias = _core._cli_model_flag(override["model"])  # strips [1m], normalizes to full ID
         if alias:
             cmd.extend(["--model", alias])
@@ -8051,12 +8070,24 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
 
     log_fh = open(log_path, "w")
     fifo_path, child_stdin_fd = _core._make_stdin_fifo(log_path)
+    resume_env = _core._question_relay_env()
+    if extra_env:
+        # Caller-provided child env wins (e.g. the free-router ANTHROPIC_*
+        # vars of a limit-hit failover). Scrub the inherited Anthropic vars
+        # first so only the caller's values apply — a stray ANTHROPIC_API_KEY
+        # in the parent shell must never leak into router-bound traffic.
+        for _k in (
+            "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+        ):
+            resume_env.pop(_k, None)
+        resume_env.update(extra_env)
     popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         cwd=cwd,
         start_new_session=True,
-        env=_core._question_relay_env(),
+        env=resume_env,
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
