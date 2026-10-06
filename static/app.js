@@ -19246,11 +19246,26 @@
   // against. A counter is correct under overlap; only 0 means "no restore
   // in flight anywhere."
   let _qfBootRestoreDepth = 0;
+  // ?session=<id> deep link (notification clicks, share links): one-shot —
+  // wins over the saved restore when the session exists, gives up once the
+  // archive list has landed and it still isn't there.
+  let _deepLinkedSession = false;
   async function restoreLastConversation() {
     if (CONV_POPOUT_MODE) return;
     if (!conversationsLoaded) return;
     _qfBootRestoreDepth++;
     try {
+      const deepSid = (_bootUrlParams.get('session') || '').trim();
+      if (deepSid && !_deepLinkedSession) {
+        const found = conversationRowsContainId(conversationsData, deepSid)
+          || (archiveLoaded && conversationRowsContainId(archiveData, deepSid));
+        if (found) {
+          _deepLinkedSession = true;
+          await selectConversation(deepSid);
+          return;
+        }
+        if (archiveLoaded) _deepLinkedSession = true;
+      }
       let anyRestored = false;
       const savedActiveIndex = splitState.activeIndex;
 
@@ -68686,6 +68701,9 @@
 
     if (event.topic === 'conversation.patch') _applyDashboardConversationPatch(event);
     else if (event.topic === 'session.patch') _applyDashboardSessionPatch(event);
+    else if (event.topic === 'notify.request') {
+      try { if (window.cccNotify) window.cccNotify._deliver(event.patch || {}); } catch (_) {}
+    }
     else if (event.topic === 'queue.patch' || event.topic === 'queue.remove') {
       scheduleDashboardInvalidation('queue', event.entity && event.entity.id);
     } else if (event.topic === 'worker.patch') {

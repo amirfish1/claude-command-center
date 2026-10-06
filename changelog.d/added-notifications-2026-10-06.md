@@ -1,0 +1,1 @@
+Notifications: agents now ping you when they finish real work or stop for input — with a "Cost $0, saved $X" line for free-model runs — plus a 6pm daily digest of the day's agent work and savings-milestone celebrations. Delivers through the macOS app bridge, browser notifications (asked once at a success moment), or an in-app toast; toggles live in Settings > Notifications.

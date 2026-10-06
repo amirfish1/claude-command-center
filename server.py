@@ -277,6 +277,11 @@ def _dashboard_session_watch_tick(previous):
         if isinstance(values, dict)
     }
     if previous is None:
+        try:
+            from ccc_server import notify as _notify
+            _notify.observe_session_states(None, current)
+        except Exception:
+            pass
         return current
     previous = previous or {}
     for sid, fields in current.items():
@@ -288,6 +293,11 @@ def _dashboard_session_watch_tick(previous):
                 "session.patch", "session", sid,
                 {"state": "ended", "question_waiting": False, "needs_approval": False},
             )
+    try:
+        from ccc_server import notify as _notify
+        _notify.observe_session_states(previous, current)
+    except Exception:
+        pass
     return current
 
 
@@ -28048,6 +28058,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # reports the same stale-transcript heuristic as the row badge; it is
             # not a claim that every labeled thread owns a live hung process.
             self.send_json(build_codex_stuck_summary())
+        elif path == "/api/notify/pending":
+            # Client catch-up for notify.request items missed while the SSE
+            # stream was down. One small JSON read, no session scan.
+            from ccc_server import notify as _notify
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_notify.pending(since_id=(qs.get("since", [""])[0] or "").strip()))
+        elif path == "/api/notify/history":
+            # Recent notifications, newest first (debug + a future bell tray).
+            from ccc_server import notify as _notify
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                limit = int((qs.get("limit", ["50"])[0] or "50"))
+            except ValueError:
+                limit = 50
+            self.send_json({"items": _notify.history(limit)})
         elif path == "/api/events":
             # Unified, replayable dashboard state stream.  Existing narrower
             # SSE routes stay available during the compatibility rollout.
@@ -30502,6 +30527,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+
+        if path == "/api/notify":
+            # One intake for every surface that wants to ping the user;
+            # ccc_server.notify validates, rate-limits, dedupes and fans out
+            # to connected dashboards over the /api/events hub.
+            from ccc_server import notify as _notify
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                if content_len > 64 * 1024:
+                    self.send_json({"ok": False, "error": "body too large"}, 413)
+                    return
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            resp, status = _notify.post(data)
+            self.send_json(resp, status)
             return
 
         if path == "/api/injection-health/ack":
@@ -41448,6 +41492,15 @@ def main():
         _throughput_week_rankings()
     if _should_prewarm_throughput_on_startup():
         threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
+    # Scheduled notifications: the 6pm daily digest and savings milestones.
+    # Emitted on the dashboard event hub and, on macOS, as an osascript banner
+    # so they land with no browser open. Ephemeral verification instances skip
+    # the loop so they can never consume the once-a-day digest marker.
+    if not os.environ.get("CCC_EPHEMERAL"):
+        def _notify_scheduled_loop():
+            from ccc_server import notify as _notify
+            _notify.scheduler_loop(base_url=f"http://127.0.0.1:{port}")
+        threading.Thread(target=_notify_scheduled_loop, daemon=True, name="ccc-notify").start()
     # Self-serve-loop health check: periodic self-probe + SIGUSR2 stack dump
     # on repeated misses. See `_self_health_check_loop` docstring for the
     # 2026-08-28 sleep/wake silent-hang incident this instruments for.
