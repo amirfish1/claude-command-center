@@ -78,6 +78,9 @@
 <!-- Moment Zero onboarding shell: always-dark cinematic overlay. Scoped
      under #cccMomentZero; inert unless the overlay opens. -->
 <link rel="stylesheet" href="/static/onboarding/onboarding.css">
+<link rel="stylesheet" href="/static/star-ask.css">
+<!-- Limit-hit failover card (see static/limit-failover.js). -->
+<link rel="stylesheet" href="/static/limit-failover.css">
 <style>
   body.hide-gh-issues .is-github-issue {
     display: none !important;
@@ -493,6 +496,9 @@
        now the fixed 52px column on the left edge, shared with q2.html and
        /view/<app> pages. See static/app-rail.js. -->
   <script src="/static/app-rail.js" defer></script>
+  <!-- Limit-hit failover approval card: self-contained poller + stack,
+       inert on servers without /api/free-failover/status. -->
+  <script src="/static/limit-failover.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
@@ -3781,6 +3787,7 @@
 <script src="/static/scheduled-jobs.js"></script>
 <script src="/static/jobs-tab.js"></script>
 <script src="/static/first-task.js" defer></script>
+<script src="/static/star-ask.js"></script>
 
 <!-- ── In-UI terminal panel ──────────────────────────────────────────────
      A small one-shot terminal: type a command, hit Enter, output streams

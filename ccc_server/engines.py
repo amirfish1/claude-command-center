@@ -3427,7 +3427,7 @@ def _start_devin_delivery_proof_watchdog(
     ).start()
 
 
-def resume_session_devin(session_id, text, _delivery_slot="resume"):
+def resume_session_devin(session_id, text, _delivery_slot="resume", model=None):
     """Resume a Devin CLI session with a one-shot headless prompt.
 
     Uses `devin --resume <id> -p "text" --permission-mode dangerous`.
@@ -3495,7 +3495,9 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
         "--resume", raw_id,
     ]
     override = _core._get_session_override(session_id)
-    model = (override or {}).get("model") if override else None
+    # Caller-specified model (e.g. a limit-hit failover's free pick) beats the
+    # session override, which beats the global CCC_DEVIN_MODEL default.
+    model = model or ((override or {}).get("model") if override else None)
     if not model:
         model = os.environ.get("CCC_DEVIN_MODEL")
     if model:
@@ -8035,7 +8037,7 @@ def _start_headless_staleness_watcher() -> None:
     ).start()
 
 
-def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, runtime=""):
+def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, runtime="", extra_env=None):
     """Resume a dormant session headlessly (`claude --resume`) and send text.
 
     If we already resumed this session and the process is still alive, reuse it.
@@ -8045,6 +8047,11 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     empty, the session's born-with runtime (recorded in its spawn marker) is
     inherited — a session created for $0 stays $0 across resumes, and an
     unavailable router refuses rather than silently billing the user.
+
+    `extra_env` (e.g. a free-router env for a limit-hit failover) is merged
+    into the child env on a FRESH resume only — a live process can't change
+    its env, so passing it also skips the warm-reuse path entirely rather
+    than silently answering on the old env.
     """
     # Claude Task-tool children have their own JSONL transcripts but cannot be
     # resumed independently. Some automatic callers invoke this lower-level
@@ -8060,13 +8067,19 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             runtime = _free_runtime.session_runtime(session_id)
         except Exception:
             runtime = ""
+    routed_args = {
+        "session_id": session_id,
+        "text": text,
+        "cwd": cwd,
+    }
+    if runtime:
+        routed_args["runtime"] = runtime
+    if extra_env:
+        # The worker owns engine processes; the failover env has to ride the
+        # control-plane call or the child would spawn with the paid endpoint.
+        routed_args["extra_env"] = dict(extra_env)
     routed = _core._control_plane_engine_call(
-        "claude", "resume", {
-            "session_id": session_id,
-            "text": text,
-            "cwd": cwd,
-            **({"runtime": runtime} if runtime else {}),
-        },
+        "claude", "resume", routed_args,
         idempotency_key=idempotency_key,
     )
     if routed is not None:
@@ -8075,10 +8088,13 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     if not text:
         return {"ok": False, "error": "missing text"}
     # Reuse existing resumed process — but only when it runs the requested
-    # runtime. A warm paid process must never serve a turn sold as $0.
+    # runtime (a warm paid process must never serve a turn sold as $0), and
+    # never for an extra_env resume: the live process still carries the old
+    # env, so reuse would answer on the wrong meter.
     for s in list(_core._spawned_sessions):
         if (
-            (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
+            not extra_env
+            and (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
             and _core._poll_spawn_entry(s) is None
         ):
             if runtime and str(s.get("runtime") or "") != runtime:
@@ -8159,7 +8175,11 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     # also expands versioned short aliases (e.g. sonnet-4-6 → claude-sonnet-4-6)
     # since the --model flag does not accept bare versioned aliases for 4.x models.
     override = _core._get_session_override(session_id)
-    if override and override.get("model"):
+    if override and override.get("model") and not extra_env and not runtime:
+        # extra_env (a limit-hit failover's free-router wiring) or a free
+        # runtime owns the model
+        # selection for this child — passing the session's paid --model alias
+        # too would send a paid-only id to the free endpoint.
         alias = _core._cli_model_flag(override["model"])  # strips [1m], normalizes to full ID
         if alias:
             cmd.extend(["--model", alias])
@@ -8193,6 +8213,17 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         _free_runtime.scrub_paid_env(child_env)
         child_env.update(free_overlay)
     fifo_path, child_stdin_fd = _core._make_stdin_fifo(log_path)
+    if extra_env:
+        # Caller-provided child env wins (e.g. the free-router ANTHROPIC_*
+        # vars of a limit-hit failover). Scrub the inherited Anthropic vars
+        # first so only the caller's values apply — a stray ANTHROPIC_API_KEY
+        # in the parent shell must never leak into router-bound traffic.
+        for _k in (
+            "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+        ):
+            child_env.pop(_k, None)
+        child_env.update(extra_env)
     popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,

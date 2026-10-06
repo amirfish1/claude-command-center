@@ -20111,6 +20111,12 @@ def _resolve_apps(include_disabled=False):
         apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
                      "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
                      "builtin": False})
+    # Savings: "what your agents did vs what you paid" — API-priced value,
+    # plan cost, and free-router $0 savings (ccc_server/savings.py). A
+    # satellite like the others: toggleable from the Applications page.
+    apps.append({"id": "savings", "label": "Savings",
+                 "icon": "\N{MONEY BAG}", "url": "/savings",
+                 "builtin": False})
     # Pipeline Canvas: the fleet-topology node graph over WatchTower truth
     # (spec: 2026-09-15-pipeline-canvas-design.md). Not core navigation —
     # switchable from the Applications page like the other satellites.
@@ -26176,6 +26182,9 @@ _adopt_ccc_module("engines")
 _adopt_ccc_module("spawn_registry")
 # ---------------------------------------------------------------------------
 _adopt_ccc_module("usage_limit")
+# Limit-hit failover with approval (continue on a $0 model / approved
+# auto-resume at reset, staggered). Rides the usage-limit watcher's cadence.
+_adopt_ccc_module("free_failover")
 # ---------------------------------------------------------------------------
 # Background coordination watcher
 # Tracks active group-chat coordinations and nudges participant sessions
@@ -26240,6 +26249,10 @@ _WEEKLY_CAL_FILE = Path.home() / ".cache" / "claude-usage-cal.json"
 _WEEKLY_PCT_FILE = Path.home() / ".cache" / "claude-usage-pct.json"
 
 _adopt_ccc_module("usage_stats")
+
+# Savings engine — /api/savings: API-priced value of agent work, plan cost,
+# ROI, and free-router $0 savings (incremental sqlite ledger over transcripts).
+_adopt_ccc_module("savings")
 
 _adopt_ccc_module("productivity")
 
@@ -26804,6 +26817,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             payload = _onboarding_login_status(session_id, offset=offset)
             self.send_json(payload, 200 if payload.get("ok") else 404)
+        elif path == "/api/star":
+            from ccc_server import star_ask as _star_ask
+            self.send_json(_star_ask.status())
         elif path == "/api/flow/index":
             self.send_json(_flow_index_payload())
         elif path == "/api/flow/node":
@@ -27413,6 +27429,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 since_s = None
             self.send_json(build_session_census(since_s=since_s))
+        elif path == "/api/free-failover/status":
+            # ccc_server/free_failover.py — per-session limit/failover state
+            # plus free-model readiness for the approval card. Reads only the
+            # two cached JSON stores + the TTL'd router probe.
+            self.send_json(free_failover_status())
         elif re.match(r"^/api/sessions/continuation-decision/.+$", path):
             # ccc_server/continuation.py — "resume in place, or spawn a fresh
             # session that continues it?" for one session, from cached
@@ -27945,6 +27966,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload, status = _throughput_daily_payload(
                 date_str, engine_filter=engine_filter, force_refresh=force
             )
+            self.send_json(payload, status)
+            return
+        elif path == "/api/savings":
+            # Savings engine: API-priced value of agent work vs plan cost and
+            # free-router $0 savings. ?range=today|week|month|all, &refresh=1.
+            qs = urllib.parse.parse_qs(parsed.query)
+            range_key = (qs.get("range", ["today"])[0] or "today").strip()
+            force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
+                "1", "true", "yes"
+            )
+            payload, status = savings_payload(range_key, refresh=force)
             self.send_json(payload, status)
             return
         elif path == "/api/weekly_usage":
@@ -29316,6 +29348,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path in ("/savings", "/savings.html"):
+            # Standalone Savings page — "what your agents did vs what you paid".
+            # Same narrow-route pattern as /spawn-ledger.html: self-contained,
+            # no app.js/app.css, so it cannot affect the main dashboard.
+            try:
+                body = (STATIC_DIR / "savings.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "savings.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/q2.html":
             # Standalone three-column queue board (queues | tickets | ticket).
             # Same narrow-route pattern as /group-chat-live.html above: the
@@ -30358,6 +30409,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         remaining -= len(chunk)
             except OSError:
                 pass
+        elif path == "/free-models" or path == "/free-models.html":
+            # Free-model leaderboard page (narrow route — the generic static
+            # handler refuses arbitrary *.html), mirroring /throughput.
+            try:
+                body = (STATIC_DIR / "free-models.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "free-models.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/free-router/models":
+            # L05 contract: bare list of catalog rows merged with eval scores.
+            from ccc_server import free_eval
+            self.send_json(free_eval.models_payload())
+        elif path == "/api/free-router/eval/status":
+            # Small status blob for the leaderboard page (additive).
+            from ccc_server import free_eval
+            self.send_json(free_eval.eval_info())
+        elif path.startswith("/api/free-router/eval/"):
+            from ccc_server import free_eval
+            job_id = path.rsplit("/", 1)[-1]
+            status = free_eval.job_status(job_id)
+            if status is None:
+                self.send_json({"ok": False, "error": "unknown job"}, 404)
+            else:
+                self.send_json(status)
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -30772,6 +30857,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+
+        if path == "/api/star":
+            # Star-ask prompt (Q17): shown/later/never update the persisted
+            # ask ledger; "star" runs `gh api -X PUT user/starred/<repo>`.
+            # Same-origin was already enforced at the top of do_POST.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            from ccc_server import star_ask as _star_ask
+            payload, code = _star_ask.handle_action(
+                data.get("action") if isinstance(data, dict) else None)
+            self.send_json(payload, code)
             return
 
         if path == "/api/notify":
@@ -37373,6 +37475,45 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "session_id": sid,
                         "cancelled_queued": result.get("cancelled_queued", 0),
                     })
+        elif path.startswith("/api/free-failover/"):
+            # ccc_server/free_failover.py — the limit-hit approval card's
+            # actions. Every one of these is a user-initiated write:
+            #   continue    {session_id, always?}  resume now on a free model
+            #   arm         {session_id, armed?}   approve/cancel auto-resume
+            #                                       at the limit's reset
+            #   dismiss     {session_id, offer?}   hide the card for this stop
+            #   switch-back {session_id}           return to the paid plan
+            #                                       once the reset passed
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            elif path == "/api/free-failover/continue":
+                result = free_failover_continue(
+                    sid, always=bool(payload.get("always"))
+                )
+                self.send_json(result, 200 if result.get("ok") else 409)
+            elif path == "/api/free-failover/arm":
+                result = free_failover_arm(
+                    sid, armed=bool(payload.get("armed", True))
+                )
+                self.send_json(result, 200 if result.get("ok") else 409)
+            elif path == "/api/free-failover/dismiss":
+                self.send_json(free_failover_dismiss(
+                    sid, offer=str(payload.get("offer") or "failover"),
+                ))
+            elif path == "/api/free-failover/switch-back":
+                result = free_failover_switch_back(sid)
+                self.send_json(result, 200 if result.get("ok") else 409)
+            else:
+                self.send_json({"ok": False, "error": "unknown endpoint"}, 404)
         elif path == "/api/sessions/spawn-continue-from":
             # ccc_server/continuation.py — `ccc spawn --continue-from`: spawn
             # a fresh session pointed at <sid>'s latest continuation
@@ -37908,6 +38049,53 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             with _TERM_LOCK:
                 killed = _term_kill_running(_term_state(ctx["repo_path"]))
             self.send_json({"ok": killed})
+        elif path == "/api/savings/plan":
+            # Savings panel: set or reset the user's plan ($/mo). Writes the
+            # panel-owned row in subscription_plans; plans added via the
+            # `throughput plans` CLI are never touched.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            payload, status = handle_plan_post(data)
+            self.send_json(payload, status)
+        elif path == "/api/free-router/eval":
+            # L05 contract: kick off a benchmark run -> {job_id}.
+            from ccc_server import free_eval
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            body = self.rfile.read(length) if 0 < length <= 1024 * 1024 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            model_ids = payload.get("models")
+            if model_ids is not None and not isinstance(model_ids, list):
+                self.send_json({"ok": False, "error": "models must be a list of ids"}, 400)
+                return
+            if isinstance(model_ids, list):
+                model_ids = [str(m) for m in model_ids][:64]
+            result, status = free_eval.start_eval(model_ids)
+            self.send_json(result, status)
+        elif path == "/api/free-router/prefer":
+            # Pin a catalog model as the router's default (leaderboard action).
+            from ccc_server import free_eval
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            body = self.rfile.read(length) if 0 < length <= 1024 * 1024 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            result, status = free_eval.prefer_model(payload.get("model"))
+            self.send_json(result, status)
         else:
             self.send_json({"error": "Not found"}, 404)
 

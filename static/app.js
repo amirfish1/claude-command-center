@@ -6194,6 +6194,8 @@
         } else if (wasLive && !isLive) {
           _cccPlayDone();
           _cccGlowCompletedConversation(_fetchedFor);
+          // Success moment for the star-ask card (static/star-ask.js listens).
+          try { document.dispatchEvent(new CustomEvent('ccc:success-moment', { detail: { kind: 'task_done', session_id: _fetchedFor } })); } catch (_) {}
         }
       }
       maybeCatchUpCodexConversationFromAppServer(_fetchedFor, data);
@@ -61603,6 +61605,17 @@
           div.classList.add('system-compact', 'codex-cloud-note');
           div.innerHTML = '<span class="ccoord-icon" aria-hidden="true">☁</span>'
             + '<span class="ccoord-text">' + escapeHtml(ev.text || 'cloud thread, transcript unavailable') + '</span>'
+            + tsSpan(ev.ts);
+        } else if (ev.subtype === 'ccc_free_runtime') {
+          // Limit-hit failover marker written by the server (see
+          // ccc_server/free_failover.py): "continued on a free model" /
+          // "switched back" / "resumed automatically at reset". A quiet
+          // green row so the transcript explains the $0 stretch.
+          const _frText = String(ev.text || '').trim()
+            || 'Ran on a free model for a stretch.';
+          div.classList.add('system-compact', 'ccc-free-runtime');
+          div.innerHTML = '<span class="ccoord-icon" aria-hidden="true">⚡</span>'
+            + '<span class="ccoord-text">' + escapeHtml(_frText) + '</span>'
             + tsSpan(ev.ts);
         } else if (String(ev.subtype || '').indexOf('grok_') === 0) {
           // Grok ACP status updates (failed hook runs, image-dropped notes,

@@ -1,0 +1,1 @@
+- Added a gentle "star us on GitHub" prompt at success moments (task done, PR merged, milestones): one click stars via the local `gh` CLI through `/api/star`, with a GitHub-link fallback. Asked at most once per 14 days and 3 times ever; "Don't ask again" persists.

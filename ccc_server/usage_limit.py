@@ -866,6 +866,11 @@ def _usage_limit_scan_once(now=None):
         if newest_mtime and newest_mtime > entry.get("detected_at", 0) + 5:
             _clear_usage_limit_resume(sid)
             continue
+        # A user-approved auto-resume (free-failover lane) owns this entry:
+        # it fires at its staggered slot, so leave `fired` untouched here.
+        armed_fn = getattr(_core, "_free_failover_is_armed", None)
+        if callable(armed_fn) and armed_fn(sid):
+            continue
         if not _mark_usage_limit_resume_fired(sid):
             continue  # a sibling thread/process won the race
         # Auto-send is killed. Detection and the countdown banner remain so
@@ -880,6 +885,16 @@ def _usage_limit_scan_once(now=None):
                 f"session={sid} engine={entry.get('engine')} "
                 f"resume_at={resume_at}",
             )
+        except Exception:
+            pass
+
+    # Limit-hit failover lane: Devin transcript detection, approved
+    # auto-resume slots, "always" opt-in and pending switch-backs all ride
+    # this same 45s cadence. Guarded so the module stays optional.
+    auto_pass = getattr(_core, "_free_failover_auto_pass", None)
+    if callable(auto_pass):
+        try:
+            auto_pass(now)
         except Exception:
             pass
 
