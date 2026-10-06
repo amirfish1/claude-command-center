@@ -1437,6 +1437,8 @@ def cmd_spawn(args):
         payload["reasoning_effort"] = args.effort
     if args.name:
         payload["name"] = args.name
+    if args.runtime:
+        payload["runtime"] = args.runtime
     # The endpoint is repo-scoped (explicit cwd/repo_path required). A CLI's
     # natural scope is the directory it was invoked from.
     payload["cwd"] = args.cwd or os.getcwd()
@@ -1492,6 +1494,8 @@ def cmd_spawn(args):
         bits.append(f"model={args.model}")
     if args.effort:
         bits.append(f"effort={args.effort}")
+    if result.get("runtime") == "free":
+        bits.append("runtime=free ($0)")
     ident = f"session {sid}" if sid else (f"pid {pid}" if pid else "session")
     suffix = f"  ({', '.join(bits)})" if bits else ""
     if result.get("existing"):
@@ -2074,6 +2078,10 @@ def main(argv=None):
     p.add_argument("--report-to", metavar="SESSION_ID",
                    help="session the spawned one reports back to on completion "
                         "(orchestration; also becomes its parent)")
+    p.add_argument("--runtime", choices=["free"],
+                   help="run the session on CCC's free router ($0; needs the "
+                        "free router running, refuses rather than billing "
+                        "your plan when it is not)")
     p.add_argument("--confirm-blocked-model", action="store_true",
                    help="spawn even if --model is on the model-policy blocklist "
                         "(~/.claude/command-center/model-policy.json)")

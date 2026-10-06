@@ -1,0 +1,1 @@
+Free model leaderboard at /free-models: races every router model through five tiny coding tasks, scores pass rate + speed, and pins the winner as the default free model (GET /api/free-router/models, POST /api/free-router/eval).

@@ -677,6 +677,7 @@ class EngineHost:
                     args.get("session_id"),
                     args.get("text") or "",
                     cwd=args.get("cwd"),
+                    runtime=args.get("runtime") or "",
                     extra_env=args.get("extra_env"),
                 )
             if operation == "ask":
