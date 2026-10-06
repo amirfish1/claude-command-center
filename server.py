@@ -26439,6 +26439,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             }, 404)
             return
 
+        # First-run setup (onboarding): plan, job polling, and the /setup page.
+        if path == "/setup" or path == "/setup.html" or path.startswith("/api/setup/"):
+            from ccc_server import setup_jobs as _setup_jobs_mod
+            _setup_jobs_mod.handle_get(self, parsed)
+            return
+
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
@@ -30420,6 +30426,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        # First-run setup (onboarding): run steps, cancel jobs.
+        if path.startswith("/api/setup/"):
+            from ccc_server import setup_jobs as _setup_jobs_mod
+            _setup_jobs_mod.handle_post(self)
             return
 
         if path == "/api/assistant/ask":
