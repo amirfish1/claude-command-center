@@ -126,6 +126,9 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+# Namespace import (not adopted): the $0 spawn runtime's helpers stay behind
+# one name so its spawn_env/readiness don't collide with engine globals.
+from ccc_server import free_runtime as _free_runtime
 from ccc_server.events import DashboardEventHub
 
 # Pure helpers and path constants moved to leaf modules (slice 3)
@@ -5078,6 +5081,9 @@ def _apply_session_lane_overrides(rows, overrides=None):
 SPAWN_MARKERS_DIR = COMMAND_CENTER_STATE_DIR / "spawn-markers"  # <session_id>.json -> {"spawned_via": "<tool>"}
 _SPAWN_MARKER_VALUE_MAX_CHARS = 64
 _SPAWN_MARKER_LANES = frozenset({"workers", "other"})
+# Non-default spawn runtimes a marker may declare. Only "free" exists today;
+# the set (not a bool) leaves room for future runtimes without a schema bump.
+_SPAWN_MARKER_RUNTIMES = frozenset({"free"})
 
 
 # Decoded marker per file path, keyed on (mtime_ns, size). Markers are
@@ -5106,7 +5112,12 @@ def _decode_spawn_marker_file(path):
     # launched the session and must never move it between lanes.
     caller = str(data.get("caller") or "").strip()[:80]
     parent = str(data.get("parent_session_id") or "").strip()[:166]
-    if not lane and not caller and not parent:
+    # Runtime-only markers (a $0 spawn stamped before the hook's caller write
+    # lands) are valid too — "free" is what the UI's $0 chip reads.
+    runtime = str(data.get("runtime") or "").strip().lower()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    if runtime not in _SPAWN_MARKER_RUNTIMES:
+        runtime = ""
+    if not lane and not caller and not parent and not runtime:
         return None
     marker = {"lane": lane} if lane else {}
     if caller:
@@ -5118,6 +5129,8 @@ def _decode_spawn_marker_file(path):
         marker["kind"] = kind
     if via:
         marker["spawned_via"] = via
+    if runtime:
+        marker["runtime"] = runtime
     return marker
 
 
@@ -5187,6 +5200,9 @@ def _apply_spawn_markers(rows, markers=None):
             mparent = marker.get("parent_session_id")
             if mparent and mparent != str(sid) and not row.get("parent_session_id"):
                 row["parent_session_id"] = mparent
+            mruntime = marker.get("runtime")
+            if mruntime and not row.get("runtime"):
+                row["runtime"] = mruntime
     return rows
 
 
@@ -5207,6 +5223,56 @@ def _write_spawn_marker(session_id, *, lane, kind="", spawned_via=""):
         payload["spawned_via"] = clean_via
     SPAWN_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
     marker_path = SPAWN_MARKERS_DIR / f"{sid}.json"
+    tmp_path = marker_path.with_suffix(f".json.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        tmp_path.replace(marker_path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _merge_spawn_marker(session_id, *, lane="", kind="", spawned_via="",
+                        caller="", parent_session_id="", runtime=""):
+    """Merge fields into one marker without clobbering fields other writers own.
+
+    `_write_spawn_marker` is a whole-file replace for the single-writer case.
+    A free-runtime stamp and the session-start hook's caller tag can land in
+    either order, so each writer merges only the keys it knows — empty values
+    are skipped rather than erasing an earlier writer's data.
+    """
+    sid = str(session_id or "").strip()
+    if not sid or Path(sid).name != sid:
+        raise ValueError("invalid session_id")
+    clean_lane = str(lane or "").strip().lower()
+    if clean_lane and clean_lane not in _SPAWN_MARKER_LANES:
+        raise ValueError("invalid spawn marker lane")
+    clean_runtime = str(runtime or "").strip().lower()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    if clean_runtime and clean_runtime not in _SPAWN_MARKER_RUNTIMES:
+        raise ValueError("invalid spawn marker runtime")
+    marker_path = SPAWN_MARKERS_DIR / f"{sid}.json"
+    try:
+        payload = json.loads(marker_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    fields = {
+        "lane": clean_lane,
+        "kind": str(kind or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS],
+        "spawned_via": str(spawned_via or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS],
+        "caller": str(caller or "").strip()[:80],
+        "parent_session_id": str(parent_session_id or "").strip()[:166],
+        "runtime": clean_runtime,
+    }
+    for key, value in fields.items():
+        if value:
+            payload[key] = value
+    if not payload:
+        return
+    SPAWN_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
     tmp_path = marker_path.with_suffix(f".json.{uuid.uuid4().hex}.tmp")
     try:
         tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
@@ -5284,6 +5350,33 @@ def _tag_spawned_via_in_registry(pid=None, session_id=None, via=""):
             sid_match = session_id and entry.get("session_id") == session_id
             if (pid_match or sid_match) and entry.get("spawned_via") != clean_via:
                 entry["spawned_via"] = clean_via
+                changed = True
+        return changed
+    _mutate_spawn_registry(_mutator)
+
+
+def _tag_spawn_runtime_in_registry(pid=None, session_id=None, runtime=""):
+    """Persist a spawn runtime ("free") onto the spawn registry entry.
+
+    Same lookup-by-pid-or-sid contract as _tag_spawned_via_in_registry; also
+    patches the live in-memory spawn entry so list_spawned_sessions' local
+    branch reports the runtime before the next registry reload.
+    """
+    clean = str(runtime or "").strip()[:32]
+    if not clean or (pid is None and not session_id):
+        return
+    for entry in _spawned_sessions:
+        pid_match = pid is not None and entry.get("pid") == pid
+        sid_match = session_id and entry.get("session_id") == session_id
+        if pid_match or sid_match:
+            entry["runtime"] = clean
+    def _mutator(entries):
+        changed = False
+        for entry in entries:
+            pid_match = pid is not None and entry.get("pid") == pid
+            sid_match = session_id and entry.get("session_id") == session_id
+            if (pid_match or sid_match) and entry.get("runtime") != clean:
+                entry["runtime"] = clean
                 changed = True
         return changed
     _mutate_spawn_registry(_mutator)
@@ -15203,7 +15296,7 @@ _ARCHIVE_LIST_FIELDS = (
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
     "goal_status", "parent_session_id", "continued_from_session_id",
-    "hermes_parent_session_id", "spawned_via", "spawn_caller",
+    "hermes_parent_session_id", "spawned_via", "spawn_caller", "runtime",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
     "model", "reasoning_effort", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
@@ -27149,6 +27242,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "task_key": h.get("task_key") or "",
                         "task_summary": h.get("task_summary") or "",
                         "prompt_hash": h.get("prompt_hash") or "",
+                        "runtime": h.get("runtime") or "",
                         "running": False,
                         "exit_code": h.get("exit_code"),
                         "status": "finished",
@@ -27200,6 +27294,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ).lower()
                 ]
             self.send_json(rows)
+        elif path == "/api/free-runtime/status":
+            # $0 spawn runtime readiness for the UI's Free chip. Cheap: one
+            # state-file read + one loopback TCP probe (400ms cap). Never
+            # reveals the router key — only whether it can serve each engine.
+            qs = urllib.parse.parse_qs(parsed.query)
+            engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
+            engines = (
+                [engine_filter]
+                if engine_filter in _free_runtime.FREE_RUNTIME_ENGINES
+                else list(_free_runtime.FREE_RUNTIME_ENGINES)
+            )
+            per_engine = {}
+            for eng in engines:
+                ready, why = _free_runtime.readiness(eng)
+                per_engine[eng] = {
+                    "ready": ready,
+                    "reason": "" if ready else why,
+                }
+            self.send_json({
+                "ok": True,
+                "ready": all(v["ready"] for v in per_engine.values()),
+                "engines": per_engine,
+            })
         elif path == "/api/sessions/children":
             # Lightweight lineage lookup: children of a dispatcher session,
             # straight from the on-disk spawn registry. No liveness probes,
@@ -33998,6 +34115,33 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # straight from the environment honor this today.
             key_profile = (payload.get("key_profile") or "").strip() or None
             byok_extra_env = byok_spawn_env(engine, model, key_profile)
+            # $0 spawn runtime: "free" routes the child through the CCC free
+            # router via per-child env. Validated here — engine support is
+            # per-engine and a $0 request must never silently run paid.
+            spawn_runtime = str(payload.get("runtime") or "").strip().lower()
+            runtime_error = None
+            if spawn_runtime and spawn_runtime != "free":
+                runtime_error = f"unknown runtime: {spawn_runtime}"
+            elif spawn_runtime == "free":
+                if engine not in _free_runtime.FREE_RUNTIME_ENGINES:
+                    runtime_error = (
+                        f"the free runtime does not support the {engine or '?'} engine "
+                        f"(supported: {', '.join(_free_runtime.FREE_RUNTIME_ENGINES)})"
+                    )
+                elif key_profile:
+                    runtime_error = (
+                        "key_profile can't be combined with runtime=free; "
+                        "the free router supplies its own key"
+                    )
+                else:
+                    _free_ready, _free_why = _free_runtime.readiness(engine)
+                    if not _free_ready:
+                        runtime_error = (
+                            "This session was asked to run free ($0), but "
+                            + (_free_why or "the free router is not ready")
+                            + ". Start the free router in Settings > Free models, "
+                            "or send again without runtime=free."
+                        )
             reasoning_effort = _spawn_request_reasoning_effort(payload, engine)
             auto_compact_k = _load_spawn_defaults().get("auto_compact_k", 250)
             if "auto_compact_k" in payload:
@@ -34144,6 +34288,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "ok": False,
                     "error": f"unsupported engine: {engine_raw}",
                     "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+                }, 400)
+            elif runtime_error:
+                _log_activity("spawn", "REJECT", f"runtime_error: {runtime_error}")
+                self.send_json({
+                    "ok": False,
+                    "error": runtime_error,
+                    "code": "free_runtime_unavailable" if spawn_runtime == "free" else "invalid_runtime",
+                    "runtime": spawn_runtime,
                 }, 400)
             elif model_error:
                 _log_activity("spawn", "REJECT", f"model_error: {model_error}")
@@ -34374,6 +34526,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                             env=byok_extra_env,
+                            runtime=spawn_runtime,
                         )
                         if result.get("ok") and byok_extra_env:
                             byok_record_usage(
@@ -34432,6 +34585,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                             env=byok_extra_env,
+                            runtime=spawn_runtime,
                         )
                         if result.get("ok") and byok_extra_env:
                             byok_record_usage(
@@ -34459,7 +34613,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 model=model,
                                 key_profile=key_profile,
                             )
-                    elif engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None)):
+                    elif not spawn_runtime and (engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None))):
                         remote_engine = "hermes" if engine == "hermes" else "claude"
                         result = spawn_session_remote(
                             prompt,
@@ -34485,6 +34639,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             prewarm_id=payload.get("prewarm_id"),
                             auto_compact_k=auto_compact_k,
                             reasoning_effort=reasoning_effort,
+                            runtime=spawn_runtime,
                         )
                     result.setdefault("engine", engine)
                     if shipped_info and isinstance(result, dict):
@@ -34512,6 +34667,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        if spawn_runtime:
+                            result["runtime"] = spawn_runtime
+                            # Worker-routed spawns stamp marker+registry inside
+                            # the worker; restamping here is idempotent and
+                            # covers every route the spawn could have taken.
+                            _spawned_sid = result.get("session_id")
+                            if _spawned_sid:
+                                try:
+                                    _merge_spawn_marker(
+                                        _spawned_sid, runtime=spawn_runtime,
+                                    )
+                                except Exception:
+                                    pass
+                            _tag_spawn_runtime_in_registry(
+                                pid=result.get("pid"),
+                                session_id=_spawned_sid,
+                                runtime=spawn_runtime,
+                            )
                         # The in-process meta path stamps the registry row
                         # inside _record_spawn_to_registry; this tag is the
                         # fallback for rows written by the worker (or an
@@ -35005,6 +35178,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     spawned_via = self._extract_spawned_via()
+                    _oc_runtime = str(payload.get("runtime") or "").strip().lower()
+                    if _oc_runtime != "free":
+                        _oc_runtime = ""
                     result = spawn_session_opencode(
                         prompt,
                         name=name,
@@ -35012,6 +35188,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         repo_path=payload.get("repo_path"),
                         worktree=bool(payload.get("worktree")),
                         model=model,
+                        runtime=_oc_runtime,
                     )
                     if isinstance(result, dict) and result.get("ok"):
                         result["spawned_via"] = spawned_via
@@ -35020,6 +35197,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        if _oc_runtime:
+                            result["runtime"] = _oc_runtime
+                            _sid = result.get("session_id")
+                            if _sid:
+                                try:
+                                    _merge_spawn_marker(_sid, runtime=_oc_runtime)
+                                except Exception:
+                                    pass
+                            _tag_spawn_runtime_in_registry(
+                                pid=result.get("pid"), session_id=_sid,
+                                runtime=_oc_runtime,
+                            )
                     if result.get("code") in ("opencode_unavailable", "opencode_launch_failed"):
                         self.send_json(result, 503)
                     else:

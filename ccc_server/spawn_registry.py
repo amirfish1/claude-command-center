@@ -253,7 +253,7 @@ _SPAWN_FEED_WINDOW_S = 300.0
 _SPAWN_FEED_FIELDS = (
     "session_id", "resumed_sid", "name", "engine", "model", "reasoning_effort",
     "cwd", "repo_path", "parent_session_id", "command_summary", "spawned_via",
-    "log",
+    "runtime", "log",
 )
 
 

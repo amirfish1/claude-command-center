@@ -1077,7 +1077,7 @@ def _record_spawn_to_registry(
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
     reasoning_effort="", auto_compact_k=None, created_at_epoch=None,
     input_result_target=None, input_accepted_at=None, input_command_uuids=None,
-    spawned_via="",
+    spawned_via="", runtime="",
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -1116,6 +1116,11 @@ def _record_spawn_to_registry(
         "parent_session_id": parent_session_id or "",
         "spawned_via": clean_via,
     }
+    clean_runtime = str(runtime or "").strip()[:32]
+    if clean_runtime:
+        # Only stamped for non-default runtimes (e.g. "free") — paid/default
+        # rows stay field-free so old entries and new ones look alike.
+        record["runtime"] = clean_runtime
     for _meta_key in _SPAWN_TASK_META_FIELDS:
         _meta_val = _spawn_request_meta().get(_meta_key)
         if _meta_val:
@@ -1829,6 +1834,7 @@ def list_spawned_sessions():
                 "task_key": entry.get("task_key") or "",
                 "task_summary": entry.get("task_summary") or "",
                 "prompt_hash": entry.get("prompt_hash") or "",
+                "runtime": entry.get("runtime") or "",
                 "running": running,
                 "exit_code": None,
                 "status": "running" if running else "finished",
@@ -1862,6 +1868,7 @@ def list_spawned_sessions():
             "task_key": s.get("task_key") or "",
             "task_summary": s.get("task_summary") or "",
             "prompt_hash": s.get("prompt_hash") or "",
+            "runtime": s.get("runtime") or "",
             "running": poll is None,
             "exit_code": poll,
             "status": "running" if poll is None else f"finished (exit {poll})",
