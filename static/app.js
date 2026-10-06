@@ -35488,6 +35488,7 @@
             + historyChainBadgeHtml
             + repoBadgeHtml
             + emptySessionChipHtml
+            + (window.cccSavings ? window.cccSavings.rowChipHtml(c) : '')
             + (opts.evergreenAgent ? '' : rowMetaHtml)
             // Context-utilized % sits just left of the elapsed-time slot, in the
             // always-visible main row (not the hover row) — it's important enough
@@ -84248,7 +84249,17 @@
     if (window.__cccEnginesFirstRun && tailscaleStepPending() && showTailscaleStep()) return;
     closeSettingsModal();
   });
-  if (window.__cccEnginesFirstRun) setTimeout(openEnginesFirstRun, 300);
+  // Moment Zero (static/onboarding/onboarding.js) owns first-run for fresh
+  // installs. claimFirstRun() resolves true when it takes over — including
+  // the explicit ?onboarding=1 route — in which case this screen never runs.
+  if (window.__cccEnginesFirstRun) {
+    setTimeout(() => {
+      const claim = (window.cccOnboarding && typeof window.cccOnboarding.claimFirstRun === 'function')
+        ? window.cccOnboarding.claimFirstRun()
+        : null;
+      Promise.resolve(claim).then(handled => { if (!handled) openEnginesFirstRun(); });
+    }, 300);
+  }
 
   function closeSettingsModal() {
     if (!$settingsModal) return;

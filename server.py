@@ -26125,6 +26125,11 @@ _adopt_ccc_module("ask")
 # Session waste — on-demand `throughput analyze` from agent-throughput (/api/session/waste).
 _adopt_ccc_module("session_waste")
 
+# Free-router provider registry + guided key setup (/api/free-router/providers,
+# /api/free-router/keys). The wizard's backend; router lifecycle is L01's
+# ccc_server/free_router.py, reached here over its loopback API.
+_adopt_ccc_module("free_providers")
+
 # Test-patched globals kept here; ccc_server/usage_stats.py reads them via _core.
 _CCC_WEEKLY_CAL_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "calibration.json"
 _WEEK_START_OVERRIDE_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "week-start-override.json"
@@ -26175,6 +26180,14 @@ def _load_index_html():
         html_text = html_text.replace(
             'href="/static/simple.css"',
             f'href="{_static_asset_url("simple.css")}"',
+        )
+        html_text = html_text.replace(
+            'href="/static/fx.css"',
+            f'href="{_static_asset_url("fx.css")}"',
+        )
+        html_text = html_text.replace(
+            'src="/static/fx.js"',
+            f'src="{_static_asset_url("fx.js")}"',
         )
         html_text = html_text.replace(
             'src="/static/app.js"',
@@ -26439,6 +26452,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             }, 404)
             return
 
+        if path.startswith("/api/free-router"):
+            # Free-model router (freellmapi) lifecycle. Falls through when
+            # the path belongs to a sibling subsystem (providers, models…).
+            from ccc_server import free_router
+            if free_router.handle_api_get(self, path):
+                return
+
+        # First-run setup (onboarding): plan, job polling, and the /setup page.
+        if path == "/setup" or path == "/setup.html" or path.startswith("/api/setup/"):
+            from ccc_server import setup_jobs as _setup_jobs_mod
+            _setup_jobs_mod.handle_get(self, parsed)
+        if path == "/api/free-router/providers":
+            # Free-key wizard catalog (L03): registry rows + live key state
+            # when the managed router answers. Contract: bare list.
+            self.send_json(free_provider_catalog())
+            return
+
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
@@ -26644,6 +26674,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
             self.send_json(_get_onboarding_status())
+        elif path == "/api/onboarding/moment-zero":
+            # Moment Zero shell: "is this a fresh install?" — answers whether
+            # any agent session history exists, so the overlay knows whether
+            # it may auto-open. Cached on directory mtimes; bounded scan.
+            from ccc_server.moment_zero import moment_zero_state
+            self.send_json(moment_zero_state())
         elif path == "/api/onboarding/first-task":
             # First magic task: playground state + starter tasks + job snapshots
             # for the onboarding step UI (static/first-task.js).
@@ -29102,6 +29138,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path in ("/free-router", "/free-router.html"):
+            # Standalone Free engine status page — same narrow-route pattern
+            # as /spawn-ledger: isolated from the main dashboard bundle.
+            try:
+                body = (STATIC_DIR / "free-router.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "free-router.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path in ("/spawn-ledger", "/spawn-ledger.html"):
             # Standalone read-only scorecard page, deliberately isolated from
             # the main dashboard bundle.
@@ -29149,6 +29203,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "canvas.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "canvas.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/fx-demo.html" or path == "/fx-demo":
+            # Sound + motion kit playground (window.cccFx). Same narrow-route
+            # pattern as /q2.html: the /static/ handler refuses *.html, so a
+            # standalone page needs its own route. Loads no app.js/app.css.
+            try:
+                body = (STATIC_DIR / "fx-demo.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "fx-demo.html missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
@@ -30424,6 +30497,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             result = codex_client_call(action, data)
             self.send_json(result, 200 if result.get("ok") else 409)
             return
+        if path.startswith("/api/free-router"):
+            # Free-model router lifecycle (install/start/stop). Same-origin
+            # was already enforced at the top of do_POST.
+            from ccc_server import free_router
+            if free_router.handle_api_post(self, path):
+                return
         if path.startswith("/proxy/"):
             self._proxy_local_view("POST")
             return
@@ -30432,6 +30511,43 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        # First-run setup (onboarding): run steps, cancel jobs.
+        if path.startswith("/api/setup/"):
+            from ccc_server import setup_jobs as _setup_jobs_mod
+            _setup_jobs_mod.handle_post(self)
+        if path == "/api/free-router/keys":
+            # Free-key wizard submit (L03): {platform, key?, consent?} ->
+            # {ok, validated, error}. The key is forwarded to the managed
+            # router only; it is never logged, echoed, or stored by CCC.
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                length = 0
+            if length > 64 * 1024:
+                self.send_json({"ok": False, "error": "request too large"}, 413)
+                return
+            try:
+                body = self.rfile.read(length) if length > 0 else b""
+                payload = json.loads(body) if body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "validated": False,
+                                "error": "invalid JSON body"}, 400)
+                return
+            result = submit_free_key(
+                payload.get("platform"),
+                key=payload.get("key"),
+                consent=bool(payload.get("consent")),
+            )
+            status = 200 if result.get("ok") else {
+                "router_unavailable": 503,
+                "router_error": 502,
+                "router_rejected": 502,
+            }.get(result.get("code"), 400)
+            self.send_json(result, status)
             return
 
         if path == "/api/assistant/ask":
