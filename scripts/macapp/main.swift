@@ -82,6 +82,114 @@ func portIsBound(_ port: Int) -> Bool {
     }
 }
 
+// MARK: Stale-server detection
+//
+// A server that outlives an update (launched by an earlier app run, launchd,
+// or a terminal) keeps port 8090 while the app serves NEW static files from
+// disk, so the page talks to an API that lacks the new routes. The server
+// stamps `code_rev` (git HEAD at process start) into /api/version; compare it
+// with HEAD on disk. These helpers are pure so they can be unit tested; see
+// tests/test_macapp_stale_server.py.
+
+struct ServerVersionInfo: Equatable {
+    var pid: Int
+    var startedAt: Double
+    var codeRev: String
+}
+
+/// Stale only when both revs are known and differ. An empty rev (server not
+/// in a git clone, git missing, old server without the field) is "unknown",
+/// never "stale".
+func serverIsStale(serverRev: String, diskRev: String) -> Bool {
+    let s = serverRev.trimmingCharacters(in: .whitespacesAndNewlines)
+    let d = diskRev.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !s.isEmpty && !d.isEmpty && s != d
+}
+
+/// A restart is done once a different process (pid or started_at changed) is
+/// serving the code that is on disk now.
+func staleRestartCompleted(before: ServerVersionInfo, now: ServerVersionInfo, diskRev: String) -> Bool {
+    let replaced = now.pid != before.pid || now.startedAt != before.startedAt
+    return replaced && !serverIsStale(serverRev: now.codeRev, diskRev: diskRev)
+        && !now.codeRev.isEmpty
+}
+
+/// Same resolution as server.py `_install_dir()`: the clone containing
+/// server.py, with symlinks (~/.ccc/claude-command-center -> dev clone) followed.
+func resolvedInstallDir() -> String {
+    URL(fileURLWithPath: CCC_INSTALL_DIR).resolvingSymlinksInPath().path
+}
+
+func diskCodeRev() -> String {
+    let task = Process()
+    task.launchPath = "/usr/bin/env"
+    task.arguments = ["git", "-C", resolvedInstallDir(), "rev-parse", "HEAD"]
+    var env = ProcessInfo.processInfo.environment
+    env["PATH"] = augmentedPath()
+    task.environment = env
+    let out = Pipe()
+    task.standardOutput = out
+    task.standardError = Pipe()
+    do {
+        try task.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else { return "" }
+        return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    } catch {
+        return ""
+    }
+}
+
+/// Blocking GET /api/version on the local server; call off the main thread.
+func fetchLocalServerVersion(timeout: TimeInterval = 3) -> ServerVersionInfo? {
+    guard let url = URL(string: "http://127.0.0.1:\(CCC_PORT)/api/version") else { return nil }
+    var req = URLRequest(url: url)
+    req.timeoutInterval = timeout
+    req.cachePolicy = .reloadIgnoringLocalCacheData
+    let sem = DispatchSemaphore(value: 0)
+    var result: ServerVersionInfo?
+    URLSession.shared.dataTask(with: req) { data, resp, _ in
+        defer { sem.signal() }
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let data = data,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pid = obj["pid"] as? Int
+        else { return }
+        result = ServerVersionInfo(
+            pid: pid,
+            startedAt: (obj["started_at"] as? Double) ?? 0,
+            codeRev: (obj["code_rev"] as? String) ?? ""
+        )
+    }.resume()
+    _ = sem.wait(timeout: .now() + timeout + 1)
+    return result
+}
+
+/// Blocking POST /api/restart; true when the server accepted (HTTP 200) or the
+/// socket dropped mid-restart (expected). False on an explicit refusal (409
+/// while sessions are busy, 403, ...).
+func requestLocalServerRestart() -> Bool {
+    guard let url = URL(string: "http://127.0.0.1:\(CCC_PORT)/api/restart") else { return false }
+    var req = URLRequest(url: url)
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    // The handler does a best-effort `git fetch` (15s cap) before replying.
+    req.timeoutInterval = 30
+    let sem = DispatchSemaphore(value: 0)
+    var accepted = false
+    URLSession.shared.dataTask(with: req) { _, resp, err in
+        defer { sem.signal() }
+        if let http = resp as? HTTPURLResponse {
+            accepted = http.statusCode == 200
+        } else {
+            accepted = err != nil
+        }
+    }.resume()
+    _ = sem.wait(timeout: .now() + 35)
+    return accepted
+}
+
 func carModeCommandExists() -> Bool {
     FileManager.default.isExecutableFile(atPath: CCC_CAR_MODE_CMD)
 }
@@ -1295,9 +1403,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if portIsBound(CCC_PORT) {
             // Someone else (launchd, foreground ./run.sh) is already serving.
-            loadDashboard()
+            // It may predate the code on disk; replace it first if so.
+            replaceStaleServerThenLoad()
         } else {
             spawnServer()
+        }
+    }
+
+    /// Port already bound by a server we did not start. If its code_rev differs
+    /// from HEAD on disk, ask it to restart itself (POST /api/restart, the only
+    /// way we touch a process we do not own), wait for the new process, then
+    /// load. Any failure falls back to loading the dashboard with a notice.
+    /// Local targets only: bootstrap() returns early for remote ones.
+    func replaceStaleServerThenLoad() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let before = fetchLocalServerVersion()
+            let disk = diskCodeRev()
+            guard let before = before, serverIsStale(serverRev: before.codeRev, diskRev: disk) else {
+                DispatchQueue.main.async { self?.loadDashboard() }
+                return
+            }
+            DispatchQueue.main.async {
+                self?.loadingLabel.isHidden = false
+                self?.loadingLabel.stringValue = "Updating Command Center…"
+            }
+            var done = false
+            if requestLocalServerRestart() {
+                let deadline = Date().addingTimeInterval(60)
+                while Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.5)
+                    // Re-read disk HEAD each pass: the restart may fast-forward the clone.
+                    if let now = fetchLocalServerVersion(),
+                       staleRestartCompleted(before: before, now: now, diskRev: diskCodeRev()) {
+                        done = true
+                        break
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.loadDashboard()
+                if !done {
+                    self.noteStaleServer()
+                }
+            }
+        }
+    }
+
+    /// Non-blocking notice: the window subtitle, cleared after a while.
+    func noteStaleServer() {
+        window.subtitle = "Server is out of date. Restart it from the CCC menu."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.window.subtitle = ""
         }
     }
 

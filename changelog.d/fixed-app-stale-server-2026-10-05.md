@@ -1,0 +1,1 @@
+CCC.app now replaces an out-of-date local server on launch: when port 8090 is already served by a server whose code is older than the install on disk, the app asks it to restart itself (via `/api/restart`) and waits for the new code before loading the dashboard, instead of showing new UI against an old API.
