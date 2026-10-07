@@ -346,7 +346,8 @@ def fetch_catalog(cfg):
     status, payload, err = _http_json(
         "GET",
         cfg["base_url"] + "/v1/models",
-        headers=_inference_headers(cfg),
+        headers={key: value for key, value in _inference_headers(cfg).items()
+                 if key != "anthropic-version"},
         timeout=12,
     )
     if status != 200 or not isinstance(payload, dict):

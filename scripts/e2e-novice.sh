@@ -440,8 +440,9 @@ import json, sys
 playground, proof_file, proof_text, task_key = sys.argv[1:5]
 print(json.dumps({
     "prompt": (
-        f"Create a file named {proof_file} in the current directory "
-        f"containing exactly this text: {proof_text}. Then stop."
+        f"Create a file named {proof_file} in the current directory.\n"
+        f"Its contents must be the decoded JSON string: {json.dumps(proof_text)}\n"
+        "Do not include the surrounding quotes or any extra punctuation. Then stop."
     ),
     "name": "e2e-free-run",
     "cwd": playground,
