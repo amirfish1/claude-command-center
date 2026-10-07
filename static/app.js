@@ -6396,7 +6396,7 @@
     if (!relayActive) return;
     const qs = _relayedQuestionState.questions || [];
     if (!qs.length) return;
-    const SEP = '';
+    const SEP = '^A';
     const keys = new Set(qs.map(function (q) {
       return ((q.header || '').trim() + SEP + (q.question || '').trim());
     }));
@@ -14104,7 +14104,7 @@
     const actions = [];
     const seen = new Set();
     const add = (a) => {
-      const key = a.act + '\u0000' + a.value;
+      const key = a.act + '^@' + a.value;
       if (seen.has(key) || actions.length >= 6) return;
       seen.add(key);
       actions.push(a);
@@ -15775,7 +15775,7 @@
   function linkifyWatchtowerTicketRefs(html) {
     const anchors = [];
     const protectedHtml = String(html || '').replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, match => {
-      const token = '\u0000WTANCHOR' + anchors.length + '\u0000';
+      const token = '^@WTANCHOR' + anchors.length + '^@';
       anchors.push(match);
       return token;
     });
@@ -15783,7 +15783,7 @@
       '<a role="button" tabindex="0" class="watchtower-ticket-link"'
         + ' data-watchtower-ticket="' + escapeAttr(match) + '"'
         + ' data-watchtower-queue="' + escapeAttr(queue) + '">' + match + '</a>');
-    return linked.replace(/\u0000WTANCHOR(\d+)\u0000/g, (match, index) => anchors[Number(index)] || match);
+    return linked.replace(/^@WTANCHOR(\d+)^@/g, (match, index) => anchors[Number(index)] || match);
   }
 
   function linkifyPath(p) {
@@ -20481,6 +20481,35 @@
     input.focus();
   }
 
+  let newSessionComposerRevision = 0;
+
+  function getAutoOpenNewChatsPref() {
+    try { return localStorage.getItem('ccc-auto-open-new-chats') !== 'off'; }
+    catch (_) { return true; }
+  }
+
+  function newSessionLaunchStillCurrent(context) {
+    return activePaneId() === context.paneId
+      && newSessionComposerRevision === context.revision
+      && currentConversation === '__new__';
+  }
+
+  function pendingSpawnIsSelected(card) {
+    if (!card) return false;
+    const paneId = card.spawn_pane_id || activePaneId();
+    const pane = paneByPaneId(paneId);
+    return activePaneId() === paneId && !!pane
+      && (pane.conversationId === card.id
+        || !!(card.expected_session_id && pane.conversationId === card.expected_session_id));
+  }
+
+  function refreshSelectedPendingSpawn(card) {
+    if (pendingSpawnIsSelected(card) && typeof selectConversation === 'function') {
+      const paneId = card.spawn_pane_id || activePaneId();
+      selectConversation(paneByPaneId(paneId).conversationId, paneId);
+    }
+  }
+
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {
     if (!pid) return;
     const id = 'spawning-' + pid;
@@ -20499,6 +20528,7 @@
       source,
       is_live: true, archived: false, verified: false,
       spawn_pid: pid, pending_spawn: true,
+      spawn_pane_id: activePaneId(),
       has_edit: false, has_commit: false, has_push: false,
       sidecar_status: 'active', sidecar_has_writes: false,
       question_waiting: false, question_text: '', question_header: '', question_preamble: '', question_options: [], question_option_details: [],
@@ -20533,10 +20563,10 @@
       // An externally-initiated spawn (`ccc spawn`, an agent, a queue lane)
       // must NOT steal the pane: the user did not ask for this session, they
       // just need to see it appear. Only spawns this tab started auto-select.
-      if (card.no_auto_select) return;
+      if (card.no_auto_select || !getAutoOpenNewChatsPref()) return;
       if (typeof selectConversation === 'function') selectConversation(id);
     };
-    if (card.fast_path) {
+    if (card.fast_path && getAutoOpenNewChatsPref() && !card.no_auto_select) {
       // Rebuilding a sidebar with thousands of sessions can occupy the main
       // thread for a full second. Claude's main pane is the useful immediate
       // feedback, so select it now and let the complete sidebar rebuild run
@@ -24705,9 +24735,7 @@
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
         const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);
-        if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
-          selectConversation(placeholder.id);
-        }
+        if (spawnUsesLogPlaceholder(engine)) refreshSelectedPendingSpawn(placeholder);
         if (engine === 'cursor') showOpToast('Cursor headless run started.', 'ok');
         if (engine === 'antigravity') showOpToast('Antigravity headless run started.', 'ok');
         setTimeout(refreshConversationList, 600);
@@ -44269,10 +44297,10 @@
     const imgs = [];
     md = md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
       imgs.push({ alt, url });
-      return '\u0000IMG' + (imgs.length - 1) + '\u0000';
+      return '^@IMG' + (imgs.length - 1) + '^@';
     });
     let html = renderMarkdown(md);
-    html = html.replace(/\u0000IMG(\d+)\u0000/g, (m, idx) => {
+    html = html.replace(/^@IMG(\d+)^@/g, (m, idx) => {
       const { alt, url } = imgs[+idx];
       return '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(alt) + '" style="max-width:100%;border-radius:6px;margin:8px 0;" loading="lazy">';
     });
@@ -57869,7 +57897,7 @@
 
   function queuedSteerErrorKey(sid, text) {
     const norm = _normSend(String(text || ''));
-    return sid && norm ? sid + '\u0000' + norm : '';
+    return sid && norm ? sid + '^@' + norm : '';
   }
 
   function setQueuedSteerError(sid, texts, message) {
@@ -67144,7 +67172,7 @@
   let _localhostCtxKey = '';
 
   function _localhostCtxKeyOf(ctx) {
-    return ctx ? [ctx.repoPath || '', ctx.cwd || '', ctx.sessionId || ''].join('') : '';
+    return ctx ? [ctx.repoPath || '', ctx.cwd || '', ctx.sessionId || ''].join('^A') : '';
   }
 
   // Forget the previous context's cached probe result. Called on a session
@@ -71896,8 +71924,8 @@
           // If the user picked a fire-and-watch engine, refocus the right pane on the
           // placeholder so log rendering kicks in for the new pid
           // (the auto-select fired when tempPid was still in play).
-          if (spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
-            selectConversation('spawning-' + tempPid);
+          if (spawnUsesLogPlaceholder(engine)) {
+            refreshSelectedPendingSpawn(pendingSpawns.get(realSpawnId) || pendingSpawns.get(tempPid));
           }
           if (engine === 'cursor') showOpToast('Cursor headless run started.', 'ok');
           if (engine === 'antigravity') showOpToast('Antigravity headless run started.', 'ok');
@@ -81501,6 +81529,7 @@
   }
 
   function enterNewSessionMode() {
+    ++newSessionComposerRevision;
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
     // CCC-29: entering new-session mode does not always go through
@@ -81900,6 +81929,10 @@
   window.addEventListener('focus', () => { if (_emnInstalled) refreshEngineMissingNotice({ fresh: true }); });
 
   async function spawnFromInlineInput(body) {
+    const spawnPaneId = activePaneId();
+    const launchContext = { paneId: spawnPaneId, revision: newSessionComposerRevision };
+    const spawnInput = composerInputForPane(spawnPaneId) || $convInput;
+    const spawnSendButton = $convSendBtn;
     const spawnAskedAt = Date.now();
     const subject = spawnFirstSentence(body);
     const prompt = body;
@@ -81940,6 +81973,7 @@
     };
     const cardSource = spawnSourceForEngine(engine);
     const tempPid = 'tmp-' + Date.now();
+    const clearSubmittedComposer = newSessionLaunchStillCurrent(launchContext);
     insertPendingSpawnCard(tempPid, subject, cardSource, null, {
       first_message: body,
       repo_path: displayPath,
@@ -81949,18 +81983,20 @@
       session_cwd: launchCwd,
       session_cwd_exists: true,
       fast_path: engine === 'claude',
+      spawn_pane_id: spawnPaneId,
+      no_auto_select: !clearSubmittedComposer,
     });
-    if ($convInput) $convInput.value = '';
-    clearInputDraftForConversation('__new__');
-    const restoreDraftAfterFailure = () => {
-      _removePendingSpawnCard(tempPid);
-      enterNewSessionMode();
-      setTimeout(() => {
-        if (!$convInput) return;
-        $convInput.value = body;
-        $convInput.dispatchEvent(new Event('input', { bubbles: true }));
-        $convInput.focus();
-      }, 60);
+    if (clearSubmittedComposer) {
+      if (spawnInput) spawnInput.value = '';
+      clearInputDraftForConversation('__new__');
+    }
+    const restoreDraftAfterFailure = (reason) => {
+      // Keep the exact failed request available for Retry/Edit without
+      // replacing a newer draft or navigating back from another chat.
+      _failPendingSpawnCard(tempPid, reason);
+      if (newSessionComposerRevision === launchContext.revision) {
+        setInputDraftForKey(inputDraftKeyForConversation('__new__'), body);
+      }
     };
     try {
       const endpoint = spawnEndpointForEngine(engine);
@@ -81988,6 +82024,9 @@
         timeline_t0_epoch_ms: spawnAskedAt,
         idempotency_key: durableActionId('spawn'),
       }, Number.isFinite(autoCompactK) && autoCompactK > 0 ? { auto_compact_k: autoCompactK } : {}));
+      if (!getAutoOpenNewChatsPref() && newSessionLaunchStillCurrent(launchContext)) {
+        enterNewSessionMode(spawnInput ? spawnInput.value : '');
+      }
       if (engine === 'claude') abortBackgroundApiReadsForSpawn();
       // A prewarm reservation boots with paid env - a $0 spawn must not claim it.
       if (engine === 'claude' && !useWorktree && spawnBody.runtime !== 'free') {
@@ -81996,6 +82035,8 @@
         _claudePrewarmKey = '';
         _claudePrewarmPromise = null;
       }
+      const pendingCard = pendingSpawns.get(tempPid);
+      if (pendingCard) Object.assign(pendingCard, { spawn_endpoint: endpoint, spawn_body: spawnBody });
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         priority: 'high',
@@ -82006,9 +82047,9 @@
         // An auto-picked folder becomes the last-used one only now that a
         // session actually launched in it.
         if (autoPickedCwd) { try { localStorage.setItem(SPAWN_CWD_KEY, autoPickedCwd); } catch (_) {} }
-        resetRepoGuess(false);
+        if (newSessionLaunchStillCurrent(launchContext) || pendingSpawnIsSelected(pendingSpawns.get(tempPid))) resetRepoGuess(false);
         if (typeof recordSpawnChoice === 'function') {
-          recordSpawnChoice(engine, pickedModel, $convInputEffortSelect ? $convInputEffortSelect.value : '');
+          recordSpawnChoice(engine, pickedModel, spawnBody.reasoning_effort || '');
         }
         if (data.prewarm_fallback) showClaudePrewarmFallbackRecovery();
         if (data.session_id) {
@@ -82017,15 +82058,15 @@
         }
         const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);
         assignSpawnedSessionToDefaultObject(data, repoPath || launchCwd);
-        if (placeholder && engine === 'claude' && data.session_id) {
+        if (pendingSpawnIsSelected(placeholder) && engine === 'claude' && data.session_id) {
           claudeSpawnAwaitingFirstPaint.add(data.session_id);
           setTimeout(() => releaseClaudeSpawnPaintGate(data.session_id), 30000);
           // The placeholder's canonical conversation stream has no durable
           // transcript yet and competes for the same HTTP/1.1 connection pool
           // as the useful spawn-log replay. Give the first-response stream the
           // slot; canonical polling resumes when the real row is rebound.
-          stopConvStream(activePaneId());
-          startSpawnStream(data.session_id, activePaneId(), {
+          stopConvStream(spawnPaneId);
+          startSpawnStream(data.session_id, spawnPaneId, {
             pendingConversationId: placeholder.id,
             replay: true,
             knownLog: !!data.log,
@@ -82034,9 +82075,7 @@
         // Fire-and-watch engines can stream their spawn log once the real pid
         // is known. Re-select the same placeholder id so fetchConversationEvents
         // starts the log poller without making the user click the sidebar row.
-        if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
-          selectConversation(placeholder.id);
-        }
+        if (spawnUsesLogPlaceholder(engine)) refreshSelectedPendingSpawn(placeholder);
         if (engine === 'cursor') showOpToast('Cursor headless run started.', 'ok');
         if (engine === 'antigravity') showOpToast('Antigravity headless run started.', 'ok');
         if (engine !== 'claude') setTimeout(refreshConversationList, 600);
@@ -82050,7 +82089,7 @@
         // retry does not fail the same way.
         const missingCwd = /^invalid cwd: (path does not exist|not a directory)/.test(data.error || '');
         if (missingCwd) forgetMissingSpawnCwd(launchCwd);
-        restoreDraftAfterFailure();
+        restoreDraftAfterFailure('Spawn failed: ' + (data.error || 'HTTP ' + res.status));
         flashRed();
         if (missingCwd) offerCreateMissingSpawnCwd(launchCwd, body);
         else if (data.error_code === 'engine_not_installed') {
@@ -82065,13 +82104,16 @@
       }
     } catch (err) {
       releaseClaudeSpawnPaintGate('', tempPid);
-      restoreDraftAfterFailure();
+      restoreDraftAfterFailure('Spawn failed: ' + (err && err.message || 'network'));
       flashRed();
       showOpToast('Spawn failed: ' + (err && err.message || 'network'), 'error');
       console.error('[New session] submit error', err);
     }
-    if ($convSendBtn) $convSendBtn.disabled = false;
-    if ($convInput) $convInput.focus();
+    if (newSessionLaunchStillCurrent(launchContext)
+        || pendingSpawnIsSelected(pendingSpawns.get(tempPid))) {
+      if (spawnSendButton) spawnSendButton.disabled = false;
+      if (!document.hidden && spawnInput) spawnInput.focus();
+    }
   }
 
   // ── Appearance picker (theme + font) ───────────────────────────
@@ -82676,6 +82718,12 @@
       const on = getSeparateTabsPref();
       $separateTabsToggle.classList.toggle('is-on', on);
       $separateTabsToggle.setAttribute('aria-checked', String(on));
+    }
+    const $autoOpenNewChatsToggle = document.getElementById('settingsAutoOpenNewChatsToggle');
+    if ($autoOpenNewChatsToggle) {
+      const on = getAutoOpenNewChatsPref();
+      $autoOpenNewChatsToggle.classList.toggle('is-on', on);
+      $autoOpenNewChatsToggle.setAttribute('aria-checked', String(on));
     }
     const $queueRhsListToggle = document.getElementById('settingsQueueRhsListToggle');
     if ($queueRhsListToggle) {
@@ -84425,6 +84473,13 @@
         applyViewGh(next);
         refreshAppearanceChecks();
         showSettingsSavedPulse(viewGhToggle.closest('.settings-row'));
+        return;
+      }
+      const autoOpenNewChatsToggle = e.target.closest('[data-auto-open-new-chats-toggle]');
+      if (autoOpenNewChatsToggle) {
+        try { localStorage.setItem('ccc-auto-open-new-chats', getAutoOpenNewChatsPref() ? 'off' : 'on'); } catch (_) {}
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(autoOpenNewChatsToggle.closest('.settings-row'));
         return;
       }
       const separateTabsToggle = e.target.closest('[data-separate-tabs-toggle]');
