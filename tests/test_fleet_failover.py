@@ -175,12 +175,12 @@ class FleetActionTests(_FleetBase):
     def test_unknown_action_rejected(self):
         res = self.server.free_failover_fleet_action("explode", ["x"])
         self.assertFalse(res["ok"])
-        self.assertIn("unknown", res["error"])
+        self.assertIn("supported", res["error"])
 
     def test_missing_session_ids_rejected(self):
         res = self.server.free_failover_fleet_action("arm", [])
         self.assertFalse(res["ok"])
-        self.assertIn("session_ids", res["error"])
+        self.assertIn("session", res["error"])
 
     def test_arm_fans_out_to_every_selected_session(self):
         sids = [f"sid{i:08d}-0000-0000-0000-000000000000" for i in range(3)]
@@ -223,6 +223,8 @@ class FleetActionTests(_FleetBase):
         sids = ["77777777-0000-0000-0000-000000000001",
                 "88888888-0000-0000-0000-000000000002"]
         calls = []
+        for sid in sids:
+            self._track(sid)
 
         def fake_continue(sid, always=False, auto=False):
             calls.append((sid, always))
@@ -247,6 +249,8 @@ class FleetActionTests(_FleetBase):
         # >1 sid takes the ThreadPoolExecutor path; a raising session must
         # still get an entry instead of dropping out of the results map.
         sids = [f"sid{i:08d}-0000-0000-0000-000000000000" for i in range(6)]
+        for sid in sids:
+            self._track(sid)
 
         def flaky(sid, always=False, auto=False):
             if sid == sids[3]:
@@ -261,11 +265,14 @@ class FleetActionTests(_FleetBase):
         self.assertEqual(set(res["results"]), set(sids))
         self.assertEqual(res["succeeded"], 5)
         self.assertEqual(res["failed"], 1)
-        self.assertEqual(res["results"][sids[3]]["error"], "boom")
+        self.assertEqual(res["results"][sids[3]]["code"], "action_failed")
+        self.assertNotIn("boom", res["results"][sids[3]]["error"])
 
     def test_switch_back_fans_out(self):
         sids = ["99999999-0000-0000-0000-000000000001",
                 "99999999-0000-0000-0000-000000000002"]
+        for sid in sids:
+            self.server._free_failover_save(sid, {"state": "free", "engine": "claude"})
         calls = []
         with mock.patch.object(
                 self.server, "free_failover_switch_back",
@@ -281,17 +288,16 @@ class FleetActionTests(_FleetBase):
         self._track(sid)
         with mock.patch.object(self.server, "_log_activity"):
             res = self.server.free_failover_fleet_action(
-                "dismiss", [sid, sid, "", "  "])
+                "dismiss", [sid, sid, "session_" + sid])
         self.assertTrue(res["ok"])
         self.assertEqual(res["succeeded"], 1)
 
-    def test_string_session_ids_treated_as_one(self):
+    def test_string_session_ids_rejected(self):
         sid = "bbbbbbbb-0000-0000-0000-000000000001"
         self._track(sid)
         with mock.patch.object(self.server, "_log_activity"):
             res = self.server.free_failover_fleet_action("dismiss", sid)
-        self.assertTrue(res["ok"])
-        self.assertEqual(res["succeeded"], 1)
+        self.assertFalse(res["ok"])
 
 
 class FleetPerfBudgetTests(_FleetBase):

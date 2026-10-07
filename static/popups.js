@@ -24,6 +24,7 @@
     'star-ask',
     'router-detected',
     'limit-failover',
+    'fleet-limit',
   ];
 
   // Approved pop-ups. Empty: nothing shows until Amir approves it.

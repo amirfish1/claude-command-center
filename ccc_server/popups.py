@@ -27,6 +27,7 @@ ALL = {
     "star-ask": "'Star CCC on GitHub?' card at success moments",
     "router-detected": "Floating 'Use your existing router' card",
     "limit-failover": "'Limit reached: continue on a free model?' cards",
+    "fleet-limit": "One grouped notice for sessions stopped by an engine usage limit",
 }
 
 # Approved pop-ups. Empty: nothing shows until Amir approves it.
