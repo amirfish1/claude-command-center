@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" role="img" aria-labelledby="compare-title compare-desc">
+  <title id="compare-title">How it compares</title>
+  <desc id="compare-desc">CCC is a local board across coding agent engines, including sessions started in a terminal. Routers connect apps to models: freellmapi provides free-tier APIs and fallback, 9Router is a local gateway with quota tracking, and OpenRouter provides a model API with provider failover. Claude Squad manages terminal tasks in isolated workspaces, Conductor uses git worktrees on macOS, and Nimbalyst has visual editors and parallel agents. Crystal is now Nimbalyst. For CCC-managed Free ($0) sessions, CCC starts and shows a coding agent whose model requests go through freellmapi to a model provider. Routers are backends, not rivals. Sources are in docs/compare.md, checked 6 October 2026.</desc>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f9fc;
+      --panel: #ffffff;
+      --ink: #172233;
+      --muted: #48596f;
+      --line: #ccd5e0;
+      --blue: #2456a6;
+      --blue-bg: #edf3fc;
+      --purple: #6540a0;
+      --purple-bg: #f4effb;
+      --green: #226649;
+      --green-bg: #edf7f2;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101722;
+        --panel: #182231;
+        --ink: #f0f4fa;
+        --muted: #b3c2d5;
+        --line: #3e5066;
+        --blue: #9fc2ff;
+        --blue-bg: #202f46;
+        --purple: #d0b5ff;
+        --purple-bg: #302640;
+        --green: #94d9b6;
+        --green-bg: #20382e;
+      }
+    }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: var(--ink); }
+    .heading { font-size: 46px; font-weight: 700; letter-spacing: -1px; }
+    .subtitle { font-size: 22px; fill: var(--muted); }
+    .panel { fill: var(--panel); stroke: var(--line); }
+    .card-title { font-size: 32px; font-weight: 700; }
+    .card-subtitle { font-size: 23px; font-weight: 600; }
+    .product { font-size: 23px; font-weight: 650; }
+    .body { font-size: 20px; fill: var(--muted); }
+    .diagram-title { font-size: 26px; font-weight: 650; }
+    .diagram-label { font-size: 23px; font-weight: 600; text-anchor: middle; }
+    .small { font-size: 18px; fill: var(--muted); }
+    .arrow { fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <rect x="1" y="1" width="1198" height="858" rx="24" fill="var(--bg)" stroke="var(--line)"/>
+  <text x="48" y="72" class="heading">How it compares</text>
+  <text x="48" y="111" class="subtitle">A board for your sessions. A router for your model requests.</text>
+
+  <g id="ccc-card">
+    <rect x="48" y="148" width="352" height="440" rx="18" class="panel"/>
+    <rect x="72" y="172" width="6" height="36" rx="3" fill="var(--blue)"/>
+    <text x="90" y="201" class="card-title" style="fill:var(--blue)">CCC</text>
+    <text x="72" y="250" class="card-subtitle">See your coding sessions</text>
+    <rect x="72" y="278" width="304" height="116" rx="12" fill="var(--blue-bg)"/>
+    <g fill="var(--blue)">
+      <rect x="91" y="296" width="76" height="34" rx="6"/>
+      <rect x="185" y="296" width="76" height="34" rx="6"/>
+      <rect x="279" y="296" width="76" height="34" rx="6"/>
+      <rect x="91" y="344" width="76" height="32" rx="6" opacity="0.55"/>
+      <rect x="185" y="344" width="76" height="32" rx="6" opacity="0.55"/>
+      <rect x="279" y="344" width="76" height="32" rx="6" opacity="0.55"/>
+    </g>
+    <text x="72" y="433" class="body">Local board, multiple engines</text>
+    <text x="72" y="473" class="body"><tspan x="72">Includes sessions started</tspan><tspan x="72" dy="28">in your terminal</tspan></text>
+    <text x="72" y="551" class="body">Free ($0) runs use freellmapi</text>
+  </g>
+
+  <g id="routers-card">
+    <rect x="424" y="148" width="352" height="440" rx="18" class="panel"/>
+    <rect x="448" y="172" width="6" height="36" rx="3" fill="var(--purple)"/>
+    <text x="466" y="201" class="card-title" style="fill:var(--purple)">Routers</text>
+    <text x="448" y="250" class="card-subtitle">Connect apps to models</text>
+    <rect x="448" y="278" width="304" height="68" rx="10" fill="var(--purple-bg)"/>
+    <text x="462" y="306" class="product">freellmapi</text>
+    <text x="462" y="334" class="body">Free-tier APIs + fallback</text>
+    <text x="448" y="393" class="product">9Router</text>
+    <text x="448" y="425" class="body">Local gateway + quota tracking</text>
+    <text x="448" y="484" class="product">OpenRouter</text>
+    <text x="448" y="516" class="body">Model API + provider failover</text>
+  </g>
+
+  <g id="orchestrators-card">
+    <rect x="800" y="148" width="352" height="440" rx="18" class="panel"/>
+    <rect x="824" y="172" width="6" height="36" rx="3" fill="var(--green)"/>
+    <text x="842" y="201" class="card-title" style="fill:var(--green)">Session tools</text>
+    <text x="824" y="250" class="card-subtitle">Run parallel coding tasks</text>
+    <text x="824" y="302" class="product">Claude Squad</text>
+    <text x="824" y="333" class="body">Terminal + isolated workspaces</text>
+    <text x="824" y="387" class="product">Conductor</text>
+    <text x="824" y="418" class="body">macOS + git worktrees</text>
+    <text x="824" y="472" class="product">Nimbalyst</text>
+    <text x="824" y="503" class="body">Visual editors + parallel agents</text>
+    <rect x="824" y="532" width="304" height="36" rx="8" fill="var(--green-bg)"/>
+    <text x="837" y="557" class="small">Crystal is now Nimbalyst</text>
+  </g>
+
+  <text x="48" y="638" class="diagram-title">Different layers, working together</text>
+  <g id="request-flow">
+    <rect x="48" y="678" width="226" height="64" rx="12" fill="var(--blue-bg)" stroke="var(--line)"/>
+    <text x="161" y="718" class="diagram-label">CCC</text>
+    <path d="M286 710 H316 M310 704 L316 710 L310 716" class="arrow"/>
+    <text x="301" y="667" class="small" text-anchor="middle">starts / shows</text>
+    <rect x="340" y="678" width="226" height="64" rx="12" class="panel"/>
+    <text x="453" y="718" class="diagram-label">Coding agent</text>
+    <path d="M578 710 H608 M602 704 L608 710 L602 716" class="arrow"/>
+    <text x="748" y="667" class="small" text-anchor="middle">model requests</text>
+    <rect x="632" y="678" width="226" height="64" rx="12" fill="var(--purple-bg)" stroke="var(--line)"/>
+    <text x="745" y="718" class="diagram-label">freellmapi</text>
+    <path d="M870 710 H900 M894 704 L900 710 L894 716" class="arrow"/>
+    <rect x="926" y="678" width="226" height="64" rx="12" class="panel"/>
+    <text x="1039" y="718" class="diagram-label">Model provider</text>
+  </g>
+  <text x="48" y="781" class="body">For CCC-managed Free ($0) sessions. Routers are backends, not rivals.</text>
+  <text x="48" y="826" class="small">README snapshot: 6 Oct 2026 · Sources and details: docs/compare.md</text>
+</svg>

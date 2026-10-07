@@ -87,6 +87,16 @@
       '}',
       '.ccc-free-pill.is-setup { border-style: dashed; color: var(--text-muted); }',
       '.ccc-free-pill.is-setup .ccc-free-pill-badge { background: var(--text-muted); }',
+      '.ccc-free-composer-label { display: none; }',
+      'body.ccc-free-on:has(.conv-input-context.is-new-session) #convInputModelSelect,',
+      'body.ccc-free-on:has(.conv-input-context.is-new-session) #convInputEffortSelect {',
+      '  display: none !important;',
+      '}',
+      'body.ccc-free-on:has(.conv-input-context.is-new-session) .ccc-free-composer-label {',
+      '  display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; height: 26px;',
+      '  border: 1px solid #2ea043; border-radius: 6px; color: var(--text);',
+      '  font-size: 12px; font-weight: 600; white-space: nowrap;',
+      '}',
       '.ccc-free-on .orch-tier-chip.is-selected {',
       '  border-color: var(--border); background: var(--surface); box-shadow: none;',
       '  color: var(--text-muted);',
@@ -157,6 +167,22 @@
       : 'Runs on your free router. Costs $0.';
     var box = pill.parentNode;
     if (box) box.classList.toggle('ccc-free-on', on);
+    // Composer: on the new-session screen the model/effort menus give way
+    // to a "Free model" label (CSS below keys off this body class).
+    document.body.classList.toggle('ccc-free-on', on);
+    ensureComposerLabel();
+  }
+
+  function ensureComposerLabel() {
+    if (document.getElementById('cccFreeComposerLabel')) return;
+    var eng = document.getElementById('convInputEngineSelect');
+    if (!eng || !eng.parentNode) return;
+    var el = document.createElement('span');
+    el.id = 'cccFreeComposerLabel';
+    el.className = 'ccc-free-composer-label';
+    el.title = 'Your free router picks the best free model. Costs $0.';
+    el.innerHTML = '<span class="ccc-free-pill-badge">$0</span>Free model';
+    eng.parentNode.insertBefore(el, eng.nextSibling);
   }
 
   // Called by syncSpawnEngineDependentUi and the pill renderer.
@@ -172,13 +198,21 @@
     var pill = t.closest('.ccc-free-pill');
     if (pill) {
       ev.preventDefault();
+      var turnOn = function () {
+        setEnabled(true);
+        useClaudeEngine();
+        paint('claude');
+      };
       if (pill.classList.contains('is-setup')) {
-        window.open('/free-router', '_blank');
+        // A "not ready" can be a stale probe from a busy page load: re-check
+        // before sending the user to setup.
+        refreshStatus(true).then(function () {
+          if (readyFor('claude')) turnOn();
+          else window.open('/free-router', '_blank');
+        });
         return;
       }
-      setEnabled(true);
-      useClaudeEngine();
-      paint('claude');
+      turnOn();
       return;
     }
     if (t.closest('#nsModelPickerPills .orch-tier-chip')) {

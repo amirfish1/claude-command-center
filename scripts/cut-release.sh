@@ -169,8 +169,12 @@ fi
 step "3/9  Bump version in pyproject.toml + server.py"
 run "sed_i 's/^version = \".*\"/version = \"${VERSION}\"/' pyproject.toml"
 run "sed_i 's/^__version__ = \".*\"/__version__ = \"${VERSION}\"/' server.py"
+PLUGIN_MANIFEST=""
+[ -f .claude-plugin/plugin.json ] && PLUGIN_MANIFEST=.claude-plugin/plugin.json
+[ -n "$PLUGIN_MANIFEST" ] && run "sed_i 's/^  \"version\": \".*\",/  \"version\": \"${VERSION}\",/' $PLUGIN_MANIFEST"
 if [ "$DRY_RUN" = 0 ]; then
   grep -q "version = \"${VERSION}\"" pyproject.toml && grep -q "__version__ = \"${VERSION}\"" server.py \
+    && { [ -z "$PLUGIN_MANIFEST" ] || grep -q "\"version\": \"${VERSION}\"" "$PLUGIN_MANIFEST"; } \
     || { echo "${RED}version bump verification failed${NC}" >&2; exit 1; }
 fi
 
@@ -180,7 +184,7 @@ fi
 
 # ── 4. Commit + tag + push ──────────────────────────────────────────────────
 step "4/9  Commit, tag, push main + tag"
-run "git add CHANGELOG.md pyproject.toml server.py changelog.d"
+run "git add CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d"
 run "git commit -m 'chore(release): v${VERSION}' -m 'Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>'"
 run "git tag -a v${VERSION} -m 'v${VERSION}'"
 run "git push origin main"
