@@ -7075,6 +7075,8 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
             except (ProcessLookupError, PermissionError, OSError, ValueError):
                 pass
     _cleanup_finished_entry(entry)
+    if terminate and isinstance(_proc, subprocess.Popen):
+        threading.Thread(target=_proc.wait, daemon=True, name=f"retired-spawn-{pid}").start()
     if pid is not None:
         _core._remove_spawn_from_registry(pid)
     try:
@@ -7804,7 +7806,8 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     # loses the in-flight response just as much as killing a tool call would.
     # `_headless_log_result_count` covers the whole window (no output yet AND
     # output streaming but not yet complete) with one check.
-    if spawn.get("prompt") and _headless_log_result_count(spawn) == 0:
+    completed_results = _headless_log_result_count(spawn)
+    if spawn.get("prompt") and completed_results == 0:
         if defer_if_busy:
             spawn["retire_when_idle"] = True
             spawn["retire_requires_approval"] = require_approval
@@ -7822,7 +7825,7 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     # until the browser gives up — "session doesn't load, times out").
     _STARTUP_GRACE_S = 60
     started_epoch = _spawn_entry_started_epoch(spawn)
-    if started_epoch and (time.time() - started_epoch) < _STARTUP_GRACE_S:
+    if not completed_results and started_epoch and (time.time() - started_epoch) < _STARTUP_GRACE_S:
         sid_for_timeline = _spawn_entry_session_id(spawn)
         timeline = _core._spawn_timeline_get(sid_for_timeline) if sid_for_timeline else None
         marks = (timeline or {}).get("marks") or {}
@@ -8218,6 +8221,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         # vars of a limit-hit failover). Scrub the inherited Anthropic vars
         # first so only the caller's values apply — a stray ANTHROPIC_API_KEY
         # in the parent shell must never leak into router-bound traffic.
+        _free_runtime.scrub_paid_env(child_env)
         for _k in (
             "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",

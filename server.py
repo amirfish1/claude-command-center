@@ -126,6 +126,7 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+from ccc_server import headroom as _headroom
 # Namespace import (not adopted): the $0 spawn runtime's helpers stay behind
 # one name so its spawn_env/readiness don't collide with engine globals.
 from ccc_server import free_runtime as _free_runtime
@@ -9273,11 +9274,15 @@ def _clean_disabled_engines(value, keep_enabled=()):
 
 def _write_spawn_defaults_file(payload):
     COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = SPAWN_DEFAULTS_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-    tmp.replace(SPAWN_DEFAULTS_FILE)
+    fd, tmp_name = tempfile.mkstemp(prefix="spawn-defaults-", suffix=".tmp", dir=SPAWN_DEFAULTS_FILE.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write("\n")
+        tmp.replace(SPAWN_DEFAULTS_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _load_spawn_defaults():
@@ -9559,7 +9564,10 @@ def _spawn_request_engine_and_model(payload):
     if engine not in _ORCHESTRATION_SPAWN_ENGINES:
         return None, None
     model = _clean_spawn_default_model(payload.get("model"))
-    if not model:
+    # A $0 spawn with no explicit model lets the free router pick its best
+    # free model; the paid spawn default (e.g. Opus) must not be sent there.
+    free_runtime = str(payload.get("runtime") or "").strip().lower() == "free"
+    if not model and not free_runtime:
         model = _spawn_default_model_for_engine(engine, defaults)
     return engine, model or None
 
@@ -27292,6 +27300,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(usage_reset_events_payload(days=raw_days))
         elif path == "/api/usage/current":
             self.send_json(usage_current_payload())
+        elif path == "/api/headroom":
+            self.send_json(_headroom.headroom_payload())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()

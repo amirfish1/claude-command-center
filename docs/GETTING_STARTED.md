@@ -4,7 +4,8 @@
 
 CCC (Claude Command Center) is a dashboard for running and watching multiple AI coding sessions at once — a fleet view for your terminal-based agents.
 
-For the full feature tour, screenshots, and comparison tables, see the [README](../README.md).
+See the [README](../README.md) for screenshots and a quick tour, or the
+[feature guide](features.md) for details.
 
 ## Install
 
@@ -22,7 +23,7 @@ Pick whichever fits how you work:
   ```
   Update later with `brew upgrade ccc`.
 
-- **macOS DMG** — for a normal double-click app experience: download the DMG from the [releases page](../README.md), drag `CCC.app` to Applications, launch it. It auto-updates itself after that (Sparkle).
+- **macOS DMG** — for a normal double-click app experience: download the DMG from the [releases page](https://github.com/amirfish1/claude-command-center/releases/latest), drag `CCC.app` to Applications, launch it. It auto-updates itself after that (Sparkle).
 
 All three install paths end up running the same local server — none of them phone home or need an account.
 
@@ -48,5 +49,6 @@ Once you've got a few sessions running, switch to **Flow** and hit **Organize** 
 
 ## Where to go next
 
-- Full feature walkthrough, screenshots, and CLI/API reference → [README.md](../README.md)
+- [Feature guide](features.md), [CLI commands](cli.md), and [orchestration API](orchestration.md)
+- [Installation and platform guide](install.md), including Windows and Linux
 - Something broken or confusing? Open an issue on the repo.

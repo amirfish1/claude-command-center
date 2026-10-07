@@ -1,0 +1,1 @@
+- New sessions get a clear "$0 Free" choice first in the model row (it replaces the small "free $0" checkbox). If free models are not set up, it says "Set up free models" and opens the setup page.
