@@ -375,3 +375,130 @@ def test_scale_fixture_reduction_is_bounded_by_recent_provider_history(sources):
     assert account(sources)['expires_unused_pct'] == 50
     summary = json.loads(sources['cache_path'].read_text())['points']
     assert all(len(points) <= 289 for points in summary.values())
+
+
+CANONICAL_KEYS = {'id', 'engine', 'account', 'label', 'available', 'stale', 'unlimited',
+                  'percent_left', 'resets_at', 'hours_to_reset', 'burn_pct_per_hour',
+                  'projected_expiring_pct', 'expiring_usd_estimate',
+                  'expiring_tokens_estimate', 'source'}
+CANONICAL_FLOAT_FIELDS = ('percent_left', 'hours_to_reset', 'burn_pct_per_hour',
+                          'projected_expiring_pct', 'expiring_usd_estimate')
+CANONICAL_INT_FIELDS = ('resets_at', 'expiring_tokens_estimate')
+CANONICAL_NUMBER_FIELDS = CANONICAL_FLOAT_FIELDS + CANONICAL_INT_FIELDS
+LEGACY_TO_CANONICAL = {'percent_left': 'percent_left',
+                       'burn_rate_pct_per_hour': 'burn_pct_per_hour',
+                       'expires_unused_pct': 'projected_expiring_pct',
+                       'expires_unused_usd': 'expiring_usd_estimate',
+                       'expires_unused_tokens': 'expiring_tokens_estimate'}
+
+
+def canonical(payload, engine='claude'):
+    return next(row for row in payload['rows'] if row['engine'] == engine)
+
+
+def assert_canonical_row(row):
+    assert CANONICAL_KEYS <= row.keys()
+    for key in ('id', 'engine', 'account', 'label', 'source'):
+        assert type(row[key]) is str and row[key]
+    assert row['account'] == 'default'
+    assert row['id'] == row['engine'] + ':' + row['account']
+    for key in ('available', 'stale', 'unlimited'):
+        assert type(row[key]) is bool
+    assert row['unlimited'] == (row['engine'] == 'free_router')
+    assert row['source'] == ('free_router' if row['engine'] == 'free_router' else 'quota')
+    for key in CANONICAL_FLOAT_FIELDS:
+        assert row[key] is None or type(row[key]) in (int, float)
+    for key in CANONICAL_INT_FIELDS:
+        assert row[key] is None or type(row[key]) is int
+
+
+@pytest.mark.parametrize('scenario', ['empty', 'fresh', 'stale', 'exhausted'])
+def test_canonical_rows_contract(sources, scenario):
+    if scenario == 'fresh':
+        write_snapshots(sources['snapshot_path'], [snapshot(NOW - 3600, 48, codex_pct=40, kimi_pct=10),
+                                                  snapshot(NOW, 50, codex_pct=42, kimi_pct=10)])
+    elif scenario == 'stale':
+        write_snapshots(sources['snapshot_path'], [snapshot(NOW - 5401, 48, codex_pct=40, kimi_pct=10),
+                                                  snapshot(NOW - 1801, 50, codex_pct=42, kimi_pct=10)])
+    elif scenario == 'exhausted':
+        write_snapshots(sources['snapshot_path'], [snapshot(NOW - 3600, 100, codex_pct=100, kimi_pct=100),
+                                                  snapshot(NOW, 100, codex_pct=100, kimi_pct=100)])
+    payload = hr.headroom_payload(**sources)
+    assert payload['ok'] is True
+    assert type(payload['generated_at']) is str and payload['generated_at'] == iso(NOW)
+    assert payload['generated_at'] == payload['updated_at']
+    assert len(payload['rows']) == 5
+    assert len({row['id'] for row in payload['rows']}) == 5
+    assert {row['engine'] for row in payload['rows']} == {'claude', 'codex', 'kimi',
+                                                        'devin', 'free_router'}
+    for row in payload['rows']:
+        assert_canonical_row(row)
+        if not row['available']:
+            assert all(row[key] is None for key in CANONICAL_NUMBER_FIELDS)
+    json.dumps(payload, allow_nan=False)
+    rows = {row['engine']: row for row in payload['rows']}
+    legacy = {row['engine']: row for row in payload['accounts']}
+    if scenario == 'empty':
+        assert all(not row['available'] for row in rows.values())
+    elif scenario == 'fresh':
+        assert type(rows['claude']['resets_at']) is int
+        assert rows['claude']['resets_at'] == int(NOW + 9 * 3600)
+        for engine in ('claude', 'codex', 'kimi'):
+            assert rows[engine]['available'] and not rows[engine]['stale']
+            for old_key, new_key in LEGACY_TO_CANONICAL.items():
+                assert rows[engine][new_key] == legacy[engine][old_key]
+        assert rows['claude']['burn_pct_per_hour'] == 2
+        assert rows['claude']['projected_expiring_pct'] == 32
+        assert rows['claude']['expiring_usd_estimate'] is None
+        assert rows['claude']['expiring_tokens_estimate'] is None
+    elif scenario == 'stale':
+        claude = rows['claude']
+        assert claude['stale'] is True and claude['available'] is True
+        assert claude['percent_left'] == 50
+        assert claude['resets_at'] == int(NOW + 9 * 3600)
+        for key in ('burn_pct_per_hour', 'projected_expiring_pct',
+                    'expiring_usd_estimate', 'expiring_tokens_estimate'):
+            assert claude[key] is None
+    elif scenario == 'exhausted':
+        claude = rows['claude']
+        assert claude['available'] and not claude['stale']
+        assert claude['percent_left'] == 0
+        assert claude['burn_pct_per_hour'] == 0
+        assert claude['projected_expiring_pct'] == 0
+
+
+@pytest.mark.parametrize('age,expected', [(1800, False), (1801, True)])
+def test_canonical_stale_flag_uses_thirty_minute_observation_age(sources, age, expected):
+    write_snapshots(sources['snapshot_path'], [snapshot(NOW - age - 3600, 48),
+                                              snapshot(NOW - age, 50)])
+    payload = hr.headroom_payload(**sources)
+    row = canonical(payload)
+    legacy = account(sources)
+    assert legacy['observed_at'] == iso(NOW - age)
+    assert legacy['stale'] is False
+    assert row['stale'] is expected
+    assert row['resets_at'] == int(NOW + 9 * 3600)
+
+
+def test_canonical_conversion_matches_legacy_and_stays_independent(sources, tmp_path):
+    write_snapshots(sources['snapshot_path'], [snapshot(NOW - 3600, 48), snapshot(NOW, 50)])
+    sources['calibration'] = {'claude': {'available': True, 'pct_per_usd': 0.5,
+                                        'calibrated_at': NOW}}
+    token = tmp_path / 'tokens.json'
+    token.write_text(json.dumps({'real_pct': 50, 'tokens': 5_000_000, 'calibrated_at': NOW}))
+    sources['token_paths'] = [token]
+    payload = hr.headroom_payload(**sources)
+    assert payload['generated_at'] == iso(NOW)
+    assert payload['rows'] is not payload['accounts']
+    row = canonical(payload)
+    assert row['percent_left'] == 50
+    assert row['burn_pct_per_hour'] == 2
+    assert row['projected_expiring_pct'] == 32
+    assert row['expiring_usd_estimate'] == 64
+    assert row['expiring_tokens_estimate'] == 3_200_000
+    assert row['resets_at'] == int(NOW + 9 * 3600)
+    legacy = account(sources)
+    assert legacy['id'] == 'claude:current'
+    assert legacy['resets_at'] == iso(NOW + 9 * 3600)
+    row['percent_left'] = 0
+    assert payload['accounts'][0]['percent_left'] == 50

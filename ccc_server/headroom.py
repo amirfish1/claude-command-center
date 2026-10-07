@@ -265,6 +265,26 @@ def _window(points, *, window, now, dollar_ratio=None, token_ratio=None):
     return row
 
 
+def _contract_row(row, now):
+    observed = _epoch(row['observed_at'])
+    reset = _epoch(row['resets_at'])
+    stale = row['stale'] or observed is not None and now - observed > 1800
+    available = row['available']
+    forecast = available and not stale
+    engine = row['engine']
+    return {'id': engine + ':default', 'engine': engine, 'account': 'default',
+            'label': row['label'], 'available': available, 'stale': stale,
+            'unlimited': engine == 'free_router',
+            'percent_left': row['percent_left'] if available else None,
+            'resets_at': int(reset) if available and reset is not None else None,
+            'hours_to_reset': row['hours_to_reset'] if available else None,
+            'burn_pct_per_hour': row['burn_rate_pct_per_hour'] if forecast else None,
+            'projected_expiring_pct': row['expires_unused_pct'] if forecast else None,
+            'expiring_usd_estimate': row['expires_unused_usd'] if forecast else None,
+            'expiring_tokens_estimate': row['expires_unused_tokens'] if forecast else None,
+            'source': 'free_router' if engine == 'free_router' else 'quota'}
+
+
 def headroom_payload(*, now=None, snapshot_path=None, throughput_dir=None, cache_path=None,
                      legacy_path=None, token_paths=None, calibration=None):
     """GET /api/headroom. Only the current account per engine is observed.
@@ -307,4 +327,7 @@ def headroom_payload(*, now=None, snapshot_path=None, throughput_dir=None, cache
             row['reason'] = 'Free models do not share one quota. Each provider has its own limits.'
             row['windows'] = []
         accounts.append(row)
-    return {'ok': True, 'accounts': accounts, 'updated_at': _iso(now)}
+    generated_at = _iso(now)
+    return {'ok': True, 'generated_at': generated_at,
+            'rows': [_contract_row(row, now) for row in accounts],
+            'accounts': accounts, 'updated_at': generated_at}
