@@ -43,11 +43,31 @@ Repository = "https://github.com/amirfish1/claude-command-center"
 Issues = "https://github.com/amirfish1/claude-command-center/issues"
 
 [project.scripts]
-claude-command-center = "server:main"
+claude-command-center = "ccc_server.launcher:main"
 
-# No build backend declared — this isn't packaged for PyPI today. Run via
-# `./run.sh` or `python3 server.py`. The pyproject.toml exists so tooling
-# (ruff, mypy, IDEs) can pick up the project metadata.
+# Build a wheel locally with `uv build --wheel`; no PyPI publication needed.
+# `./run.sh` and `python3 server.py` remain supported from a source checkout.
+# The wheel keeps runtime modules and assets in the same relative layout.
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "/*.py", "/ccc_server/**", "/_history_index/**", "/static/**",
+    "/hooks/**", "/skills/**", "/scripts/install-watchtower.sh",
+    "/pyproject.toml", "/README.md", "/LICENSE", "/LICENSE-MIT", "/NOTICE",
+]
+exclude = ["**/__pycache__/**", "**/*.pyc", "**/.DS_Store", "/static/morning/**"]
+
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "server.py", "ccc_worker.py", "ccc_acp.py", "ccc_peer_inbound.py",
+    "ccc_peer_uds.py", "control_plane.py", "fcntl.py", "federation.py",
+    "objects_store.py", "productivity.py", "ssh_multiplexer.py", "worker_engines.py",
+    "ccc_server", "_history_index", "static", "hooks", "skills",
+    "scripts/install-watchtower.sh",
+]
 
 # When/if this is packaged (setuptools/hatch/etc.), the orchestration skill
 # under `skills/` must travel with the install — server.py auto-installs

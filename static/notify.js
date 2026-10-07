@@ -336,6 +336,10 @@
     if (age > limit) return false;
     if (!enabled()) return false;
     if (!_kindAllowed(kind)) return false;
+    // Unapproved pop-ups stay silent (static/popups.js); the explicit
+    // "Send test notification" button is not a pop-up.
+    if (id.indexOf('ntf_test_') !== 0 &&
+        !(window.cccPopups && window.cccPopups.notifyAllowed(kind))) return false;
 
     var channel = 'toast';
     if (_pageCalm()) {
@@ -367,6 +371,7 @@
   }
 
   function maybeAskPermission() {
+    if (!(window.cccPopups && window.cccPopups.allowed('notify-permission'))) return;
     var state = _permissionState();
     if (state !== 'default' || _permissionAsked) return;
     var count = parseInt(_lsGet(LS_ASK_COUNT) || '0', 10) || 0;
