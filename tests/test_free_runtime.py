@@ -491,5 +491,27 @@ class AiderFreeResumeTest(unittest.TestCase):
         spawn_env.assert_not_called()
 
 
+class FreeSpawnModelDefaultTests(unittest.TestCase):
+    """A $0 spawn with no model lets the router pick; paid spawns keep the default."""
+
+    def setUp(self):
+        self.server = _fresh_server()
+
+    def test_free_spawn_without_model_sends_no_paid_default(self):
+        engine, model = self.server._spawn_request_engine_and_model(
+            {"engine": "claude", "runtime": "free"})
+        self.assertEqual(engine, "claude")
+        self.assertIsNone(model)
+
+    def test_free_spawn_keeps_an_explicit_model(self):
+        _, model = self.server._spawn_request_engine_and_model(
+            {"engine": "claude", "runtime": "free", "model": "sonnet-5"})
+        self.assertTrue(model)
+
+    def test_paid_spawn_still_gets_the_default(self):
+        _, model = self.server._spawn_request_engine_and_model({"engine": "claude"})
+        self.assertTrue(model)
+
+
 if __name__ == "__main__":
     unittest.main()

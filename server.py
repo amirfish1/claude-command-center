@@ -9559,7 +9559,10 @@ def _spawn_request_engine_and_model(payload):
     if engine not in _ORCHESTRATION_SPAWN_ENGINES:
         return None, None
     model = _clean_spawn_default_model(payload.get("model"))
-    if not model:
+    # A $0 spawn with no explicit model lets the free router pick its best
+    # free model; the paid spawn default (e.g. Opus) must not be sent there.
+    free_runtime = str(payload.get("runtime") or "").strip().lower() == "free"
+    if not model and not free_runtime:
         model = _spawn_default_model_for_engine(engine, defaults)
     return engine, model or None
 
