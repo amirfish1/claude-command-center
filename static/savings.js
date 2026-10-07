@@ -242,10 +242,10 @@ function cccSavRangePhrase(range) {
       const from = stored && stored.day === today ? (Number(stored.usd) || 0) : 0;
       countUpMoney(numEl, Math.min(from, model.usd), model.usd, 1200);
     } else if (_lastUsd != null && model.usd > _lastUsd + 0.0001) {
-      // A live increase: count up, coin sound, brief glow. Drops (new day,
-      // recalibration) snap silently instead of counting backwards.
+      // A live increase: count up and a brief glow, silent (a coin on every
+      // 60s poll was noise). Drops (new day, recalibration) snap silently
+      // instead of counting backwards.
       countUpMoney(numEl, _lastUsd, model.usd, 900);
-      playSound('coin');
       el.classList.remove('is-bump');
       void el.offsetWidth; // restart the glow animation
       el.classList.add('is-bump');
@@ -283,6 +283,7 @@ function cccSavRangePhrase(range) {
     if (!fresh.length) return;
     fresh.forEach(m => done.add(m.id));
     lsSet(LS_CELEBRATED, Array.from(done));
+    if (!(window.cccPopups && window.cccPopups.allowed('savings-milestone'))) return;
     celebrate(fresh[fresh.length - 1]); // show the biggest new one
   }
 
