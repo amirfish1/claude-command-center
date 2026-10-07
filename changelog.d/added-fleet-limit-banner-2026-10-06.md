@@ -1,0 +1,1 @@
+- When a usage limit stops several sessions at once, the dashboard now shows one fleet banner per engine ("Claude limit reached. 7 sessions stopped") with a checkbox list and one-click "Continue all free" / "Resume all at reset", instead of a separate card per session (`GET`/`POST /api/free-failover/fleet`).
