@@ -432,7 +432,7 @@ class AutoResumeArmTests(_FailoverBase):
         # Five fire in the first minute slot; the sixth waits +60s.
         self.assertEqual(inject.call_count, 5)
         sixth = self._failover_store()[sids[5]]
-        self.assertEqual(sixth["auto_resume_fire_at"], resume_at + 60)
+        self.assertEqual(sixth["auto_resume_fire_at"], now + 60)
         self.assertFalse(sixth.get("auto_resume_done"))
 
     def test_disarm_stops_the_fire(self):
