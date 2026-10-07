@@ -71169,6 +71169,12 @@
       : ((window.CCCFreeRuntime && typeof CCCFreeRuntime.runtimeForSpawn === 'function')
           ? CCCFreeRuntime.runtimeForSpawn(engine) : '');
     if (spawnRuntime) body.runtime = spawnRuntime;
+    if (spawnRuntime === 'free' && o.runtime === undefined) {
+      // The composer's "$0 Free" pick: the free router chooses its best free
+      // model, so the paid model/effort shown before the pick must not leak.
+      delete body.model;
+      delete body.reasoning_effort;
+    }
     return body;
   }
 
@@ -81365,6 +81371,8 @@
           selectSpawnPick(eng, mod);
         });
       });
+      // The "$0 Free" pill lives first in this row (static/free-runtime.js).
+      if (window.CCCFreeRuntime && typeof CCCFreeRuntime.sync === 'function') CCCFreeRuntime.sync(currentEngine);
     };
 
     const picks = getTopSpawnPicks();

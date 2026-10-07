@@ -9273,11 +9273,15 @@ def _clean_disabled_engines(value, keep_enabled=()):
 
 def _write_spawn_defaults_file(payload):
     COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = SPAWN_DEFAULTS_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-    tmp.replace(SPAWN_DEFAULTS_FILE)
+    fd, tmp_name = tempfile.mkstemp(prefix="spawn-defaults-", suffix=".tmp", dir=SPAWN_DEFAULTS_FILE.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write("\n")
+        tmp.replace(SPAWN_DEFAULTS_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _load_spawn_defaults():
@@ -9559,7 +9563,10 @@ def _spawn_request_engine_and_model(payload):
     if engine not in _ORCHESTRATION_SPAWN_ENGINES:
         return None, None
     model = _clean_spawn_default_model(payload.get("model"))
-    if not model:
+    # A $0 spawn with no explicit model lets the free router pick its best
+    # free model; the paid spawn default (e.g. Opus) must not be sent there.
+    free_runtime = str(payload.get("runtime") or "").strip().lower() == "free"
+    if not model and not free_runtime:
         model = _spawn_default_model_for_engine(engine, defaults)
     return engine, model or None
 

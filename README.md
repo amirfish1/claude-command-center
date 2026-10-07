@@ -310,6 +310,21 @@ the best route if you want the Linux service path.
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
+**Python runners (preview, not on PyPI yet)**: build a wheel with `uv build --wheel`
+from a source checkout, then try it without a permanent CCC install:
+
+```bash
+uvx --from dist/claude_command_center-5.37.0-py3-none-any.whl claude-command-center
+# Or, with pipx:
+pipx run --spec dist/claude_command_center-5.37.0-py3-none-any.whl claude-command-center
+```
+
+Open `http://localhost:8090` and leave the terminal open. Press Ctrl+C to stop.
+WatchTower, the queue engine, is set up on first launch; Bash and a connection
+are needed for that step. State stays in `~/.claude/command-center/` and the
+usual agent folders, not the runner's cache. Once published, the short commands
+will be `uvx claude-command-center` and `pipx run claude-command-center`.
+
 **Windows PowerShell**: clones into `%USERPROFILE%\.ccc\claude-command-center`
 and runs in foreground. Re-running does a `git pull`.
 
