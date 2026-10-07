@@ -21,6 +21,7 @@
 
   const LS_ONBOARDED = 'ccc-onboarded';
   const LS_JOB = 'ccc-onboarding-job';
+  const LS_FIRST_TASK = 'ccc-onboarding-first-task';
   const LS_ENG_DONE = 'ccc-engines-first-run-done';
   const LS_SOUNDS = 'ccc-sounds-enabled';
   const POLL_MS = 900;
@@ -117,14 +118,20 @@
     return data;
   }
   const realDriver = {
-    getPlan: () => api('/api/setup/plan'),
+    getPlan: () => api('/api/setup/plan?refresh=1'),
     runSteps: (ids) => api('/api/setup/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ steps: ids }),
     }),
-    pollJob: (id) => api('/api/setup/jobs/' + encodeURIComponent(id)),
+    pollJob: (id) => api('/api/setup/jobs/' + encodeURIComponent(id)).catch((err) => {
+      if (err.status !== 404) throw err;
+      return api('/api/free-router/jobs/' + encodeURIComponent(id));
+    }),
     routerStatus: () => api('/api/free-router/status'),
+    installRouter: () => api('/api/free-router/install', { method: 'POST' }),
+    startRouter: () => api('/api/free-router/start', { method: 'POST' }),
+    pollFirstTask: (id) => api('/api/onboarding/first-task/' + encodeURIComponent(id)).then((r) => r.job),
     detectedRouters: () => api('/api/free-router/detected'),
     providers: () => api('/api/free-router/providers'),
     submitKey: (platform, key) => api('/api/free-router/keys', {
@@ -135,8 +142,8 @@
     firstTask: (taskId) => api('/api/onboarding/first-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task: taskId }),
-    }),
+      body: JSON.stringify({ task_id: taskId, runtime: 'free' }),
+    }).then((r) => r.job),
     savings: () => api('/api/savings?range=today'),
     freshInstall: () => api('/api/onboarding/moment-zero'),
   };
@@ -165,12 +172,12 @@
 
   const FIRST_TASKS = [
     {
-      id: 'hello',
+      id: 'hello-3-langs',
       title: 'Say hello in 3 languages',
       desc: 'A tiny web page that greets the world. The easiest first ship.',
     },
     {
-      id: 'fix-test',
+      id: 'fix-failing-test',
       title: 'Fix the failing test',
       desc: 'A real bug, a real fix, a green checkmark. The daily driver move.',
     },
@@ -196,6 +203,8 @@
     running: false,
     savedUsd: null,
     firstTaskDone: false,
+    firstTaskJobId: null,
+    firstTaskTimer: null,
     force: false,
     prevFocus: null,
     providers: null,
@@ -512,6 +521,8 @@
     if (!planSteps().length) return;
 
     const next = nextActionableStep();
+    const taskStep = planSteps().find((st) => st.id === 'first_task');
+    if (taskStep && lsGet(LS_FIRST_TASK)) { renderFirstTaskStep(host, taskStep); return; }
     if (!next) {
       // Everything the plan knows about is done.
       const done = el('div', 'mz-all-done');
@@ -524,8 +535,8 @@
       return;
     }
 
-    if (S.jobId) {
-      host.appendChild(el('div', 'mz-hint', 'Working through the list. You can close this and come back; it keeps going.'));
+    if (S.jobId || S.running) {
+      host.appendChild(el('div', 'mz-hint mz-loading', 'Working through the list. You can close this and come back; it keeps going.'));
       return;
     }
 
@@ -549,7 +560,7 @@
       const port = found.port || (found.base_url ? String(found.base_url).replace(/.*:(\d+).*/, '$1') : '');
       note.appendChild(el('span', 'mz-detected-dot'));
       note.appendChild(el('span', null,
-        'Found ' + name + ' already running on this Mac' + (port ? ' (port ' + port + ')' : '') + '. Setup will reuse it.'));
+        'Found ' + name + ' already running on this Mac' + (port ? ' (port ' + port + ')' : '') + '. You can connect it from Free models in Settings.'));
       host.appendChild(note);
     }
 
@@ -578,7 +589,8 @@
   }
 
   async function startRun() {
-    if (S.jobId) return;
+    if (S.jobId || S.running) return;
+    const next = nextActionableStep();
     const ids = pendingStepIds().filter((id) => {
       const st = planSteps().find((x) => x.id === id);
       return !st || !st.needs_consent || S.consented[id];
@@ -586,8 +598,17 @@
     // free_key and first_task are interactive scenes, not runner work.
     const runnable = ids.filter((id) => id !== 'free_key' && id !== 'first_task');
     if (!runnable.length) { renderStepRows(); return; }
+    S.running = true;
+    renderStepDetail();
     try {
-      const res = await driver.runSteps(runnable);
+      let res;
+      if (next && next.id === 'free_router') {
+        const status = await driver.routerStatus();
+        res = status && status.installed ? await driver.startRouter() : await driver.installRouter();
+      } else {
+        res = await driver.runSteps(runnable.filter((id) => id !== 'free_router'));
+      }
+      if (res && res.ok === false) throw new Error(res.error || 'The free engine could not start.');
       if (res && res.job_id) {
         S.jobId = res.job_id;
         lsSet(LS_JOB, res.job_id);
@@ -599,7 +620,9 @@
     } catch (e) {
       if (e && e.status === 404) { S.planFailed = true; }
       const live = document.getElementById('mzLive');
-      if (live) live.textContent = 'The installer did not answer. Try again in a moment.';
+      if (live) live.textContent = (e && e.message) || 'The installer did not answer. Try again in a moment.';
+    } finally {
+      S.running = false;
     }
     if (S.scene === 'steps') renderStepRows();
   }
@@ -616,6 +639,8 @@
         S.jobId = null;
         S.jobRunningStep = null;
         lsDel(LS_JOB);
+        const live = document.getElementById('mzLive');
+        if (live) live.textContent = '';
         sfx(wasError ? 'error' : 'success');
         await loadPlan();
         if (wasError) {
@@ -685,7 +710,7 @@
     const mountEl = el('div', 'mz-keywizard');
     box.appendChild(mountEl);
 
-    const skip = el('button', 'mz-linklike', 'Skip, the keyless provider already works');
+    const skip = el('button', 'mz-linklike', 'Add a provider later');
     skip.type = 'button';
     skip.addEventListener('click', () => { step.status = 'ok'; sfx('step'); renderStepRows(); });
     box.appendChild(skip);
@@ -695,7 +720,7 @@
     const w = window.cccFreeKeyWizard || window.CCCFreeKeyWizard;
     if (w) {
       try {
-        if (typeof w.mount === 'function') { w.mount(mountEl, { onDone: () => { step.status = 'ok'; sfx('success'); renderStepRows(); } }); S.wizardMounted = true; return; }
+        if (typeof w.mount === 'function') { w.mount(mountEl, { onComplete: () => { step.status = 'ok'; sfx('success'); renderStepRows(); } }); S.wizardMounted = true; return; }
         if (typeof w === 'function') { w(mountEl); S.wizardMounted = true; return; }
         if (typeof w.open === 'function') { w.open(mountEl); S.wizardMounted = true; return; }
       } catch (_) {}
@@ -823,9 +848,26 @@
     skip.addEventListener('click', () => { step.status = 'ok'; goFinale(); });
     box.appendChild(skip);
     host.appendChild(box);
+    const saved = lsGet(LS_FIRST_TASK);
+    if (saved) startFirstTask(null, step, box, saved);
   }
 
-  async function startFirstTask(task, step, box) {
+  function firstTaskError(box, step, message) {
+    box.textContent = '';
+    const error = el('div', 'mz-task-error');
+    error.setAttribute('role', 'alert');
+    error.appendChild(el('p', 'mz-hint', message));
+    const retry = el('button', 'mz-btn mz-btn-primary', 'Try again');
+    retry.type = 'button';
+    retry.addEventListener('click', () => renderFirstTaskStep(box.parentNode, step));
+    error.appendChild(retry);
+    const setup = el('a', 'mz-linklike', 'Set up free models');
+    setup.href = '/free-router';
+    error.appendChild(setup);
+    box.appendChild(error);
+  }
+
+  async function startFirstTask(task, step, box, savedJob) {
     box.textContent = '';
     const run = el('div', 'mz-taskrun');
     run.appendChild(el('div', 'mz-taskrun-title', 'Your agent is on it.'));
@@ -840,53 +882,57 @@
 
     let res = null;
     try {
-      res = await driver.firstTask(task.id);
+      res = savedJob ? { job_id: savedJob } : await driver.firstTask(task.id);
     } catch (e) {
-      // L09 not merged yet: keep the moment and move to the finale.
-      status.textContent = 'This build does not ship the first-task runner yet. Your dashboard is still ready.';
-      setTimeout(() => { step.status = 'ok'; goFinale(); }, 1600);
+      // An unavailable first-task runner remains retryable, without a finale.
+      firstTaskError(box, step, (e && e.message) || 'The task could not start. Try again.');
       return;
     }
 
-    // Shape tolerance: {job_id} polls the shared runner; {session_id} or
-    // {done:true} finishes immediately; {saved_usd} feeds the finale.
+    // The first-task endpoint returns a job; its own poll carries the result
+    // and run-specific usage, rather than the installer's shared registry.
     if (res && typeof res.saved_usd === 'number') S.savedUsd = res.saved_usd;
     if (res && typeof res.api_value_usd === 'number' && S.savedUsd == null) S.savedUsd = res.api_value_usd;
 
     if (res && res.job_id) {
-      S.jobId = res.job_id;
+      S.firstTaskJobId = res.job_id;
+      lsSet(LS_FIRST_TASK, res.job_id);
       status.textContent = 'Working. Watching it think.';
       const finish = async () => {
+        if (!S.open || !box.isConnected) return;
         try {
-          const j = await driver.pollJob(S.jobId);
+          const j = await driver.pollFirstTask(res.job_id);
+          if (!j) throw new Error('The task is no longer available. Try again.');
           const lines = Array.isArray(j.lines) ? j.lines : [];
           const tail = lines.slice(-1)[0];
-          if (tail) status.textContent = String(tail).slice(0, 160);
-          if (j && (j.status === 'done' || j.status === 'error')) {
-            S.jobId = null;
-            lsDel(LS_JOB);
-            if (j.status === 'done') {
+          if (tail) status.textContent = String(tail.text || tail).slice(0, 160);
+          if (j.status !== 'running') {
+            S.firstTaskJobId = null;
+            lsDel(LS_FIRST_TASK);
+            if (j.status === 'done' && j.runtime === 'free' && j.result && j.result.verified) {
               S.firstTaskDone = true;
+              S.savedUsd = Number(j.usage && j.usage.api_value_usd) || null;
               step.status = 'ok';
               sfx('success');
               goFinale();
             } else {
-              status.textContent = 'The task hit a snag, but your setup is still good. Opening the finale.';
-              setTimeout(() => { step.status = 'ok'; goFinale(); }, 1600);
+              firstTaskError(box, step, j.error || 'The task did not finish on a free model. Try again.');
             }
             return;
           }
-        } catch (_) {}
-        if (S.jobId) setTimeout(finish, POLL_MS);
+        } catch (e) {
+          if (e && e.status === 404) { S.firstTaskJobId = null; lsDel(LS_FIRST_TASK); }
+          firstTaskError(box, step, (e && e.message) || 'Could not check the task. Try again.');
+          return;
+        }
+        if (S.firstTaskJobId) S.firstTaskTimer = setTimeout(finish, POLL_MS);
       };
+      clearTimeout(S.firstTaskTimer);
       finish();
       return;
     }
 
-    S.firstTaskDone = true;
-    step.status = 'ok';
-    sfx('success');
-    goFinale();
+    firstTaskError(box, step, 'The task did not start. Try again.');
   }
 
   // ── Scene: Finale ──
@@ -922,14 +968,8 @@
     sfx('success');
     setTimeout(() => sfx('coin'), 600);
 
-    // Savings line: first-task response first, then the L12 savings API.
-    let usd = S.savedUsd;
-    if (usd == null) {
-      try {
-        const sv = await driver.savings();
-        usd = (sv && (sv.free_saved_usd != null ? sv.free_saved_usd : sv.api_value_usd)) || null;
-      } catch (_) { usd = null; }
-    }
+    // Savings line: only the verified first task's own usage, never a daily total.
+    const usd = S.firstTaskDone ? S.savedUsd : null;
     if (usd != null && isFinite(usd) && usd > 0) {
       line.textContent = '';
       line.appendChild(el('span', null, 'This run cost $0. At API prices it would have cost about '));
@@ -987,8 +1027,10 @@
     // maybeStartFirstFlight defers on the .upd-overlay.open marker anyway.
     $root.classList.add('open');
     document.documentElement.classList.add('mz-no-scroll');
-    const scene = opts.scene || (lsGet(LS_JOB) ? 'steps' : 'welcome');
+    const scene = opts.scene || (lsGet(LS_JOB) || lsGet(LS_FIRST_TASK) ? 'steps' : 'welcome');
     S.scene = scene;
+    S.firstTaskDone = false;
+    S.savedUsd = null;
     if (scene === 'steps') { renderSteps(); loadPlan(); }
     else if (scene === 'finale') { goFinale(); }
     else renderWelcome();
@@ -1011,6 +1053,8 @@
     S.open = false;
     clearTimeout(S.jobTimer);
     S.jobTimer = null;
+    clearTimeout(S.firstTaskTimer);
+    S.firstTaskTimer = null;
     $root.classList.remove('open');
     $root.hidden = true;
     document.documentElement.classList.remove('mz-no-scroll');

@@ -40,3 +40,24 @@ def test_disabled_engines_must_be_a_list(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     rejected = server._save_spawn_defaults({"disabled_engines": "kilo"})
     assert rejected["ok"] is False
+
+
+def test_concurrent_first_load_writes_are_atomic(monkeypatch, tmp_path):
+    import json
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    _isolate(monkeypatch, tmp_path)
+    barrier = threading.Barrier(8)
+    original_replace = Path.replace
+    def synchronized_replace(self, target):
+        if target == server.SPAWN_DEFAULTS_FILE:
+            barrier.wait(timeout=5)
+        return original_replace(self, target)
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
+    def write(i):
+        server._write_spawn_defaults_file({"writer": i})
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write, range(8)))
+    assert json.loads(server.SPAWN_DEFAULTS_FILE.read_text())["writer"] in range(8)
+    assert list(tmp_path.iterdir()) == [server.SPAWN_DEFAULTS_FILE]

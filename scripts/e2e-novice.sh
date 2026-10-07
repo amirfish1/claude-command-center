@@ -388,9 +388,9 @@ if curl -sS -o /dev/null --max-time 2 "$CCC_BASE/" 2>/dev/null; then
   fail "$CCC_BASE already answers — another server holds the port (stale e2e run? pick another CCC_E2E_CCC_PORT)"
 fi
 # The spawn payload carries runtime:"free" — the product's $0 path then builds
-# the child's ANTHROPIC_* env from the state file itself. Exporting the same
-# vars here is belt-and-suspenders: the spawned claude child also inherits the
-# server's env, so the run stays $0 even on builds without the runtime hook.
+# the child's ANTHROPIC_* env from the state file itself. The dashboard gets
+# no inference credentials, so a missing runtime hook cannot accidentally
+# pass this test through inherited free-router environment variables.
 # ANTHROPIC_API_KEY is scrubbed: Claude Code refuses to start when both it and
 # ANTHROPIC_AUTH_TOKEN are set. (macOS env has no -u, so unset in a subshell.)
 if ! CCC_PY="$(resolve_ccc_python || bootstrap_ccc_python)"; then
@@ -400,10 +400,13 @@ log "CCC python: $CCC_PY"
 (
   # PORT is unset too: server.py would otherwise read it, and a leaked
   # PORT=8090 from a parent session could shadow the --port flag's intent.
-  unset ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD CLAUDECODE \
-        CLAUDE_CODE_SESSION_ID CLAUDE_CODE_MESSAGING_SOCKET PORT HOST
+  unset ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL \
+        CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_SESSION_KEY CLAUDECODE \
+        CLAUDE_CODE_SESSION_ID CLAUDE_CODE_MESSAGING_SOCKET PORT HOST \
+        CCC_FREE_ROUTER_HOME CCC_FREE_ROUTER_STATE ANTHROPIC_MODEL
   export HOME="$E2E_HOME" CCC_EPHEMERAL=1 CCC_ALLOW_DUPLICATE_REPO=1 \
-         ANTHROPIC_BASE_URL="$ROUTER_BASE" ANTHROPIC_AUTH_TOKEN="$UNIFIED_KEY"
+         CCC_FREE_ROUTER_SUPERVISOR=external CCC_FREE_ROUTER_PORT="$ROUTER_PORT" \
+         CCC_CLAUDE_BIN="$CLAUDE_BIN"
   exec "$CCC_PY" "$REPO_ROOT/server.py" --port "$CCC_PORT"
 ) >"$LOG_DIR/ccc-server.log" 2>&1 &
 CCC_PID=$!
@@ -421,7 +424,7 @@ if curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
   ROUTER_API="present"
   log "free-router API present — status: $(curl -sS --max-time 5 "$CCC_BASE/api/free-router/status")"
 else
-  log "free-router API absent (404) — \$0 env reaches the child via server-env inherit"
+  fail "free-router API is absent; the real free runtime cannot be verified"
 fi
 
 # ---------- phase 7: spawn the $0 session ----------------------------------------
@@ -429,6 +432,9 @@ phase "free-spawn"
 if [ -z "$CLAUDE_BIN" ]; then
   warn "no claude binary — skipping spawn phase"
 else
+  REQS_BEFORE="$(http_json GET "$ROUTER_BASE/api/analytics/summary?range=1d" "$TOKEN" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("totalRequests") or 0)')" \
+    || fail "could not read router analytics before the agent run"
   SPAWN_PAYLOAD="$(python3 - "$PLAYGROUND" "$PROOF_FILE" "$PROOF_TEXT" "$TASK_KEY" <<'PY'
 import json, sys
 playground, proof_file, proof_text, task_key = sys.argv[1:5]
@@ -504,14 +510,14 @@ else
   [ -n "$PROOF_CONTENT" ] || fail "proof file is empty"
   WANT_NORM="$(printf '%s' "$PROOF_TEXT" | tr -d '[:space:]')"
   [ "$PROOF_CONTENT" = "$WANT_NORM" ] \
-    || warn "proof text differs ('$PROOF_CONTENT' != '$WANT_NORM') — file exists, which is the assertion"
+    || fail "proof text does not match the task"
   log "proof file created: '$PROOF_CONTENT'"
 
   REQS_AFTER="$(http_json GET "$ROUTER_BASE/api/analytics/summary?range=1d" "$TOKEN" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("totalRequests") or 0)' 2>/dev/null || echo 0)"
   REQS_DELTA=$(( ${REQS_AFTER:-0} - ${REQS_BEFORE:-0} ))
   [ "$REQS_DELTA" -gt 0 ] \
-    || warn "router analytics shows no new requests — cannot prove the run was \$0 (before=$REQS_BEFORE after=$REQS_AFTER)"
+    || fail "router analytics shows no agent requests; the run was not proven free"
   log "router requests +$REQS_DELTA (the session ran on the free router)"
   RESULT_OK=1
 fi
@@ -526,8 +532,8 @@ if [ "${CCC_E2E_SKIP_ONBOARDING:-}" != "1" ] && command -v node >/dev/null; then
     ONBOARDING="walked"
   else
     OB_RC=$?
-    [ "$OB_RC" = "3" ] && ONBOARDING="not-present" \
-      || { ONBOARDING="failed"; warn "verify-onboarding.js exited $OB_RC"; }
+    ONBOARDING="failed"
+    fail "verify-onboarding.js exited $OB_RC"
   fi
 fi
 

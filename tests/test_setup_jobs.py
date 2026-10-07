@@ -288,6 +288,21 @@ def test_plan_caches_and_refreshes():
     assert third["steps"][0]["id"] == "clt"
 
 
+def test_empty_playground_is_not_a_completed_task(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "CCC-Playground").mkdir()
+    monkeypatch.setenv("CCC_FIRST_TASK_STATE", str(tmp_path / "first-task.json"))
+    assert setup_steps._detect_first_task()[0] == "missing"
+    (tmp_path / "first-task.json").write_text(json.dumps({"tasks_done": ["hello-3-langs"]}))
+    assert setup_steps._detect_first_task()[0] == "ok"
+
+
+def test_stopped_router_needs_a_start_step(monkeypatch):
+    monkeypatch.setattr(setup_steps, "_free_router_status", lambda: {
+        "installed": True, "running": False, "healthy": False})
+    assert setup_steps._detect_free_router()[0] == "missing"
+
+
 def test_python_step_always_ok():
     status, detail = setup_steps._detect_python()
     assert status == "ok"

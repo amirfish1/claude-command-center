@@ -9273,11 +9273,16 @@ def _clean_disabled_engines(value, keep_enabled=()):
 
 def _write_spawn_defaults_file(payload):
     COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = SPAWN_DEFAULTS_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-    tmp.replace(SPAWN_DEFAULTS_FILE)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=COMMAND_CENTER_STATE_DIR,
+                                     prefix="spawn-defaults-", suffix=".tmp", delete=False) as f:
+        tmp = Path(f.name)
+        try:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            tmp.replace(SPAWN_DEFAULTS_FILE)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def _load_spawn_defaults():
@@ -31664,7 +31669,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "invalid JSON"}, 400)
                 return
             from ccc_server import first_task
-            job, err = first_task.start_task(payload.get("task_id"))
+            job, err = first_task.start_task(payload.get("task_id"), require_free=payload.get("runtime") == "free")
             if err:
                 code = err.get("code")
                 self.send_json(err, 409 if code == "busy" else 400)

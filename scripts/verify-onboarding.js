@@ -27,7 +27,7 @@ const SHOTS = process.env.CCC_E2E_SHOTS
 const TIMEOUT_MS = Number(process.env.CCC_E2E_TIMEOUT_MS) || 180_000;
 // Generous: real setup steps + a first agent task can take a while, and the
 // loop exits early on finale/idle anyway — the timeout is the real bound.
-const MAX_STEPS = 60;
+const MAX_STEPS = Math.max(60, Math.ceil(TIMEOUT_MS / 700));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -174,6 +174,8 @@ async function dismissChromeOverlays(page) {
     shots: SHOTS,
     steps: [],
     reached_end: false,
+    first_task_done: false,
+    page_errors: [],
     onboarding_present: false,
   };
 
@@ -196,6 +198,7 @@ async function dismissChromeOverlays(page) {
       const page = await browser.newPage();
       await page.setViewport({ width: 1280, height: 800 });
       page.on('pageerror', (e) => {
+        result.page_errors.push(e.message);
         console.log(`[verify-onboarding] page error: ${e.message}`);
       });
 
@@ -254,6 +257,7 @@ async function dismissChromeOverlays(page) {
         result.steps.push({ step, finale: state.finale, busy: state.busy });
         if (state.finale) {
           result.reached_end = true;
+          result.first_task_done = await page.evaluate(() => !!(window.cccOnboarding && window.cccOnboarding._state && window.cccOnboarding._state.firstTaskDone));
           console.log(`[verify-onboarding] reached the finale at step ${step}`);
           // Let the finale card paint before the closing screenshot.
           await sleep(900);
@@ -295,6 +299,9 @@ async function dismissChromeOverlays(page) {
       }
 
       await page.screenshot({ path: shotPath('zz-final.png') });
+      if (!result.reached_end) throw new Error('Onboarding stopped before reaching the finale.');
+      if (!result.first_task_done) throw new Error('Onboarding did not complete a verified free first task.');
+      if (result.page_errors.length) throw new Error('Onboarding had browser errors: ' + result.page_errors.join('; '));
       console.log(`ONBOARDING_RESULT ${JSON.stringify(result)}`);
       process.exitCode = 0;
     })()]);
