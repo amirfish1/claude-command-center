@@ -184,6 +184,9 @@ You need Git and Python 3.9+ for the dashboard. To launch agents, use an
 installed agent CLI or let the first-run wizard help set one up. `gh` is
 optional for GitHub features.
 
+Prefer Python tools? [Build and run a wheel with uvx or pipx](docs/install.md#python-runners-preview).
+This is a source-build preview, not a PyPI release.
+
 ### WatchTower comes with it
 
 WatchTower powers CCC's queues. See [setup and requirements](docs/install.md#watchtower-queue-engine).

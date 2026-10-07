@@ -1,0 +1,1 @@
+- With "$0 Free" picked, the new-session composer shows "Free model" in place of the Claude model and effort menus, and the free router picks the model (the paid default model is no longer sent).

@@ -207,6 +207,7 @@
 
   function maybeAutoShow() {
     if (onboardingOpen()) return;
+    if (!(window.cccPopups && window.cccPopups.allowed("router-detected"))) return;
     detect(false).then(function (data) {
       var routers = (data && data.routers) || [];
       var fresh = routers.filter(function (r) {
