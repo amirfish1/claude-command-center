@@ -26,13 +26,14 @@ CCC puts every session on one local board and tells you which one needs you.
 _Start the next while Claude builds the first._
 
 > “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
-> — CCC user
+> CCC user
 
-One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** session on your machine, however you launched it — plus read-only ingestion of **GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** sessions. Spawn, monitor, and ingest all eight; steer seven of them with follow-up. Local, source-available (FSL-1.1-MIT), free to use and modify, including at work.
+One local dashboard for **Claude Code**, **Codex**, **Cursor**, **Antigravity**,
+**Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin**, however you launched them.
+Spawn and monitor all eight; send follow-up on seven. Kilo Code is fire-and-forget.
+CCC is local, source-available, and free to use and modify, including at work.
 
-> 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
-
-![CCC v5.35 showing the session fleet in the compact list, an active agent conversation, and the composer](docs/images/ccc-v5-35-hero.png)
+![CCC v5.35 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-35-hero.png)
 
 Install with curl:
 
@@ -48,22 +49,22 @@ brew install ccc
 ccc
 ```
 
-Or download the macOS DMG and drag `CCC.app` to Applications:
-[github.com/amirfish1/claude-command-center/releases/latest](https://github.com/amirfish1/claude-command-center/releases/latest)
+Or download the [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest)
+and drag `CCC.app` to Applications.
 
-Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) (or [amirfish1.github.io/claude-command-center/demo](https://amirfish1.github.io/claude-command-center/demo/)) - the full dashboard with seeded fake data, no install required.
+Try the [read-only demo](https://ccc.amirfish.ai/demo/) first: the full dashboard
+with seeded fake data, no install required. [Alternate demo](https://amirfish1.github.io/claude-command-center/demo/).
 
 ## Start free in 5 minutes
 
-Fresh install? The first-run wizard does the boring parts for you: it
-checks your machine, installs what an agent needs (Node, the Claude Code
-CLI, a local free-model router), and runs your first real task on a **$0 model**.
-One consent click per step, nothing installs without you, and it ends with
-the honest math: *"This run cost $0. At API prices it would have cost $X."*
+New to coding agents? The first-run wizard checks your machine, helps install
+Node, the Claude Code CLI, and a local free-model router, then runs your first
+real task on a **$0 model**. You approve each install step. It ends with the
+honest math: *"This run cost $0. At API prices it would have cost $X."*
 
-The tour: [`docs/onboarding.md`](docs/onboarding.md) · how $0 runs route
-through free providers, and the privacy tradeoffs:
-[`docs/free-models.md`](docs/free-models.md)
+[Walk through setup](docs/onboarding.md) · [Free providers and privacy](docs/free-models.md).
+Free providers have their own limits. The keyless provider logs prompts for
+training; CCC asks for consent before enabling it. Do not send it private code.
 
 ## See CCC at work
 
@@ -73,11 +74,12 @@ through free providers, and the privacy tradeoffs:
 
 ### One board, eight engines
 
-Every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** session lands on one board — however you launched it. CCC reads each engine's on-disk state, so even sessions you started by hand in a terminal show up.
+See sessions you started in a terminal or from CCC. Each agent's own files
+keep the list up to date.
 
 </td>
 <td width="50%">
-  <img src="docs/images/feature-wall/fleet-scan.gif" alt="CCC scanning every coding-agent session onto one board" width="100%" />
+  <img src="docs/images/feature-wall/fleet-scan.gif" alt="CCC scanning coding-agent sessions onto one board" width="100%" />
 </td>
 </tr>
 <tr>
@@ -88,7 +90,8 @@ Every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **
 
 ### Flow canvas & Project tree
 
-Group sessions under named, nestable Flow objects — a hierarchical map of your day's work, with a live "Current sessions" triage band riding on top.
+Group sessions by the work they belong to. Keep your live sessions next to
+a map of your projects.
 
 </td>
 </tr>
@@ -100,7 +103,8 @@ Group sessions under named, nestable Flow objects — a hierarchical map of your
 
 ### Split conversations
 
-Drag any session onto the edge of an open transcript to read two agents side by side — each pane keeps its own input bar.
+Drag a session onto the edge of an open conversation to read two agents
+side by side. Each has its own input bar.
 
 </td>
 </tr>
@@ -109,22 +113,24 @@ Drag any session onto the edge of an open transcript to read two agents side by 
 
 ### Find anything, from any session
 
-Full-text search across your entire session history, built in and zero-setup — with an optional semantic mode for when you can't remember the words you used.
+Search your session history without extra setup. An optional semantic mode
+helps when you cannot remember the exact words.
 
 </td>
 <td width="50%">
-  <img src="docs/images/feature-wall/search.gif" alt="Searching across session history in CCC" width="100%" />
+  <img src="docs/images/feature-wall/search.gif" alt="Searching session history in CCC" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="50%">
-  <img src="docs/images/feature-wall/group-chat.gif" alt="Three agent sessions coordinating in a CCC group chat" width="100%" />
+  <img src="docs/images/feature-wall/group-chat.gif" alt="Agent sessions coordinating in a CCC group chat" width="100%" />
 </td>
 <td width="50%" valign="middle">
 
 ### Sessions that coordinate without you
 
-Group chats keep two sessions on one goal in sync — post once and every participant is pinged, instead of you relaying output between terminals.
+Post once to a group chat and every participant gets the message. No copying
+answers between terminals.
 
 </td>
 </tr>
@@ -133,22 +139,24 @@ Group chats keep two sessions on one goal in sync — post once and every partic
 
 ### Durable queues, one inbox
 
-File work into named [WatchTower](https://github.com/amirfish1/watchtower) queues instead of remembering what to ask which session. Tickets survive closed sessions, workers drain them in parallel, and the queue inbox shows what needs you.
+Put work in a [WatchTower](https://github.com/amirfish1/watchtower) queue.
+Tickets survive closed sessions, and workers can pick them up in parallel.
 
 </td>
 <td width="50%">
-  <img src="docs/images/feature-wall/queues.gif" alt="CCC's queue inbox — the all-queues picker and a ticket waiting on a decision" width="100%" />
+  <img src="docs/images/feature-wall/queues.gif" alt="CCC queue inbox and a ticket waiting on a decision" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="50%">
-  <img src="docs/images/feature-wall/queue-workers.gif" alt="WatchTower workers draining CCC queues, with per-queue health and live worker rows" width="100%" />
+  <img src="docs/images/feature-wall/queue-workers.gif" alt="WatchTower workers draining CCC queues" width="100%" />
 </td>
 <td width="50%" valign="middle">
 
 ### Workers that specialize over time
 
-Each worker reads its queue's shared learnings file before it starts and writes back when it ends, so a queue handling the same kind of ticket for months keeps getting faster, not just busier.
+Workers read their queue's shared learnings before a task and write back
+afterwards, so the next worker has that experience.
 
 </td>
 </tr>
@@ -157,128 +165,162 @@ Each worker reads its queue's shared learnings file before it starts and writes 
 
 ### Work from anywhere
 
-The whole fleet on your phone — monitor sessions, answer agents, and steer from anywhere on your trusted network. Loopback by default, never the open internet.
-
-**Settings > Phone access…** sets it up in about a minute over Tailscale: one button, a QR code, a live test. See [`docs/phone-access.md`](docs/phone-access.md).
+Monitor sessions and reply from your phone on a trusted network. CCC stays
+local by default. **Settings > Phone access** guides you through Tailscale.
+[Phone setup](docs/phone-access.md).
 
 </td>
 <td width="50%" align="center">
-  <img src="docs/images/feature-wall/mobile.gif" alt="CCC session list and transcript on a phone screen" width="46%" />
+  <img src="docs/images/feature-wall/mobile.gif" alt="CCC session list and conversation on a phone" width="46%" />
 </td>
 </tr>
 </table>
 
-**Also in the box:**
+All captures use seeded demo data. [Full feature guide](docs/features.md).
 
-- **More queue tooling** — per-queue AI status briefs, GitHub-backed queues synced from issues, and one-click "create a queue for this session".
-- **Answer permission prompts from the dashboard** — Claude Code's approve/deny prompts surface inline; CCC never interrupts a possibly-mid-turn session without your Approve.
-- **Voice mode** — talk to the board hands-on through the Codex realtime lane (experimental): the browser's mic and speakers peer with the local voice host over WebRTC, the voice answers from a read-only view of your sessions and queues, and anything that would change state lands as a card you confirm by click. Runs on your ChatGPT subscription; an OpenAI API key in BYOK enables an optional billed fallback. See `docs/realtime-voice.md`.
-- **Board view (kanban, optional)** — drag-drop columns derived from session state, with rubber-band multi-select. The list is the primary surface; the board is an opt-in lens.
-- **System status** — a health modal over the whole fleet: restart-all, spawned-process cleanup, delivery receipts.
-- **Cost-aware cold-session composer** — ranked cheaper routes (continue fresh on a lower tier, search history) instead of a blind expensive resume.
-- **FIRST FLIGHT tour** — a spotlight walkthrough on first run, replayable any time from Settings.
-- **Settings modal** — instant search (Cmd/Ctrl+,), keyboard navigation, per-section reset.
-- **Plan-to-fleet** — import a plan or mission brief into a WatchTower queue and drain it with workers.
-- **Fresh worktree spawns** — launch a session in `<repo>-wt/<slug>/` on `feat/<slug>`, with optional init scripts.
-- **Headless spawn with follow-up** — `claude -p` sessions you keep talking to from the browser, no terminal needed.
-- **Resume-on-demand** — messaging a dormant session auto-spawns a headless resume to deliver it.
-- **Auto-fix deploys** — polls Vercel, spawns a `/fix-deploy` session on new production errors.
-- **AI-assisted titles** — regenerate a card's title via `claude -p` (Haiku by default).
-- **Orchestration skill + 12-skill pack** — one Claude session can spawn, inject into, and synchronously ask sibling sessions over plain HTTP.
-- **Usage tracking** — your pace against plan limits, per engine, with cache-adjusted token rankings, before you hit the wall. Per-session **cost cards** estimate weekly-quota contribution and show allocated subscription dollars next to the API list-price equivalent.
-- **Model deny-list** — `~/.claude/command-center/model-policy.json` blocks models across every picker, spawn path, and queue; WatchTower workers honor it too.
-- **`/compact` as a card** — one self-narrating card with stage names, a live clock, and the tokens-freed payoff, instead of a spinner that could report a slow compaction as failed.
-- **Workers tab** — Compact/Cozy/Detailed densities, a fixed-column grid, a WORKING NOW strip, and worker rows that appear before the engine session exists.
-- **Self-attaching agents** — headless sessions launched outside CCC discover their parent session via process ancestry; `ccc spawn` and queue lanes appear in the list the moment they start.
-- **$0 runs on free models** — a managed local router (loopback-only [freellmapi](https://github.com/tashfeenahmed/freellmapi)) runs sessions on free-tier providers; the spawn dialog's **Free ($0)** option, `$0` session badges, a savings ticker, and a "continue free?" offer when a paid session hits its limit. See [`docs/free-models.md`](docs/free-models.md).
+## Quickstart
 
-All captures use seeded demo data.
+You need Git and Python 3.9+ for the dashboard. To launch agents, use an
+installed agent CLI or let the first-run wizard help set one up. `gh` is
+optional for GitHub features.
 
-CCC latches onto every Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin session on your machine: terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+Prefer Python tools? [Build and run a wheel with uvx or pipx](docs/install.md#python-runners-preview).
+This is a source-build preview, not a PyPI release.
 
-See the [engine support matrix](#engine-support) below for what each engine does. Spawn, monitor, and transcript ingestion work across all eight; follow-up (steering a dormant session) works on seven (Kilo Code is fire-and-forget), and Cursor IDE sync is metadata-only by design.
+### WatchTower comes with it
+
+WatchTower powers CCC's queues. See [setup and requirements](docs/install.md#watchtower-queue-engine).
+
+### Running on Windows
+
+```powershell
+irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex
+```
+
+From a clone, run `.\run.ps1`. Native Windows runs in the foreground; WSL2
+supports the Linux systemd service route. [Windows guide](docs/install.md#running-on-windows).
+
+### From source
+
+```bash
+git clone https://github.com/amirfish1/claude-command-center
+cd claude-command-center
+./run.sh
+```
+
+Open [http://localhost:8090](http://localhost:8090), then pick a repo before
+starting work. Keep the terminal open for a foreground launch.
+
+### Running on Linux
+
+Use `./run.sh` in the foreground or `./run.sh --install-service` for a systemd
+user service. [Linux and WSL2 guide](docs/install.md#running-on-linux-and-wsl2) ·
+[macOS services](docs/install.md#from-source-on-macos) · [Docker](docs/docker.md).
+
+### Your agent config
+
+CCC asks before registering hooks or installing skills in your agent config.
+You can skip them, review the diff, or remove them later in Settings.
+[What changes, and how to undo it](docs/agent-config-consent.md).
+
+## Engine support
+
+All eight engines can start sessions from CCC. Follow-up and model controls
+vary; Kilo Code has no resume, and Cursor IDE sync is metadata-only.
+**GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** are read-only,
+as are Devin cloud sessions. [Full engine support matrix](docs/engine-support.md).
 
 ## What you get
 
-**See your whole fleet, past one session.** The way you build faster is a session per workstream: one on the feature, one on its go-to-market, one on the next feature, one on research. CCC puts every model and engine on one board, every row enriched so you read status without clicking in: a needs-you signal, live context left, and a cost tier. Pin strategy sessions, nest workers under them, group by project, or lay the whole fleet out on a canvas.
-
-**Stop wasting tokens, keep quality where it matters.** Your best model leads; execution fans out to cheaper models, or another platform entirely, through spawns, queues, and workers you point at any engine. CCC shows your pace against your plan's limits before you hit the wall, attributes a spend spike to the exact session or automation that caused it, and flags sessions running on a tier they don't need.
-
-**Sessions that exchange context on their own.** Two sessions on one goal stay in sync through group chats and a sibling-ask API, instead of you reading one agent's output off one screen and retyping it into the other. Post once and every participant is pinged; ask a sibling synchronously when you need an answer right now; hand a problem to a fresh spawned session that reports back when it finishes.
-
-**Workers that specialize over time.** Each worker reads its queue's shared learnings file before it starts and writes back to it when it ends, so a queue handling the same kind of ticket for months keeps getting faster and more accurate, not just busier. Ships via [WatchTower](https://github.com/amirfish1/watchtower), which CCC installs on first launch as its queue engine — Python 3.9+. WatchTower is a hard dependency: if it can't be installed, CCC fails loudly at startup with a clear error rather than silently running a stale queue.
-
-**Find anything, from any session.** The problem you solved two weeks ago in some other session, found in seconds instead of solved again: full-text search across your session history, built in, zero setup, with an optional deeper semantic mode for when you can't remember the words you used. Covers Claude Code and Codex today. Claude Code deletes conversations older than 30 days by default (`cleanupPeriodDays`); CCC offers, opt-in, to raise that so older history stays searchable.
-
-**Work from anywhere.** Two sides of one opt-in: your phone as a client to the fleet, and CCC installed on any machine you can reach, a VM or a home server, open in any browser on your trusted network. Loopback by default, never the open internet.
+[Explore features](docs/features.md): approvals, search, worktrees, settings,
+cost-aware continuations, voice, queues, and the optional board view.
 
 ## Why this exists
 
-Most Claude Code orchestration tools are opinionated wrappers. They want to
-own execution. You launch agents *through* them, and in return you get a
-dashboard. That's fine until it isn't. The moment you open a terminal,
-`claude --resume` something, and iterate on it by hand, you're outside the
-tool's universe. The dashboard can't see it. The work you just did doesn't
-show up on the kanban, against the issue, in the review queue.
-
-This goes the other way. It treats Claude Code's on-disk state as the
-source of truth: `~/.claude/projects/*.jsonl` transcripts, the
-`~/.claude/sessions/<pid>.json` live registry, and per-tool-call sidecar
-files written by hooks CCC adds to `~/.claude/settings.json` once you
-approve them (see [Your agent config](#your-agent-config)). If
-Claude Code is running anywhere on your machine, it shows up here. If you
-close the dashboard, your sessions keep running. If you open a terminal and
-iterate by hand, the card updates.
-
-The dashboard also knows how to *spawn* headless sessions (via
-`claude -p --input-format stream-json`) and *resume* dormant ones on demand,
-but those are additive. The thing it's built around is attaching to work
-that already exists.
+CCC attaches to the work you already have instead of requiring you to launch
+every session through it. Close the dashboard and your agents keep running.
+[How attachment works](docs/session-attach.md).
 
 ## How it compares
 
-|  | CCC | Orca | Vibe Kanban | Conductor | Claude Squad | opcode | herdr |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Sees sessions you launched by hand, outside the tool | ✅ | ❌ | ⚠️ partial | ❌ | ❌ | ✅ | ❌ |
-| One dashboard across many agent engines | ✅ 8 spawnable + 3 read-only | ✅ | ✅ | ❌ | ✅ | ❌ | ✅ |
-| Tells you which session needs you | ✅ read from the transcript | ⚠️ finish notifications | ❌ | ❌ | ❌ | ❌ | ⚠️ status detection |
-| Sessions coordinate without you as the relay | ✅ group chats + sibling-ask | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Durable queues with workers that learn | ✅ WatchTower | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| GitHub issue → session → verify → close loop | ✅ closes with commit-SHA comment | ⚠️ PR/issue browsing | ⚠️ PR-focused | ❌ | ⚠️ | ❌ | ❌ |
-| Survives closing the dashboard | ✅ the dashboard is a lens, not a runtime | ❌ | ⚠️ | ❌ | ✅ | ✅ | ✅ |
-| Mobile companion | ✅ full dashboard in your phone browser | ✅ native app | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Worktree-per-task isolation | ❌ attach-first by design | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| No account, no cloud, runs locally | ✅ stdlib Python, no build | ⚠️ | ⚠️ Postgres | ⚠️ | ✅ | ✅ | ✅ |
-| Setup | one curl line, or brew / DMG | desktop download | desktop / self-host | desktop download | terminal install | desktop download | terminal install |
-
-Competitor cells reflect a survey of 20+ tools in this space (April–August 2026) — everyone ships weekly, so check their current docs before quoting. The one deliberate ❌: CCC doesn't own worktrees per task. It attaches to the work you already have instead of wrapping every run.
-
-The whole point is the first row: the moment you touch a terminal, a tool that owns execution goes blind. CCC reads the state the engines already write, so it never does. Deeper dives: [vs claude-squad / Conductor / Sculptor](docs/index.html), [vs heavyweight IDEs](docs/vs-heavyweight-ides.html).
+CCC is a session dashboard and coordination tool. Routers provide the model
+backends it can use. [Comparisons and scope](docs/features.md#how-it-compares).
 
 ## Recent
 
-- **2026-10-02**: **v5.36.0**. Codex sessions are now blazingly fast: sends skip the whole-thread `thread/resume` reload when the app-server is provably fresh and confirm in well under a second (they used to sit in "Sending…" for five), and blocked sends queue durably instead of silently falling back to one-shot `codex exec` runs. The false "Another app is driving this thread" warning is gone, Devin sessions run the model you actually picked instead of the account default, and a live WIP timer shows how long every working session has been at it. Plus: a Jobs tab for scheduled work, WatchTower stage pipelines and acceptance checks on the queue board, Hand over to Codex Desktop, quota-fallback settings, and ~45 fixes.
+See [CHANGELOG.md](CHANGELOG.md) and [releases](https://github.com/amirfish1/claude-command-center/releases).
+Choose **Watch > Releases** on GitHub for update notifications.
 
-- **2026-09-28**: **v5.35.0**. The Mac app is now `CCC.app` and updates itself silently through Sparkle. First launch waits for the Command Line Tools instead of failing, and `install.sh` checks for them up front. First run opens on an engines review, adds a Tailscale step and a compact consent dialog, and the composer shows a notice with an Install button when the engine you picked is missing.
+## Core concepts
 
-- **2026-09-28**: **v5.34.0**. Sessions from paired machines join the sidebar under "Other machines", the Pipeline Canvas gives you an n8n-style node graph over your queues, and a new local memory layer (`ccc recall`, `ccc shipped`, `ccc brief`, `ccc where`) answers "did we ship X?" and "where did this session leave off?" across engines, plus phone access over Tailscale, Claude Opus 5.5, Grok 4.7, and managed installs that now follow releases instead of `main`. Also: the Original-ask reading modal, Devin over `devin acp` with Steer, Claude Task-subagent rows, a Session Waste panel, the retired telemetry ping, and ~90 fixes.
+[Sessions, Flow objects, and the board](docs/features.md#organize-and-read-work).
 
-- **2026-09-13**: **v5.33.0**. Codex conversations now render through the same live transcript view as every other engine — tool calls, diffs, images, and approval requests stream inline, and the separate native view is gone entirely. The Workers tab becomes a real table: Compact/Cozy/Detailed densities, a fixed-column grid, a WORKING NOW strip, and worker rows that appear the moment a worker spawns — before its engine session exists. Sessions now show what they actually cost: a weekly-quota estimate plus allocated subscription dollars next to the API list-price equivalent. `/compact` runs as one self-narrating card (stages, live clock, `112k → 16k tokens · −86%`) instead of a spinner that could report a slow compaction as a failure. A machine-wide model deny-list (`~/.claude/command-center/model-policy.json`) blocks models across every picker, spawn path, and queue — WatchTower workers honor it too — and Devin's free SWE-2 family joins the model picker. Plus: externally-launched headless sessions auto-attach to their parent session, `ccc spawn` sessions appear in the list the moment they start, a 21-step first-run guide, `kimi web` as a supervised service, and ~70 fixes.
+## Codex conversations
 
-- **2026-08-28**: **v5.29.0**. A follow-up for people running a real fleet: Simple Mode gives your phone a plain-language Home screen, the new orchestration rail lets you Delegate, Verify, or Critique and then watch the lanes work, and the model catalog now shows live Codex pricing and limits alongside the other engines. Recent-work search now scans local Claude, Codex, Kimi, Gemini, and Cursor transcripts directly. The sidebar also gets its overdue polish pass: readable row styles, wrapping, a clear selected state, and correct icon alignment.
+[Codex workspace guide](docs/codex-workspace.md): shared transcripts, live turns,
+connection limits, and desktop-owned tasks.
 
-- **2026-08-10**: **v5.21.0**. **A mobile and reliability release.** The phone dashboard got a full responsiveness pass — conversations open ~6× faster (2476ms → 395ms), the sidebar scrolls as one surface instead of trapping your finger in three panels, the new-session composer stops pushing its send button off-screen, and the list chrome condenses so far more sessions fit on a phone screen. On reliability: CCC no longer interrupts a possibly-mid-turn session on its own (automatic interrupt paths now file an approval ask), a global delivery-health banner surfaces lost WatchTower receipts, Kimi/Devin queues stopped wedging after mid-turn crashes, and trashed sessions stopped resurrecting for a few minutes after the click. Plus a cache-adjusted token headline in the status rail, a connection-type chip in the metadata rail, 1D/2D/7D cache-adjusted session ranking in the throughput sidebar, and a Kimi quota line in the combined throughput chart.
-- **2026-08-07**: **v5.20.0**. **Devin joins as the eighth engine**, now fully spawnable via its local CLI (`devin -p`) with headless spawn, resume, and transcript ingestion from its SQLite store — cloud API sessions stay read-only. Plus a per-repository new-session button in the sidebar, a private queue/worker diagnostic Q2 can send in one click, and a broad reasoning-effort picker rollout across every composer surface.
-- **2026-07-20**: **v5.9.0**. **Kimi Code joins as the sixth engine** (spawn, steer, live token streaming, guided setup in Settings). Plus a FIRST FLIGHT onboarding tour, a searchable full settings modal (Cmd/Ctrl+,), a cost-aware cold-session composer that offers ranked cheaper routes instead of a blind expensive resume, a 12-skill orchestration pack, plan-to-fleet queue import, and a perf pass that gets new sessions into the list in seconds.
-- **2026-06-25**: **v5.4.0**. **Project tree**: the "By objects" sidebar now splits a live "Current sessions" triage band over a hierarchical map of your day, sessions grouped under nestable, draggable Flow objects. Plus a new `/api/sessions/events` SSE stream (subscribe to session-state changes instead of polling) and a broad Codex, sidebar, and Total Recall search polish wave.
-- **2026-06-03**: **v4.6.0**. Major performance pass: the dashboard idles instead of pinning a CPU core, group-chat opens ~40x faster, long conversations open near-instantly (windowed load + scroll-up to load earlier), and Codex sessions with screenshots no longer stall on multi-MB images. New CCC self-health readout in the footer.
-- **2026-05-21**: **v4.0.0**. Antigravity (Google DeepMind) joins the dashboard as a first-class engine alongside Claude Code and Codex.
-- **2026-05-21**: Drag any conversation row outside the window to pop it into a focused side pane, with 24 per-conversation accent colors.
-- **2026-05-19**: Template gallery mechanism for reusable new-session prompts, driven by `static/templates.json`. ([#46](https://github.com/amirfish1/claude-command-center/issues/46))
-- **2026-05-19**: VS Code extension v0.1.0 published, spawn a session from the active workspace folder. ([#52](https://github.com/amirfish1/claude-command-center/issues/52))
-- **2026-05-19**: One-command `curl | bash` installer; `git clone` demoted to a "From source" section. ([#58](https://github.com/amirfish1/claude-command-center/pull/58))
-- **2026-05-19**: Static GitHub Pages demo with seeded mock data (no install required). ([#49](https://github.com/amirfish1/claude-command-center/issues/49))
-- **2026-05-18**: Local macOS `say` text-to-speech button on conversations.
+## Bring your own key (BYOK)
+
+[Provider keys and Vault](docs/byok-and-vault.md): profiles, supported routes,
+secret storage, and safe CLI use.
+
+### Vault: any other secret
+
+[Store and use non-provider secrets](docs/byok-and-vault.md#vault-any-other-secret).
+
+## Features
+
+[Full feature guide](docs/features.md) · [Free models](docs/free-models.md) ·
+[Phone access](docs/phone-access.md) · [Realtime voice](docs/realtime-voice.md).
+
+## Decision Inbox
+
+[Choose the next step for stalled work](docs/decision-inbox.md).
+
+## Throughput usage database
+
+[Local usage database and cost comparisons](docs/usage-db.md).
+
+## Orchestration skill
+
+[CLI commands](docs/cli.md) · [Spawn, send, and ask APIs](docs/orchestration.md) ·
+[12-skill pack](skills/README.md). Usage integrations read `GET /api/usage/current`.
+
+### The `ccc` CLI
+
+[Check sessions, start work, and send replies from your terminal](docs/cli.md).
+
+## Works with your skills
+
+[Skill integrations](docs/features.md#agents-working-together) ·
+[Installed-pack inventory](docs/skills-ecosystem-inventory.md).
+
+## Cookbook
+
+[Wire your own app into CCC](cookbook/README.md).
+
+## Architecture
+
+[Dashboard, persistent worker, and state](docs/architecture.md).
+
+## Configuration
+
+[Environment variables, defaults, and persistent settings](docs/configuration.md).
+
+## Python stack diagnostics
+
+[Dump thread stacks without a restart](docs/configuration.md#python-stack-diagnostics).
+
+## Roadmap
+
+For current capabilities and limits, see [Features](docs/features.md) and
+[Engine support](docs/engine-support.md). Request improvements through
+[GitHub issues](https://github.com/amirfish1/claude-command-center/issues).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Feedback and bug reports are welcome.
 
 <!-- star-history:start -->
 <picture>
@@ -287,785 +329,16 @@ The whole point is the first row: the moment you touch a terminal, a tool that o
 </picture>
 <!-- star-history:end -->
 
-> **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
-> what worked or what broke, or just say hi. This is a one-person project
-> built around a specific workflow. Outside feedback is the only way I know
-> how widely it lands. [@amirfish1](https://github.com/amirfish1)
-
-## Quickstart
-
-**Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/): the read-only dashboard with seeded fake data, no install required.
-
-Requirements: Git and Python 3.9+. Install at least one supported agent CLI to
-launch sessions: [Claude Code](https://docs.claude.com/en/docs/claude-code),
-Codex, Gemini, or Antigravity. The dashboard itself starts without an agent CLI.
-Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.
-Linux is supported for headless / remote-box use (see [Running on Linux](#running-on-linux)); the macOS-only desktop conveniences degrade cleanly there.
-Windows is supported for native foreground use with PowerShell, and WSL2 remains
-the best route if you want the Linux service path.
-
-**curl**: clones into `~/.ccc/claude-command-center` and runs in foreground. Re-running does a `git pull`.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
-```
-
-**Python runners (preview, not on PyPI yet)**: build a wheel with `uv build --wheel`
-from a source checkout, then try it without a permanent CCC install:
-
-```bash
-uvx --from dist/claude_command_center-5.37.0-py3-none-any.whl claude-command-center
-# Or, with pipx:
-pipx run --spec dist/claude_command_center-5.37.0-py3-none-any.whl claude-command-center
-```
-
-Open `http://localhost:8090` and leave the terminal open. Press Ctrl+C to stop.
-WatchTower, the queue engine, is set up on first launch; Bash and a connection
-are needed for that step. State stays in `~/.claude/command-center/` and the
-usual agent folders, not the runner's cache. Once published, the short commands
-will be `uvx claude-command-center` and `pipx run claude-command-center`.
-
-**Windows PowerShell**: clones into `%USERPROFILE%\.ccc\claude-command-center`
-and runs in foreground. Re-running does a `git pull`.
-
-```powershell
-irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex
-```
-
-**Homebrew** — installs into the Cellar, puts `ccc` on `PATH`, pins a brew-managed Python. Upgrade via `brew upgrade ccc`.
-
-```bash
-brew tap amirfish1/ccc
-brew install ccc
-ccc                              # foreground
-brew services start ccc          # or run as a brew-managed background service
-```
-
-**DMG** — drag the app to Applications and double-click to launch. On first
-launch, the signed and notarized app installs its local source into
-`~/.ccc/claude-command-center`, shows progress, and opens the dashboard when its
-loopback server is ready. Installation errors include the real log plus Retry,
-Open Log, and Quit actions. CCC does not automate Terminal or request macOS
-Automation access. Download the [latest release](https://github.com/amirfish1/claude-command-center/releases/latest).
-
-If you'd rather clone first and run the script directly, pass the channel as a flag instead: `./scripts/install.sh --from=readme`.
-
-### The `ccc` CLI
-
-Once CCC is running, the repo-root `ccc` script answers "what sessions exist
-and what are they doing" in one command — no dashboard needed:
-
-```bash
-ccc sessions              # live census: state, age, engine, repo, name
-ccc list-sessions --since 5h   # only sessions active in the window
-ccc sessions --json       # machine-readable census
-
-ccc models                # every engine's models, effort ladders, cost,
-                          # release dates where the id carries one
-ccc quota                 # weekly quota left per engine + when it resets
-ccc doctor                # per-engine CLI/auth/BYOK health, dry-run only
-ccc vault exec --env VAR=<name> -- <cmd>   # run with a Vault secret, redacted from output
-ccc spawn "fix the flaky login test" --engine claude --model opus-5
-ccc spawn "drain the queue" --report-to <your-session-id>   # reports back
-
-ccc send queue-drain "also update the changelog"   # fire-and-forget
-ccc send <session-id> "stop, wrong branch" --steer # interrupt the turn
-ccc ask queue-drain "what's your status?"          # block for the reply
-
-ccc spawn --continue-from <old session> "keep going"       # new session, not a cold resume
-ccc send <old session> "keep going" --new-if-large-and-stale # spawns a continuation only when warranted
-```
-
-It finds the server via `~/.claude/command-center/port.txt` (override with
-`--server` or `$CCC_SERVER`) and shows every live session — including spawned
-children (indented under their parent) and sessions the dashboard has no
-conversation row for. `ccc spawn` is the orchestration entry point: it posts
-to `/api/sessions/spawn` scoped to your current directory (override with
-`--cwd`), and `ccc models` lists the live per-engine model catalog so agents
-never have to guess a `--model` id. `ccc send` and `ccc ask` message any
-running session — fire-and-forget or blocking for the reply — addressed by
-session id, a unique id prefix, or a unique fragment of the name shown in
-`ccc sessions`. The installer links it to
-`~/.local/bin/ccc`; from a checkout you can also run `./ccc`. With no
-subcommand, `ccc` passes through to `run.sh` (the same launching behaviour
-as the Homebrew `ccc`).
-
-### WatchTower comes with it
-
-[WatchTower](https://github.com/amirfish1/watchtower) (`wt`) is CCC's queue
-engine, not an optional add-on — it owns ticket lifecycle, worker dispatch,
-plan-to-fleet import, and delivery receipts. Every install path installs it:
-the `curl` and PowerShell installers do it up front, and `run.sh` bootstraps it
-on first launch, so Homebrew, the DMG, Docker, and a plain `git clone` all end
-up with it too.
-
-One script, `scripts/install-watchtower.sh`, owns the whole chain: an existing
-local checkout (`$WATCHTOWER_DIR`, `~/Apps/watchtower`, `~/dev/watchtower`)
-first, then a shallow clone at `~/.ccc/watchtower`, then a source tarball, and
-only as a last resort the `watchtower-cli` package on PyPI — that release lags
-the repo, so it is a floor rather than the target. It installs into the same
-interpreter that runs `server.py` (CCC imports `watchtower.queue` in-process,
-which is why this can't be a pipx install), then runs `wt start` so the daemon
-survives reboot and login. It needs Python 3.11+; on an older interpreter CCC
-skips it and runs on a built-in fallback queue engine that can file tickets but
-will not dispatch workers, import plans, or issue receipts.
-
-Updates: the clone CCC owns is fast-forwarded at most once a day. A checkout of
-your own is never pulled — it is a working tree that may hold uncommitted work,
-so if it is behind its upstream CCC says so and leaves it alone.
-
-Set `CCC_SKIP_WATCHTOWER=1` to opt out. If `wt` ends up installed but not on
-your `PATH`, the dashboard still works — only the CLI surfaces stay hidden — and
-the installer prints the directory to add.
-
-### From source
-
-```bash
-git clone https://github.com/amirfish1/claude-command-center
-cd claude-command-center
-
-# Try it. Runs in the foreground until Ctrl-C / terminal close
-./run.sh
-
-# Keep it. Install as a per-user launchd agent that starts now and at login
-./run.sh --install-service
-```
-
-Open [http://localhost:8090](http://localhost:8090), then pick a repo from
-the repo dropdown before starting repo-scoped actions.
-
-`--install-service` writes separate dashboard and persistent-worker launch
-agents under `~/Library/LaunchAgents/`. The worker has an independent lifecycle
-so dashboard upgrades do not make it part of the dashboard's process tree.
-Both start immediately and again at macOS login. The installer bakes in whatever
-`PORT` / `CCC_*` env vars were set when you ran it. Re-run it to update config;
-check with `./run.sh --service-status`; remove with `./run.sh --uninstall-service`.
-Dashboard logs use `~/.claude/command-center/logs/service.{out,err}.log`;
-worker logs use `worker.{out,err}.log`.
-Normal CCC app updates keep using the same checkout path; re-run
-`./run.sh --install-service` only when you want to change baked-in env vars or
-pick up a release that changes the launchd plist itself.
-
-### Running on Windows
-
-CCC runs natively on Windows as a foreground PowerShell process. The dashboard,
-session ingestion, repo picker, and agent spawn paths use the same Python server
-as macOS/Linux. macOS-only desktop conveniences (screenshots, jump-to-terminal,
-native folder picker, Finder reveal, desktop deep links) are hidden on Windows
-the same way they are on Linux.
-
-```powershell
-git clone https://github.com/amirfish1/claude-command-center
-cd claude-command-center
-
-# Try it. Runs in the foreground until Ctrl-C / terminal close
-.\run.ps1
-
-# Optional: open the dashboard as a chromeless Chromium app window
-.\run.ps1 --app
-```
-
-Open [http://localhost:8090](http://localhost:8090), then pick a repo from
-the repo dropdown before starting repo-scoped actions. Native Windows service
-install is not implemented yet; keep the PowerShell window open or run
-`.\run.ps1` under your preferred process manager.
-
-If you prefer Linux-style service management on Windows, run CCC inside WSL2
-and use the Linux instructions below.
-
-### Running on Linux
-
-CCC runs on Linux as a headless service you reach from the browser on another
-machine. The core (the session board, `~/.claude` transcript ingestion, session spawn and
-drive) works the same as on macOS. The native folder picker works on Linux
-desktops too when `zenity`, `kdialog`, or `yad` is installed; on headless
-boxes the Browse buttons fall back to an in-browser picker that walks the
-server filesystem. The remaining macOS-only desktop conveniences
-(screenshots, jump-to-terminal, open-in-desktop) are not available on Linux
-yet; the UI hides those controls automatically, so you never see a button
-that does nothing.
-
-Windows users who want a systemd-managed service can use this Linux path under
-WSL2. Install Python 3, git, and your agent CLIs inside the WSL distro, then
-open `http://localhost:8090` from the Windows browser after `./run.sh` starts.
-
-```bash
-git clone https://github.com/amirfish1/claude-command-center
-cd claude-command-center
-
-# Try it in the foreground
-./run.sh
-
-# Keep it. Installs a systemd user service that starts now and at login
-./run.sh --install-service
-```
-
-`--install-service` writes independent `ccc.service` and
-`ccc-worker.service` systemd user units under `~/.config/systemd/user/`.
-The dashboard wants the worker but does not own its control group, so restarting
-the dashboard leaves the worker running. Check both with
-`./run.sh --service-status` (or `systemctl --user status ccc ccc-worker`),
-follow logs with `journalctl --user -u ccc -f`, and remove it with
-`./run.sh --uninstall-service`. On a headless box with no active login session,
-run `sudo loginctl enable-linger $USER` once so the service survives logout and
-starts at boot. If `systemctl` is not available, run CCC in the foreground or
-under your own process manager instead. A foreground `./run.sh` also ensures a
-detached worker is running before it starts the dashboard; its logs use
-`~/.claude/command-center/logs/worker.{out,err}.log`.
-
-In WSL2, `./run.sh --install-service` requires a distro with systemd enabled.
-If your WSL distro does not expose `systemctl --user`, keep CCC in the
-foreground with `./run.sh` or run it under your own process manager.
-
-To reach the dashboard from another machine, see `SECURITY.md` for the
-`CCC_BIND_HOST` and same-origin options before exposing the port.
-
-First launch (foreground or service) copies CCC's hook scripts into
-`~/.claude/command-center/hooks/` and then **asks** before registering them
-in `~/.claude/settings.json` or installing any skill: the dashboard opens an
-**Agent config access** dialog with the exact diff for each change (headless:
-`ccc consent`). Once the hooks are approved, every Claude Code session on your
-machine (terminal, headless, or dashboard-spawned) writes sidecar state the
-UI uses for the kanban.
-
-### Your agent config
-
-CCC writes nothing into your agent config until you approve it. Each change
-is a separate item you can approve, skip, or remove later:
-
-| Item | File(s) | Needed for |
-|---|---|---|
-| Claude Code hooks | `~/.claude/settings.json` (6 hook entries) | live tool status, Needs-approval badges, answering AskUserQuestion from the dashboard, the Compacting badge |
-| Codex hook | `~/.codex/hooks.json` (1 PostCompact entry) | re-orienting Codex sessions after `/compact` |
-| Bundled skills | `~/.claude/skills/<name>/SKILL.md`, `~/.codex/skills/<name>/SKILL.md` | `ccc-orchestration`, `group-chat-checkin`, `superpowers-to-watchtower`, `fleet-verify` |
-| WatchTower skills | symlinks from `wt skills sync` | agents knowing the `wt` commands |
-
-Your other hooks, settings, key order, and indentation are kept; a symlinked
-`settings.json` stays a symlink; every file is backed up to
-`~/.claude/command-center/config-backups/` before CCC edits it. If CCC's
-version of an approved item changes in an update, it asks again with the new
-diff instead of applying it. **Settings > Maintenance > Agent config access**
-(or `ccc consent revoke all`) removes everything CCC installed. Upgrading from
-a version that installed these silently keeps them working and shows a
-one-time list with Keep / Remove. Details: [`docs/agent-config-consent.md`](docs/agent-config-consent.md).
-
-## Core concepts
-
-```
-┌─────────────┐   writes   ┌────────────────────────────────┐
-│ any claude  │ ─────────> │ ~/.claude/projects/*.jsonl     │
-│ process     │            │ ~/.claude/sessions/<pid>.json  │
-│ anywhere on │            │ ~/.claude/command-center/          │
-│ your machine│            │   live-state/<sid>.json        │
-└─────────────┘            └──────────────┬─────────────────┘
-                                          │  reads
-                                          v
-                              ┌───────────────────────┐
-                              │ server.py (stdlib)    │
-                              │ :8090                 │
-                              └───────────┬───────────┘
-                                          │
-                                          v
-                              ┌───────────────────────┐
-                              │ static/index.html     │
-                              │ session list + detail │
-                              └───────────────────────┘
-```
-
-- **Session**: any Claude Code transcript on disk, alive or dormant.
-- **Attach**: the server reads Claude's own files + sidecar state the
-  installed hooks write after every tool call. Nothing to configure
-  per-session.
-- **Board columns** (optional board view): Backlog → Planning → Working →
-  Review → In Testing → Verified / Inactive / Archived. Columns are derived
-  from session state (live? commits? pushed? sidecar activity?),
-  overridable by drag.
-- **Backlog**: open GitHub issues + `TODO.md` entries, surfaced as cards
-  next to your active sessions so everything lives on one board.
-- **Objects & the Project tree**: group sessions under named, nestable
-  **Flow objects** to build a hierarchical map of the day's work. The
-  sidebar's "By objects" view splits this tree from a live "Current
-  sessions" triage band (last 5h), so structure and live activity stay
-  side by side.
-
-## Codex conversations
-
-Codex conversations render through the same shared transcript view as every
-other engine — one pane, one composer, one renderer. A live overlay merges
-in-progress turns into the transcript as they happen: tool calls, diffs,
-images, and approval requests stream inline. Capability availability follows
-the installed Codex version and connected host. Existing desktop-owned
-tasks connect through their desktop owner when available.
-See the [Codex conversation guide](docs/codex-workspace.md) for connection limits,
-preview features, queue ownership, and verification coverage.
-
-## Engine support
-
-CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin support followed. Spawn-from-dashboard works for all eight. The rest varies:
-
-| Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model + reasoning-effort picker |
-|---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
-| Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle; effort `low` `medium` `high` `xhigh` `max` |
-| Codex         | yes                      | yes (both)                                 | yes — JSONL ingestion; when the app-server bridge is connected, live turns stream into the shared transcript view (tools, diffs, approvals) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
-| Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | model only — UI/default picker, default from `CCC_CURSOR_MODEL`; no effort ladder |
-| Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | model auto-detected from transcript metadata; no effort ladder |
-| Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | model only — UI/default picker, default from `CCC_KILO_MODEL`; no effort ladder |
-| Kimi Code     | yes — ACP client over `kimi acp`, token-level live streaming | yes — steer live ACP sessions with inline permission-prompt answers; attach for TUI sessions | yes — reads `~/.kimi-code/sessions/`; live list and archive | yes — UI/default model picker; default from `CCC_KIMI_MODEL`; effort ladder read from Kimi's own `config.toml` (`support_efforts`) |
-| OpenCode      | yes — headless via `opencode run --auto` | yes — follow-ups route through `opencode run --session <id> --auto` | yes — externally-launched OpenCode (opencode.ai) sessions appear on the board | model only — UI/default picker, default from `CCC_OPENCODE_MODEL`; no effort ladder |
-| Devin         | yes — local CLI, headless via `devin -p` | yes — local CLI resumes via `devin --resume <id> -p`; cloud API sessions (`devin-` prefix) stay read-only | yes — local CLI sessions (`devincli-` prefix) parsed from its SQLite DB (`message_nodes`); cloud API sessions listed read-only when `DEVIN_API_KEY` is set | no |
-
-Where an engine has no effort ladder, CCC hides the effort control rather than
-guessing one, and drops a `reasoning_effort` sent to it over the API. The live
-per-engine ladders are published at `GET /api/engines/models` under
-`efforts_by_engine`.
-
-Three further engines are ingested **read-only** today: **GitHub Copilot CLI**,
-**VS Code Copilot Chat**, and **Grok CLI** sessions appear on the board with
-their transcripts, but can't be spawned or steered from the dashboard yet.
-
-**Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
-
-If you'd like to see an engine bumped from "partial" to first-class, open an issue — it's mostly adapter work, the ingestion layer is engine-agnostic.
-
-## Bring your own key (BYOK)
-
-Paste provider API keys once in **Settings → Engines** and route spawns
-through them instead of whatever local CLI auth an engine already has.
-Keys are stored per **profile** (name them however you like — `work`,
-`personal`, `client-x`) so different projects can use different keys.
-
-- **Storage**: the macOS Keychain (`security`, service `ccc-byok`) when
-  available; a stdlib-only encrypted local file
-  (`~/.claude/command-center/byok/profiles.enc.json`, HMAC-SHA256
-  counter-mode stream cipher, machine-bound key) on other platforms. Keys
-  are never written to disk in plaintext and never appear in the repo.
-- **Supported providers**: Anthropic, OpenAI, OpenRouter, TokenRouter, xAI,
-  Moonshot, Google, plus TypeSafe Jev (used by CCC itself for new-session
-  folder guessing; see `SECURITY.md`).
-- **Routing OpenRouter/TokenRouter models**: OpenCode accepts model ids in
-  `<provider>/<vendor>/<model>` form natively (e.g.
-  `openrouter/anthropic/claude-sonnet-5`), so pointing a spawn at one of
-  these ids and picking a profile with an `openrouter` key configured is
-  all "virtual engine" routing needs — no separate engine to select.
-- **Per-spawn profile**: the `/api/sessions/spawn` payload accepts
-  `"key_profile": "<name>"`. When a spawn uses an `openrouter/`- or
-  `tokenrouter/`-prefixed model and no profile is given, CCC falls back to
-  a profile named `default`.
-- **Cost visibility**: `GET /api/engines/models` marks BYOK-backed models
-  with indicative per-token cost, and BYOK spawns log tokens/cost to a
-  local ledger surfaced at `GET /api/byok/usage?days=30` and in the
-  Settings panel's spend summary.
-- **Current scope**: env injection is wired for **OpenCode, Droid, and
-  Aider** spawns today (`BYOK_DIRECT_ENV_ENGINES` in `ccc_server/byok.py`).
-  Kilo and Hermes are listed for when their spawn paths support it — adding
-  one is a one-line change to the spawn dispatcher. Pi has an adapter
-  (`ccc_server/pi.py`) that resolves the `pi` CLI but always reports
-  "not yet wired" — no verified `pi exec` invocation contract exists yet.
-  `GET /api/engines/models` and `ccc models` mark every BYOK-ready engine.
-- **Health check**: `ccc doctor` (or `GET /api/engines/doctor`) reports,
-  per engine, whether the CLI is present, whether it's logged in (where a
-  probe exists), whether a BYOK profile is configured, and a dry-run smoke
-  check that only confirms the CLI binary resolves — no subprocess is
-  launched and no tokens are spent.
-
-![Settings → Engines: BYOK panel with an add-key form, profile list, and a 30-day spend summary](docs/images/byok-settings.png)
-
-### Vault: any other secret
-
-BYOK is for LLM provider keys that CCC injects into engine spawns. For
-everything else (a Stripe key, a Meta app token, a website login) use
-**Settings → Vault**.
-
-- **Entries**: a unique name (`stripe-live`), a kind (`api_key`, `token`,
-  `login`, `other`), a service label, and optional username, env var,
-  website and notes. Edit details, replace the value, or delete.
-- **Storage**: values in the macOS Keychain (service `ccc-vault`, account =
-  entry name), or off macOS the same encrypted-file fallback BYOK uses
-  (`~/.claude/command-center/vault/secrets.enc.json`). Metadata lives in
-  `~/.claude/command-center/vault/index.json` (mode 0600) and never holds a
-  value.
-- **Write-only**: no API returns a value. The UI shows "saved" and when,
-  plus a last-4 hint for long API keys and tokens.
-- **BYOK keys** are listed in the Vault tab too, with **Import to Vault**:
-  it copies the value into a new entry and leaves the BYOK key in place.
-- **Agents and scripts** read values locally via the CLI (no server
-  needed). Prefer `exec`, which keeps the value out of the transcript and
-  redacts it from the command's stdout/stderr:
-
-  ```bash
-  ccc vault list [--json]                      # names, kinds, services, env vars, never values
-  ccc vault exec --env STRIPE_API_KEY=stripe-live -- ./deploy.sh
-  ccc vault exec --env stripe-live -- ./deploy.sh   # uses the entry's stored env var
-  ccc vault get stripe-live                    # exit 0 if saved; --reveal prints the value
-  ```
-- **API**: `GET /api/vault` (metadata + BYOK rows), `POST /api/vault/entries`,
-  `/api/vault/entries/update`, `/api/vault/entries/delete`,
-  `/api/vault/import-byok`. Same same-origin rule as every other POST.
-
-## Features
-
-- **One board, eight engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity. Kimi Code has a guided setup flow in Settings → Engines that detects the CLI, walks through install and `kimi login`, and verifies with a smoke-test spawn.
-- **Cost-aware cold-session composer**: when a session is large and stale, the send button is replaced by ranked routes — continue in a new session on a cheaper tier, search history, copy session id — with the full (expensive) resume demoted to a priced link. Routes are ranked by intent: question-shaped text promotes search, task-shaped text promotes continuing fresh.
-- **FIRST FLIGHT tour**: a spotlight walkthrough of the dashboard on first run, with newcomer and multi-engine paths and sample cards on empty installs. Replay any time from Settings.
-- **Settings modal**: the gear menu is a full settings modal with instant search (Cmd/Ctrl+, to open), keyboard navigation, and per-section reset — appearance, layout, sessions, fleet & network, tools, maintenance, help.
-- **Plan-to-fleet**: import a plan or mission-brief document into a WatchTower queue from the dashboard — preview the tickets `wt import` extracts, file them on confirm, optionally drain with a worker.
-- **ACP adapter** (optional): expose CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, and agents like Hermes) can drive Claude Code sessions over JSON-RPC stdio. Runs as a separate process (`python3 ccc_acp.py`); install with the `acp` extra. The core server stays stdlib-only.
-- **Board view (kanban, optional)**: every session on drag-drop columns
-  with rubber-band multi-select and per-column tinting. The list view is
-  the primary surface; the board is an opt-in lens on the same state.
-- **Project tree**: the sidebar's **By objects** view stacks a live
-  **Current sessions** band (everything active in the last 5h) over a
-  **Project tree** — your day's work as a hierarchy, with sessions grouped
-  under nestable **Flow objects** you name, drag, and reparent. Drag the
-  divider to resize the two bands; collapse branches you're not using. The
-  structured map sits beside the live triage list, so "what's running now"
-  and "how it all fits" share one pane instead of one scrolling list.
-- **Split conversations**: drag any sidebar session onto the right or
-  bottom edge of the open conversation to view two transcripts
-  side-by-side, each with its own input bar. Closes back to single-pane
-  with a click; collapses automatically below 900px.
-- **GitHub integration**: start a session from an issue with one click
-  (auto-adds `claude-in-progress` label + self-assigns). Verify closes the
-  issue with a commit-SHA comment. Drag to Archived closes as "not
-  planned". Issue body + comments render inside the dashboard (no iframe;
-  GitHub blocks that).
-- **Attach to existing sessions**: terminal `claude` processes show up
-  automatically. Jump-to-terminal focuses them by TTY; rename/color the
-  tab via Claude's own slash commands.
-- **Open in Claude Desktop** (macOS): third destination button beside
-  Jump/Launch in the conversation toolbar; resumes the current CLI
-  session inside the Claude Desktop app via the `claude://resume` deep
-  link.
-- **Fresh worktree spawns**: toggle worktree mode to launch a session in
-  `<repo>-wt/<slug>/` on `feat/<slug>`. Optional
-  [`.ccc/worktree-init`](docs/worktree-init.md) scripts can copy local env
-  files or install dependencies before the agent starts.
-- **Headless spawn with follow-up**: launch `claude -p` sessions from the
-  dashboard and keep talking to them via an in-browser input bar (no
-  terminal needed, stdin pipe stays open).
-- **Resume-on-demand**: injecting into a dormant session auto-spawns a
-  headless `claude --resume` to deliver the message.
-- **Auto-fix deploys**: optionally polls Vercel, spawns a `/fix-deploy`
-  session on new production ERRORs (deduped by commit SHA).
-- **AI-assisted titles**: click ✨ on any card to regenerate its title
-  via `claude -p` (Haiku by default). Used for cleaning up auto-generated
-  session slugs.
-
-## Decision Inbox
-
-Stalled work should not become your problem again. Once an hour CCC scans
-for what is stuck, does the thinking with a cheap analyst, and leaves you a
-three-option card. You click one; CCC spawns or steers the follow-through.
-
-Sources scanned each run:
-
-- **Strategy board** (optional): a markdown table with `Task | Status | ETA`
-  columns. Rows marked *Blocked*, or *Open* with an ETA in the past, become
-  candidates. Point the scanner at your file in the config below.
-- **WatchTower queues**: queues that are stuck with open tickets older than
-  `wt_age_days` (one `wt status --json` per run, one `wt ls` per surfaced
-  queue).
-- **Idle sessions**: live sessions idle for more than `idle_hours` whose last
-  task is unfinished (a pending tool, an open goal, a working state).
-
-The **token governor** runs in the same pass over live sessions only and
-flags the ones burning tokens for nothing: the same tool error repeated
-three times, no file edits for 45 minutes while still working, or context at
-85% with no compaction. Each finding gets one-click **Nudge** (steer a reset
-instruction in), **Pause** (interrupt the turn), or **Kill**.
-
-Anti-spam: at most five new cards per run, and a source that already has an
-open card, or was decided or dismissed in the last week, is skipped.
-
-![Decision Inbox: a token-governor strip flags a session at 98% context with Nudge/Pause/Kill, above three-option decision cards for stalled WatchTower queues and board items, one option recommended](docs/images/decision-inbox.png)
-
-Open it from the **Decisions** icon in the app rail or at
-`/decision-inbox.html`. Configure in
-`~/.claude/command-center/decision-inbox.json`:
-
-```json
-{
-  "strategy_board": "~/notes/Strategy Board.md",
-  "interval_s": 3600,
-  "max_cards_per_run": 5,
-  "idle_hours": 2,
-  "wt_age_days": 3,
-  "model": "claude-sonnet-5",
-  "spawn_cwd": "~/projects"
-}
-```
-
-External producers (a digest job, a monitor, a cron) can file their own
-cards: `POST /api/decision-inbox` (alias `/api/decision-inbox/cards`) with
-`{"source": "digest", "source_id": "studio-a:no-sessions", "title": "...",
-"detail": "...", "severity": "warn", "options": [...]}`. The reply is
-`{ok, card_id, deduped}`. Cards dedupe by `source:source_id`, so a producer
-that fires every run holds one open card that counts repeats. Omit
-`options` to get the default trio: acknowledge, spawn an investigator, or
-snooze for 24 hours.
-
-Set `CCC_DECISION_INBOX_DISABLED=1` to keep the loop off entirely. Cards and
-run history live in `~/.claude/command-center/decision-inbox/`. API:
-`GET /api/decision-inbox`, `POST /api/decision-inbox/{run,decide,dismiss,governor}`.
-
-## Throughput usage database
-
-`scripts/throughput ingest` reads your Claude Code, Codex and Kimi session
-stores (read-only) into a local SQLite database — one row per session with
-tokens, cache usage, model and message counts — and `throughput summary`,
-`runrate` and `breakeven` compare what each provider costs at API list price.
-See [docs/usage-db.md](docs/usage-db.md).
-
-## Orchestration skill
-
-CCC ships a Claude Code skill (`ccc-orchestration`) that lets one Claude
-session spawn, inject into, and synchronously ask sibling sessions over
-plain HTTP. On top of it sits a 12-skill orchestration pack
-([`skills/README.md`](skills/README.md)) that turns spawn/inject/ask into
-concrete workflows — `pair-verify`, `standup`, `second-opinion`, `bug-race`,
-`docs-drift`, `release-audit`, and more — each with stated spawn cost, a
-dry-run mode, and an honest fallback when CCC is down. Once you approve it
-(see [Your agent config](#your-agent-config)), the server installs the skill to
-`~/.claude/skills/ccc-orchestration/SKILL.md` (set
-`CCC_SKIP_SKILL_INSTALL=1` to turn skill installs off entirely). It writes its base URL to
-`~/.claude/command-center/port.txt` so the skill can discover the running
-instance without hardcoding a port.
-
-Spawn calls pass `repo_path` (or `cwd`) plus optional
-`engine: "claude" | "codex" | "cursor" | "antigravity" | "kilo" | "kimi" | "opencode"`,
-`model`, and `reasoning_effort` to `/api/sessions/spawn`;
-omitted engine/model/effort values use the server-side defaults from the dashboard.
-The effort ladder is per engine (Claude `low`…`max`, Codex `low`…`xhigh`, Kimi
-whatever its own config declares, others none), so read the legal values from
-`efforts_by_engine` in `GET /api/engines/models` instead of assuming one list.
-An unrecognized `model` is a 400 on Codex; an effort the engine does not accept
-is dropped rather than rejected, so the spawn still succeeds at that engine's
-default effort.
-Clients that may retry a spawn or `/api/inject-input` request should also pass
-a stable `idempotency_key` for that user action. CCC returns the original work
-record instead of dispatching the same engine turn twice.
-Legacy `engine: "gemini"` maps to Antigravity. Successful spawns return
-`spawn_id`, `engine`, `repo_path`, `cwd`, optional `parent_session_id`, and
-`session_id` when the native engine has emitted one; callers can poll
-`/api/sessions/spawned` if `session_id_pending` is true. Those rows also carry
-the resolved `model` and `reasoning_effort`, which is how a caller confirms what
-the spawn actually ran with. Passing `report_to`
-(or explicit `parent_session_id`) links spawned sibling sessions under the
-dispatcher in Current Sessions.
-
-Once installed, a Claude session can run e.g.:
-
-```bash
-CCC_URL="$(cat ~/.claude/command-center/port.txt)"
-REPO_PATH="$(pwd -P)"
-curl -s "$CCC_URL/api/sessions?repo_path=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$REPO_PATH")"
-
-curl -s -X POST "$CCC_URL/api/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "<uuid>", "text": "What is 2+2?", "timeout_ms": 30000}'
-# -> {"ok": true, "text": "4", "cost_usd": ..., "duration_ms": ..., "num_turns": 1}
-```
-
-Use this for **persistent peer sessions** (a marketing assistant, a deploy
-babysitter) that should survive past the current turn and show up on the
-kanban, not for one-shot internal subtasks (the built-in `Task` tool is
-better for those).
-
-Read-only usage integrations can poll `GET /api/usage/current` for CCC's
-consolidated local usage state: Claude plan windows, Codex rate-limit windows,
-Kimi usage windows, pace projections, calibration metadata, recent reset
-events, and `fetched_at`.
-Fields are nullable so external tools can gracefully degrade when a provider
-has not emitted usage yet.
-
-## Works with your skills
-
-CCC does not replace the Claude Code skill packs you already run. It gives them
-a fleet. Full write-up: [docs/skills-ecosystem.html](https://ccc.amirfish.ai/skills-ecosystem.html)
-and the honest [inventory](docs/skills-ecosystem-inventory.md).
-
-- **Superpowers subagents surface on your board.** When a superpowers skill fans
-  out `Task` subagents (dispatching-parallel-agents, subagent-driven-development),
-  CCC counts them from the transcript and shows a subagent chip plus a live status
-  rail on the parent session row. No change to the pack.
-- **`superpowers-to-watchtower`** (bundled skill) lifts a superpowers plan out of
-  its in-session scratch ledger: `wt import` turns it into durable, board-visible
-  Watchtower tickets, then optionally dispatches one CCC lane per ticket that
-  closes with a summary.
-- **`fleet-verify`** (bundled skill) spawns one CCC lane that drives gstack browse
-  (puppeteer fallback) against the running app and reports a visual verdict with a
-  screenshot. The check `/code-review` and a unit test cannot make.
-- **`GET /api/skills`** inventories CCC's own bundled skills plus every installed
-  third-party pack, each annotated with honest fleet-synergy flags
-  (`spawns_subagents`, `fleet_aware`, `drives_browser`, `ccc_synergy`). stdlib-only
-  and mtime-cached, so a dashboard can poll it for free.
-
-The `superpowers-to-watchtower` and `fleet-verify` skills install alongside
-`ccc-orchestration` once you approve each one (`CCC_SKIP_SKILL_INSTALL=1` turns
-them all off). What is
-wired today is kept plainly separate from what is roadmap, in both the docs page
-and the matrix populated by `/api/skills`.
-
-## Cookbook
-
-Recipes for wiring **your own app** into CCC — each with a copy-paste prompt
-you can hand to Claude Code so it implements the integration for you:
-
-- [Annotate → UX-fixes queue](cookbook/annotate-to-ux-fixes-queue.md) — click
-  an element in your running app, type a note, and it becomes a numbered work
-  item a Claude session claims and fixes.
-- [In-app bug report widget → GitHub issue](cookbook/bug-report-widget-github-issues.md)
-  — a floating "Report an issue" button that screenshots the page and opens a
-  fully-contextualized GitHub issue, plus a customer-facing status view
-  derived live from GitHub labels.
-
-## Architecture
-
-CCC stays stdlib-only and build-free: the dashboard is a Python HTTP server
-plus vanilla HTML/CSS/JS, while `ccc-worker` is a separately managed Python
-process. The dashboard can restart without closing worker-owned Claude,
-Codex, or Kimi transports.
-
-The two processes communicate over an authenticated, mode-0600 Unix socket.
-The worker records every owned spawn and turn in
-`~/.claude/command-center/control-plane.sqlite3`, including its idempotency
-key, lease, result, and parent/child edges. Work known not to have been sent
-replays after a drain or worker start. Work that may already have reached an
-engine becomes `uncertain` and is never blindly replayed; live-process
-evidence can reconcile it automatically, while
-`POST /api/control-plane/resolve` supports an explicit `retry`, `complete`,
-`fail`, or `cancel` decision.
-
-The Maintenance settings show worker health and active/queued/uncertain
-counts. **Pause dispatch** durably queues new owned work. **Restart dashboard**
-briefly drains dispatch, restarts only the HTTP/UI process, then resumes and
-replays provably unsent work. `GET /api/control-plane/work` and
-`GET /api/control-plane/graph?root_id=…` expose the durable work records.
-The header keeps the execution-worker state visible beside WatchTower, while
-Maintenance can start an offline worker and inspect, open, or restart the local
-WatchTower daemon/API.
-
-Session metadata still lives in JSON sidecar files under
-`~/.claude/command-center/`. Read APIs scan the engine session directories,
-merge sidecar state, enrich cached GitHub issue data, and return flat rows;
-the client classifies them with rules like “has_push → Review” and
-“live + sidecar_has_writes → Working”.
-
-Hooks are the only invasive thing, so they are opt-in. On first run the
-server copies the `hooks/*.py` scripts to `~/.claude/command-center/hooks/`
-and, only after you approve it, merges entries into `~/.claude/settings.json`.
-After that, Claude Code
-fires them after every tool invocation, each hook writes a tiny JSON file
-under `live-state/`, and the server reads those to answer "is this session
-actually doing something right now or is it idle waiting for input?".
-
-For more depth: [`docs/architecture.md`](docs/architecture.md),
-[`docs/session-attach.md`](docs/session-attach.md).
-
-## Configuration
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `PORT` | `8090` | HTTP port |
-| `CCC_CLAUDE_BIN` | *(auto)* | Absolute path to the Claude Code CLI when a launchd service cannot see your shell PATH. Set it before `./run.sh --install-service` to bake it into the agent. |
-| `CCC_CURSOR_BIN` | *(auto)* | Absolute path to `cursor-agent` if it is not on the service PATH. |
-| `CCC_CURSOR_MODEL` | `auto` | Default model for Cursor spawns/resumes when no dashboard or API model override is set. |
-| `CCC_KILO_BIN` | *(auto)* | Absolute path to the Kilo Code CLI (`kilo`) if it is not on the service PATH. |
-| `CCC_KILO_MODEL` | `kilo/stepfun/step-3.7-flash:free` | Default model for Kilo spawns when no dashboard or API model override is set. |
-| `CCC_OPENCODE_BIN` | *(auto)* | Absolute path to the OpenCode CLI (`opencode`) if it is not on the service PATH. |
-| `CCC_OPENCODE_MODEL` | `openrouter/anthropic/claude-sonnet-4.5` | Default model for OpenCode spawns when no dashboard or API model override is set. |
-| `DEVIN_API_KEY` | *(unset)* | Personal Devin API key (from app.devin.ai settings). When set, your Devin cloud sessions appear on the board and in the archive (read-only). `CCC_DEVIN_API_KEY` is accepted as a fallback. |
-| `CCC_WORKER_SOCKET` | `~/.claude/command-center/worker.sock` | Local Unix socket used between the restartable dashboard and persistent execution worker. |
-| `CCC_WORK_LEDGER` | `~/.claude/command-center/control-plane.sqlite3` | Durable SQLite work graph, idempotency, lease, and recovery ledger. |
-| `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN. **No auth, see [`SECURITY.md`](SECURITY.md)** |
-| `CCC_ALLOWED_ORIGIN` | *(empty)* | Comma-separated origins (e.g. `http://my-mac.tailnet.ts.net:8090`) added to the same-origin POST allowlist. Use with `CCC_BIND_HOST=0.0.0.0` to reach the UI from another device on a trusted network (Tailscale / VPN). **No auth, see [`SECURITY.md`](SECURITY.md)** |
-| `CCC_TRUST_TAILNET` | *(off)* | When set (`1`/`true`/`yes`/`on`), CCC shells out to `tailscale status --json` at startup and adds the local node's MagicDNS hostname + Tailscale IPs to the allowlist automatically. Same trust caveat as `CCC_ALLOWED_ORIGIN`. |
-| `CCC_TAILSCALE_BIN` | *(auto)* | Path to the `tailscale` CLI used by Phone access. Auto-detected from `PATH`, Homebrew and the Mac app bundle. |
-| `CCC_PHONE_ACCESS_FILE` | `~/.claude/command-center/phone-access.json` | Where Phone access records its serve entry and PIN hash. |
-| `CCC_TITLE_STRIP` | *(empty)* | Comma-separated prefixes to strip from GitHub issue titles (e.g. `ACME,FOO` strips `[ACME ...]` and `[FOO ...]`) |
-| `CCC_SPAWN_IDLE_TTL_HOURS` | `3` | Hours of total inactivity (spawn log, stdin FIFO, and session transcript all quiet, no running tool) before a CCC-spawned persistent headless worker is retired with a graceful SIGTERM. Their FIFO stdin means finished workers never exit on their own; retired sessions stay resumable. Set `0` to disable the sweep. |
-| `CCC_ORG_PATTERNS` | *(empty)* | Multi-tenant org-tagger. Format: `Label1:pat1a\|pat1b;Label2:pat2`. Each issue body is scanned and tagged with the first matching label so the UI can group backlog by org. |
-| `VERCEL_PROJECT` | *(unset)* | Vercel project name. Leave empty to disable deploy polling. |
-| `CCC_TELEMETRY_DISABLED` | *(unset)* | Set to `1` to hard-disable the anonymous daily open beacon at the process level — no consent step to bypass, since the beacon carries no identifier. This is the corporate / CI kill switch. Full contract: [`docs/telemetry.md`](docs/telemetry.md). |
-
-Default models have a `CCC_*_MODEL` env var per engine; default **reasoning
-effort** deliberately does not. It lives in one place, **Settings → Spawn
-defaults…**, readable and writable headlessly at `GET`/`POST /api/spawn-defaults`
-(keys `reasoning_effort` for sessions you spawn and `worker_reasoning_effort` for
-queue workers). Per-call `reasoning_effort` on `/api/sessions/spawn` overrides it.
-
-The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can also be set in `~/.claude/command-center/network.json` so they survive shell restarts, or flipped from the **Network access…** entry in the sidebar settings popover. Env vars always win, useful for CI / one-shot overrides. The same security caveats apply: every trusted origin can run commands as you.
-
-For any other env var (not just the network ones above), `run.sh` sources `~/.claude/command-center/config.local.env` if present, before doing anything else — plain `KEY=value` lines, same as a shell `.env` file. This machine-local file is never part of the repo (it lives outside the working tree, so there's nothing to gitignore). It's the fix for a real gap: `launchctl setenv`/`systemctl --user set-environment`-style overrides don't survive a reboot, but a var set in this file does, and it's baked into the launchd plist / systemd unit the same way a real env var is when you run `--install-service`.
-
-## Python stack diagnostics
-
-On macOS and Linux, a running CCC server can dump every Python thread's stack
-without `sudo`, installing a debugger, or restarting the service. Resolve the
-server's current port and send it `SIGUSR2`:
-
-```bash
-CCC_PORT="$(sed 's/.*://' ~/.claude/command-center/port.txt)"
-CCC_PID="$(lsof -nP -iTCP:"$CCC_PORT" -sTCP:LISTEN -t | head -1)"
-kill -USR2 "$CCC_PID"
-tail -n 200 ~/.claude/command-center/logs/python-stacks.log
-```
-
-Each signal appends a traceback for all Python threads to the same diagnostics
-log. This is useful when the dashboard is alive but a request appears stuck.
-The signal is unavailable on Windows.
-
-## Roadmap
-
-**Shipped**
-- Session board over all live + dormant Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin sessions
-- GitHub issue → session → verify → close pipeline
-- Headless spawn with stdin-pipe follow-up
-- Resume-on-demand
-- Auto-fix-deploy (Vercel)
-- AI title regeneration
-- Cursor — session cards, transcript ingestion, headless spawn/resume via `cursor-agent`
-- Antigravity (Google DeepMind) — full session view, transcript ingestion, headless resume via AGY CLI or app RPC
-- Kilo Code — headless spawn via `kilo run --auto`, engine selector + model picker, and read-only ingestion of externally-launched sessions from Kilo's SQLite store
-- OpenCode — headless spawn via `opencode run --auto`, follow-up steering via `opencode run --session <id> --auto`, engine selector + model picker, and browsing of externally-launched OpenCode (opencode.ai) sessions
-- ACP adapter — drive Claude Code sessions over the Agent Client Protocol (`ccc_acp.py`, optional)
-
-**Not yet**
-- First-class parity for Codex. Spawn, resume, and JSONL transcript parsing
-  work, but broader UX polish still lags behind Claude Code — see the
-  [engine support matrix](#engine-support) and
-  [#57](https://github.com/amirfish1/claude-command-center/issues/57).
-- Kilo Code resume / follow-up. Spawn and read-only ingestion both work
-  (externally-launched sessions appear on the board and open with full
-  transcripts); injecting follow-up turns into a Kilo session is not wired yet.
-- More agent runtimes (Aider, etc.). The ingestion layer is
-  engine-agnostic; adapters just don't exist yet.
-- Code split. `server.py` and `index.html` are each one huge file on
-  purpose, so you can read the whole product in an afternoon. That tradeoff
-  bends eventually; it hasn't yet.
-
-**Out of scope**
-- Desktop-Linux parity. Linux is supported headless (see
-  [Running on Linux](#running-on-linux)) with a systemd service and clean
-  degradation of the macOS-only desktop glue. Native Linux equivalents for
-  screenshots, jump-to-terminal, and deep links (X11/Wayland, wmctrl/tmux) are
-  a possible follow-on, not a current goal. Native Windows uses the same
-  degraded desktop capability set and currently runs as a foreground
-  PowerShell process.
-- Multi-user / network-exposed mode. This is a local dev tool. If you're
-  looking at it on a remote host, something has gone wrong.
-- Electron / native wrap. Browser is the UI on purpose.
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
 ## License
 
-[Functional Source License 1.1, MIT Future License (FSL-1.1-MIT)](LICENSE) © 2026 Amir Fish. Free to use, modify, and run at work, including on your own servers for your team. You may not sell CCC or offer it as a competing product or hosted service. Each release becomes MIT two years after it ships. Versions released before 2026-07-28 remain under the [MIT License](LICENSE-MIT); some third-party contributions stay MIT (see [NOTICE](NOTICE)).
+[Functional Source License 1.1, MIT Future License (FSL-1.1-MIT)](LICENSE) © 2026
+Amir Fish. Free to use, modify, and run at work, including on your own servers
+for your team. You may not sell CCC or offer it as a competing product or hosted
+service. Each release becomes MIT two years after it ships. Versions released
+before 2026-07-28 remain under the [MIT License](LICENSE-MIT); some third-party
+contributions stay MIT (see [NOTICE](NOTICE)).
 
 ## Acknowledgments
 
-Built on top of [Claude Code](https://docs.claude.com/en/docs/claude-code).
-The `gh` CLI and Vercel CLI are optional integrations but do most of the
-heavy lifting where they're used.
+Built on [Claude Code](https://docs.claude.com/en/docs/claude-code).
+The `gh` and Vercel CLIs provide optional integrations.

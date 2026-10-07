@@ -1,0 +1,1 @@
+- Shortened the README to a quick start and visual tour, with linked guides for installation, engine support, CLI/API use, secrets, and internals. Added checks for the line limit and local documentation links.

@@ -24,6 +24,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import limit_events as _limit_events
 
 # Usage-limit auto-resume (CCC-863)
 #
@@ -57,22 +58,10 @@ def _load_usage_limit_resumes():
     In-memory cache; refreshed lazily on every write (own or a sibling
     process's, via the file). Tolerant of a missing/malformed file (both
     yield {})."""
-    with _core._usage_limit_resume_lock:
-        cached = _core._usage_limit_resume_cache["data"]
-        if cached is not None:
-            return cached
-    try:
-        data = (
-            json.loads(_core.USAGE_LIMIT_RESUME_FILE.read_text())
-            if _core.USAGE_LIMIT_RESUME_FILE.exists() else {}
-        )
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    with _core._usage_limit_resume_lock:
-        _core._usage_limit_resume_cache["data"] = data
-    return data
+    return _limit_events.load_store(
+        _core.USAGE_LIMIT_RESUME_FILE, _core._usage_limit_resume_cache,
+        _core._usage_limit_resume_lock,
+    )
 
 
 def _is_session_auto_resume_disabled(session_id):
@@ -130,6 +119,7 @@ def _usage_limit_resume_rewrite(mutate):
             os.replace(tmp, _core.USAGE_LIMIT_RESUME_FILE)
             with _core._usage_limit_resume_lock:
                 _core._usage_limit_resume_cache["data"] = new_data
+                _core._usage_limit_resume_cache["signature"] = _limit_events.signature(_core.USAGE_LIMIT_RESUME_FILE)
             return retval
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
@@ -622,56 +612,7 @@ def _detect_codex_usage_limit_stop(session_id, path):
     Unix epoch. When both primary/secondary are null (seen for a
     credits-exhausted account on this machine, no window to read), fall
     back to detected_at + 5h, flagged estimated."""
-    lines = _tail_read_lines(path)
-    last_rate_limits = None
-    for line in lines:
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
-        ptype = payload.get("type")
-        if ptype == "token_count":
-            rl = payload.get("rate_limits")
-            if isinstance(rl, dict):
-                last_rate_limits = rl
-            continue
-        if ptype != "task_complete":
-            continue
-        if payload.get("last_agent_message") is not None:
-            last_rate_limits = None
-            continue  # a completed turn with real output supersedes any stop
-        err = payload.get("error")
-        if not isinstance(err, dict):
-            last_rate_limits = None
-            continue
-        info = str(err.get("codex_error_info") or "")
-        msg = str(err.get("message") or "")
-        if info != "usage_limit_exceeded" and not _USAGE_LIMIT_EXHAUSTED_RE.search(msg):
-            last_rate_limits = None
-            continue
-        dt = _core._stats_parse_ts(ev.get("timestamp"))
-        detected_at = dt.timestamp() if dt is not None else time.time()
-        resume_at = None
-        estimated = True
-        primary = (last_rate_limits or {}).get("primary") or {}
-        secondary = (last_rate_limits or {}).get("secondary") or {}
-        if isinstance(primary.get("resets_at"), (int, float)):
-            resume_at = float(primary["resets_at"])
-            estimated = False
-        elif isinstance(secondary.get("resets_at"), (int, float)):
-            resume_at = float(secondary["resets_at"])
-            estimated = False
-        if resume_at is None:
-            resume_at = detected_at + 5 * 3600
-        return _usage_limit_attach_continuation_fields({
-            "engine": "codex",
-            "detected_at": detected_at,
-            "resume_at": resume_at,
-            "resume_at_estimated": estimated,
-            "source_text_snippet": (msg or info)[:200],
-        }, session_id, path)
-    return None
+    return _limit_events.codex_stop(session_id, path)  # a completed turn with real output supersedes any stop
 
 
 def _detect_claude_usage_limit_stop(session_id, path):
@@ -687,42 +628,9 @@ def _detect_claude_usage_limit_stop(session_id, path):
     comes from the shared `_live_weekly_usage()` session_resets_at, not
     anything in this file -- every blocked Claude session resolves to the
     same account-level reset time."""
-    for line in reversed(_tail_read_lines(path)):
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        etype = ev.get("type")
-        if etype == "result":
-            if not ev.get("is_error"):
-                return None  # most recent result was a clean stop
-            blob = str(ev.get("result") or ev.get("error") or "")
-        else:
-            continue  # system/api_error (incl. transient 429/529) intentionally skipped
-        if "usage limit reached" not in blob.lower() and not _USAGE_LIMIT_EXHAUSTED_RE.search(blob):
-            return None
-        dt = _core._stats_parse_ts(ev.get("ts") or ev.get("timestamp"))
-        detected_at = dt.timestamp() if dt is not None else time.time()
-        live = _core._live_weekly_usage() or {}
-        resets_at_raw = live.get("session_resets_at")
-        resume_dt = _core._stats_parse_ts(resets_at_raw) if isinstance(resets_at_raw, str) else None
-        if resume_dt is not None:
-            resume_at = resume_dt.timestamp()
-            estimated = False
-        elif isinstance(resets_at_raw, (int, float)):
-            resume_at = float(resets_at_raw)
-            estimated = False
-        else:
-            resume_at = detected_at + 5 * 3600
-            estimated = True
-        return _usage_limit_attach_continuation_fields({
-            "engine": "claude",
-            "detected_at": detected_at,
-            "resume_at": resume_at,
-            "resume_at_estimated": estimated,
-            "source_text_snippet": blob[:200],
-        }, session_id, path)
-    return None
+    # most recent result was a clean stop
+    # system/api_error (incl. transient 429/529) intentionally skipped
+    return _limit_events.claude_stop(session_id, path)
 
 
 # A stopped session's mtime freezes the moment it stops -- a short window
@@ -828,22 +736,28 @@ def _usage_limit_scan_once(now=None):
     tracked = _core._load_usage_limit_resumes()
     for engine, candidates_fn, detect_fn in detectors:
         try:
-            candidates = candidates_fn(now)
+            candidates = list(candidates_fn(now))
+            if engine in ("claude", "codex"):
+                candidates += _limit_events.capture_candidates(engine, now)
         except Exception:
             continue
+        candidates = list({(sid, str(path)): (sid, path) for sid, path in candidates}.values())
         for sid, path in candidates:
             if not sid:
                 continue
             existing = tracked.get(sid)
             if existing and not existing.get("fired") and not existing.get("dismissed"):
-                continue  # already tracking an unresolved stop for this session
+                if existing.get("transcript_path") not in (None, str(path)):
+                    continue  # already tracking an unresolved stop for this session
             if existing and existing.get("dismissed"):
                 continue  # user cancelled this stop; don't re-arm from the same transcript
             try:
-                found = detect_fn(sid, path)
+                found = _limit_events.cached_stop(engine, sid, path, detect_fn)
             except Exception:
                 continue
             if not found:
+                if existing and existing.get("transcript_path") == str(path) and not existing.get("fired"):
+                    _core._clear_usage_limit_resume(sid)
                 continue
             if existing and existing.get("detected_at") == found["detected_at"]:
                 continue  # same stop already recorded (incl. already fired)
@@ -859,7 +773,7 @@ def _usage_limit_scan_once(now=None):
         # Re-check the session hasn't already resumed on its own (new
         # activity after the stop we detected) before firing.
         try:
-            path = _core._usage_limit_session_path(entry.get("engine"), sid)
+            path = Path(entry["transcript_path"]) if entry.get("transcript_path") else _core._usage_limit_session_path(entry.get("engine"), sid)
             newest_mtime = path.stat().st_mtime if path else 0
         except OSError:
             newest_mtime = 0
@@ -897,6 +811,7 @@ def _usage_limit_scan_once(now=None):
             auto_pass(now)
         except Exception:
             pass
+    _limit_events.flush()
 
 
 _USAGE_LIMIT_WATCHER_LOCK = threading.Lock()
