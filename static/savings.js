@@ -283,6 +283,7 @@ function cccSavRangePhrase(range) {
     if (!fresh.length) return;
     fresh.forEach(m => done.add(m.id));
     lsSet(LS_CELEBRATED, Array.from(done));
+    if (!(window.cccPopups && window.cccPopups.allowed('savings-milestone'))) return;
     celebrate(fresh[fresh.length - 1]); // show the biggest new one
   }
 

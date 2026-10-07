@@ -1036,6 +1036,8 @@
 
   function autoEligible() {
     if (isPopout) return false;
+    // The auto-open is a pop-up (static/popups.js); /?onboarding=1 is not.
+    if (!(window.cccPopups && window.cccPopups.allowed('moment-zero'))) return false;
     if (lsGet(LS_ONBOARDED)) return false;
     if (lsGet(LS_ENG_DONE) || lsGet('ccc-tour-done')) return false;
     return true;

@@ -214,6 +214,8 @@ test('welcome -> steps -> key -> task -> finale happy path', async (t) => {
 test('claimFirstRun opens the shell on a fresh install and suppresses after', async () => {
   const page = await openFixture();
   try {
+    // The auto-open is a gated pop-up (static/popups.js): approve it here.
+    await page.evaluate(() => { window.cccPopups = { allowed: (id) => id === 'moment-zero' }; });
     const claimed = await page.evaluate(() => window.cccOnboarding.claimFirstRun());
     assert.equal(claimed, true);
     await page.waitForSelector('#cccMomentZero.open', { visible: true });
@@ -223,6 +225,17 @@ test('claimFirstRun opens the shell on a fresh install and suppresses after', as
     // Second claim: ccc-onboarded now set -> not eligible again.
     const again = await page.evaluate(() => window.cccOnboarding.claimFirstRun());
     assert.equal(again, false);
+  } finally {
+    await page.close();
+  }
+});
+
+test('fresh install does not auto-claim while the pop-up is not approved', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => { window.cccPopups = { allowed: () => false }; });
+    const claimed = await page.evaluate(() => window.cccOnboarding.claimFirstRun());
+    assert.equal(claimed, false);
   } finally {
     await page.close();
   }

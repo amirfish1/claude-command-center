@@ -11,13 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from ccc_server import notify
+from ccc_server import notify, popups
 
 
 @pytest.fixture(autouse=True)
 def _isolated_notify_state(tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "STATE_FILE", tmp_path / "notify-state.json")
     monkeypatch.setattr(notify, "LOG_FILE", tmp_path / "notify-log.json")
+    # These tests cover delivery mechanics, so every notify pop-up is approved.
+    monkeypatch.setattr(popups, "APPROVED", frozenset(popups.ALL))
     notify.reset_for_tests()
     notify._TOTALS_MEMO["ts"] = 0.0
     notify._TOTALS_MEMO["value"] = None
@@ -303,3 +305,12 @@ def test_fmt_usd():
     assert notify._fmt_usd(1.8) == "$1.80"
     assert notify._fmt_usd(12.5) == "$12.50"
     assert notify._fmt_usd(1200) == "$1,200"
+
+
+def test_unapproved_kind_is_held(monkeypatch, tmp_path):
+    monkeypatch.setattr(popups, "APPROVED", frozenset())
+    sent = []
+    resp, status = notify.post({"title": "Done", "kind": "task"}, publish=sent.append)
+    assert status == 200 and resp["held"] is True
+    assert sent == []
+    assert notify.history() == []
