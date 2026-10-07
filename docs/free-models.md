@@ -148,6 +148,7 @@ See [SECURITY.md](../SECURITY.md) for the full threat model.
 
 ## Related
 
+- [How CCC compares](compare.md): session tools and model routers do different jobs.
 - [`docs/onboarding.md`](onboarding.md) — the first-run wizard that sets
   all of this up in about five minutes.
 - [`SECURITY.md`](../SECURITY.md) — binding, key storage, and the consent

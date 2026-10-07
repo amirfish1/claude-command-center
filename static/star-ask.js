@@ -211,6 +211,7 @@
      read; the remote star check is TTL'd to once a day) and maybe show. */
   function moment(kind) {
     if (_card) return;
+    if (!(window.cccPopups && window.cccPopups.allowed('star-ask'))) return;
     var now = Date.now();
     if (now - _lastTry < MOMENT_DEBOUNCE_MS) return;
     _lastTry = now;

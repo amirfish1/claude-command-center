@@ -195,7 +195,14 @@ def _osascript_notify(title, body):
 
 
 def _emit(item, publish=None, os_notify=False):
-    """Log + publish + optional OS banner. Returns the item."""
+    """Log + publish + optional OS banner. Returns the item.
+
+    A kind whose pop-up is not approved (ccc_server/popups.py) is held:
+    nothing is logged, published or bannered."""
+    from ccc_server import popups
+    if not popups.notify_allowed(item.get("kind")):
+        item["held"] = True
+        return item
     _append_log(item)
     (publish or _publish)(item)
     if os_notify:
@@ -273,6 +280,8 @@ def post(data, publish=None, now=None):
     if dup_id:
         return {"ok": True, "deduped": True, "id": dup_id}, 200
     _emit(item, publish=publish, os_notify=bool(data.get("os")))
+    if item.get("held"):
+        return {"ok": True, "id": item["id"], "held": True}, 200
     return {"ok": True, "id": item["id"]}, 200
 
 

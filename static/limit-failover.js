@@ -256,6 +256,10 @@
 
   function render() {
     if (!lastStatus) return;
+    if (!(window.cccPopups && window.cccPopups.allowed('limit-failover'))) {
+      if (stack) stack.hidden = true;
+      return;
+    }
     var host = ensureStack();
     var sessions = lastStatus.sessions || {};
     var now = Date.now() / 1000;
