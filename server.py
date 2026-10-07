@@ -126,6 +126,7 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+from ccc_server import headroom as _headroom
 # Namespace import (not adopted): the $0 spawn runtime's helpers stay behind
 # one name so its spawn_env/readiness don't collide with engine globals.
 from ccc_server import free_runtime as _free_runtime
@@ -27289,6 +27290,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(usage_reset_events_payload(days=raw_days))
         elif path == "/api/usage/current":
             self.send_json(usage_current_payload())
+        elif path == "/api/headroom":
+            self.send_json(_headroom.headroom_payload())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()
