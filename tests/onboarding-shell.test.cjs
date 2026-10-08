@@ -79,8 +79,10 @@ const FAKE_DRIVER = `{
   },
   firstTask: async (taskId) => {
     window.__mzTask = taskId;
-    return { job_id: 'job-task', saved_usd: 1.42 };
+    return { job_id: 'job-task', runtime: 'free' };
   },
+  pollFirstTask: async () => ({ status: 'done', runtime: 'free',
+    result: { verified: true }, usage: { api_value_usd: 1.42 }, lines: [] }),
   savings: async () => ({ api_value_usd: 3.5, free_saved_usd: 1.42 }),
   freshInstall: async () => ({ ok: true, fresh_install: true, has_history: false }),
 }`;
@@ -171,7 +173,7 @@ test('welcome -> steps -> key -> task -> finale happy path', async (t) => {
 
     // Consent + run: the fake job polls running then done.
     await page.click('.mz-step-cta .mz-btn-primary');
-    await page.waitForFunction(() => window.__mzRan && window.__mzRan.length === 3);
+    await page.waitForFunction(() => window.__mzRan && window.__mzRan.length === 2);
     await page.waitForFunction(
       () => !window.cccOnboarding._state.jobId,
       { timeout: 20000 }
@@ -214,6 +216,8 @@ test('welcome -> steps -> key -> task -> finale happy path', async (t) => {
 test('claimFirstRun opens the shell on a fresh install and suppresses after', async () => {
   const page = await openFixture();
   try {
+    // The auto-open is a gated pop-up (static/popups.js): approve it here.
+    await page.evaluate(() => { window.cccPopups = { allowed: (id) => id === 'moment-zero' }; });
     const claimed = await page.evaluate(() => window.cccOnboarding.claimFirstRun());
     assert.equal(claimed, true);
     await page.waitForSelector('#cccMomentZero.open', { visible: true });
@@ -223,6 +227,185 @@ test('claimFirstRun opens the shell on a fresh install and suppresses after', as
     // Second claim: ccc-onboarded now set -> not eligible again.
     const again = await page.evaluate(() => window.cccOnboarding.claimFirstRun());
     assert.equal(again, false);
+  } finally {
+    await page.close();
+  }
+});
+
+test('embedded key wizard completion advances to the task picker', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.__mzRan = true;
+      window.cccFreeKeyWizard = { mount: (host, opts) => {
+        const b = document.createElement('button');
+        b.id = 'completeKeyWizard';
+        b.textContent = 'Connect provider';
+        b.onclick = () => opts.onComplete({ platform: 'kilo' });
+        host.appendChild(b);
+      } };
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('#completeKeyWizard');
+    await page.click('#completeKeyWizard');
+    await page.waitForSelector('.mz-task-card', { visible: true, timeout: 2000 });
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('failed first task stays retryable instead of celebrating', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [{ id: 'first_task', status: 'missing' }] }),
+        firstTask: async () => { throw new Error('Free models are not ready.'); },
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-task-card');
+    await page.click('.mz-task-card');
+    await page.waitForSelector('.mz-task-error', { visible: true, timeout: 2000 });
+    assert.equal(await page.$('.mz-finale'), null);
+    assert.equal(await page.$('.mz-taskrun'), null);
+  } finally { await page.close(); }
+});
+
+test('real driver uses the first-task HTTP contract and run-specific savings', async () => {
+  const page = await openFixture();
+  const calls = [];
+  try {
+    await page.setRequestInterception(true);
+    page.on('request', async (req) => {
+      const route = new URL(req.url()).pathname;
+      if (!route.startsWith('/api/')) return req.continue();
+      calls.push({ route, method: req.method(), body: req.postData() });
+      let body;
+      if (route === '/api/setup/plan') body = { steps: [{ id: 'first_task', status: 'missing' }] };
+      else if (route === '/api/onboarding/first-task') body = { ok: true, job: { job_id: 'first-real', status: 'running' } };
+      else if (route === '/api/onboarding/first-task/first-real') body = { ok: true, job: {
+        job_id: 'first-real', status: 'done', runtime: 'free', result: { verified: true },
+        lines: [{ text: 'Everything checks out.' }], usage: { api_value_usd: 0.42 },
+      } };
+      else body = { error: 'unexpected endpoint' };
+      await req.respond({ status: body.error ? 404 : 200, contentType: 'application/json', body: JSON.stringify(body) });
+    });
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver(null);
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-task-card');
+    await page.click('.mz-task-card');
+    await page.waitForSelector('.mz-finale', { visible: true });
+    assert.deepEqual(JSON.parse(calls.find((c) => c.method === 'POST').body), {
+      task_id: 'hello-3-langs', runtime: 'free',
+    });
+    assert.ok(calls.some((c) => c.route === '/api/onboarding/first-task/first-real'));
+    assert.ok(!calls.some((c) => c.route.startsWith('/api/setup/jobs/') || c.route === '/api/savings'));
+    await page.waitForFunction(() => document.querySelector('.mz-saved-num')?.textContent === '$0.42');
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('router consent starts the router installer and clears finished progress', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [
+          { id: 'free_router', status: window.__routerInstalled ? 'ok' : 'missing', needs_consent: true, external: true },
+          { id: 'first_task', status: 'missing' },
+        ] }),
+        routerStatus: async () => ({ installed: false }),
+        detectedRouters: async () => [],
+        installRouter: async () => { window.__routerInstalled = true; return { job_id: 'router-install' }; },
+        runSteps: async () => { throw new Error('Router sent to the wrong runner'); },
+        pollJob: async () => ({ status: 'done', step: 'router', progress: 1, lines: ['ready'] }),
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-step-cta .mz-btn-primary');
+    await page.click('.mz-step-cta .mz-btn-primary');
+    await page.waitForSelector('.mz-task-card', { visible: true });
+    assert.equal(await page.$('#mzLive .mz-progress'), null);
+    assert.equal(await page.evaluate(() => window.__routerInstalled), true);
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+for (const outcome of [
+  { status: 'error', error: 'Try another free model.' },
+  { status: 'done', runtime: 'free', result: { verified: false } },
+  { status: 'done', runtime: 'standard', result: { verified: true } },
+]) {
+  test('first task never celebrates an unsuccessful free run: ' + JSON.stringify(outcome), async () => {
+    const page = await openFixture();
+    try {
+      await page.evaluate((done) => {
+        window.cccOnboarding._setDriver({
+          getPlan: async () => ({ steps: [{ id: 'first_task', status: 'missing' }] }),
+          firstTask: async () => ({ job_id: 'test-task' }),
+          pollFirstTask: async () => done,
+        });
+        window.cccOnboarding.open({ scene: 'steps' });
+      }, outcome);
+      await page.waitForSelector('.mz-task-card');
+      await page.click('.mz-task-card');
+      await page.waitForSelector('.mz-task-error', { visible: true });
+      assert.equal(await page.$('.mz-finale'), null);
+      assert.equal(await page.evaluate(() => window.cccOnboarding._state.firstTaskDone), false);
+    } finally { await page.close(); }
+  });
+}
+
+test('a first task finished while closed resumes to the finale with its savings', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      localStorage.setItem('ccc-onboarding-first-task', 'saved-job-1');
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [
+          { id: 'free_router', status: 'ok' },
+          { id: 'first_task', status: 'ok' },
+        ] }),
+        firstTask: async () => { window.__mzTaskStarted = true; return { job_id: 'nope' }; },
+        pollFirstTask: async (id) => ({ job_id: id, status: 'done', runtime: 'free',
+          result: { verified: true }, usage: { api_value_usd: 0.42 }, lines: [] }),
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-finale', { visible: true });
+    assert.equal(await page.evaluate(() => window.__mzTaskStarted), undefined);
+    assert.equal(await page.evaluate(() => window.cccOnboarding._state.firstTaskDone), true);
+    await page.waitForFunction(() => document.querySelector('.mz-saved-num')?.textContent === '$0.42');
+    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-onboarding-first-task')), null);
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('reopening the finale never replays a stale savings number', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._state.firstTaskDone = true;
+      window.cccOnboarding._state.savedUsd = 100;
+      window.cccOnboarding.open({ scene: 'finale' });
+    });
+    await page.waitForSelector('.mz-finale', { visible: true });
+    assert.equal(await page.evaluate(() => window.cccOnboarding._state.firstTaskDone), false);
+    assert.equal(await page.$('.mz-saved-num'), null);
+    const txt = await page.$eval('.mz-finale', (el) => el.textContent);
+    assert.ok(!/This run cost/.test(txt));
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('fresh install does not auto-claim while the pop-up is not approved', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => { window.cccPopups = { allowed: () => false }; });
+    const claimed = await page.evaluate(() => window.cccOnboarding.claimFirstRun());
+    assert.equal(claimed, false);
   } finally {
     await page.close();
   }

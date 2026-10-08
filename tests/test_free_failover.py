@@ -263,6 +263,55 @@ class ContinueFreeTests(_FailoverBase):
         self.assertFalse(res["ok"])
         self.assertEqual(res["code"], "busy")
 
+    def test_failover_resume_scrubs_inherited_subscription_credentials(self):
+        from ccc_server import engines, free_runtime
+
+        sid = "cccccccc-1111-2222-3333-555555555555"
+        captured = {}
+        inherited = {
+            "ANTHROPIC_API_KEY": "sk-ant-test-XXXX",
+            "CLAUDE_CODE_OAUTH_TOKEN": "oauth-test-XXXX",
+            "CLAUDE_CODE_SESSION_KEY": "session-test-XXXX",
+            "ANTHROPIC_AUTH_TOKEN": "paid-test-XXXX",
+            "ANTHROPIC_BASE_URL": "https://paid.example.test",
+            "ANTHROPIC_MODEL": "paid-test-model",
+            "PATH": "/usr/bin",
+        }
+        overlay = {
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:3017",
+            "ANTHROPIC_AUTH_TOKEN": "router-test-XXXX",
+            "ANTHROPIC_MODEL": "free-test-model",
+        }
+
+        def capture_spawn(*args, **kwargs):
+            captured.update(kwargs["env"])
+            raise OSError("stop at the process boundary")
+
+        with mock.patch.object(self.server, "_claude_subagent_parent_session_id", return_value=None), \
+             mock.patch.object(self.server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(free_runtime, "session_runtime", return_value=""), \
+             mock.patch.object(self.server, "_resolve_cwd_context", return_value={"cwd": self.tmp_dir, "repo_path": self.tmp_dir}), \
+             mock.patch.object(self.server, "_ensure_session_jsonl_for_cwd", return_value={"ok": True}), \
+             mock.patch.object(self.server, "repo_log_dir", return_value=Path(self.tmp_dir)), \
+             mock.patch.object(self.server, "_resolve_claude_bin", return_value={"available": True, "bin": "claude"}), \
+             mock.patch.object(self.server, "_claude_session_state_args", return_value=[]), \
+             mock.patch.object(self.server, "_claude_peer_inbound_args", return_value=[]), \
+             mock.patch.object(self.server, "_get_session_override", return_value=None), \
+             mock.patch.object(self.server, "_resume_ledger_append"), \
+             mock.patch.object(self.server, "_question_relay_env", return_value=dict(inherited)), \
+             mock.patch.object(self.server, "_make_stdin_fifo", return_value=(None, None)), \
+             mock.patch.object(engines.subprocess, "Popen", side_effect=capture_spawn):
+            result = self.server.resume_session_headless(sid, "continue", cwd=self.tmp_dir, extra_env=overlay)
+
+        self.assertFalse(result["ok"])
+        self.assertNotIn("ANTHROPIC_API_KEY", captured)
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", captured)
+        self.assertNotIn("CLAUDE_CODE_SESSION_KEY", captured)
+        self.assertEqual(captured["ANTHROPIC_AUTH_TOKEN"], "router-test-XXXX")
+        self.assertEqual(captured["ANTHROPIC_BASE_URL"], overlay["ANTHROPIC_BASE_URL"])
+        self.assertEqual(captured["ANTHROPIC_MODEL"], "free-test-model")
+        self.assertEqual(captured["PATH"], "/usr/bin")
+
     def test_codex_continue_is_not_free_routed(self):
         sid = "dddddddd-1111-2222-3333-444444444444"
         self.server._save_usage_limit_resume_entry(
@@ -383,7 +432,7 @@ class AutoResumeArmTests(_FailoverBase):
         # Five fire in the first minute slot; the sixth waits +60s.
         self.assertEqual(inject.call_count, 5)
         sixth = self._failover_store()[sids[5]]
-        self.assertEqual(sixth["auto_resume_fire_at"], resume_at + 60)
+        self.assertEqual(sixth["auto_resume_fire_at"], now + 60)
         self.assertFalse(sixth.get("auto_resume_done"))
 
     def test_disarm_stops_the_fire(self):

@@ -336,6 +336,10 @@
     if (age > limit) return false;
     if (!enabled()) return false;
     if (!_kindAllowed(kind)) return false;
+    // Unapproved pop-ups stay silent (static/popups.js); the explicit
+    // "Send test notification" button is not a pop-up.
+    if (id.indexOf('ntf_test_') !== 0 &&
+        !(window.cccPopups && window.cccPopups.notifyAllowed(kind))) return false;
 
     var channel = 'toast';
     if (_pageCalm()) {
@@ -367,6 +371,7 @@
   }
 
   function maybeAskPermission() {
+    if (!(window.cccPopups && window.cccPopups.allowed('notify-permission'))) return;
     var state = _permissionState();
     if (state !== 'default' || _permissionAsked) return;
     var count = parseInt(_lsGet(LS_ASK_COUNT) || '0', 10) || 0;
@@ -539,13 +544,13 @@
   // ── public API + boot ─────────────────────────────────────────────────
 
   function show(item) {
-    if (typeof item === 'string') item = { title: item, body: arguments[1] || '' };
+    if (typeof item === 'string') item = { title: item, body: arguments[1] || '', kind: arguments[2] || 'info' };
     item = Object.assign({ kind: 'info', ts: Date.now() / 1000 }, item || {});
     if (!item.id) item.id = 'ntf_local_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     return _deliver(item);
   }
 
-  window.cccNotify = {
+  window.cccNotify = Object.assign(show, {
     show: show,
     toast: toast,
     enabled: enabled,
@@ -567,7 +572,7 @@
     pollPending: pollPending,
     _deliver: _deliver,
     _toast: toast,
-  };
+  });
 
   function _boot() {
     _bindSettings();

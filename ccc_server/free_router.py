@@ -914,10 +914,19 @@ def get_job(job_id: str):
 
 def _supervisor_kind() -> str:
     forced = os.environ.get("CCC_FREE_ROUTER_SUPERVISOR", "").strip().lower()
-    if forced in ("launchd", "child", "external", "none"):
+    if forced in ("child", "external", "none"):
         return forced
     if platform.system() == "Darwin":
+        try:
+            import pwd
+            native_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+            if Path.home().resolve() != native_home or _base_dir().resolve() != native_home / ".ccc":
+                return "child"
+        except (ImportError, KeyError, OSError):
+            return "child"
         return "launchd"
+    if forced == "launchd":
+        return forced
     return "child"
 
 

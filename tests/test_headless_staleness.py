@@ -17,8 +17,10 @@ The hard contracts under test:
 import json
 import multiprocessing
 import os
+import subprocess
 import sys
 import threading
+import time
 from unittest import mock
 
 import pytest
@@ -615,6 +617,115 @@ def test_retire_idle_helper_skips_non_claude(server_mod, tmp_path):
         res = server_mod._retire_idle_headless_for_session(sid)
     assert res["retired"] is False
     retire.assert_not_called()
+
+
+@pytest.mark.parametrize("completed_results", [0, 1])
+def test_retire_idle_startup_grace_yields_to_completed_result(
+    server_mod, tmp_path, completed_results
+):
+    sid, entry, _t, _l = _stage(
+        server_mod, tmp_path, [_event("a")], completed_results
+    )
+    entry["started"] = time.strftime("%Y%m%dT%H%M%S")
+    with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_spawn_timeline_get", return_value=None), \
+         mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire:
+        res = server_mod._retire_idle_headless_for_session(
+            sid, reason="free-switch-back"
+        )
+    if completed_results == 0:
+        assert res["retired"] is False
+        assert res.get("reason") == "startup_grace"
+        retire.assert_not_called()
+    else:
+        assert res["retired"] is True
+        assert res["pid"] == entry["pid"]
+        retire.assert_called_once_with(
+            entry, terminate=True, reason="free-switch-back",
+            caller="free-switch-back")
+
+
+def _stage_owned_spawn_entry(tmp_path):
+    sid = "11111111-2222-3333-4444-555555555555"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    log = tmp_path / "hl-owned.log"
+    log.write_text(_result_lines(1))
+    entry = {
+        "pid": proc.pid,
+        "engine": "claude",
+        "resumed_sid": sid,
+        "log": str(log),
+        "fifo": None,
+        "stdin_fd": None,
+        "started": time.strftime("%Y%m%dT%H%M%S"),
+        "proc": proc,
+    }
+    return sid, entry, proc
+
+
+def _wrap_wait_for_reap(proc, reaped):
+    original_wait = proc.wait
+
+    def wait_wrapper(*args, **kwargs):
+        try:
+            return original_wait(*args, **kwargs)
+        finally:
+            reaped.set()
+
+    proc.wait = wait_wrapper
+
+
+def test_retire_terminate_reaps_owned_child(server_mod, tmp_path):
+    _sid, entry, proc = _stage_owned_spawn_entry(tmp_path)
+    reaped = threading.Event()
+    _wrap_wait_for_reap(proc, reaped)
+    tracked = [entry]
+    try:
+        with mock.patch.object(server_mod, "_spawned_sessions", tracked), \
+             mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+             mock.patch.object(server_mod, "_resume_ledger_append"), \
+             mock.patch.object(server_mod, "_log_activity"), \
+             mock.patch.object(server_mod, "_record_kill_event"), \
+             mock.patch.object(server_mod, "_remove_spawn_from_registry"):
+            server_mod._retire_unresponsive_spawn_entry(
+                entry, terminate=True,
+                reason="free-switch-back", caller="free-switch-back")
+        assert reaped.wait(5)
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+        assert entry not in tracked
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_retire_without_terminate_leaves_owned_child_running(server_mod, tmp_path):
+    _sid, entry, proc = _stage_owned_spawn_entry(tmp_path)
+    reaped = threading.Event()
+    _wrap_wait_for_reap(proc, reaped)
+    tracked = [entry]
+    try:
+        with mock.patch.object(server_mod, "_spawned_sessions", tracked), \
+             mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+             mock.patch.object(server_mod, "_resume_ledger_append"), \
+             mock.patch.object(server_mod, "_log_activity"), \
+             mock.patch.object(server_mod, "_record_kill_event"), \
+             mock.patch.object(server_mod, "_remove_spawn_from_registry"):
+            server_mod._retire_unresponsive_spawn_entry(
+                entry, reason="free-switch-back", caller="free-switch-back")
+        assert not reaped.wait(1)
+        os.kill(proc.pid, 0)
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 def _status_takeover_retire(status):

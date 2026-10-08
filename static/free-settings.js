@@ -165,7 +165,8 @@
       setTimeout(function () {
         var s = el('settingsBtn');
         var t = el('settingsRailTab-' + SECTION_ID);
-        if (s) s.click();
+        var modal = el('settingsModal');
+        if (s && (!modal || !modal.classList.contains('open'))) s.click();
         if (t) t.click();
       }, 30);
     } catch (_) { /* older browsers: no deep link */ }
