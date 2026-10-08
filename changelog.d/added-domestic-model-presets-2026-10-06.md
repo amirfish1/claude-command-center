@@ -1,0 +1,1 @@
+- Add guided paid-key presets for GLM, Kimi, DeepSeek, Qwen and MiniMax, with international and China endpoints, local key storage, and direct Claude sessions that keep their provider on resume.

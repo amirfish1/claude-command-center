@@ -9096,6 +9096,9 @@ def _build_engine_model_catalog(force_refresh=False):
             default_id=catalog["antigravity"].get("default"),
         )
 
+    from ccc_server import domestic_providers
+    domestic_providers.add_to_model_catalog(catalog)
+
     for bucket in catalog.values():
         bucket.pop("_index", None)
         bucket["models"] = [
@@ -26579,6 +26582,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path == "/setup" or path == "/setup.html" or path.startswith("/api/setup/"):
             from ccc_server import setup_jobs as _setup_jobs_mod
             _setup_jobs_mod.handle_get(self, parsed)
+        if path == "/api/domestic-providers":
+            from ccc_server import domestic_providers
+            domestic_providers.handle(self, "GET")
+            return
         if path == "/api/free-router/providers":
             # Free-key wizard catalog (L03): registry rows + live key state
             # when the managed router answers. Contract: bare list.
@@ -30770,6 +30777,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/setup/"):
             from ccc_server import setup_jobs as _setup_jobs_mod
             _setup_jobs_mod.handle_post(self)
+        if path in ("/api/domestic-providers/keys", "/api/domestic-providers/keys/remove"):
+            from ccc_server import domestic_providers
+            domestic_providers.handle(self, "POST")
+            return
         if path == "/api/free-router/keys":
             # Free-key wizard submit (L03): {platform, key?, consent?} ->
             # {ok, validated, error}. The key is forwarded to the managed
@@ -34527,6 +34538,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # router via per-child env. Validated here — engine support is
             # per-engine and a $0 request must never silently run paid.
             spawn_runtime = str(payload.get("runtime") or "").strip().lower()
+            from ccc_server import domestic_providers
+            preset_error = domestic_providers.request_error(
+                engine, model, spawn_runtime, key_profile,
+                remote=bool(payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False)),
+            )
             runtime_error = None
             if spawn_runtime and spawn_runtime != "free":
                 runtime_error = f"unknown runtime: {spawn_runtime}"
@@ -34709,6 +34725,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "error": f"unsupported engine: {engine_raw}",
                     "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
                 }, 400)
+            elif preset_error:
+                self.send_json(preset_error, 400)
             elif runtime_error:
                 _log_activity("spawn", "REJECT", f"runtime_error: {runtime_error}")
                 self.send_json({

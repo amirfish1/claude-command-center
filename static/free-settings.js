@@ -143,7 +143,8 @@
       '</div>' +
       '<div id="fsRoot">' +
         '<div class="fs-skel" aria-hidden="true"><i></i><i></i><i></i></div>' +
-      '</div>';
+      '</div>' +
+      '<div id="fsDomesticProviders"></div>';
     var after = el('settingsSection-engines');
     if (after && after.nextSibling) pane.insertBefore(sec, after.nextSibling);
     else pane.appendChild(sec);
@@ -194,6 +195,8 @@
   };
 
   function activate() {
+    var domesticHost = el('fsDomesticProviders');
+    if (domesticHost && window.cccDomesticProviders) window.cccDomesticProviders.mount(domesticHost).refresh();
     if (S.active) { refresh(); return; }
     S.active = true;
     refresh();

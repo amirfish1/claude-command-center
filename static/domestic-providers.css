@@ -1,0 +1,27 @@
+.dp-root{margin-top:22px;color:var(--text,#e6e6e6);font:13px/1.5 system-ui,-apple-system,sans-serif}
+.dp-root *{box-sizing:border-box}
+.dp-title{font-size:18px;margin:0 0 6px}
+.dp-intro{margin:0 0 8px}
+.dp-note,.dp-price,.dp-next{font-size:12px;color:var(--text-dim,#aab);margin:8px 0}
+.dp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:12px;margin-top:14px}
+.dp-card{min-width:0;padding:16px;border:1px solid var(--border,#444);border-radius:10px;background:var(--bg-elev,#1b1e24)}
+.dp-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.dp-heading h4{margin:0;font-size:15px}
+.dp-paid{border:1px solid var(--border,#444);border-radius:99px;padding:2px 8px;font-size:11px;color:var(--text-dim,#aab)}
+.dp-label{display:block;margin:12px 0 6px;font-size:12px;font-weight:600}
+.dp-select,.dp-input{display:block;width:100%;min-width:0;margin-top:5px;border:1px solid var(--border,#444);border-radius:7px;background:var(--bg,#14161a);color:inherit;padding:8px;font:inherit}
+.dp-input{font:12px ui-monospace,monospace}
+.dp-details{margin:12px 0;font-size:12px}
+.dp-details summary{cursor:pointer;color:var(--text-dim,#aab)}
+.dp-endpoint{display:block;overflow-wrap:anywhere;font-size:11px;margin:8px 0}
+.dp-link{color:var(--accent,#d97757);font-size:12px;text-underline-offset:3px}
+.dp-saved{margin:12px 0 6px;font-size:12px}
+.dp-actions,.dp-removal{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dp-button{padding:7px 11px;border:1px solid var(--accent,#d97757);border-radius:7px;background:var(--accent,#d97757);color:#fff;font:600 12px system-ui,sans-serif;cursor:pointer}
+.dp-secondary{background:transparent;border-color:var(--border,#444);color:inherit}
+.dp-button:disabled,.dp-select:disabled,.dp-input:disabled{opacity:.6;cursor:default}
+.dp-button:focus-visible,.dp-input:focus-visible,.dp-select:focus-visible,.dp-link:focus-visible,.dp-details summary:focus-visible{outline:2px solid var(--accent,#d97757);outline-offset:3px}
+.dp-message{min-height:1.5em;margin:8px 0;font-size:12px}
+.dp-message.is-error{color:var(--danger,#f07070)}
+.dp-wizard-details{margin-top:20px;padding-top:14px;border-top:1px solid var(--border,#444)}
+.dp-wizard-details>summary{cursor:pointer;font-size:14px;font-weight:600}
