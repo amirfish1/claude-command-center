@@ -74,6 +74,15 @@ test('explicit subscription engine and stable dedupe, never free runtime', () =>
   assert.equal(body.key_profile, undefined);
 });
 
+test('proposals match the canonical folder the server answers with', () => {
+  const { api } = load();
+  const item = { id: 'a', title: 'Fix search', prompt: 'Task data', repo_path: '/home/u/Apps/foo' };
+  // Typed "~/Apps/foo/" resolves server-side; the client must not drop the tasks.
+  assert.equal(api.validTasks({ repo_path: '/home/u/Apps/foo', proposals: [item] }).length, 1);
+  assert.equal(api.validTasks({ repo_path: '/home/u/Apps/bar', proposals: [item] }).length, 0);
+  assert.equal(api.validTasks({ proposals: [item] }).length, 0);
+});
+
 test('toggle defaults on and persists off', () => {
   const { api, storage } = load();
   assert.equal(api.enabled(), true);

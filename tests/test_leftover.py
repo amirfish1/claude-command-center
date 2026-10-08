@@ -73,13 +73,26 @@ def test_worktree_queue_identity(tmp_path):
 def test_github_filters_busy_or_blocked(monkeypatch):
     monkeypatch.setattr(leftover, '_cli_path', lambda name: name)
     monkeypatch.setattr(leftover, '_read_cli', lambda argv, cwd: ([
-        {'number': 1, 'title': 'Fix search', 'labels': []},
-        {'number': 2, 'title': 'Busy', 'labels': [{'name': 'claude-in-progress'}]},
-        {'number': 3, 'title': 'Blocked', 'labels': [{'name': 'needs-input'}]},
-        {'number': 4, 'title': 'Assigned', 'labels': [], 'assignees': [{'login': 'someone'}]},
+        {'number': 1, 'title': 'Fix search', 'labels': [], 'authorAssociation': 'OWNER'},
+        {'number': 2, 'title': 'Busy', 'labels': [{'name': 'claude-in-progress'}], 'authorAssociation': 'OWNER'},
+        {'number': 3, 'title': 'Blocked', 'labels': [{'name': 'needs-input'}], 'authorAssociation': 'OWNER'},
+        {'number': 4, 'title': 'Assigned', 'labels': [], 'assignees': [{'login': 'someone'}], 'authorAssociation': 'OWNER'},
     ], 'ok'))
     rows, _ = leftover.github_tasks('/repo')
     assert [r['title'] for r in rows] == ['Fix search']
+
+
+def test_github_skips_issues_from_outsiders(monkeypatch):
+    monkeypatch.setattr(leftover, '_cli_path', lambda name: name)
+    monkeypatch.setattr(leftover, '_has_remote', lambda repo: True)
+    monkeypatch.setattr(leftover, '_read_cli', lambda argv, cwd: ([
+        {'number': 1, 'title': 'From a stranger', 'labels': [], 'authorAssociation': 'NONE'},
+        {'number': 2, 'title': 'First-timer', 'labels': [], 'authorAssociation': 'FIRST_TIME_CONTRIBUTOR'},
+        {'number': 3, 'title': 'From a collaborator', 'labels': [], 'authorAssociation': 'COLLABORATOR'},
+        {'number': 4, 'title': 'No association', 'labels': []},
+    ], 'ok'))
+    rows, _ = leftover.github_tasks('/repo')
+    assert [r['title'] for r in rows] == ['From a collaborator']
 
 
 def test_sources_fill_three_and_stop(monkeypatch):

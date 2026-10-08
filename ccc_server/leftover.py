@@ -124,13 +124,16 @@ def _has_remote(repo):
     return bool(result.returncode or result.stdout.strip())
 
 
+_TRUSTED_AUTHORS = {'OWNER', 'MEMBER', 'COLLABORATOR'}
+
+
 def github_tasks(repo):
     binary = _cli_path('gh')
     if not binary:
         return [], _status('github', 'unavailable', 'GitHub CLI is not installed.')
     if not _has_remote(repo):
         return [], _status('github', 'unavailable', 'This folder is not linked to GitHub.')
-    data, state = _read_cli([binary, 'issue', 'list', '--state', 'open', '--limit', '10', '--json', 'number,title,body,labels,assignees'], repo)
+    data, state = _read_cli([binary, 'issue', 'list', '--state', 'open', '--limit', '10', '--json', 'number,title,body,labels,assignees,authorAssociation'], repo)
     if state != 'ok':
         return [], _status('github', 'error', 'Could not read GitHub issues. Check GitHub CLI sign-in and the repository remote.')
     blocked = {'claude-in-progress', 'watchtower:in-progress', 'blocked', 'needs-input', 'needs_input', 'watchtower:no-auto-drain'}
@@ -139,6 +142,10 @@ def github_tasks(repo):
         if not isinstance(item, dict):
             continue
         labels = {str(label.get('name') if isinstance(label, dict) else label).lower() for label in item.get('labels', [])}
+        # Only issues from people with write access: an outsider's issue on a
+        # public repo must not become a one-click agent task.
+        if item.get('authorAssociation') not in _TRUSTED_AUTHORS:
+            continue
         if labels & blocked or item.get('assignees') or not item.get('title') or not isinstance(item.get('number'), int):
             continue
         rows.append(proposal(repo, 'github', '#' + str(item['number']), item['title'], item.get('body')))

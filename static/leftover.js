@@ -16,8 +16,8 @@
   var busy = {}, outcomes = {};
   // Panel: the folder chosen in Settings. Offer: the open conversation's repo
   // (or the last folder picked in Settings).
-  var panel = { repo: '', tasks: [], generation: 0, signature: '' };
-  var offer = { repo: '', tasks: [], generation: 0, signature: '', fetchedAt: 0, loading: false, error: '' };
+  var panel = { repo: '', canonical: '', tasks: [], generation: 0, signature: '' };
+  var offer = { repo: '', canonical: '', tasks: [], generation: 0, signature: '', fetchedAt: 0, loading: false, error: '' };
   var labels = { claude: 'Claude', codex: 'Codex', kimi: 'Kimi' };
   var OFFER_REFRESH_MS = 60000;
 
@@ -73,9 +73,12 @@
       return res.json().catch(function () { return {}; }).then(function (data) { return { status: res.status, data: data || {} }; });
     }).finally(function () { clearTimeout(timeout); });
   }
-  function validTasks(data, folder) {
+  // The server answers with the canonical folder (~ expanded, symlinks and
+  // trailing slashes resolved), so match proposals against that, not the typed text.
+  function validTasks(data) {
+    var folder = data.repo_path;
     return (data.proposals || []).filter(function (item) {
-      return item && item.repo_path === folder && item.id && item.title && item.prompt;
+      return item && folder && item.repo_path === folder && item.id && item.title && item.prompt;
     }).slice(0, 5);
   }
   function syncToggle() {
@@ -196,7 +199,7 @@
         offer.tasks = []; offer.loading = false;
         offer.error = res.data.message || res.data.error || 'Could not find tasks in this folder.';
       } else {
-        offer.tasks = validTasks(res.data, folder); offer.error = '';
+        offer.tasks = validTasks(res.data); offer.canonical = res.data.repo_path; offer.error = '';
         offer.loading = !!res.data.loading && Date.now() < deadline;
         if (offer.loading) setTimeout(function () { loadOfferTasks(folder, version, deadline); }, 1000);
       }
@@ -275,7 +278,7 @@
         el('loTaskStatus').textContent = res.data.message || res.data.error || 'Could not find tasks. Check the folder and try another one.';
         return;
       }
-      panel.tasks = validTasks(res.data, folder);
+      panel.tasks = validTasks(res.data); panel.canonical = res.data.repo_path;
       renderTasks();
       el('loSources').textContent = (res.data.sources || []).map(function (source) { return source.detail; }).join(' ');
       el('loTaskStatus').textContent = panel.tasks.length ? 'Choose one task. Each click starts only that task.' : res.data.loading ? 'Looking for tasks in this folder…' : 'No ready tasks found. Add a GitHub issue or a TODO in your code.';
@@ -325,7 +328,7 @@
     var found = findTask(id), row = selected();
     if (!found || !row || busy[id]) return;
     var task = found.task;
-    if (task.repo_path !== found.repo || get(savedKey(task, row)) === '1') return;
+    if (task.repo_path !== found.owner.canonical || get(savedKey(task, row)) === '1') return;
     if (!resetIsCurrent(row)) {
       outcomes[id] = { text: 'This estimate has reset. Wait for the next usage update.', error: true }; renderAllTasks(); poll(); return;
     }
@@ -376,6 +379,6 @@
     if (new URLSearchParams(location.search).get('ccc_settings') === 'leftover') setTimeout(openPanel, 30);
     else poll();
   }
-  window.cccLeftover = { isCandidate: isCandidate, resetIsCurrent: resetIsCurrent, summary: summary, spawnBody: spawnBody, enabled: enabled, setEnabled: setEnabled, notifyCandidate: notifyCandidate, open: openPanel, refresh: poll };
+  window.cccLeftover = { isCandidate: isCandidate, resetIsCurrent: resetIsCurrent, summary: summary, spawnBody: spawnBody, validTasks: validTasks, enabled: enabled, setEnabled: setEnabled, notifyCandidate: notifyCandidate, open: openPanel, refresh: poll };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
