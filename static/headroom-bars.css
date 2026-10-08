@@ -1,0 +1,73 @@
+.headroom-bars {
+  width: 100%;
+  min-width: 0;
+  margin-top: 7px;
+  font-weight: 400;
+}
+.headroom-bars .hb-heading {
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+.headroom-bars .hb-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+.headroom-bars .hb-chip {
+  --hb-color: var(--text-muted);
+  min-width: 0;
+  padding: 2px 0;
+  border-radius: 3px;
+}
+.headroom-bars .hb-ok { --hb-color: var(--green); }
+.headroom-bars .hb-warn { --hb-color: var(--orange); }
+.headroom-bars .hb-low { --hb-color: var(--red); }
+.headroom-bars .hb-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 4px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.headroom-bars .hb-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.headroom-bars .hb-val {
+  color: var(--hb-color);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.headroom-bars .hb-bar {
+  height: 3px;
+  margin: 4px 0;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border);
+}
+.headroom-bars .hb-fill {
+  height: 100%;
+  background: var(--hb-color);
+  border-radius: inherit;
+  transition: width 180ms ease;
+}
+.headroom-bars .hb-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.headroom-bars .hb-stale .hb-bar { opacity: 0.5; }
+@media (prefers-reduced-motion: reduce) {
+  .headroom-bars .hb-fill { transition: none; }
+}

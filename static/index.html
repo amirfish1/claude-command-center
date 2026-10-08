@@ -65,6 +65,7 @@
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/savings.css">
+<link rel="stylesheet" href="/static/headroom-bars.css">
 <!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
      file's diff against upstream stays small — see simple.css's own header
      comment. Loaded unconditionally; it's inert (never matches) outside
@@ -501,6 +502,7 @@
        inert on servers without /api/free-failover/status. -->
   <script src="/static/popups.js"></script>
   <script src="/static/limit-failover.js" defer></script>
+  <script src="/static/headroom-bars.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
@@ -769,6 +771,7 @@
              "..." menu (#sidebarMoreMenu) -- version chores are occasional, and
              the header should carry identity plus status, not chores. -->
         <a class="sh-repo-link" id="cccRepoLink" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Open the repo on GitHub">git: amirfish1/claude-command-center</a>
+        <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
       </div>
       <!-- Top-left alerts strip. Hosts always-visible app-level signals
            (Update pill, History-stale alert if indexing >24h behind, etc.)
