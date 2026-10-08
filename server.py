@@ -34743,6 +34743,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
                 }, 400)
             elif preset_error:
+                _log_activity("spawn", "REJECT", f"preset_error: {preset_error.get('code')}")
                 self.send_json(preset_error, 400)
             elif runtime_error:
                 _log_activity("spawn", "REJECT", f"runtime_error: {runtime_error}")

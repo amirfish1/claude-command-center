@@ -134,6 +134,22 @@ def resolve_model(model):
     return preset, parts[2]
 
 
+def session_model(session_id, override=None):
+    """The model a resumed session should keep.
+
+    A model the user picked later (session override) wins. Otherwise a
+    session spawned on a paid preset keeps that preset, which lives only in
+    the spawn registry because spawn never writes an override."""
+    from ccc_server import core
+    if override is None:
+        override = core._get_session_override(session_id) or {}
+    if override.get("model"):
+        return override["model"]
+    entry = core._spawn_registry_entry_for_session(session_id, "claude") or {}
+    model = str(entry.get("model") or "")
+    return model if model.lower().startswith(MODEL_PREFIX) else ""
+
+
 def request_error(engine, model, runtime="", key_profile=None, remote=False):
     try:
         resolved = resolve_model(model)

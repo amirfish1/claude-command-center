@@ -1,7 +1,7 @@
 KEY_REGEX = r"^[A-Za-z0-9._-]{16,4096}$"
 KEY_PROFILE = "default"
 MODEL_PREFIX = "byok/"
-VERIFIED_AT = "2026-10-06"
+VERIFIED_AT = "2026-10-08"
 
 MODEL_ENV_VARS = (
     "ANTHROPIC_MODEL",
@@ -36,7 +36,7 @@ DOMESTIC_PRESETS = (
         "docs_url": "https://docs.z.ai/scenario-example/develop-tools/claude",
         "price_note": "Paid. Uses your GLM Coding Plan allowance. Check your plan before running.",
         "region_note": "Use a Z.AI key here. A China Zhipu key belongs on the China endpoint.",
-        "key_hint": "Paste your full Z.AI API key",
+        "key_hint": "Paste your Z.AI API key",
         "no_key_status": 401,
     },
     {
@@ -47,10 +47,11 @@ DOMESTIC_PRESETS = (
         "base_url": "https://open.bigmodel.cn/api/anthropic",
         "models": ("glm-5.3", "glm-4.7"),
         "signup_url": "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
-        "docs_url": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction",
+        "docs_url": "https://docs.bigmodel.cn/cn/guide/develop/claude",
+        "models_docs_url": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction",
         "price_note": "Paid. Charges or coding-plan limits depend on your Zhipu account and model.",
         "region_note": "Use a China Zhipu key here. International Z.AI keys use the other endpoint.",
-        "key_hint": "Paste your full Zhipu API key, including any dot",
+        "key_hint": "Paste your Zhipu API key",
         "no_key_status": 401,
     },
     {
@@ -64,7 +65,7 @@ DOMESTIC_PRESETS = (
         "docs_url": "https://platform.kimi.ai/docs/guide/claude-code-kimi",
         "price_note": "Paid API usage from your Moonshot balance. A Kimi chat subscription is separate.",
         "region_note": "Use a key from the international API platform, not a Kimi Code subscription key.",
-        "key_hint": "Paste your full Moonshot API key",
+        "key_hint": "Paste your Moonshot API key",
         "no_key_status": 401,
     },
     {
@@ -78,7 +79,7 @@ DOMESTIC_PRESETS = (
         "docs_url": "https://platform.kimi.com/docs/guide/claude-code-kimi",
         "price_note": "Paid API usage from your Moonshot balance. A Kimi chat subscription is separate.",
         "region_note": "Use a key from the China API platform, not a Kimi Code subscription key.",
-        "key_hint": "Paste your full Moonshot API key",
+        "key_hint": "Paste your Moonshot API key",
         "no_key_status": 401,
     },
     {
@@ -92,7 +93,7 @@ DOMESTIC_PRESETS = (
         "docs_url": "https://api-docs.deepseek.com/guides/anthropic_api/",
         "price_note": "Paid API usage. Flash and Pro have different prices. Check your balance before running.",
         "region_note": "DeepSeek documents one shared endpoint for international and China accounts.",
-        "key_hint": "Paste your full DeepSeek API key",
+        "key_hint": "Paste your DeepSeek API key",
         "no_key_status": 401,
     },
     {
@@ -107,7 +108,7 @@ DOMESTIC_PRESETS = (
         "models_docs_url": "https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages",
         "price_note": "Paid, pay as you go. Trial credits may expire. Coding Plan keys need a different endpoint.",
         "region_note": "Create a Model Studio key in Singapore. Beijing and Coding Plan keys do not work here.",
-        "key_hint": "Paste your Singapore pay-as-you-go API key",
+        "key_hint": "Paste your Singapore API key",
         "reject_key_prefixes": ("sk-sp-",),
         "no_key_status": 403,
     },
@@ -123,7 +124,7 @@ DOMESTIC_PRESETS = (
         "models_docs_url": "https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages",
         "price_note": "Paid, pay as you go. Trial credits may expire. Coding Plan keys need a different endpoint.",
         "region_note": "Create a Model Studio key in Beijing. Singapore and Coding Plan keys do not work here.",
-        "key_hint": "Paste your Beijing pay-as-you-go API key",
+        "key_hint": "Paste your Beijing API key",
         "reject_key_prefixes": ("sk-sp-",),
         "no_key_status": 403,
     },
@@ -139,7 +140,7 @@ DOMESTIC_PRESETS = (
         "region_docs_url": "https://platform.minimax.io/docs/guides/text-m3-function-call",
         "price_note": "Paid. API balance or M Plan resources are required. Check the price for your model.",
         "region_note": "Use a key from the international MiniMax platform. China keys use the China endpoint.",
-        "key_hint": "Paste your full MiniMax API key",
+        "key_hint": "Paste your MiniMax API key",
         "no_key_status": 401,
     },
     {
@@ -154,7 +155,7 @@ DOMESTIC_PRESETS = (
         "models_docs_url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
         "price_note": "Paid. API balance or M Plan resources are required. Check the price for your model.",
         "region_note": "Use a key from the China MiniMax platform. International keys use the other endpoint.",
-        "key_hint": "Paste your full MiniMax API key",
+        "key_hint": "Paste your MiniMax API key",
         "no_key_status": 401,
     },
 )

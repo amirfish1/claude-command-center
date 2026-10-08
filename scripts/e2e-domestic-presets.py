@@ -21,18 +21,19 @@ class Vendor(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-        if self.path.endswith("/count_tokens"):
+        route = self.path.split("?", 1)[0]
+        if route.endswith("/count_tokens"):
             data = json.dumps({"input_tokens": 10}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(data)
             return
-        assert self.path.endswith("/v1/messages"), self.path
+        assert route.endswith("/v1/messages"), self.path
         assert self.headers.get("Authorization") == "Bearer " + KEY
         assert self.headers.get("x-api-key") != "sk-ant-test-XXXX"
         assert body["model"] == "kimi-k3", body["model"]
-        REQUESTS.append({"path": self.path, "model": body["model"], "auth": "test-provider-key"})
+        REQUESTS.append({"path": route, "model": body["model"], "auth": "test-provider-key"})
         message = {"id": "msg_test_XXXX", "type": "message", "role": "assistant", "model": "kimi-k3",
                    "content": [{"type": "text", "text": "domestic-test-OK"}], "stop_reason": "end_turn",
                    "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 3}}
@@ -69,7 +70,7 @@ def wait_result(log_path, proc):
             if event.get("type") == "result":
                 assert not event.get("is_error"), event
                 assert "domestic-test-OK" in event.get("result", ""), event
-                return
+                return event
         if proc.poll() is not None:
             raise AssertionError("Claude exited before a result: " + data[-2000:])
         time.sleep(0.2)
@@ -104,10 +105,12 @@ def main():
             assert first.get("ok"), first
             entry = next(e for e in server._spawned_sessions if e["pid"] == first["pid"])
             entries.append(entry)
-            wait_result(first["log"], entry["proc"])
-            sid = first.get("session_id")
+            done = wait_result(first["log"], entry["proc"])
+            # The dashboard's poller backfills the native session id into the
+            # spawn registry; do the same here so resume can find the preset.
+            sid = server._spawn_session_id_from_entry(entry) or done.get("session_id")
             assert sid, first
-            assert server._get_session_override(sid)["model"] == MODEL
+            assert dp.session_model(sid) == MODEL
             assert entry["model"] == MODEL
             assert entry["command"][entry["command"].index("--model") + 1] == "kimi-k3"
             assert not first.get("prewarmed") and not first.get("runtime")
@@ -123,7 +126,8 @@ def main():
             for e in entries:
                 e["proc"].terminate()
                 e["proc"].wait(timeout=10)
-                e["log_fh"].close()
+                if e.get("log_fh"):
+                    e["log_fh"].close()
                 if e.get("stdin_fd") is not None:
                     server._close_fd_quiet(e["stdin_fd"])
             entries.clear()
@@ -135,7 +139,8 @@ def main():
             if e["proc"].poll() is None:
                 e["proc"].terminate()
                 e["proc"].wait(timeout=10)
-            e["log_fh"].close()
+            if e.get("log_fh"):
+                e["log_fh"].close()
         listener.shutdown()
         listener.server_close()
 

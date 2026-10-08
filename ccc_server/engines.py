@@ -8114,7 +8114,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     if not text:
         return {"ok": False, "error": "missing text"}
     preset_override = _core._get_session_override(session_id) or {}
-    preset_model = preset_override.get("model") or ""
+    preset_model = _domestic_providers.session_model(session_id, preset_override)
     if not runtime and not extra_env:
         preset_error = _domestic_providers.request_error(
             "claude", preset_model, remote=bool(os.environ.get("CCC_SSH_HOST")),
@@ -8218,12 +8218,17 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     # also expands versioned short aliases (e.g. sonnet-4-6 → claude-sonnet-4-6)
     # since the --model flag does not accept bare versioned aliases for 4.x models.
     override = preset_override
-    if override and override.get("model") and not extra_env and not runtime:
+    if paid_preset:
+        cmd.extend(["--model", paid_preset["model"]])
+        effort = str(override.get("reasoning_effort") or "").strip().lower()
+        if effort in _core.CLAUDE_REASONING_EFFORTS and effort:
+            cmd.extend(["--effort", effort])
+    elif override and override.get("model") and not extra_env and not runtime:
         # extra_env (a limit-hit failover's free-router wiring) or a free
         # runtime owns the model
         # selection for this child — passing the session's paid --model alias
         # too would send a paid-only id to the free endpoint.
-        alias = paid_preset["model"] if paid_preset else _core._cli_model_flag(override["model"])  # strips [1m], normalizes to full ID
+        alias = _core._cli_model_flag(override["model"])  # strips [1m], normalizes to full ID
         if alias:
             cmd.extend(["--model", alias])
         if override.get("context_1m"):

@@ -56,7 +56,7 @@
       el.replaceChildren();
       el.dataset.preset = selected.id;
       const heading = node('div', 'dp-heading');
-      heading.append(node('h4', '', selected.name), node('span', 'dp-paid', 'Your key · paid'));
+      heading.append(node('h4', '', selected.name), node('span', 'dp-paid', 'Paid'));
       el.append(heading);
       const regionLabel = node('label', 'dp-label', 'Account region');
       const region = node('select', 'dp-select');
@@ -73,7 +73,12 @@
         removePending = false;
         render();
       });
-      regionLabel.append(region);
+      if (presets.length === 1) {
+        // One shared endpoint: a disabled dropdown reads as broken, so say it plainly.
+        regionLabel.append(node('div', 'dp-region-fixed', selected.region));
+      } else {
+        regionLabel.append(region);
+      }
       el.append(regionLabel, node('p', 'dp-note', selected.region_note), node('p', 'dp-price', selected.price_note));
       const modelLabel = node('label', 'dp-label', 'Available models');
       const models = node('select', 'dp-select');

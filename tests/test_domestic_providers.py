@@ -257,3 +257,25 @@ def test_live_process_cannot_silently_change_paid_provider(monkeypatch):
     monkeypatch.setattr(server, "_poll_spawn_entry", lambda entry: None)
     result = server.resume_session_headless("test-session-XXXX", "Say hello.")
     assert result["code"] == "preset_live_model_changed"
+
+
+def test_spawned_preset_session_keeps_preset_on_cold_resume(monkeypatch, tmp_path):
+    # Spawn never writes a session override, so the preset lives only in the
+    # spawn registry. A cold resume must still find it, not fall back to Claude.
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "_claude_subagent_parent_session_id", lambda sid: None)
+    monkeypatch.setattr(server, "_get_session_override", lambda sid: None)
+    monkeypatch.setattr(server, "_spawn_registry_entry_for_session",
+                        lambda sid, engine=None: {"session_id": sid, "engine": "claude", "model": MODEL})
+    monkeypatch.setattr(server, "_spawned_sessions", [])
+    monkeypatch.setattr(server, "_resolve_cwd_context", lambda cwd: {"cwd": str(tmp_path), "repo_path": str(tmp_path)})
+    assert dp.session_model("test-session-XXXX") == MODEL
+    result = server.resume_session_headless("test-session-XXXX", "Say hello.", cwd=str(tmp_path))
+    assert result["code"] == "preset_key_missing"
+
+
+def test_session_model_prefers_user_override_and_ignores_plain_registry_models(monkeypatch):
+    monkeypatch.setattr(server, "_spawn_registry_entry_for_session",
+                        lambda sid, engine=None: {"model": "opus"})
+    assert dp.session_model("s", {"model": "sonnet"}) == "sonnet"
+    assert dp.session_model("s", {}) == ""

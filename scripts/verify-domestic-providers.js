@@ -12,22 +12,35 @@ const key = 'sk-test-XXXX-domestic-XXXX';
 
 (async () => {
   fs.mkdirSync(out, { recursive: true });
-  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  // Headless Chrome reports a touch-like device (hover: none), which turns on
+  // CCC's 16px phone field sizing. Report a mouse so desktop shots are real.
+  const browser = await puppeteer.launch({
+    executablePath: findChromePath(),
+    args: ['--no-sandbox', '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4'],
+  });
   const deadline = setTimeout(() => { browser.close(); process.exitCode = 1; }, 120000);
   const evidence = { url: base, checks: [], screenshots: [] };
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
-    await page.evaluateOnNewDocument(() => {
+    // A fresh isolated HOME has pending agent-config consent, whose modal
+    // would cover the cards. Snooze it with the same signature the page uses
+    // (static/config-consent.js) so nothing is written to the test HOME.
+    const consent = await fetch(base + '/api/config-consent').then((r) => r.json()).catch(() => ({}));
+    const due = (i) => (i.auto_review === undefined ? i.needs_review : i.auto_review);
+    const consentSig = (consent.items || []).filter(due).map((i) => i.id + ':' + i.status).sort().join('|')
+      + (consent.notice && consent.notice.pending ? '|notice' : '');
+    await page.evaluateOnNewDocument((sig) => {
       localStorage.setItem('ccc-onboarded', '1');
       localStorage.setItem('ccc-tour-done', '1');
       localStorage.setItem('ccc-sounds-enabled', '0');
-    });
+      localStorage.setItem('ccc-config-consent-snooze', JSON.stringify({ sig, until: Date.now() + 864e5 }));
+    }, consentSig);
     await page.goto(base + '/?ccc_settings=free', { waitUntil: 'load', timeout: 60000 });
     await page.waitForSelector('#fsDomesticProviders .dp-card', { timeout: 30000 });
     const count = await page.$$eval('#fsDomesticProviders .dp-card', (cards) => cards.length);
     assert.equal(count, 5);
-    assert.equal(await page.$$eval('#fsDomesticProviders .dp-card .dp-label:first-of-type option', (options) => options.length), 9);
+    assert.equal(await page.$$eval('#fsDomesticProviders .dp-card .dp-label:first-of-type :is(option, .dp-region-fixed)', (rows) => rows.length), 9);
     evidence.checks.push('Settings renders five paid provider cards and nine account-region options');
     const scope = '#fsDomesticProviders [data-family="kimi"]';
     await page.select(scope + ' select', 'kimi-cn');
@@ -86,6 +99,10 @@ const key = 'sk-test-XXXX-domestic-XXXX';
     evidence.checks.push('Key wizard exposes the paid section without counting a paid key as a free connection');
     await page.setViewport({ width: 390, height: 844 });
     assert(await page.$eval('.ccc-fkw-modal .dp-root', (el) => el.scrollWidth <= el.clientWidth + 1));
+    await page.$eval('.ccc-fkw-modal .dp-wizard-details', (el) => el.scrollIntoView({ block: 'start' }));
+    const mobileShot = path.join(out, 'domestic-wizard-mobile.png');
+    await page.screenshot({ path: mobileShot });
+    evidence.screenshots.push(mobileShot);
     evidence.checks.push('Paid-key cards fit a mobile viewport without horizontal overflow');
     evidence.verdict = 'VERIFIED';
     fs.writeFileSync(path.join(out, 'domestic-browser-result.json'), JSON.stringify(evidence, null, 2));
