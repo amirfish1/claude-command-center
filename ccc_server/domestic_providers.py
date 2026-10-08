@@ -226,6 +226,8 @@ def apply_env(child_env, overlay):
     for name in (*CREDENTIAL_ENV_VARS, *ROUTING_MODE_ENV_VARS):
         child_env.pop(name, None)
     child_env.pop("CCC_SESSION_RUNTIME", None)
+    # Extra headers may carry a gateway or proxy token meant for Anthropic.
+    child_env.pop("ANTHROPIC_CUSTOM_HEADERS", None)
     child_env.update(overlay)
     return child_env
 

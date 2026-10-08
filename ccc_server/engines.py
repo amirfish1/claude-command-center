@@ -5876,7 +5876,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     """
     reasoning_effort = _core._validate_reasoning_effort(reasoning_effort, "claude")
     runtime = str(runtime or "").strip().lower()
-    requested_model = _core._spawn_model_for_engine("claude", model)
+    # Free spawns never inherit the saved default: it may be a paid preset.
+    requested_model = model if runtime else _core._spawn_model_for_engine("claude", model)
     preset_error = _domestic_providers.request_error(
         "claude", requested_model, runtime, remote=bool(os.environ.get("CCC_SSH_HOST")),
     )

@@ -279,3 +279,31 @@ def test_session_model_prefers_user_override_and_ignores_plain_registry_models(m
                         lambda sid, engine=None: {"model": "opus"})
     assert dp.session_model("s", {"model": "sonnet"}) == "sonnet"
     assert dp.session_model("s", {}) == ""
+
+
+def test_custom_headers_never_reach_the_vendor():
+    dp.save_key("kimi-intl", KEY)
+    child = {"ANTHROPIC_CUSTOM_HEADERS": "Authorization: Bearer gateway-test-XXXX"}
+    dp.apply_env(child, dp.resolve_spawn(MODEL)["env"])
+    assert "ANTHROPIC_CUSTOM_HEADERS" not in child
+
+
+def _hidden_compact(session_model):
+    from ccc_server import compact, core
+    hidden = mock.Mock(return_value={"ok": True, "via": "hidden-pty"})
+    with mock.patch.object(core, "_compact_via_hidden_pty", hidden), \
+         mock.patch.object(dp, "session_model", return_value=session_model):
+        return compact._hidden_pty_compact("00000000-0000-4000-8000-000000000002", "/tmp"), hidden
+
+
+def test_compact_on_a_preset_never_falls_back_to_the_claude_login():
+    result, hidden = _hidden_compact(MODEL)
+    assert result["ok"] is False
+    assert result["code"] == "compact_preset_resume_failed"
+    hidden.assert_not_called()
+
+
+def test_compact_on_a_normal_session_still_falls_back():
+    result, hidden = _hidden_compact("opus")
+    assert result["ok"] is True
+    hidden.assert_called_once()
