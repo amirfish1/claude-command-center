@@ -1,0 +1,1 @@
+- Fleet limit actions (continue / switch back for many sessions) now run one at a time on Windows, where file locks are unavailable, so they cannot overwrite each other's failover state.

@@ -268,6 +268,24 @@ class FleetActionTests(_FleetBase):
         self.assertEqual(res["results"][sids[3]]["code"], "action_failed")
         self.assertNotIn("boom", res["results"][sids[3]]["error"])
 
+    def test_continue_runs_serially_on_windows(self):
+        # Windows' fcntl shim is a no-op, so the shared stores have no
+        # cross-thread lock there: fleet actions must not use the pool.
+        sids = [f"win{i:05d}-0000-0000-0000-000000000000" for i in range(3)]
+        for sid in sids:
+            self._track(sid)
+        fleet = sys.modules["ccc_server.fleet_failover"]
+        with mock.patch.object(fleet.sys, "platform", "win32"), \
+             mock.patch.object(fleet, "ThreadPoolExecutor",
+                               side_effect=AssertionError("pool used")), \
+             mock.patch.object(self.server, "free_failover_continue",
+                               side_effect=lambda sid, always=False, auto=False:
+                               {"ok": True}), \
+             mock.patch.object(self.server, "_log_activity"):
+            res = self.server.free_failover_fleet_action("continue", sids)
+        self.assertTrue(res["ok"])
+        self.assertEqual(set(res["results"]), set(sids))
+
     def test_switch_back_fans_out(self):
         sids = ["99999999-0000-0000-0000-000000000001",
                 "99999999-0000-0000-0000-000000000002"]

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hashlib
 import math
+import sys
 
 from ccc_server import core as _core
 
@@ -125,7 +126,9 @@ def free_failover_fleet_action(action, session_ids, offer="failover", always=Fal
             result = {"ok": False, "code": "action_failed", "error": "Could not change this session. Try again."}
         return dict(result, session_id=sid)
 
-    if action in ("continue", "switch_back") and len(sids) > 1:
+    # Parallel only where fcntl.flock is real: on Windows the shim is a no-op, so
+    # concurrent writes to the shared failover/usage-limit stores could clobber.
+    if action in ("continue", "switch_back") and len(sids) > 1 and sys.platform != "win32":
         with ThreadPoolExecutor(max_workers=_FLEET_ACTION_WORKERS) as pool:
             results = dict(zip(sids, pool.map(run, sids)))
     else:
