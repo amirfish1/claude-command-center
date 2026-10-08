@@ -186,6 +186,13 @@ def test_requests_are_single_flight_and_cache_is_bounded(monkeypatch):
     assert len(leftover._CACHE) <= leftover.MAX_REPOS
 
 
+def test_first_request_fetches_even_right_after_boot(monkeypatch):
+    # monotonic() starts near 0 on a freshly booted host (e.g. a CI runner).
+    monkeypatch.setattr(leftover.time, 'monotonic', lambda: 5.0)
+    monkeypatch.setattr(leftover, 'collect', lambda repo: {'ok': True, 'repo_path': repo, 'proposals': [], 'sources': []})
+    assert leftover.proposals('/fresh-boot')['loading'] is True
+
+
 def test_route_requires_explicit_repository(monkeypatch):
     def resolve(value):
         raise RepoContextError('repo_required', 'repo_path is required')

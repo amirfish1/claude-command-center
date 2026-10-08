@@ -254,9 +254,11 @@ def proposals(repo):
                 if idle is None:
                     return {'ok': True, 'repo_path': repo, 'proposals': [], 'sources': [], 'loading': True}
                 _CACHE.pop(idle)
-            entry = {'ts': 0, 'loading': False, 'value': {'ok': True, 'repo_path': repo, 'proposals': [], 'sources': []}}
+            entry = {'ts': None, 'loading': False, 'value': {'ok': True, 'repo_path': repo, 'proposals': [], 'sources': []}}
             _CACHE[repo] = entry
-        if not entry['loading'] and now - entry['ts'] >= TTL:
+        # ts None = never fetched. Not 0: monotonic() counts from boot, so a
+        # host up for less than TTL would never run the first fetch.
+        if not entry['loading'] and (entry['ts'] is None or now - entry['ts'] >= TTL):
             entry['loading'] = True
 
             def refresh():
