@@ -27,6 +27,8 @@ ALL = {
     "star-ask": "'Star CCC on GitHub?' card at success moments",
     "router-detected": "Floating 'Use your existing router' card",
     "limit-failover": "'Limit reached: continue on a free model?' cards",
+    "leftover-offer": "Card offering tasks before unused plan allowance resets",
+    "leftover-notification": "Daily reminder to use plan allowance before reset",
 }
 
 # Approved pop-ups. Empty: nothing shows until Amir approves it.
@@ -37,6 +39,7 @@ _NOTIFY_KIND_IDS = {
     "needs_input": "notify-task",
     "digest": "notify-digest",
     "milestone": "notify-milestone",
+    "leftover": "leftover-notification",
 }
 
 

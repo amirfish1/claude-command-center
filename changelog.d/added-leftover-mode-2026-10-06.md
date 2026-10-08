@@ -1,0 +1,1 @@
+- Leftover Mode in Settings suggests real WatchTower tasks, GitHub issues, and code notes before plan allowance resets. Each task needs your approval; automatic offers and daily reminders remain off until separately approved.

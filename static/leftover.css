@@ -1,0 +1,84 @@
+#settingsSection-leftover { min-width: 0; }
+.lo-hero {
+  padding: 20px;
+  margin: 18px 0;
+  border: 1px solid rgba(91, 176, 133, .45);
+  border-radius: 14px;
+  background: rgba(91, 176, 133, .08);
+}
+.lo-hero h2 {
+  font-size: 21px;
+  line-height: 1.4;
+  margin: 0;
+  color: var(--text, #ddd);
+  overflow-wrap: anywhere;
+}
+.lo-hero p { font-size: 12px; color: var(--muted, #888); margin-bottom: 0; }
+.lo-folder { display: block; font-size: 13px; font-weight: 600; }
+.lo-folder input, #loAccount {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--border, #444);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text, #ddd);
+  background: var(--panel-bg, #202126);
+}
+#loAccount[hidden] { display: none; }
+.lo-plan, #loTaskStatus, .lo-sources { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.lo-plan, .lo-sources { color: var(--muted, #888); }
+.lo-task {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border, #444);
+}
+.lo-task-copy { flex: 1; min-width: 0; }
+.lo-task-source { font-size: 10px; font-weight: 600; color: var(--muted, #888); }
+.lo-task h3 { margin: 5px 0 8px; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+.lo-task details { font-size: 12px; }
+.lo-task summary { cursor: pointer; color: var(--muted, #888); }
+.lo-task pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--panel-bg, #202126);
+  padding: 10px;
+  border-radius: 6px;
+}
+.lo-task-actions { width: 140px; flex-shrink: 0; text-align: right; }
+.lo-start, .lo-offer button:not(.lo-link) {
+  border: 1px solid rgba(91, 176, 133, .7);
+  border-radius: 8px;
+  color: var(--text, #ddd);
+  background: rgba(91, 176, 133, .18);
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lo-start:hover:not(:disabled) { background: rgba(91, 176, 133, .3); }
+.lo-start:disabled { opacity: .55; cursor: default; }
+.lo-outcome { font-size: 12px; line-height: 1.5; margin-top: 8px; overflow-wrap: anywhere; }
+.lo-link { border: 0; background: none; color: var(--muted, #888); padding: 6px 0; cursor: pointer; text-decoration: underline; font: inherit; font-size: 12px; }
+.lo-offer { position: fixed; left: 16px; bottom: 24px; width: 320px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 18px; border: 1px solid rgba(91, 176, 133, .6); border-radius: 14px; z-index: 9400; background: var(--panel-bg, #202126); color: var(--text, #ddd); box-shadow: 0 8px 30px rgba(0, 0, 0, .2); }
+.lo-offer[hidden] { display: none; }
+.lo-offer strong { display: block; font-size: 15px; line-height: 1.4; }
+.lo-offer p { font-size: 12px; color: var(--muted, #888); }
+.lo-offer .lo-link { margin-left: 12px; }
+#settingsSection-leftover :focus-visible, .lo-offer :focus-visible { outline: 2px solid #5bb085; outline-offset: 3px; }
+@media (max-width: 600px) {
+  .lo-hero { padding: 14px; }
+  .lo-hero h2 { font-size: 18px; }
+  .lo-task { flex-direction: column; gap: 10px; }
+  .lo-task-actions { width: 100%; text-align: left; }
+  .lo-start { width: 100%; }
+}

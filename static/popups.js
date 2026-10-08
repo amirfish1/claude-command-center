@@ -24,6 +24,8 @@
     'star-ask',
     'router-detected',
     'limit-failover',
+    'leftover-offer',
+    'leftover-notification',
   ];
 
   // Approved pop-ups. Empty: nothing shows until Amir approves it.
@@ -34,6 +36,7 @@
     needs_input: 'notify-task',
     digest: 'notify-digest',
     milestone: 'notify-milestone',
+    leftover: 'leftover-notification',
   };
 
   function preview() {

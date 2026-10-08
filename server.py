@@ -26792,6 +26792,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             sid = urllib.parse.unquote(path.rsplit("/", 1)[-1])
             payload, status = compute_session_detail(sid)
             self.send_json(payload, status)
+        elif path == "/api/leftover/proposals":
+            from ccc_server import leftover
+            leftover.handle_api_get(self, parsed)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
