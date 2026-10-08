@@ -1,9 +1,25 @@
+/* Leftover Mode (M06): when /api/headroom says at least 20% of a plan will
+ * expire unused within 24h, offer 3 to 5 real tasks (WatchTower, GitHub
+ * issues, TODO/FIXME notes; see ccc_server/leftover.py). Every task needs one
+ * click to start and goes through the normal /api/sessions/spawn API. Nothing
+ * ever starts by itself.
+ *
+ * Gates: the floating offer card is pop-up id 'leftover-offer' and the daily
+ * reminder is 'leftover-notification' (static/popups.js). Until they are
+ * approved, only the Settings > Leftover Mode panel works (the user opens it
+ * on purpose) and this file does not poll /api/headroom in the background.
+ */
 (function () {
   'use strict';
 
-  var accounts = [], tasks = [], repo = '', generation = 0, selectedId = '', opened = false;
-  var busy = {}, outcomes = {}, signature = '', headroomState = 'loading', pollBusy = false;
+  var accounts = [], selectedId = '', opened = false, headroomState = 'loading', pollBusy = false;
+  var busy = {}, outcomes = {};
+  // Panel: the folder chosen in Settings. Offer: the open conversation's repo
+  // (or the last folder picked in Settings).
+  var panel = { repo: '', tasks: [], generation: 0, signature: '' };
+  var offer = { repo: '', tasks: [], generation: 0, signature: '', fetchedAt: 0, loading: false, error: '' };
   var labels = { claude: 'Claude', codex: 'Codex', kimi: 'Kimi' };
+  var OFFER_REFRESH_MS = 60000;
 
   function el(id) { return document.getElementById(id); }
   function get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
@@ -22,12 +38,14 @@
   }
   function resetIsCurrent(row) { return typeof row.resets_at === 'number' && Number.isFinite(row.resets_at) && row.resets_at * 1000 > Date.now(); }
   function hasDollars(row) { return typeof row.expiring_usd_estimate === 'number' && Number.isFinite(row.expiring_usd_estimate) && row.expiring_usd_estimate >= 0; }
+  function resetText(row) {
+    return row.hours_to_reset >= 1 ? Math.round(row.hours_to_reset) + 'h' : Math.max(1, Math.ceil(row.hours_to_reset * 60)) + 'm';
+  }
+  function engineName(row) { return labels[row.engine] || row.label || 'your plan'; }
   function summary(row) {
-    var engine = labels[row.engine] || row.label;
-    var reset = row.hours_to_reset >= 1 ? Math.round(row.hours_to_reset) + 'h' : Math.ceil(row.hours_to_reset * 60) + 'm';
     return hasDollars(row)
-      ? 'You have about $' + row.expiring_usd_estimate.toFixed(2) + ' of ' + engine + ' work left that resets in ' + reset + '. Put it to work?'
-      : 'About ' + row.projected_expiring_pct.toFixed(0) + '% of your ' + engine + ' allowance may go unused before it resets in ' + reset + '. Put it to work?';
+      ? 'You have about $' + row.expiring_usd_estimate.toFixed(2) + ' of ' + engineName(row) + ' left that resets in ' + resetText(row) + '. Put it to work?'
+      : 'About ' + row.projected_expiring_pct.toFixed(0) + '% of your ' + engineName(row) + ' plan may go unused before it resets in ' + resetText(row) + '. Put it to work?';
   }
   function candidates() { return accounts.filter(isCandidate); }
   function selected() {
@@ -40,6 +58,8 @@
   }
   function notifyCandidate(row) {
     if (!enabled() || !isCandidate(row) || !window.cccPopups || !window.cccPopups.allowed('leftover-notification') || !window.cccPopups.notifyAllowed('leftover')) return;
+    // Skip while the same offer is on screen, or after "Not now" for this reset.
+    if (offerOnScreen() || snoozed(row)) return;
     var notify = window.cccNotify;
     if (!notify || typeof notify.show !== 'function' || (notify.enabled && !notify.enabled())) return;
     var now = Date.now(), last = Number(get('ccc-leftover-notified-at')) || 0;
@@ -50,8 +70,13 @@
     var controller = new AbortController();
     var timeout = setTimeout(function () { controller.abort(); }, 10000);
     return fetch(url, { signal: controller.signal, cache: 'no-store' }).then(function (res) {
-      return res.json().catch(function () { return {}; }).then(function (data) { return { status: res.status, data: data }; });
+      return res.json().catch(function () { return {}; }).then(function (data) { return { status: res.status, data: data || {} }; });
     }).finally(function () { clearTimeout(timeout); });
+  }
+  function validTasks(data, folder) {
+    return (data.proposals || []).filter(function (item) {
+      return item && item.repo_path === folder && item.id && item.title && item.prompt;
+    }).slice(0, 5);
   }
   function syncToggle() {
     var toggle = el('loEnabled');
@@ -60,22 +85,37 @@
     toggle.setAttribute('aria-checked', String(enabled()));
   }
   function savedKey(task, row) { return 'ccc-leftover-started:' + task.repo_path + ':' + task.id + ':' + row.engine; }
+  function folderName(path) {
+    var parts = String(path || '').split('/').filter(Boolean);
+    return parts[parts.length - 1] || path;
+  }
+  function sourceMarkup(task) {
+    return '<span class="lo-task-source">' + esc(task.source_label)
+      + (task.reference ? '<span class="lo-task-ref">' + esc(task.reference) + '</span>' : '') + '</span>';
+  }
+  function startButton(task, row, compact) {
+    var done = row && get(savedKey(task, row)) === '1';
+    var running = busy[task.id];
+    var label = running ? 'Starting…' : done ? 'Started' : compact ? 'Start' : 'Start with ' + (row ? engineName(row) : 'your plan');
+    return '<button type="button" class="lo-start" data-lo-start="' + esc(task.id) + '"'
+      + (compact ? ' aria-label="Start: ' + esc(task.title) + '"' : '')
+      + ((!row || running || done) ? ' disabled' : '') + '>' + esc(label) + '</button>';
+  }
+  function outcomeMarkup(task) {
+    var outcome = outcomes[task.id];
+    if (!outcome) return '';
+    return '<div class="lo-outcome' + (outcome.error ? ' is-error' : '') + '" role="status">' + esc(outcome.text)
+      + (outcome.session ? ' <button type="button" class="lo-link" data-lo-open="' + esc(outcome.session) + '">Open session</button>' : '') + '</div>';
+  }
   function renderTasks() {
     var host = el('loTasks'), row = selected();
     if (!host) return;
-    var markup = tasks.map(function (task) {
-      var outcome = outcomes[task.id];
-      var done = row && get(savedKey(task, row)) === '1';
-      var running = busy[task.id];
-      return '<article class="lo-task"><div class="lo-task-copy"><span class="lo-task-source">' + esc(task.source_label) + '</span>'
-        + '<h3>' + esc(task.title) + '</h3><details><summary>Review task</summary><pre>' + esc(task.prompt) + '</pre></details></div>'
-        + '<div class="lo-task-actions"><button type="button" class="lo-start" data-lo-start="' + esc(task.id) + '"'
-        + ((!row || running || done) ? ' disabled' : '') + '>'
-        + (running ? 'Starting…' : done ? 'Already started' : 'Start with ' + esc(row ? labels[row.engine] : 'your plan')) + '</button>'
-        + (outcome ? '<div class="lo-outcome" role="status">' + esc(outcome.text) + '</div>' : '')
-        + (outcome && outcome.session ? '<button type="button" class="lo-link" data-lo-open="' + esc(outcome.session) + '">Open session</button>' : '') + '</div></article>';
+    var markup = panel.tasks.map(function (task) {
+      return '<article class="lo-task"><div class="lo-task-copy">' + sourceMarkup(task)
+        + '<h3>' + esc(task.title) + '</h3><details><summary>Review what the agent will get</summary><pre>' + esc(task.prompt) + '</pre></details></div>'
+        + '<div class="lo-task-actions">' + startButton(task, row, false) + outcomeMarkup(task) + '</div></article>';
     }).join('');
-    if (markup !== signature) { host.innerHTML = markup; signature = markup; }
+    if (markup !== panel.signature) { host.innerHTML = markup; panel.signature = markup; }
   }
   function renderPanel() {
     var headline = el('loHeadline');
@@ -89,37 +129,129 @@
     if (picker.innerHTML !== options) picker.innerHTML = options;
     picker.hidden = list.length < 2;
     if (row) { selectedId = row.id; picker.value = row.id; }
-    el('loPlan').textContent = row ? 'Uses your ' + labels[row.engine] + ' plan in a separate worktree. No task starts by itself.' : 'Tasks become available when a fresh estimate says your allowance may expire.';
+    el('loPlan').textContent = row ? 'Uses your ' + engineName(row) + ' plan in a separate worktree. No task starts by itself.' : 'Tasks become available when a fresh estimate says your plan may go unused.';
     renderTasks();
     syncToggle();
   }
-  function renderOffer() {
-    var row = selected(), card = el('cccLeftoverOffer');
-    if (!enabled() || !row || !window.cccPopups || !window.cccPopups.allowed('leftover-offer') || get('ccc-leftover-snooze') === row.id + ':' + row.resets_at) {
-      if (card) card.hidden = true;
-      return;
-    }
-    if (!card) {
-      card = document.createElement('aside');
-      card.id = 'cccLeftoverOffer'; card.className = 'lo-offer';
-      card.innerHTML = '<strong id="loOfferTitle"></strong><p>Nothing starts without your approval.</p><button type="button" data-lo-choose>Choose a task</button><button type="button" class="lo-link" data-lo-dismiss>Not now</button>';
-      document.body.appendChild(card);
-    }
-    el('loOfferTitle').textContent = summary(row);
-    card.hidden = false;
-  }
+
+  // ── floating offer card (pop-up id 'leftover-offer') ──────────────────
+
   function activeRepo() {
     return (window.activeConvRepoPath && window.activeConvRepoPath()) || (window.popoutRepoPath && window.popoutRepoPath()) || '';
   }
+  function offerRepo() { return activeRepo() || get('ccc-leftover-repo') || ''; }
+  function settingsOpen() { var modal = el('settingsModal'); return !!(modal && !modal.hidden); }
+  // "Not now" lasts until this plan resets. Small drift in resets_at between
+  // updates (under an hour) still counts as the same reset.
+  function snoozed(row) {
+    var saved = String(get('ccc-leftover-snooze') || ''), cut = saved.lastIndexOf(':');
+    return cut > 0 && saved.slice(0, cut) === row.id && Math.abs(Number(saved.slice(cut + 1)) - row.resets_at) < 3600;
+  }
+  function offerShouldShow(row) {
+    return !!(enabled() && row && window.cccPopups && window.cccPopups.allowed('leftover-offer') && !snoozed(row) && !settingsOpen());
+  }
+  function buildOffer() {
+    var card = document.createElement('aside');
+    card.id = 'cccLeftoverOffer'; card.className = 'lo-offer'; card.hidden = true;
+    card.setAttribute('role', 'region'); card.setAttribute('aria-labelledby', 'loOfferTitle');
+    card.innerHTML = '<div class="lo-offer-head"><span class="lo-offer-eyebrow"><span class="lo-offer-dot" aria-hidden="true"></span>Leftover Mode</span>'
+      + '<button type="button" class="lo-offer-close" data-lo-dismiss aria-label="Not now">×</button></div>'
+      + '<p class="lo-offer-title" id="loOfferTitle"></p>'
+      + '<p class="lo-offer-meta" id="loOfferMeta"></p>'
+      + '<div class="lo-offer-tasks" id="loOfferTasks" aria-live="polite"></div>'
+      + '<div class="lo-offer-foot"><span>Nothing starts until you click.</span><button type="button" class="lo-link" data-lo-choose>More options</button></div>';
+    document.body.appendChild(card);
+    return card;
+  }
+  function renderOfferTasks(row) {
+    var host = el('loOfferTasks'), meta = el('loOfferMeta');
+    if (!host) return;
+    var markup;
+    if (!offer.repo) {
+      meta.textContent = '';
+      markup = '<div class="lo-offer-empty">Open a conversation or pick a folder to see tasks for it.<button type="button" class="lo-start" data-lo-choose>Pick a folder</button></div>';
+    } else {
+      meta.textContent = 'Tasks in ' + folderName(offer.repo) + ' · uses your ' + engineName(row) + ' plan';
+      if (offer.tasks.length) {
+        markup = '<ul class="lo-offer-list">' + offer.tasks.map(function (task) {
+          return '<li class="lo-offer-task"><div class="lo-offer-copy">' + sourceMarkup(task)
+            + '<span class="lo-offer-name" title="' + esc(task.title) + '">' + esc(task.title) + '</span>' + outcomeMarkup(task) + '</div>'
+            + startButton(task, row, true) + '</li>';
+        }).join('') + '</ul>';
+      } else if (offer.loading) {
+        markup = '<div class="lo-offer-empty" role="status">Finding tasks in ' + esc(folderName(offer.repo)) + '…</div>';
+      } else {
+        markup = '<div class="lo-offer-empty">' + esc(offer.error || 'No ready tasks here yet. Add a GitHub issue or a TODO note, or pick another folder.')
+          + '<button type="button" class="lo-start" data-lo-choose>Pick a folder</button></div>';
+      }
+    }
+    if (markup !== offer.signature) { host.innerHTML = markup; offer.signature = markup; }
+  }
+  function loadOfferTasks(folder, version, deadline) {
+    if (version !== offer.generation) return;
+    offer.loading = true;
+    request('/api/leftover/proposals?repo_path=' + encodeURIComponent(folder)).then(function (res) {
+      if (version !== offer.generation) return;
+      if (res.status !== 200 || res.data.ok !== true) {
+        offer.tasks = []; offer.loading = false;
+        offer.error = res.data.message || res.data.error || 'Could not find tasks in this folder.';
+      } else {
+        offer.tasks = validTasks(res.data, folder); offer.error = '';
+        offer.loading = !!res.data.loading && Date.now() < deadline;
+        if (offer.loading) setTimeout(function () { loadOfferTasks(folder, version, deadline); }, 1000);
+      }
+      renderOffer();
+    }).catch(function () {
+      if (version !== offer.generation) return;
+      offer.loading = false; offer.error = 'Could not reach CCC. Tasks will retry shortly.'; renderOffer();
+    });
+  }
+  // Same words as summary(), with the amount picked out.
+  function setOfferTitle(row) {
+    var title = el('loOfferTitle'), text = summary(row);
+    var amount = hasDollars(row) ? '$' + row.expiring_usd_estimate.toFixed(2) : row.projected_expiring_pct.toFixed(0) + '%';
+    var at = text.indexOf(amount);
+    if (title.getAttribute('data-text') === text) return;
+    title.setAttribute('data-text', text);
+    title.textContent = '';
+    if (at < 0) { title.textContent = text; return; }
+    var strong = document.createElement('span');
+    strong.className = 'lo-amount'; strong.textContent = amount;
+    title.append(text.slice(0, at), strong, text.slice(at + amount.length));
+  }
+  function offerOnScreen() {
+    var card = el('cccLeftoverOffer');
+    return !!(card && !card.hidden && !document.hidden && (!document.hasFocus || document.hasFocus()));
+  }
+  function renderOffer() {
+    var row = selected(), card = el('cccLeftoverOffer');
+    if (!offerShouldShow(row)) {
+      if (card) card.hidden = true;
+      return;
+    }
+    if (!card) card = buildOffer();
+    var folder = offerRepo();
+    if (folder !== offer.repo || (folder && !offer.loading && Date.now() - offer.fetchedAt > OFFER_REFRESH_MS)) {
+      if (folder !== offer.repo) { offer.tasks = []; offer.error = ''; }
+      offer.repo = folder; offer.generation += 1; offer.fetchedAt = Date.now();
+      if (folder) loadOfferTasks(folder, offer.generation, Date.now() + 25000);
+    }
+    setOfferTitle(row);
+    renderOfferTasks(row);
+    card.hidden = false;
+  }
+
+  // ── settings panel ────────────────────────────────────────────────────
+
   function panelVisible() {
-    var modal = el('settingsModal'), panel = el('settingsSection-leftover');
-    return !!(modal && !modal.hidden && panel && panel.classList.contains('is-active-section'));
+    var section = el('settingsSection-leftover');
+    return !!(settingsOpen() && section && section.classList.contains('is-active-section'));
   }
   function autoAllowed() {
     return !!(enabled() && window.cccPopups && (window.cccPopups.allowed('leftover-offer') || window.cccPopups.allowed('leftover-notification')));
   }
   function poll() {
-    if (document.hidden || pollBusy || (!panelVisible() && !autoAllowed())) return;
+    if (document.hidden || pollBusy || (!panelVisible() && !autoAllowed())) return Promise.resolve();
     pollBusy = true;
     return request('/api/headroom').then(function (res) {
       var valid = res.status === 200 && res.data.ok === true && Array.isArray(res.data.rows);
@@ -128,42 +260,44 @@
       renderPanel(); renderOffer();
       var row = selected();
       if (row) notifyCandidate(row);
-      if (panelVisible() && repo) loadTasks(repo, generation, Date.now() + 25000);
+      if (panelVisible() && panel.repo) loadTasks(panel.repo, panel.generation, Date.now() + 25000);
     }).catch(function () {
       accounts = []; headroomState = 'error'; renderPanel(); renderOffer();
     }).finally(function () { pollBusy = false; });
   }
   function loadTasks(folder, version, deadline) {
-    if (!panelVisible() || !folder || version !== generation) return;
-    el('loTaskStatus').textContent = tasks.length ? 'Suggestions update automatically.' : 'Looking for tasks in this folder…';
+    if (!panelVisible() || !folder || version !== panel.generation) return;
+    el('loTaskStatus').textContent = panel.tasks.length ? 'Suggestions update automatically.' : 'Looking for tasks in this folder…';
     request('/api/leftover/proposals?repo_path=' + encodeURIComponent(folder)).then(function (res) {
-      if (version !== generation || folder !== repo) return;
+      if (version !== panel.generation || folder !== panel.repo) return;
       if (res.status !== 200 || res.data.ok !== true) {
-        tasks = []; renderTasks();
+        panel.tasks = []; renderTasks();
         el('loTaskStatus').textContent = res.data.message || res.data.error || 'Could not find tasks. Check the folder and try another one.';
         return;
       }
-      tasks = (res.data.proposals || []).filter(function (item) { return item && item.repo_path === folder && item.id && item.title && item.prompt; }).slice(0, 5);
+      panel.tasks = validTasks(res.data, folder);
       renderTasks();
       el('loSources').textContent = (res.data.sources || []).map(function (source) { return source.detail; }).join(' ');
-      el('loTaskStatus').textContent = tasks.length ? 'Choose one task. Each click starts only that task.' : res.data.loading ? 'Looking for tasks in this folder…' : 'No ready tasks found. Add a GitHub issue or a TODO in your code.';
+      el('loTaskStatus').textContent = panel.tasks.length ? 'Choose one task. Each click starts only that task.' : res.data.loading ? 'Looking for tasks in this folder…' : 'No ready tasks found. Add a GitHub issue or a TODO in your code.';
       if (res.data.loading && Date.now() < deadline) setTimeout(function () { loadTasks(folder, version, deadline); }, 1000);
       else if (res.data.loading) el('loTaskStatus').textContent = 'Task discovery is taking longer than usual. It will update automatically.';
     }).catch(function () {
-      if (version === generation) { tasks = []; renderTasks(); el('loTaskStatus').textContent = 'Could not reach CCC. Suggestions will retry automatically.'; }
+      if (version === panel.generation) { panel.tasks = []; renderTasks(); el('loTaskStatus').textContent = 'Could not reach CCC. Suggestions will retry automatically.'; }
     });
   }
   function changeRepo(value) {
-    repo = value.trim(); generation += 1; tasks = []; signature = ''; outcomes = {};
+    panel.repo = value.trim(); panel.generation += 1; panel.tasks = []; panel.signature = '';
+    if (panel.repo) put('ccc-leftover-repo', panel.repo);
     el('loSources').textContent = ''; renderTasks();
-    el('loTaskStatus').textContent = repo ? 'Looking for tasks in this folder…' : 'Choose a folder to find tasks.';
-    if (repo) loadTasks(repo, generation, Date.now() + 25000);
+    el('loTaskStatus').textContent = panel.repo ? 'Looking for tasks in this folder…' : 'Choose a folder to find tasks.';
+    if (panel.repo) loadTasks(panel.repo, panel.generation, Date.now() + 25000);
   }
   function activate() {
+    renderOffer();
     if (!panelVisible()) return;
     if (!opened) {
       opened = true;
-      var current = activeRepo();
+      var current = activeRepo() || get('ccc-leftover-repo') || '';
       if (current) { el('loRepoInput').value = current; changeRepo(current); }
       request('/api/repo/list').then(function (res) {
         var options = (res.data.repos || []).concat(res.data.suggested || []);
@@ -174,28 +308,37 @@
   }
   function openPanel() {
     var settings = el('settingsBtn'), tab = el('settingsRailTab-leftover');
-    if (settings && el('settingsModal').hidden) settings.click();
+    if (settings && el('settingsModal') && el('settingsModal').hidden) settings.click();
     if (tab) tab.click();
     activate();
   }
+  function findTask(id) {
+    var inPanel = panel.tasks.find(function (item) { return item.id === id; });
+    if (inPanel) return { task: inPanel, repo: panel.repo, generation: panel.generation, owner: panel };
+    var inOffer = offer.tasks.find(function (item) { return item.id === id; });
+    if (inOffer) return { task: inOffer, repo: offer.repo, generation: offer.generation, owner: offer };
+    return null;
+  }
+  function renderAllTasks() { renderTasks(); var row = selected(); if (row && el('loOfferTasks')) renderOfferTasks(row); }
+  // One user click = one spawn. Never called from a timer or a poll.
   function startTask(id) {
-    var task = tasks.find(function (item) { return item.id === id; }), row = selected();
-    if (!task || !row || busy[id] || task.repo_path !== repo || get(savedKey(task, row)) === '1') return;
+    var found = findTask(id), row = selected();
+    if (!found || !row || busy[id]) return;
+    var task = found.task;
+    if (task.repo_path !== found.repo || get(savedKey(task, row)) === '1') return;
     if (!resetIsCurrent(row)) {
-      outcomes[id] = { text: 'This estimate has reset. Wait for the next usage update.' }; renderTasks(); poll(); return;
+      outcomes[id] = { text: 'This estimate has reset. Wait for the next usage update.', error: true }; renderAllTasks(); poll(); return;
     }
-    var version = generation;
-    busy[id] = true; delete outcomes[id]; renderTasks();
+    busy[id] = true; delete outcomes[id]; renderAllTasks();
     fetch('/api/sessions/spawn', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CCC-Automated': navigator.webdriver ? 'true' : 'false' }, body: JSON.stringify(spawnBody(task, row)) })
-      .then(function (res) { return res.json().catch(function () { return {}; }).then(function (data) { return { data: data, ok: res.ok && data.ok === true }; }); })
+      .then(function (res) { return res.json().catch(function () { return {}; }).then(function (data) { return { data: data || {}, ok: res.ok && data && data.ok === true }; }); })
       .then(function (res) {
         if (res.ok) put(savedKey(task, row), '1');
-        if (version !== generation) return;
-        outcomes[id] = res.ok ? { text: res.data.existing ? 'This task already has a session.' : 'Started with ' + labels[row.engine] + '.', session: res.data.session_id }
-          : { text: res.data.error || 'Could not start this task. Try again.' };
+        outcomes[id] = res.ok ? { text: res.data.existing ? 'This task already has a session.' : 'Started with ' + engineName(row) + '.', session: res.data.session_id }
+          : { text: res.data.error || 'Could not start this task. Try again.', error: true };
       }).catch(function () {
-        if (version === generation) outcomes[id] = { text: 'Could not confirm the start. Try again to check the same task.' };
-      }).finally(function () { busy[id] = false; if (version === generation) renderTasks(); });
+        outcomes[id] = { text: 'Could not confirm the start. Try again to check the same task.', error: true };
+      }).finally(function () { busy[id] = false; renderAllTasks(); });
   }
   function boot() {
     var rail = el('settingsRail'), pane = el('settingsPane');
@@ -205,27 +348,27 @@
     tab.type = 'button'; tab.className = 'settings-rail-item'; tab.id = 'settingsRailTab-leftover';
     tab.setAttribute('data-section-target', 'leftover'); tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', 'false'); tab.setAttribute('aria-controls', 'settingsSection-leftover');
     tab.innerHTML = '<span>Leftover Mode</span>'; rail.appendChild(tab);
-    var panel = document.createElement('section');
-    panel.id = 'settingsSection-leftover'; panel.className = 'settings-section'; panel.setAttribute('data-section-id', 'leftover'); panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', tab.id); panel.setAttribute('aria-hidden', 'true');
-    panel.innerHTML = '<div class="settings-section-eyebrow">Leftover Mode</div><p class="settings-section-note">Choose a task to use your plan before it resets. Nothing starts until you approve it.</p>'
-      + '<div class="settings-row" data-keywords="leftover unused allowance reset reminders"><div class="settings-row-main"><div class="settings-row-label">Leftover reminders</div><div class="settings-row-desc">Remind me when at least 20% may expire within a day. Automatic reminders stay off until approved for this build.</div></div><div class="settings-row-control"><button type="button" class="settings-toggle" id="loEnabled" role="switch" aria-checked="true" aria-label="Leftover reminders"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button></div></div>'
+    var section = document.createElement('section');
+    section.id = 'settingsSection-leftover'; section.className = 'settings-section'; section.setAttribute('data-section-id', 'leftover'); section.setAttribute('role', 'tabpanel'); section.setAttribute('aria-labelledby', tab.id); section.setAttribute('aria-hidden', 'true');
+    section.innerHTML = '<div class="settings-section-eyebrow">Leftover Mode</div><p class="settings-section-note">Use your plan before it resets. Pick a task and CCC starts it for you. Nothing starts until you click.</p>'
+      + '<div class="settings-row" data-keywords="leftover unused allowance reset reminders"><div class="settings-row-main"><div class="settings-row-label">Leftover offers</div><div class="settings-row-desc">Let me know when at least 20% of my plan may go unused within a day. At most one reminder a day.</div></div><div class="settings-row-control"><button type="button" class="settings-toggle" id="loEnabled" role="switch" aria-checked="true" aria-label="Leftover offers"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button></div></div>'
       + '<div class="lo-hero"><h2 id="loHeadline" aria-live="polite">Checking what is left on your plan…</h2><p id="loEstimate"></p><select id="loAccount" aria-label="Plan to use" hidden></select></div>'
       + '<label class="lo-folder" for="loRepoInput">Project folder<input id="loRepoInput" type="text" list="loRepos" autocomplete="off" placeholder="Choose or paste a repository folder"><datalist id="loRepos"></datalist></label>'
       + '<p id="loPlan" class="lo-plan"></p><p id="loTaskStatus" role="status">Choose a folder to find tasks.</p><div id="loTasks"></div><p id="loSources" class="lo-sources"></p>';
-    pane.appendChild(panel);
+    pane.appendChild(section);
     el('loEnabled').addEventListener('click', function () { setEnabled(!enabled()); poll(); });
-    el('loAccount').addEventListener('change', function () { selectedId = this.value; renderPanel(); });
+    el('loAccount').addEventListener('change', function () { selectedId = this.value; renderPanel(); renderOffer(); });
     el('loRepoInput').addEventListener('change', function () { changeRepo(this.value); });
     document.addEventListener('click', function (event) {
-      var target = event.target.closest('[data-lo-start], [data-lo-open], [data-lo-choose], [data-lo-dismiss]');
+      var target = event.target.closest && event.target.closest('[data-lo-start], [data-lo-open], [data-lo-choose], [data-lo-dismiss]');
       if (!target) return;
       if (target.hasAttribute('data-lo-start')) startTask(target.getAttribute('data-lo-start'));
       else if (target.hasAttribute('data-lo-open') && window.cccOpenSession) window.cccOpenSession(target.getAttribute('data-lo-open'));
       else if (target.hasAttribute('data-lo-choose')) openPanel();
       else if (target.hasAttribute('data-lo-dismiss')) { var row = selected(); if (row) put('ccc-leftover-snooze', row.id + ':' + row.resets_at); renderOffer(); }
     });
-    new MutationObserver(activate).observe(panel, { attributes: true, attributeFilter: ['class'] });
-    new MutationObserver(activate).observe(el('settingsModal'), { attributes: true, attributeFilter: ['hidden'] });
+    new MutationObserver(activate).observe(section, { attributes: true, attributeFilter: ['class'] });
+    if (el('settingsModal')) new MutationObserver(activate).observe(el('settingsModal'), { attributes: true, attributeFilter: ['hidden'] });
     window.addEventListener('storage', function () { syncToggle(); renderOffer(); renderTasks(); });
     document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
     syncToggle();

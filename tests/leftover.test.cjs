@@ -53,7 +53,7 @@ test('approval requires a future reset in epoch seconds', () => {
 
 test('unknown dollars never become a zero estimate', () => {
   const { api } = load();
-  assert.match(api.summary(row({ hours_to_reset: 9 })), /about \$12.50 of Claude work left.*9h/);
+  assert.match(api.summary(row({ hours_to_reset: 9 })), /^You have about \$12.50 of Claude left that resets in 9h\. Put it to work\?$/);
   const text = api.summary(row({ expiring_usd_estimate: null, hours_to_reset: 0.5 }));
   assert.match(text, /20%.*30m/);
   assert.doesNotMatch(text, /\$/);

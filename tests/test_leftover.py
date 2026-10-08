@@ -182,3 +182,41 @@ def test_route_requires_explicit_repository(monkeypatch):
     leftover.handle_api_get(handler, urlparse('/api/leftover/proposals'))
     assert responses[0][1] == 400
     assert responses[0][0]['code'] == 'repo_required'
+
+
+def test_todo_only_counts_comment_notes(tmp_path, monkeypatch):
+    (tmp_path / 'app.js').write_text(
+        "const label = 'TODO and FIXME notes in tracked code.';\n"
+        "// TODO: Show an empty state\n"
+        "/* FIXME(amir): Retry on timeout */\n"
+        "let todo = 1;\n"
+    )
+    (tmp_path / 'clock.js').write_text('// TODO: Clock files are normal code\n')
+    (tmp_path / 'package-lock.json').write_text('{}\n')
+    monkeypatch.setattr(leftover, '_tracked_files', lambda repo: ['app.js', 'clock.js', 'package-lock.json'])
+    rows, status = leftover.todo_tasks(str(tmp_path))
+    assert [row['title'] for row in rows] == ['Show an empty state', 'Retry on timeout', 'Clock files are normal code']
+    assert rows[0]['reference'] == 'app.js:2'
+    assert status['status'] == 'ok'
+
+
+def test_warm_proposals_request_spawns_no_subprocess(monkeypatch):
+    """Perf budget: a cached request must not touch wt/gh/git or the disk."""
+    calls = []
+    monkeypatch.setattr(leftover, 'collect', lambda repo: calls.append(repo) or {
+        'ok': True, 'repo_path': repo, 'proposals': [], 'sources': []})
+    leftover.proposals('/repo')
+    with leftover._LOCK:
+        thread = leftover._CACHE['/repo']['thread']
+    thread.join(3)
+
+    def boom(*args, **kwargs):
+        raise AssertionError('warm request ran a subprocess')
+
+    monkeypatch.setattr(leftover.subprocess, 'run', boom)
+    import time as _time
+    start = _time.perf_counter()
+    for _ in range(200):
+        assert leftover.proposals('/repo')['loading'] is False
+    assert _time.perf_counter() - start < 0.25
+    assert calls == ['/repo']

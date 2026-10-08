@@ -129,7 +129,7 @@
 
   var _KIND_ICON = {
     task: '✓', success: '✓', needs_input: '?', milestone: '★',
-    digest: '☰', error: '!', info: 'i',
+    digest: '☰', error: '!', info: 'i', leftover: '$',
   };
 
   function _openItem(item) {
