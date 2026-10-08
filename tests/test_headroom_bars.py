@@ -37,7 +37,8 @@ def test_panel_is_hidden_in_sidebar_header_not_a_popup():
     assert parser.panel_attrs is not None
     assert "hidden" in parser.panel_attrs
     assert parser.panel_attrs["aria-label"] == "Plan usage left"
-    assert any("sidebar-header-brand" in attrs.get("class", "").split() for _, attrs in parser.panel_parents)
+    # Last full-width row of the sidebar header (the brand column is too narrow).
+    assert parser.panel_parents[-1][1].get("class", "").split() == ["sidebar-header"]
     assert html.count('id="headroomBars"') == 1
     assert html.count('href="/static/headroom-bars.css"') == 1
     assert html.count('src="/static/headroom-bars.js"') == 1
@@ -50,9 +51,14 @@ def test_styles_are_scoped_and_honor_reduced_motion():
     css = (ROOT / "static/headroom-bars.css").read_text()
     assert "prefers-reduced-motion: reduce" in css
     assert "transition: none" in css
-    assert "repeat(2, minmax(0, 1fr))" in css
-    assert "position: fixed" not in css
+    assert "repeat(auto-fill, minmax(96px, 1fr))" in css
+    assert ".sidebar-header:has(> .headroom-bars:not([hidden]))" in css
+    # The strip itself stays in the header flow; only the shared tooltip
+    # (on <body>, so the sidebar cannot clip it) is fixed-positioned.
+    strip_css = css.split(".hb-tip {")[0]
+    assert "position: fixed" not in strip_css
     assert "position: absolute" not in css
+    assert css.count("position: fixed") == 1
     for color in ("--green", "--orange", "--red"):
         assert color in css
 

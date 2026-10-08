@@ -71,7 +71,8 @@ function browser({ mount = true } = {}) {
     fetch: (...args) => { calls.push(args); return handler(...args); },
     setTimeout: (fn, ms) => { timers.set(++timerId, { fn, ms }); return timerId; },
     clearTimeout: id => timers.delete(id),
-    setInterval: (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; },
+    setInterval: (fn, ms) => { intervals.push({ fn, ms, live: true }); return intervals.length; },
+    clearInterval: id => { if (intervals[id - 1]) intervals[id - 1].live = false; },
   });
   vm.runInContext(source, context);
   return {
@@ -121,7 +122,7 @@ test('free routing stays neutral without a made-up full bar', () => {
     const item = normalized({ engine: 'free_router', id: 'free_router:default', unlimited: true, percent_left, resets_at: null, hours_to_reset: null });
     assert.equal(item.pctLeft, null);
     assert.equal(api.riskOf(item, NOW), 'off');
-    assert.equal(api.subText(item, NOW), 'Limits vary by provider');
+    assert.equal(api.subText(item, NOW), 'Varies by provider');
     assert.match(api.buildTooltip(item, NOW), /Free routing\. Limits vary by provider\./);
     assert.doesNotMatch(api.buildTooltip(item, NOW), /unlimited|100%|refund/);
   }
@@ -167,18 +168,25 @@ test('DOM uses safe text, exact meter values, and honest unknown labels', () => 
   b.api.render(items, NOW);
   const [known, unknown, free] = b.chips();
   assert.equal(known.querySelector('.hb-name').textContent, '<img src=x onerror=bad()>');
-  assert.ok(known.title.includes('<img src=x onerror=bad()>'));
+  assert.ok(known.dataset.tip.includes('<img src=x onerror=bad()>'));
+  assert.equal(known.getAttribute('aria-label'), '<img src=x onerror=bad()>');
   assert.equal(known.querySelector('.hb-val').textContent, '<1% left');
   assert.equal(known.getAttribute('aria-valuenow'), '0.3');
   assert.equal(known.querySelector('.hb-fill').style.width, '0.3%');
-  assert.equal(known.getAttribute('role'), 'meter');
+  assert.equal(known.getAttribute('role'), 'progressbar');
+  assert.equal(known.getAttribute('aria-valuemin'), '0');
+  assert.equal(known.getAttribute('aria-valuemax'), '100');
+  assert.equal(known.getAttribute('aria-valuetext'), '<1% left. Resets in 9h');
+  assert.match(unknown.className, /hb-unknown/);
+  assert.match(unknown.getAttribute('aria-label'), /Not available\. Reset time unknown/);
   assert.equal(unknown.getAttribute('role'), 'group');
   assert.equal(unknown.getAttribute('aria-valuenow'), null);
   assert.equal(unknown.querySelector('.hb-val').textContent, 'Not available');
   assert.equal(unknown.querySelector('.hb-fill').style.width, '0%');
   assert.equal(free.getAttribute('role'), 'group');
   assert.equal(free.getAttribute('aria-valuenow'), null);
-  assert.equal(free.querySelector('.hb-val').textContent, 'Free routing');
+  assert.equal(free.querySelector('.hb-val').textContent, '');
+  assert.equal(free.getAttribute('aria-label'), 'Free models. Free routing. Varies by provider');
   assert.equal(free.querySelector('.hb-fill').style.width, '0%');
 });
 
@@ -253,7 +261,8 @@ test('server errors and invalid payloads back off, mute cached data, and recover
     await b.api.poll();
     assert.equal(b.host.hidden, false);
     assert.match(b.chips()[0].className, /hb-off hb-stale/);
-    assert.match(b.chips()[0].title, /Older reading/);
+    assert.match(b.chips()[0].dataset.tip, /Older reading/);
+    assert.match(b.chips()[0].querySelector('.hb-sub').textContent, /^Older reading, resets in/);
     await b.api.poll(true);
     assert.equal(b.calls.length, 2);
     b.advance(90000);
@@ -279,4 +288,47 @@ test('ten-second deadline aborts a hung fetch and frees the single-flight guard'
   b.setFetch(() => response(payload(row())));
   await b.api.poll();
   assert.equal(b.host.hidden, false);
+});
+
+test('engine decimals are rounded for people, with honest edges', () => {
+  const item = normalized({ percent_left: 61.2345, projected_expiring_pct: 18.7432, burn_pct_per_hour: 2.123456 });
+  const text = api.buildTooltip(item, NOW);
+  assert.ok(text.includes('61% left.'), text);
+  assert.ok(text.includes('19% could go unused'), text);
+  assert.ok(text.includes('2.1% of quota used per hour'), text);
+  assert.doesNotMatch(text, /61\.23|18\.74|2\.12/);
+  assert.ok(api.buildTooltip(normalized({ percent_left: 0.4 }), NOW).includes('<1% left.'));
+  assert.ok(api.buildTooltip(normalized({ burn_pct_per_hour: 0.01 }), NOW).includes('<0.1% of quota'));
+  const b = browser();
+  b.api.render([item], NOW);
+  assert.equal(b.chips()[0].getAttribute('aria-valuenow'), '61.2');
+  assert.equal(b.chips()[0].querySelector('.hb-val').textContent, '61% left');
+});
+
+test('tooltip lines start with the account title and never use em dashes', () => {
+  const lines = api.tooltipLines(normalized({ label: 'Claude Max' }), NOW);
+  assert.equal(lines[0], 'Claude Max');
+  assert.equal(lines[1], '64% left.');
+  assert.ok(lines.every(line => !/—/.test(line)));
+  const multi = api.normalize(payload(row('claude', { id: 'claude:a', account: 'a' }), row('claude', { id: 'claude:b', account: 'b' })), NOW);
+  assert.equal(api.tooltipLines(multi[0], NOW)[0], 'Claude (a)');
+});
+
+test('404 stops the poll and countdown timers; tab return refresh is throttled', async () => {
+  const b = browser();
+  b.doc.readyState = 'complete';
+  b.api.boot();
+  await Promise.resolve(); await new Promise(r => setImmediate(r));
+  assert.equal(b.calls.length, 1);
+  b.emit('visibilitychange');
+  assert.equal(b.calls.length, 1, 'tab flip right after a fetch must not refetch');
+  b.advance(15000);
+  b.emit('visibilitychange');
+  await new Promise(r => setImmediate(r));
+  assert.equal(b.calls.length, 2);
+  b.setFetch(() => response(null, 404));
+  b.advance(60000);
+  await b.api.poll();
+  assert.equal(b.host.hidden, true);
+  assert.ok(b.intervals.every(timer => !timer.live));
 });

@@ -21,6 +21,8 @@
   var POLL_MS = 60000;
   var TICK_MS = 30000;
   var ERROR_BACKOFF_MS = 90000;
+  // Flipping back to the tab refreshes, but never more than once per 15s.
+  var MIN_REFRESH_GAP_MS = 15000;
 
   // The headroom engine owns the account contract. Unknown readings stay
   // unknown, rather than inferring percentages from another field or
@@ -140,64 +142,89 @@
     });
   }
 
+  // The engine reports up to 4-6 decimals. People read whole percents,
+  // with honest edges so 0.3% never shows as "0%" and 99.7% never as "100%".
+  function pctNum(pct) {
+    if (pct > 0 && pct < 1) return '<1%';
+    if (pct < 100 && pct > 99) return '>99%';
+    return Math.round(pct) + '%';
+  }
+
   function pctText(pct) {
-    if (pct == null) return 'Not available';
-    if (pct > 0 && pct < 1) return '<1% left';
-    if (pct < 100 && pct > 99) return '>99% left';
-    return Math.round(pct) + '% left';
+    return pct == null ? 'Not available' : pctNum(pct) + ' left';
+  }
+
+  function rateText(rate) {
+    return rate < 0.1 ? '<0.1%' : (Math.round(rate * 10) / 10) + '%';
   }
 
   // The small line under each bar shows the reset countdown or provider limits.
   function subText(item, nowMs) {
     var now = nowMs == null ? Date.now() : nowMs;
-    if (item.unlimited) return 'Limits vary by provider';
+    if (item.unlimited) return 'Varies by provider';
+    var text = 'Reset time unknown';
     if (item.resetAtMs != null) {
-      return item.resetAtMs <= now ? 'Reset pending' : 'Resets in ' + fmtCountdown(item.resetAtMs - now);
+      text = item.resetAtMs <= now ? 'Reset pending' : 'Resets in ' + fmtCountdown(item.resetAtMs - now);
     }
-    return 'Reset time unknown';
+    if (item.stale && !(item.resetAtMs != null && item.resetAtMs <= now)) {
+      return 'Older reading, ' + text.charAt(0).toLowerCase() + text.slice(1);
+    }
+    return text;
   }
 
   function fmtTokens(tokens) {
     return Math.round(tokens).toLocaleString();
   }
 
-  // Full sentence tooltip — plain words for novices, all the numbers the
-  // engine reported.
-  function buildTooltip(item, nowMs) {
+  function titleOf(item) {
+    return item.label + (item.account !== 'default' || item.showAccount ? ' (' + item.account + ')' : '');
+  }
+
+  // Plain-word tooltip lines for novices, with every number the engine
+  // reported (rounded for reading). The first line is the heading.
+  function tooltipLines(item, nowMs) {
     var now = nowMs == null ? Date.now() : nowMs;
-    var label = item.label + (item.account !== 'default' || item.showAccount ? ' (' + item.account + ')' : '');
-    var parts = [label + '.'];
-    parts.push(item.unlimited ? 'Free routing. Limits vary by provider.'
-      : item.pctLeft == null ? 'Usage reading not available.' : item.pctLeft + '% left.');
+    var lines = [titleOf(item)];
+    lines.push(item.unlimited ? 'Free routing. Limits vary by provider.'
+      : item.pctLeft == null ? 'Usage reading not available.' : pctNum(item.pctLeft) + ' left.');
     if (!item.unlimited && item.resetAtMs != null) {
       var ms = item.resetAtMs - now;
-      parts.push('Resets ' + fmtClock(item.resetAtMs)
+      lines.push('Resets ' + fmtClock(item.resetAtMs)
         + (ms > 0 ? ' (in ' + fmtCountdown(ms) + ').' : '. Reset pending.'));
     }
     if (!item.unlimited && item.projectedPct != null && item.pctLeft != null && !isStale(item, now)) {
-      parts.push(item.projectedPct + '% could go unused at this pace.');
-      if (item.burnRate != null && item.burnRate >= 0) parts.push(item.burnRate + '% of quota used per hour recently.');
+      if (item.burnRate != null && item.burnRate >= 0) lines.push(rateText(item.burnRate) + ' of quota used per hour recently.');
+      lines.push(pctNum(item.projectedPct) + ' could go unused at this pace.');
       if (item.expiringUsd != null && item.expiringUsd >= 0.01) {
-        parts.push('About $' + item.expiringUsd.toFixed(2) + ' of API-priced work could go unused at this pace. This is not money or a refund.');
+        lines.push('About $' + item.expiringUsd.toFixed(2) + ' of API-priced work could go unused. This is not money or a refund.');
       }
       if (item.expiringTokens != null && item.expiringTokens >= 1) {
-        parts.push('About ' + fmtTokens(item.expiringTokens) + ' tokens could go unused.');
+        lines.push('About ' + fmtTokens(item.expiringTokens) + ' tokens could go unused.');
       }
     }
-    if (isStale(item, now)) parts.push('Older reading. Waiting for an update.');
-    return parts.join(' ');
+    if (isStale(item, now)) lines.push('Older reading. Waiting for an update.');
+    return lines;
+  }
+
+  function buildTooltip(item, nowMs) {
+    var lines = tooltipLines(item, nowMs);
+    return [lines[0] + '.'].concat(lines.slice(1)).join(' ');
   }
 
   /* ---------------- DOM rendering ---------------- */
 
   var strip = null;
-  var chips = Object.create(null);       // vendor id -> chip element
+  var chips = Object.create(null);       // account id -> chip element
   var grid = null;
+  var tip = null;                        // one shared tooltip, built lazily
+  var tipFor = null;                     // chip the tooltip describes
   var lastItems = null;
+  var lastFetchAt = 0;
   var unsupported = false;
   var backoffUntil = 0;
   var inflight = null;
   var booted = false;
+  var timers = [];
 
   function ensureStrip() {
     if (strip && document.body && document.body.contains(strip)) return strip;
@@ -213,10 +240,67 @@
     return strip;
   }
 
+  /* Tooltip: a native title would not show on keyboard focus and cannot be
+   * styled, so one small role=tooltip box follows hover and focus. It lives
+   * on <body> (the sidebar clips overflow) and is filled with textContent
+   * only, so engine labels can never inject markup. */
+  function ensureTip() {
+    if (tip && document.body.contains(tip)) return tip;
+    tip = document.createElement('div');
+    tip.className = 'hb-tip';
+    tip.id = 'headroomTip';
+    tip.setAttribute('role', 'tooltip');
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    return tip;
+  }
+
+  function fillTip(el) {
+    var item = el._hbItem;
+    if (!item) return;
+    var lines = tooltipLines(item);
+    var nodes = lines.map(function (line, i) {
+      var row = document.createElement('div');
+      row.className = i === 0 ? 'hb-tip-title' : 'hb-tip-line';
+      row.textContent = line;
+      return row;
+    });
+    tip.replaceChildren.apply(tip, nodes);
+  }
+
+  function placeTip(el) {
+    if (!el.getBoundingClientRect || typeof window === 'undefined') return;
+    var r = el.getBoundingClientRect();
+    var w = tip.offsetWidth || 260;
+    var h = tip.offsetHeight || 0;
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var left = Math.max(8, Math.min(r.left, vw - w - 8));
+    var top = r.bottom + 6;
+    if (top + h > vh - 8) top = Math.max(8, r.top - h - 6);
+    tip.style.left = Math.round(left) + 'px';
+    tip.style.top = Math.round(top) + 'px';
+  }
+
+  function showTip(el) {
+    ensureTip();
+    tipFor = el;
+    fillTip(el);
+    tip.hidden = false;
+    placeTip(el);
+  }
+
+  function hideTip(el) {
+    if (!tip || (el && tipFor !== el)) return;
+    tip.hidden = true;
+    tipFor = null;
+  }
+
   function chipEl() {
     var el = document.createElement('div');
     el.className = 'hb-chip';
     el.tabIndex = 0;
+    el.setAttribute('aria-describedby', 'headroomTip');
     var top = document.createElement('div');
     top.className = 'hb-top';
     var name = document.createElement('span');
@@ -236,6 +320,13 @@
     el.appendChild(top);
     el.appendChild(bar);
     el.appendChild(sub);
+    if (el.addEventListener) {
+      el.addEventListener('mouseenter', function () { showTip(el); });
+      el.addEventListener('focus', function () { showTip(el); });
+      el.addEventListener('mouseleave', function () { if (document.activeElement !== el) hideTip(el); });
+      el.addEventListener('blur', function () { hideTip(el); });
+      el.addEventListener('keydown', function (e) { if (e.key === 'Escape') hideTip(el); });
+    }
     return el;
   }
 
@@ -252,35 +343,48 @@
         chips[item.id] = el;
         el.dataset.accountId = item.id;
       }
+      el._hbItem = item;
       var risk = riskOf(item, now);
-      el.className = 'hb-chip hb-' + risk + (isStale(item, now) ? ' hb-stale' : '');
-      el.title = buildTooltip(item, now);
-      el.setAttribute('role', item.pctLeft == null ? 'group' : 'meter');
-      el.setAttribute('aria-label', el.title);
-      if (item.pctLeft != null) {
+      var known = item.pctLeft != null;
+      el.className = 'hb-chip hb-' + risk + (known ? '' : ' hb-unknown') + (isStale(item, now) ? ' hb-stale' : '');
+      var label = titleOf(item);
+      // Free routing has no single cap: the name, the dotted track and the
+      // "Varies by provider" line say it; a value would only crowd the row.
+      var value = item.unlimited ? '' : pctText(item.pctLeft);
+      var sub = subText(item, now);
+      // A progressbar has the widest screen reader support for a fill gauge.
+      // Unknown and free readings have no value, so they stay a plain group.
+      el.setAttribute('role', known ? 'progressbar' : 'group');
+      if (known) {
+        el.setAttribute('aria-label', label);
         el.setAttribute('aria-valuemin', '0');
         el.setAttribute('aria-valuemax', '100');
-        el.setAttribute('aria-valuenow', String(item.pctLeft));
-        el.setAttribute('aria-valuetext', pctText(item.pctLeft) + '. ' + subText(item, now));
+        el.setAttribute('aria-valuenow', String(Math.round(item.pctLeft * 10) / 10));
+        el.setAttribute('aria-valuetext', value + '. ' + sub);
       } else {
+        el.setAttribute('aria-label', label + '. ' + (item.unlimited ? 'Free routing' : value) + '. ' + sub);
         ['aria-valuemin', 'aria-valuemax', 'aria-valuenow', 'aria-valuetext'].forEach(function (attr) { el.removeAttribute(attr); });
       }
+      el.dataset.tip = buildTooltip(item, now);
       el.querySelector('.hb-name').textContent = item.label + (item.showAccount ? ' · ' + item.account : '');
-      el.querySelector('.hb-val').textContent = item.unlimited ? 'Free routing' : pctText(item.pctLeft);
+      el.querySelector('.hb-val').textContent = value;
       var fill = el.querySelector('.hb-fill');
-      fill.style.width = item.pctLeft == null ? '0%' : item.pctLeft + '%';
-      el.querySelector('.hb-sub').textContent = subText(item, now);
+      fill.style.width = known ? item.pctLeft + '%' : '0%';
+      el.querySelector('.hb-sub').textContent = sub;
       wanted[item.id] = el;
+      // Keep DOM order == item order (cheap: <10 nodes, focus is kept).
       if (grid.children[index] !== el) grid.insertBefore(el, grid.children[index] || null);
     });
     Object.keys(chips).forEach(function (id) {
       if (!wanted[id]) {
+        hideTip(chips[id]);
         chips[id].remove();
         delete chips[id];
       }
     });
-    // Keep DOM order == item order (cheap: <10 nodes).
     host.hidden = !items || !items.length;
+    if (host.hidden) hideTip();
+    else if (tipFor && tip && !tip.hidden) fillTip(tipFor);
   }
 
   function tickCountdowns() {
@@ -295,15 +399,19 @@
     if (inflight) return inflight;
     if (typeof document !== 'undefined' && document.hidden) return Promise.resolve();
     if (Date.now() < backoffUntil) return Promise.resolve();
+    lastFetchAt = Date.now();
     var controller = new AbortController();
     var timeout = setTimeout(function () { controller.abort(); }, 10000);
     inflight = Promise.resolve().then(function () {
       return fetch('/api/headroom', { cache: 'no-store', signal: controller.signal });
     }).then(function (r) {
       if (r.status === 404) {
+        // Engine not merged or installed: hide for good and stop the timers.
         unsupported = true;
         lastItems = null;
         render([]);
+        if (typeof clearInterval === 'function') timers.forEach(function (id) { clearInterval(id); });
+        timers = [];
         return null;
       }
       if (!r.ok) throw new Error('http ' + r.status);
@@ -336,10 +444,10 @@
     booted = true;
     strip.hidden = true;
     poll();
-    setInterval(poll, POLL_MS);
-    setInterval(tickCountdowns, TICK_MS);
+    timers.push(setInterval(poll, POLL_MS), setInterval(tickCountdowns, TICK_MS));
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden) poll();
+      if (document.hidden) { hideTip(); return; }
+      if (Date.now() - lastFetchAt >= MIN_REFRESH_GAP_MS) poll();
     });
   }
 
@@ -352,6 +460,7 @@
     riskOf: riskOf,
     subText: subText,
     buildTooltip: buildTooltip,
+    tooltipLines: tooltipLines,
     fmtCountdown: fmtCountdown,
     fmtClock: fmtClock,
     _itemsFromPayload: itemsFromPayload,
