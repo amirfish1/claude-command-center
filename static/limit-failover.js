@@ -268,6 +268,12 @@
     Object.keys(sessions).forEach(function (sid) {
       var item = sessions[sid] || {};
       var el = null;
+      // Fleet banner (static/fleet-failover.js) owns every sid its grouped
+      // endpoint returns; on older servers the global is absent and the
+      // per-session cards render as before.
+      if (!(window.cccFleetFailover
+            && typeof window.cccFleetFailover.covers === 'function'
+            && window.cccFleetFailover.covers(sid))) {
       if (item.state === 'free' || item.state === 'switch_back_pending') {
         if (item.state === 'free' && !item.switch_back_offered) {
           // A quiet chip, not a full card: keep the "this is $0" fact visible
@@ -283,6 +289,7 @@
         el = renderArmed(sid, item, now);
       } else if (!item.offer_dismissed) {
         el = renderLimited(sid, item, now);
+      }
       }
       if (el) wanted[sid] = el;
     });
@@ -403,6 +410,9 @@
     document.addEventListener('visibilitychange', function () {
       if (!document.hidden) poll(true);
     });
+    // The fleet banner redraws when its grouped payload lands; re-render so
+    // covered cards disappear immediately rather than on the next poll.
+    document.addEventListener('cccFleetRendered', function () { render(); });
   }
 
   if (document.readyState === 'loading') {

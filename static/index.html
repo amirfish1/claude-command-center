@@ -82,6 +82,9 @@
 <link rel="stylesheet" href="/static/star-ask.css">
 <!-- Limit-hit failover card (see static/limit-failover.js). -->
 <link rel="stylesheet" href="/static/limit-failover.css">
+<!-- Fleet limit view: one banner per engine limit wall (see
+     static/fleet-failover.js). -->
+<link rel="stylesheet" href="/static/fleet-failover.css">
 <link rel="stylesheet" href="/static/router-detected.css">
 <style>
   body.hide-gh-issues .is-github-issue {
@@ -502,6 +505,10 @@
        inert on servers without /api/free-failover/status. -->
   <script src="/static/popups.js"></script>
   <script src="/static/limit-failover.js" defer></script>
+  <!-- Fleet limit view: one banner per engine limit wall. Owns the
+       failover lifecycle when /api/free-failover/fleet answers; the
+       per-session cards above stay as the fallback for older servers. -->
+  <script src="/static/fleet-failover.js" defer></script>
   <script src="/static/headroom-bars.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">

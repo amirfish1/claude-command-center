@@ -27,10 +27,13 @@ ALL = {
     "star-ask": "'Star CCC on GitHub?' card at success moments",
     "router-detected": "Floating 'Use your existing router' card",
     "limit-failover": "'Limit reached: continue on a free model?' cards",
+    "fleet-limit": "One grouped notice for sessions stopped by an engine usage limit",
 }
 
-# Approved pop-ups. Empty: nothing shows until Amir approves it.
-APPROVED = frozenset()
+# Approved pop-ups. Nothing else shows until Amir approves it.
+APPROVED = frozenset({
+    "moment-zero",  # approved 2026-10-06
+})
 
 _NOTIFY_KIND_IDS = {
     "task": "notify-task",

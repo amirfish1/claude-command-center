@@ -4645,3 +4645,28 @@ def test_voice_briefing_is_bounded_and_subprocess_free(monkeypatch):
     assert feed_calls and len(feed_calls) == 3, "briefing did not use exactly one feed call each"
     assert len(roll_calls) == 3
     assert proc_calls == []
+
+
+def test_fleet_failover_get_reuses_watcher_state(monkeypatch):
+    now = time.time()
+    tracked = {f"limit-{engine}-{i}": {
+        "engine": engine, "detected_at": now - 60, "resume_at": now + 3600,
+    } for engine in ("claude", "codex", "devin") for i in range(7)}
+    monkeypatch.setattr(server, "_load_usage_limit_resumes", lambda: tracked)
+    monkeypatch.setattr(server, "_load_free_failovers", lambda: {})
+    monkeypatch.setattr(server, "_free_ready_info", lambda: {"ready": True})
+    monkeypatch.setattr(server, "_devin_free_model_candidates", lambda model=None: ["swe-2-medium"])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("fleet poll performed fresh session work")
+
+    for name in ("find_all_conversations", "_archive_all_rows_cached", "_tail_read_lines",
+                 "_usage_limit_claude_candidates", "_usage_limit_codex_candidates",
+                 "_usage_limit_kimi_candidates", "_free_failover_devin_candidates"):
+        monkeypatch.setattr(server, name, forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    for _ in range(10):
+        fleet = server.free_failover_fleet()
+        assert len(fleet["groups"]) == 3
+        assert sum(g["limited_count"] for g in fleet["groups"]) == 21

@@ -647,6 +647,9 @@ def _finish_job(job: dict, *, status: str, error: str = None) -> None:
         job["progress"] = 0.97
         job["result"] = _run_checks(job, playground)
         job["result"]["open_file"] = (_TASK_BY_ID.get(job["task_id"]) or {}).get("open_file") or "index.html"
+        if not job["result"]["verified"]:
+            _finish_job(job, status="error", error="The task finished, but its checks did not pass. Try it again.")
+            return
         usage = job.get("usage") or {}
         # API-priced worth of the work: the larger of the token-derived price
         # and what the CLI itself reported (total_cost_usd already reflects
@@ -785,7 +788,7 @@ def _run_job(job: dict, prompt: str, cmd_env: dict, playground: Path) -> None:
 
 
 def start_task(task_id: str, *, claude_bin: str = None, extra_env: dict = None,
-               playground: Path = None) -> tuple:
+               playground: Path = None, require_free: bool = False) -> tuple:
     """Start a first-task job. Returns (job_snapshot, error_dict)."""
     task = _TASK_BY_ID.get(str(task_id or "").strip())
     if task is None:
@@ -796,6 +799,10 @@ def start_task(task_id: str, *, claude_bin: str = None, extra_env: dict = None,
             if j["status"] == "running":
                 return None, {"ok": False, "error": "a first task is already running",
                               "job_id": j["job_id"], "code": "busy"}
+    free_env = _free_router_env()
+    if require_free and not free_env:
+        return None, {"ok": False, "error": "Free models are not ready. Set up a free provider, then try again.",
+                      "code": "free_unavailable"}
     pg = Path(playground) if playground else playground_path()
     ensured = ensure_playground(pg)
     if not ensured.get("ok"):
@@ -809,17 +816,20 @@ def start_task(task_id: str, *, claude_bin: str = None, extra_env: dict = None,
         claude_bin = info["bin"]
 
     env = dict(os.environ)
-    # CCC sets these inside its own spawned children; a first task is a fresh
-    # session, not a relay target.
-    for k in ("CCC_RELAY_QUESTIONS", "CCC_QUESTION_RELAY_DIR"):
-        env.pop(k, None)
-    free_env = _free_router_env()
-    runtime = "standard"
-    if free_env:
-        env.update({k: str(v) for k, v in free_env.items()})
-        runtime = "free"
     if extra_env:
         env.update(extra_env)
+    # CCC sets these inside its own spawned children; a first task is a fresh
+    # session, not a relay target.
+    for k in ("CCC_RELAY_QUESTIONS", "CCC_QUESTION_RELAY_DIR", "CLAUDECODE",
+              "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET"):
+        env.pop(k, None)
+    runtime = "standard"
+    if free_env:
+        from ccc_server.free_runtime import scrub_paid_env
+        scrub_paid_env(env)
+        env.update({k: str(v) for k, v in free_env.items()})
+        env["CCC_SESSION_RUNTIME"] = "free"
+        runtime = "free"
 
     job_id = uuid.uuid4().hex[:12]
     job = {

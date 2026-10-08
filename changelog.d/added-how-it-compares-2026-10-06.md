@@ -1,0 +1,1 @@
+- Added a plain-language comparison guide and a light/dark SVG explaining CCC, model routers, and parallel coding tools, with pinned public README sources and the Crystal-to-Nimbalyst migration note.

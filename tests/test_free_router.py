@@ -498,3 +498,33 @@ def test_admin_login_uses_config_creds(env, handler):
                               admin_password="wrong")
     # no router running → login fails cleanly, not an exception
     assert free_router._admin_login(free_router._load_state()) is None
+
+
+@pytest.mark.parametrize("forced", ["", "launchd"])
+def test_isolated_home_never_uses_shared_launchd(tmp_path, monkeypatch, forced):
+    monkeypatch.setattr(free_router.platform, "system", lambda: "Darwin")
+    monkeypatch.setenv("HOME", str(tmp_path / "isolated-home"))
+    monkeypatch.delenv("CCC_FREE_ROUTER_HOME", raising=False)
+    monkeypatch.setenv("CCC_FREE_ROUTER_SUPERVISOR", forced)
+    assert free_router._supervisor_kind() == "child"
+
+
+def test_router_state_override_never_uses_shared_launchd(tmp_path, monkeypatch):
+    import pwd
+    native_home = pwd.getpwuid(os.getuid()).pw_dir
+    monkeypatch.setattr(free_router.platform, "system", lambda: "Darwin")
+    monkeypatch.setenv("HOME", native_home)
+    monkeypatch.setenv("CCC_FREE_ROUTER_HOME", str(tmp_path / "router-state"))
+    monkeypatch.setenv("CCC_FREE_ROUTER_SUPERVISOR", "launchd")
+    assert free_router._supervisor_kind() == "child"
+
+
+def test_normal_home_keeps_existing_launch_agent(monkeypatch):
+    import pwd
+    native_home = pwd.getpwuid(os.getuid()).pw_dir
+    monkeypatch.setattr(free_router.platform, "system", lambda: "Darwin")
+    monkeypatch.setenv("HOME", native_home)
+    monkeypatch.delenv("CCC_FREE_ROUTER_HOME", raising=False)
+    monkeypatch.delenv("CCC_FREE_ROUTER_SUPERVISOR", raising=False)
+    assert free_router._supervisor_kind() == "launchd"
+    assert free_router._plist_path().name == free_router.LAUNCH_AGENT_LABEL + ".plist"
