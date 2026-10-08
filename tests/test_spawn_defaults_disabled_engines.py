@@ -1,5 +1,12 @@
 """Settings > Engines enable/disable: `disabled_engines` in spawn defaults."""
 
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import pytest
+
 import server
 
 
@@ -40,3 +47,54 @@ def test_disabled_engines_must_be_a_list(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     rejected = server._save_spawn_defaults({"disabled_engines": "kilo"})
     assert rejected["ok"] is False
+
+
+def test_concurrent_first_load_writes_are_atomic(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    barrier = threading.Barrier(8)
+    original_replace = Path.replace
+    def synchronized_replace(self, target):
+        if target == server.SPAWN_DEFAULTS_FILE:
+            barrier.wait(timeout=5)
+        return original_replace(self, target)
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
+    def write(i):
+        server._write_spawn_defaults_file({"writer": i})
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write, range(8)))
+    assert json.loads(server.SPAWN_DEFAULTS_FILE.read_text())["writer"] in range(8)
+    assert list(tmp_path.iterdir()) == [server.SPAWN_DEFAULTS_FILE]
+
+
+def test_concurrent_first_run_writes_have_unique_temp_files(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    ready = threading.Barrier(2)
+    replace = Path.replace
+    temporary_files = []
+
+    def synchronized_replace(source, target):
+        if target == server.SPAWN_DEFAULTS_FILE:
+            temporary_files.append(source)
+            ready.wait(timeout=5)
+        return replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        jobs = [executor.submit(server._write_spawn_defaults_file, {"engine": engine})
+                for engine in ("claude", "codex")]
+        for job in jobs:
+            job.result(timeout=10)
+    assert len(set(temporary_files)) == 2
+    assert json.loads(server.SPAWN_DEFAULTS_FILE.read_text()) in (
+        {"engine": "claude"}, {"engine": "codex"},
+    )
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_failed_defaults_write_preserves_previous_file_and_cleans_up(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    server._write_spawn_defaults_file({"engine": "claude"})
+    with pytest.raises(TypeError):
+        server._write_spawn_defaults_file({"engine": object()})
+    assert json.loads(server.SPAWN_DEFAULTS_FILE.read_text()) == {"engine": "claude"}
+    assert not list(tmp_path.glob("*.tmp"))

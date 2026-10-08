@@ -71,6 +71,7 @@ def _payload(tmp_path, range_key="today", **kw):
     kw.setdefault("ledger_db", tmp_path / "savings.sqlite3")
     kw.setdefault("free_ids", set())
     kw.setdefault("analytics_fn", lambda r: None)
+    kw.setdefault("now", NOW)
     kw.setdefault("scan_budget_s", None)
     return savings.savings_payload(range_key, **kw)
 
@@ -374,13 +375,19 @@ class TestPlan:
         payload, status = savings.handle_plan_post({})
         assert status == 400
 
-    def test_roi_is_value_over_plan_cost(self, tmp_path):
+    @pytest.mark.parametrize("hour,minute", [(0, 1), (1, 30), (12, 0)])
+    def test_roi_is_value_over_plan_cost(self, tmp_path, hour, minute):
+        import calendar
+        now = NOW.replace(hour=hour, minute=minute, second=0, microsecond=0)
         root = tmp_path / "projects"
         _write_transcript(root, "p", "a.jsonl", [
             _assistant("m1", "claude-sonnet-4-6", inp=10_000_000),  # $30 of value
         ])
-        payload, _ = _payload(tmp_path)
+        payload, _ = _payload(tmp_path, now=now)
         # roi_x is computed on unrounded internals; the cents rounding of
-        # plan_cost_usd (~$1.2) shifts the ratio by ~0.25 per cent, so the
-        # tolerance is proportionate rather than exact.
-        assert abs(payload["roi_x"] - payload["api_value_usd"] / payload["plan_cost_usd"]) < 0.3
+        # plan_cost_usd can shift the ratio substantially early in the day,
+        # so use the unrounded accrual for an exact expectation.
+        day_fraction = (hour * 3600 + minute * 60) / 86400
+        plan_cost = 200.0 * day_fraction / calendar.monthrange(now.year, now.month)[1]
+        assert payload["plan_cost_usd"] == round(plan_cost, 2)
+        assert payload["roi_x"] == round(30.0 / plan_cost, 1)

@@ -29,6 +29,7 @@ def test_every_popup_has_a_gate():
         "star-ask": "static/star-ask.js",
         "router-detected": "static/router-detected.js",
         "limit-failover": "static/limit-failover.js",
+        "fleet-limit": "static/fleet-failover.js",
         "leftover-offer": "static/leftover.js",
         "leftover-notification": "static/leftover.js",
     }
@@ -43,7 +44,7 @@ def test_every_popup_has_a_gate():
 def test_gate_loads_before_the_popups():
     html = (ROOT / "static" / "index.html").read_text()
     first = html.index('src="/static/popups.js"')
-    for name in ("limit-failover", "onboarding/onboarding", "savings", "notify",
+    for name in ("limit-failover", "fleet-failover", "onboarding/onboarding", "savings", "notify",
                  "router-detected", "star-ask", "leftover"):
         assert first < html.index('src="/static/%s.js"' % name), name
 

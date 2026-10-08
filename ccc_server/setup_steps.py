@@ -276,7 +276,7 @@ def _detect_free_router():
         if live.get("running") or live.get("healthy"):
             return "ok", "Running · free models are one click away"
         if live.get("installed"):
-            return "ok", "Installed · starts with its own button"
+            return "missing", "Installed · ready to start"
     if _free_router_state() is not None:
         if _port_listening(FREE_ROUTER_PORT):
             return "ok", f"Running on port {FREE_ROUTER_PORT}"
@@ -300,10 +300,10 @@ def _detect_free_key():
 
 
 def _detect_first_task():
-    playground = Path.home() / "CCC-Playground"
+    from ccc_server import first_task
     marker = _ccc_dir() / "first-task-done"
     try:
-        if playground.is_dir() or marker.exists():
+        if first_task._load_state().get("tasks_done") or marker.exists():
             return "ok", "Done · your agent already finished real work"
     except OSError:
         pass

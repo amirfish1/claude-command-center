@@ -24,12 +24,15 @@
     'star-ask',
     'router-detected',
     'limit-failover',
+    'fleet-limit',
     'leftover-offer',
     'leftover-notification',
   ];
 
-  // Approved pop-ups. Empty: nothing shows until Amir approves it.
-  var APPROVED = [];
+  // Approved pop-ups. Nothing else shows until Amir approves it.
+  var APPROVED = [
+    'moment-zero', // approved 2026-10-06
+  ];
 
   var NOTIFY_KIND_IDS = {
     task: 'notify-task',

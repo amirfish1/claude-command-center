@@ -94,7 +94,8 @@ the router's Claude mapping to the top tool-capable model so a "Free
 ## Privacy and the ToS boundary
 
 Read this before you enable free runs: free tiers are paid for in ways
-that aren't money.
+that aren't money. See [your data and account boundaries](tos-boundary.md)
+for what the router carries, what stays separate, and how to verify failover.
 
 - **Prompts leave your machine.** A $0 session's prompts, file contents
   and outputs go to whichever third-party provider serves the model. Each
@@ -107,7 +108,8 @@ that aren't money.
 - **Your Claude subscription never goes through the router.** Routing is
   per-session environment only. CCC never sends a Claude OAuth token or
   your Anthropic login through it. The router carries only non-Anthropic
-  traffic, and only inside sessions you explicitly spawned as free.
+  traffic, and only inside sessions you explicitly spawned as free or
+  approved with **Continue free**.
 - **Don't paste secrets into free runs.** Treat free-tier prompts like
   public paste: no API keys, private credentials, or code you wouldn't
   share with the provider. Paid sessions have the same caution in
@@ -148,6 +150,7 @@ See [SECURITY.md](../SECURITY.md) for the full threat model.
 
 ## Related
 
+- [How CCC compares](compare.md): session tools and model routers do different jobs.
 - [`docs/onboarding.md`](onboarding.md) — the first-run wizard that sets
   all of this up in about five minutes.
 - [`SECURITY.md`](../SECURITY.md) — binding, key storage, and the consent

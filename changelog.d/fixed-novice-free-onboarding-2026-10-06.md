@@ -1,0 +1,1 @@
+- Fixed free onboarding so router setup and the first task use the right APIs, failed or paid runs never appear as a free success, notifications work for both supported call styles, concurrent setup stays reliable, Free models Settings links open reliably, leaderboard readiness and tool support stay accurate, and isolated installs cannot replace the normal macOS router service.

@@ -1,23 +1,44 @@
 # Architecture
 
-Short version: it's a thin read-mostly layer on top of Claude Code's own
-on-disk state, plus a few write-through integrations (GitHub, Vercel). No
-long-running background workers, no database, no daemon — the server runs
-while you're looking at it and goes away when you close it.
+[Back to the README](../README.md) · [Orchestration API](orchestration.md)
 
-## Two files
+CCC attaches to the session state that agents already write. The dashboard
+is a stdlib Python HTTP server with vanilla HTML, CSS, and JavaScript. A
+separately managed `ccc-worker` owns persistent agent transports, so the
+dashboard can restart without closing worker-owned Claude, Codex, or Kimi
+connections.
 
-```
-server.py          ~3.8k lines   Python 3 stdlib HTTP server
-static/index.html  ~4.5k lines   HTML + CSS + vanilla JS (no framework)
-```
+## Persistent execution worker
 
-That's the product. Everything else is hooks (two small scripts) and state
-files under `~/.claude/command-center/`.
+The dashboard and worker communicate over an authenticated, mode-0600 Unix
+socket. The worker records spawns and turns in
+`~/.claude/command-center/control-plane.sqlite3`, including idempotency keys,
+leases, results, and parent-child edges.
+
+Work known not to have been sent replays after a drain or worker start.
+Work that may have reached an engine becomes `uncertain` and is never blindly
+replayed. Live-process evidence can reconcile it; an explicit
+`POST /api/control-plane/resolve` supports `retry`, `complete`, `fail`, or
+`cancel`.
+
+Maintenance settings show worker health and active, queued, and uncertain
+counts. **Pause dispatch** queues new owned work durably. **Restart dashboard**
+drains dispatch, restarts only the HTTP/UI process, resumes dispatch, and
+replays provably unsent work. `GET /api/control-plane/work` and
+`GET /api/control-plane/graph?root_id=…` expose those records. Maintenance can
+also start an offline worker and inspect, open, or restart WatchTower.
+
+## Dashboard and state
+
+`server.py` and `ccc_server/` provide the backend; `static/` provides the
+build-free UI. Session metadata lives in JSON sidecars under
+`~/.claude/command-center/`, alongside local databases for durable work.
+See [Configuration](configuration.md) for the worker socket and ledger paths.
 
 ## Data sources
 
-The server reads from four places. Nothing else is authoritative.
+For Claude Code, the main session inputs are below. Other engines use their
+own stores through adapters; see [Engine support](engine-support.md).
 
 1. **`~/.claude/projects/<project-slug>/*.jsonl`** — Claude Code's own
    session transcripts. Written by Claude regardless of how the session was
@@ -28,7 +49,7 @@ The server reads from four places. Nothing else is authoritative.
    `ps -A` to tell which sessions are still running and what TTY they're on.
 
 3. **`~/.claude/command-center/live-state/<sid>.json`** — written by the
-   `PostToolUse` and `Stop` hooks that the server installs on first run.
+   `PostToolUse` and `Stop` hooks registered after you approve them.
    Every tool invocation bumps a per-session sidecar file with `status`,
    `tool`, `file`, `has_writes`, `timestamp`. This is how the kanban can tell
    "Claude is actively running tools" from "Claude is waiting for input".
@@ -39,7 +60,7 @@ The server reads from four places. Nothing else is authoritative.
 
 ## Data sinks (write-through state)
 
-All mutations land in human-readable JSON sidecar files under
+Session metadata changes land in JSON sidecar files under
 `~/.claude/command-center/`:
 
 | File | Contents |
@@ -51,8 +72,9 @@ All mutations land in human-readable JSON sidecar files under
 | `conversation-order.json` | `[session_id, ...]` — custom ordering |
 | `fix-deploy-spawned.json` | `{commit_sha: {pid, name, spawned_at}}` — dedupe for auto-fix-deploy |
 
-Everything is JSON, everything is rewriteable by hand if something goes
-wrong. There is no migration layer.
+These sidecars are separate from the worker's durable SQLite ledger. Do not
+edit active work records by hand; use the control-plane resolve API for
+uncertain work.
 
 ## Request flow
 
@@ -81,8 +103,8 @@ The UI makes no distinction between:
 - **Terminal sessions** you started yourself with `claude` — surfaced via
   `~/.claude/projects/*.jsonl` + `~/.claude/sessions/<pid>.json`.
 - **Headless sessions** spawned by the UI — launched as
-  `claude -p --input-format stream-json` subprocesses, tracked in an
-  in-memory `_spawned_sessions` list. The session's stdin pipe stays open,
+  `claude -p --input-format stream-json` subprocesses, with worker-owned
+  execution recorded in the durable ledger. The session's stdin pipe stays open,
   so follow-up messages can be injected without opening a terminal.
 - **Resumed-on-demand sessions** — dormant transcripts brought back via
   `claude --resume <sid> -p ...` when the user injects input into an inactive
@@ -92,7 +114,7 @@ All three converge into the same card model in the UI.
 
 ## Classification
 
-`classifyKanbanColumn` (client-side, in `static/index.html`) takes a session
+`classifyKanbanColumn` (client-side, in `static/app.js`) takes a session
 entry and returns one of: `backlog / needs-attention / icebox / working /
 waiting / review / testing / verified / archived`. The rules:
 
@@ -128,15 +150,14 @@ overrides from older builds are dropped on first render.
 
 ## Hooks
 
-On server startup:
+Startup copies CCC's `hooks/*.py` scripts into
+`~/.claude/command-center/hooks/`. It registers them in
+`~/.claude/settings.json` only after your approval. An update that changes an
+approved item asks again. See [Agent config consent](agent-config-consent.md).
 
-1. Copy `hooks/post-tool-use.py` and `hooks/stop.py` from the repo into
-   `~/.claude/command-center/hooks/` (only if contents changed).
-2. Merge hook entries into `~/.claude/settings.json` under `hooks.PostToolUse`
-   and `hooks.Stop`, pointed at those copies.
-
-Both hooks read Claude's stdin (a small JSON event), then write/update the
-session's sidecar file. They never block Claude — errors are swallowed.
+The hooks read Claude's stdin event and update tiny JSON files under
+`live-state/`. These tell CCC whether a session is running a tool or waiting
+for input. Hook errors are handled without prompting the agent.
 
 ## macOS-specific bits
 
@@ -150,7 +171,10 @@ session's sidecar file. They never block Claude — errors are swallowed.
 
 ## What isn't here
 
-- No database. No Redis. No message broker.
-- No auth. `localhost`-only by design.
+- No Redis or external message broker.
+- No multi-user authentication. The dashboard binds to loopback by default;
+  trusted-network access is opt-in. See [SECURITY.md](../SECURITY.md).
 - No per-user multi-tenancy.
-- No scheduled jobs. Cache refresh is request-driven.
+
+The list and transcript paths cache expensive reads. The durable execution
+worker and scheduled Jobs are separate from those request-driven caches.

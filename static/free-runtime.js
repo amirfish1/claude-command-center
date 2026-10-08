@@ -1,8 +1,8 @@
-/* Free ($0) spawn runtime — the composer's Free chip and the $0 badge on
+/* Free ($0) spawn runtime — the "$0 Free" model pill and the $0 badge on
    session cards. Loaded as a plain script; exposes window.CCCFreeRuntime so
    app.js hooks stay one-liners.
 
-   The chip is a user opt-in: when on, buildSpawnBody attaches
+   The pill is a user opt-in: when on, buildSpawnBody attaches
    runtime:"free" and the server routes the child through CCC's free router.
    When the router can't serve, the spawn refuses with a clear message —
    it never silently falls back to paid. */
@@ -70,15 +70,37 @@
     var style = document.createElement('style');
     style.id = 'ccc-free-runtime-styles';
     style.textContent = [
-      '.conv-input-context .spawn-runtime-row { display: none; }',
-      '.conv-input-context.is-new-session .spawn-runtime-row {',
-      '  display: inline-flex; align-items: center; gap: 4px;',
-      '  font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;',
+      '.ccc-free-pill {',
+      '  display: inline-flex; align-items: center; gap: 5px; height: 21px;',
+      '  padding: 0 8px 0 3px; border: 1px solid #2ea043; border-radius: 999px;',
+      '  background: var(--surface); color: var(--text); font: inherit;',
+      '  font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;',
       '}',
-      '.conv-input-context .spawn-runtime-row input[type="checkbox"] { margin: 0; cursor: pointer; }',
-      '.spawn-runtime-row.is-unsupported { opacity: 0.45; }',
-      '.spawn-runtime-row.is-on { color: var(--accent, #7ec8a9); }',
-      '.spawn-runtime-row.is-warn { color: var(--warn, #d9a24a); }',
+      '.ccc-free-pill-badge {',
+      '  display: inline-flex; align-items: center; justify-content: center;',
+      '  min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px;',
+      '  background: #2ea043; color: #fff; font-size: 10px; font-weight: 700;',
+      '}',
+      '.ccc-free-pill.is-selected {',
+      '  background: color-mix(in srgb, #2ea043 22%, var(--surface));',
+      '  box-shadow: 0 0 0 1px color-mix(in srgb, #2ea043 55%, transparent);',
+      '}',
+      '.ccc-free-pill.is-setup { border-style: dashed; color: var(--text-muted); }',
+      '.ccc-free-pill.is-setup .ccc-free-pill-badge { background: var(--text-muted); }',
+      '.ccc-free-composer-label { display: none; }',
+      'body.ccc-free-on:has(.conv-input-context.is-new-session) #convInputModelSelect,',
+      'body.ccc-free-on:has(.conv-input-context.is-new-session) #convInputEffortSelect {',
+      '  display: none !important;',
+      '}',
+      'body.ccc-free-on:has(.conv-input-context.is-new-session) .ccc-free-composer-label {',
+      '  display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; height: 26px;',
+      '  border: 1px solid #2ea043; border-radius: 6px; color: var(--text);',
+      '  font-size: 12px; font-weight: 600; white-space: nowrap;',
+      '}',
+      '.ccc-free-on .orch-tier-chip.is-selected {',
+      '  border-color: var(--border); background: var(--surface); box-shadow: none;',
+      '  color: var(--text-muted);',
+      '}',
       '.meta-runtime-free {',
       '  color: var(--accent, #7ec8a9); font-weight: 600; white-space: nowrap;',
       '}',
@@ -87,35 +109,27 @@
       '  border: 1px solid var(--accent, #7ec8a9); border-radius: 999px;',
       '  padding: 0 7px; line-height: 16px; white-space: nowrap;',
       '}',
-      '@media (prefers-reduced-motion: no-preference) {',
-      '  .spawn-runtime-row.is-on { animation: ccc-free-chip-glow 1.2s ease-out 1; }',
-      '}',
-      '@keyframes ccc-free-chip-glow {',
-      '  from { text-shadow: 0 0 8px currentColor; } to { text-shadow: none; }',
-      '}',
     ].join('\n');
     document.head.appendChild(style);
   }
 
-  function ensureChip() {
-    var wrap = document.getElementById('spawnRuntimeRow');
-    if (wrap) return wrap;
-    var anchor = document.querySelector('.conv-input-context .spawn-worktree-row');
-    if (!anchor || !anchor.parentNode) return null;
-    wrap = document.createElement('label');
-    wrap.className = 'spawn-runtime-row';
-    wrap.id = 'spawnRuntimeRow';
-    wrap.innerHTML = '<input type="checkbox" id="freeRuntimeToggle"> &#9889; free $0';
-    anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
-    var input = wrap.querySelector('input');
-    input.checked = state.enabled;
-    input.addEventListener('change', function () {
-      state.enabled = !!input.checked;
-      try { localStorage.setItem(LS_KEY, state.enabled ? '1' : '0'); } catch (_) {}
-      sync(getCurrentEngine());
-      if (state.enabled) refreshStatus(true).then(function () { sync(getCurrentEngine()); });
-    });
-    return wrap;
+  // The "$0 Free" pill: first in the new-session MODEL row (#nsModelPickerPills).
+  // Picking it turns the free runtime on (and the engine to Claude); picking
+  // any other model pill turns it off. app.js re-renders the row, so sync()
+  // (called from the renderer and on engine changes) re-inserts the pill.
+  function ensurePill() {
+    var box = document.getElementById('nsModelPickerPills');
+    if (!box) return null;
+    var pill = box.querySelector('.ccc-free-pill');
+    if (!pill) {
+      pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'ccc-free-pill';
+      pill.setAttribute('role', 'radio');
+      pill.innerHTML = '<span class="ccc-free-pill-badge">$0</span><span class="ccc-free-pill-label">Free</span>';
+      box.insertBefore(pill, box.firstChild);
+    }
+    return pill;
   }
 
   function getCurrentEngine() {
@@ -126,41 +140,86 @@
     } catch (_) { return ''; }
   }
 
-  // Called by syncSpawnEngineDependentUi on every engine/default change.
+  function setEnabled(on) {
+    state.enabled = !!on;
+    try { localStorage.setItem(LS_KEY, state.enabled ? '1' : '0'); } catch (_) {}
+  }
+
+  function useClaudeEngine() {
+    var sel = document.getElementById('convInputEngineSelect');
+    if (!sel || sel.value === 'claude') return;
+    sel.value = 'claude';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function paint(engine) {
+    var pill = ensurePill();
+    if (!pill) return;
+    var s = engineStatus('claude');
+    var notReady = !!(state.status && !(s && s.ready));
+    var on = state.enabled && supports(engine) && !notReady;
+    pill.classList.toggle('is-selected', on);
+    pill.classList.toggle('is-setup', notReady);
+    pill.setAttribute('aria-checked', on ? 'true' : 'false');
+    pill.querySelector('.ccc-free-pill-label').textContent = notReady ? 'Set up free models' : 'Free';
+    pill.title = notReady
+      ? 'Free models are not set up yet. Click to set them up.'
+      : 'Runs on your free router. Costs $0.';
+    var box = pill.parentNode;
+    if (box) box.classList.toggle('ccc-free-on', on);
+    // Composer: on the new-session screen the model/effort menus give way
+    // to a "Free model" label (CSS below keys off this body class).
+    document.body.classList.toggle('ccc-free-on', on);
+    ensureComposerLabel();
+  }
+
+  function ensureComposerLabel() {
+    if (document.getElementById('cccFreeComposerLabel')) return;
+    var eng = document.getElementById('convInputEngineSelect');
+    if (!eng || !eng.parentNode) return;
+    var el = document.createElement('span');
+    el.id = 'cccFreeComposerLabel';
+    el.className = 'ccc-free-composer-label';
+    el.title = 'Your free router picks the best free model. Costs $0.';
+    el.innerHTML = '<span class="ccc-free-pill-badge">$0</span>Free model';
+    eng.parentNode.insertBefore(el, eng.nextSibling);
+  }
+
+  // Called by syncSpawnEngineDependentUi and the pill renderer.
   function sync(engine) {
     ensureStyles();
-    var wrap = ensureChip();
-    if (!wrap) return;
-    var input = wrap.querySelector('input');
-    var supported = supports(engine);
-    wrap.classList.toggle('is-unsupported', !supported);
-    wrap.classList.toggle('is-on', supported && state.enabled);
-    if (input) input.disabled = !supported;
-    var status = engineStatus(engine);
-    if (!supported) {
-      wrap.classList.remove('is-warn');
-      wrap.title = 'The free runtime works with Claude, OpenCode and Aider.';
-    } else if (status && !status.ready) {
-      wrap.classList.add('is-warn');
-      wrap.title = 'Free router is not running (' +
-        (status.reason || 'unavailable') + '). A $0 spawn will refuse rather than bill you.';
-    } else {
-      wrap.classList.remove('is-warn');
-      wrap.title = 'Run this session on CCC\u2019s free router - $0, not your paid plan.';
-    }
-    if (state.enabled) {
-      refreshStatus(false).then(function () {
-        var s = engineStatus(engine);
-        var w = document.getElementById('spawnRuntimeRow');
-        if (!w) return;
-        w.classList.toggle('is-warn', !!(s && !s.ready));
-        if (s && !s.ready) {
-          w.title = 'Free router is not running (' +
-            (s.reason || 'unavailable') + '). A $0 spawn will refuse rather than bill you.';
-        }
-      });
-    }
+    paint(engine || getCurrentEngine());
+    refreshStatus(false).then(function () { paint(getCurrentEngine()); });
   }
+
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var pill = t.closest('.ccc-free-pill');
+    if (pill) {
+      ev.preventDefault();
+      var turnOn = function () {
+        setEnabled(true);
+        useClaudeEngine();
+        paint('claude');
+      };
+      if (pill.classList.contains('is-setup')) {
+        // A "not ready" can be a stale probe from a busy page load: re-check
+        // before sending the user to setup.
+        refreshStatus(true).then(function () {
+          if (readyFor('claude')) turnOn();
+          else window.open('/free-router', '_blank');
+        });
+        return;
+      }
+      turnOn();
+      return;
+    }
+    if (t.closest('#nsModelPickerPills .orch-tier-chip')) {
+      setEnabled(false);
+      paint(getCurrentEngine());
+    }
+  }, true);
 
   // Metadata rail chip for the open session ("via: UI" gets a "$0" sibling).
   function renderRailRuntime(row) {
@@ -201,9 +260,8 @@
   };
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () { ensureStyles(); ensureChip(); });
+    document.addEventListener('DOMContentLoaded', function () { ensureStyles(); });
   } else {
     ensureStyles();
-    ensureChip();
   }
 })();

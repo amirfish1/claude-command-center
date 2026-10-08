@@ -1,0 +1,1 @@
+- Run CCC from a locally built wheel with uvx or pipx, including the dashboard, hooks, bundled skills, and first-launch WatchTower setup. State stays in the usual user folders; no PyPI publication is required.

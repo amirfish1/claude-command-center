@@ -37,8 +37,10 @@ Names still living in server.py are reached via ``_core`` at call time.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 import fcntl
 import json
+import math
 import os
 import re
 import threading
@@ -46,6 +48,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import limit_events as _limit_events
 
 
 FREE_FAILOVER_FILENAME = "free-failover.json"
@@ -66,7 +69,7 @@ _DEVIN_RESET_AT_RE = re.compile(
     r"reset[^()]*\(at\s+(\d{1,2}):(\d{2})\s*UTC\)", re.IGNORECASE
 )
 _DEVIN_RESET_IN_RE = re.compile(
-    r"reset\s+in\s+(\d+)\s*(minute|hour|min|hr)", re.IGNORECASE
+    r"reset\s+in\s+(\d+)\s*(minute|hour|min|hr|day|week)", re.IGNORECASE
 )
 
 # Reset-time parsing shared with the devin detector's candidate window.
@@ -98,22 +101,9 @@ def _load_free_failovers():
 
     In-memory cache refreshed lazily on every write (own or a sibling
     process's, via the file). Tolerant of a missing/malformed file."""
-    with _free_failover_lock:
-        cached = _free_failover_cache["data"]
-        if cached is not None:
-            return cached
-    try:
-        data = (
-            json.loads(_free_failover_file().read_text())
-            if _free_failover_file().exists() else {}
-        )
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    with _free_failover_lock:
-        _free_failover_cache["data"] = data
-    return data
+    return _limit_events.load_store(
+        _free_failover_file(), _free_failover_cache, _free_failover_lock,
+    )
 
 
 def _free_failover_cache_clear():
@@ -145,6 +135,7 @@ def _free_failover_rewrite(mutate):
             os.replace(tmp, path)
             with _free_failover_lock:
                 _free_failover_cache["data"] = new_data
+                _free_failover_cache["signature"] = _limit_events.signature(path)
             return retval
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
@@ -300,7 +291,7 @@ def _devin_reset_epoch(error_text, detected_at):
         try:
             n = int(m.group(1))
             unit = m.group(2).lower()
-            delta = n * (3600 if unit.startswith("h") else 60)
+            delta = n * (604800 if unit.startswith("w") else 86400 if unit.startswith("d") else 3600 if unit.startswith("h") else 60)
             if delta > 0:
                 return detected_at + delta, False
         except (ValueError, OverflowError):
@@ -326,7 +317,8 @@ def _free_failover_devin_candidates(now):
                 continue
     except OSError:
         pass
-    return out
+    out += _limit_events.capture_candidates("devin", now)
+    return list({(sid, str(path)): (sid, path) for sid, path in out}.values())
 
 
 def _detect_devin_usage_limit_stop(session_id, path):
@@ -346,6 +338,10 @@ def _detect_devin_usage_limit_stop(session_id, path):
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
+            if path.suffix != ".log" or not re.match(r"^(Reached free model rate limit|Error:.*(?:rate.?limit|usage.?limit|quota))", line, re.IGNORECASE):
+                continue
+            ev = {"type": "result", "subtype": "error", "error": line}
+        if not isinstance(ev, dict):
             continue
         if ev.get("type") != "result":
             continue
@@ -355,9 +351,9 @@ def _detect_devin_usage_limit_stop(session_id, path):
         if not _DEVIN_LIMIT_RE.search(err):
             return None
         dt = _core._stats_parse_ts(ev.get("ts") or ev.get("timestamp"))
-        detected_at = dt.timestamp() if dt is not None else time.time()
+        detected_at = dt.timestamp() if dt is not None else path.stat().st_mtime
         resume_at, estimated = _devin_reset_epoch(err, detected_at)
-        return _core._usage_limit_attach_continuation_fields({
+        return _limit_events._attach({
             "engine": "devin",
             "detected_at": detected_at,
             "resume_at": resume_at,
@@ -392,13 +388,15 @@ def _free_failover_scan_devin(now):
         if not sid:
             continue
         existing = tracked.get(sid)
-        if existing and (existing.get("fired") or existing.get("dismissed")):
+        if existing and existing.get("dismissed"):
             continue
         try:
-            found = _core._detect_devin_usage_limit_stop(sid, path)
+            found = _limit_events.cached_stop("devin", sid, path, _core._detect_devin_usage_limit_stop)
         except Exception:
             continue
         if not found:
+            if existing and existing.get("transcript_path") == str(path) and not existing.get("fired"):
+                _core._clear_usage_limit_resume(sid)
             continue
         if existing and existing.get("detected_at") == found["detected_at"]:
             continue
@@ -908,15 +906,10 @@ def _free_failover_auto_pass(now=None):
                 continue
             armed.append((sid, rec, entry))
     armed.sort(key=lambda t: str(t[0]))  # deterministic slot order
-    for idx, (sid, rec, entry) in enumerate(armed):
-        resume_at = entry.get("resume_at") or rec.get("auto_resume_at")
-        if not isinstance(resume_at, (int, float)):
-            continue
-        slot = idx // AUTO_RESUME_MAX_PER_MINUTE
-        fire_at = resume_at + slot * 60
-        if rec.get("auto_resume_fire_at") != fire_at:
-            _free_failover_save(sid, {"auto_resume_fire_at": fire_at})
-        if now < fire_at:
+    scheduled = _free_failover_schedule_armed(tracked, now) if armed else {}
+    for sid, rec, entry in armed:
+        fire_at = scheduled.get(sid)
+        if fire_at is None or now < fire_at:
             continue
         _free_failover_fire_auto_resume(sid, entry)
 
@@ -935,6 +928,54 @@ def _free_failover_auto_pass(now=None):
             _free_failover_finalize_switch_back(sid)
 
 
+def _free_failover_schedule_armed(tracked, now):
+    def _num(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value) if math.isfinite(value) else None
+
+    def mutate(existing):
+        slots = []
+        for rec in existing.values():
+            if not isinstance(rec, dict):
+                continue
+            fired_at = _num(rec.get("auto_resume_fired_at"))
+            if fired_at is not None and fired_at > now - 60:
+                slots.append(fired_at)
+        eligible = []
+        for sid, rec in existing.items():
+            if not isinstance(rec, dict) or not rec.get("auto_resume") or rec.get("auto_resume_done"):
+                continue
+            entry = tracked.get(sid)
+            if (
+                not isinstance(entry, dict)
+                or entry.get("fired")
+                or entry.get("dismissed")
+                or rec.get("auto_resume_detected_at") != entry.get("detected_at")
+            ):
+                rec["auto_resume"] = False
+                continue
+            reset = _num(entry.get("resume_at"))
+            if reset is None:
+                continue
+            eligible.append((sid, rec, reset, _num(rec.get("auto_resume_fire_at"))))
+        eligible.sort(key=lambda t: (
+            t[3] if t[3] is not None else max(t[2], now), str(t[0])))
+        schedule = {}
+        for sid, rec, reset, old in eligible:
+            candidate = max(reset, now) if old is None else max(reset, now, old)
+            while True:
+                occupied = [s for s in slots if candidate - 60 < s < candidate + 60]
+                if len(occupied) < AUTO_RESUME_MAX_PER_MINUTE:
+                    break
+                candidate = max(occupied) + 60
+            rec["auto_resume_fire_at"] = candidate
+            slots.append(candidate)
+            schedule[sid] = candidate
+        return existing, schedule
+    return _free_failover_rewrite(mutate)
+
+
 def _free_failover_is_armed(sid):
     """Does this session have an approved-but-unfired auto-resume? Called
     from _usage_limit_scan_once so the disabled auto-send pass leaves the
@@ -944,6 +985,7 @@ def _free_failover_is_armed(sid):
         isinstance(rec, dict)
         and rec.get("auto_resume")
         and not rec.get("auto_resume_done")
+        and rec.get("auto_resume_detected_at") == (_core._load_usage_limit_resumes().get(_normalize_sid(sid)) or {}).get("detected_at")
     )
 
 
@@ -951,6 +993,9 @@ def _free_failover_fire_auto_resume(sid, entry):
     """Fire one approved auto-resume: atomic claim first (cross-process
     safe), then a freshness re-check so we never "continue" a session that
     already moved on by itself, then the same injector a manual send uses."""
+    rec = (_load_free_failovers() or {}).get(sid) or {}
+    if not rec.get("auto_resume") or rec.get("auto_resume_detected_at") != entry.get("detected_at"):
+        return
     if not _core._mark_usage_limit_resume_fired(sid):
         # Someone else claimed the entry (e.g. a stale pass that ran before
         # the armed-skip landed). Stop retrying.
@@ -963,7 +1008,7 @@ def _free_failover_fire_auto_resume(sid, entry):
     engine = (entry.get("engine") or "").lower()
     detected_at = entry.get("detected_at") or 0
     try:
-        path = _free_failover_session_path(engine, sid)
+        path = Path(entry["transcript_path"]) if entry.get("transcript_path") else _free_failover_session_path(engine, sid)
         newest_mtime = path.stat().st_mtime if path else 0
     except OSError:
         newest_mtime = 0
@@ -1051,7 +1096,8 @@ def free_failover_status():
             "offer_dismissed": bool(
                 (rec.get("offer_dismissed_at") or 0) >= detected_at and detected_at
             ),
-            "auto_resume_armed": bool(rec.get("auto_resume")),
+            "auto_resume_armed": bool(rec.get("auto_resume") and rec.get("auto_resume_detected_at") == detected_at),
+            "limit_window": entry.get("limit_window"),
             "auto_resume_fire_at": rec.get("auto_resume_fire_at"),
             "auto_resume_done": bool(rec.get("auto_resume_done")),
             "auto_resume_error": rec.get("auto_resume_error"),

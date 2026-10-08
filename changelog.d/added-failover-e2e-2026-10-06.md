@@ -1,0 +1,1 @@
+- Add an opt-in real Claude failover test with isolated router analytics and switch-back proof, document free-provider data boundaries, strip inherited subscription credentials from failover resumes, and reliably retire and reap free children after completed turns.
