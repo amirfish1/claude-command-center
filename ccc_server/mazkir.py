@@ -477,8 +477,8 @@ TOOLS = [
                     "'what's stuck', or before filing a brief proposal.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "propose_spawn_session",
-     "description": "PROPOSE starting a new agent session. Does not start anything: the user must "
-                    "click Confirm in CCC. Returns an action_id to cite as [[action:confirm:ID]].",
+     "description": "PROPOSE starting a new agent session (also how git work like a push gets done). "
+                    "Does not start anything: the user must click Confirm in CCC. Returns an action_id to cite as [[action:confirm:ID]].",
      "inputSchema": {"type": "object", "properties": {
          "cwd": {"type": "string", "description": "Absolute repo/work directory."},
          "prompt": {"type": "string", "description": "The first message for the new session."},
@@ -673,6 +673,7 @@ Method:
 7. Be honest: if nothing matches, say what you searched and that you found nothing.
 8. For a daily brief / "what happened overnight", call daily_brief once and lead with its headline, then stuck items, then the numbered proposals.
 9. Acting: you cannot start, send, file, or post anything yourself. When the user asks you to (start a session, steer or message a session, file or comment on a ticket, "file proposal 2"), call the matching propose_* tool once with complete parameters, put [[action:confirm:ACTION_ID]] on its own line, and say it is waiting for their Confirm. Never say it was done. Don't propose actions the user did not ask for.
+10. Git work ("push bym", commit, merge, open a PR): don't say you can't. Call propose_spawn_session once with cwd = that repo's absolute path (take it from a candidate's or list_sessions' cwd; if unsure, ask which repo) and a prompt asking the session to do exactly that, following the repo's own git rules. Never ask it to force-push or skip hooks.
 
 Answer format (plain text, no markdown headers):
 - Lead with the answer in one or two sentences, then 1-4 short supporting lines.
@@ -946,8 +947,39 @@ def parse_result(stdout: str) -> dict:
     if isinstance(data, dict):
         return {"answer": str(data.get("result") or "").strip(), "num_turns": data.get("num_turns"),
                 "cost_usd": data.get("total_cost_usd"), "is_error": bool(data.get("is_error")),
-                "duration_ms": data.get("duration_ms"), "claude_session_id": data.get("session_id")}
+                "duration_ms": data.get("duration_ms"), "claude_session_id": data.get("session_id"),
+                "usage": data.get("usage"), "model_usage": data.get("modelUsage")}
     return {"answer": text, "num_turns": None, "cost_usd": None, "is_error": False}
+
+
+def turn_usage(res: dict) -> dict | None:
+    """Per-answer token usage, cache-adjusted the same way as the throughput views.
+
+    The result event's `usage` is per turn even in the warm multi-turn
+    process (`total_cost_usd` there is cumulative, so it can't be reused).
+    """
+    usage = res.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    flat = dict(usage)
+    # The 5m/1h cache-write split is nested; the normalizer reads top-level keys.
+    split = usage.get("cache_creation")
+    if isinstance(split, dict):
+        for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"):
+            if key in split:
+                flat[key] = split[key]
+    model_usage = res.get("model_usage")
+    model = next(iter(model_usage), "") if isinstance(model_usage, dict) and model_usage else MAZKIR_MODEL
+    from ccc_server.usage_stats import _throughput_normalize_usage
+    norm = _throughput_normalize_usage(flat, engine="claude", model=model)
+    return {
+        "input_tokens": int(usage.get("input_tokens") or 0),
+        "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),
+        "cache_read_input_tokens": int(usage.get("cache_read_input_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "cache_adjusted_tokens": int(round(norm["effective_total_tokens"])),
+        "model": model,
+    }
 
 
 def _harness_from_project_dir(pd: str | None) -> str:
@@ -1331,6 +1363,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         "tools_used": True,
         "turns": res.get("num_turns"),
         "cost_usd": res.get("cost_usd"),
+        "usage": turn_usage(res),
         "process_mode": res.get("mode"),
         "warm_fallback": res.get("fallback"),
         "ttft_ms": res.get("ttft_ms"),
