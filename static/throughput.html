@@ -2559,13 +2559,23 @@
         const rankings = data.sessions || [];
         weekRankings = {};
         const tokenMap = {};
+        const costMap = {};
         rankings.forEach((r, i) => {
           weekRankings[r.session_id] = i + 1;
           tokenMap[r.session_id] = Number(r.cache_adjusted_tokens || 0);
+          costMap[r.session_id] = {
+            usd: Number(r.cost_usd) || 0,
+            unpriced: Number(r.unpriced_turns) || 0,
+          };
         });
         // Keep this field for the existing aggregate table, but its value is
         // now cache-adjusted tokens in the selected sidebar window.
-        allSessions.forEach(s => { s._week_tokens = tokenMap[s.session_id] || 0; });
+        allSessions.forEach(s => {
+          s._week_tokens = tokenMap[s.session_id] || 0;
+          const c = costMap[s.session_id];
+          s._week_cost = c ? c.usd : 0;
+          s._week_unpriced = c ? c.unpriced : 0;
+        });
         renderSessionList();
         if (document.getElementById('top-sessions-section') &&
             document.getElementById('top-sessions-section').style.display !== 'none') {
@@ -2671,6 +2681,13 @@
         const effort = String(s.reasoning_effort || '').trim();
         const wt = s._week_tokens;
         const tokenLabel = wt ? formatCompactTokens(wt) : '';
+        // API-price cost for the same window; skipped when no turn was priced
+        // (e.g. models missing from the price table) so we never show a fake $0.
+        const cost = s._week_cost || 0;
+        const costLabel = cost > 0 ? fmtCost(cost) : '';
+        const costTitle = costLabel
+          ? ` · ${costLabel} at API prices${s._week_unpriced ? ` (${s._week_unpriced} turns unpriced)` : ''}`
+          : '';
 
         const item = document.createElement('div');
         item.className = `session-item ${sid === activeSessionId ? 'active' : ''}`;
@@ -2685,7 +2702,7 @@
           </div>
           <div class="session-meta">
             <span>${sid.substring(0, 8)}...${effort ? ` · ${effort}` : ''}</span>
-            <span title="${wt ? `${fmtNum(wt)} cache-adjusted tokens in the selected window` : ageText}">${tokenLabel || ageText}</span>
+            <span title="${wt ? `${fmtNum(wt)} cache-adjusted tokens in the selected window${costTitle}` : ageText}">${tokenLabel || ageText}${tokenLabel && costLabel ? ` · ${costLabel}` : ''}</span>
           </div>
         `;
         listEl.appendChild(item);
@@ -2694,7 +2711,10 @@
       // "Other" row: sum of sessions beyond top 20.
       if (rest.length > 0 && !sessionListExpanded) {
         const otherTokens = rest.reduce((sum, s) => sum + (s._week_tokens || 0), 0);
-        const otherLabel = otherTokens ? formatCompactTokens(otherTokens) : `${rest.length} sessions`;
+        const otherCost = rest.reduce((sum, s) => sum + (s._week_cost || 0), 0);
+        const otherLabel = otherTokens
+          ? formatCompactTokens(otherTokens) + (otherCost > 0 ? ` · ${fmtCost(otherCost)}` : '')
+          : `${rest.length} sessions`;
         const other = document.createElement('div');
         other.className = 'session-item';
         other.style.opacity = '0.6';

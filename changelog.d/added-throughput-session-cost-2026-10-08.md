@@ -1,0 +1,1 @@
+- Throughput dashboard: each session in the sidebar now shows its API-price cost next to its token count.
