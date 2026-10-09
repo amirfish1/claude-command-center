@@ -219,6 +219,49 @@ class TestJobLifecycle:
     def test_get_job_unknown(self):
         assert first_task.get_job("nope") is None
 
+    def test_requested_free_task_refuses_paid_fallback(self, env):
+        job, err = first_task.start_task("hello-3-langs", require_free=True)
+        assert job is None
+        assert err["code"] == "free_unavailable"
+        assert first_task._JOBS == {}
+        assert not env["playground"].exists()
+
+    def test_free_child_scrubs_paid_and_nested_session_env(self, env, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-XXXX")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-oauth-XXXX")
+        monkeypatch.setenv("CLAUDECODE", "1")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "test-parent")
+        monkeypatch.setattr(first_task, "_free_router_env", lambda: {
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:3017",
+            "ANTHROPIC_AUTH_TOKEN": "test-router-XXXX",
+        })
+        captured = {}
+        monkeypatch.setattr(first_task, "_run_job", lambda job, prompt, cmd_env, pg: captured.update(cmd_env))
+        job, err = first_task.start_task("hello-3-langs", require_free=True, extra_env={
+            "ANTHROPIC_API_KEY": "sk-ant-test-XXXX",
+            "CLAUDE_CODE_SESSION_KEY": "test-session-XXXX",
+            "CLAUDECODE": "1",
+            "CLAUDE_CODE_SESSION_ID": "test-parent",
+            "CLAUDE_CODE_MESSAGING_SOCKET": "test-socket",
+        })
+        assert err is None
+        first_task._JOBS[job["job_id"]]["thread"].join(timeout=3)
+        assert job["runtime"] == "free"
+        assert captured["CCC_SESSION_RUNTIME"] == "free"
+        assert captured["ANTHROPIC_AUTH_TOKEN"] == "test-router-XXXX"
+        assert all(k not in captured for k in (
+            "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_SESSION_KEY",
+            "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET"))
+
+    def test_failed_checks_do_not_mark_task_complete(self, env, monkeypatch):
+        first_task.ensure_playground()
+        job = {"job_id": "test-unverified", "task_id": "hello-3-langs",
+               "playground": str(env["playground"]), "runtime": "free"}
+        first_task._finish_job(job, status="done")
+        assert job["status"] == "error"
+        assert job["result"]["verified"] is False
+        assert "hello-3-langs" not in first_task._load_state().get("tasks_done", [])
+
 
 class TestOpenResult:
     def test_opens_page_inside_playground(self, env):

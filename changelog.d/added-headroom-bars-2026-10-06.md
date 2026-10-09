@@ -1,0 +1,1 @@
+- Sidebar usage bars show how much of each plan is left and when it resets, colored by risk, with a hover or focus tooltip carrying the numbers. Engines without usage data yet are hidden, and so is the whole strip when the headroom engine is not installed.

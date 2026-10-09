@@ -38,8 +38,9 @@ chips and the **FOLDER** input's ▾ dropdown (`#spawnCwdPicker`). If that endpo
 degrades to a bogus single fallback entry — a good visual signal. The bottom-left health bar's `err N`
 counter reflects server-side 5xx/handler errors and is a cheap in-UI assertion.
 
-Expect these **pre-existing** console errors on any run (not regressions): `:8765/ccc-plugin.js
-ERR_CONNECTION_REFUSED` and 404s for `/static/coo-notes.json`.
+Expect this **pre-existing** console error on any run (not a regression): 404s for
+`/static/coo-notes.json`. The `:8765/ccc-plugin.js` Hermes bridge only loads when
+`localStorage['ccc.hermesBridge'] === '1'`.
 
 ## Fresh-install simulation
 

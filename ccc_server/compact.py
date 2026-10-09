@@ -793,6 +793,25 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
             _core._COMPACT_INFLIGHT_SESSIONS.pop(sid, None)
 
 
+_PRESET_REFUSED = "compact_preset_resume_failed"
+
+
+def _hidden_pty_compact(sid, cwd):
+    """Hidden-pty /compact, refused for sessions on a paid domestic preset.
+
+    That path resumes with the plain Claude login, which would send the
+    vendor transcript to Anthropic and bill the user's Claude plan."""
+    from ccc_server import domestic_providers as _domestic_providers
+    try:
+        model = str(_domestic_providers.session_model(sid) or "")
+    except Exception:
+        model = ""
+    if model.lower().startswith(_domestic_providers.MODEL_PREFIX):
+        return {"ok": False, "code": _PRESET_REFUSED, "via": "preset",
+                "error": "Could not compact this paid-model session. Check its key in Settings, then try again."}
+    return _core._compact_via_hidden_pty(sid, cwd)
+
+
 def _compact_session_context_impl(session_id, *, terminal_app=None, _from_terminal_queue=False):
     sid = (session_id or "").strip()
     if not sid:
@@ -912,8 +931,8 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         # SILENT path first: drive /compact in an invisible pty so no Terminal
         # window pops (the Claude-Desktop approach). Falls through to the
         # visible launch on any failure so compaction is never silently dropped.
-        silent = _core._compact_via_hidden_pty(sid, cwd)
-        if silent.get("ok"):
+        silent = _hidden_pty_compact(sid, cwd)
+        if silent.get("ok") or silent.get("code") == _PRESET_REFUSED:
             return _compact_result(silent, backup_path)
         # Hidden-pty failed. The only remaining automatic path opens a NEW
         # terminal and AppleScript-types /compact into it. When other terminals
@@ -1041,8 +1060,8 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         "— falling back to hidden-pty\n"
     )
     # SILENT fallback: no Terminal window pops.
-    silent = _core._compact_via_hidden_pty(sid, cwd)
-    if silent.get("ok"):
+    silent = _hidden_pty_compact(sid, cwd)
+    if silent.get("ok") or silent.get("code") == _PRESET_REFUSED:
         return _compact_result(silent, backup_path)
     # Hidden-pty failed too. We no longer auto-open a terminal and type
     # /compact — that keystroke injection lands in the wrong window when other

@@ -65,6 +65,7 @@
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/savings.css">
+<link rel="stylesheet" href="/static/headroom-bars.css">
 <!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
      file's diff against upstream stays small — see simple.css's own header
      comment. Loaded unconditionally; it's inert (never matches) outside
@@ -81,6 +82,9 @@
 <link rel="stylesheet" href="/static/star-ask.css">
 <!-- Limit-hit failover card (see static/limit-failover.js). -->
 <link rel="stylesheet" href="/static/limit-failover.css">
+<!-- Fleet limit view: one banner per engine limit wall (see
+     static/fleet-failover.js). -->
+<link rel="stylesheet" href="/static/fleet-failover.css">
 <link rel="stylesheet" href="/static/router-detected.css">
 <style>
   body.hide-gh-issues .is-github-issue {
@@ -501,6 +505,11 @@
        inert on servers without /api/free-failover/status. -->
   <script src="/static/popups.js"></script>
   <script src="/static/limit-failover.js" defer></script>
+  <!-- Fleet limit view: one banner per engine limit wall. Owns the
+       failover lifecycle when /api/free-failover/fleet answers; the
+       per-session cards above stay as the fallback for older servers. -->
+  <script src="/static/fleet-failover.js" defer></script>
+  <script src="/static/headroom-bars.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
@@ -804,6 +813,7 @@
              flip the palette via CSS so no chip needs to re-render. -->
         <button id="chipsColorToggle" class="sh-btn" title="Toggle folder chip color mode" aria-label="Toggle folder chip color mode"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
       </div>
+      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
     </div>
 
     <div class="new-session-panel">
@@ -3467,7 +3477,7 @@
           <input type="password" id="carModeAnthropicKey" class="bug-input" autocomplete="off" placeholder="sk-ant-…  (leave blank to keep the stored one)">
         </div>
         <div>
-          <label class="bug-label" for="carModeDeepgramKey">Deepgram API key <span style="color:var(--text-muted);font-weight:400;">(optional - enables speech in + out)</span></label>
+          <label class="bug-label" for="carModeDeepgramKey">Deepgram API key <span style="color:var(--text-muted);font-weight:400;">(optional - speech runs locally by default; set CCC_VOICE_ENGINE=deepgram to use it)</span></label>
           <input type="password" id="carModeDeepgramKey" class="bug-input" autocomplete="off" placeholder="leave blank to keep the stored one">
         </div>
         <div style="color:var(--text-muted);font-size:12px;">
@@ -3480,10 +3490,10 @@
         <div class="car-mode-cost">
           <strong>What it costs</strong>
           <div style="margin-top:4px;">
-            About <strong>$0.35/hr</strong> to run: routing agent on Claude Haiku 4.5
-            (~$0.10/hr), Deepgram speech-to-text (~$0.08-0.10/hr) and text-to-speech
-            (~$0.15/hr). Near-free if you skip Deepgram and use your Mac's built-in
-            speech. Your CCC sessions bill separately as usual.
+            About <strong>$0.10/hr</strong> to run: the routing agent on Claude Haiku 4.5.
+            Speech is local and free by default (whisper.cpp hears you, Kokoro speaks).
+            Opting into Deepgram (<code>CCC_VOICE_ENGINE=deepgram</code>) adds about
+            $0.25/hr. Your CCC sessions bill separately as usual.
           </div>
         </div>
 
@@ -3491,8 +3501,8 @@
         <div id="carModeDegradeNotice" class="car-mode-degrade">
           <strong>If a key is missing</strong> - Car Mode degrades instead of breaking:
           <ul style="margin:6px 0 0 18px;padding:0;">
-            <li>No Deepgram key → hands-free voice is off, but CCC's built-in browser
-              mic and read-aloud (free, no key) still let you work by voice in the UI.</li>
+            <li>Local voice not installed → run <code>scripts/install_local_speech.sh</code>
+              once; meanwhile CCC's built-in browser mic and read-aloud still work.</li>
             <li>No Anthropic key → Car Mode can't start; it tells you what's needed
               instead of erroring.</li>
           </ul>
@@ -3756,6 +3766,9 @@
 </div>
 <script id="ccc-hermes-bridge-plugin">
 (function () {
+  // Opt-in only: this runs whatever script answers on the port inside the
+  // dashboard, so it stays off unless localStorage 'ccc.hermesBridge' is '1'.
+  try { if (localStorage.getItem('ccc.hermesBridge') !== '1') return; } catch (e) { return; }
   var port = "8765";
   var host = window.location.hostname || '127.0.0.1';
   if (host === 'localhost' || host === '::1' || host === '[::1]') host = '127.0.0.1';
@@ -3776,6 +3789,7 @@
 <script src="/static/claude-reauth.js"></script>
 <script src="/static/phone-access.js"></script>
 <script src="/static/config-consent.js"></script>
+<script src="/static/domestic-providers.js" defer></script>
 <script src="/static/free-key-wizard.js" defer></script>
 <script src="/static/federated-sidebar.js"></script>
 <script src="/static/q2-worker-idle.js"></script>
@@ -3792,6 +3806,7 @@
 <script src="/static/router-detected.js" defer></script>
 <script src="/static/app.js"></script>
 <script src="/static/free-settings.js" defer></script>
+<script src="/static/leftover.js" defer></script>
 <script src="/static/codex-live-source.js"></script>
 <script src="/static/scheduled-jobs.js"></script>
 <script src="/static/jobs-tab.js"></script>

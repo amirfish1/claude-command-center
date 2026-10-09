@@ -496,6 +496,11 @@ class FreeSpawnModelDefaultTests(unittest.TestCase):
 
     def setUp(self):
         self.server = _fresh_server()
+        patcher = mock.patch.object(
+            self.server, "_load_spawn_defaults",
+            return_value={"engine": "claude", "models": {"claude": "sonnet-5"}})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_free_spawn_without_model_sends_no_paid_default(self):
         engine, model = self.server._spawn_request_engine_and_model(
@@ -510,7 +515,7 @@ class FreeSpawnModelDefaultTests(unittest.TestCase):
 
     def test_paid_spawn_still_gets_the_default(self):
         _, model = self.server._spawn_request_engine_and_model({"engine": "claude"})
-        self.assertTrue(model)
+        self.assertEqual(model, "sonnet-5")
 
 
 if __name__ == "__main__":

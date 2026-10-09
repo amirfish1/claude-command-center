@@ -1,0 +1,115 @@
+/* Full-width last row of .sidebar-header. The brand column is too narrow
+   once the header alerts and actions are showing, so the header wraps only
+   while the strip is visible. */
+.sidebar-header:has(> .headroom-bars:not([hidden])) { flex-wrap: wrap !important; }
+.headroom-bars {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.headroom-bars .hb-heading {
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+.headroom-bars .hb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px 14px;
+}
+.headroom-bars .hb-chip {
+  --hb-color: var(--text-muted);
+  min-width: 0;
+  padding: 2px 0;
+  border-radius: 3px;
+  cursor: default;
+}
+.headroom-bars .hb-chip:focus { outline: none; }
+.headroom-bars .hb-chip:focus-visible {
+  outline: 2px solid var(--accent, #58a6ff);
+  outline-offset: 2px;
+}
+.headroom-bars .hb-ok { --hb-color: var(--green); }
+.headroom-bars .hb-warn { --hb-color: var(--orange); }
+.headroom-bars .hb-low { --hb-color: var(--red); }
+.headroom-bars .hb-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 4px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.headroom-bars .hb-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.headroom-bars .hb-val {
+  color: var(--hb-color);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.headroom-bars .hb-bar {
+  height: 3px;
+  margin: 4px 0;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border);
+}
+.headroom-bars .hb-fill {
+  height: 100%;
+  background: var(--hb-color);
+  border-radius: inherit;
+  transition: width 180ms ease;
+}
+.headroom-bars .hb-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.headroom-bars .hb-stale .hb-bar { opacity: 0.5; }
+/* No reading (or free routing, which has no single cap): a dotted track
+   instead of an empty one, so it never reads as "0% left". */
+.headroom-bars .hb-unknown .hb-bar {
+  background: repeating-linear-gradient(90deg, var(--border) 0 3px, transparent 3px 6px);
+}
+.headroom-bars .hb-unknown .hb-val { color: var(--text-muted); }
+
+/* Shared tooltip. Lives on <body> because the sidebar clips overflow. */
+.hb-tip {
+  position: fixed;
+  z-index: 10050;
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.35);
+  font-size: 11.5px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.hb-tip[hidden] { display: none; }
+.hb-tip .hb-tip-title {
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+.hb-tip .hb-tip-line {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .headroom-bars .hb-fill { transition: none; }
+}

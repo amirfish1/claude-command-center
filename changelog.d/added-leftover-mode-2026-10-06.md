@@ -1,0 +1,1 @@
+- Leftover Mode: when at least 20% of your Claude, Codex or Kimi plan may go unused within a day, CCC suggests 3 to 5 real tasks (WatchTower tasks, open GitHub issues, or TODO and FIXME notes) and starts one only when you click it. Turn it on or off in Settings > Leftover Mode. The floating offer and the once-a-day reminder stay hidden until approved.

@@ -1,0 +1,3 @@
+- Speak now uses the local Kokoro voice first and streams it a sentence at a time, so long replies start playing after the first sentence instead of after the whole clip. Deepgram is used only when explicitly turned on (`CCC_DEEPGRAM=1` or `~/.ccc/deepgram.on`); a stored key alone no longer enables it.
+- Car Mode no longer needs a Deepgram key: speech runs locally (whisper.cpp + Kokoro) by default, and the status banner names the engine. `CCC_VOICE_ENGINE=deepgram` opts back into Deepgram.
+- New `scripts/install_local_speech.sh` installs the Kokoro voice into `~/.ccc/local-tts`.

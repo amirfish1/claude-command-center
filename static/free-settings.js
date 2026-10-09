@@ -143,7 +143,8 @@
       '</div>' +
       '<div id="fsRoot">' +
         '<div class="fs-skel" aria-hidden="true"><i></i><i></i><i></i></div>' +
-      '</div>';
+      '</div>' +
+      '<div id="fsDomesticProviders"></div>';
     var after = el('settingsSection-engines');
     if (after && after.nextSibling) pane.insertBefore(sec, after.nextSibling);
     else pane.appendChild(sec);
@@ -164,7 +165,8 @@
       setTimeout(function () {
         var s = el('settingsBtn');
         var t = el('settingsRailTab-' + SECTION_ID);
-        if (s) s.click();
+        var modal = el('settingsModal');
+        if (s && (!modal || !modal.classList.contains('open'))) s.click();
         if (t) t.click();
       }, 30);
     } catch (_) { /* older browsers: no deep link */ }
@@ -194,6 +196,8 @@
   };
 
   function activate() {
+    var domesticHost = el('fsDomesticProviders');
+    if (domesticHost && window.cccDomesticProviders) window.cccDomesticProviders.mount(domesticHost).refresh();
     if (S.active) { refresh(); return; }
     S.active = true;
     refresh();

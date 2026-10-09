@@ -29,6 +29,9 @@ def test_every_popup_has_a_gate():
         "star-ask": "static/star-ask.js",
         "router-detected": "static/router-detected.js",
         "limit-failover": "static/limit-failover.js",
+        "fleet-limit": "static/fleet-failover.js",
+        "leftover-offer": "static/leftover.js",
+        "leftover-notification": "static/leftover.js",
     }
     assert set(gates) | {"notify-task", "notify-digest", "notify-milestone",
                          "notify-other"} == set(popups.ALL)
@@ -41,8 +44,8 @@ def test_every_popup_has_a_gate():
 def test_gate_loads_before_the_popups():
     html = (ROOT / "static" / "index.html").read_text()
     first = html.index('src="/static/popups.js"')
-    for name in ("limit-failover", "onboarding/onboarding", "savings", "notify",
-                 "router-detected", "star-ask"):
+    for name in ("limit-failover", "fleet-failover", "onboarding/onboarding", "savings", "notify",
+                 "router-detected", "star-ask", "leftover"):
         assert first < html.index('src="/static/%s.js"' % name), name
 
 
@@ -52,3 +55,6 @@ def test_notify_kinds_map_to_popups():
     assert popups.notify_kind_id("digest") == "notify-digest"
     assert popups.notify_kind_id("milestone") == "notify-milestone"
     assert popups.notify_kind_id("info") == "notify-other"
+    assert popups.notify_kind_id("leftover") == "leftover-notification"
+    assert "leftover: 'leftover-notification'" in JS
+    assert popups.notify_allowed("leftover") is False

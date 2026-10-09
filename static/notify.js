@@ -129,7 +129,7 @@
 
   var _KIND_ICON = {
     task: '✓', success: '✓', needs_input: '?', milestone: '★',
-    digest: '☰', error: '!', info: 'i',
+    digest: '☰', error: '!', info: 'i', leftover: '$',
   };
 
   function _openItem(item) {
@@ -544,13 +544,13 @@
   // ── public API + boot ─────────────────────────────────────────────────
 
   function show(item) {
-    if (typeof item === 'string') item = { title: item, body: arguments[1] || '' };
+    if (typeof item === 'string') item = { title: item, body: arguments[1] || '', kind: arguments[2] || 'info' };
     item = Object.assign({ kind: 'info', ts: Date.now() / 1000 }, item || {});
     if (!item.id) item.id = 'ntf_local_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     return _deliver(item);
   }
 
-  window.cccNotify = {
+  window.cccNotify = Object.assign(show, {
     show: show,
     toast: toast,
     enabled: enabled,
@@ -572,7 +572,7 @@
     pollPending: pollPending,
     _deliver: _deliver,
     _toast: toast,
-  };
+  });
 
   function _boot() {
     _bindSettings();

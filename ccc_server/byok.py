@@ -26,6 +26,7 @@ import time
 
 from ccc_server import core as _core
 from ccc_server import secret_store as _secret_store
+from ccc_server.domestic_presets import DOMESTIC_PRESETS, KEY_REGEX
 
 _KEYCHAIN_SERVICE = "ccc-byok"
 _LOCK = threading.Lock()
@@ -47,6 +48,11 @@ BYOK_PROVIDERS = {
     # sessions' env unless its profile is explicitly chosen at spawn.
     "jev": {"label": "TypeSafe Jev", "env_vars": ["JEV_API_KEY"], "key_hint": "tsk-...", "agent_env": False},
 }
+BYOK_PROVIDERS.update({
+    p["id"]: {"label": f"{p['name']} ({p['region']})", "env_vars": [],
+              "key_hint": p["key_hint"], "key_regex": KEY_REGEX}
+    for p in DOMESTIC_PRESETS
+})
 
 # Engines whose CLIs read provider API keys straight from the environment
 # (per each CLI's own documented auth env vars). CCC injects a profile's
@@ -212,6 +218,10 @@ def byok_set_key(profile, provider, secret):
     secret = (secret or "").strip()
     if not profile or provider not in BYOK_PROVIDERS or not secret:
         return False
+    if provider in {p["id"] for p in DOMESTIC_PRESETS}:
+        from ccc_server.domestic_providers import key_error
+        if key_error(provider, secret):
+            return False
     with _LOCK:
         if _keychain_available():
             ok = _keychain_set(profile, provider, secret)

@@ -417,10 +417,10 @@ TTS_VOICES = (
     "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
     "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
 )
-# Tried in order. Gemini first (30 voices); Cloudflare MeloTTS when Google
-# rate-limits the free tier. Kokoro (local, random voice) is tried before
-# MeloTTS when installed; see tts(). Aura is left out: the router sends it the wrong
-# field name and Cloudflare rejects it.
+# Cloud fallbacks, tried in order after the local Kokoro voice (see tts()):
+# Gemini (30 voices), then Cloudflare MeloTTS when Google rate-limits the free
+# tier. Aura is left out: the router sends it the wrong field name and
+# Cloudflare rejects it.
 TTS_MODELS = ("gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts", "@cf/myshell-ai/melotts")
 TTS_MAX_CHARS = 2000
 
@@ -458,7 +458,8 @@ def _local_tts_up():
 
 def local_tts_installed():
     py = _LOCAL_TTS_DIR / "venv" / "bin" / "python"
-    return py.exists() and (_LOCAL_TTS_DIR / "kokoro.int8.onnx").exists() and (_LOCAL_TTS_DIR / "voices.bin").exists()
+    model = any((_LOCAL_TTS_DIR / name).exists() for name in ("kokoro.fp32.onnx", "kokoro.int8.onnx"))
+    return py.exists() and model and (_LOCAL_TTS_DIR / "voices.bin").exists()
 
 
 def _local_tts_start():
@@ -480,25 +481,52 @@ def _local_tts_start():
     return False
 
 
+def _kokoro_voice(voice):
+    """A Kokoro voice name from a label or name; blank/unknown picks a random one."""
+    import random
+    voice = str(voice or "")
+    if voice.startswith(_KOKORO_LABEL):
+        voice = voice[len(_KOKORO_LABEL):]
+    return voice if voice in KOKORO_VOICES else random.choice(KOKORO_VOICES)
+
+
+def _local_tts_request(path, text, voice):
+    import urllib.request
+    return urllib.request.Request(
+        "http://127.0.0.1:%d%s" % (_LOCAL_TTS_PORT, path),
+        data=json.dumps({"text": text, "voice": voice}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+
+
+def local_tts_open(text, voice=""):
+    """(open HTTP response, label) streaming Kokoro mp3, or (None, "") when unavailable.
+
+    The local server makes the clip a sentence at a time and sends each one as
+    soon as it is ready, so playback starts after the first sentence instead of
+    after the whole text.
+    """
+    import urllib.request
+    text = str(text or "").strip()[:TTS_MAX_CHARS]
+    if not text or not _local_tts_start():
+        return None, ""
+    voice = _kokoro_voice(voice)
+    try:
+        return urllib.request.urlopen(_local_tts_request("/stream", text, voice), timeout=60), _KOKORO_LABEL + voice
+    except Exception:  # older venv without lameenc answers 404: caller uses local_tts()
+        return None, ""
+
+
 def local_tts(text, voice=""):
     """(audio, label) from the local Kokoro voice, or (b"", "") when unavailable.
 
     A blank or unknown voice picks a random one; the label ("Kokoro: af_nova")
     round-trips through the browser so one read keeps one voice.
     """
-    import random
     import urllib.request
-    voice = str(voice or "")
-    if voice.startswith(_KOKORO_LABEL):
-        voice = voice[len(_KOKORO_LABEL):]
-    if voice not in KOKORO_VOICES:
-        voice = random.choice(KOKORO_VOICES)
+    voice = _kokoro_voice(voice)
     if not _local_tts_start():
         return b"", ""
-    req = urllib.request.Request(
-        "http://127.0.0.1:%d/speak" % _LOCAL_TTS_PORT,
-        data=json.dumps({"text": text, "voice": voice}).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+    req = _local_tts_request("/speak", text, voice)
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = resp.read()
@@ -507,9 +535,9 @@ def local_tts(text, voice=""):
         return b"", ""
 
 
-# Deepgram Aura-2: optional metered voice, first in the chain when a key exists.
-# The key lives outside the repo (DEEPGRAM_API_KEY or ~/.ccc/deepgram.key);
-# delete the file or set CCC_DEEPGRAM=0 to turn it off.
+# Deepgram Aura-2: optional metered voice, off unless explicitly turned on with
+# CCC_DEEPGRAM=1 or an ~/.ccc/deepgram.on file. The key lives outside the repo
+# (DEEPGRAM_API_KEY or ~/.ccc/deepgram.key); a key alone does not enable it.
 DEEPGRAM_VOICES = (
     "andromeda", "apollo", "arcas", "aries", "asteria", "athena", "atlas", "aurora",
     "callista", "cora", "cordelia", "delia", "draco", "electra", "harmonia", "helena",
@@ -520,8 +548,15 @@ DEEPGRAM_VOICES = (
 _DEEPGRAM_LABEL = "Deepgram: "
 
 
+def deepgram_enabled():
+    flag = os.environ.get("CCC_DEEPGRAM", "").strip()
+    if flag:
+        return flag == "1"
+    return (Path.home() / ".ccc" / "deepgram.on").exists()
+
+
 def _deepgram_key():
-    if os.environ.get("CCC_DEEPGRAM", "") == "0":
+    if not deepgram_enabled():
         return ""
     key = os.environ.get("DEEPGRAM_API_KEY", "").strip()
     if key:
@@ -580,12 +615,14 @@ _gemini_blocked_until = 0.0
 
 
 def tts(text, voice=""):
-    """Speak ``text`` through the free router: (status, audio, content_type, label).
+    """Speak ``text``: (status, audio, content_type, label).
 
-    A blank or unknown voice picks a random Gemini voice, so repeated reads
-    sample the catalog. label names what spoke ("Puck", "MeloTTS"). status is
-    the HTTP status to relay; audio is empty on failure. The router key stays
-    on this side of the loopback.
+    Order: Deepgram when explicitly enabled, else the local Kokoro voice, then
+    the free router (Gemini, MeloTTS). A blank or unknown voice picks a random
+    one, so repeated reads sample the catalog. label names what spoke
+    ("Kokoro: af_nova", "Puck", "MeloTTS"). status is the HTTP status to
+    relay; audio is empty on failure. The router key stays on this side of the
+    loopback.
     """
     import random
     import urllib.request
@@ -596,24 +633,24 @@ def tts(text, voice=""):
     if dg:
         return 200, dg, _audio_type(dg), dg_label
     kokoro_voice = voice if str(voice).startswith(_KOKORO_LABEL) else ""
+    cloud_voice = voice in TTS_VOICES or voice == "MeloTTS"
+    if not cloud_voice and local_tts_installed():
+        # Local and unmetered, so it goes first. A read that started on a cloud
+        # voice (Kokoro was down) keeps that voice instead of switching mid-read.
+        local, label = local_tts(text, kokoro_voice)
+        if local:
+            return 200, local, _audio_type(local), label
     voice = voice if voice in TTS_VOICES else random.choice(TTS_VOICES)
     key = unified_key()
     status = 502
     if not key or not router_listening():
-        local, label = local_tts(text, kokoro_voice)
-        return (200, local, _audio_type(local), label) if local else (503, b"", "", voice)
+        return 503, b"", "", voice
     import time
     global _gemini_blocked_until
     for model in TTS_MODELS:
         melo = model.startswith("@cf/")
         if model.startswith("gemini") and time.time() < _gemini_blocked_until:
             continue
-        if melo and local_tts_installed():
-            # Kokoro (random voice, local, unmetered) goes ahead of MeloTTS
-            # (one voice); MeloTTS stays as the fallback if Kokoro fails.
-            local, label = local_tts(text, kokoro_voice)
-            if local:
-                return 200, local, _audio_type(local), label
         body = {"model": model, "input": text}
         if not melo:
             body["voice"] = voice

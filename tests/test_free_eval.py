@@ -296,6 +296,19 @@ def test_slow_models_lose_speed_points():
 # HTTP integration: catalog, full eval, pinning
 # ---------------------------------------------------------------------------
 
+def test_catalog_requests_rich_openai_metadata(monkeypatch):
+    captured = {}
+    def request(method, url, **kwargs):
+        captured.update(kwargs["headers"])
+        return 200, {"object": "list", "data": CATALOG}, None
+    monkeypatch.setattr(free_eval, "_http_json", request)
+    rows, err = free_eval.fetch_catalog({"base_url": "http://127.0.0.1:3017", "unified_key": FAKE_KEY})
+    assert err is None
+    assert "anthropic-version" not in {key.lower() for key in captured}
+    assert captured["Authorization"] == "Bearer " + FAKE_KEY
+    assert next(row for row in rows if row["id"] == "champ-7b")["ready"] is True
+
+
 def test_catalog_filters_virtual_entries(fake_router):
     cfg = free_eval.router_config(force=True)
     assert cfg["base_url"] == fake_router

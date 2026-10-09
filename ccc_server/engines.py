@@ -34,6 +34,7 @@ import uuid
 
 from ccc_server import core as _core
 from ccc_server import free_runtime as _free_runtime
+from ccc_server import domestic_providers as _domestic_providers
 
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
@@ -5875,6 +5876,16 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     """
     reasoning_effort = _core._validate_reasoning_effort(reasoning_effort, "claude")
     runtime = str(runtime or "").strip().lower()
+    # Free spawns never inherit the saved default: it may be a paid preset.
+    requested_model = model if runtime else _core._spawn_model_for_engine("claude", model)
+    preset_error = _domestic_providers.request_error(
+        "claude", requested_model, runtime, remote=bool(os.environ.get("CCC_SSH_HOST")),
+    )
+    if preset_error:
+        return preset_error
+    is_preset = bool(_domestic_providers.resolve_model(requested_model))
+    if is_preset:
+        model = requested_model
     route_args = {
         "prompt": prompt,
         "name": name,
@@ -5926,8 +5937,14 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         except Exception:
             pass
     prompt = _core._strip_ccc_session_state_instruction(prompt)
+    try:
+        paid_preset = _domestic_providers.resolve_spawn(requested_model, cwd or repo_path)
+    except _domestic_providers.DomesticProviderError as error:
+        return error.as_payload()
     free_overlay = {}
-    if runtime:
+    if paid_preset:
+        model_to_use = paid_preset["model"]
+    elif runtime:
         free_overlay = _free_runtime.spawn_env("claude", model=model)
         if not free_overlay:
             return _free_runtime.unavailable_result("claude")
@@ -5945,7 +5962,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         session_name = "unnamed"
     # A prewarm reservation launched with paid env — claiming one for a $0
     # spawn would bill the user's plan on a session sold as free.
-    entry = None if (worktree or runtime) else _core._take_claude_prewarm_for_request(
+    entry = None if (worktree or runtime or paid_preset) else _core._take_claude_prewarm_for_request(
         prewarm_id,
         cwd=cwd,
         repo_path=repo_path,
@@ -6067,6 +6084,13 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             except OSError:
                 pass
         child_env = _core._spawn_env(auto_compact_k=auto_compact_k)
+        if paid_preset:
+            try:
+                _domestic_providers._check_settings(spawn_cwd, paid_preset["env"])
+            except _domestic_providers.DomesticProviderError as error:
+                log_fh.close()
+                return error.as_payload()
+            _domestic_providers.apply_env(child_env, paid_preset["env"])
         if runtime:
             # apply_to_env also scrubs inherited Anthropic credentials so the
             # child's only auth is the router's unified key.
@@ -6125,7 +6149,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "engine": "claude",
             "cwd": spawn_cwd,
             "repo_path": ctx["repo_path"],
-            "model": model_to_use,
+            "model": model if paid_preset else model_to_use,
             "parent_session_id": parent_session_id or "",
             "session_id": session_id,
             "partial_messages": bool(capabilities.get("partial_messages")),
@@ -6191,7 +6215,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         engine="claude",
         session_id=session_id,
         repo_path=ctx["repo_path"],
-        model=model_to_use,
+        model=model if paid_preset else model_to_use,
         parent_session_id=parent_session_id,
         reasoning_effort=reasoning_effort,
         auto_compact_k=auto_compact_k,
@@ -7075,6 +7099,8 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
             except (ProcessLookupError, PermissionError, OSError, ValueError):
                 pass
     _cleanup_finished_entry(entry)
+    if terminate and isinstance(_proc, subprocess.Popen):
+        threading.Thread(target=_proc.wait, daemon=True, name=f"retired-spawn-{pid}").start()
     if pid is not None:
         _core._remove_spawn_from_registry(pid)
     try:
@@ -7804,7 +7830,8 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     # loses the in-flight response just as much as killing a tool call would.
     # `_headless_log_result_count` covers the whole window (no output yet AND
     # output streaming but not yet complete) with one check.
-    if spawn.get("prompt") and _headless_log_result_count(spawn) == 0:
+    completed_results = _headless_log_result_count(spawn)
+    if spawn.get("prompt") and completed_results == 0:
         if defer_if_busy:
             spawn["retire_when_idle"] = True
             spawn["retire_requires_approval"] = require_approval
@@ -7822,7 +7849,7 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     # until the browser gives up — "session doesn't load, times out").
     _STARTUP_GRACE_S = 60
     started_epoch = _spawn_entry_started_epoch(spawn)
-    if started_epoch and (time.time() - started_epoch) < _STARTUP_GRACE_S:
+    if not completed_results and started_epoch and (time.time() - started_epoch) < _STARTUP_GRACE_S:
         sid_for_timeline = _spawn_entry_session_id(spawn)
         timeline = _core._spawn_timeline_get(sid_for_timeline) if sid_for_timeline else None
         marks = (timeline or {}).get("marks") or {}
@@ -8087,6 +8114,14 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     text = _core._strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
+    preset_override = _core._get_session_override(session_id) or {}
+    preset_model = _domestic_providers.session_model(session_id, preset_override)
+    if not runtime and not extra_env:
+        preset_error = _domestic_providers.request_error(
+            "claude", preset_model, remote=bool(os.environ.get("CCC_SSH_HOST")),
+        )
+        if preset_error:
+            return preset_error
     # Reuse existing resumed process — but only when it runs the requested
     # runtime (a warm paid process must never serve a turn sold as $0), and
     # never for an extra_env resume: the live process still carries the old
@@ -8103,6 +8138,10 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
                     "this session already has a live process on a different "
                     "runtime — let it finish or start a new session",
                 )
+            if not runtime and (str(preset_model).startswith("byok/") or str(s.get("model") or "").startswith("byok/")):
+                if preset_model != s.get("model"):
+                    return {"ok": False, "code": "preset_live_model_changed",
+                            "error": "This session is still running with a different model. Start a new session to use your new choice."}
             ok = _core._write_stream_json_user_message(s, text)
             if ok:
                 _se = _core._resume_entry_started_epoch(s)
@@ -8133,6 +8172,11 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         except _core.RepoContextError as e:
             return e.as_payload()
     cwd = ctx["cwd"]
+    try:
+        paid_preset = (None if runtime or extra_env else
+                       _domestic_providers.resolve_spawn(preset_model, cwd))
+    except _domestic_providers.DomesticProviderError as error:
+        return error.as_payload()
     rebucket = _core._ensure_session_jsonl_for_cwd(session_id, cwd)
     if not rebucket.get("ok"):
         return {
@@ -8174,8 +8218,13 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     # header (`--betas`), not a model-id suffix. Use _cli_model_flag() which
     # also expands versioned short aliases (e.g. sonnet-4-6 → claude-sonnet-4-6)
     # since the --model flag does not accept bare versioned aliases for 4.x models.
-    override = _core._get_session_override(session_id)
-    if override and override.get("model") and not extra_env and not runtime:
+    override = preset_override
+    if paid_preset:
+        cmd.extend(["--model", paid_preset["model"]])
+        effort = str(override.get("reasoning_effort") or "").strip().lower()
+        if effort in _core.CLAUDE_REASONING_EFFORTS and effort:
+            cmd.extend(["--effort", effort])
+    elif override and override.get("model") and not extra_env and not runtime:
         # extra_env (a limit-hit failover's free-router wiring) or a free
         # runtime owns the model
         # selection for this child — passing the session's paid --model alias
@@ -8209,6 +8258,8 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         except OSError:
             pass
     child_env = _core._question_relay_env()
+    if paid_preset:
+        _domestic_providers.apply_env(child_env, paid_preset["env"])
     if runtime:
         _free_runtime.scrub_paid_env(child_env)
         child_env.update(free_overlay)
@@ -8218,6 +8269,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         # vars of a limit-hit failover). Scrub the inherited Anthropic vars
         # first so only the caller's values apply — a stray ANTHROPIC_API_KEY
         # in the parent shell must never leak into router-bound traffic.
+        _free_runtime.scrub_paid_env(child_env)
         for _k in (
             "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
@@ -8266,6 +8318,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         "cwd": cwd,
         "repo_path": ctx["repo_path"],
         "runtime": runtime,
+        "model": preset_model if paid_preset else "",
     }
     ok = _core._write_stream_json_user_message(entry, text, timeout=30)
     if not ok:
@@ -8299,6 +8352,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         session_id=session_id,
         repo_path=ctx["repo_path"],
         runtime=runtime,
+        model=preset_model if paid_preset else "",
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
         input_command_uuids=entry.get("input_command_uuids"),

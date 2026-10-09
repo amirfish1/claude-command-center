@@ -397,6 +397,18 @@
         foot.appendChild(skip);
       }
       grid.after(foot);
+      if (window.cccDomesticProviders) {
+        const details = document.createElement('details');
+        details.className = 'dp-wizard-details';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Use your own paid key';
+        const host = document.createElement('div');
+        details.append(summary, host);
+        details.addEventListener('toggle', () => {
+          if (details.open) window.cccDomesticProviders.mount(host).refresh();
+        });
+        foot.after(details);
+      }
     }
 
     load(ctl);
