@@ -1,0 +1,1 @@
+- A fresh install no longer shows a red "model-policy.json is missing" health error: first launch writes an empty policy once, and deleting it later is still flagged. The dashboard no longer loads a script from local port 8765 unless you opt in with `localStorage['ccc.hermesBridge'] = '1'`.

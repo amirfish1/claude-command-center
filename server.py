@@ -7839,6 +7839,24 @@ MODEL_POLICY_FILE = COMMAND_CENTER_STATE_DIR / "model-policy.json"
 _MODEL_POLICY_CACHE = {"sig": None, "blocked": frozenset()}
 
 
+def _seed_model_policy_once():
+    """Write an empty model-policy.json on a fresh install, exactly once.
+
+    A missing policy file is a loud health error (MEMO-FIX-25), so a brand-new
+    user would otherwise see that error on first launch. The marker keeps a
+    later deletion loud instead of being silently re-seeded.
+    """
+    marker = COMMAND_CENTER_STATE_DIR / "model-policy.seeded"
+    if MODEL_POLICY_FILE.exists() or marker.exists():
+        return
+    try:
+        COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        MODEL_POLICY_FILE.write_text('{"blocked_models": []}\n')
+        marker.write_text("")
+    except OSError as e:
+        print(f"[model-policy] could not seed {MODEL_POLICY_FILE}: {e}", file=sys.stderr)
+
+
 def _model_policy_blocked_models():
     """Return the frozenset of blocked catalog keys (env + policy file)."""
     blocked = set()
@@ -42026,6 +42044,7 @@ def main():
     globals()["PORT"] = port
     _raise_open_file_limit()
     migrate_state_dir()
+    _seed_model_policy_once()
     _install_python_stack_dump_handler()
     # Keep spawn stats across a dashboard restart -- otherwise restarting
     # mid-investigation throws away the evidence you restarted to look at.
