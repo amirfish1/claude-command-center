@@ -1,6 +1,6 @@
 # CCC
 
-[English](README.md) · **简体中文**
+[English](README.md) · [日本語](README.ja.md) · **简体中文**
 
 [![CI](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/amirfish1/claude-command-center?color=blue)](https://github.com/amirfish1/claude-command-center/releases)

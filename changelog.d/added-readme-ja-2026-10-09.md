@@ -1,0 +1,1 @@
+- Add a Japanese README (README.ja.md) covering install, first run, and engine support.
