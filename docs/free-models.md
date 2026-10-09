@@ -91,6 +91,14 @@ Settings → Free models) shows pass rate and speed per model, and CCC sets
 the router's Claude mapping to the top tool-capable model so a "Free
 ($0)" spawn gets the best free brain you have keys for.
 
+For a broader comparison, `scripts/run-leaderboard-eval.py` runs a fixed
+15-task suite (the five above plus ten more, each with a deterministic
+checker) against every $0 model on your router, OpenRouter's `:free`
+models, and GitHub Models. It never calls a model with a nonzero price and
+records the account cost before and after the run. Results land in
+[docs/leaderboard/latest.md](leaderboard/latest.md) and `latest.json`
+(pass rate, latency, tokens).
+
 ## Privacy and the ToS boundary
 
 Read this before you enable free runs: free tiers are paid for in ways

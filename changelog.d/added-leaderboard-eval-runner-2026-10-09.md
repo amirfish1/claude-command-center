@@ -1,0 +1,1 @@
+- Add a 15-task free-model leaderboard runner (scripts/run-leaderboard-eval.py) that scores $0 models on pass rate, latency and tokens, and never calls a paid model.
