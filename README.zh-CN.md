@@ -1,6 +1,6 @@
 # CCC
 
-[English](README.md) · **简体中文**
+[English](README.md) · [日本語](README.ja.md) · **简体中文**
 
 [![CI](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/amirfish1/claude-command-center?color=blue)](https://github.com/amirfish1/claude-command-center/releases)
@@ -20,7 +20,7 @@ _让 Claude 忙着第一个任务，你可以先开下一个。_
 一个本地面板，统一管理 **Claude Code**、**Codex**、**Cursor**、**Antigravity**、
 **Kilo Code**、**Kimi Code**、**OpenCode** 和 **Devin** 的会话，无论它们是从哪里启动的。
 八种引擎都能从 CCC 启动和监控，其中七种支持继续发送消息（Kilo Code 只能发起，不能续聊）。
-CCC 完全在本地运行，源码公开，个人和公司都可以免费使用和修改。
+CCC 完全在本地运行，源码公开，个人和公司都可以免费使用和修改。本项目与 Anthropic 无关联。
 
 ![CCC v5.35：会话列表、正在进行的智能体对话和输入框](docs/images/ccc-v5-35-hero.png)
 

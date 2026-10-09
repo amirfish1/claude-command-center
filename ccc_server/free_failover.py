@@ -20,9 +20,15 @@ rate-limit stop, this module owns the user's choices:
     staggered at most ``AUTO_RESUME_MAX_PER_MINUTE`` per minute — firing every
     lane at once is exactly how you hit the limit a second time.
   * **Switch back** — once the paid limit's reset time passes while a session
-    runs free, CCC offers to move it back: retire the free warm process
-    (deferred while a turn is in flight) or clear the Devin model override.
-    No prompt is sent, so a switch-back never burns a turn just to swap env.
+    runs free, CCC moves it back on the next watcher pass (unless the user
+    chose "Keep free"): retire the free warm process (deferred while a turn
+    is in flight) or clear the Devin model override. No prompt is sent, so a
+    switch-back never burns a turn just to swap env.
+
+Between the two hops every later turn of a free-running Claude session stays
+on the router (``_free_failover_session_env`` feeds resume_session_headless),
+and each hop appends a visible ``ccc_free_runtime`` transcript marker.
+Routers only ever carry non-Claude models (D9, ``_router_env_or_empty``).
 
 Detection additionally covers Devin's own free-model wall (the ACP transcript
 ``result/error`` shape, e.g. "Reached free model rate limit. ... Your limit
@@ -186,7 +192,7 @@ def _free_spawn_env():
     except Exception:
         env = {}
     if isinstance(env, dict) and env.get("ANTHROPIC_BASE_URL"):
-        return dict(env)
+        return _router_env_or_empty(dict(env))
     base = str(os.environ.get("CCC_FREE_ROUTER_BASE_URL") or "").strip()
     if not base:
         return {}
@@ -197,7 +203,84 @@ def _free_spawn_env():
     model = str(os.environ.get("CCC_FREE_ROUTER_MODEL") or "").strip()
     if model:
         env["ANTHROPIC_MODEL"] = model
+    return _router_env_or_empty(env)
+
+
+# Any id segment (after provider/region prefixes such as "bedrock/",
+# "us.anthropic.", "openrouter/anthropic/") that starts with claude/anthropic.
+_CLAUDE_MODEL_RE = re.compile(r"(?:^|[/.:@])(?:claude|anthropic)")
+
+
+def _is_claude_model(name):
+    """True when a router model id names an Anthropic model — routing that
+    through a third-party router would carry Claude traffic (D9)."""
+    return bool(_CLAUDE_MODEL_RE.search(str(name or "").strip().lower()))
+
+
+def _router_env_or_empty(env):
+    """D9 boundary: routers carry only non-Claude traffic. A router env
+    whose model is a Claude id is refused outright ({}), so the caller
+    reports "not ready" instead of proxying Claude through a router."""
+    if not env:
+        return {}
+    for key in ("ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"):
+        if _is_claude_model(env.get(key)):
+            return {}
     return env
+
+
+def _free_failover_session_env(session_id):
+    """Router env for a later turn of a session that is running free.
+
+    None = the session is not in failover (spawn normally). {} = it IS
+    running free but the router can't serve right now — the caller must
+    refuse rather than quietly resume on the still-limited paid plan.
+
+    The failover resume only wires the router into the ONE process it
+    spawns. When that warm process exits (idle retire, crash, restart),
+    the next message re-spawns `claude --resume` — and without this it
+    would go straight back to the still-limited paid plan. Only state
+    "free" counts: a pending switch-back means the user already chose
+    to go back, so the next fresh spawn is paid."""
+    sid = _normalize_sid(session_id)
+    if not sid or _free_failover_engine_and_raw(sid)[0] != "claude":
+        return None
+    rec = (_load_free_failovers() or {}).get(sid)
+    if not isinstance(rec, dict) or rec.get("state") != "free":
+        return None
+    if (rec.get("engine") or "claude") != "claude":
+        return None
+    return _core._free_spawn_env() or {}
+
+
+def _retire_failover_child(sid, reason, defer_if_busy=False):
+    """Retire the session's warm headless wherever it lives.
+
+    The worker owns engine processes by default, so the dashboard's own
+    spawn table is empty for them — asking it locally would report "nothing
+    to retire" while the router-bound child keeps running. Route to the
+    worker first; a worker error is reported as not-retired (never as
+    "gone"), and only a missing worker falls back to the local table."""
+    routed = _core._control_plane_engine_call(
+        "claude", "retire_idle",
+        {"session_id": sid, "reason": reason, "defer_if_busy": bool(defer_if_busy)},
+    )
+    if routed is None:
+        return _core._retire_idle_headless_for_session(
+            sid, reason=reason, defer_if_busy=defer_if_busy,
+        )
+    if routed.get("ok"):
+        return {k: routed[k] for k in ("retired", "pid", "reason", "deferred") if k in routed}
+    return {
+        "retired": False, "reason": "worker_error",
+        "error": routed.get("error") or routed.get("code") or "worker error",
+    }
+
+
+def _child_gone(ret):
+    """retire result -> the session has no live headless left."""
+    return bool(ret.get("retired")) or not (
+        ret.get("reason") or ret.get("deferred") or ret.get("error"))
 
 
 def _free_ready_info():
@@ -513,9 +596,7 @@ def free_failover_continue(session_id, always=False, auto=False):
             # still-limited paid model — retire it first so the resume
             # spawns a fresh process carrying the free env. Busy is refused,
             # never killed mid-turn.
-            ret = _core._retire_idle_headless_for_session(
-                sid_for_rows, reason="free-failover",
-            )
+            ret = _retire_failover_child(sid_for_rows, "free-failover")
             if not ret.get("retired") and ret.get("reason"):
                 return {
                     "ok": False, "code": "busy",
@@ -539,13 +620,14 @@ def free_failover_continue(session_id, always=False, auto=False):
                     "code": result.get("code") or "resume_failed",
                     "error": result.get("error") or "Could not resume the session.",
                 }
-            _free_failover_marker(
-                sid_for_rows, "failover_start",
-                "Continued on a free model ($0) — your Claude plan's limit "
-                "was reached.",
-            )
             free_pid = result.get("pid")
             free_label = free_env.get("ANTHROPIC_MODEL") or "free model"
+            _free_failover_marker(
+                sid_for_rows, "failover_start",
+                f"Continued on your router ({free_label}, $0) — your Claude "
+                "plan's limit was reached. Same session, full context.",
+                model=free_label,
+            )
         else:
             result = _free_failover_devin_continue(
                 sid_for_rows, raw, free_uid, entry,
@@ -740,7 +822,7 @@ def free_failover_dismiss(session_id, offer="failover"):
     return {"ok": True, "session_id": sid, "dismissed": offer}
 
 
-def free_failover_switch_back(session_id):
+def free_failover_switch_back(session_id, auto=False):
     """Move a free-running session back to its paid plan/model.
 
     Claude: retire the warm free headless (deferred while a turn is in
@@ -775,47 +857,34 @@ def free_failover_switch_back(session_id):
                     _core._acp_set_config("devin", raw, "model", origin)
             except Exception:
                 pass
-        _free_failover_finalize_switch_back(sid)
+        _free_failover_finalize_switch_back(sid, auto=auto)
         return {"ok": True, "session_id": sid, "pending": False}
 
-    ret = _free_failover_retire_free_child(sid)
-    if ret.get("deferred") or ret.get("unconfirmed"):
-        reason = "retire_unconfirmed" if ret.get("unconfirmed") else (ret.get("reason") or "busy")
+    ret = _retire_failover_child(sid, "free-switch-back", defer_if_busy=True)
+    if not _child_gone(ret):
+        # Busy, still starting, or the worker didn't answer: the free child
+        # may still be alive, so don't declare the session back yet. The
+        # watcher re-checks and finalizes once it is really gone.
         _free_failover_save(sid, {
             "state": "switch_back_pending",
             "offer": None,
-            "pending_reason": reason,
+            "pending_reason": ret.get("reason") or "busy",
+            "switch_back_auto": bool(auto),
         })
         return {
             "ok": True, "session_id": sid, "pending": True,
-            "reason": reason,
+            "reason": ret.get("reason") or "busy",
         }
-    _free_failover_finalize_switch_back(sid)
+    _free_failover_finalize_switch_back(sid, auto=auto)
     return {"ok": True, "session_id": sid, "pending": False}
 
 
-def _free_failover_retire_free_child(sid):
-    """Retire the free child. `unconfirmed` when the worker did not answer.
-
-    A routed error (worker timeout, dispatch failure) is not proof the free
-    child is gone. Finalizing on it would report the switch done while the
-    child keeps running free, so the caller keeps the switch pending and
-    the watcher retries.
-    """
-    ret = _core._retire_idle_headless_for_session(
-        sid, reason="free-switch-back", defer_if_busy=True,
-    )
-    if not isinstance(ret, dict):
-        return {"unconfirmed": True}
-    if ret.get("ok") is False and not ret.get("retired"):
-        return dict(ret, unconfirmed=True)
-    return ret
-
-
-def _free_failover_finalize_switch_back(session_id):
+def _free_failover_finalize_switch_back(session_id, auto=False):
     sid = _normalize_sid(session_id)
     _free_failover_marker(
         sid, "failover_back",
+        "Switched back to Claude — your plan's limit reset. Router "
+        "failover ended." if auto else
         "Switched back to your plan — free-model failover ended.",
     )
 
@@ -824,8 +893,10 @@ def _free_failover_finalize_switch_back(session_id):
         for key in (
             "state", "offer", "free_pid", "free_model", "pending_reason",
             "origin_model", "origin_resume_at", "origin_detected_at",
+            "switch_back_auto",
         ):
             cur.pop(key, None)
+        cur["last_switch_back_at"] = time.time()
         if cur.get("always"):
             cur["state"] = "done"  # keep `always` for the next stop
         existing[sid] = cur
@@ -930,37 +1001,45 @@ def _free_failover_auto_pass(now=None):
             continue
         _free_failover_fire_auto_resume(sid, entry)
 
-    # 4. Pending switch-backs finalize once the free process is gone.
+    # 4. Switch back when Claude resets. No prompt is sent and a busy free
+    #    process is only retired after its turn, so this never burns or cuts
+    #    a turn; "Keep free" on the offer card opts a cycle out.
+    for sid, rec in list((_load_free_failovers() or {}).items()):
+        if _free_failover_switch_back_due(rec, now):
+            try:
+                _core.free_failover_switch_back(sid, auto=True)
+            except Exception:
+                pass
+
+    # 5. Pending switch-backs finalize once the free process is gone.
     for sid, rec in (_load_free_failovers() or {}).items():
         if not isinstance(rec, dict) or rec.get("state") != "switch_back_pending":
             continue
         engine, _raw = _free_failover_engine_and_raw(sid)
         if engine != "claude":
             continue
-        if not _free_child_live(sid):
-            _free_failover_finalize_switch_back(sid)
-        elif rec.get("pending_reason") == "retire_unconfirmed":
-            ret = _free_failover_retire_free_child(sid)
-            if ret.get("retired"):
-                _free_failover_finalize_switch_back(sid)
-            elif ret.get("deferred"):
-                _free_failover_save(sid, {"pending_reason": ret.get("reason") or "busy"})
+        try:
+            ret = _retire_failover_child(sid, "free-switch-back", defer_if_busy=True)
+        except Exception:
+            continue
+        if _child_gone(ret):
+            _free_failover_finalize_switch_back(
+                sid, auto=bool(rec.get("switch_back_auto")))
 
 
-def _free_child_live(sid):
-    """True while the session's headless runs, in the worker or locally."""
-    try:
-        routed = _core._control_plane_engine_call(
-            "claude", "input_state", {"session_id": sid}, mutate=False,
-        )
-    except Exception:
-        routed = None
-    if isinstance(routed, dict) and routed.get("ok"):
-        return bool(routed.get("owned"))
-    try:
-        return _core._find_live_spawn_entry_for_session(sid) is not None
-    except Exception:
+def _free_failover_switch_back_due(rec, now):
+    """A free-running session whose paid reset has passed and whose user
+    didn't say "keep free" for this stop."""
+    if not isinstance(rec, dict) or rec.get("state") != "free":
         return False
+    reset_ref = rec.get("origin_resume_at")
+    if not isinstance(reset_ref, (int, float)) or isinstance(reset_ref, bool):
+        return False
+    if now < reset_ref:
+        return False
+    dismissed = (rec.get("switch_back_dismissed_at") or 0) >= (
+        rec.get("origin_detected_at") or 0)
+    return not dismissed
 
 
 def _free_failover_schedule_armed(tracked, now):

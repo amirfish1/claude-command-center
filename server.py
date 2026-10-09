@@ -30890,6 +30890,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import free_router
             if free_router.handle_api_post(self, path):
                 return
+        if path == "/api/leftover/approve":
+            # Leftover Mode: one click queues a proposed WatchTower ticket.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import leftover
+            if leftover.handle_api_post(self, path):
+                return
         if path.startswith("/proxy/"):
             self._proxy_local_view("POST")
             return

@@ -1,6 +1,6 @@
 # CCC
 
-**English** · [简体中文](README.zh-CN.md)
+**English** · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/amirfish1/claude-command-center?color=blue)](https://github.com/amirfish1/claude-command-center/releases)
@@ -33,7 +33,7 @@ _Start the next while Claude builds the first._
 One local dashboard for **Claude Code**, **Codex**, **Cursor**, **Antigravity**,
 **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin**, however you launched them.
 Spawn and monitor all eight; send follow-up on seven. Kilo Code is fire-and-forget.
-CCC is local, source-available, and free to use and modify, including at work.
+CCC is local, source-available, and free to use and modify, including at work. Not affiliated with Anthropic.
 
 ![CCC v5.35 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-35-hero.png)
 
