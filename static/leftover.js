@@ -89,6 +89,13 @@
     toggle.classList.toggle('is-on', enabled());
     toggle.setAttribute('aria-checked', String(enabled()));
   }
+  // WatchTower decides which engine runs a queued ticket (its queue engine,
+  // or the plan with headroom when the queue has headroom dispatch on), so
+  // never promise the selected plan for those.
+  function queueNote(tasks) {
+    return (tasks || []).some(function (task) { return task.dispatch === 'watchtower'; })
+      ? ' WatchTower tasks run on the engine their queue picks.' : '';
+  }
   function savedKey(task, row) { return 'ccc-leftover-started:' + task.repo_path + ':' + task.id + ':' + row.engine; }
   function folderName(path) {
     var parts = String(path || '').split('/').filter(Boolean);
@@ -137,7 +144,7 @@
     if (picker.innerHTML !== options) picker.innerHTML = options;
     picker.hidden = list.length < 2;
     if (row) { selectedId = row.id; picker.value = row.id; }
-    el('loPlan').textContent = row ? 'Uses your ' + engineName(row) + ' plan in a separate worktree. No task starts by itself.' : 'Tasks become available when a fresh estimate says your plan may go unused.';
+    el('loPlan').textContent = (row ? 'Uses your ' + engineName(row) + ' plan in a separate worktree. No task starts by itself.' : 'Tasks become available when a fresh estimate says your plan may go unused.') + queueNote(panel.tasks);
     renderTasks();
     syncToggle();
   }
@@ -179,7 +186,7 @@
       meta.textContent = '';
       markup = '<div class="lo-offer-empty">Open a conversation or pick a folder to see tasks for it.<button type="button" class="lo-start" data-lo-choose>Pick a folder</button></div>';
     } else {
-      meta.textContent = 'Tasks in ' + folderName(offer.repo) + ' · uses your ' + engineName(row) + ' plan';
+      meta.textContent = 'Tasks in ' + folderName(offer.repo) + ' · uses your ' + engineName(row) + ' plan' + queueNote(offer.tasks);
       if (offer.tasks.length) {
         markup = '<ul class="lo-offer-list">' + offer.tasks.map(function (task) {
           return '<li class="lo-offer-task"><div class="lo-offer-copy">' + sourceMarkup(task)
@@ -284,7 +291,7 @@
         return;
       }
       panel.tasks = validTasks(res.data); panel.canonical = res.data.repo_path;
-      renderTasks();
+      renderPanel();
       el('loSources').textContent = (res.data.sources || []).map(function (source) { return source.detail; }).join(' ');
       el('loTaskStatus').textContent = panel.tasks.length ? 'Choose one task. Each click starts only that task.' : res.data.loading ? 'Looking for tasks in this folder…' : 'No ready tasks found. Add a GitHub issue or a TODO in your code.';
       if (res.data.loading && Date.now() < deadline) setTimeout(function () { loadTasks(folder, version, deadline); }, 1000);

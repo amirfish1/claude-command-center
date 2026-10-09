@@ -90,6 +90,31 @@ def test_approve_runs_only_offered_watchtower_ticket(tmp_path, monkeypatch):
     assert leftover.approve(repo, wt['id'])[1] == 409
 
 
+def test_overlapping_approvals_reserve_each_offer(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    first = leftover.proposal(repo, 'watchtower', 'APP-1', 'One', '')
+    second = leftover.proposal(repo, 'watchtower', 'APP-2', 'Two', '')
+    for row in (first, second):
+        row.update(queue='APP', dispatch='watchtower', task_repo=repo)
+    leftover._CACHE[repo] = {'ts': 1.0, 'loading': False, 'value': {'ok': True, 'repo_path': repo, 'proposals': [first, second]}}
+    monkeypatch.setattr(leftover, '_core', SimpleNamespace(_wt_cli_path=lambda: '/bin/wt'))
+    runs, nested = [], []
+
+    def run(argv, **kw):
+        runs.append(argv[-1])
+        if argv[-1] == 'APP-1':
+            # A second click lands while the first `wt run` is still going.
+            nested.append(leftover.approve(repo, second['id']))
+            nested.append(leftover.approve(repo, first['id']))
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr(leftover.subprocess, 'run', run)
+    assert leftover.approve(repo, first['id'])[1] == 200
+    assert [status for _, status in nested] == [200, 409]
+    assert runs == ['APP-1', 'APP-2']
+    assert leftover._CACHE[repo]['value']['proposals'] == []
+
+
 def test_approve_reports_watchtower_errors(tmp_path, monkeypatch):
     repo = str(tmp_path)
     wt = leftover.proposal(repo, 'watchtower', 'APP-1', 'Fix search', '')

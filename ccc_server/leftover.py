@@ -149,12 +149,26 @@ def approve(repo, proposal_id):
 
     The ref comes from the server's own cached proposals for this folder, never
     from the request, so the endpoint can only queue a ticket it offered."""
+    # Reserve the offer atomically (take it out of the cached list) before
+    # running `wt run`, so overlapping clicks can neither queue it twice nor
+    # restore each other's approved tickets from a stale snapshot.
     with _LOCK:
         entry = _CACHE.get(repo)
         offered = list((entry or {}).get('value', {}).get('proposals') or [])
-    task = next((row for row in offered if row.get('id') == proposal_id), None)
-    if not task or task.get('dispatch') != 'watchtower' or not _REF.fullmatch(task.get('reference') or ''):
-        return {'ok': False, 'error': 'This task is no longer offered. Refresh the list and try again.'}, 409
+        task = next((row for row in offered if row.get('id') == proposal_id), None)
+        if not task or task.get('dispatch') != 'watchtower' or not _REF.fullmatch(task.get('reference') or ''):
+            return {'ok': False, 'error': 'This task is no longer offered. Refresh the list and try again.'}, 409
+        entry['value'] = dict(entry['value'], proposals=[row for row in offered if row.get('id') != proposal_id])
+    body, status = _run_wt(repo, task)
+    if not body['ok']:
+        with _LOCK:
+            current = entry['value'].get('proposals') or []
+            if all(row.get('id') != proposal_id for row in current):
+                entry['value'] = dict(entry['value'], proposals=current + [task])
+    return body, status
+
+
+def _run_wt(repo, task):
     try:
         binary = _core._wt_cli_path()
     except AttributeError:
@@ -168,9 +182,6 @@ def approve(repo, proposal_id):
     if result.returncode:
         message = (result.stderr or result.stdout or '').strip().splitlines()
         return {'ok': False, 'error': (message[-1] if message else 'WatchTower could not queue this task.')[:300]}, 502
-    with _LOCK:
-        if entry:
-            entry['value'] = dict(entry['value'], proposals=[row for row in offered if row.get('id') != proposal_id])
     return {'ok': True, 'ref': task['reference'], 'queue': task.get('queue') or ''}, 200
 
 
