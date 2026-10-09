@@ -100,7 +100,7 @@ function installShim(sessions, repos) {
     return { ok: true, rows: [
       { id: 'claude:default', engine: 'claude', label: 'Claude', available: true,
         percent_left: left, resets_at: resetAt, burn_pct_per_hour: 31 },
-      { id: 'free:router', engine: 'free', label: 'Free router', available: true, unlimited: true },
+      { id: 'free_router:default', engine: 'free_router', label: 'Free router', available: true, unlimited: true },
     ] };
   }
 
