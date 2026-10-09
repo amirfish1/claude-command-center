@@ -459,5 +459,31 @@ class FocusedSessionAndInjectTest(unittest.TestCase):
         self.assertEqual(seen["focused"], {"session_id": "abc12345"})
 
 
+
+class TurnUsageTests(unittest.TestCase):
+    """Ask shows each answer's cost in cache-adjusted tokens (FEAT-NEXT-150)."""
+
+    def setUp(self):
+        import server  # noqa: F401 -- usage_stats resolves helpers through it
+
+    def test_cache_adjusted_weights_reads_and_1h_writes(self):
+        res = mazkir.parse_result(json.dumps({
+            "result": "ok",
+            "usage": {"input_tokens": 2, "cache_creation_input_tokens": 1379,
+                      "cache_read_input_tokens": 35259, "output_tokens": 10,
+                      "cache_creation": {"ephemeral_1h_input_tokens": 1379,
+                                         "ephemeral_5m_input_tokens": 0}},
+            "modelUsage": {"claude-sonnet-5-5": {}},
+        }))
+        u = mazkir.turn_usage(res)
+        self.assertEqual(u["model"], "claude-sonnet-5-5")
+        self.assertEqual(u["cache_read_input_tokens"], 35259)
+        # 2 fresh + 1379 x 2.0 (1h write) + 35259 x 0.1 (read) + 10 out
+        self.assertEqual(u["cache_adjusted_tokens"], 6296)
+
+    def test_missing_usage_is_none(self):
+        self.assertIsNone(mazkir.turn_usage(mazkir.parse_result("plain text")))
+
+
 if __name__ == "__main__":
     unittest.main()

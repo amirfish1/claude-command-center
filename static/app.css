@@ -29133,6 +29133,12 @@ button.orch-node:hover { border-color: color-mix(in srgb, var(--accent) 60%, var
   font-size: 10px;
   color: var(--text-muted, #8b949e);
 }
+.ask-turn-usage {
+  margin-top: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted, #8b949e);
+}
 .ask-turn-body {
   font-size: 12.5px;
   line-height: 1.6;

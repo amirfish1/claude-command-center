@@ -65731,6 +65731,20 @@
   // toolbar picks up the same CSS + the two document-level click handlers
   // (data-copy-assistant-message / data-read-assistant-message) with no
   // handler changes beyond the .closest('.ask-turn-a') fallback below.
+  // Per-answer cost footer: cache-adjusted tokens (cache reads/writes weighted
+  // by the model's list-price ratios, same number as the throughput views),
+  // with the raw breakdown on hover. Older saved turns have no usage.
+  function askUsageHtml(t) {
+    const u = t && t.usage;
+    if (!u || typeof u.cache_adjusted_tokens !== 'number') return '';
+    const n = (v) => (Number(v) || 0).toLocaleString();
+    const title = n(u.input_tokens) + ' fresh in + ' + n(u.cache_creation_input_tokens) + ' cache write + '
+      + n(u.cache_read_input_tokens) + ' cache read + ' + n(u.output_tokens) + ' out'
+      + (u.model ? ' (' + u.model + ')' : '');
+    return '<div class="ask-turn-usage" title="' + askEscapeHtml(title) + '">'
+      + n(u.cache_adjusted_tokens) + ' cache-adjusted tokens</div>';
+  }
+
   function askMessageActionsHtml() {
     return '<span class="assistant-message-actions" data-role="assistant-message-actions">'
       + '<button type="button" class="assistant-message-action" data-ask-file-issue title="File an issue about this response" aria-label="File an issue">+</button>'
@@ -65936,7 +65950,8 @@
           '<div class="ask-assistant-header"><span class="ask-assistant-glyph">M</span><span class="ask-assistant-name">Mazkir</span>' + (elapsedSec ? '<span class="ask-turn-time">' + elapsedSec + '</span>' : '') + '</div>' +
           (t.error ? '' : askTraceHtml(t)) +
           '<div class="ask-turn-body">' + (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) + '</div>' +
-          (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') + '</div>' +
+          (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') +
+          (t.error ? '' : askUsageHtml(t)) + '</div>' +
           (t.error ? '' : askConfirmCardsHtml(t)) +
           (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
           '</div>';
@@ -66146,6 +66161,7 @@
           turn.elapsedMs = data.elapsed_ms;
           turn.ttftMs = data.ttft_ms;
           turn.processMode = data.process_mode;
+          turn.usage = data.usage || null;
           turn.trace = data.trace || [];
           turn.confirmActions = data.confirm_actions || [];
           // CCC-1048: "File an issue" embeds when/id in the ticket context.

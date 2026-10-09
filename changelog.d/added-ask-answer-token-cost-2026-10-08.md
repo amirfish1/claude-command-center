@@ -1,0 +1,1 @@
+- Ask answers now end with their cost in cache-adjusted tokens. Hover to see the fresh, cache-write, cache-read, and output breakdown.

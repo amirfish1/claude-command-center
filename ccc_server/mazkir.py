@@ -971,7 +971,10 @@ def turn_usage(res: dict) -> dict | None:
     model_usage = res.get("model_usage")
     model = next(iter(model_usage), "") if isinstance(model_usage, dict) and model_usage else MAZKIR_MODEL
     from ccc_server.usage_stats import _throughput_normalize_usage
-    norm = _throughput_normalize_usage(flat, engine="claude", model=model)
+    try:
+        norm = _throughput_normalize_usage(flat, engine="claude", model=model)
+    except Exception:  # a usage footer must never fail the answer
+        return None
     return {
         "input_tokens": int(usage.get("input_tokens") or 0),
         "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),
