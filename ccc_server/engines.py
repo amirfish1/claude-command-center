@@ -8114,9 +8114,18 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     text = _core._strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
+    # A session mid limit-hit failover keeps every later turn on the router
+    # until it switches back. Applied to a FRESH spawn only (below), so the
+    # warm free process is still reused turn after turn.
+    failover_env = {}
+    if not runtime and not extra_env:
+        try:
+            failover_env = _core._free_failover_session_env(session_id) or {}
+        except Exception:
+            failover_env = {}
     preset_override = _core._get_session_override(session_id) or {}
     preset_model = _domestic_providers.session_model(session_id, preset_override)
-    if not runtime and not extra_env:
+    if not runtime and not extra_env and not failover_env:
         preset_error = _domestic_providers.request_error(
             "claude", preset_model, remote=bool(os.environ.get("CCC_SSH_HOST")),
         )
@@ -8160,6 +8169,9 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
                 }
             _core._retire_unresponsive_spawn_entry(s, terminate=True, reason="write_failed")
             break
+
+    if failover_env:
+        extra_env = failover_env
 
     if cwd:
         try:
