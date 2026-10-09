@@ -27,6 +27,8 @@ CCC puts every session on one local board and tells you which one needs you.
 
 _Start the next while Claude builds the first._
 
+<a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="A Claude session hits its usage limit and CCC keeps all 12 sessions going on a free model through your own router" width="100%" /></a>
+
 > “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
 > CCC user
 

@@ -17,6 +17,8 @@ CCC はすべてのセッションをひとつのローカルボードにまと�
 
 _Claude が最初のタスクを進めている間に、次のタスクを始めましょう。_
 
+<a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="Claude の利用上限に達しても、CCC が 12 個のセッションを自分のルーター経由の無料モデルで動かし続ける様子" width="100%" /></a>
+
 **Claude Code**、**Codex**、**Cursor**、**Antigravity**、**Kilo Code**、**Kimi Code**、
 **OpenCode**、**Devin** のセッションを、どこから起動したものでもひとつのローカルダッシュボードで扱えます。
 8 つすべてを CCC から起動・監視でき、そのうち 7 つには続けてメッセージを送れます（Kilo Code は起動のみで、続きの送信には対応していません）。
