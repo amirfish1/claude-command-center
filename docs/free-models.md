@@ -99,6 +99,15 @@ records the account cost before and after the run. Results land in
 [docs/leaderboard/latest.md](leaderboard/latest.md) and `latest.json`
 (pass rate, latency, tokens).
 
+To refresh the scores weekly without touching the router's mapping, install
+the user timer with `systemd/install-leaderboard-weekly.sh`. Every Monday it
+runs `scripts/leaderboard-weekly.py run`, which races the models again and
+stages a privacy-checked page in `~/.ccc/leaderboard/`. Each run's outcome
+goes to `last-run.json`, and `scripts/leaderboard-weekly.py health` exits
+non-zero when the last run failed or is over 8 days old. Nothing is
+published: review the staged page, then copy it with
+`scripts/publish-leaderboard.sh --source-dir ~/.ccc/leaderboard`.
+
 ## Privacy and the ToS boundary
 
 Read this before you enable free runs: free tiers are paid for in ways

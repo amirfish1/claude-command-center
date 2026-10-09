@@ -128,7 +128,7 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("<!-- star-history:end -->", text)
 
     def test_readme_and_moved_guides_have_no_broken_local_links(self):
-        for relative in ("README.md", "README.zh-CN.md") + GUIDES:
+        for relative in ("README.md", "README.zh-CN.md", "README.ja.md") + GUIDES:
             with self.subTest(file=relative):
                 source = ROOT / relative
                 self.assertTrue(source.is_file(), relative)
@@ -140,6 +140,18 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("(README.md)", text)
         for item in ("scripts/install.sh", "brew install ccc", "install.ps1", "./run.sh", "GLM", "Kimi", "DeepSeek", "Qwen", "MiniMax"):
             self.assertIn(item, text)
+
+    def test_japanese_readme_is_linked_and_keeps_install_path(self):
+        self.assertIn("(README.ja.md)", (ROOT / "README.md").read_text(encoding="utf-8"))
+        text = (ROOT / "README.ja.md").read_text(encoding="utf-8")
+        self.assertIn("(README.md)", text)
+        for item in ("scripts/install.sh", "brew install ccc", "install.ps1", "./run.sh", "localhost:8090"):
+            self.assertIn(item, text)
+
+    def test_readme_first_screen_says_not_affiliated_with_anthropic(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = text.index("scripts/install.sh")
+        self.assertIn("Not affiliated with Anthropic.", text[:install])
 
     def test_readme_retains_seeded_gallery_images(self):
         targets = links((ROOT / "README.md").read_text(encoding="utf-8"))

@@ -5,6 +5,46 @@ When you choose **Free ($0)** or approve **Continue free**, your coding agent
 uses the local router to reach a non-Anthropic provider. Your normal Claude
 plan stays separate.
 
+## Your Claude subscription login
+
+**CCC never shares your Claude subscription with another app, model, or
+machine.** Your login belongs to Claude Code. CCC runs your installed `claude`
+command and lets it use its own login, the same way it does in a terminal.
+
+What CCC does with it:
+
+- **Runs your own Claude Code.** Normal sessions start your `claude` command,
+  which reads its own login. CCC does not log in for you or hold a separate
+  copy.
+- **Shows who is signed in.** CCC reads the account email and organization ID
+  that Claude Code keeps in `~/.claude.json`.
+- **Reads your own plan usage.** About every 5 minutes, CCC reads Claude Code's
+  login token on this computer and asks Anthropic's claude.ai usage endpoint
+  for your plan's usage numbers. That request goes only to Anthropic, and
+  only to read your quota for the limit and headroom meters. On macOS, CCC
+  can use the claude.ai cookie that CodexBar caches instead.
+- **Helps you sign in again.** When a login expires, the re-auth helper runs
+  `claude auth login` on that computer. You approve in your browser and paste
+  the one-time code. CCC never sees your password and never logs the code.
+
+What CCC never does with it:
+
+- It never sends your token to the free router, a free or paid model
+  provider, CCC telemetry, or another computer.
+- It never lets another app, agent, or API client use your Claude
+  subscription. CCC does not run a proxy or shared endpoint backed by your
+  login.
+- It never copies `~/.claude/.credentials.json` between computers. Each
+  computer signs in on its own.
+- It never runs a free session on your subscription. Free spawns and
+  **Continue free** remove `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  and `CLAUDE_CODE_SESSION_KEY` from the child process before pointing it at
+  the router.
+- It never spends a paid turn on its own when you hit a limit. **Continue
+  free** waits for your approval, unless you turned on **Always** for that
+  session. Switching back, by hand or after your limit resets, sends no
+  prompt.
+
 ## What the router carries
 
 - The prompts and responses for the free session.
@@ -22,14 +62,20 @@ before switching providers.
 
 - Your Claude subscription OAuth token.
 - Your Anthropic paid API key or Claude account login credentials.
+- Claude models. A router whose model id names a Claude model (`claude-*`,
+  `anthropic/...`) is refused as "not ready" instead of being used.
 
 CCC sets routing for one child process at a time. It does not write free-router
 settings to `~/.claude/settings.json`. Free spawns and failover resumes remove
 inherited paid credentials before adding the router's own key.
 
-After **Switch back**, the free child retires, once its current turn finishes.
-Your next normal resume uses your usual plan. Switching back does not send a
-prompt or spend a paid turn just to change providers.
+While a session runs on the router, every later turn stays there, including
+turns that start a fresh process. Once your plan's limit resets, CCC switches
+the session back by itself, unless you chose **Keep free**. You can also
+**Switch back** early. Either way the free child retires once its current turn
+finishes, and your next resume uses your usual plan. Switching back does not
+send a prompt or spend a paid turn just to change providers. Each hop leaves a
+marker in the session's transcript.
 
 ## Keyless does not mean private
 
@@ -73,6 +119,22 @@ installs a LaunchAgent or touches an existing router. Automatic agent CLI
 updates are disabled in the test HOME before CCC starts. Port 8090 and port
 3017 are refused so your main services are not used by mistake.
 
+To test what a new user gets, run the same path from a clean install:
+
+```bash
+CCC_E2E_FREE=1 ./scripts/e2e-failover-clean.sh
+```
+
+It starts with an empty HOME and only the system PATH. It installs Claude
+Code with its official installer, with no login, then installs CCC with the
+README installer. It sets up the router through CCC's own setup and enables
+keyless Kilo in Free model settings. CCC runs with a fake paid API key and a
+fake subscription token in its environment. On Linux, the test reads the free
+child's real environment and fails if either value reached it. It needs Git,
+Python 3.12 or newer, Node, npm and curl on the system PATH. Set
+`CCC_E2E_CLAUDE_BIN` to reuse an installed Claude Code, or
+`CCC_E2E_INSTALL_URL=github` to use the published installer.
+
 For an automated run:
 
 ```bash
@@ -96,6 +158,19 @@ Missing or incomplete analytics fail the test instead of counting as zero.
 With `CCC_E2E_KEEP=1`, private logs and sanitized analytics stay under the test
 HOME printed by the script. Keep those artifacts local. The test sends no
 report to a public service.
+
+A hermetic version needs only the `claude` CLI. It runs a fake plan endpoint
+and a fake router on loopback, with a simulated limit and reset. There is no
+network traffic and no spend:
+
+```bash
+python3 -m pytest tests/test_continue_session_e2e.py -q
+```
+
+It checks that the approved hop and a later fresh-process turn both reach the
+router. It checks that the switch-back sends nothing and the next turn returns
+to the plan. It also checks that the router sees only its own token and a
+non-Claude model.
 
 See [Free models](free-models.md) for setup and [Security](../SECURITY.md) for
 the localhost trust boundary.

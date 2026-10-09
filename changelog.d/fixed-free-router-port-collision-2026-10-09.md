@@ -1,0 +1,1 @@
+- Free model setup on Linux and WSL: the router no longer inherits the dashboard's `PORT` and collides with CCC itself, which made setup fail at "Starting it up".

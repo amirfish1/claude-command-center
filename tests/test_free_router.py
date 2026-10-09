@@ -140,7 +140,8 @@ for a in args:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    os.environ[k] = v
+                    # Real Node: --env-file never overrides a set variable.
+                    os.environ.setdefault(k, v)
     else:
         rest.append(a)
 if not rest:
@@ -197,6 +198,8 @@ def env(tmp_path, monkeypatch):
     port = _free_port()
     monkeypatch.setenv("CCC_FREE_ROUTER_HOME", str(home))
     monkeypatch.setenv("CCC_FREE_ROUTER_PORT", str(port))
+    # run.sh exports the dashboard's PORT; the router child must not inherit it.
+    monkeypatch.setenv("PORT", str(_free_port()))
     monkeypatch.setenv("CCC_FREELLMAPI_SRC", str(src))
     monkeypatch.setenv("CCC_FREE_ROUTER_SUPERVISOR", "child")
     monkeypatch.setenv("CCC_FREE_ROUTER_NODE", str(fakebin / "node"))

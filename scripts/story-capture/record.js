@@ -91,6 +91,9 @@ function run(cmd, argv) {
     const fixtureBase = args['fixture-base'] || flow.fixtureBase;
     if (fixtureBase) await forceDemoFixtures(page, fixtureBase);
     await seedLocalStorage(page, lsEntries);
+    // Optional pre-navigation hook (fetch shims, clocks) for flows that
+    // need more than static fixtures — e.g. flows/limit-hit.js.
+    if (typeof flow.setup === 'function') await flow.setup(page);
     await gotoAndSettle(page, url);
     await suppressDemoBanner(page);
     await installCursor(page, viewport.width * 0.45, viewport.height * 0.55);
