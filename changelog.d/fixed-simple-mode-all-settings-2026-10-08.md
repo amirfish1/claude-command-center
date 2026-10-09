@@ -1,0 +1,1 @@
+- Simple mode: the Settings screen now has an "All settings" row that opens the full Settings window without leaving Simple mode, and the ⋯ bottom-nav button is labeled "Settings" for screen readers.

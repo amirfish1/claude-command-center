@@ -4988,6 +4988,7 @@ class TestServerImports(unittest.TestCase):
         for hook in ('id="simpleHistory"', 'id="simpleHistorySearch"',
                      'id="simpleAutomations"', 'id="simpleAutomationDetail"',
                      'id="simpleSettings"', 'id="simpleAdvancedBtn"',
+                     'id="simpleAllSettingsBtn"',
                      'data-simple-theme="dark"'):
             self.assertIn(hook, index_html)
         # Depth 2: plain title + labeled Send button.

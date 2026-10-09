@@ -18778,6 +18778,10 @@
     fwd('simpleFontMinus', 'fontMinus');
     fwd('simpleFontPlus', 'fontPlus');
     fwd('simpleWhatsNewBtn', 'cccWhatsNewLink');
+    const allBtn = document.getElementById('simpleAllSettingsBtn');
+    if (allBtn) allBtn.addEventListener('click', () => {
+      if (typeof openSettingsModal === 'function') openSettingsModal();
+    });
     const advBtn = document.getElementById('simpleAdvancedBtn');
     if (advBtn) advBtn.addEventListener('click', () => setUiMode('advanced'));
   }
