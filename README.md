@@ -1,5 +1,25 @@
 # CCC
 
+**Your coding agents outgrew your terminal.**
+
+CCC puts every session on one local board and tells you which one needs you.
+
+_Start the next while Claude builds the first._
+
+![A CCC share card: 5.82B tokens processed, 429 agent hours, 98% cache hits over the last 30 days, with a daily activity heatmap](docs/images/share-card-example.png)
+
+<sub>A real share card from one of the maintainer's machines. Yours comes from the throughput page: totals only, no prompts, code, or project names.</sub>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
+```
+
+<sub>Needs Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
+
+- **One board for eight agents.** Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin, however you launched them.
+- **Start free in 5 minutes.** The first-run wizard runs your first task on a $0 model and shows what it would have cost.
+- **Local and source-available.** No account, no cloud, free to use at work ([FSL-1.1-MIT](LICENSE)). Not affiliated with Anthropic.
+
 [![CI](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/amirfish1/claude-command-center?color=blue)](https://github.com/amirfish1/claude-command-center/releases)
 [![Stars](https://img.shields.io/github/stars/amirfish1/claude-command-center?style=flat&color=yellow)](https://github.com/amirfish1/claude-command-center/stargazers)
@@ -19,29 +39,12 @@
 ![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B)
 ![Devin](https://img.shields.io/badge/Devin-0EA5E9)
 
-**Your coding agents outgrew your terminal.**
-
-CCC puts every session on one local board and tells you which one needs you.
-
-_Start the next while Claude builds the first._
-
 > “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
 > CCC user
 
-One local dashboard for **Claude Code**, **Codex**, **Cursor**, **Antigravity**,
-**Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin**, however you launched them.
-Spawn and monitor all eight; send follow-up on seven. Kilo Code is fire-and-forget.
-CCC is local, source-available, and free to use and modify, including at work.
-
 ![CCC v5.35 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-35-hero.png)
 
-Install with curl:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
-```
-
-With Homebrew:
+Other ways to install. With Homebrew:
 
 ```bash
 brew tap amirfish1/ccc

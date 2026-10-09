@@ -1,0 +1,1 @@
+README first screen now leads with the pitch, a real share card, the one-line install, and three bullets; badges moved below. Licence copy says source-available (FSL-1.1-MIT) everywhere, including the site footer, and the README and site say CCC is not affiliated with Anthropic.
