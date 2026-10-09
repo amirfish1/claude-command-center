@@ -30845,3 +30845,16 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   letter-spacing: 0.02em;
   opacity: 0.8;
 }
+
+/* Close button for the Continue-new config panel (the chip that opens it can
+   be covered by the panel itself on phones). */
+.f2c-close {
+  margin-left: auto;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}

@@ -1,0 +1,1 @@
+- The Continue new picker now has a Done button, and its quick picks no longer repeat models or offer the one already selected.

@@ -4376,7 +4376,7 @@
   // model chip), this continuation popup must carry the recorded effort too:
   // choosing a quick pick should recreate the exact configuration that was
   // useful before.
-  function f2TopLaunchPicks() {
+  function f2TopLaunchPicks(current) {
     try {
       const seen = new Set();
       return (Array.isArray(_cachedServerModelPicks) ? _cachedServerModelPicks : [])
@@ -4387,15 +4387,18 @@
           if (!f2LaunchEngines().some(e => e.id === engine)) return false;
           if (!f2ModelsForEngine(engine).some(option => option.id === model)) return false;
           if (effort && !f2EffortsForEngine(engine).some(option => option.id === effort)) return false;
-          const key = JSON.stringify([engine, model, effort]);
+          // One chip per engine+model (effort variants folded: the effort
+          // select already covers it), and never the model already selected.
+          if (current && current.engine === engine && current.model === model) return false;
+          const key = JSON.stringify([engine, model]);
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         }).slice(0, 4);
     } catch (_) { return []; }
   }
-  function f2QuickPickHtml() {
-    const picks = f2TopLaunchPicks();
+  function f2QuickPickHtml(current) {
+    const picks = f2TopLaunchPicks(current);
     if (!picks.length) return '';
     return '<div class="f2c-quick-picks" role="group" aria-label="Recently used launch configurations">'
       + '<span class="f2c-quick-picks-label">Quick picks</span>'
@@ -4433,9 +4436,10 @@
       + (efforts.length
           ? '<span>at</span>' + f2SelectHtml('effort', efforts, launch.effort) + '<span>effort</span>'
           : '')
-      + f2QuickPickHtml()
-      // No Done button: the caret that opened the picker closes it, and every
-      // change applies immediately, so there is nothing to confirm.
+      + f2QuickPickHtml(launch)
+      + '<button type="button" class="f2c-close" data-f2-chip aria-label="Close" title="Close">Done</button>'
+      // Every change applies immediately; Done only closes the panel (the
+      // chip caret also toggles it, but it can sit under the panel on phones).
       + '</div>';
   }
 
