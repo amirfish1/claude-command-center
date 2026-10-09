@@ -128,11 +128,18 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("<!-- star-history:end -->", text)
 
     def test_readme_and_moved_guides_have_no_broken_local_links(self):
-        for relative in ("README.md",) + GUIDES:
+        for relative in ("README.md", "README.zh-CN.md") + GUIDES:
             with self.subTest(file=relative):
                 source = ROOT / relative
                 self.assertTrue(source.is_file(), relative)
                 self.assertEqual(broken_links(source), [], relative)
+
+    def test_chinese_readme_is_linked_and_keeps_install_path(self):
+        self.assertIn("(README.zh-CN.md)", (ROOT / "README.md").read_text(encoding="utf-8"))
+        text = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+        self.assertIn("(README.md)", text)
+        for item in ("scripts/install.sh", "brew install ccc", "install.ps1", "./run.sh", "GLM", "Kimi", "DeepSeek", "Qwen", "MiniMax"):
+            self.assertIn(item, text)
 
     def test_readme_retains_seeded_gallery_images(self):
         targets = links((ROOT / "README.md").read_text(encoding="utf-8"))
