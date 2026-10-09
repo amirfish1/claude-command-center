@@ -1,0 +1,1 @@
+- New-session model chips no longer offer picks for engines that cannot be launched there, so clicking MiniMax no longer switches to Fable.
