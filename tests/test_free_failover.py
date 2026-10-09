@@ -528,6 +528,33 @@ class SwitchBackTests(_FailoverBase):
             self.server._retire_idle_headless_for_session(sid, reason="x")
         local.assert_called_once()
 
+    def test_switch_back_stays_pending_when_the_worker_does_not_confirm(self):
+        sid = "89898989-1111-2222-3333-444444444444"
+        self.server._free_failover_save(sid, {
+            "state": "free", "engine": "claude",
+            "free_since": time.time() - 600,
+        })
+        with mock.patch.object(
+                self.server, "_retire_idle_headless_for_session",
+                return_value={"ok": False, "error": "worker timed out"}), \
+             mock.patch.object(self.server, "_log_activity"):
+            res = self.server.free_failover_switch_back(sid)
+        self.assertTrue(res["pending"])
+        rec = self._failover_store()[sid]
+        self.assertEqual(rec["state"], "switch_back_pending")
+        self.assertEqual(rec["pending_reason"], "retire_unconfirmed")
+
+    def test_worker_retire_op_reports_handled(self):
+        import worker_engines
+        legacy = mock.Mock()
+        legacy._retire_idle_headless_for_session_local.return_value = {
+            "retired": False, "reason": "busy", "deferred": True}
+        host = worker_engines.EngineHost.__new__(worker_engines.EngineHost)
+        host._legacy = lambda: legacy
+        res = host._call("claude", "retire_idle", {"session_id": "s", "defer_if_busy": True})
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["deferred"])
+
     def test_pending_switch_back_waits_for_the_worker_owned_child(self):
         sid = "78787878-1111-2222-3333-444444444444"
         with mock.patch.object(self.server, "_control_plane_engine_call",

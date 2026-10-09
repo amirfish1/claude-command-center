@@ -858,7 +858,7 @@ unset link_ccc_cli_script
 # Only a non-CCC owner stops us; a CCC already on the port keeps the
 # server's own duplicate-instance handling.
 if [ -f "$HERE/scripts/port_preflight.py" ] \
-  && [ "$("$PYTHON" "$HERE/scripts/port_preflight.py" "$PORT" 2>/dev/null || true)" = "busy" ]; then
+  && [ "$("$PYTHON" "$HERE/scripts/port_preflight.py" "$PORT" --host "${CCC_BIND_HOST:-}" 2>/dev/null || true)" = "busy" ]; then
   echo "Error: port $PORT is in use by another program. Start CCC on a free port, e.g. PORT=$((PORT + 1)) ./run.sh" >&2
   exit 1
 fi

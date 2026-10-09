@@ -320,9 +320,9 @@ pick_port() {
   local picker="$INSTALL_DIR/scripts/port_preflight.py" chosen
   [ -n "$PORT_EXPLICIT" ] && return 0
   [ -f "$picker" ] || return 0
-  chosen="$("$PYTHON3" "$picker" "$PORT" --pick 2>/dev/null || true)"
+  chosen="$("$PYTHON3" "$picker" "$PORT" --host "${CCC_BIND_HOST:-}" --pick 2>/dev/null || true)"
   if [ -n "$chosen" ] && [ "$chosen" != "$PORT" ]; then
-    note "port $PORT is in use by another program; using port $chosen"
+    note "port $PORT is already in use; using port $chosen"
     PORT="$chosen"
     DASHBOARD_URL="http://localhost:${PORT}"
   fi

@@ -55,14 +55,21 @@ def test_other_program_is_busy_and_pick_moves_on():
         server.shutdown()
 
 
-def test_running_ccc_is_recognised_and_kept():
+def test_running_ccc_is_recognised_but_never_reused_by_pick():
+    # That CCC may serve another repo; the installer must not bind on top.
     server = _serve({"version": "5.37.0", "code_rev": "abc"})
     try:
         port = server.server_address[1]
         assert _run(port).stdout.strip() == "ccc"
-        assert _run(port, "--pick").stdout.strip() == str(port)
+        assert int(_run(port, "--pick").stdout.strip()) > port
     finally:
         server.shutdown()
+
+
+def test_explicit_bind_host_is_probed():
+    port = _free_port()
+    assert _run(port, "--host", "").stdout.strip() == "free"
+    assert _run(port, "--host", "127.0.0.1", "--pick").stdout.strip() == str(port)
 
 
 def test_bad_usage():

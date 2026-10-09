@@ -778,21 +778,38 @@ def free_failover_switch_back(session_id):
         _free_failover_finalize_switch_back(sid)
         return {"ok": True, "session_id": sid, "pending": False}
 
-    ret = _core._retire_idle_headless_for_session(
-        sid, reason="free-switch-back", defer_if_busy=True,
-    )
-    if ret.get("deferred"):
+    ret = _free_failover_retire_free_child(sid)
+    if ret.get("deferred") or ret.get("unconfirmed"):
+        reason = "retire_unconfirmed" if ret.get("unconfirmed") else (ret.get("reason") or "busy")
         _free_failover_save(sid, {
             "state": "switch_back_pending",
             "offer": None,
-            "pending_reason": ret.get("reason") or "busy",
+            "pending_reason": reason,
         })
         return {
             "ok": True, "session_id": sid, "pending": True,
-            "reason": ret.get("reason") or "busy",
+            "reason": reason,
         }
     _free_failover_finalize_switch_back(sid)
     return {"ok": True, "session_id": sid, "pending": False}
+
+
+def _free_failover_retire_free_child(sid):
+    """Retire the free child. `unconfirmed` when the worker did not answer.
+
+    A routed error (worker timeout, dispatch failure) is not proof the free
+    child is gone. Finalizing on it would report the switch done while the
+    child keeps running free, so the caller keeps the switch pending and
+    the watcher retries.
+    """
+    ret = _core._retire_idle_headless_for_session(
+        sid, reason="free-switch-back", defer_if_busy=True,
+    )
+    if not isinstance(ret, dict):
+        return {"unconfirmed": True}
+    if ret.get("ok") is False and not ret.get("retired"):
+        return dict(ret, unconfirmed=True)
+    return ret
 
 
 def _free_failover_finalize_switch_back(session_id):
@@ -922,6 +939,12 @@ def _free_failover_auto_pass(now=None):
             continue
         if not _free_child_live(sid):
             _free_failover_finalize_switch_back(sid)
+        elif rec.get("pending_reason") == "retire_unconfirmed":
+            ret = _free_failover_retire_free_child(sid)
+            if ret.get("retired"):
+                _free_failover_finalize_switch_back(sid)
+            elif ret.get("deferred"):
+                _free_failover_save(sid, {"pending_reason": ret.get("reason") or "busy"})
 
 
 def _free_child_live(sid):

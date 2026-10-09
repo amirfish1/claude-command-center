@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Check a dashboard port before CCC starts anything on it.
 
-    port_preflight.py PORT          -> prints free | ccc | busy
-    port_preflight.py PORT --pick   -> prints PORT when it is free or already
-                                       CCC, else the next free port above it
+    port_preflight.py PORT [--host H]         -> prints free | ccc | busy
+    port_preflight.py PORT [--host H] --pick  -> prints PORT when it is free,
+                                                 else the next free port
+
+"free" means nothing listens on the port on loopback, on any IPv4 address,
+or on --host. --pick never reuses a port another CCC holds: that may serve
+a different repo, and a same-repo duplicate is refused by the server itself.
 
 Used by install.sh and run.sh. A clean machine with another program on 8090
 used to get a bind traceback after the worker had already started; this
@@ -15,17 +19,25 @@ import sys
 import urllib.request
 
 
-def state(port: int) -> str:
+def _bindable(host: str, port: int) -> bool:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # Same option the dashboard server sets, so TIME_WAIT is not "busy".
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        sock.bind(("127.0.0.1", port))
-        return "free"
+        sock.bind((host, port))
+        return True
     except OSError:
-        pass
+        return False
     finally:
         sock.close()
+
+
+def state(port: int, host: str = "") -> str:
+    # Loopback and the wildcard both, because macOS lets a wildcard bind
+    # succeed beside a loopback listener; plus the configured bind host.
+    hosts = ["127.0.0.1", "0.0.0.0"] + ([host] if host and host not in ("localhost", "127.0.0.1", "0.0.0.0") else [])
+    if all(_bindable(h, port) for h in hosts):
+        return "free"
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/version", timeout=2) as resp:
             data = json.loads(resp.read(4096) or b"{}")
@@ -37,18 +49,17 @@ def state(port: int) -> str:
 
 
 def main(argv) -> int:
-    if len(argv) < 2 or not argv[1].isdigit():
-        print("usage: port_preflight.py PORT [--pick]", file=sys.stderr)
+    args = argv[1:]
+    if not args or not args[0].isdigit():
+        print("usage: port_preflight.py PORT [--host H] [--pick]", file=sys.stderr)
         return 2
-    port = int(argv[1])
-    if "--pick" not in argv[2:]:
-        print(state(port))
+    port = int(args[0])
+    host = args[args.index("--host") + 1] if "--host" in args[:-1] else ""
+    if "--pick" not in args:
+        print(state(port, host))
         return 0
-    if state(port) in ("free", "ccc"):
-        print(port)
-        return 0
-    for candidate in range(port + 1, min(port + 50, 65536)):
-        if state(candidate) == "free":
+    for candidate in range(port, min(port + 50, 65536)):
+        if state(candidate, host) == "free":
             print(candidate)
             return 0
     return 1
