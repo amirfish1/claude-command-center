@@ -679,6 +679,7 @@ Answer format (plain text, no markdown headers):
 - Lead with the answer in one or two sentences, then 1-4 short supporting lines.
 - When the answer spans several threads of work, make it a numbered list: each item starts with a **bold 2-5 word topic**, then one short line, then its citations and date at the end of that same line.
 - Skip evaluation/test runs (prompts marked "Evaluation run") unless the user asks about them. Treat repeated runs of the same loop or worker prompt as one thread and cite its most recent run once.
+- Skip WatchTower worker sessions (queue drains like "Drain the X WatchTower queue", ticket fixers, planners, verifiers) unless the user asks about workers or queues; the user nearly always means work they did directly.
 - Name up to 3 distinct sessions that actually did the work (skip near-duplicates like a continuation of a session you already named), each with its date, ranked best match first — not just the most recent.
 - Cite every session you rely on inline as [[session:SESSION_ID]] using the exact id from the tool output or the candidate list. Cite Gmail threads the same way with the thread id.
 - Give dates as YYYY-MM-DD and name the harness (Claude, Codex, Kimi, Antigravity, Gmail) when it is not Claude.
@@ -1083,20 +1084,62 @@ def is_eval_run(s: dict) -> bool:
     return bool(_EVAL_RE.search(f"{s.get('title') or ''} {s.get('best_snippet') or ''}"))
 
 
+# WatchTower worker sessions (the sidebar's Workers tab). Asks are almost always
+# about work the user did directly, so these are hidden unless the question is
+# about workers/queues. Title shapes mirror app.js _WT_LAUNCH_PROMPT_RE and
+# server._infer_session_spawned_via; the ledgers catch everything else.
+_WT_WORKER_TITLE_RE = re.compile(
+    r"^(?:🧵\s*)?(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b"
+    r"|fix ticket \S+ on the \S+ watchtower queue\b"
+    r"|you are the planner for watchtower ticket "
+    r"|you are an independent (?:plan reviewer|verifier) for watchtower ticket "
+    r"|you are the independent post-fix assessor for the bug ticket "
+    r"|lane-[we]|wt-|.*\[(?:watchtower|wt)\])", re.I)
+_WORKER_QUESTION_RE = re.compile(r"\b(?:workers?|watchtower|queues?)\b", re.I)
+
+
+def is_worker_session(c: dict, worker_ids=None, title: str | None = None) -> bool:
+    if worker_ids and c.get("session_id") in worker_ids:
+        return True
+    return any(_WT_WORKER_TITLE_RE.match(" ".join(str(t or "").split()))
+               for t in (c.get("title"), title) if t)
+
+
+def worker_session_ids(ids) -> set:
+    """The subset of `ids` that WatchTower or a spawn marker records as a
+    worker: the worker-sessions ledger, the session-origins ledger, and
+    workers-lane spawn markers. Per-candidate marker reads only, so the cost
+    is the candidate count, not the session count. Empty outside CCC."""
+    want = {i for i in ids or () if i}
+    if not want:
+        return set()
+    try:
+        from ccc_server import core as _core
+        found = want & (set(_core._wt_read_worker_session_ids()) | set(_core._wt_read_session_origins()))
+        for sid in want - found:
+            m = _core._decode_spawn_marker_file(Path(_core.SPAWN_MARKERS_DIR) / f"{sid}.json")
+            if m and m.get("lane") == "workers":
+                found.add(sid)
+        return found
+    except Exception:
+        return set()
+
+
 def prepare_candidates(cands: list[dict], question: str, titles: dict | None = None,
-                       full_title=None) -> tuple[list[dict], dict]:
+                       full_title=None, worker_ids=None) -> tuple[list[dict], dict]:
     """Label, filter and merge pre-fetched candidates before Mazkir sees them.
 
     CCC's own session titles win over the index's (often a raw first prompt).
-    Eval runs are dropped unless the question is about evals, and repeated
-    runs of one loop prompt collapse into the best-ranked run (`runs=N`) so
-    one worker loop can't fill every slot."""
+    Eval runs and WatchTower worker sessions are dropped unless the question
+    is about them, and repeated runs of one loop prompt collapse into the
+    best-ranked run (`runs=N`) so one worker loop can't fill every slot."""
     titles = dict(titles or {})
     if full_title:
         cut = [c["session_id"] for c in cands
                if not titles.get(c["session_id"]) and _needs_full_title(c.get("title"))]
         titles.update(full_title(cut) if cut else {})
     keep_evals = bool(re.search(r"\beval", question or "", re.I))
+    keep_workers = bool(_WORKER_QUESTION_RE.search(question or ""))
     out: list[dict] = []
     by_title: dict[str, dict] = {}
     stats = {"evals_hidden": 0, "runs_merged": 0}
@@ -1105,6 +1148,9 @@ def prepare_candidates(cands: list[dict], question: str, titles: dict | None = N
         raw = c.get("title") or ""
         if not keep_evals and (is_eval_run(c) or _EVAL_RE.search(raw)):
             stats["evals_hidden"] += 1
+            continue
+        if not keep_workers and is_worker_session(c, worker_ids, titles.get(c["session_id"])):
+            stats["workers_hidden"] = stats.get("workers_hidden", 0) + 1
             continue
         c["title"] = clean_title(titles.get(c["session_id"]) or raw)
         key = c["title"].lower()
@@ -1138,6 +1184,8 @@ def build_trace(prefetch_src: str, n_raw: int, n_kept: int, prefetch_ms: int, st
     extra = []
     if stats.get("evals_hidden"):
         extra.append(f"{stats['evals_hidden']} eval run{'s' if stats['evals_hidden'] > 1 else ''} hidden")
+    if stats.get("workers_hidden"):
+        extra.append(f"{stats['workers_hidden']} worker session{'s' if stats['workers_hidden'] > 1 else ''} hidden")
     if stats.get("runs_merged"):
         extra.append(f"{stats['runs_merged']} repeat run{'s' if stats['runs_merged'] > 1 else ''} merged")
     if extra:
@@ -1241,12 +1289,15 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         with _cf.ThreadPoolExecutor(max_workers=2) as ex:
             snap_f = ex.submit(fleet_snapshot, base, fetch)
             peer_f = ex.submit(peer_prefetch, question, fan_out=peer_fan_out)
+            # Over-fetch so hidden worker sessions don't starve the slots;
+            # trimmed back to PREFETCH_LIMIT local rows after filtering.
             if INDEX_BIN or prefetch_runner is not None:
                 cands = prefetch_sessions(question, since, runner=prefetch_runner,
                                           index_bin=INDEX_BIN or "claude-index",
-                                          exclude_session_ids=live_ids)
+                                          limit=PREFETCH_LIMIT * 2, exclude_session_ids=live_ids)
             else:
-                cands = builtin_prefetch(question, range_key, exclude_session_ids=live_ids)
+                cands = builtin_prefetch(question, range_key, exclude_session_ids=live_ids,
+                                         limit=PREFETCH_LIMIT * 2)
             try:
                 peer_cands, prefetch_info["peers"] = peer_f.result(timeout=PEER_PREFETCH_TIMEOUT_SEC)
             except Exception:
@@ -1256,7 +1307,10 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
             prefetch_info["raw"] = len(cands)
             cands, prefetch_info["stats"] = prepare_candidates(
                 cands, question, _ccc_titles(c.get("session_id") for c in cands),
-                full_title=lambda ids: full_titles(ids, db_path))
+                full_title=lambda ids: full_titles(ids, db_path),
+                worker_ids=worker_session_ids(local_ids))
+            local = [c for c in cands if not c.get("node")][:PREFETCH_LIMIT]
+            cands = local + [c for c in cands if c.get("node")]
             try:
                 snap = snap_f.result(timeout=SNAPSHOT_TIMEOUT_SEC + 1)
             except Exception:

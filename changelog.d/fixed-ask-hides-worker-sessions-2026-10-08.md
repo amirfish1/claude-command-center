@@ -1,0 +1,1 @@
+- Ask no longer surfaces WatchTower worker sessions (queue drains, ticket fixers, verifiers) when searching past work, unless the question is about workers or queues. The trace shows how many were hidden.

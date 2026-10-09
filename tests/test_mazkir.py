@@ -352,6 +352,39 @@ class SourceHygieneTest(unittest.TestCase):
         kept, _ = mazkir.prepare_candidates(cands, "how did the eval runs go", {})
         self.assertIn("e1", [c["session_id"] for c in kept])
 
+    def test_prepare_candidates_hides_worker_sessions_unless_asked(self):
+        cands = [
+            {"session_id": "w1", "title": "Drain the FEAT-NEXT WatchTower queue and keep it empty."},
+            {"session_id": "w2", "title": "Trash speed fix"},
+            {"session_id": "w3", "title": "lane-w3 bym receipts"},
+            {"session_id": "w4", "title": "raw first prompt"},
+            {"session_id": "u1", "title": "Quiet-hours receipts fix"},
+        ]
+        out, stats = mazkir.prepare_candidates(cands, "show me the receipts fix", {"w4": "[wt] OPS-12 fix"},
+                                               worker_ids={"w2"})
+        self.assertEqual([c["session_id"] for c in out], ["u1"])
+        self.assertEqual(stats["workers_hidden"], 4)
+        kept, _ = mazkir.prepare_candidates(cands, "what did the queue workers do", {}, worker_ids={"w2"})
+        self.assertEqual(len(kept), 5)
+        trace = mazkir.build_trace("x", 5, 1, 100, stats, [])
+        self.assertIn("4 worker sessions hidden", trace[0]["detail"])
+
+    def test_worker_session_ids_reads_ledgers_and_worker_markers(self):
+        tmp = Path(tempfile.mkdtemp())
+        markers = tmp / "markers"
+        markers.mkdir()
+        (markers / "m1.json").write_text(json.dumps({"spawned_via": "watchtower", "lane": "workers"}))
+        (markers / "m2.json").write_text(json.dumps({"lane": "other", "spawned_via": "ccc-ask"}))
+        fake = mock.Mock(SPAWN_MARKERS_DIR=markers,
+                         _wt_read_worker_session_ids=lambda: ["l1"],
+                         _wt_read_session_origins=lambda: {"o1": {"role": "verifier"}},
+                         _decode_spawn_marker_file=lambda path: (
+                             json.loads(path.read_text()) if path.exists() else None))
+        import ccc_server
+        with mock.patch.object(ccc_server, "core", fake):
+            got = mazkir.worker_session_ids(["l1", "o1", "m1", "m2", "u1", ""])
+        self.assertEqual(got, {"l1", "o1", "m1"})
+
     def test_titles_cut_inside_a_preamble_use_the_first_message(self):
         cut = "Heads-up: this may already be shipped: feat(x): y (wt 1), confidence 0.9. Verify before rebuilding. You ar"
         out, _ = mazkir.prepare_candidates(
