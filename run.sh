@@ -853,6 +853,16 @@ if [ -f "$link_ccc_cli_script" ]; then
 fi
 unset link_ccc_cli_script
 
+# Another program on $PORT used to surface as a bind traceback, after the
+# worker below had already started. Check first and say it in one line.
+# Only a non-CCC owner stops us; a CCC already on the port keeps the
+# server's own duplicate-instance handling.
+if [ -f "$HERE/scripts/port_preflight.py" ] \
+  && [ "$("$PYTHON" "$HERE/scripts/port_preflight.py" "$PORT" --host "${CCC_BIND_HOST:-}" 2>/dev/null || true)" = "busy" ]; then
+  echo "Error: port $PORT is in use by another program. Start CCC on a free port, e.g. PORT=$((PORT + 1)) ./run.sh" >&2
+  exit 1
+fi
+
 # Foreground installs do not have launchd/systemd to start the independent
 # execution worker. Ensure one is healthy before replacing this shell with the
 # restartable dashboard. `nohup` + a separate session keeps it alive across the
