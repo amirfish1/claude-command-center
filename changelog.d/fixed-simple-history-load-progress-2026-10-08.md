@@ -1,0 +1,1 @@
+- Simple mode's All past tasks screen now shows the current loading step, its progress, and the time spent during a slow first load, and keeps waiting instead of saying there are no tasks yet.

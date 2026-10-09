@@ -512,6 +512,10 @@ body.ccc-simple-mode .simple-loading {
   color: var(--text-muted);
   padding: 14px 4px;
 }
+body.ccc-simple-mode .simple-loading-detail {
+  font-size: 13px;
+  margin-top: 2px;
+}
 body.ccc-simple-mode .simple-spinner {
   width: 16px;
   height: 16px;

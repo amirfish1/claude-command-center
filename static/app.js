@@ -18467,17 +18467,78 @@
     const list = document.getElementById('simpleHistoryList');
     const hasCache = Array.isArray(_simpleHistoryRows) && _simpleHistoryRows.length > 0;
     if (!hasCache && list) {
-      list.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your past tasks…</div>';
+      list.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>'
+        + '<div><div>Loading your past tasks…</div><div class="simple-loading-detail" id="simpleHistoryProgress"></div></div></div>';
+      _simpleStartArchiveProgress('simpleHistoryProgress');
     }
     try {
-      const rows = await loadArchiveAll({ staleOk: true, window: 'all' });
-      if (Array.isArray(rows)) {
-        _simpleHistoryRows = rows
-          .filter(r => r && (r.id || r.session_id))
-          .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+      // A cold archive build on a fresh server can take minutes, longer than
+      // loadArchiveAll's fetch timeout (null result). While the server says
+      // the scan is still running, ask again instead of falling through to
+      // the "nothing here yet" empty state.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const rows = await loadArchiveAll({ staleOk: true, window: 'all' });
+        if (Array.isArray(rows)) {
+          _simpleHistoryRows = rows
+            .filter(r => r && (r.id || r.session_id))
+            .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+          break;
+        }
+        if (hasCache || _simpleScreen !== 'history') break;
+        const snap = await _simpleFetchArchiveStatus();
+        if (!snap || !snap.active) break;
       }
     } catch (_) { /* keep the previous cache */ }
+    _simpleStopArchiveProgress('simpleHistoryProgress');
     _simpleHistoryApply();
+  }
+  // First-load progress for the Home list and All past tasks: the same
+  // archive scan status the Advanced sidebar's stage list polls, reduced to
+  // one plain line (current step, count, elapsed time) under the spinner.
+  // One ticker per target element id; each stops once its element is gone.
+  const _simpleArchiveProgressIds = {};
+  async function _simpleFetchArchiveStatus() {
+    try {
+      const r = await backgroundApiFetch('/api/archive/loading-status');
+      return r.ok ? await r.json() : null;
+    } catch (_) { return null; }
+  }
+  function _simpleStartArchiveProgress(elId) {
+    if (_simpleArchiveProgressIds[elId]) return;
+    const t0 = Date.now();
+    const tick = async () => {
+      const el = document.getElementById(elId);
+      if (!el) { _simpleStopArchiveProgress(elId); return; }
+      const snap = await _simpleFetchArchiveStatus();
+      const secs = Math.round((Date.now() - t0) / 1000);
+      let line = '';
+      if (snap && snap.active) {
+        // Every scan stage flips to running at once, so prefer the one
+        // that carries a live count (transcripts N of M).
+        const running = (snap.steps || []).filter(s => s.state === 'running');
+        const step = running.find(s => typeof s.count === 'number' && typeof s.total === 'number')
+          || running[0];
+        if (step) {
+          line = step.label;
+          if (typeof step.count === 'number' && typeof step.total === 'number') {
+            line += ' (' + step.count + ' of ' + step.total + ')';
+          }
+        }
+      }
+      if (secs >= 3) {
+        line = (line ? line + ' · ' : '') + secs + 's';
+        if (secs >= 20) line += '. The first load can take a few minutes.';
+      }
+      el.textContent = line;
+    };
+    tick();
+    _simpleArchiveProgressIds[elId] = setInterval(tick, 1000);
+  }
+  function _simpleStopArchiveProgress(elId) {
+    if (_simpleArchiveProgressIds[elId]) {
+      clearInterval(_simpleArchiveProgressIds[elId]);
+      delete _simpleArchiveProgressIds[elId];
+    }
   }
   function _simpleHistoryStatusLine(row) {
     const age = Number(row.mtime || row.modified) || 0;
