@@ -1,0 +1,1 @@
+- Add a Simplified Chinese README (README.zh-CN.md) covering install, first run, and the GLM, Kimi, DeepSeek, Qwen and MiniMax presets.
