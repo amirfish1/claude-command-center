@@ -1,6 +1,6 @@
 // CCC-1051 E2E: clicking the breadcrumb session chip copies "ID (transcript path)".
-const puppeteer = require('./require-puppeteer.js');
-const { findChromePath } = require('./puppeteer-browser-config.js');
+const puppeteer = require('../../require-puppeteer.js');
+const { findChromePath } = require('../../puppeteer-browser-config.js');
 
 (async () => {
   const chromePath = findChromePath();

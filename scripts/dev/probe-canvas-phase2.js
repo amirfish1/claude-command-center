@@ -1,8 +1,8 @@
 // Phase-2 verification: component library (search, categories), template
 // cards with previews, template apply + shimmer mid-animation, edge-draw
 // validity, at 1280x800 and 1920x1080.
-const puppeteer = require('./require-puppeteer.js');
-const { findChromePath } = require('./puppeteer-browser-config.js');
+const puppeteer = require('../../require-puppeteer.js');
+const { findChromePath } = require('../../puppeteer-browser-config.js');
 const fs = require('fs');
 const os = require('os');
 const LAYOUT = os.homedir() + '/.claude/command-center/canvas-layout.json';
