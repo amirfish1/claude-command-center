@@ -129,6 +129,9 @@ test('no unattended spawns and popup registry starts unapproved', () => {
   const fixture = load();
   assert.equal(fixture.notices.length, 0);
   assert.equal((source.match(/fetch\('\/api\/sessions\/spawn'/g) || []).length, 1);
+  // WatchTower tickets are approved back to WatchTower from the same one click.
+  assert.equal((source.match(/fetch\('\/api\/leftover\/approve'/g) || []).length, 1);
+  assert.match(source, /if \(task\.dispatch === 'watchtower'\) \{ approveTask\(task, row\); return; \}/);
   assert.match(source, /cccPopups\.allowed\('leftover-offer'\)/);
   assert.match(source, /cccPopups\.allowed\('leftover-notification'\)/);
   assert.match(source, /data-lo-start/);
