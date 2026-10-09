@@ -60,8 +60,10 @@ Short clips (GIF, demo data): [attention](../images/feature-wall/attention.gif),
 [mobile](../images/feature-wall/mobile.gif),
 [queue workers](../images/feature-wall/queue-workers.gif).
 
-**Video:** the 20-second limit-hit demo (16:9 and 9:16 MP4) is in production
-and will be linked here when it lands.
+**Video:** the 20-second limit-hit demo, demo data:
+[16:9 MP4](../product-story/assets/video/V-20-limit-hit-16x9.mp4) (1920x1080),
+[9:16 MP4](../product-story/assets/video/V-20-limit-hit-9x16.mp4) (1080x1920),
+[16:9 GIF](../product-story/assets/video/V-20-limit-hit-16x9.gif) (800px, 0.6 MB).
 
 ## Hook lines in other languages
 
