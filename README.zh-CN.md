@@ -68,7 +68,7 @@ CCC 内置了五家国产模型的预设：**智谱 GLM**、**Kimi（月之暗�
 - 区域要对应：国内站的密钥填国内端点，国际站的密钥填国际端点。
   Kimi Code 订阅密钥、阿里云 Coding Plan 密钥不能用在这里。
 
-更多细节见 [自带密钥（BYOK）与 Vault](docs/byok-and-vault.md)（英文）。
+更多细节见 [国产模型预设说明](docs/byok-and-vault.md#paid-key-presets-glm-kimi-deepseek-qwen-minimax)（英文）。
 
 ## 快速开始
 
