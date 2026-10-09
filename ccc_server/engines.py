@@ -8117,12 +8117,12 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
     # A session mid limit-hit failover keeps every later turn on the router
     # until it switches back. Applied to a FRESH spawn only (below), so the
     # warm free process is still reused turn after turn.
-    failover_env = {}
+    failover_env = None
     if not runtime and not extra_env:
         try:
-            failover_env = _core._free_failover_session_env(session_id) or {}
+            failover_env = _core._free_failover_session_env(session_id)
         except Exception:
-            failover_env = {}
+            failover_env = None
     preset_override = _core._get_session_override(session_id) or {}
     preset_model = _domestic_providers.session_model(session_id, preset_override)
     if not runtime and not extra_env and not failover_env:
@@ -8170,7 +8170,16 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             _core._retire_unresponsive_spawn_entry(s, terminate=True, reason="write_failed")
             break
 
-    if failover_env:
+    if failover_env is not None:
+        if not failover_env:
+            # Running free until the plan resets, but the router is down:
+            # refuse instead of silently resuming on the limited plan.
+            return {
+                "ok": False, "code": "free_router_unavailable",
+                "error": "This session is on your router until your Claude "
+                         "limit resets, and the router isn't answering. "
+                         "Start it again, or switch the session back.",
+            }
         extra_env = failover_env
 
     if cwd:

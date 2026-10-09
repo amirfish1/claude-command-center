@@ -64,8 +64,13 @@ class _FailoverBase(unittest.TestCase):
         self._archive_patch = mock.patch.object(
             self.server, "_archive_all_rows_cached", return_value=([], {}))
         self._archive_patch.start()
+        # Never reach a real worker on the dev machine's default socket.
+        self._cp_patch = mock.patch.object(
+            self.server, "_control_plane_engine_call", return_value=None)
+        self._cp_patch.start()
 
     def tearDown(self):
+        self._cp_patch.stop()
         self._archive_patch.stop()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
         self.server._free_failover_cache_clear()
@@ -533,15 +538,19 @@ class ContinueOnRouterTests(_FailoverBase):
         sid = "90909090-1111-2222-3333-444444444444"
         with mock.patch.object(
                 self.server, "_free_spawn_env", return_value=dict(self.ROUTER_ENV)):
-            self.assertEqual(self.server._free_failover_session_env(sid), {})
+            self.assertIsNone(self.server._free_failover_session_env(sid))
             self.server._free_failover_save(sid, {"state": "free", "engine": "claude"})
             self.assertEqual(
                 self.server._free_failover_session_env(sid), self.ROUTER_ENV)
             self.server._free_failover_save(sid, {"state": "switch_back_pending"})
-            self.assertEqual(self.server._free_failover_session_env(sid), {})
+            self.assertIsNone(self.server._free_failover_session_env(sid))
             dsid = "devincli-90909090-1111-2222-3333-444444444444"
             self.server._free_failover_save(dsid, {"state": "free", "engine": "devin"})
-            self.assertEqual(self.server._free_failover_session_env(dsid), {})
+            self.assertIsNone(self.server._free_failover_session_env(dsid))
+        # Free but the router is down: {} (refuse), not None (spawn paid).
+        self.server._free_failover_save(sid, {"state": "free"})
+        with mock.patch.object(self.server, "_free_spawn_env", return_value={}):
+            self.assertEqual(self.server._free_failover_session_env(sid), {})
 
     def test_router_never_carries_a_claude_model(self):
         with mock.patch.dict(os.environ, {
@@ -550,7 +559,8 @@ class ContinueOnRouterTests(_FailoverBase):
              mock.patch("ccc_server.free_router.spawn_env", return_value={}):
             self.assertEqual(self.server._free_spawn_env(), {})
         for name in ("anthropic/claude-opus-4", "openrouter/anthropic/claude-3",
-                     "Claude-Haiku"):
+                     "Claude-Haiku", "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                     "bedrock/anthropic.claude-sonnet-4", "vertex_ai/claude-opus-4@001"):
             self.assertTrue(self.server._is_claude_model(name), name)
         for name in ("glm-4.6", "kimi-k2", "qwen/qwen3-coder:free", ""):
             self.assertFalse(self.server._is_claude_model(name), name)
@@ -590,6 +600,70 @@ class ContinueOnRouterTests(_FailoverBase):
         self.assertNotIn("ANTHROPIC_API_KEY", captured)
         # The paid --model override must not ride along to the router.
         self.assertNotIn("--model", captured["cmd"])
+
+    def _resume_patches(self, router_env):
+        from ccc_server import engines, free_runtime
+        return [
+            mock.patch.object(self.server, "_claude_subagent_parent_session_id", return_value=None),
+            mock.patch.object(free_runtime, "session_runtime", return_value=""),
+            mock.patch.object(self.server, "_free_spawn_env", return_value=router_env),
+            mock.patch.object(self.server, "_get_session_override", return_value=None),
+            mock.patch.object(engines.subprocess, "Popen", side_effect=AssertionError("must not spawn")),
+        ]
+
+    def test_router_down_refuses_instead_of_resuming_paid(self):
+        sid = "94949494-1111-2222-3333-444444444444"
+        self.server._free_failover_save(sid, {"state": "free", "engine": "claude"})
+        patches = self._resume_patches({})
+        for p in patches:
+            p.start()
+        try:
+            res = self.server.resume_session_headless(sid, "next turn", cwd=self.tmp_dir)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["code"], "free_router_unavailable")
+
+    def test_switch_back_retires_the_worker_owned_child(self):
+        sid = "95959595-1111-2222-3333-444444444444"
+        self.server._free_failover_save(sid, {"state": "free", "engine": "claude"})
+        self._cp_patch.stop()
+        cp = mock.Mock(return_value={"ok": True, "retired": False, "reason": "busy", "deferred": True})
+        local = mock.Mock(side_effect=AssertionError("dashboard table is not the owner"))
+        with mock.patch.object(self.server, "_control_plane_engine_call", cp), \
+             mock.patch.object(self.server, "_retire_idle_headless_for_session", local), \
+             mock.patch.object(self.server, "_log_activity"):
+            res = self.server.free_failover_switch_back(sid, auto=True)
+            self.assertTrue(res["pending"])
+            self.assertEqual(self._failover_store()[sid]["state"], "switch_back_pending")
+            # Worker unreachable/erroring: still pending, never finalized.
+            cp.return_value = {"ok": False, "code": "engine_dispatch_failed"}
+            for p in self._no_candidates():
+                p.start()
+            try:
+                self.server._free_failover_auto_pass()
+                self.assertEqual(self._failover_store()[sid]["state"], "switch_back_pending")
+                # Worker reports the child gone: finalize.
+                cp.return_value = {"ok": True, "retired": True, "pid": 9}
+                self.server._free_failover_auto_pass()
+            finally:
+                mock.patch.stopall()
+        self._cp_patch.start()
+        self.assertNotIn("state", self._failover_store()[sid])
+        _a, _k = cp.call_args
+        self.assertEqual(_a[:2], ("claude", "retire_idle"))
+
+    def test_startup_grace_does_not_finalize_switch_back(self):
+        sid = "96969696-1111-2222-3333-444444444444"
+        self.server._free_failover_save(sid, {"state": "free", "engine": "claude"})
+        with mock.patch.object(
+                self.server, "_retire_idle_headless_for_session",
+                return_value={"retired": False, "reason": "startup_grace"}), \
+             mock.patch.object(self.server, "_log_activity"):
+            res = self.server.free_failover_switch_back(sid)
+        self.assertTrue(res["pending"])
+        self.assertEqual(self._failover_store()[sid]["state"], "switch_back_pending")
 
     def test_watcher_switches_back_after_reset(self):
         sid = "92929292-1111-2222-3333-444444444444"
