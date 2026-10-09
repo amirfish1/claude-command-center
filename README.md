@@ -33,7 +33,7 @@ _Start the next while Claude builds the first._
 One local dashboard for **Claude Code**, **Codex**, **Cursor**, **Antigravity**,
 **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin**, however you launched them.
 Spawn and monitor all eight; send follow-up on seven. Kilo Code is fire-and-forget.
-CCC is local, source-available, and free to use and modify, including at work.
+CCC is local, source-available, and free to use and modify, including at work. Not affiliated with Anthropic.
 
 ![CCC v5.35 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-35-hero.png)
 

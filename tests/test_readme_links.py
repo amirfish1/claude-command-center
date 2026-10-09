@@ -148,6 +148,11 @@ class ReadmeTests(unittest.TestCase):
         for item in ("scripts/install.sh", "brew install ccc", "install.ps1", "./run.sh", "localhost:8090"):
             self.assertIn(item, text)
 
+    def test_readme_first_screen_says_not_affiliated_with_anthropic(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = text.index("scripts/install.sh")
+        self.assertIn("Not affiliated with Anthropic.", text[:install])
+
     def test_readme_retains_seeded_gallery_images(self):
         targets = links((ROOT / "README.md").read_text(encoding="utf-8"))
         for image in ("fleet-scan", "flow-canvas", "split-pane", "search", "group-chat", "queues", "queue-workers", "mobile"):
