@@ -79,7 +79,40 @@ def _status(source, state, detail):
     return {'source': source, 'status': state, 'detail': detail}
 
 
+_REF = re.compile(r'[A-Za-z0-9_-]{1,64}-[0-9]{1,9}')
+OTHER_QUEUES = 3
+
+
+def _queue_rows(binary, queue, task_repo, repo, limit):
+    data, state = _read_cli([binary, 'ls', '-q', queue, '--status', 'open', '--limit', '50', '--json'], repo)
+    rows = []
+    for item in (data or [])[:50]:
+        if not isinstance(item, dict) or item.get('status') != 'open':
+            continue
+        if any(item.get(key) for key in ('claimed_by', 'claimed_session_id', 'needs_input', 'blocked_by', 'block_question', 'run_requested')):
+            continue
+        if str(item.get('readiness') or '').lower() in ('blocked', 'needs_input', 'needs-human', 'not_ready', 'parked'):
+            continue
+        if item.get('repo_path') and repo_identity(item['repo_path']) != repo_identity(task_repo):
+            continue
+        ref = str(item.get('ref') or '')
+        if item.get('title') and _REF.fullmatch(ref):
+            row = proposal(repo, 'watchtower', ref, item['title'], item.get('text') or item.get('note'))
+            # Approving a WatchTower task hands it back to WatchTower (`wt run`)
+            # rather than spawning a loose session: WatchTower claims it, so no
+            # second worker picks up the same ticket, and its dispatcher picks
+            # the engine (headroom-aware when the queue opts in).
+            row.update(queue=queue, dispatch='watchtower', task_repo=str(task_repo))
+            rows.append(row)
+        if len(rows) == limit:
+            break
+    return rows, state
+
+
 def watchtower_tasks(repo):
+    """Open, unclaimed tickets from the user's WatchTower queues: the queues
+    for this folder first, then up to OTHER_QUEUES other active queues so a
+    folder without its own queue still gets real backlog work."""
     try:
         binary = _core._wt_cli_path()
         config = _core._wt_read_config()
@@ -88,32 +121,57 @@ def watchtower_tasks(repo):
     if not binary:
         return [], _status('watchtower', 'unavailable', 'WatchTower is not installed.')
     identity = repo_identity(repo)
-    queues = [name for name, conf in config.items() if isinstance(conf, dict)
-              and not conf.get('archived') and conf.get('repo_path')
-              and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name)
-              and repo_identity(conf['repo_path']) == identity][:3]
+    local, other = [], []
+    for name, conf in config.items():
+        if not isinstance(conf, dict) or conf.get('archived') or not conf.get('repo_path'):
+            continue
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name):
+            continue
+        (local if repo_identity(conf['repo_path']) == identity else other).append((name, conf['repo_path']))
+    other = [(name, path) for name, path in other if Path(path).expanduser().is_dir()]
+    queues = local[:3] + other[:OTHER_QUEUES]
     rows, failed = [], False
-    for queue in queues:
-        data, state = _read_cli([binary, 'ls', '-q', queue, '--status', 'open', '--limit', '50', '--json'], repo)
+    for queue, task_repo in queues:
+        found, state = _queue_rows(binary, queue, task_repo, repo, 5 - len(rows))
         failed = failed or state != 'ok'
-        for item in (data or [])[:50]:
-            if not isinstance(item, dict) or item.get('status') != 'open':
-                continue
-            if any(item.get(key) for key in ('claimed_by', 'claimed_session_id', 'needs_input', 'blocked_by', 'block_question')):
-                continue
-            if str(item.get('readiness') or '').lower() in ('blocked', 'needs_input', 'needs-human', 'not_ready', 'parked'):
-                continue
-            if item.get('repo_path') and repo_identity(item['repo_path']) != identity:
-                continue
-            if item.get('title') and item.get('ref'):
-                rows.append(proposal(repo, 'watchtower', str(item['ref']), item['title'], item.get('text') or item.get('note')))
-            if len(rows) == 5:
-                break
-        if len(rows) == 5:
+        rows.extend(found)
+        if len(rows) >= 5:
             break
     state = 'partial' if failed and rows else 'error' if failed else 'ok' if rows else 'empty'
-    detail = 'Some queues could not be checked.' if failed else 'Open tasks in this folder.' if rows else 'No ready WatchTower tasks for this folder.'
+    detail = ('Some queues could not be checked.' if failed
+              else 'Open tasks from your WatchTower queues.' if rows
+              else 'No ready WatchTower tasks.')
     return rows, _status('watchtower', state, detail)
+
+
+def approve(repo, proposal_id):
+    """One user click: mark a proposed WatchTower ticket runnable (`wt run`).
+
+    The ref comes from the server's own cached proposals for this folder, never
+    from the request, so the endpoint can only queue a ticket it offered."""
+    with _LOCK:
+        entry = _CACHE.get(repo)
+        offered = list((entry or {}).get('value', {}).get('proposals') or [])
+    task = next((row for row in offered if row.get('id') == proposal_id), None)
+    if not task or task.get('dispatch') != 'watchtower' or not _REF.fullmatch(task.get('reference') or ''):
+        return {'ok': False, 'error': 'This task is no longer offered. Refresh the list and try again.'}, 409
+    try:
+        binary = _core._wt_cli_path()
+    except AttributeError:
+        binary = _cli_path('wt')
+    if not binary:
+        return {'ok': False, 'error': 'WatchTower is not installed.'}, 409
+    try:
+        result = subprocess.run([binary, 'run', task['reference']], cwd=repo, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return {'ok': False, 'error': 'WatchTower did not answer. Try again.'}, 502
+    if result.returncode:
+        message = (result.stderr or result.stdout or '').strip().splitlines()
+        return {'ok': False, 'error': (message[-1] if message else 'WatchTower could not queue this task.')[:300]}, 502
+    with _LOCK:
+        if entry:
+            entry['value'] = dict(entry['value'], proposals=[row for row in offered if row.get('id') != proposal_id])
+    return {'ok': True, 'ref': task['reference'], 'queue': task.get('queue') or ''}, 200
 
 
 def _has_remote(repo):
@@ -282,3 +340,24 @@ def handle_api_get(handler, parsed):
         handler.send_json(error.as_payload(), error.status)
         return
     handler.send_json(proposals(repo))
+
+
+def handle_api_post(handler, path):
+    if path != '/api/leftover/approve':
+        return False
+    try:
+        length = int(handler.headers.get('Content-Length', '0') or 0)
+        payload = json.loads(handler.rfile.read(length) if 0 < length <= 65536 else b'{}')
+    except (ValueError, OSError):
+        payload = None
+    if not isinstance(payload, dict) or not isinstance(payload.get('id'), str):
+        handler.send_json({'ok': False, 'error': 'Expected {"repo_path", "id"}.'}, 400)
+        return True
+    try:
+        repo = _core.resolve_repo_path(str(payload.get('repo_path') or ''))
+    except _core.RepoContextError as error:
+        handler.send_json(error.as_payload(), error.status)
+        return True
+    body, status = approve(repo, payload['id'])
+    handler.send_json(body, status)
+    return True

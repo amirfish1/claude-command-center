@@ -1,8 +1,10 @@
 /* Leftover Mode (M06): when /api/headroom says at least 20% of a plan will
  * expire unused within 24h, offer 3 to 5 real tasks (WatchTower, GitHub
  * issues, TODO/FIXME notes; see ccc_server/leftover.py). Every task needs one
- * click to start and goes through the normal /api/sessions/spawn API. Nothing
- * ever starts by itself.
+ * click to start and goes through the normal /api/sessions/spawn API, except
+ * WatchTower tickets: that click approves the ticket back to WatchTower
+ * (POST /api/leftover/approve -> `wt run`), whose dispatcher claims it and
+ * picks the engine. Nothing ever starts by itself.
  *
  * Gates: the floating offer card is pop-up id 'leftover-offer' and the daily
  * reminder is 'leftover-notification' (static/popups.js). Until they are
@@ -94,12 +96,15 @@
   }
   function sourceMarkup(task) {
     return '<span class="lo-task-source">' + esc(task.source_label)
-      + (task.reference ? '<span class="lo-task-ref">' + esc(task.reference) + '</span>' : '') + '</span>';
+      + (task.reference ? '<span class="lo-task-ref">' + esc(task.reference) + '</span>' : '')
+      + (task.task_repo && task.task_repo !== task.repo_path ? '<span class="lo-task-ref">' + esc(folderName(task.task_repo)) + '</span>' : '') + '</span>';
   }
   function startButton(task, row, compact) {
     var done = row && get(savedKey(task, row)) === '1';
     var running = busy[task.id];
-    var label = running ? 'Starting…' : done ? 'Started' : compact ? 'Start' : 'Start with ' + (row ? engineName(row) : 'your plan');
+    var queued = task.dispatch === 'watchtower';
+    var label = queued ? (running ? 'Queuing…' : done ? 'Queued' : compact ? 'Queue' : 'Queue in WatchTower')
+      : running ? 'Starting…' : done ? 'Started' : compact ? 'Start' : 'Start with ' + (row ? engineName(row) : 'your plan');
     return '<button type="button" class="lo-start" data-lo-start="' + esc(task.id) + '"'
       + (compact ? ' aria-label="Start: ' + esc(task.title) + '"' : '')
       + ((!row || running || done) ? ' disabled' : '') + '>' + esc(label) + '</button>';
@@ -333,6 +338,7 @@
       outcomes[id] = { text: 'This estimate has reset. Wait for the next usage update.', error: true }; renderAllTasks(); poll(); return;
     }
     busy[id] = true; delete outcomes[id]; renderAllTasks();
+    if (task.dispatch === 'watchtower') { approveTask(task, row); return; }
     fetch('/api/sessions/spawn', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CCC-Automated': navigator.webdriver ? 'true' : 'false' }, body: JSON.stringify(spawnBody(task, row)) })
       .then(function (res) { return res.json().catch(function () { return {}; }).then(function (data) { return { data: data || {}, ok: res.ok && data && data.ok === true }; }); })
       .then(function (res) {
@@ -341,6 +347,20 @@
           : { text: res.data.error || 'Could not start this task. Try again.', error: true };
       }).catch(function () {
         outcomes[id] = { text: 'Could not confirm the start. Try again to check the same task.', error: true };
+      }).finally(function () { busy[id] = false; renderAllTasks(); });
+  }
+  // WatchTower tickets go back to WatchTower: it claims the ticket (so no other
+  // worker takes it too) and its dispatcher chooses the engine.
+  function approveTask(task, row) {
+    var id = task.id;
+    fetch('/api/leftover/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo_path: task.repo_path, id: id }) })
+      .then(function (res) { return res.json().catch(function () { return {}; }).then(function (data) { return { data: data || {}, ok: res.ok && data && data.ok === true }; }); })
+      .then(function (res) {
+        if (res.ok) put(savedKey(task, row), '1');
+        outcomes[id] = res.ok ? { text: 'Queued ' + res.data.ref + ' in WatchTower' + (res.data.queue ? ' (' + res.data.queue + ')' : '') + '. A worker will pick it up.' }
+          : { text: res.data.error || 'Could not queue this task. Try again.', error: true };
+      }).catch(function () {
+        outcomes[id] = { text: 'Could not confirm the request. Check WatchTower before trying again.', error: true };
       }).finally(function () { busy[id] = false; renderAllTasks(); });
   }
   function boot() {
