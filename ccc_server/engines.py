@@ -7781,6 +7781,30 @@ def _headless_spawn_is_stale(entry, session_id=None):
 
 
 def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=False, require_approval=False):
+    """Retire the session's idle headless wherever it actually lives.
+
+    The spawn entry lives in whichever process owns engine execution: the
+    worker by default. Asked from the dashboard process, the local lookup
+    found nothing and reported "nothing to retire", so a free-failover
+    Switch back left the free child running. Route first, like interrupt.
+    """
+    if not session_id:
+        return {"retired": False}
+    routed = _core._control_plane_engine_call("claude", "retire_idle", {
+        "session_id": session_id,
+        "reason": reason,
+        "defer_if_busy": bool(defer_if_busy),
+        "require_approval": bool(require_approval),
+    })
+    if routed is not None:
+        return routed
+    return _retire_idle_headless_for_session_local(
+        session_id, reason=reason, defer_if_busy=defer_if_busy,
+        require_approval=require_approval,
+    )
+
+
+def _retire_idle_headless_for_session_local(session_id, *, reason="", defer_if_busy=False, require_approval=False):
     """Retire a CCC-spawned IDLE Claude headless for `session_id` (GH #71).
 
     Used when a terminal takes over a session (mechanism 2 on launch, and

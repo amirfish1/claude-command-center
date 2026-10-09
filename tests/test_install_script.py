@@ -414,3 +414,39 @@ class TestParseChannel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PickPortTests(unittest.TestCase):
+    """A clean machine can already have another program on 8090."""
+
+    def _pick(self, port, explicit=False):
+        env = {k: v for k, v in os.environ.items() if k != "PORT"}
+        if explicit:
+            env["PORT"] = str(port)
+        program = (
+            f'source "{INSTALL_SCRIPT}"; '
+            f'INSTALL_DIR="{PROJECT_ROOT}"; PORT={port}; '
+            'note() { :; }; pick_port; printf "%s %s" "$PORT" "$DASHBOARD_URL"'
+        )
+        out = subprocess.run(["bash", "-c", program], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout.split()
+
+    def test_busy_default_port_moves_to_a_free_one(self):
+        import socket
+        with socket.socket() as busy:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen()
+            port = busy.getsockname()[1]
+            picked, url = self._pick(port)
+        self.assertGreater(int(picked), port)
+        self.assertEqual(url, f"http://localhost:{picked}")
+
+    def test_explicit_port_is_left_for_run_sh_to_report(self):
+        import socket
+        with socket.socket() as busy:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen()
+            port = busy.getsockname()[1]
+            picked, _url = self._pick(port, explicit=True)
+        self.assertEqual(int(picked), port)

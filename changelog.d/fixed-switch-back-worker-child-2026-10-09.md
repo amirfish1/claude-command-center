@@ -1,0 +1,1 @@
+- Switch back from free-model failover now really retires the free child on default installs, where the worker owns engine processes. Before, it reported success while the free child kept running on the router.

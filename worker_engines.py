@@ -660,6 +660,13 @@ class EngineHost:
                 return legacy._interrupt_claude_headless_local(
                     args.get("session_id")
                 )
+            if operation == "retire_idle":
+                return legacy._retire_idle_headless_for_session_local(
+                    args.get("session_id"),
+                    reason=args.get("reason") or "",
+                    defer_if_busy=bool(args.get("defer_if_busy")),
+                    require_approval=bool(args.get("require_approval")),
+                )
             if operation == "model":
                 return legacy._set_session_model_headless_local(
                     args.get("session_id"),

@@ -1011,10 +1011,27 @@ def _start_launchd(node_path: str, log) -> None:
               f"{_gui_target()}/{LAUNCH_AGENT_LABEL}"], log=log, timeout=30)
 
 
+def _read_env_file(env_file: Path) -> dict:
+    values = {}
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for line in lines:
+        key, sep, value = line.strip().partition("=")
+        if sep and key and not key.startswith("#"):
+            values[key.strip()] = value.strip()
+    return values
+
+
 def _start_child(node_path: str, log) -> None:
     env_file = install_dir() / ".env"
     log_dir().mkdir(parents=True, exist_ok=True)
     env = _node_env(node_path)
+    # `node --env-file` never overrides a variable that is already set, and
+    # run.sh exports PORT for the dashboard. Without this the router child
+    # inherits PORT and collides with CCC itself (EADDRINUSE on Linux/WSL).
+    env.update(_read_env_file(env_file))
     env["FREEAPI_ENV_PATH"] = str(env_file)
     env["FREEAPI_CONFIG_PATH"] = str(config_path())
     out = open(log_dir() / "free-router.out.log", "ab", buffering=0)

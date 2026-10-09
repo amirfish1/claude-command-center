@@ -920,12 +920,24 @@ def _free_failover_auto_pass(now=None):
         engine, _raw = _free_failover_engine_and_raw(sid)
         if engine != "claude":
             continue
-        try:
-            live = _core._find_live_spawn_entry_for_session(sid)
-        except Exception:
-            live = None
-        if live is None:
+        if not _free_child_live(sid):
             _free_failover_finalize_switch_back(sid)
+
+
+def _free_child_live(sid):
+    """True while the session's headless runs, in the worker or locally."""
+    try:
+        routed = _core._control_plane_engine_call(
+            "claude", "input_state", {"session_id": sid}, mutate=False,
+        )
+    except Exception:
+        routed = None
+    if isinstance(routed, dict) and routed.get("ok"):
+        return bool(routed.get("owned"))
+    try:
+        return _core._find_live_spawn_entry_for_session(sid) is not None
+    except Exception:
+        return False
 
 
 def _free_failover_schedule_armed(tracked, now):

@@ -500,6 +500,43 @@ class SwitchBackTests(_FailoverBase):
         rec = self._failover_store()[sid]
         self.assertEqual(rec["state"], "switch_back_pending")
 
+    def test_retire_routes_to_the_worker_that_owns_the_child(self):
+        # Default installs run engines in the worker; the dashboard has no
+        # spawn entry, so a local-only retire left the free child running.
+        from ccc_server import engines
+        sid = "56565656-1111-2222-3333-444444444444"
+        routed = {"retired": True, "pid": 77, "reason": "free-switch-back"}
+        call = mock.Mock(return_value=routed)
+        local = mock.Mock()
+        with mock.patch.object(self.server, "_control_plane_engine_call", call), \
+             mock.patch.object(engines, "_retire_idle_headless_for_session_local", local):
+            res = self.server._retire_idle_headless_for_session(
+                sid, reason="free-switch-back", defer_if_busy=True)
+        self.assertEqual(res, routed)
+        local.assert_not_called()
+        engine, operation, args = call.call_args.args
+        self.assertEqual((engine, operation), ("claude", "retire_idle"))
+        self.assertEqual(args["session_id"], sid)
+        self.assertTrue(args["defer_if_busy"])
+
+    def test_retire_falls_back_to_local_without_a_worker(self):
+        from ccc_server import engines
+        sid = "67676767-1111-2222-3333-444444444444"
+        local = mock.Mock(return_value={"retired": False})
+        with mock.patch.object(self.server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(engines, "_retire_idle_headless_for_session_local", local):
+            self.server._retire_idle_headless_for_session(sid, reason="x")
+        local.assert_called_once()
+
+    def test_pending_switch_back_waits_for_the_worker_owned_child(self):
+        sid = "78787878-1111-2222-3333-444444444444"
+        with mock.patch.object(self.server, "_control_plane_engine_call",
+                               return_value={"ok": True, "owned": True, "busy": True}):
+            self.assertTrue(self.server._free_child_live(sid))
+        with mock.patch.object(self.server, "_control_plane_engine_call",
+                               return_value={"ok": True, "owned": False, "busy": False}):
+            self.assertFalse(self.server._free_child_live(sid))
+
     def test_switch_back_devin_clears_override(self):
         sid = "devincli-56565656-7777-8888-9999-000000000000"
         self.server._free_failover_save(sid, {

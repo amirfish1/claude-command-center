@@ -22,6 +22,7 @@ set -euo pipefail
 
 REPO_URL="${CCC_REPO_URL:-https://github.com/amirfish1/claude-command-center}"
 INSTALL_DIR="${CCC_INSTALL_DIR:-$HOME/.ccc/claude-command-center}"
+PORT_EXPLICIT="${PORT:+1}"
 PORT="${PORT:-8090}"
 DASHBOARD_URL="http://localhost:${PORT}"
 SOURCE_FILE="$HOME/.claude/command-center/install-source"
@@ -312,12 +313,30 @@ ask_install_service() {
   return 0
 }
 
+# A clean machine can already have something else on 8090. Without a
+# PORT from the user, move to the next free port instead of crashing at
+# bind time; with one, run.sh stops with a clear message.
+pick_port() {
+  local picker="$INSTALL_DIR/scripts/port_preflight.py" chosen
+  [ -n "$PORT_EXPLICIT" ] && return 0
+  [ -f "$picker" ] || return 0
+  chosen="$("$PYTHON3" "$picker" "$PORT" --pick 2>/dev/null || true)"
+  if [ -n "$chosen" ] && [ "$chosen" != "$PORT" ]; then
+    note "port $PORT is in use by another program; using port $chosen"
+    PORT="$chosen"
+    DASHBOARD_URL="http://localhost:${PORT}"
+  fi
+  export PORT
+}
+
 launch_server() {
   if is_app_install; then
     note "launching CCC for the native app on port $PORT"
     cd "$INSTALL_DIR"
     exec ./run.sh
   fi
+
+  pick_port
 
   local url open_hint
   url="$(dashboard_open_url)"
