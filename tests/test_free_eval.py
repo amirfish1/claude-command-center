@@ -461,3 +461,69 @@ def test_eval_state_file_permissions(fake_router, tmp_path):
     wait_for_job(payload["job_id"], timeout=120)
     mode = (Path(tmp_path) / "free-eval.json").stat().st_mode & 0o777
     assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# Weekly leaderboard job (scripts/leaderboard-weekly.py)
+# ---------------------------------------------------------------------------
+
+def _weekly():
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "scripts" / "leaderboard-weekly.py"
+    spec = importlib.util.spec_from_file_location("leaderboard_weekly", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_weekly_run_stages_page_without_pinning(fake_router, tmp_path):
+    weekly = _weekly()
+    staging = tmp_path / "staging"
+    assert weekly.run(staging, ["champ-7b", "chatter-3b"], log=lambda line: None) == 0
+
+    data = json.loads((staging / "data.json").read_text())
+    assert [m["id"] for m in data["models"]] == ["champ-7b", "chatter-3b"]
+    assert data["best"] == "champ-7b"
+    assert (staging / "index.html").is_file()
+    # Unattended runs never change the router's default model.
+    assert ("PUT", "/api/settings/anthropic-map") not in FakeRouter.requests_seen
+    assert FakeRouter.anthropic_map == {}
+    status = json.loads((staging / "last-run.json").read_text())
+    assert status["status"] == "ok" and status["public_models"] == 2
+    for staged in staging.iterdir():
+        assert FAKE_KEY not in staged.read_text()
+        assert ADMIN["password"] not in staged.read_text()
+    ok, message = weekly.health(staging, 8)
+    assert ok, message
+
+
+def test_weekly_eval_error_is_recorded(fake_router, tmp_path, monkeypatch):
+    monkeypatch.setattr(free_eval, "fetch_catalog", lambda cfg: ([], "the router is down"))
+    weekly = _weekly()
+    staging = tmp_path / "staging"
+    assert weekly.run(staging, log=lambda line: None) == weekly.EXIT_FAILED
+    status = json.loads((staging / "last-run.json").read_text())
+    assert status["status"] == "eval_error" and status["step"] == "catalog"
+    assert not (staging / "data.json").exists()
+    ok, message = weekly.health(staging, 8)
+    assert not ok and "the router is down" in message
+
+
+def test_weekly_without_router_records_no_router(tmp_path, monkeypatch):
+    monkeypatch.setattr(free_eval, "router_config", lambda probe=True, force=False: None)
+    weekly = _weekly()
+    staging = tmp_path / "staging"
+    assert weekly.run(staging, log=lambda line: None) == weekly.EXIT_NO_ROUTER
+    ok, message = weekly.health(staging, 8)
+    assert not ok and "no_router" in message
+
+
+def test_weekly_health_flags_stale_and_missing_runs(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    weekly = _weekly()
+    ok, message = weekly.health(tmp_path, 8)
+    assert not ok and "no run recorded" in message
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(timespec="seconds")
+    (tmp_path / "last-run.json").write_text(json.dumps({"status": "ok", "ended_at": old}))
+    ok, message = weekly.health(tmp_path, 8)
+    assert not ok and "10 days old" in message

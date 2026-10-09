@@ -91,6 +91,15 @@ Settings → Free models) shows pass rate and speed per model, and CCC sets
 the router's Claude mapping to the top tool-capable model so a "Free
 ($0)" spawn gets the best free brain you have keys for.
 
+To refresh the scores weekly without touching the router's mapping, install
+the user timer with `systemd/install-leaderboard-weekly.sh`. Every Monday it
+runs `scripts/leaderboard-weekly.py run`, which races the models again and
+stages a privacy-checked page in `~/.ccc/leaderboard/`. Each run's outcome
+goes to `last-run.json`, and `scripts/leaderboard-weekly.py health` exits
+non-zero when the last run failed or is over 8 days old. Nothing is
+published: review the staged page, then copy it with
+`scripts/publish-leaderboard.sh --source-dir ~/.ccc/leaderboard`.
+
 ## Privacy and the ToS boundary
 
 Read this before you enable free runs: free tiers are paid for in ways
