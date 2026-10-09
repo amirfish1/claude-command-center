@@ -44287,7 +44287,11 @@
       _vvRaf = 0;
       const h = vv.height;
       if (!h || h < window.innerHeight * 0.5) return;
-      document.documentElement.style.setProperty('--app-vh', h + 'px');
+      // iOS draws its prev/next/✓ form-accessory bar over the bottom of the
+      // visual viewport while a field is focused; lift the shell above it so
+      // the composer's send button can't be hit as ✓.
+      const kbOpen = window.innerHeight - h > 150;
+      document.documentElement.style.setProperty('--app-vh', (kbOpen ? h - 56 : h) + 'px');
       document.documentElement.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
     };
     const queueVisualViewportSync = () => {

@@ -1,0 +1,1 @@
+- On iPhone, the composer now sits above the keyboard's ✓ accessory bar so Send is no longer covered.
