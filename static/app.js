@@ -81655,7 +81655,25 @@
     // History tracks effort too; the strip offers models, with effort chosen
     // separately in the composer. Deduplicate before applying the display cap.
     const seen = new Set();
-    return (Array.isArray(picks) ? picks : []).filter(p => {
+    const list = Array.isArray(picks) ? picks : [];
+    // "sonnet-5" is noise once "sonnet-5-5" exists for the same engine, in
+    // history or in its catalog.
+    const ver = (m) => {
+      const x = /^(?:claude-)?(fable|opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:\[1m\])?$/i.exec(String(m || '').trim());
+      return x ? { fam: x[1].toLowerCase(), major: +x[2], minor: x[3] ? +x[3] : 0 } : null;
+    };
+    const superseded = (p) => {
+      const v = ver(p.model);
+      if (!v) return false;
+      const rivals = list.filter(q => q.engine === p.engine).map(q => q.model)
+        .concat((MODEL_OPTIONS_BY_ENGINE[p.engine] || []).map(o => o.id));
+      return rivals.some(m => {
+        const r = ver(m);
+        return r && r.fam === v.fam && r.major === v.major && r.minor > v.minor;
+      });
+    };
+    return list.filter(p => {
+      if (superseded(p)) return false;
       const key = JSON.stringify([p.engine, p.model || '']);
       if (seen.has(key)) return false;
       seen.add(key);

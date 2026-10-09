@@ -1,0 +1,1 @@
+- New-session model pills no longer show "Sonnet 5" once "Sonnet 5.5" is available for the same engine.
