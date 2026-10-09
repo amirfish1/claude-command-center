@@ -9295,6 +9295,26 @@
     }
   }
 
+  /* New session on a phone: engine / model / effort were squeezed to ~70px
+     each beside the send cluster and unreadable. Give them their own
+     full-width row above the buttons, each select sharing the width. */
+  @media (max-width: 1200px) {
+    .conv-input-bar.is-new-session-launch .conv-input-row-bottom {
+      flex-wrap: wrap;
+      overflow: visible;
+    }
+    .conv-input-bar.is-new-session-launch .conv-input-selectors {
+      flex: 1 1 100%;
+      order: -1;
+      overflow: visible;
+    }
+    .conv-input-bar.is-new-session-launch .conv-input-selectors > select {
+      flex: 1 1 0;
+      min-width: 0;
+      max-width: none;
+    }
+  }
+
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────
      More message fits per screen once the inter-event margins shrink. */
   @media (max-width: 1200px) {
