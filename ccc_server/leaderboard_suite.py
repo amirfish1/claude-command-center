@@ -18,8 +18,13 @@ Models that would bill are never called: paid presets (GLM, Kimi, DeepSeek,
 Qwen, MiniMax) and BYOK keys are not backends here.
 
 Every checker is deterministic: it runs fixed code against the files the
-model left in a scratch directory. ``scripts/run-leaderboard-eval.py`` is the
-CLI. Stdlib-only.
+model left in a scratch directory. Checks run on a fresh copy of that
+directory with the task's grader files restored from setup, stdlib-shadowing
+modules removed, a scrubbed environment (no API keys) and CPU/file-size
+limits, so a model cannot pass by rewriting the grader. Model-written code
+still runs as the current user with network access: run the suite in a
+disposable VM or container. ``scripts/run-leaderboard-eval.py`` is the CLI.
+Stdlib-only.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from pathlib import Path
 
 from ccc_server import free_eval
 from ccc_server.free_eval import (
+    CHECK_CMD_TIMEOUT_S,
     EVAL_TOOLS,
     MAX_TOOL_CALLS_PER_TURN,
     MAX_TOOL_TURNS,
@@ -45,7 +51,6 @@ from ccc_server.free_eval import (
     _exec_tool,
     _http_json,
     _list_workspace,
-    _run_check_command,
     _write,
 )
 
@@ -73,10 +78,84 @@ def _now_iso():
 # Tasks: free_eval's five plus ten more
 # ---------------------------------------------------------------------------
 
+CHECK_CPU_S = 20
+CHECK_FILE_BYTES = 10 * 1024 * 1024
+_RLIMIT_EXEC = (
+    "import os, resource, sys\n"
+    "resource.setrlimit(resource.RLIMIT_CPU, ({cpu}, {cpu}))\n"
+    "resource.setrlimit(resource.RLIMIT_FSIZE, ({fsize}, {fsize}))\n"
+    "os.execv(sys.executable, [sys.executable] + sys.argv[1:])\n"
+)
+
+
+def _check_env(wd):
+    """Only what Python needs: no API keys or tokens from the runner."""
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(wd), "TMPDIR": str(wd),
+           "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
+    if os.name == "nt" and os.environ.get("SYSTEMROOT"):
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    return env
+
+
+def _sandbox_run(args, wd):
+    """Run ``python <args>`` in wd -> ``(ok, detail, stdout)``."""
+    argv = [sys.executable, *args]
+    if os.name == "posix":
+        argv = [sys.executable, "-c",
+                _RLIMIT_EXEC.format(cpu=CHECK_CPU_S, fsize=CHECK_FILE_BYTES), *args]
+    try:
+        proc = subprocess.run(argv, cwd=str(wd), env=_check_env(wd), capture_output=True,
+                              text=True, timeout=CHECK_CMD_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e), ""
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode == 0:
+        return True, "ok", proc.stdout or ""
+    tail = out.strip().splitlines()[-6:] if out.strip() else []
+    return False, "\n".join(tail) or f"exit {proc.returncode}", proc.stdout or ""
+
+
+def _run_check_command(argv, wd):
+    """``argv`` is ``[sys.executable, ...]``; runs sandboxed -> ``(ok, detail)``."""
+    ok, detail, _out = _sandbox_run(argv[1:], wd)
+    return ok, detail
+
+
 def _python_check(script):
     def check(wd):
         return _run_check_command([sys.executable, script], wd)
     return check
+
+
+def _greet_check(wd):
+    ok, detail, out = _sandbox_run(["greet.py"], wd)
+    if not ok:
+        return False, detail
+    if out.strip() == "Hello, world!":
+        return True, "ok"
+    return False, f"greet.py printed {out.strip()!r}, expected 'Hello, world!'"
+
+
+# free_eval's checks run model code unsandboxed; the leaderboard swaps in
+# sandboxed equivalents (same commands, same pass conditions).
+_SANDBOXED_CHECKS = {
+    "edit_file": _greet_check,
+    "fix_test": lambda wd: _run_check_command([sys.executable, "-m", "unittest", "test_calc"], wd),
+    "add_function": _python_check("check_strings.py"),
+}
+
+# Files a task's checker executes or imports as the grader. They are restored
+# from setup before every check, so overwriting them cannot fake a pass.
+GRADERS = {
+    "fix_test": ("test_calc.py",),
+    "add_function": ("check_strings.py",),
+    "fizzbuzz": ("check_fb.py",),
+    "off_by_one": ("check_series.py",),
+    "rename_symbol": ("main.py",),
+    "palindrome": ("test_pal.py",),
+    "handle_bad_input": ("check_parse.py",),
+    "new_module": ("check_slug.py",),
+}
 
 
 def _file_equals(name, expected):
@@ -313,14 +392,45 @@ def _task_dedupe_sort():
     )
 
 
-def _fresh_bytecode(check):
-    """Drop stale .pyc first: a same-size edit within one second of the last
-    check would otherwise rerun the old code and fail a correct fix."""
-    def wrapped(wd):
-        for cache in Path(wd).rglob("__pycache__"):
-            shutil.rmtree(cache, ignore_errors=True)
-        return check(wd)
-    return wrapped
+def _stdlib_names():
+    names = set(getattr(sys, "stdlib_module_names", ()))
+    return names | {"sitecustomize", "usercustomize", "unittest", "os", "sys", "json", "re"}
+
+
+_SHADOW = _stdlib_names()
+
+
+def _isolated(task):
+    """Run the task's check on a fresh copy of the workspace with its
+    graders restored and stdlib-shadowing modules removed. The copy also
+    drops __pycache__, so a fast same-size edit never reruns stale code."""
+    setup, check = task["setup"], task["check"]
+    graders = GRADERS.get(task["id"], ())
+    pristine = {}
+
+    def wrapped_setup(wd):
+        setup(wd)
+        for rel in graders:
+            pristine[rel] = (Path(wd) / rel).read_bytes()
+
+    def wrapped_check(wd):
+        with tempfile.TemporaryDirectory(prefix="ccc-leaderboard-check-") as tmp:
+            copy = Path(tmp) / "ws"
+            shutil.copytree(wd, copy, symlinks=True,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            for rel, content in pristine.items():
+                (copy / rel).write_bytes(content)
+            for entry in copy.iterdir():
+                if (entry.name not in pristine and entry.stem in _SHADOW
+                        and (entry.suffix == ".py" or entry.is_dir() or entry.suffix == ".pth")):
+                    if entry.is_dir() and not entry.is_symlink():
+                        shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        entry.unlink()
+            return check(copy)
+
+    task["setup"], task["check"] = wrapped_setup, wrapped_check
+    return task
 
 
 def suite_tasks():
@@ -338,7 +448,8 @@ def suite_tasks():
         _task_dedupe_sort(),
     ]
     for task in tasks:
-        task["check"] = _fresh_bytecode(task["check"])
+        task["check"] = _SANDBOXED_CHECKS.get(task["id"], task["check"])
+        _isolated(task)
     return tasks
 
 
@@ -601,8 +712,9 @@ def run_task(chat, wire, model, task, workdir, deadline=None):
 def run_model(backend, model, log=print):
     per_task = []
     tasks = suite_tasks()
-    deadline = time.monotonic() + len(tasks) * TASK_WALL_BUDGET_S
     for task in tasks:
+        # Each task gets its own budget: a slow one cannot starve the rest.
+        deadline = time.monotonic() + TASK_WALL_BUDGET_S
         with tempfile.TemporaryDirectory(prefix="ccc-leaderboard-") as wd:
             try:
                 result = run_task(backend["chat"], backend["wire"], model, task, wd, deadline)

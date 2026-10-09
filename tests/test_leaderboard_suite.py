@@ -1,7 +1,9 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ccc_server import leaderboard_suite as suite
 
@@ -64,6 +66,59 @@ class SuiteTaskTests(unittest.TestCase):
             ok, detail = task["check"](wd)
             self.assertFalse(ok)
             self.assertIn("area_of", detail)
+
+
+class GraderIsolationTests(unittest.TestCase):
+    def _task(self, task_id):
+        return next(t for t in suite.suite_tasks() if t["id"] == task_id)
+
+    def test_overwritten_grader_is_restored_before_checking(self):
+        task = self._task("fizzbuzz")
+        with tempfile.TemporaryDirectory() as wd:
+            task["setup"](wd)
+            Path(wd, "check_fb.py").write_text("print('ok')\n", encoding="utf-8")
+            ok, _detail = task["check"](wd)
+            self.assertFalse(ok, "a rewritten grader must not pass")
+
+    def test_stdlib_shadow_module_cannot_fake_unittest(self):
+        task = self._task("palindrome")
+        with tempfile.TemporaryDirectory() as wd:
+            task["setup"](wd)
+            Path(wd, "unittest.py").write_text("def main(*a, **k):\n    pass\n", encoding="utf-8")
+            Path(wd, "sitecustomize.py").write_text("import os\nos._exit(0)\n", encoding="utf-8")
+            ok, _detail = task["check"](wd)
+            self.assertFalse(ok)
+
+    def test_checks_do_not_see_runner_secrets(self):
+        task = self._task("new_module")
+        with tempfile.TemporaryDirectory() as wd, \
+                mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-XXXX"}):
+            task["setup"](wd)
+            Path(wd, "slug.py").write_text(
+                "import os, re\n"
+                "assert 'OPENROUTER_API_KEY' not in os.environ\n"
+                "def slugify(text):\n"
+                "    return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')\n",
+                encoding="utf-8")
+            ok, detail = task["check"](wd)
+            self.assertTrue(ok, detail)
+
+    def test_each_task_gets_its_own_time_budget(self):
+        deadlines = []
+
+        def fake_run_task(chat, wire, model, task, wd, deadline):
+            deadlines.append(deadline)
+            return {"task": task["id"], "passed": True, "detail": "ok", "error": None,
+                    "latency_ms": 1, "requests": 1, "median_request_ms": 1, "tool_calls": 1,
+                    "input_tokens": 1, "output_tokens": 1}
+
+        with mock.patch.object(suite, "run_task", fake_run_task), \
+                mock.patch.object(suite.time, "monotonic", side_effect=range(0, 10_000, 100)):
+            suite.run_model({"name": "fake", "chat": None, "wire": "openai"}, "m",
+                            log=lambda line: None)
+        self.assertEqual(len(deadlines), 15)
+        self.assertEqual(deadlines[0], suite.TASK_WALL_BUDGET_S)
+        self.assertEqual(deadlines[1], 100 + suite.TASK_WALL_BUDGET_S)
 
 
 class ZeroPriceTests(unittest.TestCase):

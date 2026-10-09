@@ -97,7 +97,10 @@ checker) against every $0 model on your router, OpenRouter's `:free`
 models, and GitHub Models. It never calls a model with a nonzero price and
 records the account cost before and after the run. Results land in
 [docs/leaderboard/latest.md](leaderboard/latest.md) and `latest.json`
-(pass rate, latency, tokens).
+(pass rate, latency, tokens). Checks restore each task's grader files and
+run with a scrubbed environment and CPU/file limits, but the code models
+write still runs as you with network access, so run the suite in a
+disposable VM or container.
 
 To refresh the scores weekly without touching the router's mapping, install
 the user timer with `systemd/install-leaderboard-weekly.sh`. Every Monday it
