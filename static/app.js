@@ -17957,7 +17957,9 @@
     // flight — show a spinner instead of leaving the section blank.
     const tasksEl0 = document.getElementById('simpleTasks');
     if (tasksEl0 && !tasksEl0.innerHTML.trim()) {
-      tasksEl0.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your tasks…</div>';
+      tasksEl0.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>'
+        + '<div><div>Loading your tasks…</div><div class="simple-loading-detail" id="simpleTasksProgress"></div></div></div>';
+      _simpleStartArchiveProgress('simpleTasksProgress');
     }
     let attention = null, archive = null;
     try {
@@ -18005,7 +18007,16 @@
     const merged = workingRows.concat(finishedRows)
       .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
       .slice(0, 10);
-    if (tasksEl) {
+    // A cold first scan outlives loadArchiveAll's fetch timeout (null). Keep
+    // the spinner and its progress line up instead of claiming the list is
+    // empty while the server says the scan is still running; the 45s home
+    // refresh asks again.
+    let stillScanning = false;
+    if (!archive && tasksEl && tasksEl.querySelector('.simple-loading')) {
+      const snap = await _simpleFetchArchiveStatus();
+      stillScanning = !!(snap && snap.active);
+    }
+    if (tasksEl && !stillScanning) {
       tasksEl.innerHTML = merged.length
         ? merged.map(r => {
             const working = !!workingIds[String(r.id || r.session_id || '')];

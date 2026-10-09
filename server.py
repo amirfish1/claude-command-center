@@ -4804,6 +4804,20 @@ def _archive_load_begin():
         })
 
 
+def _archive_load_begin_if_idle():
+    """Start a progress run unless one is already reporting.
+
+    Concurrent cold callers would otherwise reset the running N/M count back
+    to zero; only the caller that started the run reports and completes it.
+    """
+    with _ARCHIVE_LOAD_STATUS_LOCK:
+        if _ARCHIVE_LOAD_STATUS.get("active"):
+            return False
+        _ARCHIVE_LOAD_STATUS["active"] = True
+    _archive_load_begin()
+    return True
+
+
 def _archive_load_set_step(key, *, label=None, state=None, detail=None, count=_LOAD_MISSING, total=_LOAD_MISSING):
     now = time.time()
     with _ARCHIVE_LOAD_STATUS_LOCK:
@@ -15925,7 +15939,7 @@ def _stamp_archive_goals(rows):
     return rows
 
 
-def _archive_compute_rows(key, cache_options, serve_generation=None):
+def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None):
     """Produce archive rows under the per-key build lock (single-flight).
 
     Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
@@ -16005,7 +16019,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                         print(f"  [archive-cache] incremental refresh failed, rebuilding: {e}")
                         rows = None
             if rows is None:
-                rows = _build_archive_conversations(**cache_options)
+                rows = _build_archive_conversations(**cache_options, progress_step=progress_step)
                 _archive_response_cache_put(key, rows, signature=sig)
                 _save_conv_meta_cache()
                 from_cache = False
@@ -16341,8 +16355,21 @@ def _archive_serve_rows_versioned(
             ).start()
         returned_rows = [dict(r) for r in rows] if copy_rows else rows
         return returned_rows, True, _archive_serve_ver_for_rows(key, rows)
-    # Nothing persisted yet — build once synchronously.
-    rows, from_cache = _archive_compute_rows(key, cache_options, serve_generation)
+    # Nothing persisted yet — build once synchronously. On a fresh install
+    # this is the minutes-long first scan, so feed the archive progress
+    # channel (folders → transcripts N/M → …) the loading UI polls.
+    owns_progress = _archive_load_begin_if_idle()
+    try:
+        rows, from_cache = _archive_compute_rows(
+            key, cache_options, serve_generation,
+            progress_step=_archive_load_set_step if owns_progress else None,
+        )
+    except Exception as e:
+        if owns_progress:
+            _archive_load_fail(e)
+        raise
+    if owns_progress:
+        _archive_load_complete(rows)
     return rows, from_cache, _archive_serve_ver_for_rows(key, rows)
 
 
