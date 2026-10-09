@@ -9534,6 +9534,11 @@
     .wp-usage-pill { font-size: 0 !important; white-space: nowrap; }
     .wp-usage-pill .wp-usage-pct { font-size: 11px !important; }
   }
+  /* Phones: the ≤550px container query above hides the context pill entirely,
+     which is every phone. Show it, with its numbers, on touch devices. */
+  @media (pointer: coarse) {
+    .conv-input-context .wp-usage-pill { display: inline-flex !important; font-size: 11px !important; }
+  }
 
   /* ── Mobile: sidebar-footer poller strip doesn't clip ──────────────────────
      #pollerWrap (CPU/build/err health + models pill + throughput pill +

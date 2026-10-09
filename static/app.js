@@ -81757,7 +81757,10 @@
     // Engines the New session UI can't launch (droid, aider, pi) would be
     // coerced to claude on click and land on the wrong model; don't offer them.
     const list = (Array.isArray(picks) ? picks : [])
-      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine);
+      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine
+        // A model another engine owns (claude + minimax-m3) can't be selected
+        // in that engine's list, so the select would fall back to the priciest.
+        && (!p.model || _modelAllowedForEngine(p.engine, p.model)));
     // "sonnet-5" is noise once "sonnet-5-5" exists for the same engine, in
     // history or in its catalog.
     const ver = (m) => {
