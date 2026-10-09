@@ -1,0 +1,16 @@
+# User unit: install with systemd/install-leaderboard-weekly.sh (no root needed).
+# Reruns the free-model eval against the local free router and stages the
+# leaderboard page in ~/.ccc/leaderboard. It never commits, uploads or deploys;
+# publishing stays a reviewed step (scripts/publish-leaderboard.sh).
+[Unit]
+Description=CCC free-model leaderboard: weekly eval + staged page
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/Apps/claude-command-center
+ExecStart=/usr/bin/python3 %h/Apps/claude-command-center/scripts/leaderboard-weekly.py run
+TimeoutStartSec=2h
+Nice=10
