@@ -1,0 +1,51 @@
+{
+  "schema": "product-motion/v1",
+  "id": "ccc-fleet-search",
+  "take": "takes/20261009-072347-ccc-find-a-session-across-the-fleet-motion-sourc",
+  "source": {"w": 3840, "h": 2160, "css_zoom": 3, "prepare_for_seek": true},
+  "expect": {"clicks": 3, "keys": 6},
+  "duration": 31,
+  "music": {"synthesis": "pulse", "period": 0.5, "phase": 0, "offset": 0, "rights": "Original deterministic synthesis from the kit's sfx.py"},
+  "palette": {"paper": "#f6f8fa", "ink": "#161b22", "deep": "#0d1117", "accent": "#6e8caf", "hi": "#f5a623", "mute": "#8b949e", "page": "#0d1117", "card": "#ffffff", "tag": "#46607f", "herob": "#46607f"},
+  "layout": {"landscape": {"slab": {"left": 96, "top": 760, "h2": 70, "p": 29, "max_w": 1100}}},
+  "copy": {
+    "brand": {"name": "CCC", "wordmark": "ccc", "dot": "."},
+    "window_title": "CCC &middot; Claude Command Center",
+    "hook": {"a": ["Six agents, three repos,", "[one question.]"], "b": ["Which session", "touched Stripe?"]},
+    "storm": [
+      ["Stripe webhooks", "#widgets-api"], ["Auth cookie race", "#fix"], ["Blog to Eleventy", "#migration"],
+      ["Review PR #247", "#rate-limiter"], ["Flaky webhook tests", "#codex"], ["Billing state machine", "#refactor"],
+      ["CI lint on main", "#today"], ["Contact form errors", "#later"], ["/healthz endpoint", "#today"],
+      ["RSS feed", "#blog"], ["Pricing page", "#icebox"], ["Pillow 11 bump", "#deps"]
+    ],
+    "storm_labels": ["LATER", "TODAY", "REVIEW", "NOW"],
+    "hero": {"eyebrow": "ONE QUESTION", "text": "Which session touched Stripe?", "accent": "#now"},
+    "intro": {"eyebrow": "MEET", "tagline": ["Every agent,", "one list."], "chips": ["CLAUDE &middot; CODEX &middot; GEMINI", "SEARCH ACROSS REPOS"]},
+    "steps": [
+      {"pill": "01 FIND", "eyebrow": "01 &mdash; FIND", "title": "Type a word.", "sub": "Every session, every repo, every engine. One search box."},
+      {"pill": "02 OPEN", "eyebrow": "02 &mdash; OPEN", "title": "One click to open.", "sub": "The full transcript, tool calls and all, right where it stopped."},
+      {"pill": "03 TRIAGE", "eyebrow": "03 &mdash; TRIAGE", "title": "Switch to Active.", "sub": "Ready to merge sits on top. The search stays with you."}
+    ],
+    "recap": ["Find.", "Open.", "Triage."],
+    "end": {
+      "tagline": ["Start the next", "while Claude builds the first."],
+      "url": "github.com/amirfish1/claude-command-center",
+      "chips": ["FLEET LIST", "SEARCH", "TRANSCRIPTS"],
+      "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+      "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+    },
+    "hud_label": "CCC &middot; REAL CAPTURE"
+  },
+  "edit": {
+    "reveal_src": 3,
+    "act1": {"click": 0, "keys": [0, 6], "type_window": [7.1, 11.5], "type_region": [930, 150, 1395, 246]},
+    "act2": {"click": 1, "instant_result": true, "result_window": [15.2, 19.5], "result_after": 15.5,
+             "result_region": [1660, 0, 3840, 2160], "lift_region": [258, 588, 1360, 96],
+             "lock_label": "ONE CLICK", "stamp": "OPENED"},
+    "act3": {"click": 2, "instant_result": true, "skip_load": true, "result_window": [22.6, 27.5], "result_after": 23.4,
+             "result_region": [228, 300, 1640, 1600], "track_region": [258, 510, 1360, 90],
+             "track_label": "READY TO MERGE", "label_side": "below", "hold_rate": 1},
+    "recap": [["type_end", 1.5, 228, 120, 1500], ["saved_visible", 0.5, 1660, 0, 2180], ["filtered", 0.8, 228, 300, 1500]],
+    "recap_stills": true
+  }
+}
