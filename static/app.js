@@ -46222,6 +46222,7 @@
       +   '<div class="fq-alert-title">' + escapeHtml(title) + '</div>'
       +   (detail ? '<div class="fq-alert-detail">' + escapeHtml(detail) + '</div>' : '')
       + '</div>'
+      + '<button type="button" class="fq-alert-investigate" title="File a WatchTower ticket for a worker to investigate this error" aria-label="Investigate">Investigate</button>'
       + '<button type="button" class="fq-alert-ack" title="Acknowledge and dismiss (re-alerts on a new occurrence)" aria-label="Acknowledge">✓</button>'
       + '</div>';
   }
@@ -46294,6 +46295,32 @@
       const row = e.target.closest('[data-wt-alert-id]');
       if (!row) return;
       const id = row.getAttribute('data-wt-alert-id');
+      const inv = e.target.closest('.fq-alert-investigate');
+      if (inv) {
+        e.stopPropagation();
+        if (inv.disabled) return;
+        inv.disabled = true;
+        inv.textContent = 'Filing…';
+        fetch('/api/watchtower/alerts/investigate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        }).then(r => r.json().catch(() => ({}))).then(d => {
+          if (d && d.ok) {
+            inv.textContent = d.ref ? 'Filed ' + d.ref : 'Filed';
+            showOpToast('Investigation ticket ' + (d.ref || 'filed') + ' in ' + (d.queue || 'WATCHTOWER'), 'success');
+          } else {
+            inv.disabled = false;
+            inv.textContent = 'Investigate';
+            showOpToast('Investigate failed: ' + ((d && d.error) || 'unknown'), 'error');
+          }
+        }).catch(err => {
+          inv.disabled = false;
+          inv.textContent = 'Investigate';
+          showOpToast('Investigate failed: ' + (err && err.message || err), 'error');
+        });
+        return;
+      }
       if (e.target.closest('.fq-alert-ack')) {
         e.stopPropagation();
         _ackWtAlerts([id], false);

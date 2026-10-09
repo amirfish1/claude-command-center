@@ -32687,6 +32687,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path == "/api/watchtower/alerts/investigate":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            alert_id = str(payload.get("id") or "").strip() if isinstance(payload, dict) else ""
+            if not alert_id:
+                self.send_json({"ok": False, "error": "id required"}, 400)
+                return
+            res = investigate_wt_alert(alert_id)
+            self.send_json(res, 200 if res.get("ok") else 502)
+            return
         if path == "/api/watchtower/alerts/ack":
             # Ack (dismiss) WatchTower alerts by id, or every current one with
             # {"all": true}. An ack is a timestamp: the alert re-surfaces if a

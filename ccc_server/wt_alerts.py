@@ -525,6 +525,53 @@ def ack_wt_alerts(ids, path=None, now=None):
     return acks
 
 
+# ── investigate ──────────────────────────────────────────────────────────────
+
+INVESTIGATE_QUEUE = "WATCHTOWER"
+
+
+def investigate_wt_alert(alert_id, *, queue=INVESTIGATE_QUEUE, timeout=30):
+    """File a WatchTower ticket asking a worker to investigate one alert.
+
+    Idempotent per alert id (``wt add --dedupe-key``): a second click returns
+    the same ticket instead of filing a duplicate. Returns ``{ok, ref, output}``.
+    """
+    import subprocess
+    alert_id = str(alert_id or "").strip()
+    alert = next((a for a in collect_wt_alerts(include_acked=True).get("alerts", [])
+                  if a.get("id") == alert_id), None)
+    if not alert:
+        return {"ok": False, "error": "alert not found (it may have cleared)"}
+    wt = _core._wt_cli_path()
+    if not wt:
+        return {"ok": False, "error": "wt CLI not found"}
+    queues = ", ".join(str(q) for q in (alert.get("queues") or [alert.get("queue")]) if q)
+    title = "Investigate WatchTower alert: " + str(alert.get("title") or alert_id)[:80]
+    text = "\n".join(filter(None, [
+        "Investigate and fix the root cause of this WatchTower error alert "
+        "(filed from the Queue panel Investigate button).",
+        "Queue(s): " + queues if queues else "",
+        "Title: " + str(alert.get("title") or ""),
+        "Detail: " + str(alert.get("detail") or ""),
+        "Occurrences: " + str(alert.get("count") or 1),
+        "Last seen: " + str(alert.get("ts_iso") or ""),
+        "Log: " + str(alert.get("log") or ""),
+        "Alert id: " + alert_id,
+    ]))
+    try:
+        r = subprocess.run(
+            [wt, "add", "-q", queue, "--title", title, "--text", text, "--type", "bug",
+             "--dedupe-key", "wt-alert:" + alert_id],
+            capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"ok": False, "error": str(e)}
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if r.returncode != 0:
+        return {"ok": False, "error": out[-300:] or "wt add failed"}
+    m = re.search(r"\b[A-Z][A-Z0-9_-]*-\d+\b", out)
+    return {"ok": True, "ref": m.group(0) if m else "", "queue": queue, "output": out[-300:]}
+
+
 def _is_acked(alert, acks):
     acked_at = acks.get(alert.get("id"))
     if acked_at is None:

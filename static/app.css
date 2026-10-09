@@ -23847,6 +23847,13 @@ body.has-gc-reader .pwa-install-banner {
   color: var(--green, #3fb950); background: rgba(63,185,80,0.14);
   border-color: rgba(63,185,80,0.35);
 }
+.fq-alert-investigate {
+  flex: 0 0 auto; align-self: flex-start; margin: 0 4px 0 0; padding: 2px 8px;
+  border: 1px solid rgba(139,148,158,0.35); border-radius: 999px; background: transparent;
+  color: var(--text-muted); font-size: 11px; line-height: 1.4; cursor: pointer;
+}
+.fq-alert-investigate:hover:not(:disabled) { color: var(--text); border-color: rgba(139,148,158,0.7); }
+.fq-alert-investigate:disabled { opacity: 0.6; cursor: default; }
 .fq-alert-row.is-acking { opacity: 0.35; pointer-events: none; }
 
 .fq-health {

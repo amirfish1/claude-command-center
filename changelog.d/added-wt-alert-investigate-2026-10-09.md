@@ -1,0 +1,1 @@
+- WatchTower error rows in the Queue panel have an Investigate button that files a ticket in the WATCHTOWER queue for a worker to fix the root cause (once per alert).

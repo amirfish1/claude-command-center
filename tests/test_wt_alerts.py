@@ -315,3 +315,10 @@ class TestStaticWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InvestigateTests(_Fixture):
+    def test_unknown_alert_is_rejected_without_filing(self):
+        res = wt_alerts.investigate_wt_alert("no-such-alert-id")
+        self.assertFalse(res["ok"])
+        self.assertIn("not found", res["error"])
