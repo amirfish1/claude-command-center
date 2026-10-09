@@ -9343,6 +9343,8 @@
     /* overflow:hidden on the bottom row (phone width guard) clips the ⋯ and
        send menus that open upward; the selectors scroll on their own. */
     .conv-input-bar .conv-input-row-bottom { overflow: visible !important; }
+    /* Nothing to continue from before the first message. */
+    .conv-input-bar.is-new-session-launch .conv-actions-item[data-act="continue"] { display: none; }
     .conv-input-bar .send-btn { -webkit-touch-callout: none; user-select: none; }
   }
 
