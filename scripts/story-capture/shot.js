@@ -67,6 +67,9 @@ async function runActions(ctx, actions) {
     const fixtureBase = args['fixture-base'] || (flowMod && flowMod.fixtureBase);
     if (fixtureBase) await forceDemoFixtures(page, fixtureBase);
     await seedLocalStorage(page, lsEntries);
+    // Optional pre-navigation hook (fetch shims, clocks) for flows that
+    // need more than static fixtures — e.g. flows/limit-hit.js.
+    if (flowMod && typeof flowMod.setup === 'function') await flowMod.setup(page);
     const url = resolveUrl(base, args.url || (flowMod && flowMod.path) || '/docs/demo/');
     await gotoAndSettle(page, url, { settleMs });
     if (!args['keep-banner']) await suppressDemoBanner(page);

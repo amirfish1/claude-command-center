@@ -67,6 +67,7 @@ module.exports = {
   viewport: '1440x900',            // optional
   localStorage: { ... },           // seeded before app scripts run
   lead: 1500, tail: 1700,          // establish / settle ms (record.js)
+  async setup(page) { ... },       // optional, before navigation (fetch shims)
   async run(ctx) { ... },
 };
 ```
@@ -81,6 +82,25 @@ drags: Flow nodes, resizers), `scrollEl(sel, dy, {dx})`, `type(sel, text)`,
 `reloadWith(lsEntries)` — a fade-out scene cut that reloads with different
 localStorage (used where the UI has no click affordance for a persisted
 preference, e.g. list -> board view).
+
+### Limit-hit demo (B20) — `limit-hit-video.js`
+
+`flows/limit-hit.js` plays "Your Claude limit hits. Your 12 sessions keep
+going." on the real UI: its `setup` installs a fetch shim with 12 generated
+sessions (timestamps relative to capture time) and a working -> limit -> free
+state machine behind the list, live-activity, headroom and free-failover
+endpoints. The cursor clicks the real fleet banner's "Continue all 12 free".
+One command records both takes (landscape 1280x720, portrait = CCC's mobile
+layout at 540x960), burns in captions timed from the flow's act marks, adds
+an end card, and writes the 20 s 16:9 + 9:16 MP4s and the README GIF:
+
+```bash
+node scripts/story-capture/limit-hit-video.js   # [--out-dir DIR] [--skip-record --work DIR]
+```
+
+Captions use libass with the Inter font (install Inter, or libass falls back
+to a default sans). Headless screencast frames are CSS-pixel sized whatever
+the deviceScaleFactor, so exports are lanczos-upscaled.
 
 ## Seeds (`seeds/*.json`, mirrored in `flows/_seeds.js`)
 
