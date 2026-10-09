@@ -80882,6 +80882,15 @@
     if (btn) btn.disabled = true;
     closeSpawnCwdMenu();
     try {
+      // The native chooser opens on the host Mac, not on a phone/remote
+      // browser, so remote clients go straight to the in-page picker.
+      if (!['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+        openWebFolderPicker({
+          startPath: getSpawnCwd(),
+          onPick: (chosen) => { void useSpawnCwdSelection(chosen); },
+        });
+        return;
+      }
       const r = await fetch('/api/fs/pick-folder', { method: 'POST' });
       const picked = await r.json().catch(() => ({}));
       if (picked && picked.cancelled) return;

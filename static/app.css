@@ -5014,8 +5014,14 @@
     font-size: 12px;
   }
   @media (max-width: 720px) {
+    /* Keep the recent-folder chips on phones: one swipeable row. */
     .conv-input-context.is-new-session .spawn-cwd-quick-chips {
-      display: none;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .conv-input-context.is-new-session .spawn-cwd-quick-chips > * {
+      flex: 0 0 auto;
     }
   }
   .conv-input-context .wp-path {

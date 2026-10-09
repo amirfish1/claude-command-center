@@ -1,0 +1,1 @@
+- Phone new-session screen shows recent-folder chips again, and the folder button opens the in-page folder picker.
