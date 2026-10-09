@@ -1,0 +1,1 @@
+- New-session model chips now offer one chip per enabled engine, not just the most-used one.

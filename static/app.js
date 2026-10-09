@@ -81777,13 +81777,28 @@
         return r && r.fam === v.fam && r.major === v.major && r.minor > v.minor;
       });
     };
-    return list.filter(p => {
+    const kept = list.filter(p => {
       if (superseded(p)) return false;
       const key = JSON.stringify([p.engine, p.model || '']);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    }).slice(0, 8);
+    });
+    // Variety: usage history is dominated by one engine, so also offer each
+    // other enabled engine's default model, and list one chip per engine first.
+    const have = new Set(kept.map(p => p.engine));
+    Array.from((typeof $convInputEngineSelect !== 'undefined' && $convInputEngineSelect && $convInputEngineSelect.options) || [])
+      .filter(o => !o.hidden && !o.disabled && SPAWN_DEFAULT_ENGINES.includes(o.value) && !have.has(o.value))
+      .forEach(o => {
+        const model = _defaultModelsByEngine[o.value] || '';
+        if (model && !_modelAllowedForEngine(o.value, model)) return;
+        have.add(o.value);
+        kept.push({ engine: o.value, model, effort: '', count: 0, last_used: 0 });
+      });
+    const firstOfEngine = new Set();
+    const lead = [], rest = [];
+    kept.forEach(p => (firstOfEngine.has(p.engine) ? rest : lead).push(p) && firstOfEngine.add(p.engine));
+    return lead.concat(rest).slice(0, 10);
   }
 
   function formatModelNameForBadge(engine, modelId) {
