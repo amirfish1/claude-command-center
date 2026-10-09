@@ -13699,6 +13699,65 @@
       hide();
     });
   })();
+  // Touch: long-press Send opens the send-options menu (the 14px caret is too
+  // small to hit on a phone; CSS hides it under a coarse pointer).
+  (function _initSendLongPress() {
+    const btn = document.getElementById('convSendBtn');
+    const caret = document.getElementById('convSendCaret');
+    if (!btn || !caret) return;
+    let timer = 0, fired = false;
+    const clear = () => { clearTimeout(timer); timer = 0; };
+    btn.addEventListener('touchstart', () => {
+      fired = false;
+      timer = setTimeout(() => {
+        fired = true;
+        if (navigator.vibrate) navigator.vibrate(10);
+        caret.click();
+      }, 450);
+    }, { passive: true });
+    ['touchend', 'touchmove', 'touchcancel'].forEach(t => btn.addEventListener(t, clear, { passive: true }));
+    // Swallow the click that follows a long-press so it doesn't also send.
+    btn.addEventListener('click', (ev) => {
+      if (!fired) return;
+      fired = false;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }, true);
+    btn.addEventListener('contextmenu', (ev) => { if (isTouchPrimary()) ev.preventDefault(); });
+  })();
+  // Touch: the + becomes a ⋯ actions menu (Attach, Compact, Continue in new).
+  (function _initConvActionsMenu() {
+    const btn = document.getElementById('convActionsBtn');
+    const menu = document.getElementById('convActionsMenu');
+    if (!btn || !menu) return;
+    const hide = () => { menu.style.display = 'none'; btn.setAttribute('aria-expanded', 'false'); };
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const opening = menu.style.display === 'none';
+      if (opening) {
+        const c = document.getElementById('convCompactBtn');
+        const row = menu.querySelector('[data-act="compact"]');
+        if (row) row.style.display = c && c.classList.contains('visible') && !c.disabled ? '' : 'none';
+      }
+      menu.style.display = opening ? 'block' : 'none';
+      btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    });
+    menu.addEventListener('click', (ev) => {
+      const item = ev.target.closest && ev.target.closest('[data-act]');
+      if (!item) return;
+      hide();
+      if (item.dataset.act === 'attach') { const i = document.getElementById('convAttachInput'); if (i) i.click(); }
+      else if (item.dataset.act === 'compact') compactCurrentSession();
+      else if (item.dataset.act === 'continue') { const c = document.querySelector('#convSendMenu .continue-new-btn'); if (c) c.click(); }
+    });
+    document.addEventListener('click', (ev) => {
+      if (menu.style.display === 'none') return;
+      const group = menu.closest('.conv-actions-group');
+      if (group && group.contains(ev.target)) return;
+      hide();
+    });
+  })();
   if ($convSteerBtn) $convSteerBtn.addEventListener('click', () => sendToTerminal('p1', 'steer'));
   if ($convCompactBtn) $convCompactBtn.addEventListener('click', () => compactCurrentSession());
   // Mobile: lift the Compact button out of the composer into the header so the

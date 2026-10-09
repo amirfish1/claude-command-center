@@ -9315,6 +9315,33 @@
     }
   }
 
+  /* Actions menu (⋯) is touch-only; desktop keeps the + attach button. */
+  .conv-actions-group { display: none; position: relative; flex-shrink: 0; }
+  .conv-actions-btn {
+    width: 40px; height: 40px; border-radius: 999px; padding: 0;
+    border: 1px solid var(--border); background: transparent; color: var(--text-muted);
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .conv-actions-menu {
+    position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 200;
+    min-width: 220px; padding: 4px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  }
+  .conv-actions-item {
+    display: block; width: 100%; text-align: left; padding: 12px 12px;
+    font-size: 15px; color: var(--text); background: transparent;
+    border: none; border-radius: 6px; cursor: pointer;
+  }
+  .conv-actions-item:active { background: var(--surface); }
+  @media (pointer: coarse) {
+    .conv-input-bar .conv-actions-group { display: inline-flex; }
+    .conv-input-bar .attach-btn,
+    .conv-input-bar .conv-send-caret,
+    #convToolbar .compact-btn.in-header { display: none !important; }
+    .conv-input-bar .send-btn { -webkit-touch-callout: none; user-select: none; }
+  }
+
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────
      More message fits per screen once the inter-event margins shrink. */
   @media (max-width: 1200px) {

@@ -1,0 +1,1 @@
+- On phones the + is now a ⋯ actions menu (Attach, Compact, Continue in new session), and long-pressing Send opens the send options.
