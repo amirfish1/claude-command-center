@@ -9276,6 +9276,17 @@
     .conv-pane:has(> .conv-input-context.is-new-session) > .conv-input-bar {
       flex-shrink: 0;
     }
+    /* The overflow-y:auto above clips the upward-opening folder menu to the
+       strip, hiding most suggestions. position:fixed escapes that clip. */
+    .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-menu {
+      position: fixed;
+      top: 72px;
+      bottom: auto;
+      left: 10px;
+      right: 10px;
+      width: auto;
+      max-height: 45vh;
+    }
   }
 
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────

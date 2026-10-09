@@ -1,0 +1,1 @@
+- Mobile new-session folder suggestions are no longer cut off by the strip; they open as a full-width sheet.
