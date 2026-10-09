@@ -443,6 +443,8 @@
   .sh-stage { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid #23302a; background: #0d1110; line-height: 0; }
   .sh-stage canvas { width: 100%; height: auto; display: block; }
   .sh-stage.square { max-width: 560px; margin: 0 auto; }
+  .btn-month { white-space: nowrap; }
+  .btn-month.fresh { border-color: #39d353; color: #9fe0b0; }
   .sh-status { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 14px; line-height: 1.5; color: #cfe3d6; background: rgba(13, 17, 16, 0.86); }
   .sh-status.on { display: flex; }
   .sh-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 16px; font-size: 13px; color: #aab1c5; align-items: center; }
@@ -1251,6 +1253,9 @@
       <button class="btn btn-share" id="share-btn" title="Make a shareable card of your agent activity">
         <span>&#8599;</span> Share
       </button>
+      <button class="btn btn-share btn-month" id="month-card-btn" title="Make your monthly card">
+        <span>&#9638;</span> <span id="month-card-label">My month</span>
+      </button>
       <button class="btn" id="annotate-btn" onclick="openAnnotate()" title="File a bug or note to the THROUGHPUT queue">
         <span>📝</span> Annotate
       </button>
@@ -1265,8 +1270,9 @@
         <div class="sh-milestone" id="sh-milestone" role="status"></div>
         <div class="sh-seg" id="sh-period" role="group" aria-label="Period">
           <button type="button" data-v="week">This week</button>
-          <button type="button" data-v="month">This month</button>
+          <button type="button" data-v="month">Last 30 days</button>
           <button type="button" data-v="year">Last 12 months</button>
+          <button type="button" data-v="cal" id="sh-period-cal" title="A calendar card for one month">My month</button>
         </div>
         <div class="sh-seg" id="sh-metric" role="group" aria-label="Headline number">
           <button type="button" data-v="tokens">Tokens</button>
@@ -5721,8 +5727,13 @@
       week: { days: 7, kicker: 'last 7 days', phrase: 'this week' },
       month: { days: 30, kicker: 'last 30 days', phrase: 'this month' },
       year: { days: 365, kicker: 'last 12 months', phrase: 'in the last 12 months' },
+      // One calendar month ("My October"); range comes from calMonth().
+      cal: { days: 0, kicker: '', phrase: '' },
     };
     const ENGINE_NAMES = { claude: 'Claude', codex: 'Codex', kimi: 'Kimi' };
+    const PRODUCT_NAMES = { claude: 'Claude Code', codex: 'Codex', kimi: 'Kimi' };
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const MON = MONTHS.map((m) => m.slice(0, 3));
     const NET_URLS = {
       x: (t) => 'https://x.com/intent/post?text=' + encodeURIComponent(t),
       linkedin: (t) => 'https://www.linkedin.com/feed/?shareActive=true&text=' + encodeURIComponent(t),
@@ -5742,6 +5753,7 @@
     function loadState() {
       const base = { period: 'week', metric: 'tokens', size: 'wide', pseudo: true, streak: true, cost: false, saved: true, engines: false, name: '' };
       try { Object.assign(base, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* ignore */ }
+      base.month = '';   // a ?m=YYYY-MM month pick lasts one page load
       if (!PERIODS[base.period]) base.period = 'week';
       if (!base.name) base.name = randomName();
       return base;
@@ -5758,16 +5770,56 @@
     }
     function addDays(d, n) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); return x; }
 
-    function summarize(payload, periodKey, today) {
+    // The month the "My month" card shows. In the first week of a month that
+    // is the month that just ended (the monthly card goes out then);
+    // otherwise it is the current month so far. `pick` is an optional
+    // 'YYYY-MM' override from the ?m= deep link.
+    function calMonth(today, pick) {
+      let y = today.getFullYear();
+      let m = today.getMonth();
+      const mm = /^(\d{4})-(\d{2})$/.exec(pick || '');
+      if (mm && +mm[2] >= 1 && +mm[2] <= 12) { y = +mm[1]; m = +mm[2] - 1; }
+      else if (today.getDate() <= 7) { m -= 1; if (m < 0) { m = 11; y -= 1; } }
+      const first = new Date(y, m, 1);
+      const last = new Date(y, m + 1, 0);
+      const todayKey = dayKey(today);
+      const complete = dayKey(last) < todayKey;
+      const endDay = complete ? last.getDate() : (dayKey(first) <= todayKey ? today.getDate() : 0);
+      return {
+        key: y + '-' + String(m + 1).padStart(2, '0'),
+        year: y, month: m, name: MONTHS[m], first: first,
+        daysInMonth: last.getDate(), endDay: endDay, complete: complete,
+      };
+    }
+    // First day and length of the window a period covers, ending today
+    // (or at the end of the picked month).
+    function periodRange(periodKey, today, pick) {
+      if (periodKey === 'cal') {
+        const cm = calMonth(today, pick);
+        return { start: cm.first, days: cm.endDay };
+      }
+      const days = PERIODS[periodKey].days;
+      return { start: addDays(today, -(days - 1)), days: days };
+    }
+
+    function summarize(payload, periodKey, today, pick) {
       const daily = (payload && payload.daily) || [];
       const byDay = {};
       daily.forEach((r) => { byDay[r.day] = r; });
-      const days = PERIODS[periodKey].days;
+      const range = periodRange(periodKey, today, pick);
       const freeByDay = {};
       ((((payload || {}).savings) || {}).daily || []).forEach((r) => { freeByDay[r.day] = r; });
-      const sum = { tokens: 0, hours: 0, calls: 0, cost: 0, raw: 0, cacheRead: 0, engineTokens: {}, freeSaved: 0, freeRuns: 0, freeTokens: 0 };
-      for (let i = 0; i < days; i++) {
-        const dk = dayKey(addDays(today, -i));
+      const sum = { tokens: 0, hours: 0, calls: 0, cost: 0, raw: 0, cacheRead: 0, engineTokens: {}, freeSaved: 0, freeRuns: 0, freeTokens: 0, activeDays: 0, longestStreak: 0, bestDay: null, bestTokens: 0 };
+      let run = 0;
+      for (let i = 0; i < range.days; i++) {
+        const dk = dayKey(addDays(range.start, i));
+        const active = !!(byDay[dk] && byDay[dk].tokens > 0);
+        run = active ? run + 1 : 0;
+        if (active) {
+          sum.activeDays++;
+          if (run > sum.longestStreak) sum.longestStreak = run;
+          if (byDay[dk].tokens > sum.bestTokens) { sum.bestTokens = byDay[dk].tokens; sum.bestDay = dk; }
+        }
         const fr = freeByDay[dk];
         if (fr) {
           sum.freeSaved += fr.free_saved_usd || 0;
@@ -5823,6 +5875,28 @@
       return cols.map((col) => col.map((v) => (v === null ? -1 : level(v))));
     }
 
+    // One heat level per day of the picked month (-1 = still to come).
+    // Levels are quartiles of that month's own active days.
+    function monthCells(payload, cm) {
+      const byDay = {};
+      ((payload && payload.daily) || []).forEach((r) => { byDay[r.day] = r.tokens || 0; });
+      const raw = [];
+      for (let d = 1; d <= cm.daysInMonth; d++) {
+        raw.push(d > cm.endDay ? null : (byDay[dayKey(new Date(cm.year, cm.month, d))] || 0));
+      }
+      const vals = raw.filter((v) => v > 0).sort((a, b) => a - b);
+      const q = (p) => (vals.length ? vals[Math.min(vals.length - 1, Math.floor(vals.length * p))] : 0);
+      const cuts = [q(0.25), q(0.5), q(0.75)];
+      return raw.map((v) => (v === null ? -1 : v <= 0 ? 0 : v <= cuts[0] ? 1 : v <= cuts[1] ? 2 : v <= cuts[2] ? 3 : 4));
+    }
+    // "Claude Code", "Claude Code + Codex", or a generic name for 3+ engines.
+    function engineLabel(s) {
+      const names = s.engines.slice().sort((a, b) => (s.engineTokens[b] || 0) - (s.engineTokens[a] || 0)).map((e) => PRODUCT_NAMES[e] || e);
+      if (!names.length) return 'AI coding agents';
+      if (names.length > 2) return 'AI coding agents';
+      return names.join(' + ');
+    }
+
     function fmtBig(n) {
       const abs = Math.abs(n);
       const f = (v, s) => {
@@ -5845,7 +5919,7 @@
     // The card model: everything drawn comes from here.
     function cardModel(payload, st, today, planPct) {
       const p = PERIODS[st.period];
-      const s = summarize(payload, st.period, today);
+      const s = summarize(payload, st.period, today, st.month);
       const stat = {
         tokens: { num: fmtBig(s.tokens).num, unit: 'tokens processed' },
         hours: { num: fmtInt(s.hours), unit: 'agent hours' },
@@ -5867,12 +5941,12 @@
       };
       const order = { tokens: ['hours', 'cache', 'calls'], hours: ['tokens', 'cache', 'calls'], cache: ['tokens', 'hours', 'calls'], plan: ['tokens', 'hours', 'cache'], saved: ['runs', 'tokens', 'hours'], runs: ['saved', 'tokens', 'hours'] }[metric];
       const extras = [];
-      if (st.streak && s.streak > 0) extras.push(s.streak + ' day streak');
+      if (st.streak && s.streak > 0 && st.period !== 'cal') extras.push(s.streak + ' day streak');
       if (st.cost && s.cost > 0) extras.push('about ' + fmtUsd(s.cost) + ' at API prices');
       if (st.saved && metric !== 'saved' && s.freeSaved > 0) extras.push('saved ' + fmtUsd(s.freeSaved) + (s.freeRuns > 0 ? ' on ' + fmtInt(s.freeRuns) + ' $0 runs' : ''));
       const engineText = st.engines && s.engines.length ? s.engines.map((e) => ENGINE_NAMES[e] || e).join(' + ') : '';
       const who = st.pseudo && st.name.trim() ? st.name.trim() + "'s AI agent fleet" : 'My AI agent fleet';
-      return {
+      const model = {
         kicker: who + ' · ' + p.kicker + (engineText ? ' · ' + engineText : ''),
         big: stat[metric].num,
         unit: stat[metric].unit,
@@ -5882,9 +5956,44 @@
         metric: metric,
         raw: s,
       };
+      if (st.period === 'cal') {
+        // Monthly card: a titled calendar of one month plus four stat tiles.
+        // The title names the engines (it is the point of the card), so the
+        // "engines used" switch does not apply here.
+        const cm = calMonth(today, st.month);
+        const span = MON[cm.month] + ' 1' + (cm.endDay > 1 ? '-' + cm.endDay : '') + ', ' + cm.year + (cm.complete ? '' : ' (so far)');
+        const best = s.bestDay ? MON[cm.month] + ' ' + Number(s.bestDay.slice(8)) : 'none yet';
+        const first = metric === 'tokens'
+          ? { num: fmtInt(s.hours), unit: 'agent hours' }
+          : { num: fmtBig(s.tokens).num, unit: 'tokens processed' };
+        model.kind = 'month';
+        model.monthName = cm.name;
+        model.complete = cm.complete;
+        model.engineLabel = engineLabel(s);
+        model.title = 'My ' + cm.name + ' in ' + model.engineLabel;
+        model.kicker = (st.pseudo && st.name.trim() ? st.name.trim() + ' · ' : '') + span;
+        model.tiles = [
+          first,
+          { num: s.activeDays + '/' + cm.daysInMonth, unit: 'active days' },
+          { num: s.longestStreak + (s.longestStreak === 1 ? ' day' : ' days'), unit: 'longest streak' },
+          { num: best, unit: 'busiest day' },
+        ];
+        model.cal = {
+          firstDow: cm.first.getDay(),
+          levels: monthCells(payload, cm),
+          best: s.bestDay ? Number(s.bestDay.slice(8)) : 0,
+        };
+        model.monthKey = cm.key;
+      }
+      return model;
     }
 
+    const SHORT_UNIT = { tokens: 'tokens', hours: 'agent hours', cache: 'cache hit rate', plan: 'of my weekly plan', saved: 'of work for $0', runs: 'runs for $0' };
     function shareLead(model, st) {
+      if (model.kind === 'month') {
+        const parts = [model.big + ' ' + SHORT_UNIT[model.metric], model.tiles[0].num + ' ' + model.tiles[0].unit, model.raw.activeDays + ' active days'];
+        return 'My ' + model.monthName + (model.complete ? '' : ' so far') + ' in ' + model.engineLabel + ': ' + parts.join(', ') + '.';
+      }
       const phrase = PERIODS[st.period].phrase;
       let lead;
       if (model.metric === 'hours') lead = 'My AI agents worked ' + model.big + ' hours ' + phrase + '.';
@@ -5999,6 +6108,85 @@
       ctx.fillRect(0, 0, w, h);
     }
 
+    // Month calendar: Sunday-first columns, day numbers in each cell, the
+    // busiest day ringed, days still to come drawn as empty outlines.
+    function drawMonth(ctx, cal, x, y, pitch) {
+      const cell = pitch * 0.88;
+      const r = Math.max(3, cell * 0.14);
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = '600 ' + Math.round(pitch * 0.26) + 'px ' + FONT;
+      ctx.fillStyle = '#7d9886';
+      ctx.textAlign = 'center';
+      ['S', 'M', 'T', 'W', 'T', 'F', 'S'].forEach((d, i) => ctx.fillText(d, x + i * pitch + cell / 2, y - pitch * 0.18));
+      cal.levels.forEach((lv, i) => {
+        const idx = cal.firstDow + i;
+        const cx = x + (idx % 7) * pitch;
+        const cy = y + Math.floor(idx / 7) * pitch;
+        rrect(ctx, cx, cy, cell, cell, r);
+        if (lv < 0) {
+          ctx.strokeStyle = '#1f2a24';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = LEVELS[lv];
+          ctx.fill();
+        }
+        if (i + 1 === cal.best) {
+          rrect(ctx, cx - 3, cy - 3, cell + 6, cell + 6, r + 3);
+          ctx.strokeStyle = '#f2f5f3';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        }
+        ctx.font = '600 ' + Math.round(pitch * 0.22) + 'px ' + FONT;
+        ctx.textAlign = 'left';
+        ctx.fillStyle = lv >= 3 ? 'rgba(13,17,16,0.72)' : lv < 0 ? '#3a4a40' : '#7d9886';
+        ctx.fillText(String(i + 1), cx + cell * 0.13, cy + cell * 0.32);
+      });
+    }
+    function drawTiles(ctx, tiles, x, y, colW, rowH, cols, numSize, unitSize) {
+      tiles.forEach((t, i) => {
+        const tx = x + (i % cols) * colW;
+        const ty = y + Math.floor(i / cols) * rowH;
+        fitText(ctx, t.num, tx, ty, 800, numSize, colW - 16, '#f2f5f3');
+        fitText(ctx, t.unit, tx, ty + unitSize + 10, 500, unitSize, colW - 16, '#8fb59d');
+      });
+    }
+    function drawMonthCard(ctx, model, w, h, wide) {
+      if (wide) {
+        const pad = 60;
+        const left = 600;
+        fitText(ctx, model.kicker, pad, 84, 500, 22, left, '#8fb59d');
+        fitText(ctx, model.title, pad, 138, 800, 44, left, '#f2f5f3');
+        fitText(ctx, model.big, pad, 262, 800, 112, left, '#f2f5f3');
+        fitText(ctx, model.unit, pad, 304, 700, 30, left, '#8fb59d');
+        drawTiles(ctx, model.tiles, pad, 380, 300, 92, 2, 40, 18);
+        if (model.extras.length) fitText(ctx, model.extras.join('   ·   '), pad, 548, 500, 20, left, '#8fb59d');
+        const pitch = 60;
+        const rows = Math.ceil((model.cal.firstDow + model.cal.levels.length) / 7);
+        const x0 = w - pad - 7 * pitch + pitch * 0.12;
+        const y0 = 120 + (6 - rows) * pitch / 2;
+        drawMonth(ctx, model.cal, x0, y0, pitch);
+        drawLegend(ctx, w - pad - 44, y0 + rows * pitch + 8, 15);
+        drawFooter(ctx, w, h - 36, pad, 1);
+      } else {
+        const pad = 64;
+        const inner = w - pad * 2;
+        fitText(ctx, model.kicker, pad, 100, 500, 26, inner, '#8fb59d');
+        fitText(ctx, model.title, pad, 172, 800, 58, inner, '#f2f5f3');
+        fitText(ctx, model.big, pad, 330, 800, 160, inner, '#f2f5f3');
+        fitText(ctx, model.unit, pad, 384, 700, 40, inner, '#8fb59d');
+        drawTiles(ctx, model.tiles, pad, 470, inner / 4, 0, 4, 40, 18);
+        if (model.extras.length) fitText(ctx, model.extras.join('  \u00b7  '), pad, 552, 500, 22, inner, '#8fb59d');
+        const pitch = 62;
+        const rows = Math.ceil((model.cal.firstDow + model.cal.levels.length) / 7);
+        const x0 = pad + (inner - 7 * pitch) / 2;
+        const y0 = 620 + (6 - rows) * pitch / 2;
+        drawMonth(ctx, model.cal, x0, y0, pitch);
+        drawLegend(ctx, x0 + 7 * pitch - pitch * 0.12 - 44, y0 + rows * pitch + 8, 15);
+        drawFooter(ctx, w, h - 40, pad, 1);
+      }
+    }
+
     function drawCard(canvas, model, size) {
       const wide = size !== 'square';
       const w = wide ? 1200 : 1080;
@@ -6007,6 +6195,7 @@
       canvas.height = h;
       const ctx = canvas.getContext('2d');
       drawBackground(ctx, w, h);
+      if (model.kind === 'month') { ctx.textBaseline = 'alphabetic'; drawMonthCard(ctx, model, w, h, wide); return; }
       const pad = wide ? 60 : 64;
       const inner = w - pad * 2;
       ctx.textBaseline = 'alphabetic';
@@ -6070,6 +6259,12 @@
       $('sh-opt-cost').checked = state.cost;
       $('sh-opt-saved').checked = state.saved;
       $('sh-opt-engines').checked = state.engines;
+      const isCal = state.period === 'cal';
+      [['sh-opt-engines', 'The month card names your engines in its title'], ['sh-opt-streak', 'The month card always shows its longest streak']].forEach(([id, why]) => {
+        $(id).disabled = isCal;
+        if ($(id).parentNode) $(id).parentNode.title = isCal ? why : '';
+      });
+      syncMonthLabels();
       $('sh-pseudo-input').value = state.name;
       $('sh-pseudo-input').disabled = !state.pseudo;
       $('sh-stage').classList.toggle('square', state.size === 'square');
@@ -6129,7 +6324,8 @@
       const blob = await canvasBlob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'ccc-fleet-' + state.period + '-' + (state.size === 'square' ? '1080x1080' : '1200x630') + '.png';
+      const tag = state.period === 'cal' && lastModel && lastModel.monthKey ? 'month-' + lastModel.monthKey : 'fleet-' + state.period;
+      a.download = 'ccc-' + tag + '-' + (state.size === 'square' ? '1080x1080' : '1200x630') + '.png';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -6256,7 +6452,8 @@
           try { localStorage.setItem(LS_MILESTONE, String(pending)); } catch (e) { /* ignore */ }
           milestoneShown = pending;
           refreshMilestoneAttn();
-          if (state.metric === 'tokens') { state.metric = 'saved'; saveState(); }
+          // The month card was asked for by name, so keep its headline.
+          if (state.metric === 'tokens' && state.period !== 'cal') { state.metric = 'saved'; saveState(); }
           el.textContent = 'You just passed ' + fmtUsd(pending) + ' saved on $0 runs. This card says it best.';
           el.classList.add('on');
           try {
@@ -6285,8 +6482,33 @@
       return state.metric;
     }
 
+    // "My October" in the period picker and the header button. The header
+    // button lights up in the first week of a month, when last month's card
+    // is ready to share.
+    function syncMonthLabels() {
+      const today = new Date();
+      const cm = calMonth(today, state.month);
+      $('sh-period-cal').textContent = 'My ' + cm.name;
+      const btn = $('month-card-btn');
+      if (!btn) return;
+      const auto = calMonth(today, '');
+      $('month-card-label').textContent = 'My ' + auto.name;
+      btn.classList.toggle('fresh', auto.complete);
+      btn.title = auto.complete ? 'Your ' + auto.name + ' card is ready to share' : 'Make your ' + auto.name + ' card (so far)';
+    }
+    // One click: open the card on the calendar month. `pick` = 'YYYY-MM'.
+    function openMonth(pick) {
+      state.period = 'cal';
+      if (state.metric === 'plan') state.metric = 'tokens';
+      state.month = /^\d{4}-\d{2}$/.test(pick || '') ? pick : '';
+      saveState();
+      open();
+      return lastModel ? lastModel.monthKey : '';
+    }
+
     function wire() {
       $('share-btn').addEventListener('click', open);
+      $('month-card-btn').addEventListener('click', () => openMonth(''));
       $('sh-close').addEventListener('click', close);
       $('share-overlay').addEventListener('click', (e) => { if (e.target === $('share-overlay')) close(); });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('share-overlay').classList.contains('open')) close(); });
@@ -6314,15 +6536,16 @@
       document.querySelectorAll('.sh-tile[data-net]').forEach((t) => t.addEventListener('click', () => post(t.dataset.net)));
     }
     wire();
-    // Deep link: /throughput.html?share=1 opens the share overlay directly
-    // (the savings panel and milestone celebrations land here).
-    if (new URLSearchParams(location.search).has('share')) open();
-    window.CCCShare = { summarize, heatmapCells, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close };
-    // /throughput?share=1 opens the card; ?share=saved|runs lands on a metric.
+    syncMonthLabels();
+    // /throughput?share=1 opens the card; ?share=saved|runs lands on a metric;
+    // ?share=month[&m=YYYY-MM] opens the monthly card.
     // This is the deep link milestone prompts and other CCC views point at.
     try {
-      const shareParam = new URLSearchParams(window.location.search).get('share');
-      if (shareParam) {
+      const params = new URLSearchParams(window.location.search);
+      const shareParam = params.get('share');
+      if (shareParam === 'month') {
+        openMonth(params.get('m') || '');
+      } else if (shareParam) {
         if (['tokens', 'hours', 'plan', 'cache', 'saved', 'runs'].indexOf(shareParam) !== -1) {
           state.metric = shareParam;
           saveState();
@@ -6333,7 +6556,7 @@
     // Prefetch the totals so a pending milestone can light up the Share
     // button before the user ever opens the card.
     if (!$('share-overlay').classList.contains('open')) loadData(false);
-    window.CCCShare = { summarize, heatmapCells, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close, openSavings, pendingMilestone, loadData };
+    window.CCCShare = { summarize, heatmapCells, monthCells, calMonth, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close, openSavings, openMonth, pendingMilestone, loadData };
   })();
   // SHARE-CARD:END
   </script>

@@ -45,6 +45,8 @@ No install? The [read-only demo](https://ccc.amirfish.ai/demo/) runs in the brow
 | [cards/card-tokens-1080x1080.png](cards/card-tokens-1080x1080.png) | Same, square | 1080x1080 |
 | [cards/card-saved-1200x630.png](cards/card-saved-1200x630.png) | Share card: $ of work done on $0 models | 1200x630 |
 | [cards/card-saved-1080x1080.png](cards/card-saved-1080x1080.png) | Same, square | 1080x1080 |
+| [cards/card-month-1200x630.png](cards/card-month-1200x630.png) | Monthly card: "My October", a calendar of the month plus four stats | 1200x630 |
+| [cards/card-month-1080x1080.png](cards/card-month-1080x1080.png) | Same, square | 1080x1080 |
 | [screenshots/board.png](screenshots/board.png) | The fleet: every session on one board, one transcript open | 2880x1800 |
 | [screenshots/share.png](screenshots/share.png) | The share screen that makes the card | 2880x1800 |
 | [screenshots/mobile.png](screenshots/mobile.png) | A session on a phone, with Call and the composer | 1170x2532 |

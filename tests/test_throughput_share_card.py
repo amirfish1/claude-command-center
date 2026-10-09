@@ -158,3 +158,15 @@ def test_card_worker_unit_tests():
 def test_share_screen_discloses_upload():
     html = (ROOT / "static" / "throughput.html").read_text()
     assert "Sharing uploads only this image to make the link preview." in html
+
+
+def test_month_card_harness():
+    """'My October' card: month picking, totals, model, post text, deep link, no names."""
+    r = _node("tests/share_card_month_harness.cjs")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_month_card_one_click_entry_points():
+    html = (ROOT / "static" / "throughput.html").read_text()
+    assert 'id="month-card-btn"' in html
+    assert 'data-v="cal"' in html
