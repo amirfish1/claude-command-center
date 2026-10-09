@@ -42,7 +42,8 @@ What CCC never does with it:
   the router.
 - It never spends a paid turn on its own when you hit a limit. **Continue
   free** waits for your approval, unless you turned on **Always** for that
-  session. **Switch back** sends no prompt.
+  session. Switching back, by hand or after your limit resets, sends no
+  prompt.
 
 ## What the router carries
 
