@@ -1622,89 +1622,6 @@
     _syncStripTicker();
     window.__refreshPollerStrip = _refreshStripState;
   }
-  // ── Auto-title activity (above the footer) ──────────────────────────────
-  // Every auto-titler run is a headless `claude -p` turn that costs ~30k
-  // cache tokens for a few-word title; this section makes that burn visible:
-  // 24h token total plus a live list of the newest runs. Polls only while the
-  // page is visible; the server caches the payload for 15s.
-  function _initTitlerSection() {
-    const footer = document.querySelector('.sidebar-footer');
-    if (!footer || !footer.parentNode) { setTimeout(_initTitlerSection, 400); return; }
-    if (document.getElementById('cccTitlerSection')) return;
-    const sec = document.createElement('div');
-    sec.id = 'cccTitlerSection';
-    sec.style.cssText = 'flex:0 0 auto;border-top:1px solid var(--border-color,#30363d);' +
-      'font:600 10px/1.3 ui-monospace,Menlo,monospace;color:var(--text-secondary,#9aa);';
-    const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;user-select:none;';
-    head.title = 'Auto-title runs: headless Claude turns that name your sessions. Click to collapse.';
-    const label = document.createElement('span');
-    label.textContent = 'auto-title';
-    const total = document.createElement('span');
-    total.style.cssText = 'margin-left:auto;color:var(--text-primary,#e6edf3);';
-    total.textContent = '...';
-    head.appendChild(label);
-    head.appendChild(total);
-    const list = document.createElement('div');
-    list.style.cssText = 'max-height:120px;overflow-y:auto;padding:0 10px 5px;font-weight:500;';
-    sec.appendChild(head);
-    sec.appendChild(list);
-    let open = localStorage.getItem('ccc-titler-open') !== '0';
-    list.style.display = open ? '' : 'none';
-    head.addEventListener('click', function () {
-      open = !open;
-      list.style.display = open ? '' : 'none';
-      localStorage.setItem('ccc-titler-open', open ? '1' : '0');
-    });
-    footer.parentNode.insertBefore(sec, footer);
-
-    let lastTop = null;
-    function paint(d) {
-      total.textContent = _formatTokens(d.total_tokens || 0) + ' tokens / 24h  ·  ' +
-        (d.turn_count || 0) + ' runs';
-      list.textContent = '';
-      (d.turns || []).forEach(function (t) {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;gap:6px;padding:1px 0;white-space:nowrap;';
-        const when = document.createElement('span');
-        const ts = Date.parse(t.t_end);
-        when.textContent = ts ? _agoStr(Date.now() - ts) : '';
-        when.style.cssText = 'flex:0 0 28px;opacity:.7;';
-        const name = document.createElement('span');
-        name.textContent = t.title || t.session_id.slice(0, 8);
-        name.style.cssText = 'flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;';
-        // mtime of the conversation this run titled (how stale it was).
-        const mt = document.createElement('span');
-        mt.style.cssText = 'flex:0 0 auto;opacity:.7;';
-        if (t.target_mtime) {
-          const sec = Math.max(0, Math.floor(Date.now() / 1000 - t.target_mtime));
-          mt.textContent = 'mtime ' + (sec < 3600 ? Math.floor(sec / 60) + 'm'
-            : sec < 86400 ? Math.floor(sec / 3600) + 'h' : Math.floor(sec / 86400) + 'd');
-          mt.title = 'Titled conversation last modified ' + new Date(t.target_mtime * 1000).toLocaleString()
-            + (t.target_sid ? ' (' + t.target_sid.slice(0, 8) + ')' : '');
-        }
-        const tok = document.createElement('span');
-        tok.textContent = _formatTokens(t.tokens || 0);
-        tok.style.cssText = 'flex:0 0 auto;min-width:30px;text-align:right;';
-        row.appendChild(when); row.appendChild(name); row.appendChild(mt); row.appendChild(tok);
-        list.appendChild(row);
-      });
-      const top = d.turns && d.turns[0] ? d.turns[0].t_end + d.turns[0].session_id : '';
-      if (lastTop !== null && top && top !== lastTop) {
-        total.animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 600 });
-      }
-      lastTop = top;
-    }
-    function poll() {
-      if (document.hidden) return;
-      fetch('/api/titler-turns', { cache: 'no-store' })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) { if (d && d.ok) paint(d); })
-        .catch(function () {});
-    }
-    poll();
-    setInterval(poll, 15000);
-  }
   // ── Frame-health / jank monitor (engine-agnostic) ───────────────────────
   // requestAnimationFrame runs in every engine including WKWebView (where the
   // Mac app has NO devtools), so this quantifies real jank with zero server or
@@ -1806,11 +1723,10 @@
     })();
   }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); _initTitlerSection(); });
+    document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); });
   } else {
     _initPollerStrip();
     _initFrameMonitor();
-    _initTitlerSection();
   }
 
   // Back to the foreground → refresh the paused background pollers once rather
