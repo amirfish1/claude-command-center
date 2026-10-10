@@ -242,12 +242,16 @@
     const key = opt.key || j.id;
     const open = _expanded.has(key);
     const running = j.status === 'running';
+    const ev = opt.event || null;
     const tipBits = ['Status: ' + j.status];
+    if (ev) tipBits.push('Event: ' + fmtLocal(ev.at) + ': ' + nodash(ev.text));
     if (j.last_run_at) tipBits.push('Last run: ' + fmtLocal(j.last_run_at));
     if (j.last_duration_s != null) tipBits.push('Duration: ' + dur(j.last_duration_s || 0.4));
     if (j.exit_code) tipBits.push('Exit code: ' + j.exit_code);
-    const mid = (j.outcome_kind === 'summary' || !(j.tickets && j.tickets.length))
-      ? outcomeHtml(j) : '<span class="job-chips">' + chipsHtml(j.tickets, 5) + '</span>';
+    const mid = ev
+      ? '<span class="job-event" title="' + esc(nodash(ev.text)) + '">' + esc(nodash(ev.text)) + '</span>'
+      : ((j.outcome_kind === 'summary' || !(j.tickets && j.tickets.length))
+        ? outcomeHtml(j) : '<span class="job-chips">' + chipsHtml(j.tickets, 5) + '</span>');
     const slotCls = opt.state ? ' slot-' + opt.state : '';
     let h = '<div class="job-row st-' + esc(j.status) + (open ? ' is-open' : '') + slotCls + '" data-job-id="' + esc(j.id) + '" data-row-key="' + esc(key) + '">'
       + '<div class="job-line1">'
@@ -260,7 +264,7 @@
       + (_sort !== 'day' && j.next_run_at && j.enabled !== false ? '<span class="job-next" title="Next run: ' + esc(fmtLocal(j.next_run_at)) + ' (' + esc(rel(j.next_run_at)) + ')">Next ' + esc(nextLabel(j.next_run_at)) + '</span>' : '')
       + '</div>'
       + '<div class="job-line2">' + stripHtml(j) + '<span class="job-mid">' + mid + '</span>'
-      + '<span class="job-when" title="' + esc(tipBits.join('\n')) + '">' + esc(j.last_run_at ? rel(j.last_run_at) : '') + '</span></div>';
+      + '<span class="job-when" title="' + esc(tipBits.join('\n')) + '">' + esc(ev ? rel(ev.at) : (j.last_run_at ? rel(j.last_run_at) : '')) + '</span></div>';
     if (open) {
       const log = _logs.get(j.id);
       const lv = _live.get(j.id);
@@ -360,8 +364,14 @@
       } else if (tl.kind === 'times' && firesToday(tl.weekdays, dow)) {
         (tl.minutes || []).forEach(m => slots.push({ j: j, min: m }));
       }
+      // CCC_EVENT lines the job emitted: each becomes its own timeline row so
+      // a repeating job's real work shows up between the rows around it.
+      (j.events || []).forEach(ev => {
+        const d = new Date(ev.at);
+        if (!isNaN(d) && sameDay(d, now)) slots.push({ j: j, min: minuteOf(d), sec: d.getSeconds(), event: ev });
+      });
     });
-    slots.sort((a, b) => a.min - b.min || String(a.j.name).localeCompare(String(b.j.name)));
+    slots.sort((a, b) => a.min - b.min || (a.sec || 0) - (b.sec || 0) || String(a.j.name).localeCompare(String(b.j.name)));
     let h = '';
     if (repeating.length) {
       h += '<div class="jobs-day-band">Repeating</div>'
@@ -370,9 +380,11 @@
     h += '<div class="jobs-day-band">Today, ' + esc(now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })) + '</div>';
     let marked = false;
     const marker = '<div class="jobs-now" id="jobsNowMarker"><span class="jobs-now-arrow">&#9654;</span> now ' + esc(hhmm(nowMin)) + '<i></i></div>';
-    slots.forEach(sl => {
+    slots.forEach((sl, i) => {
       if (!marked && sl.min > nowMin) { h += marker; marked = true; }
-      h += rowHtml(sl.j, { key: sl.j.id + '#' + sl.min, label: hhmm(sl.min), state: slotState(sl.j, sl.min, nowMin, now) });
+      h += sl.event
+        ? rowHtml(sl.j, { key: sl.j.id + '#ev' + i, label: hhmm(sl.min), state: 'event', event: sl.event })
+        : rowHtml(sl.j, { key: sl.j.id + '#' + sl.min, label: hhmm(sl.min), state: slotState(sl.j, sl.min, nowMin, now) });
     });
     if (!marked) h += marker;
     if (!slots.length) h += '<div class="jobs-empty">Nothing else scheduled today.</div>';

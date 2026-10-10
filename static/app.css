@@ -30627,6 +30627,9 @@ a.job-chip:hover { background: rgba(110,140,175,0.3); }
 .job-row.slot-ok .job-dot { background: var(--green); }
 .job-row.slot-bad .job-dot { background: var(--red); }
 .job-row.slot-future .job-dot, .job-row.slot-muted .job-dot { background: transparent; border: 1px solid var(--text-muted); box-sizing: border-box; }
+.job-row.slot-event .job-dot { background: var(--accent, #6e8caf); }
+.job-row.slot-event .job-name { color: var(--text-muted); }
+.job-event { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jobs-day-band { margin: 10px 0 2px; padding: 0 4px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
 .jobs-now { display: flex; align-items: center; gap: 6px; margin: 4px 0; padding: 0 4px; font-size: 13px; font-weight: 700; color: var(--red); }
 .jobs-now i { flex: 1 1 auto; height: 2px; background: var(--red); opacity: 0.7; border-radius: 1px; }

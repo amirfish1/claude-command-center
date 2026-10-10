@@ -1,0 +1,1 @@
+- Jobs tab day view now shows each `CCC_EVENT:` line a scheduled job printed as its own timeline row, so meaningful work by high-frequency jobs (like a 5-minute ship tick re-pinning a release or merging a PR) appears at the time it happened instead of hiding behind the last run's outcome.

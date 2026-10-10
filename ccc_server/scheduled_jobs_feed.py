@@ -56,6 +56,9 @@ for t in /etc/systemd/system/*.timer; do
   if [ -n "$inv" ]; then
     journalctl "_SYSTEMD_INVOCATION_ID=$inv" -o cat --no-pager -q 2>/dev/null | tail -n 150 | cut -c1-400
   fi
+  echo "@@CCCJOB:EVENTS"
+  journalctl -u "$svc" --since -24h -o short-unix --no-pager -q 2>/dev/null \
+    | grep "CCC_EVENT:" | cut -c1-400 | tail -n 200
   echo "@@CCCJOB:ENDUNIT"
 done
 echo "@@CCCJOB:END"
@@ -133,6 +136,64 @@ def pick_outcome(lines):
         if m:
             return m.group(1).strip()[:300], "summary"
     return (cleaned[-1].strip()[:300], "output") if cleaned else ("", "")
+
+
+# A run reports each meaningful thing it did as `CCC_EVENT: <text>` (optionally
+# behind an ISO timestamp, like CCC_OUTCOME). High-frequency jobs use this so
+# real work (a pin, a merge, an escalation) shows up on the day timeline instead
+# of hiding behind the single last-tick outcome.
+_EVENT_RE = re.compile(r"CCC_EVENT:\s*(.*)$")
+_EVENT_LOG_RE = re.compile(
+    r"^\[?(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?)\]?\s+CCC_EVENT:\s*(.*)$")
+
+
+def _iso_epoch(s):
+    """'2026-10-10T15:32:33Z' -> epoch seconds, or None."""
+    try:
+        dt = datetime.fromisoformat(s.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _event_from_journal_line(ln):
+    """short-unix journal line -> (epoch, text) or None."""
+    parts = ln.split(None, 1)
+    if len(parts) < 2:
+        return None
+    try:
+        at = float(parts[0])
+    except ValueError:
+        return None
+    m = _EVENT_RE.search(parts[1])
+    if not m:
+        return None
+    text = _ANSI_RE.sub("", m.group(1)).strip()[:300]
+    return (at, text) if text else None
+
+
+def events_from_log_lines(lines, now=None, limit=200):
+    """Timestamped CCC_EVENT: lines in a plain log file -> events, newest last.
+
+    Only lines that carry their own ISO timestamp can be placed on the day
+    timeline; anything else (or older than 24h) is dropped.
+    """
+    now = now if now is not None else time.time()
+    out = []
+    for ln in lines:
+        m = _EVENT_LOG_RE.match(_ANSI_RE.sub("", ln).strip())
+        if not m:
+            continue
+        at = _iso_epoch(m.group(1))
+        if at is None or now - at > 86400 or at - now > 3600:
+            continue
+        text = m.group(2).strip()[:300]
+        if text:
+            out.append({"at": _iso(at), "text": text})
+    out.sort(key=lambda e: e["at"])
+    return out[-limit:]
 
 
 _NOT_WT_PREFIX = {
@@ -357,10 +418,10 @@ def parse_hermes_output(text, now=None):
         if ln.startswith(_MARK):
             tag = ln[len(_MARK):]
             if tag.startswith("TIMER "):
-                cur = {"timer": tag[6:].strip(), "TIMER": [], "SVC": [], "HIST": [], "OUT": []}
+                cur = {"timer": tag[6:].strip(), "TIMER": [], "SVC": [], "HIST": [], "OUT": [], "EVENTS": []}
                 units.append(cur)
                 section = "TIMER"
-            elif tag in ("SVC", "HIST", "OUT"):
+            elif tag in ("SVC", "HIST", "OUT", "EVENTS"):
                 section = tag
             elif tag == "ENDUNIT":
                 section = None
@@ -387,6 +448,13 @@ def parse_hermes_output(text, now=None):
                 continue
             history.append({"at": _iso(at), "ok": "Deactivated successfully" in parts[1]})
         history = history[-30:]
+
+        events = []
+        for ln in u["EVENTS"]:
+            ev = _event_from_journal_line(ln)
+            if ev:
+                events.append({"at": _iso(ev[0]), "text": ev[1]})
+        events = sorted(events, key=lambda e: e["at"])[-200:]
 
         start = parse_systemd_ts(s.get("ExecMainStartTimestamp")) or parse_systemd_ts(t.get("LastTriggerUSec"))
         exit_ts = parse_systemd_ts(s.get("ExecMainExitTimestamp"))
@@ -437,6 +505,7 @@ def parse_hermes_output(text, now=None):
             "outcome": outcome,
             "outcome_kind": outcome_kind,
             "tickets": extract_tickets(u["OUT"]),
+            "events": events,
         })
     return jobs
 
@@ -681,6 +750,7 @@ def collect_laptop(now=None):
         logs = [x for x in (data.get("StandardOutPath"), data.get("StandardErrorPath")) if x]
         last_run = None
         outcome, outcome_kind, tickets = "", "", []
+        events = {}
         for lp in logs:
             try:
                 path = Path(lp).expanduser()
@@ -693,6 +763,11 @@ def collect_laptop(now=None):
                 if tail and tail.strip():
                     outcome, outcome_kind = pick_outcome(tail.splitlines())
                     tickets = extract_tickets(tail.splitlines())
+            ev_tail = _sj._read_file_tail(path, max_lines=400)
+            if ev_tail and ev_tail.strip():
+                for e in events_from_log_lines(ev_tail.splitlines(), now=now):
+                    events[(e["at"], e["text"])] = e
+        events = sorted(events.values(), key=lambda e: e["at"])[-200:]
         exit_code = info.get("status") if info else None
         status = laptop_status(
             pid=info.get("pid") if info else None, exit_code=exit_code, loaded=info is not None,
@@ -721,6 +796,7 @@ def collect_laptop(now=None):
             "outcome": outcome,
             "outcome_kind": outcome_kind,
             "tickets": tickets,
+            "events": events,
         })
     return jobs
 

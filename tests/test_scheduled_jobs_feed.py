@@ -35,6 +35,11 @@ filed BECKY-TEACH-4 and BECKY-12 -> https://github.com/acme/repo/issues/125
 opened https://github.com/acme/repo/pull/1857 and PR #9; SHA-256 UTF-8 2026-09-29 v1.2.3-4
 CCC_OUTCOME: merged PR #12
 \x1b[32mdone\x1b[0m
+@@CCCJOB:EVENTS
+1790695000.4 host bym-ship.service[411]: 2026-09-29T16:10:00Z CCC_EVENT: PR #2148 pinned at d6bd723 (87 commits)
+1790696000.7 host bym-ship.service[412]: CCC_EVENT: Release r-20260929-0210: CI -> MERGING (PR #2148)
+1790697000.2 host bym-ship.service[413]: \x1b[32m2026-09-29T16:30:00Z CCC_EVENT: PR #2148 live in production\x1b[0m
+1790697001.2 host bym-ship.service[413]: a line without the marker
 @@CCCJOB:ENDUNIT
 @@CCCJOB:TIMER off.timer
 Unit=off.service
@@ -91,6 +96,38 @@ class HermesParse(unittest.TestCase):
         self.assertEqual(self.jobs["bym-ship"]["outcome"], "merged PR #12")
         self.assertEqual(self.jobs["bym-ship"]["outcome_kind"], "summary")
         self.assertEqual(f.pick_outcome(["a", "\x1b[32mdone\x1b[0m", ""]), ("done", "output"))
+
+    def test_events_parsed_sorted_and_stripped(self):
+        ev = self.jobs["bym-ship"]["events"]
+        self.assertEqual(len(ev), 3)
+        self.assertEqual([e["text"] for e in ev], [
+            "PR #2148 pinned at d6bd723 (87 commits)",
+            "Release r-20260929-0210: CI -> MERGING (PR #2148)",
+            "PR #2148 live in production",
+        ])
+        self.assertEqual(ev[0]["at"], "2026-09-29T15:16:40.400000+00:00")
+        self.assertEqual(ev[2]["at"], "2026-09-29T15:50:00.200000+00:00")
+        # ANSI stripped; the leading journal epoch drives `at`, not the
+        # ISO prefix inside the message.
+        self.assertNotIn("\x1b", ev[2]["text"])
+
+    def test_events_absent_for_other_jobs(self):
+        self.assertEqual(self.jobs["off"]["events"], [])
+        self.assertEqual(self.jobs["bad"]["events"], [])
+
+    def test_events_from_log_lines(self):
+        now = 1_790_700_000.0  # 2026-09-29T16:40:00Z
+        lines = [
+            "2026-09-29T15:32:33Z CCC_EVENT: PR #2148 pinned at d6bd723 (87 commits)",
+            "[2026-09-29 15:48:00+00:00] CCC_EVENT: bracketed ts works",
+            "\x1b[32m2026-09-29T15:49:30Z CCC_EVENT: ansi line\x1b[0m",
+            "CCC_EVENT: no timestamp, cannot be placed",
+            "2026-09-28T00:00:00Z CCC_EVENT: too old, dropped",
+            "2026-09-29T15:50:00Z just a normal log line",
+        ]
+        ev = f.events_from_log_lines(lines, now=now)
+        self.assertEqual([e["text"] for e in ev],
+                         ["PR #2148 pinned at d6bd723 (87 commits)", "bracketed ts works", "ansi line"])
 
     def test_outcome_behind_log_timestamp(self):
         # CCC-1240: bym-ship's log() stamps every line, so the marker sits behind
