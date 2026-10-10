@@ -23,6 +23,7 @@
   var ERROR_BACKOFF_MS = 90000;
   // Flipping back to the tab refreshes, but never more than once per 15s.
   var MIN_REFRESH_GAP_MS = 15000;
+  var ABANDONED_MS = 24 * 3600e3;
 
   // The headroom engine owns the account contract. Unknown readings stay
   // unknown, rather than inferring percentages from another field or
@@ -70,6 +71,10 @@
     var resetAtMs = epochMs(item.resets_at);
     var hours = num(item.hours_to_reset);
     if (resetAtMs == null && hours != null && hours >= 0) resetAtMs = epochMs((now + hours * 3600e3) / 1000);
+    // A stale reading whose window ended more than a day ago is an engine the
+    // user stopped using (e.g. a lapsed Kimi plan's cached quota), not a plan
+    // that is "waiting for an update". Hide it like an unavailable account.
+    if (item.stale === true && resetAtMs != null && now - resetAtMs > ABANDONED_MS) return null;
     return {
       id: id,
       engine: engine,

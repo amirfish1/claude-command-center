@@ -147,6 +147,14 @@ test('quota colors have explicit thresholds and stale readings are neutral', () 
   assert.equal(api.riskOf(normalized({ percent_left: null }), NOW), 'off');
 });
 
+test('stale readings from a long-passed window are hidden as abandoned', () => {
+  const day = 24 * 3600;
+  const gone = (extra) => api.normalize(payload(row('kimi', extra)), NOW).length === 0;
+  assert.equal(gone({ stale: true, resets_at: NOW / 1000 - 2 * day }), true);
+  assert.equal(gone({ stale: true, resets_at: NOW / 1000 - 3600 }), false);
+  assert.equal(gone({ stale: false, resets_at: NOW / 1000 - 2 * day }), false);
+});
+
 test('countdown keeps hours and minutes without rounding a future reset to now', () => {
   for (const [ms, text] of [[0, 'now'], [-1, 'now'], [1, '<1m'], [59000, '<1m'], [60000, '1m'], [59 * 60000, '59m'], [3600000, '1h'], [80 * 60000, '1h 20m'], [23 * 3600000, '23h'], [24 * 3600000, '1d'], [49 * 3600000, '2d 1h']]) assert.equal(api.fmtCountdown(ms), text);
   assert.equal(api.fmtCountdown(null), '');
