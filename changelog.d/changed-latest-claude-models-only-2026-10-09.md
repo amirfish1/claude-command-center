@@ -1,0 +1,1 @@
+- Claude model pickers now list only the newest version of each family (for example Opus 5.5 without Opus 5 or 4.8); a model you already selected stays listed.

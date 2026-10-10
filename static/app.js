@@ -4265,13 +4265,29 @@
   // declared ~36k lines below this block, so a bare read during module eval
   // would hit the temporal dead zone — and for let/const even `typeof` throws
   // there. Hence the try/catch plus a per-engine inline fallback.
-  function f2ModelsForEngine(engineId) {
+  // Claude catalogs keep every past version; pickers should offer only the
+  // newest of each family (opus-5-5, not opus-5 / opus-4-8). `keep` is a
+  // model already selected, which is never pulled out from under the user.
+  function latestClaudeModelsOnly(list, keep) {
+    const ver = (m) => {
+      const x = /^(?:claude-)?(fable|opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:\[1m\])?$/i.exec(String(m || '').trim());
+      return x ? { fam: x[1].toLowerCase(), v: +x[2] * 1000 + (x[3] ? +x[3] : 0) } : null;
+    };
+    const best = {};
+    list.forEach(o => { const v = ver(o.id); if (v && !(best[v.fam] >= v.v)) best[v.fam] = v.v; });
+    return list.filter(o => {
+      const v = ver(o.id);
+      return !v || v.v === best[v.fam] || (keep && String(o.id) === String(keep));
+    });
+  }
+  function f2ModelsForEngine(engineId, keep) {
     const spec = f2AllLaunchEngines().find(e => e.id === engineId) || f2AllLaunchEngines()[0];
     try {
       const byEngine = MODEL_OPTIONS_BY_ENGINE;
       const list = byEngine && byEngine[spec.id];
       if (Array.isArray(list) && list.length) {
-        return list.map(o => ({ id: String(o.id), label: String(o.label || o.id) }));
+        const rows = list.map(o => ({ id: String(o.id), label: String(o.label || o.id) }));
+        return spec.id === 'claude' ? latestClaudeModelsOnly(rows, keep) : rows;
       }
     } catch (_) {}
     return spec.fallback;
@@ -4364,7 +4380,7 @@
     return e ? e.label : String(launch.effort || '');
   }
   function f2ModelLabel(launch) {
-    const m = f2ModelsForEngine(launch.engine).find(x => x.id === launch.model);
+    const m = f2ModelsForEngine(launch.engine, launch.model).find(x => x.id === launch.model);
     return m ? m.label : String(launch.model || '');
   }
   function f2EngineLabel(launch) {
@@ -4432,7 +4448,7 @@
     return '<div class="f2c-config">'
       + '<span>Launches on</span>'
       + f2SelectHtml('engine', engines, launch.engine)
-      + f2SelectHtml('model', f2ModelsForEngine(launch.engine), launch.model)
+      + f2SelectHtml('model', f2ModelsForEngine(launch.engine, launch.model), launch.model)
       + (efforts.length
           ? '<span>at</span>' + f2SelectHtml('effort', efforts, launch.effort) + '<span>effort</span>'
           : '')
@@ -71710,7 +71726,7 @@
     if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && _modelAllowedForEngine(engine, cur)) {
       add(cur, cur + ' (default)');
     }
-    base.forEach(opt => add(opt.id, opt.label || opt.id, {
+    (engine === 'claude' ? latestClaudeModelsOnly(base, cur) : base).forEach(opt => add(opt.id, opt.label || opt.id, {
       disabled: opt.available === false,
       reason: opt.availability_reason || opt.reason || '',
     }));
