@@ -1,0 +1,1 @@
+- Phone ⋮ menu has a Reload app item, so a Home Screen app can pick up a new version without closing it.

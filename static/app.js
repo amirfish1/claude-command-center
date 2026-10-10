@@ -17409,6 +17409,8 @@
       } else if (action === 'codex-handover') {
         const handoverBtn = document.getElementById('codexHandoverBtn');
         if (handoverBtn) handoverBtn.click();
+      } else if (action === 'reload-app') {
+        location.reload();
       } else if (action === 'annotate') {
         const annBtn = document.getElementById('annotationStartBtn');
         if (annBtn) annBtn.click();
