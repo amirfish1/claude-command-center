@@ -47199,10 +47199,36 @@
     const allSorted = all.sort(_uxqPickerActDesc);
     const groups = [{
       label: 'LATEST TOUCHED', tint: '#6e7681', count: allSorted.length,
-      rows: allSorted.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items })),
+      rows: [_uxqPickerAllRow(rollup)].concat(
+        allSorted.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items }))),
     }];
     _uxqPicker.flat = groups.reduce((acc, g) => acc.concat(g.rows), []);
     return groups;
+  }
+  // Synthetic first row: the unfiltered view across every queue. Picking it
+  // stores the 'ALL' scope sentinel (_uxqResolvePanelProject maps it to '').
+  function _uxqPickerAllRow(rollup) {
+    const open = rollup.reduce((n, q) => n + (q.openCount || 0), 0);
+    const needs = rollup.reduce((n, q) => n + (q.needsInputCount || 0), 0);
+    return {
+      kind: 'all',
+      name: 'ALL QUEUES',
+      child: false,
+      live: false,
+      subs: false,
+      subsLabel: '',
+      gh: false,
+      hasRepo: false,
+      repo: '',
+      hasNeeds: needs > 0,
+      needs: needs > 0 ? (needs + ' need you') : '',
+      openLabel: open > 0 ? String(open) : '-',
+      last: '',
+      drainOn: false,
+      drainOff: false,
+      meta: open + ' open across ' + rollup.length + ' queues',
+      pick: () => { _uxqPickerPickQueue('ALL'); },
+    };
   }
   function _uxqPickerActDesc(a, b) {
     const age = q => {

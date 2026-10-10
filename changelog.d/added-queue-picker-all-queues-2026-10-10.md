@@ -1,0 +1,1 @@
+- Queue picker now has an "ALL QUEUES" row at the top to view tickets across every queue.
