@@ -30909,8 +30909,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     flex: 1 1 100%; order: -2; display: flex; justify-content: flex-start;
   }
   .conv-input-bar .conv-input-buttons > :not(.f2c-panel) { flex: 0 0 auto; }
-  .conv-input-bar .conv-input-buttons > .esc-btn,
-  .conv-input-bar .conv-input-buttons > .tts-btn:first-of-type { margin-left: auto; }
+  .conv-input-bar .conv-actions-group { margin-right: auto; }
   .conv-input-bar .conv-input-buttons .route { max-width: 100%; }
   .f2c-panel .f2c-config { max-width: min(320px, calc(100vw - 40px)); }
 }
