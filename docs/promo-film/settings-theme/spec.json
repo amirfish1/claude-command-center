@@ -1,0 +1,271 @@
+{
+ "schema": "product-motion/v1",
+ "id": "ccc-settings",
+ "take": "takes/20261010-181424-ccc-settings-type-a-default-model-switch-theme-t",
+ "source": {
+  "w": 3840,
+  "h": 2160,
+  "css_zoom": 3,
+  "prepare_for_seek": true
+ },
+ "expect": {
+  "clicks": 4,
+  "keys": 3
+ },
+ "duration": 31,
+ "music": {
+  "synthesis": "pulse",
+  "period": 0.5,
+  "phase": 0,
+  "offset": 0,
+  "rights": "Original deterministic synthesis from the kit's sfx.py"
+ },
+ "palette": {
+  "paper": "#f6f8fa",
+  "ink": "#161b22",
+  "deep": "#0d1117",
+  "accent": "#6e8caf",
+  "hi": "#f5a623",
+  "mute": "#8b949e",
+  "page": "#0d1117",
+  "card": "#ffffff",
+  "tag": "#46607f",
+  "herob": "#46607f"
+ },
+ "layout": {
+  "landscape": {
+   "slab": {
+    "left": 96,
+    "top": 90,
+    "h2": 70,
+    "p": 29,
+    "max_w": 1100
+   }
+  },
+  "portrait": {
+   "slab": {
+    "left": 56,
+    "top": 1640,
+    "h2": 84,
+    "p": 27,
+    "max_w": 900
+   }
+  }
+ },
+ "copy": {
+  "brand": {
+   "name": "CCC",
+   "wordmark": "ccc",
+   "dot": "."
+  },
+  "window_title": "CCC &middot; Claude Command Center",
+  "hook": {
+   "a": [
+    "Same dashboard,",
+    "[every machine]"
+   ],
+   "b": [
+    "Set it up once,",
+    "then make it yours."
+   ]
+  },
+  "storm": [
+   [
+    "Default model for new sessions",
+    "#engines"
+   ],
+   [
+    "Worktree init command",
+    "#setup"
+   ],
+   [
+    "Monthly plan estimate",
+    "#cost"
+   ],
+   [
+    "Light theme for daytime",
+    "#theme"
+   ],
+   [
+    "Debug mode while testing",
+    "#debug"
+   ],
+   [
+    "Completion chime off",
+    "#sounds"
+   ],
+   [
+    "Folder chip colors",
+    "#layout"
+   ],
+   [
+    "Notification digest",
+    "#alerts"
+   ],
+   [
+    "Autocompact threshold",
+    "#engines"
+   ],
+   [
+    "Fallback model order",
+    "#quota"
+   ]
+  ],
+  "storm_labels": [
+   "SET",
+   "SET",
+   "PREFS",
+   "THEME"
+  ],
+  "hero": {
+   "eyebrow": "SETTINGS",
+   "text": "Tune CCC to your setup",
+   "accent": "#preferences"
+  },
+  "intro": {
+   "eyebrow": "MEET",
+   "tagline": [
+    "Engines, theme and habits,",
+    "in one searchable place."
+   ],
+   "chips": [
+    "ENGINES",
+    "THEME",
+    "PREFERENCES"
+   ]
+  },
+  "steps": [
+   {
+    "pill": "01 TYPE",
+    "eyebrow": "01 &mdash; TYPE",
+    "title": "Type a setting value.",
+    "sub": "Monthly plan, default model, init command. It saves as you type."
+   },
+   {
+    "pill": "02 TOGGLE",
+    "eyebrow": "02 &mdash; TOGGLE",
+    "title": "Flip a switch.",
+    "sub": "Debug mode and sounds apply to this browser right away."
+   },
+   {
+    "pill": "03 THEME",
+    "eyebrow": "03 &mdash; THEME",
+    "title": "Switch the theme.",
+    "sub": "Light, dark or system. The whole dashboard follows."
+   }
+  ],
+  "recap": [
+   "Type.",
+   "Toggle.",
+   "Theme."
+  ],
+  "end": {
+   "tagline": [
+    "Set it once,",
+    "see it everywhere."
+   ],
+   "url": "github.com/amirfish1/claude-command-center",
+   "chips": [
+    "ENGINES",
+    "THEME",
+    "PREFERENCES"
+   ],
+   "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+   "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+  },
+  "hud_label": "CCC &middot; REAL CAPTURE"
+ },
+ "edit": {
+  "reveal_src": 3,
+  "act1": {
+   "click": 0,
+   "keys": [
+    0,
+    2
+   ],
+   "type_window": [
+    9.9,
+    13.2
+   ],
+   "type_region": [
+    2900,
+    150,
+    3700,
+    330
+   ]
+  },
+  "act2": {
+   "click": 2,
+   "instant_result": true,
+   "result_window": [
+    38.4,
+    43
+   ],
+   "result_after": 38.4,
+   "result_region": [
+    3300,
+    700,
+    3840,
+    900
+   ],
+   "lift_region": [
+    3480,
+    775,
+    180,
+    80
+   ],
+   "lock_label": "ONE CLICK",
+   "stamp": "ENABLED"
+  },
+  "act3": {
+   "click": 3,
+   "instant_result": true,
+   "skip_load": true,
+   "result_window": [
+    60.8,
+    66
+   ],
+   "result_after": 60.8,
+   "result_region": [
+    1400,
+    100,
+    3840,
+    1500
+   ],
+   "track_region": [
+    3100,
+    170,
+    500,
+    130
+   ],
+   "track_label": "LIGHT THEME",
+   "label_side": "below",
+   "hold_rate": 1,
+   "label_side_portrait": "below"
+  },
+  "recap": [
+   [
+    "type_end",
+    1.0,
+    2500,
+    0,
+    1340
+   ],
+   [
+    "saved_visible",
+    0.5,
+    2500,
+    500,
+    1340
+   ],
+   [
+    "filtered",
+    0.8,
+    2500,
+    0,
+    1340
+   ]
+  ],
+  "recap_stills": true
+ }
+}

@@ -1,0 +1,66 @@
+{
+ "name": "CCC — settings: type a default model, switch theme, toggle (motion source)",
+ "url": "http://127.0.0.1:8892/static/index.html?demo=1",
+ "viewport": {
+  "width": 3840,
+  "height": 2160
+ },
+ "wait_for": "body",
+ "seeds": {
+  "ccc-session-view": "list",
+  "ccc-kanban-view": "false",
+  "ccc-sidebar-width": "470",
+  "ccc-status-rail-collapsed": "1"
+ },
+ "stage": {
+  "init_scripts": [
+   "document.addEventListener('DOMContentLoaded',function(){var st=document.createElement('style');st.textContent='.eng-hero{display:none!important}html,body,.sidebar,.main,#sidebarResizer{height:720px!important;max-height:720px!important;overflow-y:hidden}';document.head.appendChild(st);setTimeout(function(){document.getElementById('settingsBtn').click();setTimeout(function(){var t=document.getElementById('settingsRailTab-sessions');if(t)t.click();var o=document.getElementById('settingsMonthlyClaudePlanInput');if(o){o.value=''}document.documentElement.scrollTop=0},600)},4000)});"
+  ]
+ },
+ "steps": [
+  {
+   "do": "wait",
+   "s": 7
+  },
+  {
+   "do": "click",
+   "selector": "#settingsMonthlyClaudePlanInput"
+  },
+  {
+   "do": "type",
+   "text": "180",
+   "delay": 0.45
+  },
+  {
+   "do": "wait",
+   "s": 3
+  },
+  {
+   "do": "click",
+   "selector": "#settingsRailTab-appearance",
+   "settle": 0.5
+  },
+  {
+   "do": "wait",
+   "s": 2
+  },
+  {
+   "do": "click",
+   "selector": "#settingsDebugModeToggle",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 5
+  },
+  {
+   "do": "click",
+   "selector": ".settings-segment[data-theme=\"light\"]",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 6
+  }
+ ]
+}
