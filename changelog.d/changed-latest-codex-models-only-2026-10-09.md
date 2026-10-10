@@ -1,0 +1,1 @@
+- Codex model pickers also list only the newest Sol, Terra, Luna and Astra.

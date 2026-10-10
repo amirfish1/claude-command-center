@@ -4265,13 +4265,18 @@
   // declared ~36k lines below this block, so a bare read during module eval
   // would hit the temporal dead zone — and for let/const even `typeof` throws
   // there. Hence the try/catch plus a per-engine inline fallback.
-  // Claude catalogs keep every past version; pickers should offer only the
+  // Catalogs keep every past version; pickers should offer only the
   // newest of each family (opus-5-5, not opus-5 / opus-4-8). `keep` is a
   // model already selected, which is never pulled out from under the user.
-  function latestClaudeModelsOnly(list, keep) {
+  // Codex has the same shape: gpt-6.1-sol supersedes gpt-5.6-sol (tier name
+  // is the family).
+  function latestModelsOnly(list, keep) {
     const ver = (m) => {
-      const x = /^(?:claude-)?(fable|opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:\[1m\])?$/i.exec(String(m || '').trim());
-      return x ? { fam: x[1].toLowerCase(), v: +x[2] * 1000 + (x[3] ? +x[3] : 0) } : null;
+      const id = String(m || '').trim();
+      let x = /^(?:claude-)?(fable|opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:\[1m\])?$/i.exec(id);
+      if (x) return { fam: x[1].toLowerCase(), v: +x[2] * 1000 + (x[3] ? +x[3] : 0) };
+      x = /^gpt-(\d+)(?:\.(\d+))?-(sol|terra|luna|astra)$/i.exec(id);
+      return x ? { fam: 'gpt-' + x[3].toLowerCase(), v: +x[1] * 1000 + (x[2] ? +x[2] : 0) } : null;
     };
     const best = {};
     list.forEach(o => { const v = ver(o.id); if (v && !(best[v.fam] >= v.v)) best[v.fam] = v.v; });
@@ -4287,7 +4292,7 @@
       const list = byEngine && byEngine[spec.id];
       if (Array.isArray(list) && list.length) {
         const rows = list.map(o => ({ id: String(o.id), label: String(o.label || o.id) }));
-        return spec.id === 'claude' ? latestClaudeModelsOnly(rows, keep) : rows;
+        return (spec.id === 'claude' || spec.id === 'codex') ? latestModelsOnly(rows, keep) : rows;
       }
     } catch (_) {}
     return spec.fallback;
@@ -71726,7 +71731,7 @@
     if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && _modelAllowedForEngine(engine, cur)) {
       add(cur, cur + ' (default)');
     }
-    (engine === 'claude' ? latestClaudeModelsOnly(base, cur) : base).forEach(opt => add(opt.id, opt.label || opt.id, {
+    ((engine === 'claude' || engine === 'codex') ? latestModelsOnly(base, cur) : base).forEach(opt => add(opt.id, opt.label || opt.id, {
       disabled: opt.available === false,
       reason: opt.availability_reason || opt.reason || '',
     }));
