@@ -1,0 +1,1 @@
+- Mobile Queues tab: the header (queue label, filters, status strip, chips) is more compact, so more tickets fit on a phone screen.

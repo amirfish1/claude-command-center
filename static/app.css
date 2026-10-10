@@ -15992,6 +15992,24 @@
     #queuePanel.fq-mobile .fq-ticket-filter-row .fq-filter-btn {
       font-size: 11.5px; padding: 5px 11px; border-radius: 5px;
     }
+    /* CCC-60: the queue header (label, filters, status strip, chips) used to
+       take ~60% of a phone screen and leave ~4 ticket rows. Reclaim the
+       height: drop the redundant "Queue" label, tighten paddings, and keep
+       the status strip's chips on one horizontally-scrollable line. */
+    #queuePanel.fq-mobile .fq-field-label { display: none; }
+    #queuePanel.fq-mobile .fq-field-row { padding: 4px 10px 6px; }
+    #queuePanel.fq-mobile .fq-ticket-filter-row { gap: 5px; padding: 4px 10px; }
+    #queuePanel.fq-mobile .fq-ticket-filter-row .fq-filter-btn { padding: 4px 9px; }
+    #queuePanel.fq-mobile .fq-ticket-filter-row .fq-search-input { padding: 4px 8px; }
+    #queuePanel.fq-mobile .fq-status-strip {
+      flex-wrap: nowrap; gap: 6px; padding: 4px 10px;
+      overflow-x: auto; scrollbar-width: none;
+    }
+    #queuePanel.fq-mobile .fq-status-strip::-webkit-scrollbar { display: none; }
+    #queuePanel.fq-mobile .fq-status-strip > * { flex-shrink: 0; }
+    #queuePanel.fq-mobile .fq-status-strip .fq-health-config {
+      width: 28px; height: 28px; font-size: 18px;
+    }
   }
   /* Mobile picker: bottom sheet, not anchored card. */
   #queuePanel.fq-mobile.fq-picker-open .fq-qp { display: flex; flex-direction: column; }
