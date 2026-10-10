@@ -1,0 +1,268 @@
+{
+ "schema": "product-motion/v1",
+ "id": "ccc-new-session-worktree",
+ "take": "takes/20261010-140641-ccc-new-session-in-a-worktree-motion-source",
+ "source": {
+  "w": 3840,
+  "h": 2160,
+  "css_zoom": 3,
+  "prepare_for_seek": true
+ },
+ "expect": {
+  "clicks": 3,
+  "keys": 27
+ },
+ "duration": 31,
+ "music": {
+  "synthesis": "pulse",
+  "period": 0.5,
+  "phase": 0,
+  "offset": 0,
+  "rights": "Original deterministic synthesis from the kit's sfx.py"
+ },
+ "palette": {
+  "paper": "#f6f8fa",
+  "ink": "#161b22",
+  "deep": "#0d1117",
+  "accent": "#6e8caf",
+  "hi": "#f5a623",
+  "mute": "#8b949e",
+  "page": "#0d1117",
+  "card": "#ffffff",
+  "tag": "#46607f",
+  "herob": "#46607f"
+ },
+ "layout": {
+  "landscape": {
+   "slab": {
+    "left": 96,
+    "top": 760,
+    "h2": 70,
+    "p": 29,
+    "max_w": 1100
+   }
+  }
+ },
+ "copy": {
+  "brand": {
+   "name": "CCC",
+   "wordmark": "ccc",
+   "dot": "."
+  },
+  "window_title": "CCC &middot; Claude Command Center",
+  "hook": {
+   "a": [
+    "Every task",
+    "[deserves its own branch.]"
+   ],
+   "b": [
+    "Where does the",
+    "next one run?"
+   ]
+  },
+  "storm": [
+   [
+    "Add an RSS feed",
+    "#blog"
+   ],
+   [
+    "Stripe webhooks",
+    "#in-progress"
+   ],
+   [
+    "Fix auth cookie race",
+    "#needs-attention"
+   ],
+   [
+    "Pricing from billing service",
+    "#icebox"
+   ],
+   [
+    "Review PR #247",
+    "#review"
+   ],
+   [
+    "Webhook retries flapping",
+    "#gh-321"
+   ],
+   [
+    "Pagination > 100 items",
+    "#gh-312"
+   ],
+   [
+    "CI lint on main",
+    "#today"
+   ],
+   [
+    "Pillow 11 bump",
+    "#deps"
+   ],
+   [
+    "Contact form silent failures",
+    "#later"
+   ],
+   [
+    "Audit log for billing",
+    "#gh-318"
+   ],
+   [
+    "Blog to Eleventy",
+    "#waiting"
+   ]
+  ],
+  "storm_labels": [
+   "MAIN",
+   "FEAT",
+   "FIX",
+   "REVIEW"
+  ],
+  "hero": {
+   "eyebrow": "FRESH WORKTREE",
+   "text": "A new task, a new branch",
+   "accent": "#feat"
+  },
+  "intro": {
+   "eyebrow": "MEET",
+   "tagline": [
+    "Every task,",
+    "its own worktree."
+   ],
+   "chips": [
+    "PICK A REPO &middot; TYPE A TASK",
+    "FEAT/&lt;SLUG&gt; BRANCH"
+   ]
+  },
+  "steps": [
+   {
+    "pill": "01 TYPE",
+    "eyebrow": "01 &mdash; TYPE",
+    "title": "Describe the task.",
+    "sub": "One line in the composer is the whole brief."
+   },
+   {
+    "pill": "02 TOGGLE",
+    "eyebrow": "02 &mdash; TOGGLE",
+    "title": "Tick worktree.",
+    "sub": "The session gets its own folder and a feat/ branch, away from main."
+   },
+   {
+    "pill": "03 PICK",
+    "eyebrow": "03 &mdash; PICK",
+    "title": "Pick the repo.",
+    "sub": "One chip switches the folder it launches in."
+   }
+  ],
+  "recap": [
+   "Type.",
+   "Isolate.",
+   "Pick."
+  ],
+  "end": {
+   "tagline": [
+    "Start the next",
+    "while Claude builds the first."
+   ],
+   "url": "github.com/amirfish1/claude-command-center",
+   "chips": [
+    "FRESH WORKTREE",
+    "ANY REPO",
+    "OWN BRANCH"
+   ],
+   "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+   "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+  },
+  "hud_label": "CCC &middot; REAL CAPTURE"
+ },
+ "edit": {
+  "reveal_src": 3,
+  "act1": {
+   "click": 0,
+   "keys": [
+    0,
+    26
+   ],
+   "type_window": [
+    9.1,
+    15.0
+   ],
+   "type_region": [
+    1830,
+    1630,
+    3200,
+    1676
+   ]
+  },
+  "act2": {
+   "click": 1,
+   "instant_result": true,
+   "result_window": [
+    19.5,
+    23.5
+   ],
+   "result_after": 19.55,
+   "result_region": [
+    3300,
+    1300,
+    3800,
+    1460
+   ],
+   "lift_region": [
+    3400,
+    1320,
+    380,
+    110
+   ],
+   "lock_label": "ONE TICK",
+   "stamp": "ISOLATED"
+  },
+  "act3": {
+   "click": 2,
+   "instant_result": true,
+   "skip_load": true,
+   "result_window": [
+    25.9,
+    30.0
+   ],
+   "result_after": 26.0,
+   "result_region": [
+    1700,
+    1200,
+    3800,
+    2100
+   ],
+   "track_region": [
+    1850,
+    1215,
+    700,
+    120
+   ],
+   "track_label": "OWN BRANCH",
+   "label_side": "above",
+   "hold_rate": 1
+  },
+  "recap": [
+   [
+    "type_end",
+    1.0,
+    1700,
+    1200,
+    2100
+   ],
+   [
+    "saved_visible",
+    0.5,
+    1700,
+    1200,
+    2100
+   ],
+   [
+    "filtered",
+    0.8,
+    1700,
+    1200,
+    2100
+   ]
+  ],
+  "recap_stills": true
+ }
+}

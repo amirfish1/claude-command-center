@@ -1,0 +1,56 @@
+{
+ "name": "CCC \u2014 new session in a worktree (motion source)",
+ "url": "http://127.0.0.1:8892/static/index.html?demo=1",
+ "viewport": {
+  "width": 3840,
+  "height": 2160
+ },
+ "wait_for": "#convInput",
+ "seeds": {
+  "ccc-session-view": "list",
+  "ccc-kanban-view": "false",
+  "ccc-sidebar-width": "470"
+ },
+ "stage": {
+  "init_scripts": [
+   "document.addEventListener('DOMContentLoaded',function(){var st=document.createElement('style');st.textContent='html,body,.sidebar,.main,#sidebarResizer{height:720px!important;max-height:720px!important;overflow-y:hidden}.sidebar .conv-list-panel{max-height:640px}';document.head.appendChild(st);setTimeout(function(){var b=document.querySelector('#sidebarNewBtn');if(b)b.click();document.documentElement.scrollTop=0},4000)});"
+  ]
+ },
+ "steps": [
+  {
+   "do": "wait",
+   "s": 7
+  },
+  {
+   "do": "click",
+   "selector": "#convInput"
+  },
+  {
+   "do": "type",
+   "text": "Add an RSS feed to the blog",
+   "delay": 0.2
+  },
+  {
+   "do": "wait",
+   "s": 3
+  },
+  {
+   "do": "click",
+   "selector": "#inlineWorktreeToggle",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 4
+  },
+  {
+   "do": "click",
+   "selector": ".spawn-cwd-chip:has-text(\"blog-engine\")",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 6
+  }
+ ]
+}
