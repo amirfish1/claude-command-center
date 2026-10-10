@@ -55702,7 +55702,7 @@
       headline: quota.state === 'ready' || quota.state === 'provisional'
         ? (quota.state === 'provisional' ? '~' : '') + '$' + quota.allocatedCost.toFixed(2)
           + ' (' + quota.contributionPct.toFixed(1) + '%)'
-        : quota.state === 'calibrating' ? 'Calibrating…' : 'Unavailable',
+        : quota.state === 'calibrating' ? 'Calibrating…' : '',
       apiLabel: apiCost == null ? 'API list-price unavailable'
         : '$' + apiCost.toFixed(2) + ' API list-price equivalent',
     };
@@ -55733,7 +55733,9 @@
       quotaEngine === 'claude' ? _monthlyClaudePlanUsd() : _monthlyCodexPlanUsd(),
     );
     const summary = railCostHeadline(quotaPresentation, breakdown.totalCost);
-    el.innerHTML = '<div class="rail-tokens-value rail-cost-headline">' + summary.headline + '</div>'
+    // No allocated-cost headline when quota is unavailable: the API
+    // list-price line below carries the number instead of an "Unavailable".
+    el.innerHTML = (summary.headline ? '<div class="rail-tokens-value rail-cost-headline">' + summary.headline + '</div>' : '')
       + '<div class="rail-usage-caption rail-api-price">' + summary.apiLabel + '</div>'
       + '<button type="button" class="rail-cost-details-toggle" id="railCostDetailsToggle"'
       + ' aria-controls="railCostDetails" aria-expanded="false">Show details</button>'
