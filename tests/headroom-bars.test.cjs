@@ -89,7 +89,7 @@ const response = (data, status = 200) => Promise.resolve({ ok: status < 400, sta
 test('canonical backend rows sort by engine with stable per-account identity', () => {
   const accounts = [row('free_router', { unlimited: true, percent_left: null }), row('devin', { available: false }), row('codex'), row('kimi'), row('claude', { id: 'claude:b', account: 'b' }), row('claude', { id: 'claude:a', account: 'a' })];
   const sorted = api.normalize(payload(...accounts), NOW);
-  assert.deepEqual(sorted.map(item => item.id), ['claude:a', 'claude:b', 'codex:default', 'kimi:default', 'free_router:default']);
+  assert.deepEqual(sorted.map(item => item.id), ['claude:a', 'claude:b', 'codex:default', 'kimi:default', 'devin:default', 'free_router:default']);
   assert.deepEqual(api.normalize(payload(...accounts.reverse()), NOW).map(item => item.id), sorted.map(item => item.id));
   assert.equal(sorted[0].showAccount, true);
   assert.equal(sorted[2].showAccount, false);
@@ -106,6 +106,18 @@ test('percent left uses only finite numeric readings in the contract', () => {
   }
   for (const percent_left of [0, 0.3, 10, 30, 99.7, 100]) assert.equal(normalized({ percent_left }).pctLeft, percent_left);
   assert.equal(normalized({ available: false, percent_left: 64 }), undefined);
+});
+
+test('Claude and Devin without a reading show a muted No reading chip beside a real gauge', () => {
+  const items = api.normalize(payload(row('claude', { available: false, percent_left: null, resets_at: null, reason: 'Run claude auth login' }), row('codex'), row('devin', { available: false, percent_left: null, resets_at: null })), NOW);
+  assert.deepEqual(items.map(i => i.id), ['claude:default', 'codex:default', 'devin:default']);
+  assert.equal(items[0].unconnected, true);
+  assert.equal(api.riskOf(items[0], NOW), 'off');
+  assert.equal(api.subText(items[0], NOW), 'Sign in to see it');
+  assert.deepEqual(api.tooltipLines(items[0], NOW), ['Claude', 'Run claude auth login']);
+  // Never alone, and other engines (free_router) stay hidden.
+  assert.deepEqual(api.normalize(payload(row('claude', { available: false })), NOW), []);
+  assert.equal(api.normalize(payload(row('codex'), row('free_router', { available: false, unlimited: true })), NOW).length, 1);
 });
 
 test('unavailable accounts disappear and an all-unavailable panel stays hidden', () => {

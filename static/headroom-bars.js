@@ -29,6 +29,10 @@
   // unknown, rather than inferring percentages from another field or
   // pretending that a free provider has an unlimited quota.
   var VENDOR_ORDER = { claude: 0, codex: 1, kimi: 2, devin: 3, free_router: 4 };
+  // Engines that stay on the strip as a muted "No reading" chip when CCC has no
+  // quota for them, so their absence reads as "not connected" instead of
+  // looking like the strip forgot them. Shown only beside a real reading.
+  var SHOW_UNCONNECTED = { claude: 'Sign in to see it', devin: 'Not shared yet' };
   var VENDOR_LABELS = { claude: 'Claude', codex: 'Codex', kimi: 'Kimi', devin: 'Devin', free_router: 'Free models' };
 
   /* ---------------- pure helpers (also the test surface) ---------------- */
@@ -61,7 +65,16 @@
     var item = raw;
     var engine = str(item.engine);
     var id = str(item.id);
-    if (!id || !Object.prototype.hasOwnProperty.call(VENDOR_ORDER, engine) || item.available !== true) return null;
+    if (!id || !Object.prototype.hasOwnProperty.call(VENDOR_ORDER, engine)) return null;
+    if (item.available !== true) {
+      if (!Object.prototype.hasOwnProperty.call(SHOW_UNCONNECTED, engine)) return null;
+      return {
+        id: id, engine: engine, label: str(item.label) || VENDOR_LABELS[engine],
+        account: str(item.account) || 'default', available: false, unconnected: true,
+        unlimited: false, pctLeft: null, resetAtMs: null, projectedPct: null, burnRate: null,
+        expiringUsd: null, expiringTokens: null, stale: false, reason: str(item.reason),
+      };
+    }
     var unlimited = item.unlimited === true;
     var pctLeft = unlimited ? null : num(item.percent_left);
     if (pctLeft != null && (pctLeft < 0 || pctLeft > 100)) pctLeft = null;
@@ -106,6 +119,8 @@
       counts[item.engine] = (counts[item.engine] || 0) + 1;
       out.push(item);
     });
+    // A "No reading" chip only makes sense next to at least one real gauge.
+    if (!out.some(function (item) { return !item.unconnected; })) out = [];
     out.forEach(function (item) { item.showAccount = counts[item.engine] > 1; });
     out.sort(function (a, b) {
       return VENDOR_ORDER[a.engine] - VENDOR_ORDER[b.engine]
@@ -167,6 +182,7 @@
   function subText(item, nowMs) {
     var now = nowMs == null ? Date.now() : nowMs;
     if (item.unlimited) return 'Varies by provider';
+    if (item.unconnected) return SHOW_UNCONNECTED[item.engine];
     var text = 'Reset time unknown';
     if (item.resetAtMs != null) {
       text = item.resetAtMs <= now ? 'Reset pending' : 'Resets in ' + fmtCountdown(item.resetAtMs - now);
@@ -190,6 +206,10 @@
   function tooltipLines(item, nowMs) {
     var now = nowMs == null ? Date.now() : nowMs;
     var lines = [titleOf(item)];
+    if (item.unconnected) {
+      lines.push(item.reason || 'No usage reading yet.');
+      return lines;
+    }
     lines.push(item.unlimited ? 'Free routing. Limits vary by provider.'
       : item.pctLeft == null ? 'Usage reading not available.' : pctNum(item.pctLeft) + ' left.');
     if (!item.unlimited && item.resetAtMs != null) {
@@ -355,7 +375,7 @@
       var label = titleOf(item);
       // Free routing has no single cap: the name, the dotted track and the
       // "Varies by provider" line say it; a value would only crowd the row.
-      var value = item.unlimited ? '' : pctText(item.pctLeft);
+      var value = item.unlimited ? '' : item.unconnected ? 'No reading' : pctText(item.pctLeft);
       var sub = subText(item, now);
       // A progressbar has the widest screen reader support for a fill gauge.
       // Unknown and free readings have no value, so they stay a plain group.

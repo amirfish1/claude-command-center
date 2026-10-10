@@ -282,6 +282,7 @@ def _contract_row(row, now):
             'projected_expiring_pct': row['expires_unused_pct'] if forecast else None,
             'expiring_usd_estimate': row['expires_unused_usd'] if forecast else None,
             'expiring_tokens_estimate': row['expires_unused_tokens'] if forecast else None,
+            'reason': '' if available else str(row.get('reason') or ''),
             'source': 'free_router' if engine == 'free_router' else 'quota'}
 
 
@@ -317,6 +318,9 @@ def headroom_payload(*, now=None, snapshot_path=None, throughput_dir=None, cache
         row = {'id': engine + ':current', 'engine': engine, 'account_id': 'current',
                'label': label, **weekly, 'windows': [dict(weekly)],
                'estimate_note': 'Based on recent use. Dollar values estimate API-priced work, not cash or a refund.'}
+        if engine == 'claude' and not weekly['available']:
+            row['reason'] = ('CCC has no Claude plan usage reading on this machine. '
+                             'Run `claude auth login` here to show what is left.')
         session = points.get(engine + ':session')
         if session:
             row['windows'].append(_window(session, window='session', now=now))
