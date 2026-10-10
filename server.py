@@ -28615,6 +28615,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                     )
                                 except Exception:
                                     status["stale_tool_queued_input"] = False
+                    elif spawn and status.get("sidecar_status") != "active" and _headless_turn_in_progress(spawn):
+                        # Mid-turn but between tools (thinking / streaming text):
+                        # the last Stop hook left sidecar_status "waiting" and no
+                        # PreToolUse marker exists, so the pane's "Working…" strip
+                        # vanished. The headless's own stdout log is the
+                        # authoritative open-turn signal. Stamp its mtime (not
+                        # "now") so a wedged turn still ages out client-side.
+                        status["status"] = "busy"
+                        status["sidecar_status"] = "active"
+                        status["sidecar_in_flight"] = False
+                        try:
+                            status["sidecar_ts"] = max(
+                                float(status.get("sidecar_ts") or 0),
+                                os.stat(spawn.get("log")).st_mtime,
+                            )
+                        except (OSError, TypeError, ValueError):
+                            status["sidecar_ts"] = time.time()
                 # Authoritative AskUserQuestion signal: our PreToolUse hook
                 # writes a relay request file for exactly the window it blocks
                 # waiting for an answer. Trust it over the in-flight marker
