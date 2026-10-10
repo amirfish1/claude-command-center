@@ -9366,6 +9366,13 @@
     .conv-input-bar .paste-thumb { flex: 0 0 auto; width: 56px; height: 56px; }
     .conv-input-bar textarea { max-height: calc(var(--app-vh, 100vh) * 0.16) !important; }
     .conv-input-context .spawn-cwd-picker { font-size: 13px; }
+    /* While typing (keyboard up) the bar must fit above the keyboard so the
+       Send row stays reachable: drop the engine/model/effort row and shrink
+       the attachment thumbnails. They return when the textarea loses focus. */
+    .conv-input-bar:has(textarea:focus) .conv-input-selectors { display: none !important; }
+    .conv-input-bar:has(textarea:focus) .paste-thumb-strip { max-height: 48px; padding: 3px 6px; }
+    .conv-input-bar:has(textarea:focus) .paste-thumb { width: 38px; height: 38px; }
+    .conv-input-bar:has(textarea:focus) textarea { max-height: calc(var(--app-vh, 100vh) * 0.12) !important; }
   }
 
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────

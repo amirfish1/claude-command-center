@@ -1,0 +1,1 @@
+- Phone: while typing with an image attached, the composer shrinks (selectors hidden, small thumbnails) so Send stays above the keyboard.
