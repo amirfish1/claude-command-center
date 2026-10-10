@@ -30895,17 +30895,22 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 }
 .f2c-dismiss:hover { color: var(--text); background: var(--surface-2); }
 
-/* Phone toolbar: the offer pill gets its own full-width row, every icon
-   button sits in ONE row below it, and the ⋯ menu lines up with that row,
-   instead of the pill, Esc, speaker, mic, ⚡ and Send wrapping at random. */
+/* Phone toolbar: one wrapping row, in a deliberate order. The offer pill gets
+   a full-width row on top (left-aligned, so its config popup opens inside the
+   screen); below it ⋯ sits at the left and every icon button (Esc, speaker,
+   mic, ⚡, Send) is grouped at the right. `display: contents` flattens the
+   button cluster so they all share the one row. */
 @media (max-width: 1200px) {
-  .conv-input-bar .conv-input-row-bottom { align-items: flex-end; flex-wrap: nowrap; }
-  .conv-input-bar .conv-input-buttons {
-    flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 6px; justify-content: flex-end;
+  .conv-input-bar .conv-input-row-bottom {
+    flex-wrap: wrap; align-items: center; gap: 8px 6px;
   }
+  .conv-input-bar .conv-input-buttons { display: contents; }
   .conv-input-bar .conv-input-buttons > .f2c-panel:not([hidden]) {
-    flex: 1 1 100%; order: -1; display: flex; justify-content: flex-end;
+    flex: 1 1 100%; order: -2; display: flex; justify-content: flex-start;
   }
   .conv-input-bar .conv-input-buttons > :not(.f2c-panel) { flex: 0 0 auto; }
+  .conv-input-bar .conv-input-buttons > .esc-btn,
+  .conv-input-bar .conv-input-buttons > .tts-btn:first-of-type { margin-left: auto; }
   .conv-input-bar .conv-input-buttons .route { max-width: 100%; }
+  .f2c-panel .f2c-config { max-width: min(320px, calc(100vw - 40px)); }
 }
