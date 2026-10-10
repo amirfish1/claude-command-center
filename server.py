@@ -27466,6 +27466,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ).lower()
                 ]
             self.send_json(rows)
+        elif path == "/api/free-runtime/tts-voices":
+            self.send_json({"ok": True, "voices": _free_runtime.tts_voice_options()})
         elif path == "/api/free-runtime/status":
             # $0 spawn runtime readiness for the UI's Free chip. Cheap: one
             # state-file read + one loopback TCP probe (400ms cap). Never

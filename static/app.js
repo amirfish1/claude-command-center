@@ -13005,6 +13005,7 @@
   const _ttsCanStream = () => typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mpeg');
   // Resolves { url, voice } or rejects with the HTTP status (0 = network).
   function _ttsFetchNeural(text, voice) {
+    voice = voice || ttsVoiceForPane(activePaneId());
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -82920,6 +82921,7 @@
     const convKey = conversationBgPrimaryKeyForPane(pid);
     if (convKey && convKey.indexOf('__pane__:') !== 0) pane.setAttribute('data-conv-id', convKey);
     renderConversationBackgroundPalette(pane);
+    renderTtsVoiceStepper(pane);
     applyConversationBackgroundToPane(pid, storedConversationBgForPane(pid), { persist: false });
   }
 
@@ -82929,6 +82931,86 @@
       refreshConversationBackgroundForPane(paneId);
     });
   }
+
+  // ---- Speak voice: per-session pick, default stored in Settings ----
+  const TTS_VOICE_DEFAULT_KEY = 'ccc-tts-voice-default';
+  const TTS_VOICE_BY_SESSION_KEY = 'ccc-tts-voice-by-session';
+  let _ttsVoiceOptions = [];   // [{id,label,paid}] from /api/free-runtime/tts-voices
+  function _ttsVoiceMap() {
+    try {
+      const m = JSON.parse(localStorage.getItem(TTS_VOICE_BY_SESSION_KEY) || '{}');
+      return m && typeof m === 'object' && !Array.isArray(m) ? m : {};
+    } catch (_) { return {}; }
+  }
+  function ttsVoiceDefault() {
+    try { return localStorage.getItem(TTS_VOICE_DEFAULT_KEY) || ''; } catch (_) { return ''; }
+  }
+  function ttsVoiceForPane(paneId) {
+    const key = conversationBgKeysForPane(paneId)[0];
+    const own = key ? _ttsVoiceMap()[key] : '';
+    const v = own === undefined ? '' : own;   // '' = random, still an explicit pick
+    const pick = key && own !== undefined ? v : ttsVoiceDefault();
+    return _ttsVoiceOptions.some(o => o.id === pick) ? pick : '';
+  }
+  function setTtsVoiceForPane(paneId, voice) {
+    const key = conversationBgKeysForPane(paneId)[0];
+    if (!key) return;
+    const m = _ttsVoiceMap();
+    m[key] = voice;
+    try { localStorage.setItem(TTS_VOICE_BY_SESSION_KEY, JSON.stringify(m)); } catch (_) {}
+  }
+  function renderTtsVoiceStepper(paneOrId) {
+    const pane = typeof paneOrId === 'string' ? conversationPaneForId(paneOrId) : paneOrId;
+    const host = pane && pane.querySelector('[data-role="tts-voice-stepper"]');
+    if (!host) return;
+    const paneId = pane.getAttribute('data-pane-id') || activePaneId();
+    const ids = [''].concat(_ttsVoiceOptions.map(o => o.id));
+    host.hidden = _ttsVoiceOptions.length === 0;
+    const cur = ttsVoiceForPane(paneId);
+    const opt = _ttsVoiceOptions.find(o => o.id === cur);
+    host.innerHTML = '<button type="button" data-step="-1" aria-label="Previous voice">&lt;</button>'
+      + '<span class="rail-voice-name"></span>'
+      + '<button type="button" data-step="1" aria-label="Next voice">&gt;</button>';
+    const name = host.querySelector('.rail-voice-name');
+    name.textContent = opt ? opt.label : 'Random voice';
+    if (opt && opt.paid) {
+      const m = document.createElement('span');
+      m.className = 'rail-voice-paid';
+      m.textContent = '$';
+      m.title = 'This voice costs money';
+      name.appendChild(m);
+    }
+    host.querySelectorAll('button').forEach(btn => btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const i = ids.indexOf(cur) + Number(btn.getAttribute('data-step'));
+      setTtsVoiceForPane(paneId, ids[(i + ids.length) % ids.length]);
+      renderTtsVoiceStepper(pane);
+    }));
+  }
+  function renderTtsVoiceDefaultSelect() {
+    const sel = document.getElementById('settingsTtsVoiceDefault');
+    if (!sel) return;
+    sel.innerHTML = '';
+    [{ id: '', label: 'Random voice', paid: false }].concat(_ttsVoiceOptions).forEach(o => {
+      const el = document.createElement('option');
+      el.value = o.id;
+      el.textContent = o.label + (o.paid ? ' $' : '');
+      sel.appendChild(el);
+    });
+    sel.value = ttsVoiceDefault();
+    if (!sel._tvBound) {
+      sel._tvBound = true;
+      sel.addEventListener('change', () => {
+        try { localStorage.setItem(TTS_VOICE_DEFAULT_KEY, sel.value); } catch (_) {}
+        document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
+      });
+    }
+  }
+  fetch('/api/free-runtime/tts-voices').then(r => r.ok ? r.json() : null).then(d => {
+    _ttsVoiceOptions = (d && Array.isArray(d.voices)) ? d.voices : [];
+    renderTtsVoiceDefaultSelect();
+    document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
+  }).catch(() => {});
 
   renderAllConversationBackgroundPalettes();
   window.addEventListener('storage', (ev) => {

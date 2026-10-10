@@ -1531,6 +1531,7 @@
               </div>
             </div>
             <div class="rail-bottom-tools">
+              <div class="rail-voice-stepper" data-role="tts-voice-stepper" role="group" aria-label="Speak voice for this session"></div>
               <div class="conv-rowstyle-palette" data-role="conv-rowstyle-palette" role="radiogroup" aria-label="Conversation row style"></div>
               <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
             </div>
@@ -2621,6 +2622,16 @@
                 <button type="button" class="settings-toggle" id="settingsUiModeToggle" data-ui-mode-toggle role="switch" aria-checked="false" aria-label="Simple mode">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="voice speak tts read aloud deepgram kokoro">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Default Speak voice</div>
+                <div class="settings-row-desc">Voice for reading replies aloud. Each session can override it from the right rail. A $ marks a voice that costs money.</div>
+              </div>
+              <div class="settings-row-control">
+                <select id="settingsTtsVoiceDefault" class="bug-input" style="width:auto;" aria-label="Default Speak voice"></select>
               </div>
             </div>
 

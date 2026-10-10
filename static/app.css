@@ -31015,3 +31015,30 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
   .f2c-panel .f2c-config .f2c-select { height: 44px; font-size: 16px; }
 }
+
+.status-rail .rail-voice-stepper {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.status-rail .rail-voice-stepper button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 7px;
+  line-height: 20px;
+}
+.status-rail .rail-voice-stepper .rail-voice-name {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-rail .rail-voice-stepper .rail-voice-paid { color: var(--text-muted); margin-left: 3px; }

@@ -595,6 +595,21 @@ def deepgram_open(text, voice="", fmt="encoding=linear16&container=wav"):
         return None, ""
 
 
+def tts_voice_options():
+    """Voices the Speak picker can offer: [{"id", "label", "paid"}].
+
+    The id is the label the TTS routes accept ("Kokoro: af_nova"). Deepgram
+    voices are listed only while Deepgram is on, and carry paid=True.
+    """
+    out = []
+    if local_tts_installed():
+        out += [{"id": _KOKORO_LABEL + v, "label": _KOKORO_LABEL + v, "paid": False} for v in KOKORO_VOICES]
+    if _deepgram_key():
+        out += [{"id": _DEEPGRAM_LABEL + v, "label": _DEEPGRAM_LABEL + v.capitalize(), "paid": True}
+                for v in DEEPGRAM_VOICES]
+    return out
+
+
 def deepgram_tts(text, voice=""):
     """(audio, label) from Deepgram Aura-2 as a whole WAV, or (b"", "")."""
     resp, label = deepgram_open(text, voice)
