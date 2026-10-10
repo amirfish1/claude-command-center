@@ -1,0 +1,1 @@
+- A WatchTower worker row with no transcript now says "no session yet" after 5 minutes instead of "starting…", and clicking it opens its session when known instead of the old queue view.

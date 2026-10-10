@@ -38796,11 +38796,17 @@
         });
         const startedMs = Date.parse(w.started_at || '');
         const age = Number.isFinite(startedMs) ? relativeTime(startedMs / 1000) : '';
+        // "starting" is only true for the first minutes; a worker that is
+        // alive but still has no session after that is not starting.
+        const _isFresh = Number.isFinite(startedMs) && (Date.now() - startedMs) < 5 * 60 * 1000;
+        const _pendSid = String(w.session_id || (((_uxqHealthCache || {}).worker_session_map) || {})[wid] || '').trim();
         return '<div class="conv-item conv-wt-pending" data-role="wt-pending-worker"'
           + ' data-wt-queue="' + escapeAttr(queue) + '"'
-          + ' title="' + escapeAttr((wid || 'This worker') + ' is running on the '
-              + (queue || 'WatchTower') + ' queue but has not opened its engine session yet. '
-              + 'Click to open the queue.') + '">'
+          + (_pendSid ? ' data-wt-sid="' + escapeAttr(_pendSid) + '"' : '')
+          + ' title="' + escapeAttr((wid || 'This worker') + ' is registered on the '
+              + (queue || 'WatchTower') + ' queue but no transcript exists yet'
+              + (_isFresh ? ' (it is still starting up).' : '; its engine session never opened or is not visible here.')
+              + (_pendSid ? ' Click to try opening its session.' : '')) + '">'
           // Same nesting as a real row -- .conv-title-row outside .conv-main-row.
           // The table flattens both with display:contents so the cells below
           // become grid items of .conv-item and land in the shared columns; get
@@ -38808,7 +38814,7 @@
           + '<div class="conv-title-row"><div class="conv-main-row">'
           +   icon
           +   '<span class="conv-title">' + escapeHtml((queue || 'WatchTower') + ' worker')
-          +     ' <span class="conv-wt-pending-note">starting\u2026</span></span>'
+          +     ' <span class="conv-wt-pending-note">' + (_isFresh ? 'starting\u2026' : 'no session yet') + '</span></span>'
           +   '<div class="conv-meta-col"><span class="conv-wt-pending-id">'
           +     escapeHtml(wid || 'worker') + '</span></div>'
           +   '<span class="conv-row-end"><span class="conv-rel" data-role="rel" title="Started">'
@@ -39877,14 +39883,13 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     });
-    // A pending worker has no session to open, so the row's normal click path
-    // has nothing to select. Send it where the worker actually is instead.
+    // A pending worker usually has no session to open; open it only when WT
+    // already knows its session id (the queue view no longer lives in the sidebar).
     $convList.querySelectorAll('[data-role="wt-pending-worker"]').forEach(el => {
       el.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        if (typeof _activateSidebarTabFromMobileNav === 'function') {
-          _activateSidebarTabFromMobileNav('queues');
-        }
+        const sid = el.getAttribute('data-wt-sid');
+        if (sid && typeof selectConversation === 'function') selectConversation(sid);
       });
     });
     const $currentSessionsModeToggle = $convList.querySelector('[data-role="current-sessions-mode-toggle"]');
