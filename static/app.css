@@ -30913,3 +30913,62 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .conv-input-bar .conv-input-buttons .route { max-width: 100%; }
   .f2c-panel .f2c-config { max-width: min(320px, calc(100vw - 40px)); }
 }
+
+/* ── Continue-in-new-session sheet ─────────────────────────────────────
+   Labeled stacked fields (rectangular selects), pill chips for recents
+   (clearly not selects), one big primary button. A bottom sheet on phones,
+   a compact popover on desktop. */
+.f2c-panel .f2c-config {
+  display: flex; flex-direction: column; align-items: stretch; gap: 12px;
+  width: min(360px, calc(100vw - 24px)); max-width: none;
+  padding: 16px; border-radius: 14px;
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+.f2c-sheet-title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
+.f2c-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1 1 0; }
+.f2c-field-label {
+  font-size: 10.5px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.f2c-field-row { display: flex; gap: 10px; }
+.f2c-panel .f2c-config .f2c-select {
+  width: 100%; max-width: none; height: 40px; padding: 0 10px;
+  font-size: 14px; font-weight: 500; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+}
+.f2c-panel .f2c-config .f2c-quick-picks {
+  flex-basis: auto; flex-wrap: wrap; gap: 6px; padding-top: 0;
+}
+.f2c-panel .f2c-config .f2c-quick-picks-label {
+  flex: 1 0 100%; font-size: 10.5px; font-weight: 650; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-muted); margin: 0 0 1px;
+}
+.f2c-panel .f2c-config .f2c-quick-pick {
+  height: 30px; padding: 0 12px; font-size: 12.5px; font-weight: 500;
+  color: color-mix(in srgb, var(--accent) 85%, var(--text));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+}
+.f2c-panel .f2c-config .f2c-quick-pick:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.f2c-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.f2c-start {
+  height: 48px; font-size: 15px; font-weight: 650; color: #fff; cursor: pointer;
+  background: var(--green, #2ea043); border: 0; border-radius: 10px;
+}
+.f2c-start:active { filter: brightness(0.9); }
+.f2c-start:disabled { opacity: 0.6; }
+.f2c-actions .f2c-close {
+  margin: 0; height: 36px; padding: 0; font-size: 13px; color: var(--text-muted);
+  background: transparent; border: 0; cursor: pointer;
+}
+@media (max-width: 1200px) {
+  .f2c-panel .f2c-config {
+    position: fixed; left: 8px; right: 8px; bottom: 8px; top: auto; width: auto;
+    z-index: 1300; border-radius: 16px;
+    max-height: calc(var(--app-vh, 100vh) - 24px); overflow-y: auto;
+  }
+  .f2c-panel .f2c-config .f2c-select { height: 44px; font-size: 16px; }
+}

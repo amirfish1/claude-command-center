@@ -1,0 +1,1 @@
+- The Continue new picker is a clean sheet: labeled engine, model and effort fields, pill chips for recent picks, and one big Continue button.

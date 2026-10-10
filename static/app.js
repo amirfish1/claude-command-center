@@ -4422,7 +4422,7 @@
     const picks = f2TopLaunchPicks(current);
     if (!picks.length) return '';
     return '<div class="f2c-quick-picks" role="group" aria-label="Recently used launch configurations">'
-      + '<span class="f2c-quick-picks-label">Quick picks</span>'
+      + '<span class="f2c-quick-picks-label">Recent</span>'
       + picks.map((pick) => {
         const launch = { engine: pick.engine, model: pick.model, effort: pick.effort || '' };
         const effort = f2EffortLabel(launch);
@@ -4450,17 +4450,21 @@
       .filter(e => enabled.some(x => x.id === e.id) || e.id === launch.engine)
       .map(e => ({ id: e.id, label: e.label }));
     const efforts = f2EffortsForEngine(launch.engine);
-    return '<div class="f2c-config">'
-      + '<span>Launches on</span>'
-      + f2SelectHtml('engine', engines, launch.engine)
-      + f2SelectHtml('model', f2ModelsForEngine(launch.engine, launch.model), launch.model)
-      + (efforts.length
-          ? '<span>at</span>' + f2SelectHtml('effort', efforts, launch.effort) + '<span>effort</span>'
-          : '')
+    const field = (label, html) => '<label class="f2c-field"><span class="f2c-field-label">' + label + '</span>' + html + '</label>';
+    return '<div class="f2c-config" role="dialog" aria-label="Continue in a new session">'
+      + '<div class="f2c-sheet-title">Continue in a new session</div>'
+      + field('Engine', f2SelectHtml('engine', engines, launch.engine))
+      + '<div class="f2c-field-row">'
+      +   field('Model', f2SelectHtml('model', f2ModelsForEngine(launch.engine, launch.model), launch.model))
+      +   (efforts.length ? field('Effort', f2SelectHtml('effort', efforts, launch.effort)) : '')
+      + '</div>'
       + f2QuickPickHtml(launch)
-      + '<button type="button" class="f2c-close" data-f2-chip aria-label="Close" title="Close">Done</button>'
-      // Every change applies immediately; Done only closes the panel (the
-      // chip caret also toggles it, but it can sit under the panel on phones).
+      // Every change applies immediately; the primary button starts the new
+      // session, Close just dismisses the sheet.
+      + '<div class="f2c-actions">'
+      +   '<button type="button" class="f2c-start" data-f2-act="continue">Continue in new session</button>'
+      +   '<button type="button" class="f2c-close" data-f2-chip aria-label="Close">Close</button>'
+      + '</div>'
       + '</div>';
   }
 
