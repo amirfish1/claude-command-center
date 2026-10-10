@@ -23656,6 +23656,18 @@ body.has-gc-reader .pwa-install-banner {
   border-radius: 5px; padding: 3px 9px; cursor: pointer;
 }
 .uxq-td-session-btn:hover { background: rgba(88,166,255,0.2); }
+.uxq-td-learnings-btn {
+  font: 600 11px var(--font-ui); color: var(--accent);
+  background: rgba(88,166,255,0.10); border: 1px solid rgba(88,166,255,0.3);
+  border-radius: 5px; padding: 3px 9px; cursor: pointer;
+}
+.uxq-td-learnings-btn:hover { background: rgba(88,166,255,0.2); }
+.uxq-td-comment-input {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  font: 13px var(--font-ui); padding: 6px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+}
+.uxq-td-comment-input:focus { outline: none; border-color: var(--accent); }
 .uxq-td-worker-id {
   font: 600 11px var(--font-mono, ui-monospace, monospace);
   color: var(--accent); background: rgba(88,166,255,0.08); padding: 1px 5px; border-radius: 3px;
