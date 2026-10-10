@@ -44288,6 +44288,11 @@
   if (window.visualViewport && window.matchMedia('(pointer: coarse)').matches) {
     const vv = window.visualViewport;
     let _vvRaf = 0;
+    const _cccNativeShell = /CCC-iOS/.test(navigator.userAgent);
+    if (_cccNativeShell) {
+      const kb = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Keyboard;
+      if (kb && kb.setAccessoryBarVisible) kb.setAccessoryBarVisible({ isVisible: false });
+    }
     // iOS Safari can report a bogus/stale visualViewport.height on the very
     // first read (e.g. mid-way through the address-bar collapse animation on
     // cold load) — small enough to make `body { height: var(--app-vh) }`
@@ -44308,8 +44313,9 @@
       // iOS draws its prev/next/✓ form-accessory bar over the bottom of the
       // visual viewport while a field is focused; lift the shell above it so
       // the composer's send button can't be hit as ✓.
+      // The native iOS shell hides that bar (see ios-app/), so no lift there.
       const kbOpen = window.innerHeight - h > 150;
-      document.documentElement.style.setProperty('--app-vh', (kbOpen ? h - 56 : h) + 'px');
+      document.documentElement.style.setProperty('--app-vh', (kbOpen && !_cccNativeShell ? h - 56 : h) + 'px');
       document.documentElement.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
     };
     const queueVisualViewportSync = () => {

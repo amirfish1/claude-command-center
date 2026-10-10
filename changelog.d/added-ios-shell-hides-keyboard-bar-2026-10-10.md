@@ -1,0 +1,1 @@
+- An optional iOS app shell (`ios-app/`) hides the prev/next/done bar above the keyboard.

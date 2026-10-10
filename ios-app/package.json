@@ -1,0 +1,20 @@
+{
+  "name": "ccc-ios",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native iOS shell (Capacitor) around CCC's phone UI. Hides the iOS keyboard accessory bar (prev/next/done) that Safari can't.",
+  "scripts": {
+    "cap:add:ios": "cap add ios",
+    "cap:sync": "cap sync ios",
+    "cap:open": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.6.7",
+    "@capacitor/ios": "^7.6.7",
+    "@capacitor/keyboard": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.6.7",
+    "typescript": "^5.4.0"
+  }
+}
