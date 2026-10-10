@@ -2547,6 +2547,11 @@
     padding-right: 4px;
   }
 
+  /* Editing the folder path on a phone: hide the composer and model strip so
+     the folder row and its suggestions have the room above the keyboard. */
+  .conv-pane.is-cwd-editing > .conv-input-bar,
+  .conv-pane.is-cwd-editing > .conv-model-picker-strip { display: none !important; }
+
   /* Minimized new-session composer is one row: the engine/model/effort
      selects (full-width on phones) would squeeze the textarea to a sliver.
      The model chips above still choose the model. */

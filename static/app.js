@@ -80847,7 +80847,23 @@
     if (input && document.activeElement !== input) input.scrollLeft = input.scrollWidth;
   }
   document.addEventListener('focusout', (ev) => {
-    if (ev.target && ev.target.id === 'spawnCwdPicker') setTimeout(_showSpawnCwdTail, 0);
+    if (ev.target && ev.target.id === 'spawnCwdPicker') {
+      setTimeout(_showSpawnCwdTail, 0);
+      // Delayed so a tap on a suggestion isn't cancelled by the layout shift.
+      setTimeout(() => {
+        const pane = ev.target.closest('.conv-pane');
+        if (pane && document.activeElement !== ev.target) pane.classList.remove('is-cwd-editing');
+      }, 300);
+    }
+  });
+  // Phone: with the keyboard up the composer fills the shrunken pane and the
+  // folder row collapses out of view. While the folder field is focused, give
+  // it the room (CSS hides the composer + model strip).
+  document.addEventListener('focusin', (ev) => {
+    if (!ev.target || ev.target.id !== 'spawnCwdPicker' || !isTouchPrimary()) return;
+    const pane = ev.target.closest('.conv-pane');
+    if (pane) pane.classList.add('is-cwd-editing');
+    setTimeout(() => { try { ev.target.scrollIntoView({ block: 'center' }); } catch (_) {} }, 350);
   });
 
   // ── In-browser folder picker ──
