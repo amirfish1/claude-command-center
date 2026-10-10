@@ -1,0 +1,1 @@
+- A minimized phone composer on the new-session screen is a single tidy row again instead of a squeezed sliver.

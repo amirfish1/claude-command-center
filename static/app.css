@@ -2547,6 +2547,12 @@
     padding-right: 4px;
   }
 
+  /* Minimized new-session composer is one row: the engine/model/effort
+     selects (full-width on phones) would squeeze the textarea to a sliver.
+     The model chips above still choose the model. */
+  .conv-input-bar.is-composer-minimized .conv-input-selectors { display: none !important; }
+  .conv-input-bar.is-composer-minimized .conv-input-row-bottom { flex-wrap: nowrap; }
+
   /* Context ring (kimi-web ContextRing parity) inside the usage pill. */
   .ctx-ring { vertical-align: -2.5px; margin-right: 4px; }
   .ctx-ring .ctx-ring-bg { fill: none; stroke: var(--border); stroke-width: 2.4; }
