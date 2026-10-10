@@ -9346,6 +9346,15 @@
     /* Nothing to continue from before the first message. */
     .conv-input-bar.is-new-session-launch .conv-actions-item[data-act="continue"] { display: none; }
     .conv-input-bar .send-btn { -webkit-touch-callout: none; user-select: none; }
+    /* Keep the composer short enough that the button row (Send) stays on
+       screen with the keyboard up: one swipeable row of small thumbnails and a
+       capped textarea, instead of a tall attachment box + long prompt. */
+    .conv-input-bar .paste-thumb-strip {
+      flex-wrap: nowrap; overflow-x: auto; max-height: 76px;
+    }
+    .conv-input-bar .paste-thumb { flex: 0 0 auto; width: 56px; height: 56px; }
+    .conv-input-bar textarea { max-height: calc(var(--app-vh, 100vh) * 0.16) !important; }
+    .conv-input-context .spawn-cwd-picker { font-size: 13px; }
   }
 
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────

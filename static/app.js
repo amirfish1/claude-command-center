@@ -13729,6 +13729,19 @@
     }, true);
     btn.addEventListener('contextmenu', (ev) => { if (isTouchPrimary()) ev.preventDefault(); });
   })();
+  // Touch: tapping the context pill offers to compact (with a confirm), in
+  // place of a Compact button in the composer.
+  document.addEventListener('click', (ev) => {
+    if (!isTouchPrimary()) return;
+    const pill = ev.target.closest && ev.target.closest('.conv-input-context .wp-usage-pill:not(.wp-usage-missing):not(.wp-spawn-ctx-badge)');
+    if (!pill) return;
+    const c = document.getElementById('convCompactBtn');
+    if (!c || !c.classList.contains('visible') || c.disabled) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const label = (pill.textContent || '').replace(/\s+/g, ' ').trim();
+    if (window.confirm('Compact this conversation to free context?' + (label ? '\n\nNow: ' + label : ''))) compactCurrentSession();
+  }, true);
   // Touch: the + becomes a ⋯ actions menu (Attach, Compact, Continue in new).
   (function _initConvActionsMenu() {
     const btn = document.getElementById('convActionsBtn');
@@ -13739,11 +13752,6 @@
       ev.preventDefault();
       ev.stopPropagation();
       const opening = menu.style.display === 'none';
-      if (opening) {
-        const c = document.getElementById('convCompactBtn');
-        const row = menu.querySelector('[data-act="compact"]');
-        if (row) row.style.display = c && c.classList.contains('visible') && !c.disabled ? '' : 'none';
-      }
       menu.style.display = opening ? 'block' : 'none';
       btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
     });
@@ -13752,7 +13760,6 @@
       if (!item) return;
       hide();
       if (item.dataset.act === 'attach') { const i = document.getElementById('convAttachInput'); if (i) i.click(); }
-      else if (item.dataset.act === 'compact') compactCurrentSession();
       else if (item.dataset.act === 'continue') { const c = document.querySelector('#convSendMenu .continue-new-btn'); if (c) c.click(); }
     });
     document.addEventListener('click', (ev) => {
@@ -80716,6 +80723,7 @@
 
   function refreshNewSessionCwdUi(paneId) {
     if (currentConversation !== '__new__') return;
+    requestAnimationFrame(_showSpawnCwdTail);
     const spawnCwd = getSpawnCwd();
     updatePaneHeader(paneId || activePaneId(), {
       source: getSpawnEngine(),
@@ -80814,7 +80822,17 @@
     // NOT steal focus: doing so bounced focus out of #nsNewProjectName on every
     // keystroke/focus, making the name field read as "not editable" (CCC-144).
     if (opts.focus !== false) input.focus();
+    else _showSpawnCwdTail();
   }
+  // The folder field is narrow on a phone; show the END of a long path (the
+  // repo name) instead of its start whenever the field isn't being edited.
+  function _showSpawnCwdTail() {
+    const input = document.getElementById('spawnCwdPicker');
+    if (input && document.activeElement !== input) input.scrollLeft = input.scrollWidth;
+  }
+  document.addEventListener('focusout', (ev) => {
+    if (ev.target && ev.target.id === 'spawnCwdPicker') setTimeout(_showSpawnCwdTail, 0);
+  });
 
   // ── In-browser folder picker ──
   // Fallback for hosts with no native GUI chooser (headless Linux: no

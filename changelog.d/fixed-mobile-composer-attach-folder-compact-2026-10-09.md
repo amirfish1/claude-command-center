@@ -1,0 +1,1 @@
+- Phone: the folder field shows the end of a long path, an attached image no longer pushes Send off screen, and tapping the context pill offers Compact with a confirm.
