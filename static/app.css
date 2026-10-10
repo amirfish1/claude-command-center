@@ -29835,6 +29835,12 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   border-radius: 0 !important;
 }
 #convList.workers-dense .conv-item:last-child { border-bottom: 0 !important; }
+/* The reset above wipes .conv-item.active too, so the session open in the
+   conversation view was indistinguishable in the Workers table. */
+#convList.workers-dense .conv-item.active {
+  background: color-mix(in srgb, var(--purple) 14%, transparent) !important;
+  border-left-color: var(--purple) !important;
+}
 /* CCC-1193: the % and age cells are hidden in a very narrow list (see the
    sidebar 400px tier); collapse their fixed tracks so the title gets them. */
 @container sidebar (max-width: 400px) {
