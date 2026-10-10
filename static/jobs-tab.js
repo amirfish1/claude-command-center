@@ -18,7 +18,7 @@
   let _lastHtml = '';
   let _host = (function () {
     try { const v = localStorage.getItem(HOST_KEY); if (v === 'all' || v === 'hermes' || v === 'laptop') return v; } catch (_) {}
-    return 'hermes';
+    return null;
   })();
   const _expanded = new Set(); // row keys (job id, or job id + '#' + slot in the Day view)
   const _collapsed = new Set((function () { try { return JSON.parse(localStorage.getItem('ccc-jobs-collapsed') || '[]'); } catch (_) { return []; } })());
@@ -77,7 +77,7 @@
 
   function attentionCount() {
     if (!_data || !_data.summary) return 0;
-    const sm = _data.summary[_host === 'all' ? 'all' : _host];
+    const sm = _data.summary[activeHost()];
     return (sm && sm.attention) || 0;
   }
 
@@ -90,9 +90,19 @@
     if (span) { if (n) span.textContent = String(n); else span.remove(); }
   }
 
+  // The host view in effect. Unset means "this machine's view": the VM's own
+  // timers on Linux, everything (laptop + hermes-gcp) on a laptop. The Laptop
+  // view is always empty on Linux, so it is never offered or honored there.
+  function activeHost() {
+    const local = _data && _data.local_host;
+    if (local === 'hermes' && (_host === 'laptop' || !_host)) return 'hermes';
+    return _host || (local === 'laptop' ? 'all' : 'hermes');
+  }
+
   function visibleJobs() {
     const jobs = (_data && _data.jobs) || [];
-    return _host === 'all' ? jobs : jobs.filter(j => j.host === _host);
+    const host = activeHost();
+    return host === 'all' ? jobs : jobs.filter(j => j.host === host);
   }
 
   // No em-dashes in user copy.
@@ -126,9 +136,10 @@
   function headerHtml() {
     const hosts = _data.hosts || {};
     const h = hosts.hermes || {};
-    const sum = (_data.summary || {})[_host === 'all' ? 'all' : _host] || {};
+    const host = activeHost();
+    const sum = (_data.summary || {})[host] || {};
     const parts = [];
-    if (_host !== 'laptop') {
+    if (host !== 'laptop') {
       if (h.status === 'online') parts.push('hermes-gcp online');
       else if (h.status === 'loading') parts.push('hermes-gcp loading');
       else {
@@ -143,10 +154,11 @@
     if (sum.failed) parts.push(sum.failed + ' failed');
     if (sum.stale) parts.push(sum.stale + ' stale');
     if (sum.disabled) parts.push(sum.disabled + ' disabled');
-    const bad = (h.status === 'offline' && _host !== 'laptop') || sum.failed;
-    const seg = ['hermes', 'laptop', 'all'].map(k => {
+    const bad = (h.status === 'offline' && host !== 'laptop') || sum.failed;
+    const segKeys = _data.local_host === 'hermes' ? ['hermes'] : ['hermes', 'laptop', 'all'];
+    const seg = segKeys.map(k => {
       const label = k === 'all' ? 'All' : k === 'hermes' ? 'hermes-gcp' : 'Laptop';
-      return '<button type="button" class="jobs-seg-btn' + (k === _host ? ' is-active' : '') + '" data-jobs-host="' + k + '">' + label + '</button>';
+      return '<button type="button" class="jobs-seg-btn' + (k === host ? ' is-active' : '') + '" data-jobs-host="' + k + '">' + label + '</button>';
     }).join('');
     const sortOpts = [['project', 'project'], ['recent', 'recent'], ['day', 'day']].map(x =>
       '<span class="grouping-opt' + (_sort === x[0] ? ' is-active' : '') + '" data-jobs-sort="' + x[0] + '">' + x[1] + '</span>').join('');
@@ -243,7 +255,7 @@
       + '<span class="job-dot" title="' + esc(j.status) + '"></span>'
       + '<span class="job-name" title="' + esc(j.name) + '">' + esc(shortName(j.name)) + '</span>'
       + (running ? liveHtml(j) : '')
-      + (_host === 'all' ? '<span class="job-host">' + (j.host === 'hermes' ? 'hermes-gcp' : 'Laptop') + '</span>' : '')
+      + (activeHost() === 'all' ? '<span class="job-host">' + (j.host === 'hermes' ? 'hermes-gcp' : 'Laptop') + '</span>' : '')
       + '<span class="job-desc-inline" title="' + esc(nodash(j.description)) + '">' + esc(nodash(j.description)) + '</span>'
       + (_sort !== 'day' && j.next_run_at && j.enabled !== false ? '<span class="job-next" title="Next run: ' + esc(fmtLocal(j.next_run_at)) + ' (' + esc(rel(j.next_run_at)) + ')">Next ' + esc(nextLabel(j.next_run_at)) + '</span>' : '')
       + '</div>'
@@ -395,7 +407,7 @@
       const jobs = visibleJobs();
       html = headerHtml()
         + (jobs.length ? '<div class="jobs-list">' + (_sort === 'day' ? dayHtml(jobs) : _sort === 'recent' ? recentHtml(jobs) : groupsHtml(jobs)) + '</div>'
-          : '<div class="jobs-empty">No scheduled jobs' + (_host === 'hermes' && (_data.hosts.hermes || {}).status !== 'online' ? ' (hermes-gcp unreachable)' : '') + '.</div>');
+          : '<div class="jobs-empty">No scheduled jobs' + (activeHost() === 'hermes' && (_data.hosts.hermes || {}).status !== 'online' ? ' (hermes-gcp unreachable)' : '') + '.</div>');
     }
     if (html !== _lastHtml || !el.firstChild) {
       const scroll = el.scrollTop;
@@ -526,7 +538,7 @@
 
   async function openAddDialog() {
     closeAddDialog();
-    const host = _host === 'laptop' ? 'laptop' : 'hermes';
+    const host = activeHost() === 'laptop' ? 'laptop' : 'hermes';
     const wrap = document.createElement('div');
     wrap.id = 'jobsAddDialog';
     wrap.className = 'jobs-add-overlay';

@@ -216,5 +216,13 @@ class PerfBudget(unittest.TestCase):
         self.assertEqual(len(p["jobs"]), 1)
 
 
+class LocalHostTest(unittest.TestCase):
+    def test_payload_names_the_local_host(self):
+        with mock.patch.object(f.platform, "system", return_value="Linux"):
+            self.assertEqual(f.build_payload()["local_host"], "hermes")
+        with mock.patch.object(f.platform, "system", return_value="Darwin"):
+            self.assertEqual(f.build_payload()["local_host"], "laptop")
+
+
 if __name__ == "__main__":
     unittest.main()

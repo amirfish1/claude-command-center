@@ -18,6 +18,7 @@ thread never waits on ssh (except the very first call, bounded).
 from __future__ import annotations
 
 import os
+import platform
 import plistlib
 import re
 import subprocess
@@ -806,6 +807,9 @@ def build_payload(now=None):
         "ok": True,
         "collected_at": _iso(now),
         "hosts": hosts,
+        # Which of the two hosts is THIS machine: on Linux the systemd timers
+        # are local and there is no launchd, so the UI hides the Laptop view.
+        "local_host": "hermes" if platform.system() == "Linux" else "laptop",
         "jobs": jobs,
         "summary": {
             "total": len(jobs),
