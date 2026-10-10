@@ -4493,6 +4493,10 @@
         + '<span class="f2c-chip-label">' + escapeHtml(f2ModelLabel(st.launch)) + '</span>'
         + '<span class="f2c-chip-caret" aria-hidden="true">▾</span>'
       + '</button>'
+      // Not wanting the offer is a real choice: "Continue here" (the existing
+      // dismiss act) hides it for this pane+session.
+      + '<button type="button" class="f2c-dismiss" data-f2-act="dismiss"'
+        + ' aria-label="Dismiss: continue in this session" title="No thanks, continue here">&times;</button>'
       // Nested inside .route (not a sibling in .routes) so it can anchor via
       // CSS to the pill it belongs to and drop directly below it instead of
       // floating wherever the toolbar row's flex flow happens to place it.

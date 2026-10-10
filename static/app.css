@@ -30885,3 +30885,27 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   border-radius: 6px;
   cursor: pointer;
 }
+
+/* Continue-new dismiss (×) */
+.f2c-dismiss {
+  flex: 0 0 auto; width: 30px; align-self: stretch;
+  font-size: 18px; line-height: 1; color: var(--text-muted);
+  background: transparent; border: 1px solid var(--border);
+  border-left: none; border-radius: 0 6px 6px 0; cursor: pointer;
+}
+.f2c-dismiss:hover { color: var(--text); background: var(--surface-2); }
+
+/* Phone toolbar: the offer pill gets its own full-width row, every icon
+   button sits in ONE row below it, and the ⋯ menu lines up with that row,
+   instead of the pill, Esc, speaker, mic, ⚡ and Send wrapping at random. */
+@media (max-width: 1200px) {
+  .conv-input-bar .conv-input-row-bottom { align-items: flex-end; flex-wrap: nowrap; }
+  .conv-input-bar .conv-input-buttons {
+    flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 6px; justify-content: flex-end;
+  }
+  .conv-input-bar .conv-input-buttons > .f2c-panel:not([hidden]) {
+    flex: 1 1 100%; order: -1; display: flex; justify-content: flex-end;
+  }
+  .conv-input-bar .conv-input-buttons > :not(.f2c-panel) { flex: 0 0 auto; }
+  .conv-input-bar .conv-input-buttons .route { max-width: 100%; }
+}
