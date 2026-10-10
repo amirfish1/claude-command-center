@@ -1,0 +1,270 @@
+{
+ "schema": "product-motion/v1",
+ "id": "ccc-resume-session",
+ "take": "takes/20261010-172006-ccc-resume-a-dormant-session-cost-aware-route-ch",
+ "source": {
+  "w": 3840,
+  "h": 2160,
+  "css_zoom": 3,
+  "prepare_for_seek": true
+ },
+ "expect": {
+  "clicks": 3,
+  "keys": 21
+ },
+ "duration": 31,
+ "music": {
+  "synthesis": "pulse",
+  "period": 0.5,
+  "phase": 0,
+  "offset": 0,
+  "rights": "Original deterministic synthesis from the kit's sfx.py"
+ },
+ "palette": {
+  "paper": "#f6f8fa",
+  "ink": "#161b22",
+  "deep": "#0d1117",
+  "accent": "#6e8caf",
+  "hi": "#f5a623",
+  "mute": "#8b949e",
+  "page": "#0d1117",
+  "card": "#ffffff",
+  "tag": "#46607f",
+  "herob": "#46607f"
+ },
+ "layout": {
+  "landscape": {
+   "slab": {
+    "left": 96,
+    "top": 90,
+    "h2": 70,
+    "p": 29,
+    "max_w": 1100
+   }
+  },
+  "portrait": {
+   "slab": {
+    "left": 56,
+    "top": 1640,
+    "h2": 84,
+    "p": 27,
+    "max_w": 900
+   }
+  }
+ },
+ "copy": {
+  "brand": {
+   "name": "CCC",
+   "wordmark": "ccc",
+   "dot": "."
+  },
+  "window_title": "CCC &middot; Claude Command Center",
+  "hook": {
+   "a": [
+    "Back to a session",
+    "[from last month?]"
+   ],
+   "b": [
+    "Resume it,",
+    "or start light?"
+   ]
+  },
+  "storm": [
+   [
+    "Add the migration too",
+    "#follow-up"
+   ],
+   [
+    "Extract invoice numbering",
+    "#56-days"
+   ],
+   [
+    "Fix silent contact-form failures",
+    "#stale"
+   ],
+   [
+    "Review PR #198",
+    "#idle"
+   ],
+   [
+    "CI lint failures on main",
+    "#waiting"
+   ],
+   [
+    "Add streaming to the SDK",
+    "#later"
+   ],
+   [
+    "328k tokens of context",
+    "#cold-cache"
+   ],
+   [
+    "Webhook retries flapping",
+    "#gh-321"
+   ],
+   [
+    "Add RSS / Atom feed",
+    "#icebox"
+   ],
+   [
+    "Bump pillow to 11.x",
+    "#today"
+   ]
+  ],
+  "storm_labels": [
+   "IDLE",
+   "IDLE",
+   "COLD",
+   "YOU"
+  ],
+  "hero": {
+   "eyebrow": "RESUME",
+   "text": "Send to a dormant session",
+   "accent": "#headless"
+  },
+  "intro": {
+   "eyebrow": "MEET",
+   "tagline": [
+    "Pick up where it stopped,",
+    "at the cheapest route."
+   ],
+   "chips": [
+    "RESUMES HEADLESS",
+    "COST-AWARE ROUTES"
+   ]
+  },
+  "steps": [
+   {
+    "pill": "01 TYPE",
+    "eyebrow": "01 &mdash; TYPE",
+    "title": "Message a dormant session.",
+    "sub": "It has no live process. Send anyway and it resumes headless."
+   },
+   {
+    "pill": "02 ROUTES",
+    "eyebrow": "02 &mdash; ROUTES",
+    "title": "See the cheaper route first.",
+    "sub": "Large and stale? The composer offers a fresh session on any model."
+   },
+   {
+    "pill": "03 YOUR CALL",
+    "eyebrow": "03 &mdash; YOUR CALL",
+    "title": "Or just continue here.",
+    "sub": "One tap dismisses the offer and sends to the original session."
+   }
+  ],
+  "recap": [
+   "Type.",
+   "Choose.",
+   "Resume."
+  ],
+  "end": {
+   "tagline": [
+    "Resume on demand,",
+    "at the right price."
+   ],
+   "url": "github.com/amirfish1/claude-command-center",
+   "chips": [
+    "RESUME",
+    "CONTINUE FRESH",
+    "ANY MODEL"
+   ],
+   "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+   "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+  },
+  "hud_label": "CCC &middot; REAL CAPTURE"
+ },
+ "edit": {
+  "reveal_src": 3,
+  "act1": {
+   "click": 0,
+   "keys": [
+    0,
+    20
+   ],
+   "type_window": [
+    8.9,
+    18.8
+   ],
+   "type_region": [
+    1700,
+    1650,
+    3000,
+    1800
+   ]
+  },
+  "act2": {
+   "click": 1,
+   "instant_result": true,
+   "result_window": [
+    23.4,
+    28
+   ],
+   "result_after": 23.4,
+   "result_region": [
+    2400,
+    950,
+    3600,
+    1780
+   ],
+   "lift_region": [
+    2800,
+    1845,
+    230,
+    90
+   ],
+   "lock_label": "ONE CLICK",
+   "stamp": "ROUTES"
+  },
+  "act3": {
+   "click": 2,
+   "instant_result": true,
+   "skip_load": true,
+   "result_window": [
+    31.1,
+    36
+   ],
+   "result_after": 31.1,
+   "result_region": [
+    1700,
+    1500,
+    3800,
+    1980
+   ],
+   "track_region": [
+    1740,
+    1650,
+    1260,
+    300
+   ],
+   "track_label": "RESUME HERE",
+   "label_side": "above",
+   "hold_rate": 1,
+   "label_side_portrait": "below"
+  },
+  "recap": [
+   [
+    "type_end",
+    1.0,
+    1700,
+    1500,
+    1300
+   ],
+   [
+    "saved_visible",
+    0.5,
+    2480,
+    950,
+    1100
+   ],
+   [
+    "filtered",
+    0.8,
+    1700,
+    1500,
+    1300
+   ]
+  ],
+  "recap_stills": true
+ }
+}
