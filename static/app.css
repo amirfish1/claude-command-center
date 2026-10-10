@@ -30750,8 +30750,10 @@ body.conv-compact.conv-compact .conversations-view details.tool-command-disclosu
    no later text, and their absolute-positioned stamps stacked into a smear. */
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) .msg-ts { display: inline !important; }
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) .assistant-message-actions { display: inline-flex !important; }
-/* Each turn's final card (.cc-final) also keeps speak/copy: otherwise only
-   the very last reply in the whole conversation has them. */
+/* Each turn's final card (.cc-final) also keeps speak/copy and its timestamp:
+   otherwise only the very last reply in the whole conversation has them, and
+   there is no way to tell when an earlier turn happened. */
+body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text.cc-final) .msg-ts { display: inline !important; }
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text.cc-final) .assistant-message-actions { display: inline-flex !important; }
 /* The newest reply keeps its per-turn token summary and model line; the
    older turns stay clean. Merged chips ride on tool-call lines, so they stay
