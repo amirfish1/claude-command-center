@@ -1,0 +1,278 @@
+{
+ "schema": "product-motion/v1",
+ "id": "ccc-group-chat",
+ "take": "takes/20261010-145811-ccc-group-chat-with-the-fleet-motion-source",
+ "source": {
+  "w": 3840,
+  "h": 2160,
+  "css_zoom": 3,
+  "prepare_for_seek": true
+ },
+ "expect": {
+  "clicks": 3,
+  "keys": 18
+ },
+ "duration": 31,
+ "music": {
+  "synthesis": "pulse",
+  "period": 0.5,
+  "phase": 0,
+  "offset": 0,
+  "rights": "Original deterministic synthesis from the kit's sfx.py"
+ },
+ "palette": {
+  "paper": "#f6f8fa",
+  "ink": "#161b22",
+  "deep": "#0d1117",
+  "accent": "#6e8caf",
+  "hi": "#f5a623",
+  "mute": "#8b949e",
+  "page": "#0d1117",
+  "card": "#ffffff",
+  "tag": "#46607f",
+  "herob": "#46607f"
+ },
+ "layout": {
+  "landscape": {
+   "slab": {
+    "left": 96,
+    "top": 90,
+    "h2": 70,
+    "p": 29,
+    "max_w": 1100
+   }
+  },
+  "portrait": {
+   "slab": {
+    "left": 56,
+    "top": 1640,
+    "h2": 84,
+    "p": 27,
+    "max_w": 900
+   }
+  }
+ },
+ "copy": {
+  "brand": {
+   "name": "CCC",
+   "wordmark": "ccc",
+   "dot": "."
+  },
+  "window_title": "CCC &middot; Claude Command Center",
+  "hook": {
+   "a": [
+    "One thread,",
+    "[every agent in it.]"
+   ],
+   "b": [
+    "Who is working",
+    "on what?"
+   ]
+  },
+  "storm": [
+   [
+    "Planner: draft release notes",
+    "#planner"
+   ],
+   [
+    "Builder: list what shipped",
+    "#builder"
+   ],
+   [
+    "Reviewer: tone pass",
+    "#reviewer"
+   ],
+   [
+    "Stripe webhooks",
+    "#in-progress"
+   ],
+   [
+    "Fix auth cookie race",
+    "#needs-attention"
+   ],
+   [
+    "Review PR #247",
+    "#review"
+   ],
+   [
+    "Webhook retries flapping",
+    "#gh-321"
+   ],
+   [
+    "Blog to Eleventy",
+    "#waiting"
+   ],
+   [
+    "CI lint on main",
+    "#today"
+   ],
+   [
+    "Pagination > 100 items",
+    "#gh-312"
+   ],
+   [
+    "Changelog final pass",
+    "#later"
+   ],
+   [
+    "Pricing from billing service",
+    "#icebox"
+   ]
+  ],
+  "storm_labels": [
+   "PLANNER",
+   "BUILDER",
+   "REVIEWER",
+   "YOU"
+  ],
+  "hero": {
+   "eyebrow": "GROUP CHAT",
+   "text": "Agents talking to each other",
+   "accent": "#v5.7"
+  },
+  "intro": {
+   "eyebrow": "MEET",
+   "tagline": [
+    "One chat,",
+    "the whole fleet."
+   ],
+   "chips": [
+    "SEVERAL SESSIONS &middot; ONE THREAD",
+    "YOU JOIN TOO"
+   ]
+  },
+  "steps": [
+   {
+    "pill": "01 TYPE",
+    "eyebrow": "01 &mdash; TYPE",
+    "title": "Write to the group.",
+    "sub": "One message in the shared composer reaches every participant."
+   },
+   {
+    "pill": "02 INVITE",
+    "eyebrow": "02 &mdash; INVITE",
+    "title": "Add a participant.",
+    "sub": "Search recent sessions and pull another agent into the thread."
+   },
+   {
+    "pill": "03 JOINED",
+    "eyebrow": "03 &mdash; JOINED",
+    "title": "It joins the chat.",
+    "sub": "The session is in the thread and reads what was said."
+   }
+  ],
+  "recap": [
+   "Write.",
+   "Invite.",
+   "Joined."
+  ],
+  "end": {
+   "tagline": [
+    "Coordinate the fleet",
+    "from one thread."
+   ],
+   "url": "github.com/amirfish1/claude-command-center",
+   "chips": [
+    "GROUP CHAT",
+    "ANY SESSION",
+    "ONE THREAD"
+   ],
+   "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+   "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+  },
+  "hud_label": "CCC &middot; REAL CAPTURE"
+ },
+ "edit": {
+  "reveal_src": 3,
+  "act1": {
+   "click": 0,
+   "keys": [
+    0,
+    17
+   ],
+   "type_window": [
+    8.9,
+    15.0
+   ],
+   "type_region": [
+    1800,
+    1880,
+    3200,
+    1990
+   ]
+  },
+  "act2": {
+   "click": 1,
+   "instant_result": true,
+   "result_window": [
+    20.0,
+    22.5
+   ],
+   "result_after": 20.0,
+   "result_region": [
+    1250,
+    900,
+    2650,
+    2100
+   ],
+   "lift_region": [
+    2680,
+    30,
+    340,
+    70
+   ],
+   "lock_label": "ONE CLICK",
+   "stamp": "INVITED"
+  },
+  "act3": {
+   "click": 2,
+   "instant_result": true,
+   "skip_load": true,
+   "result_window": [
+    27.3,
+    30.4
+   ],
+   "result_after": 27.3,
+   "result_region": [
+    1300,
+    1550,
+    2700,
+    1800
+   ],
+   "track_region": [
+    1360,
+    1600,
+    1120,
+    150
+   ],
+   "track_label": "JOINED",
+   "label_side": "above",
+   "hold_rate": 1,
+   "label_side_portrait": "below"
+  },
+  "recap": [
+   [
+    "type_end",
+    1.0,
+    1200,
+    1100,
+    2400
+   ],
+   [
+    "saved_visible",
+    0.5,
+    1200,
+    700,
+    2000
+   ],
+   [
+    "filtered",
+    0.8,
+    1200,
+    1300,
+    2400
+   ]
+  ],
+  "recap_stills": true
+ }
+}
