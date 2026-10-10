@@ -4463,7 +4463,7 @@
       // session, Close just dismisses the sheet.
       + '<div class="f2c-actions">'
       +   '<button type="button" class="f2c-start" data-f2-act="continue">Continue in new session</button>'
-      +   '<button type="button" class="f2c-close" data-f2-chip aria-label="Close">Close</button>'
+      +   '<button type="button" class="f2c-close" data-f2-act="dismiss" aria-label="Close and dismiss the offer">Done</button>'
       + '</div>'
       + '</div>';
   }
@@ -4887,6 +4887,7 @@
     // keystroke. Switching sessions in the pane clears it (keyed by sid).
     if (el.getAttribute('data-f2-act') === 'dismiss') {
       f2ManualPanes.delete(f2PaneKey(paneId));
+      st.configOpen = false;
       f2DismissedPanes.set(f2PaneKey(paneId), st.sid);
       try { f2RenderComposer(paneId, { force: true }); } catch (_) {}
       return;

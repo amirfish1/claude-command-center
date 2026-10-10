@@ -1,0 +1,1 @@
+- The Continue new sheet fits the phone screen, and Done closes it together with the offer.

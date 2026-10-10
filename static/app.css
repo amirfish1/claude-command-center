@@ -30965,10 +30965,12 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   background: transparent; border: 0; cursor: pointer;
 }
 @media (max-width: 1200px) {
+  /* In flow, not position:fixed: an ancestor's containment boxed a fixed
+     sheet into a narrow clipped strip. The offer row grows to hold it. */
+  .f2c-panel .route:has(.f2c-config) { display: flex; flex-wrap: wrap; width: 100%; max-width: 100%; }
   .f2c-panel .f2c-config {
-    position: fixed; left: 8px; right: 8px; bottom: 8px; top: auto; width: auto;
-    z-index: 1300; border-radius: 16px;
-    max-height: calc(var(--app-vh, 100vh) - 24px); overflow-y: auto;
+    position: static; order: -1; flex: 1 1 100%; width: 100%; max-width: 100%;
+    box-sizing: border-box; margin-bottom: 8px;
   }
   .f2c-panel .f2c-config .f2c-select { height: 44px; font-size: 16px; }
 }
