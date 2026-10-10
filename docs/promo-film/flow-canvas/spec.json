@@ -1,0 +1,268 @@
+{
+  "schema": "product-motion/v1",
+  "id": "ccc-flow-canvas",
+  "take": "takes/20261010-133154-ccc-flow-objects-name-a-flow-group-sessions-coll",
+  "source": {
+    "w": 3840,
+    "h": 2160,
+    "css_zoom": 3,
+    "prepare_for_seek": true
+  },
+  "expect": {
+    "clicks": 3,
+    "keys": 15
+  },
+  "duration": 31,
+  "music": {
+    "synthesis": "pulse",
+    "period": 0.5,
+    "phase": 0,
+    "offset": 0,
+    "rights": "Original deterministic synthesis from the kit's sfx.py"
+  },
+  "palette": {
+    "paper": "#f6f8fa",
+    "ink": "#161b22",
+    "deep": "#0d1117",
+    "accent": "#6e8caf",
+    "hi": "#f5a623",
+    "mute": "#8b949e",
+    "page": "#0d1117",
+    "card": "#ffffff",
+    "tag": "#46607f",
+    "herob": "#46607f"
+  },
+  "layout": {
+    "landscape": {
+      "slab": {
+        "left": 96,
+        "top": 760,
+        "h2": 70,
+        "p": 29,
+        "max_w": 1100
+      }
+    }
+  },
+  "copy": {
+    "brand": {
+      "name": "CCC",
+      "wordmark": "ccc",
+      "dot": "."
+    },
+    "window_title": "CCC &middot; Claude Command Center",
+    "hook": {
+      "a": [
+        "Twelve sessions,",
+        "[no structure.]"
+      ],
+      "b": [
+        "Which belong",
+        "together?"
+      ]
+    },
+    "storm": [
+      [
+        "Refactor billing state machine",
+        "#widgets-api"
+      ],
+      [
+        "Stripe webhooks",
+        "#billing"
+      ],
+      [
+        "Extract invoice numbering",
+        "#PR 214"
+      ],
+      [
+        "Fix OAuth cookie loss",
+        "#fix"
+      ],
+      [
+        "Investigate flaky tests",
+        "#codex"
+      ],
+      [
+        "Review PR #247",
+        "#gemini"
+      ],
+      [
+        "Add /healthz endpoint",
+        "#today"
+      ],
+      [
+        "Migrate blog to Eleventy",
+        "#blog"
+      ],
+      [
+        "RSS / Atom feed",
+        "#later"
+      ],
+      [
+        "Bump pillow to 11.x",
+        "#deps"
+      ],
+      [
+        "Contact form failures",
+        "#marketing"
+      ],
+      [
+        "Ship v5.7 notes",
+        "#release"
+      ]
+    ],
+    "storm_labels": [
+      "LATER",
+      "TODAY",
+      "REVIEW",
+      "NOW"
+    ],
+    "hero": {
+      "eyebrow": "ONE TREE",
+      "text": "Group sessions under named flows",
+      "accent": "#flow"
+    },
+    "intro": {
+      "eyebrow": "MEET",
+      "tagline": [
+        "Every session,",
+        "under the right flow."
+      ],
+      "chips": [
+        "FLOW OBJECTS",
+        "BY OBJECTS VIEW"
+      ]
+    },
+    "steps": [
+      {
+        "pill": "01 NAME",
+        "eyebrow": "01 \u2014 NAME",
+        "title": "Name a flow.",
+        "sub": "A flow object is a named home for related sessions. Type a name and press enter."
+      },
+      {
+        "pill": "02 FOLD",
+        "eyebrow": "02 \u2014 FOLD",
+        "title": "Fold what is done.",
+        "sub": "One click collapses a whole repo group. The tree stays readable."
+      },
+      {
+        "pill": "03 SWITCH",
+        "eyebrow": "03 \u2014 SWITCH",
+        "title": "Back to recency.",
+        "sub": "By objects and Current are one toggle apart. Same sessions, two views."
+      }
+    ],
+    "recap": [
+      "Name.",
+      "Fold.",
+      "Switch."
+    ],
+    "end": {
+      "tagline": [
+        "Start the next",
+        "while Claude builds the first."
+      ],
+      "url": "github.com/amirfish1/claude-command-center",
+      "chips": [
+        "FLOW OBJECTS",
+        "BY OBJECTS",
+        "SESSION TREE"
+      ],
+      "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+      "foot": "CCC \u2014 THE CODING-AGENT COMMAND CENTER"
+    },
+    "hud_label": "CCC &middot; REAL CAPTURE"
+  },
+  "edit": {
+    "reveal_src": 3,
+    "act1": {
+      "click": 0,
+      "keys": [
+        0,
+        14
+      ],
+      "type_window": [
+        9.0,
+        15.8
+      ],
+      "type_region": [
+        320,
+        1190,
+        1000,
+        1310
+      ]
+    },
+    "act2": {
+      "click": 1,
+      "instant_result": true,
+      "result_window": [
+        25.1,
+        29.0
+      ],
+      "result_after": 25.2,
+      "result_region": [
+        250,
+        1100,
+        3800,
+        2160
+      ],
+      "lift_region": [
+        288,
+        1340,
+        3500,
+        100
+      ],
+      "lock_label": "ONE CLICK",
+      "stamp": "FOLDED"
+    },
+    "act3": {
+      "click": 2,
+      "instant_result": true,
+      "skip_load": true,
+      "result_window": [
+        31.4,
+        35.5
+      ],
+      "result_after": 31.5,
+      "result_region": [
+        250,
+        1100,
+        3800,
+        2160
+      ],
+      "track_region": [
+        288,
+        1210,
+        3500,
+        190
+      ],
+      "track_label": "CURRENT",
+      "label_side": "below",
+      "hold_rate": 1
+    },
+    "recap": [
+      [
+        "type_end",
+        1.0,
+        230,
+        1100,
+        2000
+      ],
+      [
+        "saved_visible",
+        0.5,
+        230,
+        1100,
+        2200
+      ],
+      [
+        "filtered",
+        0.8,
+        230,
+        1100,
+        2200
+      ]
+    ],
+    "recap_stills": true
+  }
+}
