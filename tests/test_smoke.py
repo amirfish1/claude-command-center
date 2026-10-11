@@ -9808,7 +9808,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.assertEqual(self.server._poll_spawn_entry(entry), 0)
 
         log_fh.close.assert_called_once()
-        remove.assert_called_once_with(12345)
+        remove.assert_called_once_with(12345, exit_code=0)
         self.assertIsNone(entry["log_fh"])
         self.assertTrue(entry["_cleanup_done"])
 
