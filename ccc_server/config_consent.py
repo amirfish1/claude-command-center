@@ -36,6 +36,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -153,8 +154,23 @@ class Ctx:
 
 def _find_wt():
     found = shutil.which("wt")
+    # Windows Terminal's app alias (...\WindowsApps\wt.exe) shadows
+    # WatchTower's `wt` on PATH; running it opens a terminal tab instead.
+    if found and os.name == "nt" and "\\windowsapps\\" in found.lower():
+        found = None
     if found:
         return found
+    if os.name == "nt":
+        for scheme in ("nt_user", None):
+            try:
+                scripts = (sysconfig.get_path("scripts", scheme=scheme) if scheme
+                           else sysconfig.get_path("scripts"))
+            except Exception:
+                continue
+            candidate = Path(scripts) / "wt.exe"
+            if os.access(candidate, os.X_OK):
+                return str(candidate)
+        return ""
     fallback = Path.home() / ".local" / "bin" / "wt"
     return str(fallback) if os.access(fallback, os.X_OK) else ""
 
