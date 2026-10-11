@@ -38,8 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ![Antigravity](https://img.shields.io/badge/Antigravity-4285F4?logo=google&logoColor=white)
 ![Kilo Code](https://img.shields.io/badge/Kilo%20Code-F8F675?logoColor=black)
 ![Kimi Code](https://img.shields.io/badge/Kimi%20Code-1A1A2E)
-![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B)
-![Devin](https://img.shields.io/badge/Devin-0EA5E9)
+![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B) ![Devin](https://img.shields.io/badge/Devin-0EA5E9)
 
 <a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="A Claude session hits its usage limit and CCC keeps all 12 sessions going on a free model through your own router" width="100%" /></a>
 
