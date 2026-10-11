@@ -41,9 +41,11 @@ def test_claude_placeholder_attaches_to_replayed_spawn_stream():
     assert "pendingConversationId: placeholder.id" in body
     assert "replay: true" in body
     assert "knownLog: !!data.log" in body
-    assert body.index("stopConvStream(activePaneId())") < body.index(
+    assert "const spawnPaneId = activePaneId();" in body
+    assert body.index("stopConvStream(spawnPaneId)") < body.index(
         "startSpawnStream(data.session_id"
     )
+    assert "startSpawnStream(data.session_id, spawnPaneId" in body
 
 
 def test_claude_placeholder_defers_the_full_sidebar_rebuild():
