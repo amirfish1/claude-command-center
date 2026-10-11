@@ -16183,6 +16183,23 @@
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:html|htm)$/i.test(clean);
   }
+  // CCC-63: a bare `01-gate.png` link carries no directory, but the message
+  // usually named one just above ("screenshots are in `~/x/shots/`"). Resolve
+  // against the nearest preceding directory mention in the same message so the
+  // /api/media URL works for a remote viewer.
+  function _bareMediaBaseDir(a, p) {
+    if (String(p).indexOf('/') !== -1) return '';
+    const box = a.closest('.assistant-text') || a.closest('.msg') || a.parentElement;
+    if (!box) return '';
+    let dir = '';
+    const nodes = box.querySelectorAll('a.path-link, code');
+    for (const el of nodes) {
+      if (el === a || (el.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_PRECEDING)) break;
+      const t = (el.getAttribute('data-path') || el.textContent || '').trim();
+      if (/^(?:~|\/)[^\s]*\/$/.test(t)) dir = t;
+    }
+    return dir;
+  }
   function _pathLinkSessionContext(el) {
     try {
       const paneEl = el && el.closest ? el.closest('.conv-pane[data-pane-id]') : null;
@@ -16225,7 +16242,7 @@
       // for a viewer connected from elsewhere (CCC-30).
       const ctx = _pathLinkSessionContext(a);
       const url = new URL('/api/media', window.location.origin);
-      url.searchParams.set('path', p);
+      url.searchParams.set('path', (_bareMediaBaseDir(a, p) || '') + p);
       if (ctx && ctx.id) url.searchParams.set('session_id', ctx.id);
       if (ctx && ctx.cwd) url.searchParams.set('cwd', ctx.cwd);
       if (ctx && (ctx.repoPath || ctx.repo_path)) url.searchParams.set('repo_path', ctx.repoPath || ctx.repo_path);
