@@ -19,8 +19,12 @@ def _read(rel):
 class ConvViewToggleTest(unittest.TestCase):
     def test_three_segments_visible(self):
         html = _read("static/index.html")
-        for seg in ("compact", "normal", "verbose"):
-            self.assertEqual(html.count('data-conv-view="%s"' % seg), 2, seg)
+        # Pane template + main composer carry all three; the mobile top-bar
+        # toggle (mobile-view-seg) is deliberately Compact | Normal only.
+        for seg, expected in (("compact", 3), ("normal", 3), ("verbose", 2)):
+            self.assertEqual(html.count('data-conv-view="%s"' % seg), expected, seg)
+        mobile = re.search(r'mobile-view-seg[^>]*>(.*?)</span>', html, re.S).group(1)
+        self.assertNotIn('data-conv-view="verbose"', mobile)
 
     def test_modes_persist(self):
         js = _read("static/app.js")
