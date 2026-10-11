@@ -16253,7 +16253,9 @@
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
-      if (!data.ok) {
+      if (!data.ok && res.status === 501) {
+        await handleOpenUnavailable(data, p);
+      } else if (!data.ok) {
         const err = data.error || 'open failed';
         a.title = err;
         a.style.color = 'var(--red)';
@@ -31191,6 +31193,18 @@
     if (!pane) return undefined;
     const url = 'x-apple.systempreferences:com.apple.preference.security?' + pane;
     return { label, onClick: () => { window.location.href = url; } };
+  }
+
+  // The server host may be headless (no xdg-open) while the viewer sits on
+  // another machine (CCC-62). /api/open then answers 501 with the path; copy
+  // it so "open folder" still does something useful instead of a bare error.
+  async function handleOpenUnavailable(data, fallbackPath) {
+    const p = (data && data.path) || fallbackPath || '';
+    const copied = p ? await copyTextValue(p) : false;
+    const msg = copied
+      ? 'This server has no desktop to open folders on \u2014 path copied: ' + escapeHtml(p)
+      : 'This server has no desktop to open folders on: ' + escapeHtml(p);
+    showOpToast(msg, 'info-always');
   }
 
   function showOpToast(msg, kind, action) {
@@ -81098,8 +81112,9 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: p }),
-    }).then(res => res.json()).then(data => {
-      if (!data.ok) showOpToast('Could not open in Finder: ' + (data.error || 'unknown error'), 'error');
+    }).then(res => res.json().then(data => ({ status: res.status, data }))).then(({ status, data }) => {
+      if (!data.ok && status === 501) handleOpenUnavailable(data, p);
+      else if (!data.ok) showOpToast('Could not open in Finder: ' + (data.error || 'unknown error'), 'error');
     }).catch(() => showOpToast('Could not open in Finder: network error', 'error'));
   });
   document.addEventListener('keydown', (ev) => {
