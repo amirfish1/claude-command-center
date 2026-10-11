@@ -1,5 +1,7 @@
 import json
 import re
+import subprocess
+import sys
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -66,8 +68,8 @@ def test_local_benchmark_directions_match_the_existing_ui_and_route():
     assert len([1 for tag, attrs in Elements(html).elements if tag == "li" and attrs.get("class") == "task"]) == 5
 
 
-def test_plugin_wrapper_is_metadata_only_with_actual_license_and_version():
-    manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+def test_plugin_wrapper_ships_skills_with_actual_license_and_version():
+    manifest = json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text())
     assert manifest["name"] == "ccc-dashboard"
     assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", manifest["name"])
     assert manifest["license"] == "FSL-1.1-MIT"
@@ -75,5 +77,22 @@ def test_plugin_wrapper_is_metadata_only_with_actual_license_and_version():
     assert f'version = "{manifest["version"]}"' in (ROOT / "pyproject.toml").read_text()
     assert manifest["repository"] == "https://github.com/amirfish1/claude-command-center"
     assert manifest["homepage"] == "https://ccc.amirfish.ai"
+    # Skills only: no hooks, servers or commands that would run code on install.
     assert not set(manifest).intersection({"hooks", "mcpServers", "commands", "skills", "agents", "lspServers"})
+    assert not (ROOT / "plugin" / "hooks").exists()
     assert set(manifest["author"]) == {"name"}
+    assert not (ROOT / ".claude-plugin" / "plugin.json").exists()
+    market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    assert [(p["name"], p["source"]) for p in market["plugins"]] == [("ccc-dashboard", "./plugin")]
+
+
+def test_plugin_bundle_matches_skills_sources():
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "build-plugin.py"), "--check"],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    names = {p.stem for p in (ROOT / "skills").glob("*.md") if p.stem.lower() != "readme"}
+    assert {p.parent.name for p in (ROOT / "plugin" / "skills").glob("*/SKILL.md")} == names
+    for name in names:
+        text = (ROOT / "plugin" / "skills" / name / "SKILL.md").read_text()
+        assert re.search(rf"^name: {re.escape(name)}$", text, re.M)
+        assert re.search(r"^description: \S", text, re.M)

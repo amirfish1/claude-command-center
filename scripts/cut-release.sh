@@ -169,12 +169,13 @@ fi
 step "3/9  Bump version in pyproject.toml + server.py"
 run "sed_i 's/^version = \".*\"/version = \"${VERSION}\"/' pyproject.toml"
 run "sed_i 's/^__version__ = \".*\"/__version__ = \"${VERSION}\"/' server.py"
+# plugin/ is generated from skills/*.md + the pyproject version.
 PLUGIN_MANIFEST=""
-[ -f .claude-plugin/plugin.json ] && PLUGIN_MANIFEST=.claude-plugin/plugin.json
-[ -n "$PLUGIN_MANIFEST" ] && run "sed_i 's/^  \"version\": \".*\",/  \"version\": \"${VERSION}\",/' $PLUGIN_MANIFEST"
+[ -f scripts/build-plugin.py ] && PLUGIN_MANIFEST=plugin
+[ -n "$PLUGIN_MANIFEST" ] && run "python3 scripts/build-plugin.py"
 if [ "$DRY_RUN" = 0 ]; then
   grep -q "version = \"${VERSION}\"" pyproject.toml && grep -q "__version__ = \"${VERSION}\"" server.py \
-    && { [ -z "$PLUGIN_MANIFEST" ] || grep -q "\"version\": \"${VERSION}\"" "$PLUGIN_MANIFEST"; } \
+    && { [ -z "$PLUGIN_MANIFEST" ] || grep -q "\"version\": \"${VERSION}\"" plugin/.claude-plugin/plugin.json; } \
     || { echo "${RED}version bump verification failed${NC}" >&2; exit 1; }
 fi
 

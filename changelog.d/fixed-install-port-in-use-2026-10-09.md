@@ -1,0 +1,1 @@
+- The installer now picks the next free port when another program already uses 8090, and `run.sh` stops with one clear line instead of a traceback (it used to leave a stray worker behind).

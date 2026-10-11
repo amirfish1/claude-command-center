@@ -23,7 +23,7 @@ REPO_PATH="${CCC_REPO_PATH:-$(pwd -P)}"
 
 ### Identifying Your Own Session UUID
 If you need to know your own session UUID (e.g. to register yourself in a chat or trace your own session) and `$CLAUDE_SESSION_ID` is empty or unset in your Bash shell:
-1. Locate the project directory under `~/.claude/projects/` corresponding to your slugified current working directory (e.g., `/Users/amirfish/Apps/BYM+Finie` becomes `~/.claude/projects/-Users-amirfish-Apps-BYM+Finie`).
+1. Locate the project directory under `~/.claude/projects/` corresponding to your slugified current working directory (e.g., `/Users/me/Apps/Notes+Tasks` becomes `~/.claude/projects/-Users-me-Apps-Notes-Tasks`).
 2. Find the newest `*.jsonl` file in that directory; because you are actively executing, your active session transcript is the most recently modified.
 3. The basename of that file (without the `.jsonl` extension) is your session UUID.
 
@@ -32,7 +32,7 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
 
 ### URL-Encoding repo_path
 **CRITICAL:** Any parameter or payload value for `repo_path` must be properly URL-encoded (especially `+` to `%2B` and spaces to `%20`).
-- *Example:* `/Users/amirfish/Apps/BYM+Finie` must be sent as `/Users/amirfish/Apps/BYM%2BFinie`.
+- *Example:* `/Users/me/Apps/Notes+Tasks` must be sent as `/Users/me/Apps/Notes%2BTasks`.
 - Failure to URL-encode characters like `+` will result in HTTP 400 Bad Request because `+` is decoded as a space by the server.
 
 ### Avoiding Slow List Calls

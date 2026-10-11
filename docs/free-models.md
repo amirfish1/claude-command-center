@@ -91,6 +91,26 @@ Settings → Free models) shows pass rate and speed per model, and CCC sets
 the router's Claude mapping to the top tool-capable model so a "Free
 ($0)" spawn gets the best free brain you have keys for.
 
+For a broader comparison, `scripts/run-leaderboard-eval.py` runs a fixed
+15-task suite (the five above plus ten more, each with a deterministic
+checker) against every $0 model on your router, OpenRouter's `:free`
+models, and GitHub Models. It never calls a model with a nonzero price and
+records the account cost before and after the run. Results land in
+[docs/leaderboard/latest.md](leaderboard/latest.md) and `latest.json`
+(pass rate, latency, tokens). Checks restore each task's grader files and
+run with a scrubbed environment and CPU/file limits, but the code models
+write still runs as you with network access, so run the suite in a
+disposable VM or container.
+
+To refresh the scores weekly without touching the router's mapping, install
+the user timer with `systemd/install-leaderboard-weekly.sh`. Every Monday it
+runs `scripts/leaderboard-weekly.py run`, which races the models again and
+stages a privacy-checked page in `~/.ccc/leaderboard/`. Each run's outcome
+goes to `last-run.json`, and `scripts/leaderboard-weekly.py health` exits
+non-zero when the last run failed or is over 8 days old. Nothing is
+published: review the staged page, then copy it with
+`scripts/publish-leaderboard.sh --source-dir ~/.ccc/leaderboard`.
+
 ## Privacy and the ToS boundary
 
 Read this before you enable free runs: free tiers are paid for in ways

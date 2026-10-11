@@ -1156,68 +1156,90 @@ def start_eval(model_ids=None):
     return {"job_id": job["id"]}, 200
 
 
+class EvalError(Exception):
+    """A benchmark run that could not start or finish (message is user-facing)."""
+
+    def __init__(self, message, step="error"):
+        super().__init__(message)
+        self.step = step
+
+
+def run_eval(cfg, requested=None, log=None, progress=None, pin=True):
+    """Race the router's models through the five tasks and save the results.
+
+    Blocking; shared by the dashboard job and ``scripts/leaderboard-weekly.py``.
+    ``progress(step, fraction)`` reports where the race is. ``pin=False`` saves
+    scores without changing the router's default model (unattended runs).
+    Returns ``{"evaluated": n, "best": pinned_info}``; raises ``EvalError``.
+    """
+    log = log or (lambda line: None)
+    progress = progress or (lambda step, fraction: None)
+    log("Warming up: reading the router's model catalog.")
+    catalog, error = fetch_catalog(cfg)  # fresh read — a race is heavyweight anyway
+    if not catalog:
+        raise EvalError(error or "The router returned no models.", step="catalog")
+    candidates = _pick_candidates(catalog, requested)
+    if not candidates:
+        if requested:
+            msg = "None of the requested models exist in the catalog."
+        else:
+            msg = ("No model can serve a request right now. "
+                   "Add a provider key to the router first.")
+        raise EvalError(msg, step="catalog")
+    skipped = len(catalog) - len(candidates) if not requested else 0
+    log(f"Racing {len(candidates)} model(s) through 5 tiny coding tasks."
+        + (f" ({skipped} more in the catalog were skipped.)" if skipped > 0 else ""))
+    results = []
+    total = len(candidates)
+    for index, row in enumerate(candidates, 1):
+        progress(f"{row['id']} ({index}/{total})", (index - 1) / total)
+        log(f"Racing {row['id']} ({index}/{total})")
+        try:
+            result = run_model_eval(cfg, row, log=log)
+        except Exception as e:
+            result = {"id": row["id"], "name": row.get("name") or row["id"],
+                      "platform": row.get("platform") or "",
+                      "context": row.get("context"),
+                      "supports_tools": bool(row.get("supports_tools")),
+                      "tools_observed": False, "ready": bool(row.get("ready")),
+                      "per_task": [], "evaluated_at": _now_iso(),
+                      "score": 0.0, "passed": 0, "tasks": 0,
+                      "pass_rate": 0.0, "median_request_ms": None,
+                      "error": str(e)[:200]}
+            log(f"  FAIL {row['id']} crashed out: {str(e)[:120]}")
+        results.append(result)
+        log(f"  Score for {row['id']}: {result.get('score', 0)}"
+            f" ({result.get('passed', 0)}/{result.get('tasks', 5)} tasks)")
+    store = _load_store()
+    _merge_results(store, results, cfg, None)  # saves the store
+    if not pin:
+        return {"evaluated": len(results), "best": None}
+    progress("picking the winner", 0.98)
+    pinned_info = _pin_best(cfg, store, catalog, log=log)
+    store = _load_store()
+    store["best"] = pinned_info
+    _save_store(store)
+    best_model = pinned_info.get("model")
+    if best_model and pinned_info.get("pinned"):
+        log(f"Winner: {best_model}. It is now the default free model.")
+    elif best_model:
+        log(f"Winner: {best_model}. (Could not pin it: "
+            f"{pinned_info.get('reason') or 'unknown'}.)")
+    else:
+        log("No model passed enough tasks to earn the crown.")
+    return {"evaluated": len(results), "best": pinned_info}
+
+
 def _run_eval_job(job, cfg, requested):
     log = lambda line: _job_log(job, line)  # noqa: E731
     try:
-        log("Warming up: reading the router's model catalog.")
-        catalog, error = fetch_catalog(cfg)  # fresh read — a race is heavyweight anyway
-        if not catalog:
-            _job_update(job, status="error", step="catalog",
-                        error=error or "The router returned no models.",
-                        ended_at=_now_iso())
-            return
-        candidates = _pick_candidates(catalog, requested)
-        if not candidates:
-            if requested:
-                msg = "None of the requested models exist in the catalog."
-            else:
-                msg = ("No model can serve a request right now. "
-                       "Add a provider key to the router first.")
-            _job_update(job, status="error", step="catalog",
-                        error=msg, ended_at=_now_iso())
-            return
-        skipped = len(catalog) - len(candidates) if not requested else 0
-        log(f"Racing {len(candidates)} model(s) through 5 tiny coding tasks."
-            + (f" ({skipped} more in the catalog were skipped.)" if skipped > 0 else ""))
-        results = []
-        total = len(candidates)
-        for index, row in enumerate(candidates, 1):
-            _job_update(job, step=f"{row['id']} ({index}/{total})",
-                        progress=(index - 1) / total)
-            log(f"Racing {row['id']} ({index}/{total})")
-            try:
-                result = run_model_eval(cfg, row, log=log)
-            except Exception as e:
-                result = {"id": row["id"], "name": row.get("name") or row["id"],
-                          "platform": row.get("platform") or "",
-                          "context": row.get("context"),
-                          "supports_tools": bool(row.get("supports_tools")),
-                          "tools_observed": False, "ready": bool(row.get("ready")),
-                          "per_task": [], "evaluated_at": _now_iso(),
-                          "score": 0.0, "passed": 0, "tasks": 0,
-                          "pass_rate": 0.0, "median_request_ms": None,
-                          "error": str(e)[:200]}
-                log(f"  FAIL {row['id']} crashed out: {str(e)[:120]}")
-            results.append(result)
-            log(f"  Score for {row['id']}: {result.get('score', 0)}"
-                f" ({result.get('passed', 0)}/{result.get('tasks', 5)} tasks)")
-        store = _load_store()
-        _merge_results(store, results, cfg, None)
-        _job_update(job, step="picking the winner", progress=0.98)
-        pinned_info = _pin_best(cfg, store, catalog, log=log)
-        store = _load_store()
-        store["best"] = pinned_info
-        _save_store(store)
-        best_model = pinned_info.get("model")
-        if best_model and pinned_info.get("pinned"):
-            log(f"Winner: {best_model}. It is now the default free model.")
-        elif best_model:
-            log(f"Winner: {best_model}. (Could not pin it: "
-                f"{pinned_info.get('reason') or 'unknown'}.)")
-        else:
-            log("No model passed enough tasks to earn the crown.")
+        result = run_eval(
+            cfg, requested, log=log,
+            progress=lambda step, fraction: _job_update(job, step=step, progress=fraction))
         _job_update(job, status="done", step="done", progress=1.0,
-                    result={"evaluated": len(results), "best": pinned_info},
+                    result=result, ended_at=_now_iso())
+    except EvalError as e:
+        _job_update(job, status="error", step=e.step, error=str(e),
                     ended_at=_now_iso())
     except Exception as e:
         log(f"The race crashed: {str(e)[:160]}")

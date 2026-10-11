@@ -45,6 +45,21 @@ class TestSystemdUnits(unittest.TestCase):
         self.assertIn("/etc/systemd/system/ccc-worker.service", content)
         self.assertIn("systemctl daemon-reload", content)
 
+    def test_leaderboard_weekly_user_timer(self):
+        service = (REPO_ROOT / "systemd" / "ccc-leaderboard-weekly.service").read_text(encoding="utf-8")
+        timer = (REPO_ROOT / "systemd" / "ccc-leaderboard-weekly.timer").read_text(encoding="utf-8")
+        self.assertIn("Type=oneshot", service)
+        self.assertIn("scripts/leaderboard-weekly.py run", service)
+        self.assertNotIn("publish-leaderboard.sh --apply", service)
+        self.assertNotIn("User=", service)  # a user unit, no root needed
+        self.assertIn("OnCalendar=Mon", timer)
+        self.assertIn("Persistent=true", timer)
+        install = REPO_ROOT / "systemd" / "install-leaderboard-weekly.sh"
+        self.assertTrue(os.access(install, os.X_OK))
+        self.assertIn("systemctl --user enable --now ccc-leaderboard-weekly.timer",
+                      install.read_text(encoding="utf-8"))
+        self.assertTrue((REPO_ROOT / "scripts" / "leaderboard-weekly.py").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

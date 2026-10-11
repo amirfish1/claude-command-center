@@ -1,0 +1,2 @@
+- `scripts/e2e-failover-clean.sh`: runs the full limit, approval, free work and switch-back path on a clean HOME installed from the README, and checks the free child never gets paid credentials.
+- The free models boundary page now spells out what CCC does and never does with your Claude subscription login.

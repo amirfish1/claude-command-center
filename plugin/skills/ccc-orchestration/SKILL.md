@@ -1,0 +1,148 @@
+---
+name: ccc-orchestration
+description: Spawn, inject into, and ask questions of persistent sibling sessions via Claude Command Center (CCC).
+allowed-tools: Bash
+---
+
+Interact with long-running peer sessions via the CCC HTTP server. **Use only for persistent tasks** (e.g., "marketing assistant", "deploy watcher") that need to show on the user's kanban. **For one-shot subtasks, use the built-in `Task` tool instead.**
+
+## 1. Setup
+### Port and Path Discovery
+Find the CCC URL. DO NOT try to start CCC yourself.
+```bash
+CCC_URL="$(cat ~/.claude/command-center/port.txt 2>/dev/null || echo "${CCC_URL:-http://127.0.0.1:8090}")"
+# port.txt can be stale — a now-dead secondary server may have left it pointing
+# at a refused port (OPS-41). Verify liveness; fall back to the canonical 8090
+# if the recorded URL doesn't answer, so live checks don't hit a dead port.
+curl -sf --max-time 2 "$CCC_URL/api/health" >/dev/null 2>&1 || CCC_URL="http://127.0.0.1:8090"
+REPO_PATH="${CCC_REPO_PATH:-$(pwd -P)}"
+```
+
+### 1.2 Network Sandbox Constraint
+**CRITICAL:** The Bash sandbox blocks loopback connections. All CCC curls from the Bash tool can fail purely due to network sandboxing, not because CCC is down. **You must run all CCC curls with the network sandbox disabled (localhost IPC).** Ensure your tool execution options disable sandboxing for these requests.
+
+### Identifying Your Own Session UUID
+If you need to know your own session UUID (e.g. to register yourself in a chat or trace your own session) and `$CLAUDE_SESSION_ID` is empty or unset in your Bash shell:
+1. Locate the project directory under `~/.claude/projects/` corresponding to your slugified current working directory (e.g., `/Users/me/Apps/Notes+Tasks` becomes `~/.claude/projects/-Users-me-Apps-Notes-Tasks`).
+2. Find the newest `*.jsonl` file in that directory; because you are actively executing, your active session transcript is the most recently modified.
+3. The basename of that file (without the `.jsonl` extension) is your session UUID.
+
+## 2. API Operations
+All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Content-Type: application/json" -d '<json>'`.
+
+### URL-Encoding repo_path
+**CRITICAL:** Any parameter or payload value for `repo_path` must be properly URL-encoded (especially `+` to `%2B` and spaces to `%20`).
+- *Example:* `/Users/me/Apps/Notes+Tasks` must be sent as `/Users/me/Apps/Notes%2BTasks`.
+- Failure to URL-encode characters like `+` will result in HTTP 400 Bad Request because `+` is decoded as a space by the server.
+
+### Avoiding Slow List Calls
+- **List endpoints can be slow:** `/api/sessions?all=1` and `/api/sessions?repo_path=...` can exceed 15s on repositories with many transcripts.
+- **List is skippable:** You only need List as an anti-double-spawn guard. If you already have the target `session_id`, do not call List; proceed directly to **Inject** or **Ask**.
+- If List is genuinely needed, use a generous timeout (e.g. `curl --max-time 30`).
+- **Lightweight Health Probe:** Do not run `/api/sessions?all=1` to check if CCC is alive. Use `/api/version` instead, which is lightweight and fast.
+
+### Operations
+- **Lightweight Health Check (GET):** `/api/version`
+  *Returns the version of CCC. Use this to quickly verify CCC is up and running.*
+- **List Current Repo (GET):** `/api/sessions?repo_path=<URL-encoded abs path>`
+  *Returns the unified session list for one repo. Always check if a session for your topic exists before spawning!*
+
+  **Resolving a session by name:** rows have **no `name` or `title` field** — matching those silently misses every session. The canonical name is **`display_name`** (the server already resolves custom title → spawn-time name → AI title → first message into it); fall back to substring-matching `first_message` if needed. Use the matched row's `session_id` for Inject/Ask.
+  ```bash
+  curl -s --max-time 30 "$CCC_URL/api/sessions?repo_path=$ENC_REPO" | python3 -c '
+  import json,sys
+  q=sys.argv[1].lower()
+  for r in json.load(sys.stdin):
+      hay=((r.get("display_name") or "")+" "+(r.get("first_message") or "")).lower()
+      if q in hay:
+          print(r["session_id"], "|", r.get("display_name")); break
+  ' "marketing assistant"
+  ```
+- **List Spawned Runs (GET):** `/api/sessions/spawned`
+  *Returns recent CCC-owned spawns with `spawn_id`, `session_id`, `parent_session_id`, `engine`, `model`, `reasoning_effort`, `repo_path`, `cwd`, and `spawned_at`. Use this if a spawn response has `session_id_pending: true`, or to confirm which engine/model/effort a spawn actually resolved to.*
+  *Dedupe fields:* rows also carry `task_key` (the caller's dedupe token), `task_summary` (first 200 chars of the RAW prompt — `command_summary`/`prompt` is the WRAPPED prompt and starts with boilerplate, so grep this instead), `prompt_hash`, and `display_name` (the AI/enriched title, present only once the session has an archive row). Filters: `?engine=`, `?task_key=` (exact), `?parent=<sid prefix, ≥8 chars>`, `?q=` (case-insensitive substring over name/display_name/task_summary/task_key/prompt), `?include_finished=1` (adds rows from spawned-history.json with `ended_at`/`exit_code` — `exit_code` is null for worker-owned and sweep-dropped rows).*
+- **List All (GET):** `/api/sessions?all=1` (optional `&engine=codex|antigravity|claude`)
+  *Returns cross-repo sessions plus the spawned-run registry.*
+- **Spawn:** `/api/sessions/spawn` 
+  *Payload:* `{"prompt": "...", "repo_path": "/abs/repo", "engine": "claude|codex|antigravity", "model": "...", "reasoning_effort": "low|medium|high|xhigh|max"}`. `repo_path` (or `cwd`) is required. `engine`, `model`, and `reasoning_effort` are optional; when omitted, CCC uses the server-side defaults from **Settings → Spawn defaults…**. Legacy `gemini` maps to `antigravity`. **When unsure of a model id, omit `model` entirely** rather than guessing — a made-up id can spawn a broken session. If you do need to see valid ids, `GET /api/engines/models` returns `{"engines": {"codex": ["gpt-5.5", ...], "claude": [...], ...}, "efforts_by_engine": {"claude": ["low", ..., "max"], "codex": [...], "cursor": [], ...}, "enforced": ["codex"]}`. Only `codex` is currently rejected (400) on an unrecognized model — e.g. `gpt-5.5-codex` is not a real id, the correct one is `gpt-5.5`.
+  *Reasoning effort:* the ladder is **per engine**, so read it from `efforts_by_engine` rather than assuming one list. Claude accepts `low, medium, high, xhigh, max`; Codex tops out at `xhigh` (no `max`); Kimi offers only what its own `config.toml` declares; an engine with an empty list has no effort concept at all. Unlike `model`, an effort the engine does not accept is **dropped, not rejected**: the spawn succeeds at that engine's default effort, so never infer from a `200` that your value was applied. Confirm via `GET /api/sessions/spawned` (`reasoning_effort` on the row). `"effort"` is accepted as an alias.
+  *Dedupe a spawn before paying for it:* pass `"task_key": "<stable-key>"` (a ticket id or task slug, e.g. `"verify-d08302b3"` — repo-scoped). If a live lane already carries the key, the response is `200 {"ok": true, "existing": true, "pid": ..., "session_id": ...}` and NO new session is spawned; a lane that already finished matches too (`"finished": true`, `ended_at`, `exit_code`) so "was this already done" is answered without respawning. Concurrent identical spawns collapse: the second request waits on the first's result (`"deduped": "in_flight"`). Two sharp edges: completion reports go to the lane's ORIGINAL dispatcher (`"report_back": "original_dispatcher"`), and `task_key` is deliberately not `idempotency_key` — that field means "replay this exact request" at the work-ledger layer. Without a key, `"dedupe": true` dedupes on the raw prompt's exact hash instead. Prefer dedupe-first `GET /api/sessions/spawned?task_key=<key>&include_finished=1` for a cheap pre-check.
+  *Return address + hierarchy (recommended for spawned siblings):* Add `"report_to": "<your-session-id>"` (aliases: `return_to`, `reply_to`) to the payload. CCC appends a footer to the spawned agent's prompt instructing it to POST a structured completion report back to your session via `/api/inject-input` when it finishes (success or failure), and uses the same id as `parent_session_id` so the child appears nested under the dispatcher in Current Sessions. Use explicit `"parent_session_id": "<session-id>"` only when the visual parent differs from the report target.
+  *Returns:* `{"ok": true, "session_id": "...", "spawn_id": "123", "parent_session_id": "...", "engine": "...", "repo_path": "...", "cwd": "...", "session_id_pending": false}`. Prefer `session_id` immediately; if pending, poll Spawned Runs by `spawn_id`.
+- **Inject (Fire & Forget):** `/api/inject-input`
+  *Payload:* `{"session_id": "<uuid>", "text": "...", "peer_sender_sid": "<your-session-id>"}`. CCC detects the target session's engine; live Claude sessions receive the message over native Unix Domain Socket (UDS) peer transport without interrupting active turns or touching FIFOs. `peer_sender_sid` (or `sender_session_id`) attributes the message to your session. Or use the `ccc send <target> <text>` CLI.
+- **Ask (Sync/Wait):** `/api/ask`
+  *Payload:* `{"session_id": "<uuid>", "text": "...", "timeout_ms": 60000}`. 
+  *Returns:* `{"ok": true, "text": "reply"}`. On timeout, work continues (you can re-ask or notify user). Requires a real engine `session_id`, not only a pending `spawn_id`.
+
+### Continuing Old Work: Refer, Don't Resume
+Injecting/resuming a session whose context is large AND has gone cold (idle past the prompt-cache TTL) reloads its whole transcript — a real case re-loaded 430k tokens to do a few merges. **Never `ccc send`/Inject a follow-up task into an old session just to pick up where it left off.** Instead, spawn a fresh session that continues it:
+- **CLI:** `ccc spawn --continue-from <old sid|prefix> "<task>"` — resolves to the latest successor in the session's continuation chain, reuses its cwd/engine/model/effort, and seeds the new session with a short brief (title, transcript path, `ccc brief`/tail-by-lines pointers) instead of the whole transcript.
+- **CLI (decide for you):** `ccc send <sid> "<task>" --new-if-large-and-stale` — sends normally unless the target is both large (context tokens) and stale (idle past the cache TTL), in which case it does the above instead. Add `--dry-run` to preview the decision without acting.
+- **API equivalent:** `POST /api/sessions/spawn-continue-from` with `{"continue_from": "<sid>", "prompt": "..."}`; `GET /api/sessions/continuation-decision/<sid>` for the large/stale decision `ccc send`'s flag uses.
+- Any child or WatchTower ticket already reporting to the old session is automatically rebound to the new one; delivery to the old sid keeps landing on its latest successor from then on.
+
+### Group Chat Operations
+You can manage group chats programmatically via the API endpoints or manually via the UI.
+
+- **Create Chat (POST):** `/api/group-chat/create`
+  *Payload:* `{"topic": "<title>", "session_ids": ["<uuid1>", "<uuid2>"], "include_human": true}`. `include_human` is optional and defaults to `true`.
+  *Returns:* `{"ok": true, "chat_path": "~/.claude/group-chats/slug-timestamp.md", "id": "<chat-uuid>", "uuid": "<chat-uuid>", "results": [...]}`.
+  This registers the participants in the chat's `name_map`, generates the `.md` and `.json` sidecar files, and injects a group-chat check-in instruction (the `group-chat-checkin` skill) into the target sessions so they join automatically.
+- **Add Participant (POST):** `/api/group-chat/add`
+  *Payload:* `{"chat_id": "<chat-uuid>", "session_id": "<uuid>", "display_name": "<name>"}` (you can also pass `chat_path` instead of `chat_id`). `display_name` is optional.
+  *Returns:* `{"ok": true, "session_id": "<uuid>"}`.
+  This registers the new participant session in the chat's metadata and injects a group-chat check-in instruction (the `group-chat-checkin` skill) into the session so it joins the live chat.
+
+*Manual UI Fallback:*
+1. Open the CCC UI in your browser at `http://127.0.0.1:8090`.
+2. Navigate to the **Chats** or **Group Chats** tab and click **Create New Chat**.
+3. Enter the topic, search/select the participant sessions by UUID, and click **Create/Start**.
+
+
+## 2.5 Federation — sessions on other machines
+
+CCC instances can be **paired across machines** (Settings → Nodes & peers…).
+You never write SSH commands — your local CCC routes everything.
+
+- **Global session reference:** `"<node_id>:<session_id>"`. Anywhere a
+  `session_id` is accepted (Inject, Ask, `report_to`, group-chat targets),
+  a global ref transparently proxies to the owning CCC. A bare `session_id`
+  always means "this node" — existing calls are unchanged.
+- **Discover nodes (GET):** `/api/federation/peers` → `{"self": {"node_id",
+  "display_name", ...}, "peers": [{"node_id", "name", "transport", ...}]}`.
+- **Federated list (GET):** `/api/sessions?federated=1` → one list across all
+  nodes. Each row carries `node_id`, `node_name`, `ref` (the global
+  reference), and `stale` (true when served from cache because the peer is
+  unreachable). The `nodes` array reports per-peer health — treat
+  `ok: false` peers as offline, not empty.
+- **Spawn on another node:** add `"node": "<node_id or peer name>"` to the
+  spawn payload. Keep passing YOUR local `repo_path` — CCC translates it to
+  the stable repo identity and the target node maps it to its own clone
+  (paths never travel). Response gains `node_id`, `ref`, and `spawn_ref`.
+  Pass `"report_to": "<your bare session id>"` as usual; CCC globalizes it
+  so the child's completion report crosses machines back to you.
+- **Group chats across machines:** chat rows include `host_node` (the node
+  owning the chat files). If a chat's `host_node` is not your node, do NOT
+  touch its path — call your own CCC with the id + host:
+  read `GET /api/group-chat/read?id=<uuid>&host_node=<node_id>`;
+  post/nudge/add: include `"host_node": "<node_id>"` in the JSON payload.
+- **Ownership (handoff) errors:** a 409 `not_owner` with `owner_node` means
+  the conversation was handed to another machine — re-address it as
+  `"<owner_node>:<session_id>"`. `GET /api/federation/handoff/status?session_id=`
+  shows the lease.
+- **Typed federation errors:** `peer_offline` (node unreachable), `timeout`
+  (work may still continue there), `unpaired_peer` (pair first),
+  `stale_mapping` (repo not mapped on that node), `unsupported_capability`,
+  `routing_loop`. Report these truthfully; do not retry `unpaired_peer` or
+  `unsupported_capability`.
+
+## 3. Strict Rules
+- **No one-shot tasks:** Use the built-in `Task` tool for quick delegation.
+- **No tight polling:** `/api/ask` blocks until a reply or timeout.
+- **No duplicate spawning:** Check List Current Repo first. Users pay for each spawned session.
+- **Triage Errors:**
+  If a `curl` call fails, do not immediately assume CCC is offline. Triage the failure based on the exit code or HTTP status:
+  * **exit 7 (Connection Refused):** CCC is genuinely down. Ask the user to start CCC.
+  * **exit 28 (Timeout):** CCC is up but slow/under load. Retry with a longer timeout (e.g., `--max-time 30`), do not declare it down.
+  * **HTTP status 000 (or connection failure) while sandboxed:** The loopback connection is blocked by the sandboxed environment. Retry with the network sandbox disabled before concluding anything.
