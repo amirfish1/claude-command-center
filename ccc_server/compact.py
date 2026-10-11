@@ -18,6 +18,7 @@ import sys
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 
 def _backup_jsonl_before_compact(session_id):
     """Copy the session's JSONL to ~/.claude/command-center/compact-backups/
@@ -153,9 +154,7 @@ def _compact_via_hidden_pty(session_id, cwd):
         if hpid is not None:
             deadline = time.time() + 5.0
             while time.time() < deadline:
-                try:
-                    os.kill(int(hpid), 0)
-                except (ProcessLookupError, ValueError, PermissionError):
+                if not _is_pid_alive(hpid):
                     break
                 time.sleep(0.2)
     else:

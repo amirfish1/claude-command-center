@@ -2008,7 +2008,7 @@ def _wt_queue_attend_session_running(session_id):
     """Same liveness primitive the idle-reaper and interrupt-ask endpoints
     use for claude sessions: resolve the spawn registry entry for the
     session id, then verify its pid is still an actual claude process (pids
-    get recycled, so a bare os.kill(pid, 0) is not enough)."""
+    get recycled, so a bare liveness probe is not enough)."""
     sid = str(session_id or "").strip()
     if not sid:
         return False
@@ -17230,9 +17230,7 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
             return outcome
         still_alive = True
         for _ in range(20):
-            try:
-                os.kill(int(pid), 0)
-            except OSError:
+            if not _is_pid_alive(pid):
                 still_alive = False
                 break
             time.sleep(0.1)
@@ -17251,9 +17249,7 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
         if pid:
             os.kill(int(pid), signal.SIGTERM)
             for _ in range(20):
-                try:
-                    os.kill(int(pid), 0)
-                except OSError:
+                if not _is_pid_alive(pid):
                     break
                 time.sleep(0.1)
         log_dir = COMMAND_CENTER_STATE_DIR / "logs"
@@ -40533,7 +40529,7 @@ def _platform_capabilities():
         "launchTerminal": is_mac,     # open a session in a visible terminal
         "answerPermission": is_mac,   # approve/deny a Claude permission prompt via keystroke
         "folderPicker": is_mac or _linux_folder_picker_cmd() is not None,
-        "desktopDeepLinks": is_mac,   # open in Claude / Codex desktop apps
+        "desktopDeepLinks": is_mac or platform.system() == "Windows",   # open in Claude / Codex desktop apps
         "revealFile": is_mac,         # reveal a file in Finder
         "openBrowser": is_mac,        # open a URL via the OS `open` command
         "notifications": is_mac,      # desktop banner notifications (hooks)

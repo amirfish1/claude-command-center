@@ -23,6 +23,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
 
 # ---------------------------------------------------------------------------
@@ -2197,11 +2198,7 @@ def _nextjs_proc_alive(entry):
     pid = entry.get("pid")
     if not pid:
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return _is_pid_alive(pid)
 
 
 def _ps_dev_processes():
@@ -2551,18 +2548,13 @@ def _terminate_external_nextjs(target_path: Path):
     while time.time() < deadline:
         alive = []
         for pid in pids:
-            try:
-                os.kill(pid, 0)
+            if _is_pid_alive(pid):
                 alive.append(pid)
-            except OSError:
-                pass
         if not alive:
             break
         time.sleep(0.1)
     for pid in pids:
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not _is_pid_alive(pid):
             continue
         try:
             os.kill(pid, signal.SIGKILL)

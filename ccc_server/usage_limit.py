@@ -24,6 +24,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import limit_events as _limit_events
 
 # Usage-limit auto-resume (CCC-863)
@@ -1564,15 +1565,9 @@ def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None, dropp
                 dropped_sink.append(dict(entry))
             continue
         # Step 1: is the PID alive at all?
-        try:
-            os.kill(pid, 0)
-            alive = True
-        except ProcessLookupError:
-            alive = False
-        except PermissionError:
-            # Different user owns the PID — we'd never be able to signal it
-            # anyway. Drop from registry rather than confuse the UI.
-            alive = False
+        # (PermissionError = another user's pid: not ours to signal, so
+        # the default perm_alive=False drops it from the registry.)
+        alive = _is_pid_alive(pid)
         if not alive:
             dropped += 1
             if dropped_sink is not None:

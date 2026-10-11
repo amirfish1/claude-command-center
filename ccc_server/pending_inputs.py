@@ -26,6 +26,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import inject_receipts as _inject_receipts
 from ccc_server import test_isolation_active as _test_isolation_active
 
@@ -5420,12 +5421,8 @@ def _stray_reaper_legitimate_pids():
 def _stray_reaper_wait_for_death(pid, checks=6, interval=0.5):
     """Poll for up to ~checks*interval seconds for `pid` to exit."""
     for _ in range(checks):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not _is_pid_alive(pid, perm_alive=True):
             return True
-        except Exception:
-            pass
         time.sleep(interval)
     return False
 

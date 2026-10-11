@@ -337,11 +337,8 @@ def _worker_pid_alive(pidfile):
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
     except OSError:
         # No /proc (macOS): fall back to a bare liveness probe.
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        from ccc_server.paths import _is_pid_alive
+        return _is_pid_alive(pid)
     return b"ccc_worker" in cmdline
 
 

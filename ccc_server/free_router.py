@@ -54,6 +54,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from ccc_server.paths import _is_pid_alive
 from pathlib import Path
 from xml.sax.saxutils import escape as _xml_escape
 
@@ -1047,9 +1048,7 @@ def _stop_child(log=None) -> bool:
         return False
     deadline = time.time() + 8
     while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not _is_pid_alive(pid):
             break
         time.sleep(0.3)
     else:

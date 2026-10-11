@@ -1,0 +1,1 @@
+- Windows: process liveness checks no longer use `os.kill(pid, 0)` (which terminates the target on Windows), and "Open in desktop app" deep links are enabled on Windows (#142).

@@ -21,6 +21,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
 
 # How many trailing assistant turns /usage ships for the status-rail
@@ -221,11 +222,7 @@ def _resolve_spawn_log_for_session(session_id):
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, ValueError):
-        return False
+    return _is_pid_alive(pid)
 
 
 class _SpawnEventNormalizer:

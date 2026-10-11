@@ -23,6 +23,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
 
 # ---------------------------------------------------------------------------
@@ -4081,9 +4082,7 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
             # transcript state, not a mid-write snapshot.
             deadline = time.time() + 5.0
             while time.time() < deadline:
-                try:
-                    os.kill(hpid, 0)
-                except ProcessLookupError:
+                if not _is_pid_alive(hpid, perm_alive=True):
                     break
                 time.sleep(0.2)
             else:

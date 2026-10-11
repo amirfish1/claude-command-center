@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from ccc_server.paths import _is_pid_alive
 
 # --- daemon discovery ------------------------------------------------------
 #
@@ -72,11 +73,7 @@ def kap_token():
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return _is_pid_alive(pid)
 
 
 _KAP_SERVER_PIN_ENV = "CCC_KIMI_KAP_SERVER"

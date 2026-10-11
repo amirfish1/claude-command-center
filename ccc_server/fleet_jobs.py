@@ -25,6 +25,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 
 # ---------------------------------------------------------------------------
 # Fleet executor — reviewed plan, persisted resumable jobs
@@ -1170,11 +1171,7 @@ def _is_pid_alive(pid):
         return False
     if pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return _paths_is_pid_alive(pid)
 
 
 def _prune_registry_entries(entries):

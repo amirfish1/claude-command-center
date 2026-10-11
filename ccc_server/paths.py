@@ -98,12 +98,16 @@ def _iter_common_cli_candidates(cmd):
             yield p
 
 
-def _is_pid_alive(pid):
+def _is_pid_alive(pid, perm_alive=False):
     """Check if a process is alive without sending a terminating signal.
 
     On Unix, `os.kill(pid, 0)` performs an error check only (does not send a signal).
     On Windows, `os.kill(pid, 0)` maps signal 0 to CTRL_C_EVENT and terminates the
     target process. We use Win32 OpenProcess + WaitForSingleObject on Windows.
+
+    `perm_alive`: on POSIX, treat PermissionError (pid owned by another user)
+    as alive. Default False keeps the historical OSError -> dead behaviour.
+    (Windows access-denied always means alive.)
     """
     try:
         pid = int(pid)
@@ -131,6 +135,8 @@ def _is_pid_alive(pid):
     try:
         os.kill(pid, 0)
         return True
+    except PermissionError:
+        return bool(perm_alive)
     except (OSError, ProcessLookupError):
         return False
 
