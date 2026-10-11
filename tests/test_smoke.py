@@ -6450,7 +6450,7 @@ class TestServerImports(unittest.TestCase):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
 
         self.assertIn("startCodexWakeBreakdown($wv, sid);", app_js)
-        self.assertIn("appendStageRow('Waiting for wake request', false, true);", app_js)
+        self.assertIn("appendStageRow('Waiting for delivery', false, true);", app_js)
         self.assertIn("waiting for server wake log", app_js)
         self.assertIn("warning: ' + data.warning", app_js)
         self.assertIn("detail: ' + data.outcome_detail", app_js)
