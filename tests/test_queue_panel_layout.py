@@ -268,12 +268,12 @@ class TestQueuePanelLayout(unittest.TestCase):
             "_parkSharedQueuePanelForSidebarRender();\n    $convList.innerHTML = _convListHtml;",
             app_js,
         )
-        self.assertIn(
-            "$convList.innerHTML = _convListHtml;\n"
-            "    _convListRenderVersion++;\n"
-            "    _updateConvTabBarHeightVar($convList);\n"
-            "    _mountSharedQueuePanel();",
+        # Order matters (park, rebuild, re-mount); decorator calls may sit between.
+        self.assertRegex(
             app_js,
+            r"\$convList\.innerHTML = _convListHtml;\s+_convListRenderVersion\+\+;"
+            r"(?:(?!\$convList\.innerHTML)[\s\S]){0,1500}?"
+            r"_updateConvTabBarHeightVar\(\$convList\);\s+_mountSharedQueuePanel\(\);",
         )
         self.assertIn("if (next === 'queue' && queuePane) {", app_js)
         self.assertIn("_setSharedQueuePanelHost('rail');", app_js)
