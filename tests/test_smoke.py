@@ -7870,7 +7870,8 @@ class TestRepoContextHelpers(unittest.TestCase):
         with _mock.patch.dict(os.environ, {}, clear=True):
             # No env: the watchtower package resolver answers when importable.
             p = self.server._queue_store_path()
-            self.assertTrue(str(p).endswith(".json"))
+            # watchtower.queue prefers the SQLite .db once it exists.
+            self.assertTrue(str(p).endswith((".json", ".db")))
             self.assertNotEqual(str(p), "")
 
     def test_queue_config_options_offer_model_and_github_repo_choices(self):
