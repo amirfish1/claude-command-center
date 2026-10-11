@@ -31261,12 +31261,59 @@
       let inner;
       if (f.category === 'images') inner = '<img src="' + escapeAttr(url) + '" alt="' + escapeAttr(f.name) + '">';
       else if (f.category === 'videos') inner = '<video src="' + escapeAttr(url) + '" controls></video>';
+      else if (f.category === 'markdown') inner = '<div class="ffv-md tp-body">Loading\u2026</div>';
       else if (f.category === 'pdfs' || f.category === 'html') inner = '<iframe src="' + escapeAttr(url) + '"></iframe>';
       else inner = '<div class="ffv-nopreview">No inline preview for this file type.</div>';
       $view.innerHTML = '<div class="ffv-pv-head"><span>' + escapeHtml(f.name) + '</span>'
         + '<a class="ffv-btn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in new tab</a></div>' + inner;
       $list.querySelectorAll('.ffv-row').forEach(r => r.classList.toggle('sel', r.getAttribute('data-path') === f.path));
+      if (f.category === 'markdown') {
+        fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status))).then(t => {
+          const el = $view.querySelector('.ffv-md');
+          if (!el || $list.querySelector('.ffv-row.sel')?.getAttribute('data-path') !== f.path) return;
+          el.innerHTML = window.CCCTicketProse ? window.CCCTicketProse.render(t) : '<pre>' + escapeHtml(t) + '</pre>';
+        }).catch(e => {
+          const el = $view.querySelector('.ffv-md');
+          if (el) el.textContent = 'Could not load: ' + e.message;
+        });
+      }
     }
+
+    // Movable + resizable window: drag the title bar; resize via the corner
+    // grip (CSS resize). Geometry persists across opens.
+    const $win = root.querySelector('.ffv');
+    try {
+      const g = JSON.parse(localStorage.getItem('ccc-ffv-geom') || 'null');
+      if (g && g.w && g.h) {
+        const w = Math.min(g.w, window.innerWidth - 20), h = Math.min(g.h, window.innerHeight - 20);
+        $win.style.width = w + 'px'; $win.style.height = h + 'px';
+        $win.style.left = Math.max(0, Math.min(g.x, window.innerWidth - 80)) + 'px';
+        $win.style.top = Math.max(0, Math.min(g.y, window.innerHeight - 40)) + 'px';
+        $win.style.margin = '0';
+      }
+    } catch (e) {}
+    const saveGeom = () => {
+      const r = $win.getBoundingClientRect();
+      try { localStorage.setItem('ccc-ffv-geom', JSON.stringify({ x: r.left, y: r.top, w: r.width, h: r.height })); } catch (e) {}
+    };
+    root.querySelector('.ffv-bar').addEventListener('pointerdown', (ev) => {
+      if (ev.target.closest('button, a') || ev.button !== 0) return;
+      const r = $win.getBoundingClientRect();
+      const dx = ev.clientX - r.left, dy = ev.clientY - r.top;
+      $win.style.width = r.width + 'px'; $win.style.height = r.height + 'px';
+      $win.style.margin = '0';
+      $win.style.left = r.left + 'px'; $win.style.top = r.top + 'px';
+      const bar = ev.currentTarget;
+      bar.setPointerCapture(ev.pointerId);
+      const mv = (e) => {
+        $win.style.left = Math.max(0, Math.min(e.clientX - dx, window.innerWidth - 80)) + 'px';
+        $win.style.top = Math.max(0, Math.min(e.clientY - dy, window.innerHeight - 40)) + 'px';
+      };
+      const up = () => { bar.removeEventListener('pointermove', mv); bar.removeEventListener('pointerup', up); saveGeom(); };
+      bar.addEventListener('pointermove', mv);
+      bar.addEventListener('pointerup', up);
+    });
+    if (window.ResizeObserver) new ResizeObserver(() => { if ($win.style.margin === '0px') saveGeom(); }).observe($win);
 
     async function load(path, selected) {
       $list.innerHTML = '<div class="ffv-msg">Loading\u2026</div>';
@@ -31292,7 +31339,6 @@
     }
 
     root.addEventListener('click', async (ev) => {
-      if (ev.target === root) return close();
       const act = ev.target.closest('[data-ffv]');
       if (act) {
         const a = act.getAttribute('data-ffv');
@@ -31314,6 +31360,8 @@
     });
     load(startPath);
   }
+
+  window.openFolderViewer = openFolderViewer;
 
   function showOpToast(msg, kind, action) {
     if (!debugModeEnabled() && kind === 'info') return;

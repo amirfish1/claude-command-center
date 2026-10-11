@@ -1,0 +1,1 @@
+- The in-page folder viewer is now a movable, resizable window (drag the title bar, resize from the corner; position is remembered) and previews Markdown files rendered.

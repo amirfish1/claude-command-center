@@ -30529,7 +30529,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             file_path = Path(resolved["path"])
             media_category = _categorize_file_target(str(file_path))
-            if media_category not in ("videos", "html", "images", "pdfs") or not file_path.is_file():
+            if media_category not in ("videos", "html", "images", "pdfs", "markdown") or not file_path.is_file():
                 self.send_json({"ok": False, "error": "not a streamable media file"}, 404)
                 return
             try:
@@ -30555,6 +30555,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ".webp": "image/webp",
                 ".svg": "image/svg+xml",
                 ".pdf": "application/pdf",
+                # Served as plain text, never rendered by the browser; the
+                # folder viewer fetches it and renders client-side.
+                ".md": "text/plain; charset=utf-8",
+                ".mdx": "text/plain; charset=utf-8",
             }
             content_type = ct_map.get(ext)
             if content_type is None:
