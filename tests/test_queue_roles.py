@@ -33,11 +33,14 @@ class QueueRolesTest(unittest.TestCase):
         if not self.codex_models:
             self.skipTest("no readable codex catalog on this machine")
 
-    def test_state_lists_four_roles_and_only_catalog_engines(self):
+    def test_state_lists_all_roles_and_only_catalog_engines(self):
         state = queue_roles.role_state("rq")
         self.assertTrue(state["ok"] and state["available"])
-        self.assertEqual([r["role"] for r in state["roles"]],
-                         ["planner", "plan_reviewer", "builder", "verifier"])
+        # WatchTower owns the role list (it has grown: 'assessor' was added), so
+        # pin the original four as a prefix and the rest to its own ROLES.
+        names = [r["role"] for r in state["roles"]]
+        self.assertEqual(names[:4], ["planner", "plan_reviewer", "builder", "verifier"])
+        self.assertEqual(names, list(wt_roles.ROLES))
         builder = next(r for r in state["roles"] if r["role"] == "builder")
         self.assertFalse(builder["editable"])
         engines = {e["engine"]: e["models"] for e in state["engines"]}
