@@ -17,6 +17,8 @@ CCC 把所有会话放进同一块本地看板，并告诉你此刻哪个会话�
 
 _让 Claude 忙着第一个任务，你可以先开下一个。_
 
+<a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="Claude 用量达到上限后，CCC 通过你自己的路由器让 12 个会话在免费模型上继续运行" width="100%" /></a>
+
 一个本地面板，统一管理 **Claude Code**、**Codex**、**Cursor**、**Antigravity**、
 **Kilo Code**、**Kimi Code**、**OpenCode** 和 **Devin** 的会话，无论它们是从哪里启动的。
 八种引擎都能从 CCC 启动和监控，其中七种支持继续发送消息（Kilo Code 只能发起，不能续聊）。

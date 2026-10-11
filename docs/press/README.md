@@ -45,6 +45,8 @@ No install? The [read-only demo](https://ccc.amirfish.ai/demo/) runs in the brow
 | [cards/card-tokens-1080x1080.png](cards/card-tokens-1080x1080.png) | Same, square | 1080x1080 |
 | [cards/card-saved-1200x630.png](cards/card-saved-1200x630.png) | Share card: $ of work done on $0 models | 1200x630 |
 | [cards/card-saved-1080x1080.png](cards/card-saved-1080x1080.png) | Same, square | 1080x1080 |
+| [cards/card-month-1200x630.png](cards/card-month-1200x630.png) | Monthly card: "My October", a calendar of the month plus four stats | 1200x630 |
+| [cards/card-month-1080x1080.png](cards/card-month-1080x1080.png) | Same, square | 1080x1080 |
 | [screenshots/board.png](screenshots/board.png) | The fleet: every session on one board, one transcript open | 2880x1800 |
 | [screenshots/share.png](screenshots/share.png) | The share screen that makes the card | 2880x1800 |
 | [screenshots/mobile.png](screenshots/mobile.png) | A session on a phone, with Call and the composer | 1170x2532 |
@@ -58,8 +60,10 @@ Short clips (GIF, demo data): [attention](../images/feature-wall/attention.gif),
 [mobile](../images/feature-wall/mobile.gif),
 [queue workers](../images/feature-wall/queue-workers.gif).
 
-**Video:** the 20-second limit-hit demo (16:9 and 9:16 MP4) is in production
-and will be linked here when it lands.
+**Video:** the 20-second limit-hit demo, demo data:
+[16:9 MP4](../product-story/assets/video/V-20-limit-hit-16x9.mp4) (1920x1080),
+[9:16 MP4](../product-story/assets/video/V-20-limit-hit-9x16.mp4) (1080x1920),
+[16:9 GIF](../product-story/assets/video/V-20-limit-hit-16x9.gif) (800px, 0.6 MB).
 
 ## Hook lines in other languages
 

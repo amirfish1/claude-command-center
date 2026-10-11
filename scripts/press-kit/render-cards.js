@@ -8,6 +8,7 @@
 //   python3 -m http.server 8877 --directory <repo root> &
 //   node scripts/press-kit/render-cards.js            # writes docs/press/cards/
 //   node scripts/press-kit/render-cards.js --out /tmp/cards
+//   node scripts/press-kit/render-cards.js --only month   # just the monthly cards
 'use strict';
 
 const fs = require('fs');
@@ -19,6 +20,8 @@ const ROOT = path.join(__dirname, '..', '..');
 const args = process.argv.slice(2);
 const outIdx = args.indexOf('--out');
 const OUT = outIdx >= 0 ? path.resolve(args[outIdx + 1]) : path.join(ROOT, 'docs', 'press', 'cards');
+const onlyIdx = args.indexOf('--only');
+const ONLY = onlyIdx >= 0 ? args[onlyIdx + 1] : '';
 
 // Fixed "today" so re-renders are byte-stable; the heatmap ends on this day.
 const TODAY = '2026-10-18';
@@ -28,12 +31,19 @@ const CARDS = [
   { file: 'card-tokens-1080x1080.png', size: 'square', state: { period: 'month', metric: 'tokens' } },
   { file: 'card-saved-1200x630.png', size: 'wide', state: { period: 'month', metric: 'saved' } },
   { file: 'card-saved-1080x1080.png', size: 'square', state: { period: 'month', metric: 'saved' } },
-];
+  // Monthly "My October" card as it looks on Nov 1, when the wave goes out.
+  { file: 'card-month-1200x630.png', size: 'wide', today: '2026-11-01', state: { period: 'cal', metric: 'tokens', cost: true } },
+  { file: 'card-month-1080x1080.png', size: 'square', today: '2026-11-01', state: { period: 'cal', metric: 'tokens', cost: true } },
+].filter((c) => !ONLY || c.file.includes(ONLY));
+
+const payloadFor = (today) => {
+  const [y, m, d] = today.split('-').map(Number);
+  return syntheticPayload(new Date(y, m - 1, d));
+};
 
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
-  const [ty, tm, td] = TODAY.split('-').map(Number);
-  const payload = syntheticPayload(new Date(ty, tm - 1, td));
+  const payload = payloadFor(TODAY);
   const browser = await launchBrowser();
   try {
     const page = await browser.newPage();
@@ -49,13 +59,13 @@ const CARDS = [
     await page.evaluate(() => document.fonts && document.fonts.ready);
     for (const card of CARDS) {
       const dataUrl = await page.evaluate((p, st, size, today) => {
-        const base = { pseudo: true, streak: true, cost: false, saved: true, engines: false, name: 'demo-otter' };
+        const base = { pseudo: true, streak: true, cost: false, saved: true, engines: false, name: 'demo-otter', month: '' };
         const [y, m, d] = today.split('-').map(Number);
         const model = window.CCCShare.cardModel(p, Object.assign(base, st), new Date(y, m - 1, d), null);
         const c = document.createElement('canvas');
         window.CCCShare.drawCard(c, model, size);
         return c.toDataURL('image/png');
-      }, payload, card.state, card.size, TODAY);
+      }, card.today ? payloadFor(card.today) : payload, card.state, card.size, card.today || TODAY);
       const file = path.join(OUT, card.file);
       fs.writeFileSync(file, Buffer.from(dataUrl.split(',')[1], 'base64'));
       console.log(`[press] ${path.relative(ROOT, file)}`);

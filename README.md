@@ -41,6 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B)
 ![Devin](https://img.shields.io/badge/Devin-0EA5E9)
 
+<a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="A Claude session hits its usage limit and CCC keeps all 12 sessions going on a free model through your own router" width="100%" /></a>
+
 > “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
 > CCC user
 

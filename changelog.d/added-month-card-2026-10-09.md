@@ -1,0 +1,1 @@
+- Monthly share card: a "My October" button on the throughput page (and a new period in the share screen) makes a calendar card of one month with tokens, agent hours, active days, longest streak and busiest day. In the first week of a month it shows the month that just ended. Deep link: `/throughput.html?share=month` (optional `&m=YYYY-MM`).
