@@ -12150,6 +12150,11 @@ class TestRepoContextHelpers(unittest.TestCase):
     def test_spawn_session_codex_uses_app_server_when_available(self):
         """Fresh Codex sessions should prefer app-server thread/start."""
         server = self.server
+        # An earlier test's async spawn finalizer may still be running; it
+        # would hit this test's fake request and add a stray thread/name/set.
+        for _t in list(threading.enumerate()):
+            if _t.name.startswith("ccc-codex-finalize-"):
+                _t.join(15)
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         calls = []
         original_spawns = list(server._spawned_sessions)
