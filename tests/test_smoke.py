@@ -16430,7 +16430,12 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("body.reasoning_effort = effort;", js)
         self.assertIn("effortExplicit: spawnEffortChoiceDirty", js)
         self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", engines_py)
-        self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', engines_py)
+        # Spawning goes through the Codex app-server (no `codex exec -c ...`
+        # fallback), so the effort rides on the thread/turn params instead.
+        codex_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "codex.py").read_text()
+        self.assertIn("reasoning_effort=reasoning_effort,", engines_py)
+        self.assertIn("effort=reasoning_effort or None,", codex_py)
+        self.assertIn('params["effort"] = effort', codex_py)
 
     def test_truncate_session_name_clamps_long_pastes(self):
         """A row title that's a full annotation context blob would stretch
