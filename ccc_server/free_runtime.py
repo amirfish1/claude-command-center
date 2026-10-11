@@ -555,8 +555,10 @@ def deepgram_enabled():
     return (Path.home() / ".ccc" / "deepgram.on").exists()
 
 
-def _deepgram_key():
-    if not deepgram_enabled():
+def _deepgram_key(explicit=False):
+    """The key, or "" when Deepgram is off. explicit=True (the user picked a
+    Deepgram voice by name) skips the on/off flag: a key alone is enough."""
+    if not explicit and not deepgram_enabled():
         return ""
     key = os.environ.get("DEEPGRAM_API_KEY", "").strip()
     if key:
@@ -575,11 +577,11 @@ def deepgram_open(text, voice="", fmt="encoding=linear16&container=wav"):
     """
     import random
     import urllib.request
-    key = _deepgram_key()
+    voice = str(voice or "")
+    key = _deepgram_key(explicit=voice.startswith(_DEEPGRAM_LABEL))
     text = str(text or "").strip()[:TTS_MAX_CHARS]
     if not key or not text:
         return None, ""
-    voice = str(voice or "")
     if voice.startswith(_DEEPGRAM_LABEL):
         voice = voice[len(_DEEPGRAM_LABEL):]
     if voice not in DEEPGRAM_VOICES:
@@ -604,7 +606,7 @@ def tts_voice_options():
     out = []
     if local_tts_installed():
         out += [{"id": _KOKORO_LABEL + v, "label": _KOKORO_LABEL + v, "paid": False} for v in KOKORO_VOICES]
-    if _deepgram_key():
+    if _deepgram_key(explicit=True):
         out += [{"id": _DEEPGRAM_LABEL + v, "label": _DEEPGRAM_LABEL + v.capitalize(), "paid": True}
                 for v in DEEPGRAM_VOICES]
     return out
