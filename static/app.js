@@ -9270,7 +9270,7 @@
       showOpToast('Queued message is missing its session or text.', 'error');
       return;
     }
-    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source, currentSession && currentSession.acp_steer_ready)) {
+    if (!sessionSupportsQueuedSteer(queuedSteerSource(currentSession && currentSession.source, currentSession && currentSession.engine), currentSession && currentSession.acp_steer_ready)) {
       showOpToast('Steer is only available for Codex and ACP sessions.', 'error');
       return;
     }
@@ -9428,7 +9428,7 @@
       showOpToast('Nothing queued to steer.', 'error');
       return;
     }
-    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source, currentSession && currentSession.acp_steer_ready)) {
+    if (!sessionSupportsQueuedSteer(queuedSteerSource(currentSession && currentSession.source, currentSession && currentSession.engine), currentSession && currentSession.acp_steer_ready)) {
       showOpToast('Steer all is only available for Codex and ACP sessions.', 'error');
       return;
     }
@@ -11022,9 +11022,11 @@
     const msg = pending.entry.queuedLabel;
     note.title = msg;
     const paneState = paneByPaneId(pid);
-    const queuedSource = (paneState && paneState.currentSession && paneState.currentSession.source)
-      || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[convId])
-      || '';
+    const queuedSource = queuedSteerSource(
+      (paneState && paneState.currentSession && paneState.currentSession.source)
+        || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[convId])
+        || '',
+      paneState && paneState.currentSession && paneState.currentSession.engine);
     // Default to showing the Steer button when the source is not yet known
     // (e.g., early test stubs or a pane mid-load). Only hide it for engines
     // we know do not support queued-row steer.
@@ -33096,6 +33098,12 @@
   // itself is attached lazily by the first send, and a failed attach
   // (e.g. the session is open in Devin Desktop) degrades to the durable
   // queue server-side.
+  // A Codex row can arrive as source 'interactive' with engine 'codex', so
+  // fold the engine in before deciding what the queued row can do.
+  function queuedSteerSource(source, engine) {
+    return engine === 'codex' ? 'codex' : (source || '');
+  }
+
   function sessionSupportsQueuedSteer(source, acpReady) {
     if (source === 'codex' || source === 'kimi' || source === 'grok') return true;
     if (source === 'devin-cli') return !!acpReady || devinSteerCapableNow();
@@ -58552,9 +58560,12 @@
       inputBar.parentNode.insertBefore(tray, inputBar);
     }
     const trayRows = [...tray.querySelectorAll('.event.user_text'), ...candidates];
-    const queuedSource = (paneState && paneState.currentSession && paneState.currentSession.source)
-      || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[conversationId])
-      || '';
+    const queuedSource = queuedSteerSource(
+      (paneState && paneState.currentSession && paneState.currentSession.source)
+        || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[conversationId])
+        || '',
+      (paneState && paneState.currentSession && paneState.currentSession.engine)
+        || (selected && selected.engine) || '');
     // Default to showing the Steer button when the source is not yet known
     // (e.g., early test stubs or a pane mid-load). Only hide it for engines
     // we know do not support queued-row steer.

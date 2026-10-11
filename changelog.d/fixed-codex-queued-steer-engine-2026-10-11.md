@@ -1,0 +1,1 @@
+- Queued messages on a Codex session now show the Steer button even when the row's source is "interactive" with engine "codex".
