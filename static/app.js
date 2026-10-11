@@ -31213,15 +31213,106 @@
   }
 
   // The server host may be headless (no xdg-open) while the viewer sits on
-  // another machine (CCC-62). /api/open then answers 501 with the path; copy
-  // it so "open folder" still does something useful instead of a bare error.
-  async function handleOpenUnavailable(data, fallbackPath) {
+  // another machine (CCC-62). /api/open then answers 501 with the path; show
+  // the folder in an in-page viewer instead (listing via /api/fs/browse,
+  // previews streamed through /api/media, so it works from any machine).
+  function handleOpenUnavailable(data, fallbackPath) {
     const p = (data && data.path) || fallbackPath || '';
-    const copied = p ? await copyTextValue(p) : false;
-    const msg = copied
-      ? 'This server has no desktop to open folders on \u2014 path copied: ' + escapeHtml(p)
-      : 'This server has no desktop to open folders on: ' + escapeHtml(p);
-    showOpToast(msg, 'info-always');
+    if (p) openFolderViewer(p);
+  }
+
+  function _ffvSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return Math.round(n / 1024) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+  const _FFV_ICON = { images: '\uD83D\uDDBC', videos: '\uD83C\uDFAC', pdfs: '\uD83D\uDCC4', html: '\uD83C\uDF10', markdown: '\uD83D\uDCDD' };
+
+  async function openFolderViewer(startPath) {
+    let root = document.getElementById('ffvOverlay');
+    if (root) root.remove();
+    root = document.createElement('div');
+    root.id = 'ffvOverlay';
+    root.className = 'ffv-overlay';
+    root.innerHTML = '<div class="ffv" role="dialog" aria-label="Folder viewer">'
+      + '<div class="ffv-bar"><button type="button" class="ffv-btn" data-ffv="up">\u2191 Up</button>'
+      + '<span class="ffv-crumb"></span>'
+      + '<button type="button" class="ffv-btn" data-ffv="copy">Copy path</button>'
+      + '<button type="button" class="ffv-btn" data-ffv="close" aria-label="Close">\u2715</button></div>'
+      + '<div class="ffv-body"><div class="ffv-list"></div><div class="ffv-view"></div></div></div>';
+    document.body.appendChild(root);
+    const $crumb = root.querySelector('.ffv-crumb');
+    const $list = root.querySelector('.ffv-list');
+    const $view = root.querySelector('.ffv-view');
+    let cur = { path: startPath, parent: null };
+    let repo = (typeof activeConvRepoPath === 'function' && activeConvRepoPath()) || '';
+    const mediaUrl = (fp) => {
+      const u = new URL('/api/media', window.location.origin);
+      u.searchParams.set('path', fp);
+      if (repo) u.searchParams.set('repo_path', repo);
+      return u.href;
+    };
+    const close = () => { root.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+
+    function preview(f) {
+      const url = mediaUrl(f.path);
+      let inner;
+      if (f.category === 'images') inner = '<img src="' + escapeAttr(url) + '" alt="' + escapeAttr(f.name) + '">';
+      else if (f.category === 'videos') inner = '<video src="' + escapeAttr(url) + '" controls></video>';
+      else if (f.category === 'pdfs' || f.category === 'html') inner = '<iframe src="' + escapeAttr(url) + '"></iframe>';
+      else inner = '<div class="ffv-nopreview">No inline preview for this file type.</div>';
+      $view.innerHTML = '<div class="ffv-pv-head"><span>' + escapeHtml(f.name) + '</span>'
+        + '<a class="ffv-btn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in new tab</a></div>' + inner;
+      $list.querySelectorAll('.ffv-row').forEach(r => r.classList.toggle('sel', r.getAttribute('data-path') === f.path));
+    }
+
+    async function load(path, selected) {
+      $list.innerHTML = '<div class="ffv-msg">Loading\u2026</div>';
+      let d;
+      try {
+        const res = await fetch('/api/fs/browse?path=' + encodeURIComponent(path), { cache: 'no-store' });
+        d = await res.json();
+      } catch (e) { d = { ok: false, error: String(e) }; }
+      if (!d.ok) { $list.innerHTML = '<div class="ffv-msg">' + escapeHtml(d.error || 'failed') + '</div>'; return; }
+      cur = d;
+      if (!repo) repo = d.media_repo_path || '';
+      $crumb.textContent = d.path;
+      const rows = [];
+      d.dirs.forEach(x => rows.push('<div class="ffv-row" data-dir="1" data-path="' + escapeAttr(x.path) + '">\uD83D\uDCC1 ' + escapeHtml(x.name) + '</div>'));
+      d.files.forEach(x => rows.push('<div class="ffv-row" data-path="' + escapeAttr(x.path) + '">'
+        + (_FFV_ICON[x.category] || '\uD83D\uDCC3') + ' <span class="ffv-name">' + escapeHtml(x.name) + '</span><small>' + _ffvSize(x.size) + '</small></div>'));
+      $list.innerHTML = rows.join('') || '<div class="ffv-msg">Empty folder</div>';
+      const pick = d.files.find(x => x.name === (selected || d.selected))
+        || d.files.find(x => x.category === 'images');
+      if (pick) preview(pick);
+      else $view.innerHTML = '<div class="ffv-nopreview">Select a file to preview it.</div>';
+      if (d.truncated) $list.insertAdjacentHTML('beforeend', '<div class="ffv-msg">Listing truncated.</div>');
+    }
+
+    root.addEventListener('click', async (ev) => {
+      if (ev.target === root) return close();
+      const act = ev.target.closest('[data-ffv]');
+      if (act) {
+        const a = act.getAttribute('data-ffv');
+        if (a === 'close') close();
+        else if (a === 'up' && cur.parent) load(cur.parent);
+        else if (a === 'copy') {
+          const ok = await copyTextValue(cur.path);
+          act.textContent = ok ? 'Copied \u2713' : 'Copy failed';
+          setTimeout(() => { act.textContent = 'Copy path'; }, 1500);
+        }
+        return;
+      }
+      const row = ev.target.closest('.ffv-row');
+      if (!row) return;
+      const rp = row.getAttribute('data-path');
+      if (row.getAttribute('data-dir')) return load(rp);
+      const f = cur.files.find(x => x.path === rp);
+      if (f) preview(f);
+    });
+    load(startPath);
   }
 
   function showOpToast(msg, kind, action) {

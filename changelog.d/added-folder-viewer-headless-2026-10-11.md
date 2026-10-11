@@ -1,0 +1,1 @@
+Opening a folder or file link when the server host has no desktop (headless Linux viewed from another machine) now opens an in-page folder viewer with image/PDF/video/HTML previews, instead of a bare error.

@@ -6736,6 +6736,58 @@ def _list_dirs_for_picker(raw_path):
     return {"ok": True, "path": str(p), "parent": parent, "dirs": dirs[:500]}
 
 
+def _browse_folder_for_viewer(raw_path):
+    """Read-only listing (dirs + files) for the in-browser folder viewer.
+
+    Used when the server host has no desktop to open a folder on (headless
+    Linux viewed from another machine, CCC-62). Same posture as
+    /api/fs/list: listing only, hidden entries skipped, capped. A file path
+    lists its parent with `selected` set. File bytes are never served here;
+    previews go through /api/media, which keeps its extension whitelist.
+    """
+    target = (raw_path or "").strip() or str(Path.home())
+    try:
+        p = Path(target).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return {"ok": False, "error": f"not found: {target}"}
+    selected = ""
+    if p.is_file():
+        selected = p.name
+        p = p.parent
+    if not p.is_dir():
+        return {"ok": False, "error": f"not a directory: {target}"}
+    dirs, files = [], []
+    try:
+        for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+            if child.name.startswith("."):
+                continue
+            try:
+                if child.is_dir():
+                    dirs.append({"name": child.name, "path": str(child)})
+                elif child.is_file():
+                    files.append({
+                        "name": child.name,
+                        "path": str(child),
+                        "size": child.stat().st_size,
+                        "category": _categorize_file_target(child.name),
+                    })
+            except OSError:
+                continue
+    except PermissionError:
+        return {"ok": False, "error": f"permission denied: {p}"}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    parent = str(p.parent) if p.parent != p else None
+    return {
+        "ok": True, "path": str(p), "parent": parent, "selected": selected,
+        "dirs": dirs[:500], "files": files[:1000],
+        # /api/media needs *a* repo context; the server's own checkout is
+        # always valid, so the viewer works even with no session open.
+        "media_repo_path": str(Path(__file__).resolve().parent),
+        "truncated": len(dirs) > 500 or len(files) > 1000,
+    }
+
+
 def _native_pick_folder(prompt_text="Pick a repo folder for Command Center"):
     """Open the OS-native folder chooser and return the selected absolute path.
 
@@ -26823,6 +26875,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # (the headless-Linux fallback when no native GUI chooser exists).
             qs = urllib.parse.parse_qs(parsed.query)
             self.send_json(_list_dirs_for_picker(qs.get("path", [""])[0]))
+        elif path == "/api/fs/browse":
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_browse_folder_for_viewer(qs.get("path", [""])[0]))
         elif path == "/api/car-mode/status":
             # Car Mode running state + capability mode + which keys are set
             # (booleans only — never the key values). O(1).
