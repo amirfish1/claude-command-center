@@ -29018,6 +29018,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", mt)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/pasted-image":
@@ -29088,6 +29089,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/local-image":
@@ -29126,6 +29128,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            # SECURITY: arbitrary on-disk path; a crafted .svg opened top-level must not run script in CCC's origin.
+            self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/image-cache/"):
@@ -29166,6 +29171,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/static/morning/"):
