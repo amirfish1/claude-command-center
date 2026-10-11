@@ -369,9 +369,12 @@ def test_hidden_and_attachment_paths_are_ignored(rg, tmp_path, monkeypatch):
     proj = str((home / "proj").resolve())
     monkeypatch.setattr(server, "_load_recent_repos", lambda: [proj])
     monkeypatch.setattr(server, "_known_repo_paths", lambda: [proj])
-    monkeypatch.setattr(rg, "_RG_IGNORED_ROOTS", ("~/Desktop", "~/Downloads", "/tmp"))
+    # A scratch root beside (not above) proj: on Linux pytest's tmp_path itself
+    # lives under /tmp, so ignoring a literal "/tmp" would swallow proj too.
+    scratch = str(tmp_path / "scratch")
+    monkeypatch.setattr(rg, "_RG_IGNORED_ROOTS", ("~/Desktop", "~/Downloads", scratch))
     for text in (f"see {proj}/.claude/plans/x.md", "see ~/.claude/plans/x.md", f"see {home}/Desktop/shot.png",
-                 "see ~/Downloads/a.png", "see /tmp/x.log"):
+                 "see ~/Downloads/a.png", f"see {scratch}/x.log"):
         assert rg._rg_match_path(text, {proj: proj}) is None, text
     assert rg._rg_match_path(f"see {proj}/src/x.py", {proj: proj}) == proj
 

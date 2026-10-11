@@ -54567,7 +54567,7 @@
     if (!p) return '';
     return '<span class="codex-diag-path" data-action="reveal-path" data-path="'
       + escapeAttr(String(p)) + '" role="button" tabindex="0" title="' + escapeAttr(String(p))
-      + ' — click to reveal in Finder">' + escapeHtml(_codexDiagTilde(p)) + '</span>';
+      + ': click to reveal in Finder">' + escapeHtml(_codexDiagTilde(p)) + '</span>';
   }
 
   function _codexDiagClock(ts) {
@@ -54668,10 +54668,10 @@
       const kind = String(h.kind || '');
       if (kind === 'ccc-exec-resume') {
         return h.this_thread
-          ? "codex exec resume — this thread (CCC's own run" + pidSuffix + ')'
-          : "codex exec resume — another thread (CCC's own run" + pidSuffix + ')';
+          ? "codex exec resume: this thread (CCC's own run" + pidSuffix + ')'
+          : "codex exec resume: another thread (CCC's own run" + pidSuffix + ')';
       }
-      if (kind === 'ccc-exec') return "codex exec — CCC one-shot run" + pidSuffix;
+      if (kind === 'ccc-exec') return "codex exec: CCC one-shot run" + pidSuffix;
       if (kind === 'desktop') return 'Codex desktop' + pidSuffix;
       if (kind === 'app-server') return 'codex app-server' + pidSuffix;
       return (h.command || 'codex') + pidSuffix;
@@ -54681,7 +54681,7 @@
       : '<span class="codex-diag-muted">nobody else</span>');
     if (cp.own_exec_child) {
       compHtml += '<div class="codex-diag-muted" style="margin:2px 0 4px;">'
-        + escapeHtml("The shared state DB is held by CCC's own run of this thread — this is not a competing app.")
+        + escapeHtml("The shared state DB is held by CCC's own run of this thread, so this is not a competing app.")
         + '</div>';
     }
     compHtml += _codexDiagRow('Desktop attached to rollout', yesNo(!!cp.desktop_attached_to_rollout));

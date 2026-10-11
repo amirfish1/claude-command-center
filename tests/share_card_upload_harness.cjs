@@ -39,7 +39,7 @@ function makeEnv({ uploadOk }) {
   const clip = { text: null };
   const tiles = ['x', 'linkedin', 'bluesky', 'threads'].map((n) => { const t = stub('tile-' + n); t.dataset.net = n; return t; });
   const sandbox = {
-    console, URL, Blob, FormData, AbortController, setTimeout, clearTimeout, crypto: globalThis.crypto,
+    console, URL, URLSearchParams, location: { search: '' }, Blob, FormData, AbortController, setTimeout, clearTimeout, crypto: globalThis.crypto,
     Uint8Array, JSON, Math, Date, Number, String, Array, Object, RegExp, Promise, Error, encodeURIComponent,
     weeklyData: { weekly_pct: 40 },
     localStorage: { getItem: () => null, setItem() {} },

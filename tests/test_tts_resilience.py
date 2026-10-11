@@ -112,6 +112,21 @@ const highlightTtsWord = () => {};
 const updateTtsCaption = () => {};
 const stopTextToSpeech = () => {};
 const showOpToast = (message, kind) => notices.push({ message, kind });
+// Free (neural) voice stubs: held in cooldown so this exercises the Mac-voice
+// fallback path that the chunk-skip behaviour belongs to.
+let _ttsNeuralCooldownUntil = Infinity;
+const _ttsNeuralCooldownWhy = "test";
+const _ttsHeadChunk = () => null;
+const _ttsHeadCache = new Map();
+const _TTS_HEAD_CHARS = 160;
+let _ttsStartWhy = "";
+let _ttsKeepVoice = null;
+let _ttsDirectBtn = null;
+const _ttsLog = () => {};
+const _ttsShowVoice = () => {};
+const _ttsNeuralUsable = () => false;
+const _ttsSpeakChunkNeural = () => {};
+const _ttsEnginePause = () => {};
 const window = {
   speechSynthesis: {
     speak: utterance => utterances.push(utterance),

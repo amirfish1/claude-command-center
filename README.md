@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 > “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
 > CCC user
 
-![CCC v5.35 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-35-hero.png)
+![CCC v5.37 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-37-hero.png)
 
 Other ways to install. With Homebrew:
 
