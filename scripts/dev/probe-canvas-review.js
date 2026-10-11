@@ -1,7 +1,7 @@
 // Review-fix verification: 1280x800 + 1920x1080, runtime first view,
 // fit view, design mode (library scroll/fade), edge routing.
-const puppeteer = require('./require-puppeteer.js');
-const { findChromePath } = require('./puppeteer-browser-config.js');
+const puppeteer = require('../../require-puppeteer.js');
+const { findChromePath } = require('../../puppeteer-browser-config.js');
 const fs = require('fs');
 const os = require('os');
 const LAYOUT = os.homedir() + '/.claude/command-center/canvas-layout.json';
