@@ -73,6 +73,9 @@ def mock_memory_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "0")  # disable cutoff for tests
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(fts_db))
+    # Keep the host's real ~/.hermes sessions out of search results.
+    from ccc_server import hermes as _hermes
+    monkeypatch.setattr(_hermes, "search_hermes_messages", lambda *a, **k: [])
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")  # disable cutoff for tests
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")  # tmp_path looks scratch-y
     # These tests exercise the FTS/graph enrichment path, not the optional
