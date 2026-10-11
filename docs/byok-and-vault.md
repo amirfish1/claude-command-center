@@ -47,6 +47,22 @@ check does not launch an agent or spend tokens.
 
 ![Settings Engines with BYOK key form, profiles, and spend summary](images/byok-settings.png)
 
+### Paid-key presets: GLM, Kimi, DeepSeek, Qwen, MiniMax
+
+**Settings > Free models** and the key wizard offer presets for GLM (Z.AI /
+Zhipu), Kimi (Moonshot), DeepSeek, Qwen (Alibaba Cloud Model Studio) and
+MiniMax. They run Claude sessions against each vendor's Anthropic-compatible
+endpoint. Every vendor except DeepSeek has an international and a China
+endpoint; pick the region where you created the key. Keys from one region do
+not work on the other endpoint. Kimi Code subscription keys and Qwen Coding
+Plan keys do not work here either.
+
+These models are paid at the vendor's rates and do not use the free router.
+The key stays in CCC's local key store, while prompts and code go straight to
+the vendor you chose. A resumed preset session keeps its vendor and never falls
+back to your Anthropic login. Endpoints and region notes live in
+`ccc_server/domestic_presets.py`.
+
 ## Vault: any other secret
 
 Use **Settings > Vault** for secrets that are not LLM provider keys, such as

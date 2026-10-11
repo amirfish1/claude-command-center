@@ -1,8 +1,10 @@
 # CCC
 
+**English** · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
+
 **Your coding agents outgrew your terminal.**
 
-CCC puts every session on one local board and tells you which one needs you.
+CCC puts every session on one local board and tells you which one needs you. Not affiliated with Anthropic.
 
 _Start the next while Claude builds the first._
 

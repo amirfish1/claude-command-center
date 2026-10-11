@@ -4256,6 +4256,15 @@ def _session_fts_perf_env(tmp_path, monkeypatch, n_docs=300):
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
     monkeypatch.setenv("CCC_SESSION_FTS_EMBED", "0")
+    # Session search also ranks hits from Hermes' messages_fts and enriches
+    # Hermes sids from the host's real ~/.hermes/state.db (+ profile DBs).
+    # On a box running the gateway that DB is hundreds of MB and constantly
+    # written, so a cold first keystroke paid for an FTS scan of it (0.69s
+    # vs a 0.5s bound) -- timing the host, not the code. Point both at
+    # files that don't exist so the Hermes channel short-circuits.
+    hermes_home = tmp_path / ".hermes"
+    monkeypatch.setattr(server, "HERMES_STATE_DB", hermes_home / "state.db")
+    monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
     for mod in (session_fts, ship_graph):
         if hasattr(mod._tls, "conn") and mod._tls.conn:
             mod._tls.conn.close()

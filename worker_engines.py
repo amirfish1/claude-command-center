@@ -656,6 +656,14 @@ class EngineHost:
                     peer_sender_sid=args.get("peer_sender_sid"),
                     idempotency_key=args.get("idempotency_key"),
                 )
+            if operation == "retire_idle":
+                # Limit-hit failover: the worker owns the warm child, so only
+                # it can retire it (busy children are deferred, never killed).
+                return {"ok": True, **legacy._retire_idle_headless_for_session(
+                    args.get("session_id"),
+                    reason=args.get("reason") or "",
+                    defer_if_busy=bool(args.get("defer_if_busy")),
+                )}
             if operation == "interrupt":
                 return legacy._interrupt_claude_headless_local(
                     args.get("session_id")

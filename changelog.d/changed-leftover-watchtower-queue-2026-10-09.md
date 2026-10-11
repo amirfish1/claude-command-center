@@ -1,0 +1,1 @@
+- Leftover Mode now suggests open tickets from all your WatchTower queues (this folder's queues first), and one click queues the ticket back in WatchTower (`wt run`) so a WatchTower worker claims it instead of a loose session.

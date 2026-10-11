@@ -34,27 +34,97 @@ def test_watchtower_scope_and_ownership(tmp_path, monkeypatch):
     (repo / '.git').mkdir()
     unrelated = tmp_path / 'other'
     unrelated.mkdir()
-    config = {'APP': {'repo_path': str(repo)}, 'OTHER': {'repo_path': str(unrelated)}}
+    config = {'OTHER': {'repo_path': str(unrelated)}, 'APP': {'repo_path': str(repo)},
+              'GONE': {'repo_path': str(tmp_path / 'missing')}, 'OLD': {'repo_path': str(unrelated), 'archived': True}}
     monkeypatch.setattr(leftover, '_core', SimpleNamespace(_wt_cli_path=lambda: 'wt', _wt_read_config=lambda: config))
     calls = []
-
-    def read(argv, cwd):
-        calls.append(argv)
-        return [
+    tickets = {
+        'APP': [
             {'ref': 'APP-1', 'title': 'Fix search', 'status': 'open'},
             {'ref': 'APP-2', 'title': 'Owned', 'status': 'open', 'claimed_by': 'worker'},
             {'ref': 'APP-3', 'title': 'Blocked', 'status': 'open', 'blocked_by': ['APP-2']},
             {'ref': 'APP-4', 'title': 'Human', 'status': 'open', 'needs_input': True},
             {'ref': 'APP-5', 'title': 'Elsewhere', 'status': 'open', 'repo_path': str(unrelated)},
             {'ref': 'APP-6', 'title': 'Closed', 'status': 'closed'},
-        ], 'ok'
+            {'ref': 'APP-7', 'title': 'Already queued', 'status': 'open', 'run_requested': True},
+            {'ref': 'not a ref; rm', 'title': 'Bad ref', 'status': 'open'},
+        ],
+        'OTHER': [{'ref': 'OTHER-9', 'title': 'Backlog elsewhere', 'status': 'open'}],
+    }
+
+    def read(argv, cwd):
+        calls.append(argv)
+        return tickets[argv[3]], 'ok'
 
     monkeypatch.setattr(leftover, '_read_cli', read)
     rows, status = leftover.watchtower_tasks(str(repo))
-    assert [r['title'] for r in rows] == ['Fix search']
+    # The folder's own queue comes first, then the user's other live queues;
+    # archived queues and queues whose folder is gone are never read.
+    assert [r['title'] for r in rows] == ['Fix search', 'Backlog elsewhere']
+    assert [r['queue'] for r in rows] == ['APP', 'OTHER']
+    assert all(r['dispatch'] == 'watchtower' and r['repo_path'] == str(repo) for r in rows)
+    assert rows[1]['task_repo'] == str(unrelated)
     assert status['status'] == 'ok'
-    assert len(calls) == 1
+    assert [c[3] for c in calls] == ['APP', 'OTHER']
     assert calls[0] == ['wt', 'ls', '-q', 'APP', '--status', 'open', '--limit', '50', '--json']
+
+
+def test_approve_runs_only_offered_watchtower_ticket(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    wt = leftover.proposal(repo, 'watchtower', 'APP-1', 'Fix search', '')
+    wt.update(queue='APP', dispatch='watchtower', task_repo=repo)
+    todo = leftover.proposal(repo, 'todo', 'a.py:1', 'Note', '')
+    leftover._CACHE[repo] = {'ts': 1.0, 'loading': False, 'value': {'ok': True, 'repo_path': repo, 'proposals': [wt, todo]}}
+    monkeypatch.setattr(leftover, '_core', SimpleNamespace(_wt_cli_path=lambda: '/bin/wt'))
+    runs = []
+    monkeypatch.setattr(leftover.subprocess, 'run', lambda argv, **kw: runs.append(argv) or SimpleNamespace(returncode=0, stdout='RUNNABLE: APP-1', stderr=''))
+
+    assert leftover.approve(repo, 'unknown')[1] == 409
+    assert leftover.approve(repo, todo['id'])[1] == 409
+    assert runs == []
+    body, status = leftover.approve(repo, wt['id'])
+    assert (status, body) == (200, {'ok': True, 'ref': 'APP-1', 'queue': 'APP'})
+    assert runs == [['/bin/wt', 'run', 'APP-1']]
+    # Approved tickets leave the offer so a second click cannot queue it twice.
+    assert [p['id'] for p in leftover._CACHE[repo]['value']['proposals']] == [todo['id']]
+    assert leftover.approve(repo, wt['id'])[1] == 409
+
+
+def test_overlapping_approvals_reserve_each_offer(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    first = leftover.proposal(repo, 'watchtower', 'APP-1', 'One', '')
+    second = leftover.proposal(repo, 'watchtower', 'APP-2', 'Two', '')
+    for row in (first, second):
+        row.update(queue='APP', dispatch='watchtower', task_repo=repo)
+    leftover._CACHE[repo] = {'ts': 1.0, 'loading': False, 'value': {'ok': True, 'repo_path': repo, 'proposals': [first, second]}}
+    monkeypatch.setattr(leftover, '_core', SimpleNamespace(_wt_cli_path=lambda: '/bin/wt'))
+    runs, nested = [], []
+
+    def run(argv, **kw):
+        runs.append(argv[-1])
+        if argv[-1] == 'APP-1':
+            # A second click lands while the first `wt run` is still going.
+            nested.append(leftover.approve(repo, second['id']))
+            nested.append(leftover.approve(repo, first['id']))
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr(leftover.subprocess, 'run', run)
+    assert leftover.approve(repo, first['id'])[1] == 200
+    assert [status for _, status in nested] == [200, 409]
+    assert runs == ['APP-1', 'APP-2']
+    assert leftover._CACHE[repo]['value']['proposals'] == []
+
+
+def test_approve_reports_watchtower_errors(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    wt = leftover.proposal(repo, 'watchtower', 'APP-1', 'Fix search', '')
+    wt.update(queue='APP', dispatch='watchtower', task_repo=repo)
+    leftover._CACHE[repo] = {'ts': 1.0, 'loading': False, 'value': {'ok': True, 'repo_path': repo, 'proposals': [wt]}}
+    monkeypatch.setattr(leftover, '_core', SimpleNamespace(_wt_cli_path=lambda: '/bin/wt'))
+    monkeypatch.setattr(leftover.subprocess, 'run', lambda argv, **kw: SimpleNamespace(returncode=1, stdout='', stderr='error: APP-1 not found'))
+    body, status = leftover.approve(repo, wt['id'])
+    assert status == 502 and body == {'ok': False, 'error': 'error: APP-1 not found'}
+    assert leftover._CACHE[repo]['value']['proposals'] == [wt]
 
 
 def test_worktree_queue_identity(tmp_path):

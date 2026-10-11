@@ -22,14 +22,20 @@ before switching providers.
 
 - Your Claude subscription OAuth token.
 - Your Anthropic paid API key or Claude account login credentials.
+- Claude models. A router whose model id names a Claude model (`claude-*`,
+  `anthropic/...`) is refused as "not ready" instead of being used.
 
 CCC sets routing for one child process at a time. It does not write free-router
 settings to `~/.claude/settings.json`. Free spawns and failover resumes remove
 inherited paid credentials before adding the router's own key.
 
-After **Switch back**, the free child retires, once its current turn finishes.
-Your next normal resume uses your usual plan. Switching back does not send a
-prompt or spend a paid turn just to change providers.
+While a session runs on the router, every later turn stays there, including
+turns that start a fresh process. Once your plan's limit resets, CCC switches
+the session back by itself, unless you chose **Keep free**. You can also
+**Switch back** early. Either way the free child retires once its current turn
+finishes, and your next resume uses your usual plan. Switching back does not
+send a prompt or spend a paid turn just to change providers. Each hop leaves a
+marker in the session's transcript.
 
 ## Keyless does not mean private
 
@@ -96,6 +102,19 @@ Missing or incomplete analytics fail the test instead of counting as zero.
 With `CCC_E2E_KEEP=1`, private logs and sanitized analytics stay under the test
 HOME printed by the script. Keep those artifacts local. The test sends no
 report to a public service.
+
+A hermetic version needs only the `claude` CLI. It runs a fake plan endpoint
+and a fake router on loopback, with a simulated limit and reset. There is no
+network traffic and no spend:
+
+```bash
+python3 -m pytest tests/test_continue_session_e2e.py -q
+```
+
+It checks that the approved hop and a later fresh-process turn both reach the
+router. It checks that the switch-back sends nothing and the next turn returns
+to the plan. It also checks that the router sees only its own token and a
+non-Claude model.
 
 See [Free models](free-models.md) for setup and [Security](../SECURITY.md) for
 the localhost trust boundary.
