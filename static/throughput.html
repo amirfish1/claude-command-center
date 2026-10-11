@@ -3932,7 +3932,9 @@
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
       // Extra right padding when either secondary axis needs room.
-      const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
+      // Without quota context the 3-hour view falls back to a cumulative-tokens line.
+      const showTokenCumFallback = sixhourly && isAggregate && !showWeeklyOverlay;
+      const rightPad = (showWeeklyOverlay || showCumulative || showTokenCumFallback) ? 52 : 30;
       const padding = { top: showAccountUsage ? 44 : 20, right: rightPad, bottom: 54, left: 60 };
 
       // Build sourceRows — aggregate hourly data into 3h buckets scoped to billing period.
@@ -4394,6 +4396,43 @@
           resetMarkerWindow,
           selPeriodStart ? selPeriodStart.getTime() : null,
         );
+      }
+
+      // ── Cumulative tokens fallback (3-hour view, no quota context) ────────────
+      if (showTokenCumFallback) {
+        let run = 0;
+        const cumTok = sourceRows.map(row => {
+          if (!row || row._projected) return null;
+          run += (row.effective_input_tokens || 0) + (row.output_tokens || 0);
+          return run;
+        });
+        const maxTok = Math.max(...cumTok.filter(v => v != null), 0);
+        if (maxTok > 0) {
+          const cumH = height - padding.top - padding.bottom;
+          const yTok = v => padding.top + cumH * (1 - v / maxTok);
+          const mk = (tag, attrs) => {
+            const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+            Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+            svg.appendChild(el);
+            return el;
+          };
+          [0.5, 1].forEach(f => {
+            mk('text', {
+              x: width - padding.right + 4, y: yTok(maxTok * f) + 3, fill: '#47a6ff',
+              'font-size': '11px', 'font-family': 'var(--font-mono)',
+            }).textContent = fmtNum(Math.round(maxTok * f));
+          });
+          const d = cumTok.map((v, idx) => v == null ? null : `${xScale(idx + 1)},${yTok(v)}`)
+            .filter(Boolean).map((p, i) => `${i === 0 ? 'M' : 'L'}${p}`).join(' ');
+          mk('path', {
+            d, fill: 'none', stroke: '#47a6ff', 'stroke-width': '1.8',
+            'stroke-dasharray': '5,3', opacity: '0.8',
+          });
+          mk('text', {
+            x: width - padding.right + 4, y: padding.top - 4, fill: '#47a6ff', 'font-size': '11px',
+            'font-weight': 'bold', 'font-family': 'var(--font-mono)',
+          }).textContent = 'cumulative';
+        }
       }
 
       // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
