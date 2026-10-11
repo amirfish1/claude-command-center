@@ -294,6 +294,10 @@ def _run_history_case(case, tmp_dir):
     server._HISTORY_INDEX_PATH = tmp_dir / "index.db"
     _reset_history_conn()
     _set_session_fts_env(tmp_dir)
+    # Isolate the Hermes channel too: otherwise the searches scan this host's
+    # real ~/.hermes DBs and blow the thread deadline on a busy machine.
+    server.HERMES_STATE_DB = tmp_dir / "hermes" / "state.db"
+    server.HERMES_PROFILES_DIR = tmp_dir / "hermes" / "profiles"
     _prewarm_session_fts("widget refactor")
     succeeded = False
     try:
