@@ -3416,6 +3416,10 @@ def _isolate_hermes_search_channel(monkeypatch):
     the host's sessions."""
     from ccc_server import session_fts
     monkeypatch.setattr(session_fts, "_hermes_channel_hits", lambda query, limit: [])
+    # Likewise the sandbox-harvest channel: /tmp/ccc-local-* worker sandboxes
+    # and the harvested dir leak host transcripts into the index.
+    monkeypatch.setenv("CCC_SANDBOX_SCAN_ROOT", "/nonexistent/ccc-test-sandbox")
+    monkeypatch.setenv("CCC_HARVESTED_ROOT", "/nonexistent/ccc-test-harvested")
 
 
 def test_session_fts_second_search_does_no_reparse(tmp_path, monkeypatch):
