@@ -18722,7 +18722,8 @@ class TestCodexEsc(unittest.TestCase):
 
             res = self.server._interrupt_session("some-codex-session-id")
             self.assertFalse(res["ok"])
-            self.assertEqual(res["error"], "Codex session is not live — nothing to interrupt")
+            self.assertEqual(res["code"], "codex_no_active_turn")
+            self.assertEqual(res["error"], "Codex is idle - no running turn to interrupt")
 
     def test_interrupt_live_headless_claude_session_sends_sigint(self):
         with mock.patch.object(self.server, "_is_codex_session", return_value=False), \
