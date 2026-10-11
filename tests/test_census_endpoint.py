@@ -503,13 +503,16 @@ class TestAcpLiveActivityFields(unittest.TestCase):
 
     def test_pending_permissions_flag_needs_approval(self):
         server._kimi_session_index = lambda: {}
+        updated_at = time.time() - 9
         server._ACP_SESSION_STATE = {"kimi": {"session_k1": {
             "attached": True, "pending_permissions": [{"request_id": "r1"}],
-            "updated_at": time.time() - 9}}}
+            "updated_at": updated_at}}}
         out = server._acp_live_activity_fields("kimi", "session_k1")
         self.assertTrue(out["needs_approval"])
-        # No wire signal → falls back to the registry's updated_at.
-        self.assertAlmostEqual(out["sidecar_ts"], time.time() - 9, delta=2)
+        # No wire signal → falls back to the registry's updated_at, passed
+        # through verbatim (compare to the captured value, not a fresh
+        # time.time(), which flakes under suite load).
+        self.assertEqual(out["sidecar_ts"], updated_at)
 
     def test_grok_tail_mid_turn_then_finished(self):
         path = pathlib.Path(self._tmp.name) / "grok.jsonl"
