@@ -34,13 +34,15 @@ telemetry consent; it strictly adds an outbound loop.
 ## 2. The relay is not a proxy: closed capability list
 
 The relay cannot make the laptop do anything outside a **closed, versioned
-capability list**. The device's own allow-list in v1 is exactly four
+capability list**. The device's own allow-list in v1 is exactly five
 capabilities:
 
 - `session.send_input` — deliver bounded free-text input to a session.
 - `question.answer` — answer a waiting question, routed to the local session.
 - `session.wake` — wake a dormant session with provided text.
 - `session.detail` — return a bounded recent-turn preview window on demand.
+- `session.history` — the same read with a longer window (at most 120 turns,
+  redacted, under the relay's 48 KiB bound).
 
 `notification.ack` is relay-side only and never reaches the device.
 `session.stop` is **not** in v1 (deferred pending security review). Anything not

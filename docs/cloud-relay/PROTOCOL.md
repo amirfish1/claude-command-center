@@ -1,6 +1,6 @@
 # CCC Cloud Relay Protocol v1
 
-Status: Normative (2026-07-10). Owner: Fable.
+Status: Normative (2026-07-10). Owner: CCC maintainers.
 This is the open wire contract between (a) a local CCC ("device") and the
 hosted relay, and (b) a browser and the hosted relay. The hosted service
 implementation lives in the ccc-cloud repository; this spec is the contract
@@ -133,13 +133,26 @@ re-queue after 30 s without a result).
  "requested_by": {"kind": "user", "ua_class": "mobile|desktop"}}
 ```
 
-Device-side validation (fail-closed, in order): protocol version; capability
-in the device's own closed allow-list; `expires` in the future (max lifetime
-10 min, clock-skew grace 60 s); `seq` strictly greater than the last executed
-seq for this device (relay issues a per-device monotonic sequence; gaps are
-fine, regressions are rejected as `replay`); idempotency key unseen (else
-return recorded result, do not re-execute); payload size and schema. Only then
-execute by calling the local CCC loopback endpoint mapped below.
+Device-side validation (fail-closed, in order): a finalized `request_id`
+returns its recorded result immediately (idempotent, no re-execute); a
+`request_id` reserved-but-not-finalized on a prior attempt resolves to an
+`interrupted` error and is NOT re-dispatched (at-most-once across a crash);
+otherwise protocol version; capability in the device's own closed allow-list;
+`expires` in the future (max lifetime 10 min, clock-skew grace 60 s); payload
+size and schema. The device then **reserves** the `request_id` and executes by
+calling the local CCC loopback endpoint mapped below.
+
+**Replay defense is idempotency + expiry, not sequence ordering.** The relay
+issues a per-device monotonic `seq` for observability and in-batch ordering,
+but the device does NOT reject a command whose `seq` is below the high-water
+mark: the relay legitimately re-queues an earlier, never-delivered command
+after a later one advanced the mark (delivery to a dead socket), and rejecting
+it as `replay` would silently drop a real user action. A genuine replay of an
+already-executed command carries a seen `request_id` and is caught by the
+idempotency store (24 h ≫ the 10 min max lifetime); a never-seen command is
+either still-valid (executes once) or past `expires` (rejected). Reserve-
+before-dispatch guarantees at-most-once even if the device crashes between the
+local action and persisting the result.
 
 ### 4.4 Command result (device → cloud)
 
@@ -157,6 +170,7 @@ deletes the mailbox payload. Results are idempotent by `request_id`.
 | `question.answer` | `POST /api/answer-question` when a relayed question is pending; else `POST /api/inject-input {mode:"answer"}` |
 | `session.wake` | `POST /api/inject-input` with the provided text against a dormant session (existing resume path) |
 | `session.detail` | assembled read: bounded recent-turn window (≤ 20 turns, tail-read), returned via `/v1/result` `detail` field, relay caches ≤ 5 min then deletes |
+| `session.history` | same as `session.detail` with a longer window (≤ 120 turns, ≤ 4000 chars each, redacted); the device trims oldest turns so `detail` stays under the relay's 48 KiB `detail_json` bound and sets `detail.truncated` |
 | `notification.ack` | relay-side only; never reaches the device |
 
 Anything else → `{"status":"rejected","error_code":"unknown_capability"}`.
@@ -227,7 +241,7 @@ pair_code_expired, session_not_found, handoff_leased`.
 in `/v1/state`. Additive fields are non-breaking. This file is the changelog
 anchor for the protocol.
 
-## Appendix A — v1 clarifications (2026-07-10, Fable rulings)
+## Appendix A — v1 clarifications (2026-07-10, maintainer rulings)
 
 1. **Rotation trigger.** The relay may set `"rotate_requested": true` on any
    `/v1/state` or `/v1/poll` response; the client then performs §2 rotation.
@@ -249,3 +263,25 @@ anchor for the protocol.
    human follow-up); device offline items are cloud-computed → `offline`.
 6. **Capability tokens.** The §4.1 capability list may additionally include
    `session_detail` when the device supports on-demand detail windows.
+
+## Appendix B: client notes (2026-10)
+
+- Relay URL: `https://` for any host; plain `http://` only for a loopback host
+  (local staging). No userinfo, query, or fragment. The device secret is sent
+  only to the origin the user chose: a `relay_base_url` in the pairing answer
+  is used only when it has the same origin. There is no built-in service URL;
+  the user types it, or sets `CCC_CLOUD_SERVICE_URL`.
+- `POST /v1/pair/abandon` and `POST /v1/device/self-revoke` are device-bearer
+  authenticated. Unpair calls self-revoke best-effort, then wipes local
+  credentials whether or not the call lands.
+- `question.answer` payloads carry `answer` as `{index?: int, text?: str}`;
+  the device maps it to `/api/answer-question` `answers[]` (index `-1` when
+  only text is given).
+- Three consecutive `401 bad_device_credentials` responses, `device_revoked`,
+  or `account_deleted` stop the loop and wipe the local credential
+  (`disabled_reason` says why); network errors never do.
+- Only one CCC process per machine runs the loop (an exclusive lock in the
+  cloud state directory).
+- A failed local delivery reports the loopback endpoint's own snake_case
+  `code` as `error_code` (default `delivery_failed`), with a redacted
+  `detail.local_error`.

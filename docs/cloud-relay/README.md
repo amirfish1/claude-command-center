@@ -63,7 +63,9 @@ cloud app in a browser, and CCC running on the machine you want to pair.
 1. In the cloud app, start pairing. It shows a short **single-use pairing
    code** (8 characters, valid for 10 minutes) as text and as a QR code.
 2. Open the CCC Cloud settings panel in your **local** CCC dashboard and paste
-   the code in. (Pairing can only be started from the machine itself, on a
+   the code in, with your service's **Relay URL** (`https://` only; plain
+   `http://` is accepted for `localhost` staging). CCC ships no built-in service
+   URL: type it, or set `CCC_CLOUD_SERVICE_URL` to prefill it. (Pairing can only be started from the machine itself, on a
    localhost connection — a remote page cannot pair a computer for you.)
 3. Your local CCC contacts the relay to complete pairing and gets back a
    **masked** version of the account email — something like `a***@***.com`.
