@@ -79684,6 +79684,8 @@
     }
     networkRenderTailnet(data.tailnet);
     networkRenderEnvNotice(runtime.env_overrides);
+    // CCC Cloud relay section (static/cloud-relay.js).
+    try { if (window.cccCloudRelay) window.cccCloudRelay.open(); } catch (_) {}
   }
   function networkClose() {
     if ($networkModal) $networkModal.classList.remove('open');
