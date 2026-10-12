@@ -768,8 +768,14 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
             continue
         # Current feed items carry question_text / where / next_step rather
         # than a ready-made summary; pick the most informative available.
-        summary = (it.get("summary") or it.get("question_text")
-                   or it.get("where") or it.get("next_step") or "")
+        # A prose soft-block's question_text is a scraped transcript line;
+        # the session's own next step is the clean ask, so it wins there.
+        if it.get("kind") in ("soft_block", "sidecar_waiting"):
+            summary = it.get("next_step") or it.get("question_text") or ""
+        else:
+            summary = it.get("question_text") or ""
+        summary = (it.get("summary") or summary or it.get("where")
+                   or it.get("next_step") or "")
         a_ref = _norm_ref(it.get("session_id") or it.get("session_ref"))
         # Name the session even when it fell outside the capped sessions list.
         if a_ref in labels:

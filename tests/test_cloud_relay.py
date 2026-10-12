@@ -483,3 +483,18 @@ def test_attention_refs_join_sessions_and_carry_titles():
     opaque = cr.build_snapshot(API(), {"share_titles": False})
     assert all("Ship the docs" not in a["title"] for a in opaque["attention"])
     assert all("repo_label" not in a for a in opaque["attention"])
+
+
+def test_soft_block_summary_prefers_sessions_own_next_step():
+    class API(CountingLocalAPI):
+        def get(self, path, query=None):
+            if path == "/api/attention":
+                return 200, {"ok": True, "items": [{
+                    "kind": "soft_block", "priority": 2, "session_id": "sess-1",
+                    "question_text": "| a | table | row |",
+                    "next_step": "Pick Funnel or Cloud Relay.",
+                    "mtime": time.time()}]}
+            return super().get(path, query)
+
+    snap = cr.build_snapshot(API(), {"share_titles": True})
+    assert snap["attention"][0]["summary"] == "Pick Funnel or Cloud Relay."
