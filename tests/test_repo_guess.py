@@ -3,6 +3,7 @@ import email
 import io
 import json
 import sys
+import urllib.error
 import urllib.request
 
 import pytest
@@ -207,6 +208,21 @@ def test_jev_error_falls_back_to_local(rg, tmp_path, monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", boom)
     out = rg.repo_guess_request({"prompt": "something vague about pricing"})
     assert out["ok"] and out["repo_path"] is None and out["source"] == "none"
+
+
+def test_jev_auth_failure_is_logged_once(rg, tmp_path, monkeypatch):
+    _repos(tmp_path, monkeypatch, "alpha", "beta")
+    monkeypatch.setattr(rg, "_rg_jev_key", lambda: "jev-test-key")
+    monkeypatch.setattr(rg, "_RG_JEV_FAIL_LAST", {})
+    logged = []
+    monkeypatch.setattr(rg._core, "_log_activity", lambda *a: logged.append(a))
+
+    def unauthorized(*a, **k):
+        raise urllib.error.HTTPError(rg._RG_JEV_URL, 401, "Unauthorized", None, io.BytesIO(b""))
+    monkeypatch.setattr(urllib.request, "urlopen", unauthorized)
+    rg.repo_guess_request({"prompt": "something vague about pricing"})
+    rg.repo_guess_request({"prompt": "something else vague about pricing"})
+    assert logged == [("repoguess", "JEV_FAIL", "http=401 (bad or expired key)")]
 
 
 def test_jev_key_from_byok_profile(tmp_path, monkeypatch):

@@ -23,6 +23,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -408,6 +409,20 @@ def repo_guess_describe(repo):
 # Jev
 # ---------------------------------------------------------------------------
 
+# A failed Jev call falls back silently in the UI, so log it -- once per
+# distinct error per window, since the composer re-guesses on every pause.
+_RG_JEV_FAIL_LOG_EVERY_S = 600
+_RG_JEV_FAIL_LAST = {}
+
+
+def _rg_log_jev_failure(err):
+    now = time.time()
+    if now - _RG_JEV_FAIL_LAST.get(err, 0) < _RG_JEV_FAIL_LOG_EVERY_S:
+        return
+    _RG_JEV_FAIL_LAST[err] = now
+    _core._log_activity("repoguess", "JEV_FAIL", err)
+
+
 def _rg_jev_key():
     key = (os.environ.get("JEV_API_KEY") or "").strip()
     if key:
@@ -461,6 +476,7 @@ def _rg_ask_jev(key, prompt, cands, current_rep, mentioned=()):
         answer = data["answers"]["repo"]
         choice = labels.get(str(answer["choice"]))
         if not choice:
+            _rg_log_jev_failure(f"unknown choice={str(answer['choice'])[:40]!r}")
             return None
         conf = max(0.0, min(1.0, float(answer.get("confidence") or 0.0)))
         probs = []
@@ -469,7 +485,12 @@ def _rg_ask_jev(key, prompt, cands, current_rep, mentioned=()):
                 probs.append((labels[lab], float(pr)))
         probs.sort(key=lambda t: -t[1])
         return choice, conf, probs
-    except Exception:
+    except urllib.error.HTTPError as e:
+        hint = " (bad or expired key)" if e.code in (401, 403) else ""
+        _rg_log_jev_failure(f"http={e.code}{hint}")
+        return None
+    except Exception as e:
+        _rg_log_jev_failure(f"{type(e).__name__}: {str(e)[:120]}")
         return None
 
 
