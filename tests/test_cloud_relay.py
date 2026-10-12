@@ -451,3 +451,8 @@ def test_inject_failure_carries_redacted_local_error(tmp_path):
     r = ex.execute(_cmd("session.send_input", "e-1", {"session_ref": "s", "text": "hi"}))
     assert r["error_code"] == "invalid_cwd"
     assert "/Users/alice" not in r["detail"]["local_error"]
+
+
+def test_stale_tool_call_maps_to_stuck_not_approval():
+    assert cr._map_attention_kind("stale_tool_call") == "stuck"
+    assert cr._map_attention_kind("pending_tool") == "approval"

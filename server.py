@@ -40427,15 +40427,21 @@ def _classify_attention(c):
                 "has_structured": has_structured,
             }
 
-        if c.get("stale_tool_call"):
+        # Same liveness gate: a dead process has no tool call left to be
+        # stuck in. Without it every session that died mid-tool stayed
+        # "may be stuck" forever (110 corpses up to 96 days old). A dormant
+        # Codex session can still be woken, so it keeps the flag for a day.
+        _stale_codex = (c.get("source") == "codex" or c.get("engine") == "codex")
+        if c.get("stale_tool_call") and (
+                live or (_stale_codex
+                         and (c.get("stale_tool_age_s") or 0) < 86400)):
             tool_age = c.get("stale_tool_age_s") or 0
             age_minutes = max(1, round(tool_age / 60)) if tool_age else None
             # Use a placeholder for the ticking age so the dashboard can render
             # it in a volatile span and avoid rebuilding the whole conversation
             # list every time the age increments.
             age_text = "{{stale_age}}" if age_minutes else ""
-            _stale_is_codex = (c.get("source") == "codex" or c.get("engine") == "codex")
-            if _stale_is_codex:
+            if _stale_codex:
                 _stale_where = "Needs attention · Codex tool stopped reporting"
                 _stale_next = state.get("next_step_user") or (
                     f"Wake Codex - {pending_tool or 'a tool call'} has been open{age_text}" +

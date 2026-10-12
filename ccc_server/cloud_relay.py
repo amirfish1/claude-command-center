@@ -634,7 +634,11 @@ def _map_attention_kind(kind) -> str:
     if k in ("question_blocked", "soft_block", "sidecar_waiting") \
             or "question" in k or "waiting" in k or "ask" in k:
         return "question"
-    if k in ("pending_tool", "stale_tool_call", "needs_approval") \
+    # A wedged tool call is not an approval request; it falls through to
+    # "stuck" below.
+    if k == "stale_tool_call":
+        return "stuck"
+    if k in ("pending_tool", "needs_approval") \
             or "approval" in k or "permission" in k:
         return "approval"
     if "fail" in k or "error" in k:
