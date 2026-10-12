@@ -1,0 +1,1 @@
+- Needs Your Attention now catches sessions whose next step hands a choice back to you ("Say X if you want Y", "Tell me which"), not only ones that end on a question mark.

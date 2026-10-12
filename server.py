@@ -40104,6 +40104,8 @@ _NS_DECISION_WORDS = (
     "review", "approve", "confirm", "pick", "choose", "which", "want me",
     "should i", "should we", "redirect", "your call", "let me know", "sign off",
     "decide", "answer", "respond", "reply", "approve or", "go deep",
+    # "Say X if you want Y" hands the choice back just as much as a question.
+    "say ", "tell me", "if you want", "do you want", "give me", "send me",
 )
 _NS_SKIP_PREFIXES = (
     # done / shipped

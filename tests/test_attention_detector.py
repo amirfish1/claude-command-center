@@ -446,3 +446,14 @@ def test_soft_block_score_is_memoized_per_text(monkeypatch):
     assert server._detect_soft_block(row)
     assert server._detect_soft_block(dict(row))
     assert calls["n"] == 1
+
+
+@pytest.mark.parametrize("ns, expected", [
+    ('Say "fix the refs" if you want attention items to carry session names.', True),
+    ("Tell me which host to deploy to.", True),
+    ("Answer Q1 (Funnel or Cloud Relay).", True),
+    ("Refresh the cloud page and check the sessions list.", False),
+    ("Nothing to do; it shipped.", False),
+])
+def test_next_step_decision_phrases(ns, expected):
+    assert server._next_step_requests_decision(ns) is expected
