@@ -1,0 +1,1 @@
+- New Session repo guess now knows what each repo is for: it reads CLAUDE.md and AGENTS.md as well as the README, skips language-switcher and tool-managed lines, and sends Jev your past session titles in each repo, so a prompt like "send the digest to owners" finds the right repo without naming it.

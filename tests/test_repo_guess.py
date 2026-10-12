@@ -3,6 +3,7 @@ import email
 import io
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -27,6 +28,8 @@ def rg(tmp_path, monkeypatch):
     # tmp_path lives under /private/var on macOS, which the path rule ignores.
     monkeypatch.setattr(repo_guess, "_RG_IGNORED_ROOTS", ())
     monkeypatch.setattr(repo_guess, "_rg_scores", lambda paths: {})
+    # A fresh, empty recent-work index: no background rebuild during a test.
+    monkeypatch.setattr(repo_guess, "_RG_RECENT", {"at": time.time(), "by_slug": {}, "building": False})
     return repo_guess
 
 
@@ -259,7 +262,8 @@ def test_description_from_readme_and_fallback(rg, tmp_path):
     (d / "README.md").write_text(
         "# Shop API\n\n[![ci](x.svg)](y)\n<p align=center>hi</p>\n\n"
         "Backend for   the\nonline shop.\n\nSecond paragraph.\n")
-    assert rg.repo_guess_describe(str(d)) == "Shop API: Backend for the online shop."
+    # A short first paragraph keeps reading into the next one.
+    assert rg.repo_guess_describe(str(d)) == "Shop API: Backend for the online shop. Second paragraph."
     e = tmp_path / "empty"
     e.mkdir()
     assert rg.repo_guess_describe(str(e)) == "Folder empty"
@@ -275,6 +279,73 @@ def test_description_override_and_length_caps(rg, tmp_path):
     d2.mkdir()
     (d2 / "CLAUDE.md").write_text("# T\n\n" + "word " * 200)
     assert len(rg.repo_guess_describe(str(d2))) <= 300
+
+
+def test_description_skips_nav_links_and_managed_blocks(rg, tmp_path):
+    d = tmp_path / "r5"
+    d.mkdir()
+    (d / "README.md").write_text(
+        "# CCC\n\n**English** · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)\n\n"
+        "A dashboard for coding agents.\n")
+    assert rg.repo_guess_describe(str(d)) == "CCC: A dashboard for coding agents."
+    e = tmp_path / "r6"
+    e.mkdir()
+    (e / "CLAUDE.md").write_text(
+        "<!-- memplug:start -->\n## Project memory\n\nAuto-managed notes.\n<!-- memplug:end -->\n\n"
+        "# Studio app\n\nBooking for yoga studios.\n")
+    assert rg.repo_guess_describe(str(e)) == "Studio app: Booking for yoga studios."
+
+
+def test_description_reads_readme_and_claude_md(rg, tmp_path):
+    d = tmp_path / "r7"
+    d.mkdir()
+    (d / "README.md").write_text("# Old Name\n\nA stale summary.\n")
+    (d / "CLAUDE.md").write_text("# New Name\n\nWhat the repo is today.\n")
+    desc = rg.repo_guess_describe(str(d))
+    assert "Old Name: A stale summary." in desc and "New Name: What the repo is today." in desc
+
+
+def test_recent_session_titles_sent_as_recent_work(rg, tmp_path, monkeypatch):
+    a, b = _repos(tmp_path, monkeypatch, "alpha", "beta")
+    server = _server()
+    slug = server._encode_project_slug(b)
+    fake_cache = {
+        f"/p/{slug}/1.jsonl": {"mtime": 1, "last_meaningful_ts": 10, "custom_title": "Send owner digest emails"},
+        f"/p/{slug}/2.jsonl": {"mtime": 1, "last_meaningful_ts": 20, "custom_title": "fix-booking-page"},
+        f"/p/{slug}/3.jsonl": {"mtime": 1, "last_meaningful_ts": 5, "custom_title": "token sk-ant-test-XXXXXXXXXXXX"},
+        "/p/other/4.jsonl": {"mtime": 1, "custom_title": "Unrelated"},
+    }
+    monkeypatch.setattr(server, "_conv_meta_cache", fake_cache)
+    rg._rg_build_recent_titles()
+    assert rg._rg_recent_titles([b]) == ["fix booking page", "Send owner digest emails",
+                                         "token sk-ant-test-XXXXXXXXXXXX"]
+    monkeypatch.setattr(rg, "_rg_jev_key", lambda: "jev-test-key")
+    seen = {}
+
+    def fake(req, timeout=None):
+        seen["body"] = json.loads(req.data.decode())
+        return _Resp({"answers": {"repo": {"choice": "R2", "confidence": 0.9}}})
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    rg.repo_guess_request({"prompt": "start sending the digest to owners"})
+    crit = seen["body"]["questions"]["repo"]["criteria"]
+    # A title sharing a word with the prompt ("digest") leads, then the newest.
+    assert "Recent work: Send owner digest emails; fix booking page" in crit["R2"]
+    assert "Recent work" not in crit["R1"] and "sk-ant-test" not in crit["R2"]
+
+
+def test_recent_titles_never_scan_on_request_path(rg, monkeypatch):
+    started = []
+
+    class _T:
+        def __init__(self, **k):
+            self.k = k
+
+        def start(self):
+            started.append(self.k)
+    monkeypatch.setattr(rg.threading, "Thread", _T)
+    monkeypatch.setattr(rg, "_RG_RECENT", {"at": 0.0, "by_slug": None, "building": False})
+    assert rg._rg_recent_titles(["/x"]) == [] and rg._rg_recent_titles(["/x"]) == []
+    assert len(started) == 1 and started[0]["target"] is rg._rg_build_recent_titles
 
 
 def test_description_cache_does_not_reread_unchanged_file(rg, tmp_path, monkeypatch):

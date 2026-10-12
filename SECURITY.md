@@ -53,7 +53,7 @@ We'll respond within a week. If the report is valid we'll cut a fix release befo
 
 ## Optional outbound call: new-session repo guess
 
-When you start a new session, CCC guesses the right folder from your first prompt. Path and folder-name matching is local and never touches the network. Only if you add a TypeSafe Jev key (Settings > BYOK, or the `JEV_API_KEY` environment variable) does CCC also send the prompt (up to 3000 characters, with likely secrets such as tokens, API keys and passwords replaced by `[REDACTED]`) plus opaque repo labels and short repo descriptions to `https://api.typesafe.ai/v1/systemone`. No key means no call. The key is used only for this call and is not passed to spawned agent sessions unless you explicitly choose that BYOK profile at spawn; failures and timeouts (3 seconds) silently fall back to the local result.
+When you start a new session, CCC guesses the right folder from your first prompt. Path and folder-name matching is local and never touches the network. Only if you add a TypeSafe Jev key (Settings > BYOK, or the `JEV_API_KEY` environment variable) does CCC also send the prompt (up to 3000 characters, with likely secrets such as tokens, API keys and passwords replaced by `[REDACTED]`) plus opaque repo labels, short repo descriptions (from each repo's README / CLAUDE.md / AGENTS.md) and up to a dozen of your past session titles per repo (scrubbed the same way) to `https://api.typesafe.ai/v1/systemone`. No key means no call. The key is used only for this call and is not passed to spawned agent sessions unless you explicitly choose that BYOK profile at spawn; failures and timeouts (3 seconds) silently fall back to the local result.
 
 ## Optional outbound call: share card upload
 

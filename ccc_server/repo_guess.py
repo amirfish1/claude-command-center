@@ -322,7 +322,27 @@ def _rg_collapse_ws(text):
     return " ".join(str(text).split())
 
 
-def _rg_summarize_markdown(text):
+# Tool-managed blocks (`<!-- name:start -->...<!-- name:end -->`, e.g. a
+# memory plugin's section at the top of CLAUDE.md) say nothing about the repo.
+_RG_MANAGED_BLOCK = re.compile(r"<!--\s*([\w.-]+):start\s*-->.*?<!--\s*\1:end\s*-->", re.S)
+_RG_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_RG_MD_LINK = re.compile(r"!?\[[^\]]*\]\([^)]*\)")
+# A first paragraph shorter than this keeps reading the next one.
+_RG_DESC_MIN_BODY = 120
+# Bump when the summarizer changes so cached descriptions are rebuilt.
+_RG_DESC_VERSION = 2
+
+
+def _rg_link_only(line):
+    """True for nav lines like `**English** · [日本語](README.ja.md)`."""
+    if not _RG_MD_LINK.search(line):
+        return False
+    rest = re.sub(r"[*_`·•|/,\-\s]+", " ", _RG_MD_LINK.sub(" ", line)).strip()
+    return len(rest) < 12
+
+
+def _rg_summarize_markdown(text, limit=_RG_DESC_MAX):
+    text = _RG_HTML_COMMENT.sub("", _RG_MANAGED_BLOCK.sub("", text))
     lines = text.splitlines()
     i = 0
     if lines and lines[0].strip() == "---":  # YAML front matter
@@ -343,66 +363,159 @@ def _rg_summarize_markdown(text):
         if not heading and s.startswith("#"):
             heading = s.lstrip("#").strip()
             continue
-        if s.startswith("#"):
-            if para:
+        long_enough = len(" ".join(para)) >= _RG_DESC_MIN_BODY
+        if not s or s.startswith(("#", "![", "[![", "<", "|", "---", "===")) or _rg_link_only(s):
+            if para and long_enough:
                 break
             continue
-        if not s or s.startswith(("![", "[![", "<", "|", "---", "===")):
-            if para:
-                break
-            continue
-        para.append(s)
+        para.append(s.lstrip("-*+ ") if s[:2] in ("- ", "* ", "+ ") else s)
     body = _rg_collapse_ws(" ".join(para))
     head = _rg_collapse_ws(heading)
     if head and body:
         out = f"{head}: {body}"
     else:
         out = head or body
-    return out[:_RG_DESC_MAX].rstrip()
+    return out[:limit].rstrip()
 
 
-def _rg_desc_source(repo):
-    """(kind, path, (mtime_ns, size)) of the first description source, else None."""
-    cands = [("override", Path(repo) / _RG_OVERRIDE_REL)]
-    cands += [("doc", Path(repo) / n) for n in _RG_DESC_SOURCES]
-    for kind, p in cands:
+def _rg_desc_sources(repo):
+    """[(kind, path, [mtime_ns, size])]: the override alone if present, else
+    every doc that exists. README goes stale; CLAUDE.md / AGENTS.md are kept
+    current for agents, so they are read too and listed first."""
+    found = []
+    for kind, name in (("override", _RG_OVERRIDE_REL),) + tuple(("doc", n) for n in _RG_DESC_SOURCES):
+        path = Path(repo) / name
         try:
-            st = p.stat()
+            st = path.stat()
         except OSError:
             continue
-        if kind == "doc" and not os.path.isfile(p):
+        if kind == "doc" and not os.path.isfile(path):
             continue
-        return kind, p, [st.st_mtime_ns, st.st_size]
-    return None
+        if kind == "override":
+            return [(kind, path, [st.st_mtime_ns, st.st_size])]
+        found.append((kind, path, [st.st_mtime_ns, st.st_size]))
+    return found
 
 
 def repo_guess_describe(repo):
     """Short description of a repo for the Jev criteria."""
     base = os.path.basename(str(repo).rstrip(os.sep)) or str(repo)
     fallback = f"Folder {base}"
-    src = _rg_desc_source(repo)
-    sig = [str(src[1].name), *src[2]] if src else None
+    srcs = _rg_desc_sources(repo)
+    sig = [_RG_DESC_VERSION] + [[str(p.name), *st] for _, p, st in srcs]
     with _RG_DESC_LOCK:
         _rg_desc_load()
         hit = _RG_DESC_CACHE.get(repo)
         if hit and hit.get("sig") == sig:
             return hit["desc"] or fallback
-    desc = ""
-    if src:
+    parts = []
+    per_doc = max(_RG_DESC_MAX // max(len(srcs), 1), 120)
+    for kind, path, _ in srcs:
         try:
-            raw = _rg_read_head(src[1])
-            if src[0] == "override":
-                desc = _rg_collapse_ws(raw)[:_RG_OVERRIDE_MAX]
-            else:
-                desc = _rg_summarize_markdown(raw)
+            raw = _rg_read_head(path)
         except OSError:
-            desc = ""
+            continue
+        if kind == "override":
+            parts.append(_rg_collapse_ws(raw)[:_RG_OVERRIDE_MAX])
+        else:
+            part = _rg_summarize_markdown(raw, per_doc)
+            if part and part not in parts:
+                parts.append(part)
+    desc = " / ".join(parts)[:max(_RG_DESC_MAX, _RG_OVERRIDE_MAX if srcs and srcs[0][0] == "override" else 0)].rstrip()
     desc = desc or fallback
     with _RG_DESC_LOCK:
         _rg_desc_load()
         _RG_DESC_CACHE[repo] = {"sig": sig, "desc": desc}
         _rg_desc_save()
     return desc
+
+
+# ---------------------------------------------------------------------------
+# Recent work: the user's own session titles per repo
+# ---------------------------------------------------------------------------
+
+# What you actually do in a repo says more than its README. Titles come from
+# the in-memory transcript-metadata cache, indexed off the request path in a
+# background thread at most once per TTL; a request reads the last snapshot.
+_RG_RECENT_PER_REPO = 6
+# Older titles kept per repo so one that matches the prompt can still be sent.
+_RG_RECENT_INDEX_PER_REPO = 300
+_RG_RECENT_MATCHES = 6
+_RG_RECENT_TTL_S = 600
+_RG_WORD = re.compile(r"[a-z0-9]{4,}")
+_RG_COMMON_WORDS = frozenset((
+    "about", "after", "again", "also", "check", "could", "does", "doesn", "from", "have",
+    "into", "just", "like", "make", "more", "need", "only", "should", "some", "start",
+    "still", "than", "that", "their", "them", "then", "there", "they", "this", "what",
+    "when", "where", "which", "while", "with", "would", "your", "issue", "issues", "work",
+))
+_RG_RECENT = {"at": 0.0, "by_slug": None, "building": False}
+_RG_RECENT_LOCK = threading.Lock()
+
+
+def _rg_build_recent_titles():
+    by_slug = None
+    try:
+        with _core._conv_meta_cache_lock:
+            items = list(_core._conv_meta_cache.items())
+        rows = {}
+        for key, meta in items:
+            if not isinstance(meta, dict):
+                continue
+            title = str(meta.get("custom_title") or meta.get("ai_title") or "").strip()
+            if not title:
+                continue
+            if " " not in title:  # launch slugs like `fix-booking-page`
+                title = title.replace("-", " ")
+            ts = float(meta.get("last_meaningful_ts") or meta.get("mtime") or 0)
+            rows.setdefault(os.path.basename(os.path.dirname(str(key))), []).append((ts, title[:80]))
+        by_slug = {}
+        for slug, rs in rows.items():
+            rs.sort(reverse=True)
+            keep, seen = [], set()
+            for ts, t in rs:
+                if t.lower() not in seen:
+                    seen.add(t.lower())
+                    keep.append((ts, t))
+                if len(keep) >= _RG_RECENT_INDEX_PER_REPO:
+                    break
+            by_slug[slug] = keep
+    except Exception:
+        by_slug = None
+    with _RG_RECENT_LOCK:
+        if by_slug is not None:
+            _RG_RECENT["by_slug"] = by_slug
+        _RG_RECENT["at"] = time.time()
+        _RG_RECENT["building"] = False
+
+
+def _rg_prompt_words(prompt):
+    return {w for w in _RG_WORD.findall(str(prompt or "").lower()) if w not in _RG_COMMON_WORDS}
+
+
+def _rg_recent_titles(paths, prompt=""):
+    """Session titles across ``paths`` (a repo and its worktrees): older ones
+    that share a word with ``prompt`` first, then the newest. Never scans on
+    the request path: a stale or cold index starts one background rebuild and
+    this call uses what it has (maybe nothing)."""
+    with _RG_RECENT_LOCK:
+        by_slug = _RG_RECENT["by_slug"]
+        if time.time() - _RG_RECENT["at"] > _RG_RECENT_TTL_S and not _RG_RECENT["building"]:
+            _RG_RECENT["building"] = True
+            threading.Thread(target=_rg_build_recent_titles, daemon=True).start()
+    if not by_slug:
+        return []
+    rows = []
+    for p in dict.fromkeys(paths):
+        try:
+            rows.extend(by_slug.get(_core._encode_project_slug(p), ()))
+        except Exception:
+            continue
+    rows.sort(reverse=True)
+    titles = list(dict.fromkeys(t for _, t in rows))
+    words = _rg_prompt_words(prompt)
+    matches = [t for t in titles if words & set(_RG_WORD.findall(t.lower()))][:_RG_RECENT_MATCHES] if words else []
+    return list(dict.fromkeys(matches + titles[:_RG_RECENT_PER_REPO]))
 
 
 # ---------------------------------------------------------------------------
@@ -440,14 +553,21 @@ def _rg_jev_key():
     return ""
 
 
-def _rg_ask_jev(key, prompt, cands, current_rep, mentioned=()):
-    """-> (choice_path, confidence, [(path, prob)]) or None on any failure."""
+def _rg_ask_jev(key, prompt, cands, current_rep, mentioned=(), members=None):
+    """-> (choice_path, confidence, [(path, prob)]) or None on any failure.
+
+    ``members`` maps a candidate to every known path it stands for (its
+    worktrees), whose session titles count as its recent work."""
     labels = {f"R{i + 1}": p for i, p in enumerate(cands)}
     by_path = {p: lab for lab, p in labels.items()}
     criteria = {}
     for lab, p in labels.items():
         base = os.path.basename(p.rstrip(os.sep))
-        criteria[lab] = f"{base}: {repo_guess_describe(p)}"
+        crit = f"{base}: {repo_guess_describe(p)}"
+        recent = _rg_recent_titles([p, *((members or {}).get(p) or ())], prompt)
+        if recent:
+            crit += " Recent work: " + repo_guess_scrub("; ".join(recent))
+        criteria[lab] = crit
     cur_label = by_path.get(current_rep) if current_rep else None
     ment = [by_path[p] for p in dict.fromkeys(mentioned) if p in by_path]
     body = {
@@ -546,8 +666,11 @@ def repo_guess_request(body):
                 jc.append(path_hit)
             if len(jc) >= 2:
                 cur_rep = collapse.get(_rg_norm(current)) if current else None
+                members = {}
+                for path, rep in collapse.items():
+                    members.setdefault(rep, []).append(path)
                 res = _rg_ask_jev(key, prompt, jc, cur_rep,
-                                  ([path_hit] if path_hit else []) + name_hits)
+                                  ([path_hit] if path_hit else []) + name_hits, members)
                 if res:
                     choice, conf, probs = res
                     return done(choice, conf, "jev", [_rg_cand_row(p, pr) for p, pr in probs[:5]])
