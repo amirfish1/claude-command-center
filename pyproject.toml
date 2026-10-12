@@ -77,5 +77,14 @@ only-include = [
 [tool.setuptools.package-data]
 "*" = ["skills/*.md", "static/**/*", "hooks/*.py"]
 
+# `cloud_relay_e2e` tests boot the ccc-cloud relay service in-process, which
+# pins sys.modules['server'] to the ccc-cloud package for the rest of the
+# process (see tests/cloud_relay_harness.py), shadowing this repo's server.py.
+# Deselected by default; opt in with CCC_CLOUD_REPO=<checkout>
+# `python3 -m pytest -o addopts="" -m cloud_relay_e2e tests/test_cloud_relay_e2e.py`.
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "cloud_relay_e2e: boots the ccc-cloud relay in-process (needs CCC_CLOUD_REPO; excluded by default)",
+]
+addopts = "-m 'not cloud_relay_e2e'"
