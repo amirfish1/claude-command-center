@@ -530,7 +530,7 @@ def repo_guess_request(body):
         path_hit = _rg_match_path(prompt, collapse)
         name_hits = _rg_match_names(prompt, cands)
         local = None
-        # Local matches stay below the UI's 0.95 auto-pick bar: on real
+        # Local matches never auto-pick in the UI (only Jev does): on real
         # history a mentioned path or name was the work's repo only ~70% of
         # the time, so without Jev they surface as a suggestion, never a switch.
         if path_hit:

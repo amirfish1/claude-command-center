@@ -81378,7 +81378,9 @@
     const conf = Number(guess.confidence);
     if (!(conf >= 0.5)) return none;
     if (guess.repo_path === state.current) return none;
-    if (conf >= 0.95 && !state.userPicked) return { action: 'auto', path: guess.repo_path };
+    // Only Jev auto-switches: local path/name matches were the work's repo
+    // only ~70% of the time, so they stay a suggestion at any confidence.
+    if (guess.source === 'jev' && conf >= 0.8 && !state.userPicked) return { action: 'auto', path: guess.repo_path };
     return { action: 'suggest', path: guess.repo_path };
   }
   // end repoGuessDecide
@@ -81434,7 +81436,7 @@
 
   function applyRepoGuess(data) {
     const d = repoGuessDecide(
-      data && { repo_path: normalizeSpawnCwdPath(data.repo_path), confidence: data.confidence },
+      data && { repo_path: normalizeSpawnCwdPath(data.repo_path), confidence: data.confidence, source: data.source },
       { current: getSpawnCwd(), userPicked: repoGuessUserPicked });
     if (d.action === 'auto') {
       const prev = repoGuessAuto ? repoGuessAuto.prev : getSpawnCwd();

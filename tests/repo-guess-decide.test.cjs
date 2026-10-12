@@ -18,23 +18,28 @@ const decide = (g, s) => ctx.repoGuessDecide(g, s);
 const A = '/w/alpha';
 const B = '/w/beta';
 
-test('confident guess that differs auto-picks', () => {
-  assert.deepEqual({ ...decide({ repo_path: B, confidence: 0.97 }, { current: A, userPicked: false }) },
+test('confident Jev guess that differs auto-picks', () => {
+  assert.deepEqual({ ...decide({ repo_path: B, confidence: 0.97, source: 'jev' }, { current: A, userPicked: false }) },
     { action: 'auto', path: B });
 });
 
-test('threshold is inclusive at 0.95', () => {
-  assert.equal(decide({ repo_path: B, confidence: 0.95 }, { current: A, userPicked: false }).action, 'auto');
-  assert.equal(decide({ repo_path: B, confidence: 0.94 }, { current: A, userPicked: false }).action, 'suggest');
+test('Jev threshold is inclusive at 0.8', () => {
+  assert.equal(decide({ repo_path: B, confidence: 0.8, source: 'jev' }, { current: A, userPicked: false }).action, 'auto');
+  assert.equal(decide({ repo_path: B, confidence: 0.79, source: 'jev' }, { current: A, userPicked: false }).action, 'suggest');
+});
+
+test('local path/name matches only suggest, at any confidence', () => {
+  assert.equal(decide({ repo_path: B, confidence: 0.9, source: 'name' }, { current: A, userPicked: false }).action, 'suggest');
+  assert.equal(decide({ repo_path: B, confidence: 1.0, source: 'path' }, { current: A, userPicked: false }).action, 'suggest');
 });
 
 test('a manual pick is never overridden, only suggested', () => {
-  assert.equal(decide({ repo_path: B, confidence: 1.0 }, { current: A, userPicked: true }).action, 'suggest');
+  assert.equal(decide({ repo_path: B, confidence: 1.0, source: 'jev' }, { current: A, userPicked: true }).action, 'suggest');
 });
 
-test('0.5 to 0.95 suggests; below 0.5 shows nothing', () => {
-  assert.equal(decide({ repo_path: B, confidence: 0.5 }, { current: A, userPicked: false }).action, 'suggest');
-  assert.equal(decide({ repo_path: B, confidence: 0.49 }, { current: A, userPicked: false }).action, 'none');
+test('below 0.5 shows nothing', () => {
+  assert.equal(decide({ repo_path: B, confidence: 0.5, source: 'jev' }, { current: A, userPicked: false }).action, 'suggest');
+  assert.equal(decide({ repo_path: B, confidence: 0.49, source: 'jev' }, { current: A, userPicked: false }).action, 'none');
 });
 
 test('same folder, no repo, or junk confidence does nothing', () => {

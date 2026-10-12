@@ -1,0 +1,1 @@
+- New Session repo guess now switches the folder by itself when Jev is at least 80% sure (was 95%). Local path or name matches still only suggest.
