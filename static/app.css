@@ -5034,6 +5034,24 @@
     .conv-input-context.is-new-session .spawn-cwd-quick-chips > * {
       flex: 0 0 auto;
     }
+    /* overflow:hidden gives the strip min-height 0, so the keyboard squeezed
+       the folder picker row to a sliver. Never shrink it; bigger touch targets. */
+    .conv-pane > .conv-input-context.is-new-session { flex-shrink: 0; }
+    .conv-input-context.is-new-session .spawn-cwd-quick-chips { gap: 8px; padding-bottom: 2px; }
+    .conv-input-context.is-new-session .spawn-cwd-chip {
+      max-width: 70vw;
+      padding: 7px 13px;
+      font-size: 14px;
+    }
+    .conv-input-context.is-new-session .spawn-cwd-chip-group-label { font-size: 12px; }
+    .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-picker {
+      padding: 12px 14px;
+      font-size: 16px;
+    }
+    .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-menu-btn,
+    .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-browse-btn {
+      width: 44px;
+    }
   }
   .conv-input-context .wp-path {
     margin-left: auto;
