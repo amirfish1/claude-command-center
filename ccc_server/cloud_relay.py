@@ -684,6 +684,14 @@ def _context_pct(row: dict):
     return max(0, min(100, int(round(pct))))
 
 
+def _norm_ref(value) -> str:
+    """One ref per session across every list. The attention feed uses the
+    dashboard's `session_<id>` row ids while /api/sessions uses the bare id,
+    so a remote client could never join an attention item to its session."""
+    ref = str(value or "")
+    return ref[len("session_"):] if ref.startswith("session_") else ref
+
+
 def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0") -> dict:
     """Pull local read models over loopback, minimize + cap, and assemble the
     §4.1 state body. `share_titles` off replaces titles/repo labels with opaque
@@ -702,10 +710,11 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         rows = s_data.get("sessions") or s_data.get("conversations") or []
     sessions = []
     questions = []
+    labels = {}  # ref -> (title, repo_label), reused by attention items
     for row in rows[:MAX_SESSIONS]:
         if not isinstance(row, dict):
             continue
-        ref = row.get("id") or row.get("session_id") or ""
+        ref = _norm_ref(row.get("id") or row.get("session_id"))
         if not ref:
             continue
         q_waiting = bool(row.get("question_waiting"))
@@ -732,6 +741,7 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         if repo_label is not None:
             session["repo_label"] = repo_label
         sessions.append(session)
+        labels[ref] = (title, repo_label)
 
         if q_waiting and len(questions) < MAX_QUESTIONS:
             opts_raw = row.get("question_options") or []
@@ -760,14 +770,27 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         # than a ready-made summary; pick the most informative available.
         summary = (it.get("summary") or it.get("question_text")
                    or it.get("where") or it.get("next_step") or "")
-        attention.append({
+        a_ref = _norm_ref(it.get("session_id") or it.get("session_ref"))
+        # Name the session even when it fell outside the capped sessions list.
+        if a_ref in labels:
+            a_title, a_repo = labels[a_ref]
+        elif share_titles:
+            a_title = redact_cap(it.get("name"), CAP_TITLE)
+            a_repo = redact_cap(it.get("folder_label"), CAP_LABEL)
+        else:
+            a_title, a_repo = f"Session on {host}", None
+        item = {
             "kind": _map_attention_kind(it.get("kind")),
             "priority": int(it.get("priority") or 9),
-            "session_ref": it.get("session_id") or it.get("session_ref") or "",
+            "session_ref": a_ref,
+            "title": a_title,
             "summary": redact_cap(summary, CAP_SUMMARY),
             "created": _iso_from_epoch(
                 it.get("mtime") or it.get("modified")) or _iso_now(),
-        })
+        }
+        if a_repo:
+            item["repo_label"] = a_repo
+        attention.append(item)
 
     # --- workers (per-queue rollup via the existing HTTP endpoint) ---
     # NOTE: no dedicated /api/queue-health route exists; queue health ships

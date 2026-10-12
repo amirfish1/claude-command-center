@@ -456,3 +456,30 @@ def test_inject_failure_carries_redacted_local_error(tmp_path):
 def test_stale_tool_call_maps_to_stuck_not_approval():
     assert cr._map_attention_kind("stale_tool_call") == "stuck"
     assert cr._map_attention_kind("pending_tool") == "approval"
+
+
+def test_attention_refs_join_sessions_and_carry_titles():
+    class API(CountingLocalAPI):
+        def get(self, path, query=None):
+            if path == "/api/attention":
+                return 200, {"ok": True, "items": [
+                    {"kind": "soft_block", "priority": 1,
+                     "session_id": "session_sess-1", "mtime": time.time()},
+                    {"kind": "stale_tool_call", "priority": 1,
+                     "session_id": "session_other", "name": "Ship the docs",
+                     "folder_label": "docs-repo", "mtime": time.time()},
+                ]}
+            return super().get(path, query)
+
+    snap = cr.build_snapshot(API(), {"share_titles": True})
+    refs = {s["ref"] for s in snap["sessions"]}
+    first, second = snap["attention"]
+    assert first["session_ref"] == "sess-1" and first["session_ref"] in refs
+    assert first["title"] == snap["sessions"][0]["title"]
+    assert second["session_ref"] == "other"
+    assert second["title"] == "Ship the docs"
+    assert second["repo_label"] == "docs-repo"
+
+    opaque = cr.build_snapshot(API(), {"share_titles": False})
+    assert all("Ship the docs" not in a["title"] for a in opaque["attention"])
+    assert all("repo_label" not in a for a in opaque["attention"])
