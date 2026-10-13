@@ -266,3 +266,13 @@ showing an active per-PID "application" domain for the running app). The
 serving the port — quit and relaunch the .app to restore it instead of
 fighting the launchd install path. `run.sh` now detects this and prints the
 same guidance (OPS-1246).
+
+## Scratch-HOME test servers
+
+`server.py` hard-imports `watchtower.queue`, and `watchtower` is installed in
+the user site (`~/Library/Python/<ver>/lib/python/site-packages`). Python
+derives that path from `$HOME`, so `HOME=$(mktemp -d) python3 server.py` dies
+with `ModuleNotFoundError: watchtower`. Keep the real user site visible:
+`HOME=$scratch PYTHONUSERBASE=$(python3 -m site --user-base) python3 server.py`
+(compute the user base before overriding HOME). Also pick a free port; check
+with `/usr/sbin/lsof -nP -iTCP:<port>` first (OPS-1392/1393).
