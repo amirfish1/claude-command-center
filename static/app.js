@@ -48694,7 +48694,8 @@
         status === 'in_review' ? '.uxq-td-review-sec' : statusJumpTarget)
       + (item.lane ? _jumpBadge('uxq-bs-lane', item.lane, '.uxq-td-pg-origin') : '')
       + (item.priority ? _jumpBadge(priorityClass, item.priority, '.uxq-td-pg-properties') : '')
-      + (item.type ? _jumpBadge('uxq-bs-type', item.type, '.uxq-td-pg-properties') : '');
+      + (item.type ? _jumpBadge('uxq-bs-type', item.type, '.uxq-td-pg-properties') : '')
+      + ((item.placement === 'mac' || item.placement === 'cloud') ? _jumpBadge('uxq-bs-type', item.placement + ' only', '.uxq-td-pg-properties') : '');
 
     // Images: screenshot_path + PNGs/images extracted from note/text
     const imagePaths = [];
@@ -48899,6 +48900,7 @@
       + _propSel('Readiness', 'readiness', [['','-'],['shovel-ready','shovel-ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping']], item.readiness || '')
       + _propSel('Value', 'value',         [['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.value || '')
       + _propSel('Confidence', 'confidence',[['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.confidence || '')
+      + _propSel('Runs on', 'placement',    [['','any machine (default)'],['any','any (cloud ok)'],['mac','Mac only'],['cloud','cloud only']], item.placement || '')
       + '</div>'
       + '<div class="uxq-td-pg">'
       + '<div class="uxq-td-pg-label">Assignment</div>'

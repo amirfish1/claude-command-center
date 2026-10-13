@@ -1,0 +1,1 @@
+Queue tickets can say where they run (Mac only, cloud only, or any machine). The ticket detail panel has a "Runs on" setting and a badge, so Mac-bound work waits for the Mac while an always-on server drains the rest.

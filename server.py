@@ -33269,7 +33269,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
             editable = ("note", "title", "priority", "type", "readiness",
-                        "value", "confidence", "lane")
+                        "value", "confidence", "lane", "placement")
             fields = {k: payload[k] for k in editable if k in payload}
             try:
                 item = _q.update(ref, **fields)
