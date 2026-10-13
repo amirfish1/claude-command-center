@@ -30955,14 +30955,22 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 
 /* Voiceover cache bar: slim bar along the top of the Speak button, as wide as the
    share of the last message already generated. Amber while filling, green when done. */
-.tts-btn[data-tts-cache] { position: relative; }
+.tts-btn[data-tts-cache], .tts-btn.speaking { position: relative; }
 .tts-btn[data-tts-cache]::before {
   content: ''; position: absolute; top: 2px; left: 9px; height: 3px; border-radius: 2px;
   width: calc((100% - 18px) * var(--tts-cache-f, 1));
   background: var(--green); transition: width 0.3s;
 }
 .tts-btn[data-tts-cache="partial"]::before { background: #d29922; }
-.tts-btn.speaking[data-tts-cache]::before { background: #0b1620; }
+.tts-btn.speaking::before {
+  content: ''; position: absolute; top: 2px; left: 9px; height: 3px; border-radius: 2px;
+  width: calc(100% - 18px); transition: none;
+  background: linear-gradient(to right,
+    #0b1620 calc(var(--tts-play, 0) * 100%),
+    rgba(11,22,32,0.45) calc(var(--tts-play, 0) * 100%),
+    rgba(11,22,32,0.45) calc(var(--tts-cache-f, 0) * 100%),
+    rgba(11,22,32,0.15) calc(var(--tts-cache-f, 0) * 100%));
+}
 
 /* Close button for the Continue-new config panel (the chip that opens it can
    be covered by the panel itself on phones). */

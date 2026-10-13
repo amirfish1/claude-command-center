@@ -1,0 +1,1 @@
+- While reading aloud, the Speak button's bar shows both the read position and how much audio is already made ahead of it.

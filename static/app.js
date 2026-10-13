@@ -12928,6 +12928,20 @@
   // Dot on the Speak button: amber = first clip ready, green = whole last message ready.
   const _ttsCacheState = new Map();   // head text -> 'partial' | 'ready'
   // f = share of the message's clips already made (0..1), drawn as the bar width.
+  // While reading, the bar shows both: dark fill = read position, lighter = audio
+  // already made ahead of it (like a video buffer bar). Fractions of the whole text.
+  function _ttsSetPlay() {
+    const total = (_ttsBoundUtteranceText || '').length;
+    if (!total) return;
+    const st = _ttsChunkState;
+    const play = Math.max(0, Math.min(1, (_ttsLastCharIndex || 0) / total));
+    const cached = Math.max(play, Math.min(1, ((st && st.cachedTo) || 0) / total));
+    ttsButtons().forEach((btn) => {
+      if (!btn.classList.contains('speaking')) return;
+      btn.style.setProperty('--tts-play', play.toFixed(3));
+      btn.style.setProperty('--tts-cache-f', cached.toFixed(3));
+    });
+  }
   function _ttsMarkCache(paneId, headText, st, f) {
     if (headText) _ttsCacheState.set(headText, { st, f });
     ttsButtons().forEach((btn) => {
@@ -13092,14 +13106,21 @@
       const c = state.chunks[i];
       if (!c || state.prefetch[i]) return;
       const hit = _ttsHeadCache.get(c.text);
+      let p;
       if (hit && (i === 0 ? !state.geminiVoice : hit.voice === state.geminiVoice)) {
-        state.prefetch[i] = hit.p;
+        p = hit.p;
         _ttsHeadCache.delete(c.text);
-        return;
+      } else {
+        p = _ttsFetchNeural(c.text, state.geminiVoice);
+        p.catch(() => {});
       }
-      const p = _ttsFetchNeural(c.text, state.geminiVoice);
-      p.catch(() => {});
       state.prefetch[i] = p;
+      // Once this clip is fully made, the bar's cached end moves past it.
+      p.then((g) => g.done).then(() => {
+        if (_ttsChunkState !== state) return;
+        state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
+        _ttsSetPlay();
+      }).catch(() => {});
     };
     ensure(state.index);
     state.prefetch[state.index].then((got) => {
@@ -13122,6 +13143,7 @@
         const frac = (isFinite(d) && d > 0) ? audio.currentTime / d
           : Math.min(0.95, audio.currentTime * 15 / chunk.text.length);
         _ttsLastCharIndex = chunk.start + Math.floor(Math.min(1, frac) * chunk.text.length);
+        _ttsSetPlay();
       };
       const label = 'Pause reading (free voice: ' + got.voice + ')';
       audio.onplay = () => {
@@ -13483,6 +13505,7 @@
       if (event.name === 'word') {
         const charIndex = chunk.start + event.charIndex;
         _ttsLastCharIndex = charIndex;
+        _ttsSetPlay();
         highlightTtsWord(charIndex, event.charLength);
         updateTtsCaption(charIndex, event.charLength, _ttsBoundUtteranceText);
       }
