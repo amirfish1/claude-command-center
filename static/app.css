@@ -30953,21 +30953,16 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 /* Dark label: white on the bright accent fill was hard to read. */
 .conv-input-bar .tts-btn.speaking[data-tts-voice] { color: #0b1620; }
 
-/* While reading, the dot becomes a slim progress bar along the top of the button. */
-.tts-btn.speaking { position: relative; }
-body .tts-btn.speaking[data-tts-voice]::before, body .tts-btn.speaking::before {
-  content: ''; position: absolute; top: 3px; left: 9px; right: auto; height: 3px; border: 0; border-radius: 2px;
-  width: calc((100% - 18px) * var(--tts-progress, 0));
-  background: #0b1620;
-}
-/* Voiceover cache dot: amber = first clip ready, green = whole message ready. */
+/* Voiceover cache bar: slim bar along the top of the Speak button, as wide as the
+   share of the last message already generated. Amber while filling, green when done. */
 .tts-btn[data-tts-cache] { position: relative; }
 .tts-btn[data-tts-cache]::before {
-  content: ''; position: absolute; top: -2px; right: -2px;
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--green); border: 1px solid var(--bg);
+  content: ''; position: absolute; top: 2px; left: 9px; height: 3px; border-radius: 2px;
+  width: calc((100% - 18px) * var(--tts-cache-f, 1));
+  background: var(--green); transition: width 0.3s;
 }
 .tts-btn[data-tts-cache="partial"]::before { background: #d29922; }
+.tts-btn.speaking[data-tts-cache]::before { background: #0b1620; }
 
 /* Close button for the Continue-new config panel (the chip that opens it can
    be covered by the panel itself on phones). */

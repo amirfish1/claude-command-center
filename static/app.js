@@ -12927,20 +12927,13 @@
   }
   // Dot on the Speak button: amber = first clip ready, green = whole last message ready.
   const _ttsCacheState = new Map();   // head text -> 'partial' | 'ready'
-  // Read progress for the slim bar on the playing Speak button (0..1 of the whole text).
-  function _ttsSetProgress(idx) {
-    const total = (_ttsBoundUtteranceText || '').length;
-    const f = total ? Math.max(0, Math.min(1, idx / total)) : 0;
-    ttsButtons().forEach((btn) => {
-      if (btn.classList.contains('speaking')) btn.style.setProperty('--tts-progress', f.toFixed(3));
-      else btn.style.removeProperty('--tts-progress');
-    });
-  }
-  function _ttsMarkCache(paneId, headText, st) {
-    if (headText) _ttsCacheState.set(headText, st);
+  // f = share of the message's clips already made (0..1), drawn as the bar width.
+  function _ttsMarkCache(paneId, headText, st, f) {
+    if (headText) _ttsCacheState.set(headText, { st, f });
     ttsButtons().forEach((btn) => {
       if (paneId && ttsButtonPaneId(btn) !== paneId) return;
-      if (st) btn.dataset.ttsCache = st; else delete btn.dataset.ttsCache;
+      if (st) { btn.dataset.ttsCache = st; btn.style.setProperty('--tts-cache-f', String(f == null ? 1 : f)); }
+      else { delete btn.dataset.ttsCache; btn.style.removeProperty('--tts-cache-f'); }
     });
   }
   function _ttsPrefetchHead(rawText, paneId) {
@@ -12949,7 +12942,7 @@
     const clean = _sanitizeTtsText(rawText, true);
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
-    if (_ttsHeadCache.has(head.text)) { _ttsMarkCache(paneId, null, _ttsCacheState.get(head.text) || null); return; }
+    if (_ttsHeadCache.has(head.text)) { const c = _ttsCacheState.get(head.text); _ttsMarkCache(paneId, null, c ? c.st : null, c ? c.f : 0); return; }
     _ttsMarkCache(paneId, null, null);
     const entry = { ready: false, got: null };
     const t0 = Date.now();
@@ -12957,7 +12950,7 @@
     entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '').then((got) => {
       entry.ready = true; entry.got = got; entry.voice = got.voice;
       _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
-      _ttsMarkCache(paneId, head.text, 'partial');
+      _ttsMarkCache(paneId, head.text, 'partial', 0.1);
       const token = _ttsChainTokens[paneId || ''] = (_ttsChainTokens[paneId || ''] || 0) + 1;
       // One pane's clips at a time: two chains would share the CPU and both finish late.
       _ttsChainQueue = _ttsChainQueue.then(() => _ttsPrefetchRest(clean, head, got, token, paneId)).catch(() => {});
@@ -12989,8 +12982,10 @@
     const end = head.start + head.text.length;
     const rest = _chunkTtsText(clean.slice(end), 400, end).slice(0, _TTS_PREFETCH_CLIPS);
     let prev = headGot;
-    for (const c of rest) {
+    for (let i = 0; i < rest.length; i++) {
+      const c = rest[i];
       try { await prev.done; } catch (_) { return; }
+      if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'partial', (i + 1) / (rest.length + 1));
       if (token !== _ttsChainTokens[paneId || ''] || _ttsActive || Date.now() < _ttsNeuralCooldownUntil) return;
       if (_ttsHeadCache.has(c.text)) continue;
       const entry = { ready: false, got: null, voice: headGot.voice };
@@ -12999,7 +12994,8 @@
       _ttsEvictCache();
       try { prev = await entry.p; } catch (_) { _ttsHeadCache.delete(c.text); return; }
     }
-    if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready');
+    try { await prev.done; } catch (_) { return; }
+    if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
   // Called after a transcript render; waits for the text to stop changing.
@@ -13126,7 +13122,6 @@
         const frac = (isFinite(d) && d > 0) ? audio.currentTime / d
           : Math.min(0.95, audio.currentTime * 15 / chunk.text.length);
         _ttsLastCharIndex = chunk.start + Math.floor(Math.min(1, frac) * chunk.text.length);
-        _ttsSetProgress(_ttsLastCharIndex);
       };
       const label = 'Pause reading (free voice: ' + got.voice + ')';
       audio.onplay = () => {
@@ -13488,7 +13483,6 @@
       if (event.name === 'word') {
         const charIndex = chunk.start + event.charIndex;
         _ttsLastCharIndex = charIndex;
-        _ttsSetProgress(charIndex);
         highlightTtsWord(charIndex, event.charLength);
         updateTtsCaption(charIndex, event.charLength, _ttsBoundUtteranceText);
       }

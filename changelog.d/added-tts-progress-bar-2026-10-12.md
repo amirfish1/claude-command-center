@@ -1,1 +1,1 @@
-- While reading aloud, the Speak button shows a slim progress bar along its top edge.
+- The Speak button shows a slim bar along its top edge that fills as the last message's voice audio is generated (amber while filling, green when done).
