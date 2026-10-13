@@ -30955,7 +30955,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 
 /* While reading, the dot becomes a slim progress bar along the top of the button. */
 .tts-btn.speaking { position: relative; }
-.tts-btn.speaking::before {
+body .tts-btn.speaking[data-tts-voice]::before, body .tts-btn.speaking::before {
   content: ''; position: absolute; top: 3px; left: 9px; right: auto; height: 3px; border: 0; border-radius: 2px;
   width: calc((100% - 18px) * var(--tts-progress, 0));
   background: #0b1620;
