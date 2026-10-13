@@ -111,7 +111,7 @@ class Approve(ConsentTestBase):
         self.assertTrue(res["ok"], res)
         text = self.settings.read_text()
         data = json.loads(text)
-        self.assertEqual(len(self.ccc_commands()), 7)
+        self.assertEqual(len(self.ccc_commands()), 8)
         self.assertEqual(data["hooks"]["PreToolUse"][0], USER_SETTINGS["hooks"]["PreToolUse"][0])
         self.assertEqual(list(data)[:2], ["model", "permissions"])
         self.assertEqual(data["statusLine"], USER_SETTINGS["statusLine"])
@@ -148,7 +148,7 @@ class Approve(ConsentTestBase):
         self.settings.symlink_to(real)
         cc.decide({"claude-hooks": "approve"}, ctx=self.ctx)
         self.assertTrue(self.settings.is_symlink())
-        self.assertEqual(len(self.ccc_commands()), 7)
+        self.assertEqual(len(self.ccc_commands()), 8)
         self.assertIn(cc.HOOK_MARKER, real.read_text())
 
     def test_invalid_json_is_never_touched(self):
@@ -344,7 +344,7 @@ class ExistingInstalls(ConsentTestBase):
         summary = cc.startup(self.ctx, log=None)
         self.assertIn("claude-hooks", summary["applied"])
         self.assertIn("skill:ccc-orchestration", summary["applied"])
-        self.assertEqual(len(self.ccc_commands()), 7)
+        self.assertEqual(len(self.ccc_commands()), 8)
         view = cc.overview(self.ctx)
         self.assertTrue(view["notice"]["pending"])
         self.assertEqual({i["id"] for i in view["notice"]["items"]},
@@ -374,7 +374,7 @@ class InstalledEngines(ConsentTestBase):
         self.assertFalse(by["claude-hooks"]["auto_review"])
         self.assertTrue(by["claude-hooks"]["needs_review"])
         self.assertTrue(by["codex-hooks"]["auto_review"])
-        self.assertEqual(by["claude-hooks"]["hook_count"], 7)
+        self.assertEqual(by["claude-hooks"]["hook_count"], 8)
         self.assertEqual(ov["engines_present"], {"claude": False, "codex": True})
 
     def test_nothing_installed_means_no_auto_review(self):

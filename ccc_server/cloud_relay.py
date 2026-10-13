@@ -48,8 +48,10 @@ from datetime import datetime, timezone
 
 try:
     from . import relay_context as _rc
+    from . import approval_hook as _approval_hook
 except ImportError:  # pragma: no cover - run as a loose module
     from ccc_server import relay_context as _rc
+    from ccc_server import approval_hook as _approval_hook
 
 try:
     import fcntl  # repo-root shim delegates to the stdlib module on POSIX
@@ -77,6 +79,10 @@ CAP_TURN_TEXT = 2000
 # exactly these two fields.
 CAP_ACTION = 2000
 CAP_QUESTION_TEXT = 4000
+# Complete canonical tool input of a pending approval (hard cap, chars of JSON).
+# Over the cap the text is cut and `action_input_truncated` is set; a truncated
+# input can never be allowed by an agent. See PROTOCOL.md "Approval input".
+CAP_ACTION_INPUT = _rc.INPUT_CAP
 MAX_SESSIONS = 200
 MAX_ATTENTION = 50
 MAX_QUEUES = 50
@@ -106,6 +112,8 @@ HISTORY_MAX_TURNS = 120
 HISTORY_TURN_CAP = 4000
 HISTORY_TAIL_BYTES = 384 * 1024
 DETAIL_MAX_BYTES = 40 * 1024
+# JSON-escaped budget for the full tool input inside one detail body.
+DETAIL_INPUT_BYTES = 24 * 1024
 
 # Consecutive 401 bad_device_credentials before the loop gives up and asks
 # the user to pair again (one stray 401 must not wipe a live pairing).
@@ -872,6 +880,39 @@ def _action_text(tool, target) -> str:
     return f"{tool}: {target}" if target else tool
 
 
+# The full tool input is NOT run through redact(): that strips every absolute
+# path and long identifier, which would make file edits unreadable and the
+# input unverifiable. Only strong secret shapes are masked; a masked input no
+# longer hashes to `action_input_sha256`, so the cloud refuses to allow it.
+_RE_INPUT_SECRET = re.compile(
+    r"\b[a-z][a-z0-9+.\-]*://[^\s/@\"']+@[^\s\"']+"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|\b(?:sk|gsk|pk|rk)[-_][A-Za-z0-9_\-]{16,}"
+    r"|\bxox[abprs]-[A-Za-z0-9\-]{10,}"
+    r"|\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}"
+    r"|(?i:bearer)\s+[A-Za-z0-9._~+/\-]{20,}")
+
+
+def action_input_fields(inp, byte_budget=None) -> dict:
+    """Wire fields for a pending approval's complete tool input, from
+    relay_context.pending_input(): action_input (canonical JSON text),
+    action_input_truncated, action_input_sha256 (over the WHOLE input).
+    `byte_budget` shrinks the text further (and flags it) for bounded bodies."""
+    if not inp:
+        return {}
+    text = inp["text"]
+    truncated = bool(inp["truncated"])
+    if byte_budget is not None:
+        while text and len(json.dumps(text).encode("utf-8")) > byte_budget:
+            text = text[:max(0, int(len(text) * 0.8))]
+            truncated = True
+    text = _RE_INPUT_SECRET.sub(_REDACTED, text)
+    return {"action_input": text, "action_input_truncated": truncated,
+            "action_input_sha256": inp["sha256"]}
+
+
 def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0",
                    paths: CloudPaths | None = None) -> dict:
     """Pull local read models over loopback, minimize + cap, and assemble the
@@ -1036,6 +1077,8 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
                 or _action_text(info.get("tool"), info.get("target"))
             if act:
                 extra["action"] = redact_cap(act, CAP_ACTION)
+            extra.update(action_input_fields(
+                _rc.pending_input(path_of(a_ref), CAP_ACTION_INPUT)))
         elif share_titles and kind == "question":
             qt = info.get("question_text") or _rc.last_assistant_text(path_of(a_ref))
             if qt:
@@ -1482,16 +1525,27 @@ class CommandExecutor:
 
     def _approval_answer(self, request_id, session_ref, payload) -> dict:
         """approval.answer: answer a Claude Code permission prompt, but only
-        if the prompt that is pending NOW is the exact action the relay
-        judged (sha256 of the action text). Reuses the dashboard's
-        Approve/Deny path (POST /api/claude/permission), which drives the
-        session's own terminal and is macOS + live-tty only; anywhere else the
-        result is `rejected` / `unsupported`. Never retried or keystroked
-        blind: any doubt is a rejection."""
+        if the prompt that is pending NOW is the exact action the cloud
+        judged. The cloud pins either the sha256 of the complete canonical
+        tool input (`hash_kind: "input"`, current clouds) or of the display
+        text (older clouds). Delivery, in order:
+
+          1. the PermissionRequest hook (hooks/permission-request.py) parked
+             on that exact tool call: the decision file is only honoured by a
+             hook whose own hash matches, so there is no keystroke, no focus
+             steal and it works headless;
+          2. fallback only when no such hook is parked (not installed, window
+             elapsed): the dashboard Approve/Deny path (POST
+             /api/claude/permission), a keystroke into the session's terminal
+             (macOS + live tty only).
+
+        Never retried or keystroked blind: any doubt is a rejection."""
         decision = payload.get("decision")
         want = payload.get("action_sha256")
+        by_input = payload.get("hash_kind") == "input"
         if decision not in ("allow", "deny") or not isinstance(want, str) \
-                or not re.fullmatch(r"[0-9a-f]{64}", want):
+                or not re.fullmatch(r"[0-9a-f]{64}", want) \
+                or payload.get("hash_kind") not in (None, "input", "text"):
             return self._result(request_id, "rejected", error_code="invalid_payload")
         if is_subagent_ref(session_ref):
             # A sub-agent's prompt is shown in its parent's terminal.
@@ -1503,15 +1557,29 @@ class CommandExecutor:
         if _norm_engine(row.get("engine")) != "claude":
             return self._result(request_id, "rejected", error_code="unsupported",
                                 detail_code="not_claude")
-        action = self._pending_approval_action(row)
-        if action is None:
-            return self._result(request_id, "rejected",
-                                error_code="no_pending_approval")
-        have = hashlib.sha256(action.encode("utf-8")).hexdigest()
+        if by_input:
+            inp = _rc.pending_input(row.get("jsonl_path") or None)
+            if inp is None or not row.get("needs_approval") \
+                    or row.get("question_waiting"):
+                return self._result(request_id, "rejected",
+                                    error_code="no_pending_approval")
+            have = inp["sha256"]
+        else:
+            action = self._pending_approval_action(row)
+            if action is None:
+                return self._result(request_id, "rejected",
+                                    error_code="no_pending_approval")
+            have = hashlib.sha256(action.encode("utf-8")).hexdigest()
         if not hmac.compare_digest(have, want):
             return self._result(request_id, "rejected", error_code="action_changed")
+        sid = str(row.get("session_id") or session_ref)
+        if by_input and _approval_hook.waiting(sid, want):
+            outcome = _approval_hook.deliver(sid, want, decision)
+            if outcome == "applied":
+                return self._result(request_id, "ok", detail_code="hook")
+            # unclaimed and withdrawn: fall through to the keystroke path
         status, data = self.local_api.post("/api/claude/permission", {
-            "session_id": row.get("session_id") or session_ref,
+            "session_id": sid,
             "decision": "accept" if decision == "allow" else "decline",
         })
         if isinstance(data, dict) and data.get("ok"):
@@ -1652,6 +1720,9 @@ class CommandExecutor:
                     or _action_text(row.get("pending_tool"), row.get("pending_file"))
                 if act:
                     pending["action"] = redact_cap(act, CAP_ACTION)
+                pending.update(action_input_fields(
+                    _rc.pending_input(path, CAP_ACTION_INPUT),
+                    byte_budget=DETAIL_INPUT_BYTES))
             ctx["pending"] = pending
         elif str(row.get("state") or "") == "waiting" and row.get("is_live") \
                 and not row.get("pending_tool"):
@@ -1995,6 +2066,7 @@ class RelayLoop:
     def _push_once(self):
         """Send one state push: a small heartbeat when the snapshot is
         unchanged and the service supports it, else the full snapshot."""
+        _approval_hook.touch_enabled()
         snapshot = build_snapshot(self.m.local_api, self.m.config,
                                   self.m.ccc_version, self.m.paths)
         digest = snapshot_digest(snapshot)

@@ -386,19 +386,56 @@ known). The device does not trust that decision blindly. It acts only when:
    parent's terminal; other engines have their own approval controls).
 2. A real permission prompt is pending now (the Notification-hook marker, not
    just a running tool).
-3. The sha256 of the pending action text equals `action_sha256`. The text is
-   the one the snapshot sends as `action` (redacted, capped at 2000 chars), so
-   both sides hash the same string. A mismatch is `rejected` with
-   `error_code: "action_changed"` and nothing is sent to the terminal.
+3. The pinned hash equals the hash of the pending tool call. Current clouds
+   send `hash_kind: "input"`: the sha256 of the complete canonical tool input
+   (see "Approval input" below). Older clouds omit `hash_kind` and pin the
+   sha256 of the redacted `action` display text. A mismatch is `rejected` with
+   `error_code: "action_changed"` and nothing is delivered.
 
-It then uses the same path as the dashboard Approve/Deny buttons
-(`POST /api/claude/permission`: Return approves once, Esc denies), which drives
-the session's own terminal tab through System Events. That works on macOS with
-a live tty only. Elsewhere the result is `rejected` with
-`error_code: "unsupported"` and `detail_code: "macos_only"` (or `subagent_prompt`,
-`not_claude`). Other rejections: `no_pending_approval`, `not_live_tty`,
-`no_pending_prompt`, `invalid_payload`. A successful result is `ok` with
-`detail_code: "delivered"`. The command is at-most-once like every other
-capability. There is a short gap between the check and the keystroke in which
-the prompt could change; the cloud's operator guard and the single-prompt
-nature of a parked session keep it small, but it is not zero.
+Delivery, in order:
+
+1. **PermissionRequest hook.** CCC's `hooks/permission-request.py` runs when
+   Claude Code is about to open a permission dialog. While the relay loop is
+   running it parks (up to 15 minutes, then falls through to the normal prompt)
+   and watches `~/.claude/command-center/cloud-approvals/decisions/`. When the
+   device accepts a `hash_kind: "input"` command and a hook is parked on that
+   exact tool call, it writes a decision `{sha256, decision, created, expires}`.
+   The hook answers `allow`/`deny` only if the decision's hash equals the hash
+   of the tool call it was given, the decision is under 120 s old, and it can
+   claim the file with an atomic rename (single use). The result is `ok` with
+   `detail_code: "hook"`. No keystroke, no focus change, works headless. If the
+   hook does not claim the decision within 4 s the device withdraws it and
+   falls back to 2.
+2. **Keystroke fallback**, only when no hook is parked on that tool call (hook
+   not installed or approved, the wait window elapsed, or an older cloud): the
+   same path as the dashboard Approve/Deny buttons (`POST /api/claude/permission`:
+   Return approves once, Esc denies), which drives the session's own terminal tab
+   through System Events. That works on macOS with a live tty only. Elsewhere the
+   result is `rejected` with `error_code: "unsupported"` and `detail_code:
+   "macos_only"` (or `subagent_prompt`, `not_claude`). A successful result is
+   `ok` with `detail_code: "delivered"`. There is a short gap between the check
+   and the keystroke in which the prompt could change; the hook path has none.
+
+Other rejections: `no_pending_approval`, `not_live_tty`, `no_pending_prompt`,
+`invalid_payload`. The command is at-most-once like every other capability.
+
+#### Approval input (complete tool input)
+
+With `share_titles` on, an approval attention item and the `pending` object of
+`session.detail` also carry the complete tool call:
+
+- `action_input`: canonical JSON text of `{"tool": <name>, "input": <tool
+  input>}` (sorted keys, compact separators, UTF-8). Hard cap 16384 characters
+  (detail bodies may shrink it further to stay within their size bound).
+- `action_input_truncated`: `true` when the text was cut. Never silently
+  dropped: a MultiEdit keeps every edit; an oversize Write is flagged.
+- `action_input_sha256`: sha256 over the WHOLE canonical input, even when the
+  text was cut. The cloud recomputes the hash from `action_input` and refuses
+  an agent allow when the input is truncated or the hashes differ.
+
+`action_input` is not run through the path/email/token minimizer (that would
+blank every absolute path and long identifier, making edits unreadable). Only
+strong secret shapes (credentialed URLs, private key headers, API key
+prefixes, JWTs, bearer tokens) are masked; a masked input no longer hashes to
+`action_input_sha256`, so such an item cannot be allowed remotely. The
+display `action` stays minimized and capped at 2000 chars.

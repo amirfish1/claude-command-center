@@ -8,7 +8,7 @@ how to undo it.
 
 | Item id | Target | What it adds | Without it |
 |---|---|---|---|
-| `claude-hooks` | `~/.claude/settings.json` | 6 hook entries (PreToolUse, PostToolUse, Notification, Stop, PreCompact, PostCompact), each running a script in `~/.claude/command-center/hooks/` | no live "running X for Ns" tool status, Needs-approval badges, AskUserQuestion answers from the dashboard, Compacting badge, or precise turn-end detection for Claude sessions |
+| `claude-hooks` | `~/.claude/settings.json` | 8 hook entries (PreToolUse, PermissionRequest, PostToolUse, Notification, Stop, SessionStart, PreCompact, PostCompact), each running a script in `~/.claude/command-center/hooks/` | no live "running X for Ns" tool status, Needs-approval badges, AskUserQuestion answers from the dashboard, Compacting badge, or precise turn-end detection for Claude sessions |
 | `codex-hooks` | `~/.codex/hooks.json` | 1 PostCompact entry. Codex asks you to trust it once on the next `codex` launch. Offered only when Codex is installed. | Codex sessions are not re-oriented on their task after `/compact` |
 | `skill:ccc-orchestration`, `skill:group-chat-checkin`, `skill:superpowers-to-watchtower`, `skill:fleet-verify` | `~/.claude/skills/<name>/SKILL.md`, plus `~/.codex/skills/<name>/SKILL.md` when Codex is installed | the bundled skill file | agents don't know that skill exists |
 | `watchtower-skills` | `wt skills sync` symlinks into each agent's skills folder | WatchTower's bundled skills (WatchTower owns the list) | agents don't know the `wt` commands |

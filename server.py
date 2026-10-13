@@ -21118,7 +21118,7 @@ SIDECAR_STATE_DIR = Path.home() / ".claude" / "command-center" / "live-state"
 HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
 HOOK_MARKER = "command-center/hooks/"
 CCC_HOOK_SCRIPT_NAMES = (
-    "pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py",
+    "pre-tool-use.py", "permission-request.py", "post-tool-use.py", "notification.py", "stop.py",
     "pre-compact.py", "post-compact.py", "session-start.py", "_notify.py",
     # Codex hooks (installed into ~/.codex/hooks.json, not settings.json —
     # see ensure_codex_hooks_installed) share this same copy step and the

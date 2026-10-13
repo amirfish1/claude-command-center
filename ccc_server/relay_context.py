@@ -13,6 +13,7 @@ cloud_relay.redact_cap before it leaves the machine.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -240,6 +241,44 @@ def pending_action(path, limit=2000):
     if not p:
         return ""
     return format_action(p["tool"], p["input"], limit)
+
+
+# Hard cap on the full tool input an approval carries (chars of canonical JSON).
+# Over the cap the text is cut AND `truncated` is set: never silently dropped.
+INPUT_CAP = 16 * 1024
+
+
+def canonical_input(tool, tin):
+    """Canonical JSON of a tool call: the one text the approval hash is pinned
+    over. The CCC PermissionRequest hook builds the same string from its own
+    stdin, so keep both in lockstep (hooks/permission-request.py)."""
+    try:
+        return json.dumps({"tool": str(tool or ""), "input": tin},
+                          sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False)
+    except (TypeError, ValueError):
+        return json.dumps({"tool": str(tool or ""), "input": str(tin)},
+                          sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False)
+
+
+def input_sha256(canonical):
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def pending_input(path, cap=INPUT_CAP):
+    """The session's pending tool call in full: {"tool", "text", "truncated",
+    "sha256"} or None. `sha256` covers the WHOLE canonical input even when
+    `text` was cut at `cap`, so a truncated item can never be mistaken for a
+    complete one."""
+    if not path:
+        return None
+    p = last_pending_tool(path)
+    if not p or not isinstance(p.get("input"), dict):
+        return None
+    full = canonical_input(p["tool"], p["input"])
+    return {"tool": p["tool"], "text": full[:cap],
+            "truncated": len(full) > cap, "sha256": input_sha256(full)}
 
 
 # ---------------------------------------------------------------------------

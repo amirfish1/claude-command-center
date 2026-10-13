@@ -19020,9 +19020,9 @@ class TestQuestionRelay(unittest.TestCase):
                 if "command-center/hooks/" in h.get("command", "")
             ]
             # 4 pre-seeded (PreToolUse/PostToolUse/Notification/Stop, migrated
-            # to an absolute interpreter) + 3 freshly installed (SessionStart/
-            # PreCompact/PostCompact, absent from the fixture above).
-            self.assertEqual(len(commands), 7)
+            # to an absolute interpreter) + 4 freshly installed (PermissionRequest/
+            # SessionStart/PreCompact/PostCompact, absent from the fixture above).
+            self.assertEqual(len(commands), 8)
             expected_python = "/usr/bin/python3" if self.server.sys.platform == "darwin" else "/opt/ccc-test/python3"
             for command in commands:
                 self.assertTrue(command.startswith(expected_python + " "), command)

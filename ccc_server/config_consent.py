@@ -54,10 +54,14 @@ BACKUPS_KEPT = 30
 HOOK_MARKER = "command-center/hooks/"
 HOOK_MARKER_LEGACY = "log-viewer/hooks/"
 PRETOOLUSE_HOOK_TIMEOUT = 1800
+# PermissionRequest parks (only while the cloud relay runs) waiting for a cloud
+# agent's decision; seconds, a little above the hook's own 900 s wait.
+PERMISSIONREQUEST_HOOK_TIMEOUT = 930
 
 # (event, script, timeout). Order is the order entries are appended.
 CLAUDE_HOOK_SPECS = (
     ("PreToolUse", "pre-tool-use.py", PRETOOLUSE_HOOK_TIMEOUT),
+    ("PermissionRequest", "permission-request.py", PERMISSIONREQUEST_HOOK_TIMEOUT),
     ("PostToolUse", "post-tool-use.py", None),
     ("Notification", "notification.py", None),
     ("Stop", "stop.py", None),
@@ -69,8 +73,8 @@ CODEX_HOOK_SPECS = (
     ("PostCompact", "post-compact-codex.py", 5),
 )
 HOOK_SCRIPT_NAMES = (
-    "pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py",
-    "session-start.py", "pre-compact.py", "post-compact.py", "_reorient_shared.py",
+    "pre-tool-use.py", "permission-request.py", "post-tool-use.py", "notification.py",
+    "stop.py", "session-start.py", "pre-compact.py", "post-compact.py", "_reorient_shared.py",
     "post-compact-codex.py",
 )
 
@@ -598,10 +602,13 @@ class ClaudeHooks:
     id = "claude-hooks"
     kind = "hooks"
     title = "Claude Code hooks"
-    summary = ("Adds 6 hook entries (PreToolUse, PostToolUse, Notification, Stop, "
-               "PreCompact, PostCompact) to ~/.claude/settings.json. Each runs a "
-               "small script from ~/.claude/command-center/hooks/ that writes live "
-               "status for the dashboard. Your other hooks and settings are kept as-is.")
+    summary = ("Adds hook entries (PreToolUse, PermissionRequest, PostToolUse, "
+               "Notification, Stop, SessionStart, PreCompact, PostCompact) to "
+               "~/.claude/settings.json. Each runs a small script from "
+               "~/.claude/command-center/hooks/ that writes live status for the "
+               "dashboard. PermissionRequest does nothing unless CCC Cloud is on: "
+               "then it lets an agent you gave approval rights answer one exact "
+               "prompt. Your other hooks and settings are kept as-is.")
     depends = ("Live \"running X for Ns\" tool status, Needs-approval badges, "
                "answering AskUserQuestion from the dashboard, the Compacting badge, "
                "and precise turn-end detection for Claude sessions.")
