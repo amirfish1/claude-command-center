@@ -30963,13 +30963,14 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 }
 .tts-btn[data-tts-cache="partial"]::before { background: #d29922; }
 .tts-btn.speaking::before {
-  content: ''; position: absolute; top: 2px; left: 9px; height: 3px; border-radius: 2px;
+  content: ''; position: absolute; top: 2px; left: 9px; height: 4px; border-radius: 2px;
   width: calc(100% - 18px); transition: none;
+  /* dark = read, white = made ahead, dim dark = not made yet */
   background: linear-gradient(to right,
     #0b1620 calc(var(--tts-play, 0) * 100%),
-    rgba(11,22,32,0.45) calc(var(--tts-play, 0) * 100%),
-    rgba(11,22,32,0.45) calc(var(--tts-cache-f, 0) * 100%),
-    rgba(11,22,32,0.15) calc(var(--tts-cache-f, 0) * 100%));
+    #ffffff calc(var(--tts-play, 0) * 100%),
+    #ffffff calc(var(--tts-cache-f, 0) * 100%),
+    rgba(11,22,32,0.35) calc(var(--tts-cache-f, 0) * 100%));
 }
 
 /* Close button for the Continue-new config panel (the chip that opens it can
