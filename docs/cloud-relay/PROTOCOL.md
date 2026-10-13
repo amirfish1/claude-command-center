@@ -288,10 +288,15 @@ anchor for the protocol.
 - Session replies: `session.send_input` text reaches a Claude session as a
   peer message from CCC, with a line asking it to answer by `SendMessage` to
   `ccc`. For 24h after the relay messages a session, a peer message from that
-  session to CCC is sent up as a question (`question_id` `reply:<id>`, no
-  `options`) plus a top `question` attention item, so the relay sends a
-  `question_waiting` notification for each reply. The next `session.send_input`
-  or `question.answer` to that session clears its replies.
+  session to CCC is sent up in a top-level snapshot field `replies`:
+  `[{id, session_ref, text, at}]` (at most 20; `text` redacted and capped at
+  4000 chars; `at` is ISO-8601). Each reply also gets a top attention item of
+  kind `reply` (not `question`, so no `question_waiting` notification). The
+  relay's ask API (`POST /v1/ask`) matches a new reply id to the newest
+  unanswered ask for that `session_ref`; replies with no matching ask are
+  ignored. The next `session.send_input` or `question.answer` to that session
+  clears its replies. A change in `replies` changes the snapshot digest, so
+  it is always a full push (and CCC requests a prompt one).
 - Heartbeat pushes: when a full `POST /v1/state` response carries
   `unchanged_ok: true` and the next snapshot is identical (ignoring
   `snapshot_at`), CCC sends `{"v": 1, "snapshot_at": ..., "unchanged": true}`

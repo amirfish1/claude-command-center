@@ -539,19 +539,32 @@ def test_reply_thread_expires(tmp_path):
     assert not cr.record_session_reply(paths, "sess-1", "late", now=late)
 
 
-def test_reply_surfaces_as_question_and_attention(tmp_path):
+def test_reply_surfaces_as_replies_field_and_reply_attention(tmp_path):
     paths = cr.CloudPaths(str(tmp_path))
     cr.open_reply_thread(paths, "sess-1")
     assert cr.record_session_reply(paths, "sess-1", "done, see /Users/alice/x")
     snap = cr.build_snapshot(CountingLocalAPI(), dict(cr._CONFIG_DEFAULTS), paths=paths)
-    replies = [q for q in snap["questions"] if q["question_id"].startswith("reply:")]
-    assert len(replies) == 1
-    assert replies[0]["session_ref"] == "sess-1"
-    assert replies[0]["options"] == []
-    assert "done, see" in replies[0]["text"]
-    assert "/Users/alice" not in replies[0]["text"]
+    # Not a question any more: ccc-cloud must not fire question_waiting.
+    assert not [q for q in snap["questions"] if str(q["question_id"]).startswith("reply:")]
+    assert len(snap["replies"]) == 1
+    r = snap["replies"][0]
+    assert r["session_ref"] == "sess-1" and r["id"] and r["at"]
+    assert "done, see" in r["text"] and "/Users/alice" not in r["text"]
     top = snap["attention"][0]
-    assert top["kind"] == "question" and top["summary"].startswith("Reply: ")
+    assert top["kind"] == "reply" and top["summary"].startswith("Reply: ")
+    assert not [a for a in snap["attention"] if a["kind"] == "question"
+                and a["summary"].startswith("Reply: ")]
+
+
+def test_replies_change_the_snapshot_digest(tmp_path):
+    paths = cr.CloudPaths(str(tmp_path))
+    api = CountingLocalAPI()
+    before = cr.build_snapshot(api, dict(cr._CONFIG_DEFAULTS), paths=paths)
+    assert "replies" not in before
+    cr.open_reply_thread(paths, "sess-1")
+    cr.record_session_reply(paths, "sess-1", "hi")
+    after = cr.build_snapshot(api, dict(cr._CONFIG_DEFAULTS), paths=paths)
+    assert cr.snapshot_digest(before) != cr.snapshot_digest(after)
 
 
 def test_answering_clears_replies(tmp_path):

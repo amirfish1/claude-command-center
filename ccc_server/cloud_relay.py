@@ -63,6 +63,7 @@ PROTOCOL_VERSION = 1
 CAP_TITLE = 120
 CAP_SUMMARY = 300
 CAP_QUESTION = 2000
+CAP_REPLY = 4000
 CAP_LABEL = 120
 CAP_TURN_TEXT = 2000
 MAX_SESSIONS = 200
@@ -70,6 +71,7 @@ MAX_ATTENTION = 50
 MAX_QUEUES = 50
 MAX_SCHEDULES = 50
 MAX_QUESTIONS = 50
+MAX_REPLIES_UP = 20
 MAX_OPTIONS = 4
 MAX_TURNS = 20
 
@@ -484,9 +486,8 @@ def audit_append(paths: CloudPaths, request_id: str, capability: str,
 # session.send_input reaches a Claude session as a peer message from CCC's
 # own peer socket, so the session answers with SendMessage to "ccc". CCC
 # keeps the sessions the relay messaged ("open threads"). A peer message from
-# one of them is held here and goes up in the next snapshot as a question.
-# The relay emails/pushes question_waiting for each new question_id, so the
-# remote client gets woken without polling.
+# one of them is held here and goes up in the next snapshot as `replies`; the
+# relay's ask API hands it to the caller that asked (sync, or email + fetch).
 
 REPLY_THREAD_TTL_S = 24 * 3600
 MAX_REPLIES = 20
@@ -891,24 +892,26 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         attention.append(item)
 
     # --- session replies (peer messages to CCC on an open relay thread) ---
-    # Each reply is a new question_id, so the relay notifies once per reply.
-    # Answering it (question.answer or session.send_input) clears it.
+    # Replies go up as a top-level `replies` list (the relay's ask API matches
+    # them to a waiting caller). Each also gets a visible attention item of
+    # kind "reply" (not "question": a reply must not fire question_waiting).
+    # Answering the session (session.send_input / question.answer) clears it.
+    replies = []
     if paths is not None:
         for r in pending_replies(paths):
             r_ref = r.get("session_ref") or ""
             r_title = labels.get(r_ref, (f"Session on {host}", None))[0]
             r_at = _iso_from_epoch(r.get("at")) or _iso_now()
-            if len(questions) < MAX_QUESTIONS:
-                questions.append({
+            if len(replies) < MAX_REPLIES_UP:
+                replies.append({
+                    "id": str(r.get("id") or ""),
                     "session_ref": r_ref,
-                    "question_id": f"reply:{r.get('id')}",
-                    "text": redact_cap(r.get("text"), CAP_QUESTION),
-                    "options": [],
-                    "asked_at": r_at,
+                    "text": redact_cap(r.get("text"), CAP_REPLY),
+                    "at": r_at,
                 })
             if len(attention) < MAX_ATTENTION:
                 attention.insert(0, {
-                    "kind": "question",
+                    "kind": "reply",
                     "priority": 1,
                     "session_ref": r_ref,
                     "title": r_title,
@@ -960,6 +963,8 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
     }
     if schedules:
         snapshot["schedules"] = schedules
+    if replies:
+        snapshot["replies"] = replies
     return snapshot
 
 
