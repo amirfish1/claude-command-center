@@ -30950,6 +30950,9 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 .conv-input-bar .tts-btn[data-tts-voice] {
   width: auto; min-width: 32px; padding: 0 10px; white-space: nowrap;
 }
+/* Dark label: white on the bright accent fill was hard to read. */
+.conv-input-bar .tts-btn.speaking[data-tts-voice] { color: #0b1620; }
+
 /* Voiceover cache dot: amber = first clip ready, green = whole message ready. */
 .tts-btn[data-tts-cache] { position: relative; }
 .tts-btn[data-tts-cache]::before {

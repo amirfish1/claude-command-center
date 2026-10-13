@@ -1,0 +1,1 @@
+- Read-aloud retries the free voice after 15 seconds (not 5 minutes) when the connection drops, and the playing button label is dark so it is readable.

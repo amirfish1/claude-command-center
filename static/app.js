@@ -12912,6 +12912,8 @@
   let _ttsKeepVoice = '';   // carries the speaker across a restart (rate step, skip)
   let _ttsNeuralCooldownWhy = '';
   let _ttsStartWhy = '';
+  // A dropped connection (status 0) is usually brief: retry soon, not in 5 minutes.
+  const _ttsCoolMs = (status) => status === 429 ? 60000 : status === 0 ? 15000 : 300000;
   function _ttsCool(ms, status) {
     _ttsNeuralCooldownUntil = Date.now() + ms;
     _ttsNeuralCooldownWhy = 'HTTP ' + status;
@@ -12954,7 +12956,7 @@
     });
     entry.p.catch((status) => {
       _ttsHeadCache.delete(head.text);
-      _ttsCool(status === 429 ? 60000 : 300000, status);
+      _ttsCool(_ttsCoolMs(status), status);
     });
     _ttsHeadCache.set(head.text, entry);
     _ttsEvictCache();
@@ -13142,7 +13144,7 @@
       };
       audio.onerror = () => { URL.revokeObjectURL(got.url); fallBack(300000); };
       audio.play().catch(() => fallBack(0));
-    }, (status) => { if (!stale()) fallBack(status === 429 ? 60000 : 300000); });
+    }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
   }
 
   // One-time iOS-Safari engine prime (CCC-31). Must run inside a user gesture.
