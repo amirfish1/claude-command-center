@@ -18,13 +18,9 @@ if [[ ! -x "$DIR/venv/bin/python" ]]; then
 fi
 "$DIR/venv/bin/pip" install --quiet --upgrade kokoro-onnx soundfile lameenc
 
-# int8 is a third of the size and fast on Apple Silicon, but several times
-# slower than fp32 on x86 CPUs without VNNI, so x86 gets the fp32 model.
-if [[ "$(uname -m)" == "x86_64" ]]; then
-  MODEL_FILE="kokoro.fp32.onnx"; MODEL_URL="$BASE/kokoro-v1.0.onnx"
-else
-  MODEL_FILE="kokoro.int8.onnx"; MODEL_URL="$BASE/kokoro-v1.0.int8.onnx"
-fi
+# fp32 everywhere: measured on an Apple M4, int8 made speech about 2.5x slower
+# than fp32 (slower than real time under load), and x86 without VNNI is worse.
+MODEL_FILE="kokoro.fp32.onnx"; MODEL_URL="$BASE/kokoro-v1.0.onnx"
 fetch() {  # fetch <file> <url>: download to a temp name, then move into place
   [[ -s "$DIR/$1" ]] && { echo "have $1"; return; }
   echo "Downloading $1"

@@ -1,0 +1,1 @@
+- Local read-aloud voice now uses the fp32 model on every Mac and PC; it made speech about 2.5x faster than int8 in a benchmark.
