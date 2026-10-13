@@ -9222,6 +9222,27 @@
     }
   });
 
+  // Hovering an older turn's speaker makes its audio ahead of the click (local
+  // voice, no cost), so the read starts without a wait.
+  let _ttsHoverTimer = null;
+  document.addEventListener('pointerover', (ev) => {
+    const btn = ev.target.closest && ev.target.closest('[data-read-assistant-message], [data-read-agent-answer]');
+    if (!btn || _ttsActive || _ttsPaused) return;
+    clearTimeout(_ttsHoverTimer);
+    _ttsHoverTimer = setTimeout(() => {
+      try {
+        const resultEl = btn.closest('.event.result');
+        const eventEl = resultEl ? agentAnswerNodeBeforeResult(resultEl) : btn.closest('.event.assistant');
+        const els = assistantTextElements(eventEl);
+        if (!els.length) return;
+        const data = buildTtsDataFromElements(els);
+        const pane = btn.closest('.conv-pane');
+        const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
+        if (data && data.text.trim()) _ttsPrefetchHead(data.text, paneId, true);
+      } catch (_) {}
+    }, 200);
+  });
+
   document.addEventListener('click', (ev) => {
     const btn = ev.target.closest('[data-read-assistant-message]');
     if (!btn) return;
@@ -12950,24 +12971,26 @@
       else { delete btn.dataset.ttsCache; btn.style.removeProperty('--tts-cache-f'); }
     });
   }
-  function _ttsPrefetchHead(rawText, paneId) {
+  // quiet = a hovered older turn: make the clips but leave the composer bar alone.
+  function _ttsPrefetchHead(rawText, paneId, quiet) {
+    const mk = quiet ? '__quiet' : paneId;
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
     const clean = _sanitizeTtsText(rawText, true);
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
-    if (_ttsHeadCache.has(head.text)) { const c = _ttsCacheState.get(head.text); _ttsMarkCache(paneId, null, c ? c.st : null, c ? c.f : 0); return; }
-    _ttsMarkCache(paneId, null, null);
+    if (_ttsHeadCache.has(head.text)) { const c = _ttsCacheState.get(head.text); _ttsMarkCache(mk, null, c ? c.st : null, c ? c.f : 0); return; }
+    _ttsMarkCache(mk, null, null);
     const entry = { ready: false, got: null };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
     entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '').then((got) => {
       entry.ready = true; entry.got = got; entry.voice = got.voice;
       _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
-      _ttsMarkCache(paneId, head.text, 'partial', 0.1);
-      const token = _ttsChainTokens[paneId || ''] = (_ttsChainTokens[paneId || ''] || 0) + 1;
+      _ttsMarkCache(mk, head.text, 'partial', 0.1);
+      const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
       // One pane's clips at a time: two chains would share the CPU and both finish late.
-      _ttsChainQueue = _ttsChainQueue.then(() => _ttsPrefetchRest(clean, head, got, token, paneId)).catch(() => {});
+      _ttsChainQueue = _ttsChainQueue.then(() => _ttsPrefetchRest(clean, head, got, token, mk)).catch(() => {});
       return got;
     });
     entry.p.catch((status) => {
