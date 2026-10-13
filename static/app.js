@@ -61036,7 +61036,12 @@
   const _KIMI_TOOL_PEEK_LINES = 3;
   const _KIMI_TOOL_PEEK_COLS = 160;
   function _kimiToolPeekHtml(outputText) {
-    const text = String(outputText || '').replace(/\s+$/, '');
+    let text = String(outputText || '');
+    // Codex wraps every exec result in "Script completed / Wall time N
+    // seconds / Output:" boilerplate; it's noise in a peek, so drop it
+    // (the expanded body still shows the raw output).
+    text = text.replace(/^\s*Script completed\s*\n\s*Wall time[^\n]*\n\s*Output:[ \t]*\n?/i, '');
+    text = text.replace(/\s+$/, '');
     if (!text) return '';
     const lines = text.split('\n');
     const shown = lines.slice(0, _KIMI_TOOL_PEEK_LINES).map(function (l) {

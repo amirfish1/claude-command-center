@@ -1,0 +1,1 @@
+- Codex tool-output peeks no longer repeat the "Script completed / Wall time / Output:" boilerplate.
