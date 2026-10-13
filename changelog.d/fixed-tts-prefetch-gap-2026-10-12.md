@@ -1,1 +1,1 @@
-- Read-aloud no longer pauses between clips: the next two voice clips start generating as soon as the current one arrives, not when it starts playing.
+- Read-aloud no longer pauses between clips: each next voice clip starts generating the moment the previous one is fully generated, one at a time.

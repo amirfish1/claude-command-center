@@ -12974,7 +12974,7 @@
   }
   // Plays a streamed mp3 body through MediaSource, so the <audio> element (pause,
   // rate, ended) works unchanged while Deepgram is still making the clip.
-  function _ttsStreamUrl(res) {
+  function _ttsStreamUrl(res, onDone) {
     const ms = new MediaSource();
     const url = URL.createObjectURL(ms);
     const queue = [];
@@ -13001,6 +13001,7 @@
       } catch (_) {}
       finished = true;
       pump();
+      if (onDone) onDone();
     })();
     return url;
   }
@@ -13008,6 +13009,8 @@
   // Resolves { url, voice } or rejects with the HTTP status (0 = network).
   function _ttsFetchNeural(text, voice) {
     voice = voice || ttsVoiceForPane(activePaneId());
+    let onDone;
+    const done = new Promise((r) => { onDone = r; });
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -13015,8 +13018,8 @@
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
-      if (res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res), voice: v };
-      return { url: URL.createObjectURL(await res.blob()), voice: v };
+      if (res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, done };
+      return { url: URL.createObjectURL(await res.blob()), voice: v, done: Promise.resolve() };
     }, () => { throw 0; });
   }
   function _ttsSpeakChunkNeural(state, chunk) {
@@ -13046,10 +13049,11 @@
     state.prefetch[state.index].then((got) => {
       delete state.prefetch[state.index];
       if (stale()) { URL.revokeObjectURL(got.url); return; }
-      // Start the next clips generating now, not at onplay: a short head clip
-      // ends before a 400-char clip finishes generating, which was an audible gap.
-      ensure(state.index + 1);
-      ensure(state.index + 2);
+      // Start the next clip the moment this one is fully generated, not at
+      // onplay. One at a time: the local voice server shares the CPU, so two
+      // clips made at once both finish late and playback stalls.
+      const idx = state.index;
+      got.done.then(() => { if (!stale()) ensure(idx + 1); });
       if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
       const audio = new Audio(got.url);
       audio.playbackRate = _ttsRate;
@@ -13072,8 +13076,6 @@
           if (ttsButtonPaneId(btn) === _ttsActivePaneId) { btn.classList.remove('paused'); btn.title = label; }
         });
         _ttsShowVoice(got.voice);
-        ensure(state.index + 1);
-        ensure(state.index + 2);
       };
       audio.onended = () => {
         URL.revokeObjectURL(got.url);
