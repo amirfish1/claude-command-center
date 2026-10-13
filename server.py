@@ -31033,6 +31033,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         self.send_response(200)
                         self.send_header("Content-Type", "audio/mpeg")
                         self.send_header("X-CCC-Voice", _label)
+                        if _label.startswith("Kokoro"):
+                            self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
                         self.send_header("X-CCC-Stream", "1")
                         self.send_header("Cache-Control", "no-store")
                         self.send_header("Connection", "close")

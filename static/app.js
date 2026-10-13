@@ -12923,19 +12923,31 @@
   function _ttsHeadChunk(text, baseOffset) {
     return _chunkTtsText(text, _TTS_HEAD_CHARS, baseOffset)[0] || null;
   }
-  function _ttsPrefetchHead(rawText) {
+  // Dot on the Speak button: amber = first clip ready, green = whole last message ready.
+  const _ttsCacheState = new Map();   // head text -> 'partial' | 'ready'
+  function _ttsMarkCache(paneId, headText, st) {
+    if (headText) _ttsCacheState.set(headText, st);
+    ttsButtons().forEach((btn) => {
+      if (paneId && ttsButtonPaneId(btn) !== paneId) return;
+      if (st) btn.dataset.ttsCache = st; else delete btn.dataset.ttsCache;
+    });
+  }
+  function _ttsPrefetchHead(rawText, paneId) {
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
     const clean = _sanitizeTtsText(rawText, true);
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
-    if (!head || _ttsHeadCache.has(head.text)) return;
+    if (!head) return;
+    if (_ttsHeadCache.has(head.text)) { _ttsMarkCache(paneId, null, _ttsCacheState.get(head.text) || null); return; }
+    _ttsMarkCache(paneId, null, null);
     const entry = { ready: false, got: null };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
     entry.p = _ttsFetchNeural(head.text, '').then((got) => {
       entry.ready = true; entry.got = got; entry.voice = got.voice;
       _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
-      _ttsPrefetchRest(clean, head, got, ++_ttsChainToken);
+      _ttsMarkCache(paneId, head.text, 'partial');
+      _ttsPrefetchRest(clean, head, got, ++_ttsChainToken, paneId);
       return got;
     });
     entry.p.catch((status) => {
@@ -12958,7 +12970,7 @@
   // for the click. Stops when a read starts or a newer message takes over.
   let _ttsChainToken = 0;
   const _TTS_PREFETCH_CLIPS = 8;
-  async function _ttsPrefetchRest(clean, head, headGot, token) {
+  async function _ttsPrefetchRest(clean, head, headGot, token, paneId) {
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
     const end = head.start + head.text.length;
     const rest = _chunkTtsText(clean.slice(end), 400, end).slice(0, _TTS_PREFETCH_CLIPS);
@@ -12973,6 +12985,7 @@
       _ttsEvictCache();
       try { prev = await entry.p; } catch (_) { _ttsHeadCache.delete(c.text); return; }
     }
+    if (token === _ttsChainToken) _ttsMarkCache(paneId, head.text, 'ready');
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
   // Called after a transcript render; waits for the text to stop changing.
@@ -12983,8 +12996,8 @@
         if (_ttsActive || _ttsPaused) return;
         const paneId = activePaneId();
         const data = paneId ? lastMessageTtsData(paneId) : null;
-        if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text);
-        else _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId);
+        if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text, paneId);
+        else { _ttsMarkCache(paneId, null, null); _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId); }
       } catch (_) {}
     }, 2500);
   }
@@ -13044,7 +13057,8 @@
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
-      if (res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, done };
+      const model = res.headers.get('X-CCC-Model') || '';
+      if (res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
       return { url: URL.createObjectURL(await res.blob()), voice: v, done: Promise.resolve() };
     }, () => { throw 0; });
   }
@@ -13103,7 +13117,7 @@
         ttsButtons().forEach(btn => {
           if (ttsButtonPaneId(btn) === _ttsActivePaneId) { btn.classList.remove('paused'); btn.title = label; }
         });
-        _ttsShowVoice(got.voice);
+        _ttsShowVoice(got.voice + (got.model ? ' · ' + got.model : ''));
       };
       audio.onended = () => {
         URL.revokeObjectURL(got.url);

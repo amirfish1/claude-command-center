@@ -456,6 +456,11 @@ def _local_tts_up():
         return False
 
 
+def local_tts_precision():
+    """"fp32" or "int8": the model file the local voice server loads."""
+    return "fp32" if (_LOCAL_TTS_DIR / "kokoro.fp32.onnx").exists() else "int8"
+
+
 def local_tts_installed():
     py = _LOCAL_TTS_DIR / "venv" / "bin" / "python"
     model = any((_LOCAL_TTS_DIR / name).exists() for name in ("kokoro.fp32.onnx", "kokoro.int8.onnx"))
@@ -605,7 +610,7 @@ def tts_voice_options():
     """
     out = []
     if local_tts_installed():
-        out += [{"id": _KOKORO_LABEL + v, "label": _KOKORO_LABEL + v, "paid": False} for v in KOKORO_VOICES]
+        out += [{"id": _KOKORO_LABEL + v, "label": _KOKORO_LABEL + v + " (" + local_tts_precision() + ")", "paid": False} for v in KOKORO_VOICES]
     if _deepgram_key(explicit=True):
         out += [{"id": _DEEPGRAM_LABEL + v, "label": _DEEPGRAM_LABEL + v.capitalize(), "paid": True}
                 for v in DEEPGRAM_VOICES]
