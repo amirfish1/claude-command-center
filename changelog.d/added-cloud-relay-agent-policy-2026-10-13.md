@@ -1,0 +1,1 @@
+Cloud relay: the device can now answer a Claude Code permission prompt on request from the cloud (`approval.answer`). It acts only when the pending prompt still matches the action the cloud approved (sha256 check), reuses the dashboard's Approve/Deny path, and reports `unsupported` where that path is not available (non-macOS, sub-agent prompts, other engines).

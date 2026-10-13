@@ -370,3 +370,35 @@ agent is woken at once. Items are exposed at `GET /v1/attention`,
 `session.send_input`, `session.wake`, `question.answer` or ask to a session
 whose `last_human_input_at` is within 5 minutes gets `409 operator_active`
 unless the request sets `force: true` (only for cases the person approved).
+
+### Approval answers and rights policy (2026-10)
+
+A new capability, `approval.answer`, lets the cloud answer a Claude Code
+permission prompt. Payload: `{session_ref, decision: "allow"|"deny",
+action_sha256, attention_id?}`. The device advertises `approval_answer`.
+
+The cloud decides whether an agent token may send it (rights policy, written
+rules, a built-in classifier that never allows deploy, publish, delete, push
+to main and similar actions, and a requirement that the full action text is
+known). The device does not trust that decision blindly. It acts only when:
+
+1. The session is a top-level Claude session (a sub-agent's prompt lives in its
+   parent's terminal; other engines have their own approval controls).
+2. A real permission prompt is pending now (the Notification-hook marker, not
+   just a running tool).
+3. The sha256 of the pending action text equals `action_sha256`. The text is
+   the one the snapshot sends as `action` (redacted, capped at 2000 chars), so
+   both sides hash the same string. A mismatch is `rejected` with
+   `error_code: "action_changed"` and nothing is sent to the terminal.
+
+It then uses the same path as the dashboard Approve/Deny buttons
+(`POST /api/claude/permission`: Return approves once, Esc denies), which drives
+the session's own terminal tab through System Events. That works on macOS with
+a live tty only. Elsewhere the result is `rejected` with
+`error_code: "unsupported"` and `detail_code: "macos_only"` (or `subagent_prompt`,
+`not_claude`). Other rejections: `no_pending_approval`, `not_live_tty`,
+`no_pending_prompt`, `invalid_payload`. A successful result is `ok` with
+`detail_code: "delivered"`. The command is at-most-once like every other
+capability. There is a short gap between the check and the keystroke in which
+the prompt could change; the cloud's operator guard and the single-prompt
+nature of a parked session keep it small, but it is not zero.

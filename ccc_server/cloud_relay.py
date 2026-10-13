@@ -93,6 +93,7 @@ ALLOWED_CAPABILITIES = (
     "session.wake",
     "session.detail",
     "session.history",
+    "approval.answer",
 )
 COMMAND_MAX_LIFETIME_S = 600      # 10 min
 COMMAND_SKEW_GRACE_S = 60         # clock-skew grace
@@ -115,7 +116,8 @@ SERVICE_DISCONNECT_REASONS = ("device_revoked", "account_deleted",
                               "credentials_rejected")
 DEVICE_CAPABILITIES = ["sessions", "attention", "workers", "questions",
                        "session_input", "question_answer", "session_wake",
-                       "session_detail", "session_history"]
+                       "session_detail", "session_history",
+                       "approval_answer"]
 
 # Loop timing (PROTOCOL §7).
 STATE_PUSH_INTERVAL_S = 20.0
@@ -1378,6 +1380,8 @@ class CommandExecutor:
             return self._detail(request_id, session_ref)
         if capability == "session.history":
             return self._history(request_id, session_ref)
+        if capability == "approval.answer":
+            return self._approval_answer(request_id, session_ref, payload)
         return self._result(request_id, "rejected", error_code="unknown_capability")
 
     def _inject(self, request_id, session_ref, text, mode, detail_ok="delivered",
@@ -1462,6 +1466,65 @@ class CommandExecutor:
         if "invalid" in low or "missing" in low:
             return "invalid_payload"
         return "delivery_failed"
+
+    @staticmethod
+    def _pending_approval_action(row) -> str | None:
+        """The redacted, capped action text of the permission prompt the
+        session is parked on right now (the same text the snapshot sends to
+        the relay), or None when no permission prompt is pending. Requires
+        the Notification-hook marker: a long-running tool is not a prompt."""
+        if not row or row.get("question_waiting") or not row.get("needs_approval"):
+            return None
+        path = row.get("jsonl_path") or None
+        act = _rc.pending_action(path, CAP_ACTION) if path else ""
+        act = act or _action_text(row.get("pending_tool"), row.get("pending_file"))
+        return redact_cap(act, CAP_ACTION) if act else None
+
+    def _approval_answer(self, request_id, session_ref, payload) -> dict:
+        """approval.answer: answer a Claude Code permission prompt, but only
+        if the prompt that is pending NOW is the exact action the relay
+        judged (sha256 of the action text). Reuses the dashboard's
+        Approve/Deny path (POST /api/claude/permission), which drives the
+        session's own terminal and is macOS + live-tty only; anywhere else the
+        result is `rejected` / `unsupported`. Never retried or keystroked
+        blind: any doubt is a rejection."""
+        decision = payload.get("decision")
+        want = payload.get("action_sha256")
+        if decision not in ("allow", "deny") or not isinstance(want, str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", want):
+            return self._result(request_id, "rejected", error_code="invalid_payload")
+        if is_subagent_ref(session_ref):
+            # A sub-agent's prompt is shown in its parent's terminal.
+            return self._result(request_id, "rejected", error_code="unsupported",
+                                detail_code="subagent_prompt")
+        row = self._find_row(session_ref)
+        if row is None:
+            return self._result(request_id, "error", error_code="session_not_found")
+        if _norm_engine(row.get("engine")) != "claude":
+            return self._result(request_id, "rejected", error_code="unsupported",
+                                detail_code="not_claude")
+        action = self._pending_approval_action(row)
+        if action is None:
+            return self._result(request_id, "rejected",
+                                error_code="no_pending_approval")
+        have = hashlib.sha256(action.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(have, want):
+            return self._result(request_id, "rejected", error_code="action_changed")
+        status, data = self.local_api.post("/api/claude/permission", {
+            "session_id": row.get("session_id") or session_ref,
+            "decision": "accept" if decision == "allow" else "decline",
+        })
+        if isinstance(data, dict) and data.get("ok"):
+            return self._result(request_id, "ok", detail_code="delivered")
+        code = str(data.get("code") or "") if isinstance(data, dict) else ""
+        if code in ("macos_only", "not_claude") or status == 501:
+            return self._result(request_id, "rejected", error_code="unsupported",
+                                detail_code=code or "unsupported")
+        if code in ("not_live_tty", "no_pending_prompt"):
+            return self._result(request_id, "rejected", error_code=code)
+        err = str(data.get("error") or "") if isinstance(data, dict) else ""
+        return self._result(request_id, "error", error_code="delivery_failed",
+                            extra={"detail": {"local_error": redact_cap(err, 300)}})
 
     def _detail(self, request_id, session_ref) -> dict:
         """Assemble a bounded recent-turn window by tail-reading the session's
