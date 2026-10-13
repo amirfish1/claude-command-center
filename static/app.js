@@ -12941,6 +12941,14 @@
     _ttsLog('COOLDOWN', Math.round(ms / 1000) + 's after ' + _ttsNeuralCooldownWhy);
   }
   const _TTS_HEAD_CHARS = 80;
+  // The free voice has no Hebrew (it spells out the letters), so Hebrew text goes
+  // to the Mac voice. "Hebrew" = most letters in the text are Hebrew.
+  function _ttsIsHebrew(text) {
+    const t = String(text || '');
+    const he = (t.match(/[\u0590-\u05FF]/g) || []).length;
+    const other = (t.match(/[A-Za-z\u00C0-\u024F\u0400-\u04FF]/g) || []).length;
+    return he > 0 && he >= other;
+  }
   const _ttsHeadCache = new Map();   // chunk text -> { p, ready, got }
   let _ttsPrefetchTimer = null;
   function _ttsHeadChunk(text, baseOffset) {
@@ -12977,6 +12985,7 @@
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
     const clean = _sanitizeTtsText(rawText, true);
+    if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
     if (_ttsHeadCache.has(head.text)) { const c = _ttsCacheState.get(head.text); _ttsMarkCache(mk, null, c ? c.st : null, c ? c.f : 0); return; }
@@ -13457,12 +13466,14 @@
     // Free voice whenever it isn't cooling down. A prepared first chunk starts
     // instantly; otherwise it is fetched now (a 160-char head takes ~1-2 s).
     // The Mac voice is only the fallback when that fetch or playback fails.
-    const _ttsHeadReady = Date.now() >= _ttsNeuralCooldownUntil;
+    const _ttsHebrew = _ttsIsHebrew(text);
+    const _ttsHeadReady = !_ttsHebrew && Date.now() >= _ttsNeuralCooldownUntil;
     {
       const h = _ttsHeadChunk(text, baseOffset);
       const e = h && _ttsHeadCache.get(h.text);
       let why = '';
-      if (Date.now() < _ttsNeuralCooldownUntil) why = 'free voice cooling down, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')';
+      if (_ttsHebrew) why = 'Hebrew: the free voice has none';
+      else if (Date.now() < _ttsNeuralCooldownUntil) why = 'free voice cooling down, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')';
       _ttsStartWhy = why;
       _ttsLog('START', why ? 'MAC VOICE: ' + why
         : 'free voice, ' + (e && e.ready ? 'chunk ready' : e ? 'chunk still generating' : 'fetching first chunk now'));
@@ -13480,6 +13491,7 @@
     _ttsChunkState = {
       chunks,
       neuralOk: _ttsHeadReady,
+      hebrew: _ttsHebrew,
       geminiVoice: _ttsKeepVoice,
       index: 0,
       paneId: paneId || _ttsActivePaneId || activePaneId(),
@@ -13500,6 +13512,7 @@
     if (_ttsNeuralUsable(state)) { _ttsSpeakChunkNeural(state, chunk); return; }
     const utterance = new SpeechSynthesisUtterance(chunk.text);
     utterance.rate = _ttsRate;
+    if (state.hebrew) utterance.lang = 'he-IL';
     _ttsUtterance = utterance;
 
     utterance.onstart = () => {
