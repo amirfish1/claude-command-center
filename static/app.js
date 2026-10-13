@@ -13046,6 +13046,10 @@
     state.prefetch[state.index].then((got) => {
       delete state.prefetch[state.index];
       if (stale()) { URL.revokeObjectURL(got.url); return; }
+      // Start the next clips generating now, not at onplay: a short head clip
+      // ends before a 400-char clip finishes generating, which was an audible gap.
+      ensure(state.index + 1);
+      ensure(state.index + 2);
       if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
       const audio = new Audio(got.url);
       audio.playbackRate = _ttsRate;
@@ -13069,6 +13073,7 @@
         });
         _ttsShowVoice(got.voice);
         ensure(state.index + 1);
+        ensure(state.index + 2);
       };
       audio.onended = () => {
         URL.revokeObjectURL(got.url);
