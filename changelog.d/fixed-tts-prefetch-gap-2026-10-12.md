@@ -1,1 +1,1 @@
-- Read-aloud no longer pauses between clips: each next voice clip starts generating the moment the previous one is fully generated, one at a time.
+- Read-aloud audio is now made ahead: when a turn ends or you open a conversation, its last message is generated in the background so the Speak click plays with no wait or pauses.

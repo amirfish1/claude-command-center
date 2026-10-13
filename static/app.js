@@ -12933,8 +12933,9 @@
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
     entry.p = _ttsFetchNeural(head.text, '').then((got) => {
-      entry.ready = true; entry.got = got;
+      entry.ready = true; entry.got = got; entry.voice = got.voice;
       _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
+      _ttsPrefetchRest(clean, head, got, ++_ttsChainToken);
       return got;
     });
     entry.p.catch((status) => {
@@ -12942,12 +12943,37 @@
       _ttsCool(status === 429 ? 60000 : 300000, status);
     });
     _ttsHeadCache.set(head.text, entry);
-    while (_ttsHeadCache.size > 3) {
+    _ttsEvictCache();
+  }
+  function _ttsEvictCache() {
+    while (_ttsHeadCache.size > 12) {
       const oldest = _ttsHeadCache.keys().next().value;
       const old = _ttsHeadCache.get(oldest);
       if (old && old.got) URL.revokeObjectURL(old.got.url);
       _ttsHeadCache.delete(oldest);
     }
+  }
+  // Generation is local and free, so once the first clip is ready the rest of
+  // the message is made one clip at a time (same split as Speak uses) and kept
+  // for the click. Stops when a read starts or a newer message takes over.
+  let _ttsChainToken = 0;
+  const _TTS_PREFETCH_CLIPS = 8;
+  async function _ttsPrefetchRest(clean, head, headGot, token) {
+    if (!headGot.voice || headGot.voice === 'MeloTTS') return;
+    const end = head.start + head.text.length;
+    const rest = _chunkTtsText(clean.slice(end), 400, end).slice(0, _TTS_PREFETCH_CLIPS);
+    let prev = headGot;
+    for (const c of rest) {
+      try { await prev.done; } catch (_) { return; }
+      if (token !== _ttsChainToken || _ttsActive || Date.now() < _ttsNeuralCooldownUntil) return;
+      if (_ttsHeadCache.has(c.text)) continue;
+      const entry = { ready: false, got: null, voice: headGot.voice };
+      entry.p = _ttsFetchNeural(c.text, headGot.voice).then((got) => { entry.ready = true; entry.got = got; return got; });
+      _ttsHeadCache.set(c.text, entry);
+      _ttsEvictCache();
+      try { prev = await entry.p; } catch (_) { _ttsHeadCache.delete(c.text); return; }
+    }
+    _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
   // Called after a transcript render; waits for the text to stop changing.
   function scheduleTtsPrefetch() {
@@ -13037,14 +13063,16 @@
     const ensure = (i) => {
       const c = state.chunks[i];
       if (!c || state.prefetch[i]) return;
+      const hit = _ttsHeadCache.get(c.text);
+      if (hit && (i === 0 ? !state.geminiVoice : hit.voice === state.geminiVoice)) {
+        state.prefetch[i] = hit.p;
+        _ttsHeadCache.delete(c.text);
+        return;
+      }
       const p = _ttsFetchNeural(c.text, state.geminiVoice);
       p.catch(() => {});
       state.prefetch[i] = p;
     };
-    if (state.index === 0 && !state.prefetch[0] && !state.geminiVoice) {
-      const hit = _ttsHeadCache.get(chunk.text);
-      if (hit) { state.prefetch[0] = hit.p; _ttsHeadCache.delete(chunk.text); }
-    }
     ensure(state.index);
     state.prefetch[state.index].then((got) => {
       delete state.prefetch[state.index];
@@ -61633,6 +61661,9 @@
         scheduleTtsPrefetch();
         break;
       }
+    } else if (opts && opts.initialLoad) {
+      // Switching to a conversation: make its last message ready to play too.
+      scheduleTtsPrefetch();
     }
     function whatsappBridgeSenderHtml(ev) {
       if (!ev || ev.subtype !== 'hermes_whatsapp_bridge') return '';
