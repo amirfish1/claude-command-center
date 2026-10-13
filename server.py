@@ -31065,6 +31065,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(audio)))
             self.send_header("X-CCC-Voice", voice)
+            if voice.startswith("Kokoro"):
+                self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(audio)
