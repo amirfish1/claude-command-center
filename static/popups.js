@@ -14,6 +14,7 @@
   'use strict';
 
   var ALL = [
+    'local-voice-install',
     'moment-zero',
     'savings-milestone',
     'notify-permission',

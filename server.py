@@ -27551,6 +27551,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ).lower()
                 ]
             self.send_json(rows)
+        elif path == "/api/local-speech/status":
+            from ccc_server import local_speech
+            local_speech.handle_api(self)
         elif path == "/api/free-runtime/tts-voices":
             self.send_json({"ok": True, "voices": _free_runtime.tts_voice_options()})
         elif path == "/api/free-runtime/status":
@@ -30991,6 +30994,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             result = codex_client_call(action, data)
             self.send_json(result, 200 if result.get("ok") else 409)
+            return
+        if path == "/api/local-speech/install":
+            from ccc_server import local_speech
+            local_speech.handle_api(self, install=True)
             return
         if path == "/api/free-runtime/tts-log":
             # Browser-side Speak decisions (which voice, and why the Mac voice)

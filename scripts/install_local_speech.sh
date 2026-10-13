@@ -16,7 +16,8 @@ if [[ ! -x "$DIR/venv/bin/python" ]]; then
   echo "Creating $DIR/venv"
   python3 -m venv "$DIR/venv"
 fi
-"$DIR/venv/bin/pip" install --quiet --upgrade kokoro-onnx soundfile lameenc
+echo "Installing voice dependencies"
+"$DIR/venv/bin/python" -m pip install --quiet --upgrade kokoro-onnx soundfile lameenc
 
 # fp32 everywhere: measured on an Apple M4, int8 made speech about 2.5x slower
 # than fp32 (slower than real time under load), and x86 without VNNI is worse.
@@ -32,6 +33,8 @@ fetch voices.bin "$BASE/voices-v1.0.bin"
 
 "$DIR/venv/bin/python" - "$DIR" <<'EOF'
 import os, sys, time
+import lameenc
+import soundfile
 from kokoro_onnx import Kokoro
 d = sys.argv[1]
 model = next(os.path.join(d, n) for n in ("kokoro.fp32.onnx", "kokoro.int8.onnx")
@@ -41,4 +44,4 @@ t = time.time()
 samples, rate = k.create("Local voice ready.", voice="af_heart")
 print("Kokoro OK: %s, %.1fs of audio in %.1fs" % (os.path.basename(model), len(samples) / rate, time.time() - t))
 EOF
-echo "Done. Speak uses this voice by default; restart CCC if its voice server was already running."
+echo "Done. Local voice and MP3 streaming dependencies are ready."

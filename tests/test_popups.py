@@ -23,6 +23,7 @@ def test_lists_match_between_server_and_browser():
 
 def test_every_popup_has_a_gate():
     gates = {
+        "local-voice-install": "static/local-speech.js",
         "moment-zero": "static/onboarding/onboarding.js",
         "savings-milestone": "static/savings.js",
         "notify-permission": "static/notify.js",

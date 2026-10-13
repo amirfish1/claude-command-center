@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import threading
 
 from ccc_server import core as _core
 
@@ -443,17 +444,28 @@ KOKORO_VOICES = (
 )
 _KOKORO_LABEL = "Kokoro: "
 
-_LOCAL_TTS_DIR = Path.home() / ".ccc" / "local-tts"
-_LOCAL_TTS_PORT = int(os.environ.get("CCC_LOCAL_TTS_PORT", "3019"))
+_LOCAL_TTS_DIR = Path(os.environ.get("CCC_LOCAL_TTS_DIR", str(Path.home() / ".ccc" / "local-tts"))).expanduser()
+_LOCAL_TTS_BASE_PORT = int(os.environ.get("CCC_LOCAL_TTS_PORT", "3019"))
+_LOCAL_TTS_PORT = _LOCAL_TTS_BASE_PORT
 _LOCAL_TTS_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "local_tts_server.py"
 
 
-def _local_tts_up():
+def _local_tts_health():
+    import urllib.request
     try:
-        with socket.create_connection(("127.0.0.1", _LOCAL_TTS_PORT), timeout=0.3):
-            return True
-    except OSError:
-        return False
+        with urllib.request.urlopen(f"http://127.0.0.1:{_LOCAL_TTS_PORT}/health", timeout=0.5) as response:
+            return json.loads(response.read(4096))
+    except (OSError, ValueError):
+        return {}
+
+
+def _local_tts_up():
+    health = _local_tts_health()
+    return health.get("ok") is True and health.get("stream") is True
+
+
+_LOCAL_TTS_PROCESS = None
+_LOCAL_TTS_START_LOCK = threading.Lock()
 
 
 def local_tts_precision():
@@ -467,23 +479,64 @@ def local_tts_installed():
     return py.exists() and model and (_LOCAL_TTS_DIR / "voices.bin").exists()
 
 
+def _local_tts_saved_port():
+    try:
+        saved = json.loads((_LOCAL_TTS_DIR / "server-port.json").read_text())
+        port = int(saved["port"])
+        if saved.get("base_port") == _LOCAL_TTS_BASE_PORT and 0 < port < 65536:
+            return port
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return _LOCAL_TTS_BASE_PORT
+
+
+def _local_tts_save_port():
+    # Persist a repair's replacement port so another dashboard process can
+    # reuse it instead of spawning another model after every restart.
+    target = _LOCAL_TTS_DIR / "server-port.json"
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"base_port": _LOCAL_TTS_BASE_PORT, "port": _LOCAL_TTS_PORT}))
+    temporary.replace(target)
+
+
 def _local_tts_start():
-    """Start the loopback Kokoro server detached; True once it answers."""
+    """Start the loopback Kokoro server; require the MP3 encoder to be healthy."""
     import subprocess
     import time
-    if _local_tts_up():
-        return True
-    if not local_tts_installed():
-        return False
-    subprocess.Popen(
-        [str(_LOCAL_TTS_DIR / "venv" / "bin" / "python"), str(_LOCAL_TTS_SCRIPT)],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True)
-    for _ in range(40):
-        time.sleep(0.25)
+    global _LOCAL_TTS_PROCESS, _LOCAL_TTS_PORT
+    with _LOCAL_TTS_START_LOCK:
+        if _LOCAL_TTS_PROCESS is None:
+            _LOCAL_TTS_PORT = _local_tts_saved_port()
         if _local_tts_up():
             return True
-    return False
+        if not local_tts_installed():
+            return False
+        if _LOCAL_TTS_PROCESS is not None:
+            if _LOCAL_TTS_PROCESS.poll() is None:
+                _LOCAL_TTS_PROCESS.terminate()
+                _LOCAL_TTS_PROCESS.wait(timeout=5)
+            _LOCAL_TTS_PROCESS = None
+        health = _local_tts_health()
+        if health.get("ok") and not health.get("stream"):
+            # An older, unowned Kokoro process may have loaded without lameenc.
+            # Leave it alone and use a fresh loopback port for the repaired voice.
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                _LOCAL_TTS_PORT = listener.getsockname()[1]
+        env = dict(os.environ, CCC_LOCAL_TTS_DIR=str(_LOCAL_TTS_DIR),
+                   CCC_LOCAL_TTS_PORT=str(_LOCAL_TTS_PORT))
+        _LOCAL_TTS_PROCESS = subprocess.Popen(
+            [str(_LOCAL_TTS_DIR / "venv" / "bin" / "python"), str(_LOCAL_TTS_SCRIPT)],
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(120):
+            if _LOCAL_TTS_PROCESS.poll() is not None:
+                return False
+            time.sleep(0.25)
+            if _local_tts_up():
+                _local_tts_save_port()
+                return True
+        return False
 
 
 def _kokoro_voice(voice):

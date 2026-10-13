@@ -92,6 +92,10 @@ console.log(JSON.stringify(settled));
         start = self.source.index("  function _ttsStartChunkedSpeech(")
         end = self.source.index("  function speakTextDirect(", start)
         queue_source = self.source[start:end]
+        hebrew_detector = self.source[
+            self.source.index("  function _ttsIsHebrew("):
+            self.source.index("  const _ttsHeadCache")
+        ]
         result = self.run_node(
             """
 const TTS_CHUNK_MAX_CHARS = 12;
@@ -135,6 +139,7 @@ const window = {
 };
 function SpeechSynthesisUtterance(text) { this.text = text; }
 """
+            + hebrew_detector
             + chunker
             + binder
             + queue_source

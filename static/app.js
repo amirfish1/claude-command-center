@@ -13573,6 +13573,7 @@
   // When `domElements` (rendered message nodes) are given, the read maps
   // spoken offsets back onto their text nodes so the current word highlights.
   function speakTextDirect(text, convId, paneId, sourceBtn, domElements) {
+    if (sourceBtn && window.cccLocalSpeech) window.cccLocalSpeech.offer();
     if (!window.speechSynthesis) return false;
     let domData = null;
     if (domElements && domElements.length) {
@@ -13603,6 +13604,7 @@
   }
 
   async function readLastMessageAloud(paneId) {
+    if (window.cccLocalSpeech) window.cccLocalSpeech.offer();
     if (!window.speechSynthesis) {
       showOpToast('Your browser does not support text-to-speech.', 'error');
       return;
@@ -83357,11 +83359,15 @@
       });
     }
   }
-  fetch('/api/free-runtime/tts-voices').then(r => r.ok ? r.json() : null).then(d => {
-    _ttsVoiceOptions = (d && Array.isArray(d.voices)) ? d.voices : [];
-    renderTtsVoiceDefaultSelect();
-    document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
-  }).catch(() => {});
+  function refreshTtsVoiceOptions() {
+    fetch('/api/free-runtime/tts-voices').then(r => r.ok ? r.json() : null).then(d => {
+      _ttsVoiceOptions = (d && Array.isArray(d.voices)) ? d.voices : [];
+      renderTtsVoiceDefaultSelect();
+      document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
+    }).catch(() => {});
+  }
+  refreshTtsVoiceOptions();
+  window.addEventListener('ccc-local-speech-ready', refreshTtsVoiceOptions);
 
   renderAllConversationBackgroundPalettes();
   window.addEventListener('storage', (ev) => {

@@ -1,0 +1,1 @@
+- Add an opt-in offline Speak voice installer in voice settings with background progress, repair of missing MP3 streaming dependencies, and streaming health verification. The one-time Speak install offer stays off pending popup approval.

@@ -20,7 +20,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HOME = os.path.join(os.path.expanduser("~"), ".ccc", "local-tts")
+HOME = os.path.expanduser(os.environ.get("CCC_LOCAL_TTS_DIR", os.path.join(os.path.expanduser("~"), ".ccc", "local-tts")))
 PORT = int(os.environ.get("CCC_LOCAL_TTS_PORT", "3019"))
 MAX_CHARS = 2000
 

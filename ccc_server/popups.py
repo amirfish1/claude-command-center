@@ -17,6 +17,7 @@ from __future__ import annotations
 
 # Every gated pop-up, with what it is. Keep in sync with static/popups.js.
 ALL = {
+    "local-voice-install": "Speak offers to install the optional offline voice",
     "moment-zero": "Full-screen Moment Zero onboarding auto-opens for a new user",
     "savings-milestone": "Full-screen confetti card when savings cross $10/$100/$1k",
     "notify-permission": "Card asking to turn on browser notifications",
