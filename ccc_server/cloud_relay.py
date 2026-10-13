@@ -30,7 +30,7 @@ State lives under ~/.claude/command-center/cloud/:
 
 from __future__ import annotations
 
-import hashlib  # noqa: F401  (available for future signed calls; kept per spec import set)
+import hashlib
 import hmac  # noqa: F401
 import http.client  # noqa: F401
 import json
@@ -107,6 +107,10 @@ DEVICE_CAPABILITIES = ["sessions", "attention", "workers", "questions",
 # Loop timing (PROTOCOL §7).
 STATE_PUSH_INTERVAL_S = 20.0
 STATE_PUSH_MIN_INTERVAL_S = 3.0   # coalesce on-demand pushes
+# An unchanged snapshot is sent as a small heartbeat instead (only when the
+# service advertised `unchanged_ok`); a full snapshot still goes out at least
+# this often so a service that lost its copy recovers on its own.
+STATE_FULL_REFRESH_S = 600.0
 POLL_WAIT_S = 25
 BACKOFF_MIN_S = 1.0
 BACKOFF_MAX_S = 60.0
@@ -959,6 +963,20 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
     return snapshot
 
 
+def snapshot_digest(snapshot: dict) -> str:
+    """Content hash of a snapshot, ignoring its own timestamp."""
+    body = {k: v for k, v in snapshot.items() if k != "snapshot_at"}
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def heartbeat_body(snapshot: dict) -> dict:
+    """The small state body that says "nothing changed since my last push"."""
+    return {"v": snapshot.get("v", PROTOCOL_VERSION),
+            "snapshot_at": snapshot.get("snapshot_at") or _iso_now(),
+            "unchanged": True}
+
+
 # ---------------------------------------------------------------------------
 # Command validation (PROTOCOL §4.3) — pure, fail-closed, in order
 # ---------------------------------------------------------------------------
@@ -1540,6 +1558,9 @@ class RelayLoop:
         self._push_now = threading.Event()
         self._threads: list[threading.Thread] = []
         self._last_push_ts = 0.0
+        self._last_full_ts = 0.0
+        self._last_digest = None
+        self._unchanged_ok = False
         self.state = "off"
         self.last_push = None
         self.last_poll = None
@@ -1597,6 +1618,30 @@ class RelayLoop:
             return True
         return False
 
+    def _push_once(self):
+        """Send one state push: a small heartbeat when the snapshot is
+        unchanged and the service supports it, else the full snapshot."""
+        snapshot = build_snapshot(self.m.local_api, self.m.config,
+                                  self.m.ccc_version, self.m.paths)
+        digest = snapshot_digest(snapshot)
+        heartbeat = (self._unchanged_ok
+                     and digest == self._last_digest
+                     and time.time() - self._last_full_ts
+                     < STATE_FULL_REFRESH_S)
+        if heartbeat:
+            resp = self.m.client.post_state(heartbeat_body(snapshot))
+            if isinstance(resp, dict) and resp.get("need_full"):
+                resp = self.m.client.post_state(snapshot)
+                heartbeat = False
+        else:
+            resp = self.m.client.post_state(snapshot)
+        if not heartbeat:
+            self._last_full_ts = time.time()
+            self._last_digest = digest
+            self._unchanged_ok = bool(isinstance(resp, dict)
+                                      and resp.get("unchanged_ok"))
+        return resp
+
     def _push_loop(self):
         base = 0.0
         while not self._dead():
@@ -1607,9 +1652,7 @@ class RelayLoop:
             if self._dead():
                 break
             try:
-                snapshot = build_snapshot(self.m.local_api, self.m.config,
-                                          self.m.ccc_version, self.m.paths)
-                resp = self.m.client.post_state(snapshot)
+                resp = self._push_once()
                 self._last_push_ts = time.time()
                 self.last_push = _iso_now()
                 self.last_push_error = None
@@ -1624,6 +1667,7 @@ class RelayLoop:
                 if self._handle_fatal(e):
                     break
                 self.last_push_error = e.code
+                self._last_digest = None  # next push after a failure is full
                 self.state = "error" if self.state == "online" else "offline"
                 sleep, base = _backoff_next(base)
                 self._stop.wait(sleep)

@@ -292,3 +292,9 @@ anchor for the protocol.
   `options`) plus a top `question` attention item, so the relay sends a
   `question_waiting` notification for each reply. The next `session.send_input`
   or `question.answer` to that session clears its replies.
+- Heartbeat pushes: when a full `POST /v1/state` response carries
+  `unchanged_ok: true` and the next snapshot is identical (ignoring
+  `snapshot_at`), CCC sends `{"v": 1, "snapshot_at": ..., "unchanged": true}`
+  instead. The relay only moves the stored snapshot's freshness; it answers
+  `need_full: true` when it has no stored snapshot, and CCC resends in full.
+  CCC still sends a full snapshot at least every 10 minutes.
