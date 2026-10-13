@@ -1,0 +1,1 @@
+- The skip-sentence button no longer pauses while the voice is re-made: it jumps inside the audio that is already generated.

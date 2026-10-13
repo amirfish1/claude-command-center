@@ -13119,6 +13119,12 @@
       const label = 'Pause reading (free voice: ' + got.voice + ')';
       audio.onplay = () => {
         if (stale()) return;
+        if (state.seekFrac) {
+          const f = state.seekFrac;
+          state.seekFrac = 0;
+          const t = f * audio.duration;
+          if (isFinite(t) && audio.seekable.length && audio.seekable.end(audio.seekable.length - 1) >= t) audio.currentTime = t;
+        }
         setTtsButtonsState(true, false, state.paneId);
         setTtsButtonsBusy(false);
         ttsButtons().forEach(btn => {
@@ -13865,7 +13871,36 @@
       return;
     }
     _ttsLastCharIndex = m.index + m[0].length;
+    if (_ttsSeekNeuralTo(_ttsLastCharIndex)) return;
     _restartTtsAtCurrentPosition();
+  }
+  // Skip inside audio that is already made: seek in the playing clip, or jump to
+  // the clip holding the target, instead of re-requesting speech (a multi-second
+  // wait). The position is a character-proportional estimate. False = no neural
+  // audio to seek in, so the caller restarts from text.
+  function _ttsSeekNeuralTo(target) {
+    const st = _ttsChunkState;
+    if (!st || _ttsPaused || !_ttsNeural || !_ttsNeural.audio) return false;
+    let k = st.chunks.findIndex((c) => target < c.start + c.text.length);
+    if (k < 0) return false;
+    const c = st.chunks[k];
+    const frac = Math.max(0, Math.min(1, (target - c.start) / Math.max(1, c.text.length)));
+    if (k === st.index) {
+      const a = _ttsNeural.audio;
+      const t = frac * a.duration;
+      if (!isFinite(t) || !a.seekable.length || a.seekable.end(a.seekable.length - 1) < t) return false;
+      a.currentTime = t;
+      return true;
+    }
+    if (k < st.index) return false;
+    const old = _ttsNeural.audio;
+    try { old.pause(); URL.revokeObjectURL(old.src); } catch (_) {}
+    _ttsNeural = null;
+    _ttsUtterance = null;
+    st.index = k;
+    st.seekFrac = frac;
+    _ttsSpeakNextChunk();
+    return true;
   }
   // Rate is adjusted with − / + buttons (replaced the drag slider). Each click
   // steps ±0.05 within [MIN, MAX]; persist, relabel, disable at the ends, and
