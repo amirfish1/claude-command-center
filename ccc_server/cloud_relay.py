@@ -1103,6 +1103,20 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
     # --- schedules (omitted entirely when none found) ---
     schedules = collect_schedules()
 
+    # --- presence (human input only; see ccc_server/presence.py) ---
+    try:
+        from . import presence as _presence
+    except ImportError:  # pragma: no cover
+        from ccc_server import presence as _presence
+    try:
+        human_at, presence = _presence.compute(
+            [(s["ref"], s["is_live"], s["recency"]) for s in sessions], path_of)
+    except Exception:
+        human_at, presence = {}, {"present": False, "last_input_at": None}
+    for s in sessions:
+        if s["ref"] in human_at:
+            s["last_human_input_at"] = human_at[s["ref"]]
+
     capabilities = ["sessions", "attention", "workers", "questions"]
     if schedules:
         capabilities.append("schedules")
@@ -1121,6 +1135,7 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         "attention": attention,
         "questions": questions,
         "workers": workers,
+        "presence": presence,
     }
     if schedules:
         snapshot["schedules"] = schedules

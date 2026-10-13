@@ -340,3 +340,33 @@ anchor for the protocol.
   `{type: "approval", tool, action}`) next to `turns`. If a sub-agent
   transcript cannot be read, `turns` come from the parent and
   `fallback: "parent"` is set.
+
+### Presence and alert routing (2026-10)
+
+State bodies gain two additive fields.
+
+- Top-level `presence: {present: bool, last_input_at: iso|null}`. `present` is
+  true when the person gave input in the last 5 minutes. Delta pushes carry it
+  whenever it changes (it is a normal top-level key). A client that omits it is
+  treated as away.
+- Per-session `last_human_input_at` (iso, key absent when unknown).
+
+"Human input" is a prompt the person typed into a terminal session (a
+transcript user turn that is typed text, not a tool result, meta or sub-agent
+turn, not a provenance marker such as `[From <name> via CCC Cloud, ...]`,
+`Announced from:` or a system tag, and not text CCC itself injected) or a send
+from the dashboard composer. Cloud-relay, peer, WatchTower and other API
+injections never count. Transcripts are scanned only for live sessions, once
+per change of the session's modification time. The dashboard tab visibility is
+not a signal: the server has none.
+
+The cloud uses these to route each approval or question to one owner. An
+item with `covered_by_parent` has owner `parent` and wakes nobody. While the
+person is present the owner is `amir` with a 5-minute grace, then it moves to
+the agent (`instinct`) and the wake email is sent. When the person is away the
+agent is woken at once. Items are exposed at `GET /v1/attention`,
+`GET /v1/attention/<id>` and `POST /v1/attention/<id>/claim`, with
+`resolved_by` of `instinct`, `amir`, `self` or `unknown`. An agent-issued
+`session.send_input`, `session.wake`, `question.answer` or ask to a session
+whose `last_human_input_at` is within 5 minutes gets `409 operator_active`
+unless the request sets `force: true` (only for cases the person approved).

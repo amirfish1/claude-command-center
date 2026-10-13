@@ -38239,6 +38239,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         str(payload.get("source") or "").strip()
                         or _inject_source_for_request(announced_from, inject_options["wt_origin"])
                     )
+                    try:
+                        # Cloud-relay presence: composer sends are human input;
+                        # every other source is remembered as machine input.
+                        from ccc_server import presence as _presence
+                        _presence.note_inject(sid, queued_text, source)
+                    except Exception:
+                        pass
                     result = _inject_text_into_session(
                         sid, text, mode=verb_mode,
                         requested_verb=verb,
