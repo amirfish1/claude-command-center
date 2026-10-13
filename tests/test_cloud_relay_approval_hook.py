@@ -266,6 +266,59 @@ def test_hook_picks_up_decision_posted_while_parked(appdir):
     proc.wait(timeout=10)
 
 
+def _line(block, role="assistant"):
+    return json.dumps({"type": role, "message": {"role": role,
+                                                 "content": [block]}}) + "\n"
+
+
+def _park(appdir, transcript, wait="20"):
+    env = dict(os.environ, CCC_APPROVAL_HOOK_DIR=str(appdir),
+               CCC_APPROVAL_HOOK_WAIT=wait)
+    proc = subprocess.Popen([sys.executable, HOOK], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True, env=env)
+    proc.stdin.write(json.dumps({"session_id": SID, "tool_name": "Bash",
+                                 "tool_input": TIN,
+                                 "transcript_path": transcript}))
+    proc.stdin.close()
+    for _ in range(100):
+        if ah.waiting(SID, SHA):
+            break
+        time.sleep(0.05)
+    assert ah.waiting(SID, SHA)
+    return proc
+
+
+def test_hook_stops_parking_once_prompt_answered_by_hand(appdir, tmp_path):
+    ah.touch_enabled()
+    tr = tmp_path / "s.jsonl"
+    tr.write_text(_line({"type": "tool_use", "id": "t9", "name": "Bash",
+                         "input": TIN}))
+    proc = _park(appdir, str(tr))
+    t0 = time.time()
+    with open(tr, "a") as f:
+        f.write(_line({"type": "tool_result", "tool_use_id": "t9",
+                       "content": "ok"}, role="user"))
+    assert proc.stdout.read() == ""            # no decision emitted
+    proc.wait(timeout=10)
+    assert time.time() - t0 < 5
+    assert not ah.waiting(SID, SHA)
+
+
+def test_earlier_identical_resolved_call_does_not_end_parking(appdir, tmp_path):
+    ah.touch_enabled()
+    tr = tmp_path / "s.jsonl"
+    tr.write_text(
+        _line({"type": "tool_use", "id": "t1", "name": "Bash", "input": TIN})
+        + _line({"type": "tool_result", "tool_use_id": "t1"}, role="user")
+        + _line({"type": "tool_use", "id": "t2", "name": "Bash", "input": TIN}))
+    proc = _park(appdir, str(tr))
+    time.sleep(1.5)                            # past one resolved-check tick
+    assert proc.poll() is None
+    assert ah.deliver(SID, SHA, "allow") == "applied"
+    assert _out_decision(proc.stdout.read()) == "allow"
+    proc.wait(timeout=10)
+
+
 # --- relay executor: hook first, keystroke only as fallback -------------------
 
 class PermAPI:

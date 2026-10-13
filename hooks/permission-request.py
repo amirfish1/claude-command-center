@@ -10,7 +10,9 @@ Claude Code runs this when a permission dialog would open. The hook:
   3. parks for a short window, watching for a decision file the relay writes
      after the cloud approved/denied that exact hash;
   4. returns allow/deny only when the decision's hash equals its own hash, it
-     has not expired (120 s) and it can be claimed atomically (single use).
+     has not expired (120 s) and it can be claimed atomically (single use);
+  5. stops parking as soon as the prompt is answered some other way (the
+     transcript gets the tool_result for this call) or the session exits.
 
 Anything else (no decision, wrong hash, expired, error) prints nothing, so the
 normal prompt decides. Never prompts. Stdlib only. Keep the file-name scheme
@@ -27,6 +29,8 @@ import time
 ENABLED_FRESH_S = 90
 POLL_S = 0.2
 HEARTBEAT_S = 2.0
+RESOLVED_CHECK_S = 1.0
+TAIL_BYTES = 512 * 1024
 SKIP_TOOLS = ("AskUserQuestion", "ExitPlanMode")
 _SID_RE = re.compile(r"[A-Za-z0-9_\-]{1,100}")
 
@@ -109,7 +113,75 @@ def emit(decision):
         "hookEventName": "PermissionRequest", "decision": body}}))
 
 
-def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.time):
+class PromptWatch:
+    """Tells when the prompt this hook parked on was answered elsewhere.
+
+    Reads the session transcript incrementally. The pending call is the last
+    tool_use with this exact name+input that has no tool_result yet; once a
+    tool_result for its id is appended, the prompt is resolved. No transcript
+    or no match means "never resolved" (the deadline still bounds the wait)."""
+
+    def __init__(self, path, tool, tin):
+        self.path, self.tool, self.tin = path, tool, tin
+        self.pending = None
+        self.rest = b""
+        self.ppid = os.getppid()
+        try:
+            size = os.path.getsize(path) if path else 0
+        except OSError:
+            size = 0
+        self.start = size
+        self.offset = max(0, size - TAIL_BYTES)
+        self.skip_first = self.offset > 0
+        self._scan(initial=True)
+
+    def _scan(self, initial=False):
+        if not self.path:
+            return False
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                chunk = f.read()
+        except OSError:
+            return False
+        self.offset += len(chunk)
+        lines = (self.rest + chunk).split(b"\n")
+        self.rest = lines.pop()
+        if self.skip_first and lines:
+            lines.pop(0)                # partial line at the tail cut
+            self.skip_first = False
+        for raw in lines:
+            if self._line(raw) and not initial:
+                return True
+        return False
+
+    def _line(self, raw):
+        try:
+            content = (json.loads(raw).get("message") or {}).get("content")
+        except (ValueError, AttributeError):
+            return False
+        if not isinstance(content, list):
+            return False
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use" and b.get("name") == self.tool \
+                    and b.get("input") == self.tin:
+                self.pending = b.get("id")
+            elif b.get("type") == "tool_result" and self.pending \
+                    and b.get("tool_use_id") == self.pending:
+                self.pending = None     # an earlier identical call; or ours
+                return True
+        return False
+
+    def resolved(self):
+        if os.getppid() != self.ppid:
+            return True                 # the session exited
+        return self._scan()
+
+
+def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.time,
+                      watch=None):
     name = "%s.%s.json" % (sid, sha[:16])
     wpath = os.path.join(base, "waiting", name)
     dpath = os.path.join(base, "decisions", name)
@@ -121,7 +193,7 @@ def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.tim
         os.replace(tmp, wpath)
     except OSError:
         return None
-    last_beat = clock()
+    last_beat = last_check = clock()
     try:
         while True:
             now = clock()
@@ -130,6 +202,10 @@ def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.tim
                 return decision
             if now >= deadline:
                 return None
+            if watch is not None and now - last_check >= RESOLVED_CHECK_S:
+                last_check = now
+                if watch.resolved():
+                    return None
             if now - last_beat >= HEARTBEAT_S:
                 try:
                     os.utime(wpath, None)
@@ -157,7 +233,9 @@ def main():
         wait = max_wait()
         if wait <= 0:
             return
-        decision = wait_for_decision(base, sid, input_sha256(tool, tin), now + wait)
+        watch = PromptWatch(str(data.get("transcript_path") or ""), tool, tin)
+        decision = wait_for_decision(base, sid, input_sha256(tool, tin), now + wait,
+                                     watch=watch)
         if decision:
             emit(decision)
     except Exception:
