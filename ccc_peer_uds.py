@@ -17,6 +17,7 @@ import html
 import json
 import os
 import socket
+import subprocess
 import time
 import uuid as _uuid
 from pathlib import Path
@@ -52,6 +53,22 @@ def _ccc_session_id_for(pid, socket_path):
     return str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"ccc:{pid}:{socket_path}"))
 
 
+def proc_start_for(pid):
+    """The process start time exactly as Claude Code computes it
+    (`LC_ALL=C TZ=UTC ps -o lstart= -p <pid>`). Claude treats a registry row
+    whose procStart differs from this as a reused pid and hides it from
+    ListAgents and SendMessage, so CCC must match it byte for byte."""
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-o", "lstart=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=2,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+        ).stdout.strip()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        out = ""
+    return out or None
+
+
 def build_ccc_registry_row(pid, socket_path, cwd, *, name="ccc",
                             version=None, started_at_epoch_ms=None, proc_start=None):
     """Build CCC's own ~/.claude/sessions/<pid>.json row.
@@ -70,7 +87,7 @@ def build_ccc_registry_row(pid, socket_path, cwd, *, name="ccc",
         "sessionId": _ccc_session_id_for(pid, socket_path),
         "cwd": str(cwd),
         "startedAt": now_ms,
-        "procStart": proc_start or time.ctime(now_ms / 1000.0),
+        "procStart": proc_start or time.asctime(time.gmtime(now_ms / 1000.0)),
         "version": version or CCC_PEER_COMPAT_VERSION,
         "peerProtocol": 1,
         "peerFeatures": [],

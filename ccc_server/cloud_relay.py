@@ -475,6 +475,93 @@ def audit_append(paths: CloudPaths, request_id: str, capability: str,
 
 
 # ---------------------------------------------------------------------------
+# Session replies: the way back from a session to the remote client
+# ---------------------------------------------------------------------------
+# session.send_input reaches a Claude session as a peer message from CCC's
+# own peer socket, so the session answers with SendMessage to "ccc". CCC
+# keeps the sessions the relay messaged ("open threads"). A peer message from
+# one of them is held here and goes up in the next snapshot as a question.
+# The relay emails/pushes question_waiting for each new question_id, so the
+# remote client gets woken without polling.
+
+REPLY_THREAD_TTL_S = 24 * 3600
+MAX_REPLIES = 20
+RELAY_REPLY_HINT = ("[Sent from a remote client through CCC Cloud Relay. "
+                    "To answer, SendMessage to \"ccc\"; CCC forwards it back.]")
+_REPLIES_LOCK = threading.Lock()
+
+
+def _replies_path(paths: CloudPaths) -> str:
+    return paths._p("replies.json")
+
+
+def _load_replies(paths: CloudPaths, now: float) -> dict:
+    try:
+        with open(_replies_path(paths), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    threads = data.get("threads") if isinstance(data, dict) else None
+    replies = data.get("replies") if isinstance(data, dict) else None
+    cutoff = now - REPLY_THREAD_TTL_S
+    threads = {str(k): float(v) for k, v in (threads or {}).items()
+               if isinstance(v, (int, float)) and v >= cutoff}
+    replies = [r for r in (replies or []) if isinstance(r, dict)
+               and float(r.get("at") or 0) >= cutoff][-MAX_REPLIES:]
+    return {"threads": threads, "replies": replies}
+
+
+def _save_replies(paths: CloudPaths, data: dict) -> None:
+    _atomic_write(_replies_path(paths), json.dumps(data), 0o600)
+
+
+def open_reply_thread(paths: CloudPaths, session_ref: str, now: float | None = None) -> None:
+    """The remote client just messaged this session: accept its replies, and
+    drop replies it already saw (it is answering them)."""
+    ref = _norm_ref(session_ref)
+    if not ref:
+        return
+    now = time.time() if now is None else now
+    with _REPLIES_LOCK:
+        data = _load_replies(paths, now)
+        data["threads"][ref] = now
+        data["replies"] = [r for r in data["replies"] if r.get("session_ref") != ref]
+        try:
+            _save_replies(paths, data)
+        except OSError:
+            pass
+
+
+def record_session_reply(paths: CloudPaths, session_ref: str, text: str,
+                         now: float | None = None) -> bool:
+    """Hold a peer message to CCC for the remote client. False when the
+    session has no open thread (CCC never guesses a destination)."""
+    ref = _norm_ref(session_ref)
+    body = str(text or "").strip()
+    if not ref or not body:
+        return False
+    now = time.time() if now is None else now
+    with _REPLIES_LOCK:
+        data = _load_replies(paths, now)
+        if ref not in data["threads"]:
+            return False
+        data["replies"].append({"id": secrets.token_hex(6), "session_ref": ref,
+                                "text": body[:COMMAND_TEXT_MAX_BYTES], "at": now})
+        data["replies"] = data["replies"][-MAX_REPLIES:]
+        try:
+            _save_replies(paths, data)
+        except OSError:
+            return False
+    return True
+
+
+def pending_replies(paths: CloudPaths, now: float | None = None) -> list[dict]:
+    now = time.time() if now is None else now
+    with _REPLIES_LOCK:
+        return _load_replies(paths, now)["replies"]
+
+
+# ---------------------------------------------------------------------------
 # Time helpers
 # ---------------------------------------------------------------------------
 
@@ -692,7 +779,8 @@ def _norm_ref(value) -> str:
     return ref[len("session_"):] if ref.startswith("session_") else ref
 
 
-def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0") -> dict:
+def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0",
+                   paths: CloudPaths | None = None) -> dict:
     """Pull local read models over loopback, minimize + cap, and assemble the
     §4.1 state body. `share_titles` off replaces titles/repo labels with opaque
     'Session on <machine>' labels."""
@@ -797,6 +885,32 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         if a_repo:
             item["repo_label"] = a_repo
         attention.append(item)
+
+    # --- session replies (peer messages to CCC on an open relay thread) ---
+    # Each reply is a new question_id, so the relay notifies once per reply.
+    # Answering it (question.answer or session.send_input) clears it.
+    if paths is not None:
+        for r in pending_replies(paths):
+            r_ref = r.get("session_ref") or ""
+            r_title = labels.get(r_ref, (f"Session on {host}", None))[0]
+            r_at = _iso_from_epoch(r.get("at")) or _iso_now()
+            if len(questions) < MAX_QUESTIONS:
+                questions.append({
+                    "session_ref": r_ref,
+                    "question_id": f"reply:{r.get('id')}",
+                    "text": redact_cap(r.get("text"), CAP_QUESTION),
+                    "options": [],
+                    "asked_at": r_at,
+                })
+            if len(attention) < MAX_ATTENTION:
+                attention.insert(0, {
+                    "kind": "question",
+                    "priority": 1,
+                    "session_ref": r_ref,
+                    "title": r_title,
+                    "summary": redact_cap("Reply: " + str(r.get("text") or ""), CAP_SUMMARY),
+                    "created": r_at,
+                })
 
     # --- workers (per-queue rollup via the existing HTTP endpoint) ---
     # NOTE: no dedicated /api/queue-health route exists; queue health ships
@@ -1013,6 +1127,8 @@ class CommandExecutor:
             return self._inject(request_id, session_ref, text, mode="send",
                                 detail_ok="queued_for_wake")
         if capability == "question.answer":
+            if self.paths is not None:
+                open_reply_thread(self.paths, session_ref)
             return self._answer(request_id, session_ref, payload)
         if capability == "session.detail":
             return self._detail(request_id, session_ref)
@@ -1021,9 +1137,11 @@ class CommandExecutor:
         return self._result(request_id, "rejected", error_code="unknown_capability")
 
     def _inject(self, request_id, session_ref, text, mode, detail_ok="delivered") -> dict:
+        if self.paths is not None:
+            open_reply_thread(self.paths, session_ref)
         status, data = self.local_api.post("/api/inject-input", {
             "session_id": session_ref,
-            "text": text,
+            "text": f"{text}\n\n{RELAY_REPLY_HINT}",
             "mode": mode,
             "origin": "cloud-relay",
         })
@@ -1490,7 +1608,7 @@ class RelayLoop:
                 break
             try:
                 snapshot = build_snapshot(self.m.local_api, self.m.config,
-                                          self.m.ccc_version)
+                                          self.m.ccc_version, self.m.paths)
                 resp = self.m.client.post_state(snapshot)
                 self._last_push_ts = time.time()
                 self.last_push = _iso_now()

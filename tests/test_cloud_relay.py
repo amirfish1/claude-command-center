@@ -498,3 +498,68 @@ def test_soft_block_summary_prefers_sessions_own_next_step():
 
     snap = cr.build_snapshot(API(), {"share_titles": True})
     assert snap["attention"][0]["summary"] == "Pick Funnel or Cloud Relay."
+
+
+# ---------------------------------------------------------------------------
+# Session replies: session -> CCC peer message -> relay question
+# ---------------------------------------------------------------------------
+
+class RecordingPostAPI(CountingLocalAPI):
+    def __init__(self):
+        super().__init__()
+        self.posts = []
+
+    def post(self, path, body=None):
+        self.posts.append((path, body))
+        return super().post(path, body)
+
+
+def test_send_input_opens_reply_thread_and_adds_hint(tmp_path):
+    api = RecordingPostAPI()
+    ex, _ = _executor(tmp_path, api)
+    assert ex.execute(_env(request_id="rt-1", seq=1, text="status?"))["status"] == "ok"
+    path, body = api.posts[0]
+    assert path == "/api/inject-input"
+    assert body["text"].startswith("status?")
+    assert 'SendMessage to "ccc"' in body["text"]
+    paths = cr.CloudPaths(str(tmp_path))
+    assert cr.record_session_reply(paths, "sess-1", "all green")
+
+
+def test_reply_without_open_thread_is_dropped(tmp_path):
+    paths = cr.CloudPaths(str(tmp_path))
+    assert not cr.record_session_reply(paths, "sess-1", "hello?")
+    assert cr.pending_replies(paths) == []
+
+
+def test_reply_thread_expires(tmp_path):
+    paths = cr.CloudPaths(str(tmp_path))
+    cr.open_reply_thread(paths, "sess-1", now=1000.0)
+    late = 1000.0 + cr.REPLY_THREAD_TTL_S + 1
+    assert not cr.record_session_reply(paths, "sess-1", "late", now=late)
+
+
+def test_reply_surfaces_as_question_and_attention(tmp_path):
+    paths = cr.CloudPaths(str(tmp_path))
+    cr.open_reply_thread(paths, "sess-1")
+    assert cr.record_session_reply(paths, "sess-1", "done, see /Users/alice/x")
+    snap = cr.build_snapshot(CountingLocalAPI(), dict(cr._CONFIG_DEFAULTS), paths=paths)
+    replies = [q for q in snap["questions"] if q["question_id"].startswith("reply:")]
+    assert len(replies) == 1
+    assert replies[0]["session_ref"] == "sess-1"
+    assert replies[0]["options"] == []
+    assert "done, see" in replies[0]["text"]
+    assert "/Users/alice" not in replies[0]["text"]
+    top = snap["attention"][0]
+    assert top["kind"] == "question" and top["summary"].startswith("Reply: ")
+
+
+def test_answering_clears_replies(tmp_path):
+    api = RecordingPostAPI()
+    ex, _ = _executor(tmp_path, api)
+    paths = cr.CloudPaths(str(tmp_path))
+    cr.open_reply_thread(paths, "sess-1")
+    cr.record_session_reply(paths, "sess-1", "need a decision")
+    assert len(cr.pending_replies(paths)) == 1
+    ex.execute(_env(request_id="rt-2", seq=2, text="go ahead"))
+    assert cr.pending_replies(paths) == []

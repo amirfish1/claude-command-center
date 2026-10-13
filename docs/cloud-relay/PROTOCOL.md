@@ -285,3 +285,10 @@ anchor for the protocol.
 - A failed local delivery reports the loopback endpoint's own snake_case
   `code` as `error_code` (default `delivery_failed`), with a redacted
   `detail.local_error`.
+- Session replies: `session.send_input` text reaches a Claude session as a
+  peer message from CCC, with a line asking it to answer by `SendMessage` to
+  `ccc`. For 24h after the relay messages a session, a peer message from that
+  session to CCC is sent up as a question (`question_id` `reply:<id>`, no
+  `options`) plus a top `question` attention item, so the relay sends a
+  `question_waiting` notification for each reply. The next `session.send_input`
+  or `question.answer` to that session clears its replies.

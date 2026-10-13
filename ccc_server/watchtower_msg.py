@@ -429,7 +429,9 @@ def _ccc_peer_server_start():
             except OSError:
                 pass
             return {"ok": False, "reason": f"bind_failed: {e}"}
-        row = ccc_peer_uds.build_ccc_registry_row(pid, socket_path, str(_core.CCC_ROOT))
+        row = ccc_peer_uds.build_ccc_registry_row(
+            pid, socket_path, str(_core.CCC_ROOT), proc_start=ccc_peer_uds.proc_start_for(pid),
+        )
         # Cross-check against real rows already on disk (Claude sessions this
         # same user has running, if any) before publishing.
         real_rows = []
@@ -604,6 +606,25 @@ def _ccc_sid_for_socket_addr(from_addr):
     return ""
 
 
+def _ccc_peer_route_relay_reply(from_sid, body):
+    """Hand a session's message to CCC back to the Cloud Relay client, if
+    the relay messaged that session recently. Pushes a snapshot right away
+    so the reply doesn't wait for the next 20s push."""
+    if not from_sid:
+        return False
+    try:
+        manager = _core.cloud_relay_manager()
+        from ccc_server import cloud_relay as _cloud_relay
+        if not _cloud_relay.record_session_reply(manager.paths, from_sid, body):
+            return False
+        if manager.loop is not None:
+            manager.loop.request_push()
+        return True
+    except Exception as e:
+        _core._log_activity("peer", "CCC-PEER-ERR", f"relay reply: {e}")
+        return False
+
+
 def _ccc_peer_handle_connection(conn):
     """Classify and route one inbound connection on CCC's own peer socket.
 
@@ -646,6 +667,12 @@ def _ccc_peer_handle_connection(conn):
                 _core._log_activity(
                     "peer", "CCC-PEER-REPORT",
                     f"from={from_addr} session_id={envelope.get('session_id')}",
+                )
+                continue
+            if _ccc_peer_route_relay_reply(from_sid, body):
+                _core._log_activity(
+                    "peer", "CCC-PEER-RELAY-REPLY",
+                    f"from={from_addr} session_id={from_sid}",
                 )
                 continue
             _core._log_activity(
