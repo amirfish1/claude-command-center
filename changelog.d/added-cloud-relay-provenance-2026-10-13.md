@@ -1,0 +1,1 @@
+- Cloud Relay: input sent by an agent (for example Instinct) now starts with a line naming the sender, `[From <name> via CCC Cloud, request <id>]`, so the session and anyone watching the transcript can see who sent it.

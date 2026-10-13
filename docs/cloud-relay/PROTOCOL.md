@@ -285,6 +285,13 @@ anchor for the protocol.
 - A failed local delivery reports the loopback endpoint's own snake_case
   `code` as `error_code` (default `delivery_failed`), with a redacted
   `detail.local_error`.
+- Provenance: an envelope may carry `issued_by: {type:"agent", name}` when an
+  agent token issued the command. For `session.send_input` and `session.wake`
+  the device then prepends the line `[From <name> via CCC Cloud, request <id>]`
+  to the injected text (name stripped of brackets and control characters, 40
+  chars). A missing field means the old behaviour (no header). Retries are
+  deduplicated by the cloud (`idempotency_key` on the caller's request), not by
+  the device; the envelope's own `idempotency_key` is still the request id.
 - Session replies: `session.send_input` text reaches a Claude session as a
   peer message from CCC, with a line asking it to answer by `SendMessage` to
   `ccc`. For 24h after the relay messages a session, a peer message from that

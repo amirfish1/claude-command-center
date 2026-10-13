@@ -545,6 +545,21 @@ MAX_REPLIES = 20
 RELAY_REPLY_HINT = ("[Sent from a remote client through CCC Cloud Relay. "
                     "To answer, SendMessage to \"ccc\"; CCC forwards it back.]")
 _REPLIES_LOCK = threading.Lock()
+PROVENANCE_NAME_MAX = 40
+
+
+def provenance_header(issued_by, request_id):
+    """First line of relayed input naming the sender, e.g.
+    ``[From Instinct via CCC Cloud, request abc]``. Only agent-issued
+    commands carry ``issued_by`` (older relays omit it: no header)."""
+    if not isinstance(issued_by, dict) or issued_by.get("type") != "agent":
+        return ""
+    name = "".join(c if c.isprintable() and c not in "[]\n\r" else " "
+                   for c in str(issued_by.get("name") or ""))
+    name = " ".join(name.split())[:PROVENANCE_NAME_MAX] or "agent"
+    rid = "".join(c for c in str(request_id or "")
+                  if c.isalnum() or c in "-_")[:64]
+    return f"[From {name} via CCC Cloud, request {rid}]\n"
 
 
 def _replies_path(paths: CloudPaths) -> str:
@@ -1334,10 +1349,12 @@ class CommandExecutor:
         request_id = str(env.get("request_id") or "")
         text = payload.get("text") or ""
         if capability == "session.send_input":
-            return self._inject(request_id, session_ref, text, mode="send")
+            return self._inject(request_id, session_ref, text, mode="send",
+                                issued_by=env.get("issued_by"))
         if capability == "session.wake":
             return self._inject(request_id, session_ref, text, mode="send",
-                                detail_ok="queued_for_wake")
+                                detail_ok="queued_for_wake",
+                                issued_by=env.get("issued_by"))
         if capability == "question.answer":
             if self.paths is not None:
                 open_reply_thread(self.paths, session_ref)
@@ -1348,12 +1365,14 @@ class CommandExecutor:
             return self._history(request_id, session_ref)
         return self._result(request_id, "rejected", error_code="unknown_capability")
 
-    def _inject(self, request_id, session_ref, text, mode, detail_ok="delivered") -> dict:
+    def _inject(self, request_id, session_ref, text, mode, detail_ok="delivered",
+                issued_by=None) -> dict:
         if self.paths is not None:
             open_reply_thread(self.paths, session_ref)
         status, data = self.local_api.post("/api/inject-input", {
             "session_id": session_ref,
-            "text": f"{text}\n\n{RELAY_REPLY_HINT}",
+            "text": (f"{provenance_header(issued_by, request_id)}"
+                     f"{text}\n\n{RELAY_REPLY_HINT}"),
             "mode": mode,
             "origin": "cloud-relay",
         })
