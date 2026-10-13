@@ -12927,6 +12927,15 @@
   }
   // Dot on the Speak button: amber = first clip ready, green = whole last message ready.
   const _ttsCacheState = new Map();   // head text -> 'partial' | 'ready'
+  // Read progress for the slim bar on the playing Speak button (0..1 of the whole text).
+  function _ttsSetProgress(idx) {
+    const total = (_ttsBoundUtteranceText || '').length;
+    const f = total ? Math.max(0, Math.min(1, idx / total)) : 0;
+    ttsButtons().forEach((btn) => {
+      if (btn.classList.contains('speaking')) btn.style.setProperty('--tts-progress', f.toFixed(3));
+      else btn.style.removeProperty('--tts-progress');
+    });
+  }
   function _ttsMarkCache(paneId, headText, st) {
     if (headText) _ttsCacheState.set(headText, st);
     ttsButtons().forEach((btn) => {
@@ -13117,6 +13126,7 @@
         const frac = (isFinite(d) && d > 0) ? audio.currentTime / d
           : Math.min(0.95, audio.currentTime * 15 / chunk.text.length);
         _ttsLastCharIndex = chunk.start + Math.floor(Math.min(1, frac) * chunk.text.length);
+        _ttsSetProgress(_ttsLastCharIndex);
       };
       const label = 'Pause reading (free voice: ' + got.voice + ')';
       audio.onplay = () => {
@@ -13478,6 +13488,7 @@
       if (event.name === 'word') {
         const charIndex = chunk.start + event.charIndex;
         _ttsLastCharIndex = charIndex;
+        _ttsSetProgress(charIndex);
         highlightTtsWord(charIndex, event.charLength);
         updateTtsCaption(charIndex, event.charLength, _ttsBoundUtteranceText);
       }

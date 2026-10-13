@@ -1,0 +1,1 @@
+- While reading aloud, the Speak button shows a slim progress bar along its top edge.
