@@ -982,6 +982,47 @@ def heartbeat_body(snapshot: dict) -> dict:
             "unchanged": True}
 
 
+_DELTA_SKIP = ("v", "snapshot_at", "device", "sessions", "digest")
+
+
+def build_delta(prev: dict, new: dict, base: str, digest: str) -> dict | None:
+    """State body carrying only what changed between two snapshots, or None
+    when a delta is not possible (sessions without unique refs). Sessions are
+    keyed by ``ref`` (upsert/remove, plus ``order`` only when the resulting
+    order differs from prev-minus-removed with new rows appended). Every
+    other list section is sent whole when it changed and omitted otherwise
+    (an emptied section is sent as ``[]``). The cloud reconstructs the full
+    snapshot and runs its normal full-push path on it."""
+    body = {"v": new.get("v", PROTOCOL_VERSION),
+            "snapshot_at": new.get("snapshot_at") or _iso_now(),
+            "delta": True, "base": base, "digest": digest}
+    if new.get("device") != prev.get("device"):
+        body["device"] = new.get("device")
+    old_rows, new_rows = prev.get("sessions") or [], new.get("sessions") or []
+    old_refs = [r.get("ref") if isinstance(r, dict) else None for r in old_rows]
+    new_refs = [r.get("ref") if isinstance(r, dict) else None for r in new_rows]
+    for refs in (old_refs, new_refs):
+        if not all(isinstance(x, str) and x for x in refs) \
+                or len(set(refs)) != len(refs):
+            return None
+    if old_rows != new_rows:
+        old_by = dict(zip(old_refs, old_rows))
+        upsert = [r for r in new_rows if old_by.get(r["ref"]) != r]
+        new_set = set(new_refs)
+        remove = [x for x in old_refs if x not in new_set]
+        sess = {"upsert": upsert, "remove": remove}
+        gone = set(remove)
+        implied = [x for x in old_refs if x not in gone]
+        implied += [x for x in new_refs if x not in set(old_refs)]
+        if implied != new_refs:
+            sess["order"] = new_refs
+        body["sessions"] = sess
+    for k in sorted((set(prev) | set(new)) - set(_DELTA_SKIP)):
+        if prev.get(k) != new.get(k):
+            body[k] = new.get(k) or []
+    return body
+
+
 # ---------------------------------------------------------------------------
 # Command validation (PROTOCOL §4.3) — pure, fail-closed, in order
 # ---------------------------------------------------------------------------
@@ -1566,6 +1607,8 @@ class RelayLoop:
         self._last_full_ts = 0.0
         self._last_digest = None
         self._unchanged_ok = False
+        self._delta_ok = False
+        self._last_snapshot = None
         self.state = "off"
         self.last_push = None
         self.last_poll = None
@@ -1636,15 +1679,45 @@ class RelayLoop:
         if heartbeat:
             resp = self.m.client.post_state(heartbeat_body(snapshot))
             if isinstance(resp, dict) and resp.get("need_full"):
-                resp = self.m.client.post_state(snapshot)
+                resp = self._post_full(snapshot, digest)
                 heartbeat = False
         else:
-            resp = self.m.client.post_state(snapshot)
-        if not heartbeat:
-            self._last_full_ts = time.time()
-            self._last_digest = digest
-            self._unchanged_ok = bool(isinstance(resp, dict)
-                                      and resp.get("unchanged_ok"))
+            resp = None
+            delta = None
+            if (self._delta_ok and self._last_digest and self._last_snapshot
+                    and time.time() - self._last_full_ts
+                    < STATE_FULL_REFRESH_S):
+                delta = build_delta(self._last_snapshot, snapshot,
+                                    self._last_digest, digest)
+                if delta is not None and (
+                        len(json.dumps(delta, default=str))
+                        >= len(json.dumps(snapshot, default=str))):
+                    delta = None
+            if delta is not None:
+                resp = self.m.client.post_state(delta)
+                if isinstance(resp, dict) and resp.get("need_full"):
+                    resp = None
+                else:
+                    self._last_digest = digest
+                    self._last_snapshot = snapshot
+                    self._delta_ok = bool(isinstance(resp, dict)
+                                          and resp.get("delta_ok"))
+                    self._unchanged_ok = bool(isinstance(resp, dict)
+                                              and resp.get("unchanged_ok"))
+                    return resp
+            resp = self._post_full(snapshot, digest)
+        return resp
+
+    def _post_full(self, snapshot, digest):
+        """Full push (carries its digest so the cloud can verify deltas)."""
+        resp = self.m.client.post_state(dict(snapshot, digest=digest))
+        self._last_full_ts = time.time()
+        self._last_digest = digest
+        self._last_snapshot = snapshot
+        self._unchanged_ok = bool(isinstance(resp, dict)
+                                  and resp.get("unchanged_ok"))
+        self._delta_ok = bool(isinstance(resp, dict)
+                              and resp.get("delta_ok"))
         return resp
 
     def _push_loop(self):
@@ -1673,6 +1746,7 @@ class RelayLoop:
                     break
                 self.last_push_error = e.code
                 self._last_digest = None  # next push after a failure is full
+                self._last_snapshot = None
                 self.state = "error" if self.state == "online" else "offline"
                 sleep, base = _backoff_next(base)
                 self._stop.wait(sleep)

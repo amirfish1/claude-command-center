@@ -296,10 +296,24 @@ anchor for the protocol.
   unanswered ask for that `session_ref`; replies with no matching ask are
   ignored. The next `session.send_input` or `question.answer` to that session
   clears its replies. A change in `replies` changes the snapshot digest, so
-  it is always a full push (and CCC requests a prompt one).
+  it is always pushed (as part of a delta or full push) and CCC requests a prompt one.
 - Heartbeat pushes: when a full `POST /v1/state` response carries
   `unchanged_ok: true` and the next snapshot is identical (ignoring
   `snapshot_at`), CCC sends `{"v": 1, "snapshot_at": ..., "unchanged": true}`
   instead. The relay only moves the stored snapshot's freshness; it answers
   `need_full: true` when it has no stored snapshot, and CCC resends in full.
   CCC still sends a full snapshot at least every 10 minutes.
+- Delta pushes: when a state response carries `delta_ok: true` and the
+  snapshot changed, CCC sends `{"v": 1, "snapshot_at": ..., "delta": true,
+  "base": <digest of the last pushed snapshot>, "digest": <digest of this
+  one>, ...}` with only what changed: `device` if changed; `sessions` as
+  `{"upsert": [rows], "remove": [refs], "order": [refs]}` keyed by `ref`
+  (`order` only when the result is not "previous order minus removed, new
+  rows appended"); every other list section (`attention`, `questions`,
+  `workers`, `schedules`, `replies`, ...) whole when it changed (`[]` when
+  emptied), omitted otherwise. Full pushes carry their `digest` too. The
+  relay stores the last digest, rebuilds the full snapshot, and processes it
+  exactly like a full push. A missing row, a `base` that is not the stored
+  digest, or a malformed delta gets `{"ok": true, "need_full": true}` and
+  CCC resends in full. CCC sends a full push after any push error, every 10
+  minutes, and whenever the delta would not be smaller.

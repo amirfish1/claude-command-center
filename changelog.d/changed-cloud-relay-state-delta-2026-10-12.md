@@ -1,0 +1,1 @@
+- Cloud Relay: when the state changed, CCC sends only the changed sessions and sections instead of the full snapshot.
