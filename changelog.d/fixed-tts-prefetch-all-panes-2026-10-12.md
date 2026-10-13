@@ -1,0 +1,1 @@
+- Read-aloud audio is now prepared for every visible conversation pane, not just the active one.

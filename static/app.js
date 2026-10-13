@@ -12943,11 +12943,13 @@
     const entry = { ready: false, got: null };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
-    entry.p = _ttsFetchNeural(head.text, '').then((got) => {
+    entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '').then((got) => {
       entry.ready = true; entry.got = got; entry.voice = got.voice;
       _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
       _ttsMarkCache(paneId, head.text, 'partial');
-      _ttsPrefetchRest(clean, head, got, ++_ttsChainToken, paneId);
+      const token = _ttsChainTokens[paneId || ''] = (_ttsChainTokens[paneId || ''] || 0) + 1;
+      // One pane's clips at a time: two chains would share the CPU and both finish late.
+      _ttsChainQueue = _ttsChainQueue.then(() => _ttsPrefetchRest(clean, head, got, token, paneId)).catch(() => {});
       return got;
     });
     entry.p.catch((status) => {
@@ -12958,7 +12960,7 @@
     _ttsEvictCache();
   }
   function _ttsEvictCache() {
-    while (_ttsHeadCache.size > 12) {
+    while (_ttsHeadCache.size > 24) {
       const oldest = _ttsHeadCache.keys().next().value;
       const old = _ttsHeadCache.get(oldest);
       if (old && old.got) URL.revokeObjectURL(old.got.url);
@@ -12968,7 +12970,8 @@
   // Generation is local and free, so once the first clip is ready the rest of
   // the message is made one clip at a time (same split as Speak uses) and kept
   // for the click. Stops when a read starts or a newer message takes over.
-  let _ttsChainToken = 0;
+  const _ttsChainTokens = {};   // pane id -> latest chain token
+  let _ttsChainQueue = Promise.resolve();
   const _TTS_PREFETCH_CLIPS = 8;
   async function _ttsPrefetchRest(clean, head, headGot, token, paneId) {
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
@@ -12977,7 +12980,7 @@
     let prev = headGot;
     for (const c of rest) {
       try { await prev.done; } catch (_) { return; }
-      if (token !== _ttsChainToken || _ttsActive || Date.now() < _ttsNeuralCooldownUntil) return;
+      if (token !== _ttsChainTokens[paneId || ''] || _ttsActive || Date.now() < _ttsNeuralCooldownUntil) return;
       if (_ttsHeadCache.has(c.text)) continue;
       const entry = { ready: false, got: null, voice: headGot.voice };
       entry.p = _ttsFetchNeural(c.text, headGot.voice).then((got) => { entry.ready = true; entry.got = got; return got; });
@@ -12985,7 +12988,7 @@
       _ttsEvictCache();
       try { prev = await entry.p; } catch (_) { _ttsHeadCache.delete(c.text); return; }
     }
-    if (token === _ttsChainToken) _ttsMarkCache(paneId, head.text, 'ready');
+    if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready');
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
   // Called after a transcript render; waits for the text to stop changing.
@@ -12994,10 +12997,14 @@
     _ttsPrefetchTimer = setTimeout(() => {
       try {
         if (_ttsActive || _ttsPaused) return;
-        const paneId = activePaneId();
-        const data = paneId ? lastMessageTtsData(paneId) : null;
-        if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text, paneId);
-        else { _ttsMarkCache(paneId, null, null); _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId); }
+        // Every visible pane, active one first.
+        const act = activePaneId();
+        const ids = [act].concat(splitState.panes.map(p => p.id).filter(id => id !== act));
+        for (const paneId of ids) {
+          const data = paneId ? lastMessageTtsData(paneId) : null;
+          if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text, paneId);
+          else { _ttsMarkCache(paneId, null, null); _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId); }
+        }
       } catch (_) {}
     }, 2500);
   }
