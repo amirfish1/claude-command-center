@@ -755,6 +755,8 @@ SNAPSHOT_SESSION_FIELDS = (
     "id", "session_id", "display_name", "folder_label", "engine", "state",
     "is_live", "mtime", "modified", "live_context_percent", "question_waiting",
     "question_id", "question_text", "question_options",
+    # Sub-agent / approval context for attention items (additive).
+    "parent_session_id", "pending_tool", "pending_file", "first_message",
 )
 SNAPSHOT_SESSION_QUERY = {
     "all": "1", "compact": "1", "limit": str(MAX_SESSIONS),
@@ -784,6 +786,21 @@ def _norm_ref(value) -> str:
     return ref[len("session_"):] if ref.startswith("session_") else ref
 
 
+def is_subagent_ref(ref) -> bool:
+    """Task-tool sub-agent refs: `<parent>:agent-<hex>` or bare `agent-<hex>`."""
+    r = str(ref or "")
+    return ":agent-" in r or r.startswith("agent-")
+
+
+def _action_text(tool, target) -> str:
+    """`Bash: git push origin main` style preview of a pending tool call."""
+    tool = str(tool or "").strip()
+    target = str(target or "").strip()
+    if not tool:
+        return ""
+    return f"{tool}: {target}" if target else tool
+
+
 def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0",
                    paths: CloudPaths | None = None) -> dict:
     """Pull local read models over loopback, minimize + cap, and assemble the
@@ -804,6 +821,8 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
     sessions = []
     questions = []
     labels = {}  # ref -> (title, repo_label), reused by attention items
+    rinfo = {}   # ref -> sub-agent / approval context, reused by attention items
+    aliases = {}  # bare `agent-<hex>` session id -> composite session ref
     for row in rows[:MAX_SESSIONS]:
         if not isinstance(row, dict):
             continue
@@ -835,6 +854,17 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
             session["repo_label"] = repo_label
         sessions.append(session)
         labels[ref] = (title, repo_label)
+        info = {
+            "parent": _norm_ref(row.get("parent_session_id")),
+            "tool": row.get("pending_tool"),
+            "target": row.get("pending_file"),
+            "name": row.get("display_name") or row.get("first_message"),
+            "live": bool(row.get("is_live")) or session["state"] == "working",
+        }
+        rinfo[ref] = info
+        bare = str(row.get("session_id") or "")
+        if bare and bare != ref:
+            aliases[bare] = ref
 
         if q_waiting and len(questions) < MAX_QUESTIONS:
             opts_raw = row.get("question_options") or []
@@ -870,6 +900,9 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         summary = (it.get("summary") or summary or it.get("where")
                    or it.get("next_step") or "")
         a_ref = _norm_ref(it.get("session_id") or it.get("session_ref"))
+        # The feed names a sub-agent by its bare id; join it to the composite
+        # ref the sessions list uses.
+        a_ref = aliases.get(a_ref, a_ref)
         # Name the session even when it fell outside the capped sessions list.
         if a_ref in labels:
             a_title, a_repo = labels[a_ref]
@@ -878,8 +911,37 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
             a_repo = redact_cap(it.get("folder_label"), CAP_LABEL)
         else:
             a_title, a_repo = f"Session on {host}", None
+        kind = _map_attention_kind(it.get("kind"))
+        info = rinfo.get(a_ref) or {}
+        extra = {}
+        sub = is_subagent_ref(a_ref) or is_subagent_ref(it.get("session_id"))
+        if sub:
+            parent = (info.get("parent") or _norm_ref(it.get("parent_session_id"))
+                      or (a_ref.split(":agent-")[0] if ":agent-" in a_ref else ""))
+            extra["subagent"] = True
+            if parent:
+                extra["parent_ref"] = parent
+                extra["covered_by_parent"] = bool(
+                    (rinfo.get(parent) or {}).get("live"))
+            if share_titles:
+                label = redact_cap(info.get("name") or it.get("name"), CAP_LABEL)
+                p_title, p_repo = labels.get(parent, (None, None))
+                if label:
+                    extra["agent_label"] = label
+                if p_title:
+                    extra["parent_title"] = p_title
+                if label:
+                    a_title = (f"{label} (sub-agent of {p_title})" if p_title
+                               else f"{label} (sub-agent)")
+                    a_title = redact_cap(a_title, CAP_TITLE)
+                if not a_repo and p_repo:
+                    a_repo = p_repo
+        if share_titles and kind == "approval":
+            act = _action_text(info.get("tool"), info.get("target"))
+            if act:
+                extra["action"] = redact_cap(act, CAP_SUMMARY)
         item = {
-            "kind": _map_attention_kind(it.get("kind")),
+            "kind": kind,
             "priority": int(it.get("priority") or 9),
             "session_ref": a_ref,
             "title": a_title,
@@ -889,6 +951,7 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         }
         if a_repo:
             item["repo_label"] = a_repo
+        item.update(extra)
         attention.append(item)
 
     # --- session replies (peer messages to CCC on an open relay thread) ---
@@ -1086,10 +1149,12 @@ def validate_command(env: dict, last_seq: int, now: float | None = None) -> str 
 # ---------------------------------------------------------------------------
 
 class CommandExecutor:
-    def __init__(self, local_api, store: IdempotencyStore, paths: CloudPaths | None = None):
+    def __init__(self, local_api, store: IdempotencyStore, paths: CloudPaths | None = None,
+                 share_titles_fn=None):
         self.local_api = local_api
         self.store = store
         self.paths = paths
+        self._share_titles_fn = share_titles_fn
 
     def _result(self, request_id, status, error_code=None, detail_code=None, extra=None):
         res = {
@@ -1283,19 +1348,39 @@ class CommandExecutor:
 
     def _detail(self, request_id, session_ref) -> dict:
         """Assemble a bounded recent-turn window by tail-reading the session's
-        own transcript (≤20 turns, ≤2000 chars each, redacted)."""
-        jsonl_path = self._find_jsonl(session_ref)
-        if not jsonl_path:
+        own transcript (<=20 turns, <=2000 chars each, redacted), plus the
+        session context an agent needs in one call: title, repo, parent,
+        state, and the pending question / approval with its tool action. A
+        sub-agent whose transcript cannot be read falls back to its parent's
+        turns plus the sub-agent label."""
+        row = self._find_row(session_ref)
+        jsonl_path = row.get("jsonl_path") if row else None
+        turns = None
+        if jsonl_path:
+            turns = tail_read_turns(jsonl_path, max_turns=MAX_TURNS, cap=CAP_TURN_TEXT)
+        elif is_subagent_ref(session_ref):
+            parent = self._parent_ref(session_ref, row)
+            prow = self._find_row(parent) if parent else None
+            if prow and prow.get("jsonl_path"):
+                turns = tail_read_turns(prow["jsonl_path"], max_turns=MAX_TURNS,
+                                        cap=CAP_TURN_TEXT)
+                row = dict(row or {})
+                row.setdefault("parent_session_id", parent)
+                row["_parent_row"] = prow
+                row["_fallback"] = "parent"
+        if turns is None:
             return self._result(request_id, "error", error_code="session_not_found")
-        turns = tail_read_turns(jsonl_path, max_turns=MAX_TURNS, cap=CAP_TURN_TEXT)
+        detail = _bounded_detail(session_ref, turns,
+                                 context=self._detail_context(session_ref, row))
         return self._result(request_id, "ok", detail_code="delivered",
-                            extra={"detail": _bounded_detail(session_ref, turns)})
+                            extra={"detail": detail})
 
     def _history(self, request_id, session_ref) -> dict:
         """session.history: a longer bounded window from the same local
         tail-read, trimmed oldest-first until it fits the relay's
         detail_json bound. Never a fake 'ok' on an unreadable transcript."""
-        jsonl_path = self._find_jsonl(session_ref)
+        row = self._find_row(session_ref)
+        jsonl_path = row.get("jsonl_path") if row else None
         if not jsonl_path:
             return self._result(request_id, "error", error_code="session_not_found")
         turns = tail_read_turns(jsonl_path, max_turns=HISTORY_MAX_TURNS + 1,
@@ -1306,33 +1391,118 @@ class CommandExecutor:
         return self._result(request_id, "ok", detail_code="delivered",
                             extra={"detail": detail})
 
-    def _find_jsonl(self, session_ref) -> str | None:
+    @staticmethod
+    def _parent_ref(session_ref, row) -> str:
+        if row and row.get("parent_session_id"):
+            return _norm_ref(row.get("parent_session_id"))
+        if ":agent-" in session_ref:
+            return session_ref.split(":agent-")[0]
+        return ""
+
+    def _detail_context(self, session_ref, row) -> dict:
+        """Title / repo / parent / state / pending question or approval."""
+        row = row or {}
+        share = True if self._share_titles_fn is None else bool(self._share_titles_fn())
+        ctx: dict = {}
+        sub = is_subagent_ref(session_ref)
+        parent = self._parent_ref(session_ref, row) if sub else ""
+        prow = row.get("_parent_row") or {}
+        if sub:
+            ctx["subagent"] = True
+            if parent:
+                ctx["parent_ref"] = parent
+            if row.get("_fallback"):
+                ctx["fallback"] = row["_fallback"]
+        state = row.get("state") or prow.get("state")
+        if state:
+            ctx["state"] = str(state)
+        ctx["is_live"] = bool(row.get("is_live") if row else prow.get("is_live"))
+        if share:
+            label = redact_cap(row.get("display_name") or row.get("first_message"),
+                               CAP_LABEL)
+            if sub and label:
+                ctx["agent_label"] = label
+            if sub and parent:
+                if not prow:
+                    prow = self._find_row(parent) or {}
+                ptitle = redact_cap(prow.get("display_name"), CAP_TITLE)
+                if ptitle:
+                    ctx["parent_title"] = ptitle
+            title = label or ""
+            if sub and label:
+                ptitle = ctx.get("parent_title")
+                title = (f"{label} (sub-agent of {ptitle})" if ptitle
+                         else f"{label} (sub-agent)")
+            if title:
+                ctx["title"] = redact_cap(title, CAP_TITLE)
+            repo = redact_cap(row.get("folder_label") or prow.get("folder_label"),
+                              CAP_LABEL)
+            if repo:
+                ctx["repo_label"] = repo
+        else:
+            ctx["title"] = f"Session on {_hostname()}"
+        if row.get("question_waiting"):
+            opts = []
+            raw = row.get("question_options") or []
+            if isinstance(raw, list):
+                for o in raw[:MAX_OPTIONS]:
+                    lab = o.get("label") if isinstance(o, dict) else o
+                    opts.append({"label": redact_cap(lab, CAP_LABEL)})
+            pending = {"type": "question", "options": opts}
+            if share:
+                pending["text"] = redact_cap(row.get("question_text"), CAP_QUESTION)
+            ctx["pending"] = pending
+        elif row.get("pending_tool") and (row.get("is_live") or sub):
+            pending = {"type": "approval", "tool": str(row.get("pending_tool"))[:60]}
+            act = _action_text(row.get("pending_tool"), row.get("pending_file"))
+            if share and act:
+                pending["action"] = redact_cap(act, CAP_SUMMARY)
+            ctx["pending"] = pending
+        return ctx
+
+    def _find_row(self, session_ref) -> dict | None:
         # On-demand only (one session.detail command), cached archive feed,
-        # projected to the three fields needed.
+        # projected to the fields needed.
         _, data = self.local_api.get("/api/sessions", query={
-            "all": "1", "compact": "1", "fields": "id,session_id,jsonl_path"})
+            "all": "1", "compact": "1", "fields": ",".join((
+                "id", "session_id", "jsonl_path", "display_name", "first_message",
+                "folder_label", "state", "is_live", "parent_session_id",
+                "pending_tool", "pending_file", "question_waiting",
+                "question_text", "question_options"))})
         rows = []
         if isinstance(data, dict):
             rows = data.get("sessions") or data.get("conversations") or []
         for row in rows:
             if isinstance(row, dict) and (row.get("id") == session_ref
                                           or row.get("session_id") == session_ref):
-                return row.get("jsonl_path")
+                return row
         return None
+
+    def _find_jsonl(self, session_ref) -> str | None:
+        row = self._find_row(session_ref)
+        return row.get("jsonl_path") if row else None
 
 
 def _detail_json_bytes(detail: dict) -> int:
     return len(json.dumps(detail, separators=(",", ":")).encode("utf-8"))
 
 
-def _bounded_detail(session_ref: str, turns: list, truncated: bool = False) -> dict:
+def _bounded_detail(session_ref: str, turns: list, truncated: bool = False,
+                    context: dict | None = None) -> dict:
     """Trim oldest turns until the detail body fits DETAIL_MAX_BYTES."""
     turns = list(turns)
-    detail = {"session_ref": session_ref, "turns": turns}
+
+    def build():
+        d = {"session_ref": session_ref}
+        d.update(context or {})
+        d["turns"] = turns
+        return d
+
+    detail = build()
     while turns and _detail_json_bytes(detail) > DETAIL_MAX_BYTES:
         turns.pop(0)
         truncated = True
-        detail = {"session_ref": session_ref, "turns": turns}
+        detail = build()
     detail["truncated"] = truncated
     return detail
 
@@ -1826,7 +1996,9 @@ class CloudRelayManager:
         self.config = load_config(self.paths)
         self.local_api = LocalAPI(self.port)
         self.store = IdempotencyStore(self.paths.idempotency)
-        self.executor = CommandExecutor(self.local_api, self.store, self.paths)
+        self.executor = CommandExecutor(
+            self.local_api, self.store, self.paths,
+            share_titles_fn=lambda: bool(self.config.get("share_titles", True)))
         self.client: RelayClient | None = None
         self.loop: RelayLoop | None = None
         self._loop_lock_fd = None  # flock held while this process owns the loop

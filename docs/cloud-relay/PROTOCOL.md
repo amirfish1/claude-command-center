@@ -317,3 +317,19 @@ anchor for the protocol.
   digest, or a malformed delta gets `{"ok": true, "need_full": true}` and
   CCC resends in full. CCC sends a full push after any push error, every 10
   minutes, and whenever the delta would not be smaller.
+- Attention item context (additive, all optional): items for a Task-tool
+  sub-agent carry `subagent: true`, `parent_ref`, `parent_title`,
+  `agent_label` (its description) and `covered_by_parent` (true while the
+  parent session is live or working, so a human is already watching it); the
+  `title` reads `<agent_label> (sub-agent of <parent_title>)` and `repo_label`
+  falls back to the parent's. Approval items carry `action`, the pending tool
+  plus a short preview, for example `Bash: git push origin main`. Text fields
+  are redacted and capped; with `share_titles` off only `subagent`,
+  `parent_ref` and `covered_by_parent` are sent. A sub-agent ref is the
+  composite `<parent>:agent-<hex>`, the same as in `sessions`.
+- `session.detail` results (`detail`) now also carry `title`, `repo_label`,
+  `state`, `is_live`, `parent_ref`/`parent_title`/`agent_label`/`subagent` for
+  sub-agents, and `pending` (`{type: "question", text, options}` or
+  `{type: "approval", tool, action}`) next to `turns`. If a sub-agent
+  transcript cannot be read, `turns` come from the parent and
+  `fallback: "parent"` is set.

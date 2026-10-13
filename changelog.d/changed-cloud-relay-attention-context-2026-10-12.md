@@ -1,0 +1,1 @@
+- Cloud Relay attention items now name the parent session, the sub-agent's description and the pending tool action (for example `Bash: git push origin main`) for background sub-agents, and `session.detail` returns the title, parent, state and pending approval with the recent turns. With titles off, none of that text is sent.
