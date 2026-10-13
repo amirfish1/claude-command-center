@@ -127,6 +127,7 @@ from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
 from ccc_server import headroom as _headroom
+from ccc_server import approval_evidence as _approval_evidence
 # Namespace import (not adopted): the $0 spawn runtime's helpers stay behind
 # one name so its spawn_env/readiness don't collide with engine globals.
 from ccc_server import free_runtime as _free_runtime
@@ -40480,7 +40481,7 @@ def _classify_attention(c):
                 "has_structured": has_structured,
             }
 
-        if live and pending_tool:
+        if live and pending_tool and _approval_evidence.pending_tool_is_approval(c):
             return {
                 "kind": "pending_tool", "priority": 1,
                 "session_id": sid, "name": name,

@@ -28,7 +28,7 @@ def _rows(tmp_path, parent_live=True):
          "is_live": parent_live, "mtime": time.time(), "jsonl_path": str(pj)},
         {"id": AGENT_REF, "session_id": AGENT_BARE, "display_name": "Commit and rebase",
          "state": "waiting", "is_live": True, "mtime": time.time(),
-         "parent_session_id": PARENT, "pending_tool": "Bash",
+         "parent_session_id": PARENT, "pending_tool": "Bash", "needs_approval": True,
          "pending_file": "git push origin main", "jsonl_path": str(aj)},
     ]
 
@@ -91,7 +91,7 @@ def test_action_is_redacted_and_capped(tmp_path):
     rows[1]["pending_file"] = "curl -d bob@example.com " + "x" * 900
     it = cr.build_snapshot(API(rows), {"share_titles": True})["attention"][0]
     assert "bob@example.com" not in it["action"]
-    assert len(it["action"]) <= cr.CAP_SUMMARY
+    assert len(it["action"]) <= cr.CAP_ACTION
 
 
 def test_plain_session_item_unchanged(tmp_path):

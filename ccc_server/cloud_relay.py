@@ -47,6 +47,11 @@ import urllib.request
 from datetime import datetime, timezone
 
 try:
+    from . import relay_context as _rc
+except ImportError:  # pragma: no cover - run as a loose module
+    from ccc_server import relay_context as _rc
+
+try:
     import fcntl  # repo-root shim delegates to the stdlib module on POSIX
 except Exception:  # pragma: no cover
     fcntl = None
@@ -66,6 +71,12 @@ CAP_QUESTION = 2000
 CAP_REPLY = 4000
 CAP_LABEL = 120
 CAP_TURN_TEXT = 2000
+# Full-context fields for an external agent that must decide from the payload
+# alone: the complete pending tool input and the complete final assistant
+# message. Larger than CAP_SUMMARY on purpose; the relay raises its clip for
+# exactly these two fields.
+CAP_ACTION = 2000
+CAP_QUESTION_TEXT = 4000
 MAX_SESSIONS = 200
 MAX_ATTENTION = 50
 MAX_QUEUES = 50
@@ -228,6 +239,46 @@ def redact(text) -> str:
     s = _RE_HEX.sub(_REDACTED, s)
     s = _RE_TOKEN.sub(_REDACTED, s)
     return s
+
+
+def _wordy_name(tok: str) -> bool:
+    """True for a hyphen/underscore-joined NAME (`claude-command-center`,
+    `app_v2_release-notes`): two or more short segments, each plain letters or
+    a short number. Real secrets carry a long random segment (`sk-ant-api03-
+    <40 chars>`) or no separators, so they never match."""
+    if not re.fullmatch(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+", tok):
+        return False
+    for seg in re.split(r"[-_]", tok):
+        if len(seg) > 14:
+            return False
+        if seg.isalpha() or seg.isdigit():
+            continue
+        if len(seg) > 6:  # long letter/digit mix = random-looking
+            return False
+    return True
+
+
+def redact_label(text) -> str:
+    """redact() for short human labels (folder/repo names, session titles,
+    queue names). Identical except a plain hyphen/underscore-joined name is
+    kept: the generic token rule flags any 16+ char dashed name that contains
+    a separator, which turned `claude-command-center` into `[redacted]`."""
+    if text is None:
+        return ""
+    s = str(text)
+    s = _RE_URL_USERINFO.sub(_REDACTED, s)
+    s = _RE_PATH_POSIX.sub(_REDACTED, s)
+    s = _RE_PATH_WIN.sub(_REDACTED, s)
+    s = _RE_EMAIL.sub(_REDACTED, s)
+    s = _RE_HEX.sub(_REDACTED, s)
+    s = _RE_TOKEN.sub(lambda m: m.group(0) if _wordy_name(m.group(0))
+                      else _REDACTED, s)
+    return s
+
+
+def label_cap(text, limit: int) -> str:
+    """redact_label, then hard-cap."""
+    return truncate(redact_label(text), limit)
 
 
 def truncate(text, limit: int) -> str:
@@ -696,7 +747,7 @@ def collect_schedules() -> list[dict]:
         low = name.lower()
         if "ccc" not in low and "claude" not in low:
             continue
-        label = redact_cap(name[: -len(".plist")], CAP_LABEL)
+        label = label_cap(name[: -len(".plist")], CAP_LABEL)
         rows.append({
             "label": label,
             "kind": "launchd",
@@ -757,6 +808,9 @@ SNAPSHOT_SESSION_FIELDS = (
     "question_id", "question_text", "question_options",
     # Sub-agent / approval context for attention items (additive).
     "parent_session_id", "pending_tool", "pending_file", "first_message",
+    # Permission-prompt evidence (the transcript path is NOT projected here:
+    # it doubles the payload; see _candidate_paths).
+    "needs_approval",
 )
 SNAPSHOT_SESSION_QUERY = {
     "all": "1", "compact": "1", "limit": str(MAX_SESSIONS),
@@ -831,9 +885,9 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
             continue
         q_waiting = bool(row.get("question_waiting"))
         if share_titles:
-            title = redact_cap(row.get("display_name"), CAP_TITLE)
+            title = label_cap(row.get("display_name"), CAP_TITLE)
             title_source = "redacted"
-            repo_label = redact_cap(row.get("folder_label"), CAP_LABEL)
+            repo_label = label_cap(row.get("folder_label"), CAP_LABEL)
         else:
             title = f"Session on {host}"
             title_source = "opaque"
@@ -858,6 +912,8 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
             "parent": _norm_ref(row.get("parent_session_id")),
             "tool": row.get("pending_tool"),
             "target": row.get("pending_file"),
+            "needs_approval": bool(row.get("needs_approval")),
+            "question_text": row.get("question_text"),
             "name": row.get("display_name") or row.get("first_message"),
             "live": bool(row.get("is_live")) or session["state"] == "working",
         }
@@ -880,6 +936,24 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
                 "options": options,
                 "asked_at": _iso_from_epoch(row.get("mtime")),
             })
+
+    _path_cache: dict = {}
+
+    def path_of(ref):
+        """Transcript path, fetched once and only when a candidate needs it."""
+        if not _path_cache:
+            _, p_data = local_api.get("/api/sessions", query={
+                "all": "1", "compact": "1", "limit": str(MAX_SESSIONS),
+                "fields": "id,session_id,jsonl_path"})
+            p_rows = []
+            if isinstance(p_data, dict):
+                p_rows = p_data.get("sessions") or p_data.get("conversations") or []
+            for pr in p_rows:
+                if isinstance(pr, dict) and pr.get("jsonl_path"):
+                    _path_cache[_norm_ref(pr.get("id") or pr.get("session_id"))] = \
+                        pr["jsonl_path"]
+            _path_cache.setdefault("", None)
+        return _path_cache.get(ref)
 
     # --- attention (recent live feed) ---
     _, a_data = local_api.get("/api/attention",
@@ -907,12 +981,16 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         if a_ref in labels:
             a_title, a_repo = labels[a_ref]
         elif share_titles:
-            a_title = redact_cap(it.get("name"), CAP_TITLE)
-            a_repo = redact_cap(it.get("folder_label"), CAP_LABEL)
+            a_title = label_cap(it.get("name"), CAP_TITLE)
+            a_repo = label_cap(it.get("folder_label"), CAP_LABEL)
         else:
             a_title, a_repo = f"Session on {host}", None
         kind = _map_attention_kind(it.get("kind"))
         info = rinfo.get(a_ref) or {}
+        # The permission-prompt marker is the real approval signal; the feed
+        # files it under a question kind.
+        if kind == "question" and info.get("needs_approval"):
+            kind = "approval"
         extra = {}
         sub = is_subagent_ref(a_ref) or is_subagent_ref(it.get("session_id"))
         if sub:
@@ -924,7 +1002,7 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
                 extra["covered_by_parent"] = bool(
                     (rinfo.get(parent) or {}).get("live"))
             if share_titles:
-                label = redact_cap(info.get("name") or it.get("name"), CAP_LABEL)
+                label = label_cap(info.get("name") or it.get("name"), CAP_LABEL)
                 p_title, p_repo = labels.get(parent, (None, None))
                 if label:
                     extra["agent_label"] = label
@@ -933,13 +1011,18 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
                 if label:
                     a_title = (f"{label} (sub-agent of {p_title})" if p_title
                                else f"{label} (sub-agent)")
-                    a_title = redact_cap(a_title, CAP_TITLE)
+                    a_title = label_cap(a_title, CAP_TITLE)
                 if not a_repo and p_repo:
                     a_repo = p_repo
         if share_titles and kind == "approval":
-            act = _action_text(info.get("tool"), info.get("target"))
+            act = _rc.pending_action(path_of(a_ref), CAP_ACTION) \
+                or _action_text(info.get("tool"), info.get("target"))
             if act:
-                extra["action"] = redact_cap(act, CAP_SUMMARY)
+                extra["action"] = redact_cap(act, CAP_ACTION)
+        elif share_titles and kind == "question":
+            qt = info.get("question_text") or _rc.last_assistant_text(path_of(a_ref))
+            if qt:
+                extra["question_text"] = redact_cap(qt, CAP_QUESTION_TEXT)
         item = {
             "kind": kind,
             "priority": int(it.get("priority") or 9),
@@ -993,7 +1076,7 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
         if not isinstance(q, dict):
             continue
         workers.append({
-            "queue": redact_cap(q.get("queue"), CAP_LABEL),
+            "queue": label_cap(q.get("queue"), CAP_LABEL),
             "depth": int(q.get("total", sum(int(q.get(k) or 0) for k in
                                             ("depth", "in_progress", "closed"))) or 0),
             "open": int(q.get("depth") or 0),         # open (unclosed) count
@@ -1358,7 +1441,9 @@ class CommandExecutor:
         turns = None
         if jsonl_path:
             turns = tail_read_turns(jsonl_path, max_turns=MAX_TURNS, cap=CAP_TURN_TEXT)
-        elif is_subagent_ref(session_ref):
+        if not turns and is_subagent_ref(session_ref):
+            # No transcript, or a sub-agent that has not written a text turn
+            # yet: show the parent's turns rather than an empty window.
             parent = self._parent_ref(session_ref, row)
             prow = self._find_row(parent) if parent else None
             if prow and prow.get("jsonl_path"):
@@ -1418,14 +1503,14 @@ class CommandExecutor:
             ctx["state"] = str(state)
         ctx["is_live"] = bool(row.get("is_live") if row else prow.get("is_live"))
         if share:
-            label = redact_cap(row.get("display_name") or row.get("first_message"),
+            label = label_cap(row.get("display_name") or row.get("first_message"),
                                CAP_LABEL)
             if sub and label:
                 ctx["agent_label"] = label
             if sub and parent:
                 if not prow:
                     prow = self._find_row(parent) or {}
-                ptitle = redact_cap(prow.get("display_name"), CAP_TITLE)
+                ptitle = label_cap(prow.get("display_name"), CAP_TITLE)
                 if ptitle:
                     ctx["parent_title"] = ptitle
             title = label or ""
@@ -1434,13 +1519,18 @@ class CommandExecutor:
                 title = (f"{label} (sub-agent of {ptitle})" if ptitle
                          else f"{label} (sub-agent)")
             if title:
-                ctx["title"] = redact_cap(title, CAP_TITLE)
-            repo = redact_cap(row.get("folder_label") or prow.get("folder_label"),
+                ctx["title"] = label_cap(title, CAP_TITLE)
+            repo = label_cap(row.get("folder_label") or prow.get("folder_label"),
                               CAP_LABEL)
             if repo:
                 ctx["repo_label"] = repo
         else:
             ctx["title"] = f"Session on {_hostname()}"
+        path = row.get("jsonl_path") or None
+        try:
+            from ccc_server.approval_evidence import pending_tool_is_approval
+        except ImportError:  # pragma: no cover
+            pending_tool_is_approval = lambda r: True  # noqa: E731
         if row.get("question_waiting"):
             opts = []
             raw = row.get("question_options") or []
@@ -1450,13 +1540,31 @@ class CommandExecutor:
                     opts.append({"label": redact_cap(lab, CAP_LABEL)})
             pending = {"type": "question", "options": opts}
             if share:
-                pending["text"] = redact_cap(row.get("question_text"), CAP_QUESTION)
+                pending["text"] = redact_cap(
+                    row.get("question_text"), CAP_QUESTION_TEXT)
             ctx["pending"] = pending
-        elif row.get("pending_tool") and (row.get("is_live") or sub):
-            pending = {"type": "approval", "tool": str(row.get("pending_tool"))[:60]}
-            act = _action_text(row.get("pending_tool"), row.get("pending_file"))
-            if share and act:
-                pending["action"] = redact_cap(act, CAP_SUMMARY)
+        elif row.get("needs_approval") or (
+                row.get("pending_tool") and (row.get("is_live") or sub)
+                and pending_tool_is_approval(row)):
+            tool = row.get("pending_tool")
+            if not tool and path:
+                tool = (_rc.last_pending_tool(path) or {}).get("tool")
+            pending = {"type": "approval", "tool": str(tool or "")[:60]}
+            if share:
+                act = _rc.pending_action(path, CAP_ACTION) \
+                    or _action_text(row.get("pending_tool"), row.get("pending_file"))
+                if act:
+                    pending["action"] = redact_cap(act, CAP_ACTION)
+            ctx["pending"] = pending
+        elif str(row.get("state") or "") == "waiting" and row.get("is_live") \
+                and not row.get("pending_tool"):
+            # Prose question: the session ended its turn asking the human
+            # something (no AskUserQuestion). The final assistant message is
+            # the question.
+            pending = {"type": "question", "options": []}
+            if share:
+                pending["text"] = redact_cap(
+                    _rc.last_assistant_text(path), CAP_QUESTION_TEXT)
             ctx["pending"] = pending
         return ctx
 
@@ -1468,7 +1576,8 @@ class CommandExecutor:
                 "id", "session_id", "jsonl_path", "display_name", "first_message",
                 "folder_label", "state", "is_live", "parent_session_id",
                 "pending_tool", "pending_file", "question_waiting",
-                "question_text", "question_options"))})
+                "question_text", "question_options", "needs_approval",
+                "engine"))})
         rows = []
         if isinstance(data, dict):
             rows = data.get("sessions") or data.get("conversations") or []
@@ -1504,6 +1613,7 @@ def _bounded_detail(session_ref: str, turns: list, truncated: bool = False,
         truncated = True
         detail = build()
     detail["truncated"] = truncated
+    detail["turn_count"] = len(turns)
     return detail
 
 
@@ -1512,70 +1622,19 @@ def tail_read_turns(jsonl_path: str, max_turns: int = MAX_TURNS,
     """Read the last ~tail_bytes of a JSONL transcript and return the last
     `max_turns` role/text turns, each redacted and capped. Engine-agnostic and
     defensive: unknown line shapes are skipped."""
-    try:
-        size = os.path.getsize(jsonl_path)
-        with open(jsonl_path, "rb") as f:
-            if size > tail_bytes:
-                f.seek(size - tail_bytes)
-                f.readline()  # drop partial first line after the seek
-            raw = f.read().decode("utf-8", "replace")
-    except OSError:
-        return []
-    turns: list[dict] = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        role, text = _extract_turn(obj)
-        if role is None or not text:
-            continue
-        turns.append({"role": role, "text": redact_cap(text, cap)})
-    return turns[-max_turns:]
+    # A tool-heavy tail (tool_use/tool_result/thinking, huge results) holds no
+    # text turns in a fixed window, which used to yield an empty `turns`. The
+    # reader widens the window until it has enough turns or the whole file.
+    raw_turns = _rc.read_turns(jsonl_path, max_turns, tail_bytes=tail_bytes)
+    return [{"role": r, "text": redact_cap(t, cap)} for r, t in raw_turns]
 
 
 def _extract_turn(obj: dict):
-    role = obj.get("role")
-    msg = obj.get("message") if isinstance(obj.get("message"), dict) else None
-    if role is None and msg is not None:
-        role = msg.get("role")
-    if role is None:
-        t = str(obj.get("type") or "").lower()
-        if t in ("user", "assistant", "system"):
-            role = t
-    if role not in ("user", "assistant", "system"):
-        return None, ""
-    content = None
-    if msg is not None:
-        content = msg.get("content")
-    if content is None:
-        content = obj.get("content") or obj.get("text")
-    text = _content_to_text(content)
-    return role, text
+    return _rc.extract_turn(obj)
 
 
 def _content_to_text(content) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                if block.get("type") == "text" and block.get("text"):
-                    parts.append(str(block["text"]))
-                elif block.get("text"):
-                    parts.append(str(block["text"]))
-        return "\n".join(parts)
-    return str(content)
+    return _rc.content_to_text(content)
 
 
 # ---------------------------------------------------------------------------
