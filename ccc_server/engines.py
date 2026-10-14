@@ -4231,6 +4231,46 @@ def _antigravity_live_resume_pid(session_id):
     return None
 
 
+def _antigravity_terminal_holder_pid(session_id):
+    """PID of an interactive (terminal) `agy --conversation[=| ]<sid>` that owns
+    this conversation, or None. A headless `-p` resume can't be delivered while
+    a terminal agy holds the conversation: the input is never acknowledged
+    (CCC-1273). Headless resumes carry `-p`; the terminal one doesn't."""
+    if not session_id:
+        return None
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,tty=,command="],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    for line in out.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_str, tty, cmd = parts
+        words = cmd.split()
+        if not words or words[0].rsplit("/", 1)[-1] != "agy":
+            continue
+        if tty in ("?", "??"):
+            continue
+        has_conv = f"--conversation={session_id}" in words or (
+            "--conversation" in words
+            and words.index("--conversation") + 1 < len(words)
+            and words[words.index("--conversation") + 1] == session_id
+        )
+        if not has_conv or "-p" in words or any(w.startswith("-p=") for w in words):
+            continue
+        try:
+            return int(pid_str)
+        except ValueError:
+            continue
+    return None
+
+
 def _spawn_entry_started_epoch(entry):
     """Epoch seconds for a spawn entry's ``started`` stamp (``%Y%m%dT%H%M%S``,
     local time), or 0 when missing/unparseable."""
@@ -4317,6 +4357,15 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     }
             except Exception:
                 pass
+    term_pid = _antigravity_terminal_holder_pid(session_id)
+    if term_pid is not None:
+        return {
+            "ok": False,
+            "code": "terminal_owned",
+            "pid": term_pid,
+            "via": "antigravity-resume",
+            "error": f"This Antigravity conversation is open in a terminal (pid {term_pid}). Type in that terminal, or close it to send from here.",
+        }
     live_pid = _antigravity_live_resume_pid(session_id)
     if live_pid is not None:
         # `_spawned_sessions` has no entry for this sid (registry reattach
