@@ -14,11 +14,23 @@ PATTERN = re.compile(r"os\.kill\([^,()]+(?:\([^()]*\))?[^,()]*,\s*0\s*\)")
 ALLOW = {"ccc_server/paths.py", "scripts/e2e_failover.py"}
 
 
-class NoRawPidProbe(unittest.TestCase):
-    def test_no_direct_os_kill_zero(self):
-        files = subprocess.run(
+def _source_files():
+    try:
+        return subprocess.run(
             ["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True, check=True
         ).stdout.split()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # No git metadata (e.g. a `git archive` export): walk the tree instead.
+        skip = {"node_modules", "venv", "site-packages"}
+        return [
+            str(p.relative_to(ROOT)) for p in ROOT.rglob("*.py")
+            if not any(part.startswith(".") or part in skip for part in p.relative_to(ROOT).parts)
+        ]
+
+
+class NoRawPidProbe(unittest.TestCase):
+    def test_no_direct_os_kill_zero(self):
+        files = _source_files()
         bad = []
         for rel in files:
             if rel.startswith("tests/") or rel in ALLOW:
