@@ -4283,6 +4283,24 @@ def _spawn_entry_started_epoch(entry):
         return 0
 
 
+def _antigravity_auth_prompt_seen(proc, log_path, wait_seconds=4.0):
+    """True when a just-spawned headless agy printed its login prompt (it is
+    not signed in and will idle until its auth timeout). Returns early once
+    the process exits or the wait elapses."""
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        try:
+            with open(log_path, "r", errors="replace") as fh:
+                if "Authentication required" in fh.read(4000):
+                    return True
+        except OSError:
+            pass
+        if proc.poll() is not None:
+            return False
+        time.sleep(0.25)
+    return False
+
+
 def resume_session_antigravity(session_id, text, mode="send"):
     """Resume an Antigravity conversation through AGY CLI or the running app.
 
@@ -4451,6 +4469,27 @@ def resume_session_antigravity(session_id, text, mode="send"):
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-resume"}
+
+    # A logged-out agy prints an OAuth prompt and then idles for 60s before
+    # exiting, so the UI shows "Thinking..." with no reason (CCC-1274). The
+    # prompt lands within a second or two: catch it, stop the stuck process
+    # and say so instead of leaving the turn silently hung.
+    if _antigravity_auth_prompt_seen(proc, log_path):
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            log_fh.close()
+        except OSError:
+            pass
+        return {
+            "ok": False,
+            "code": "antigravity_auth_required",
+            "via": "antigravity-resume",
+            "log": str(log_path),
+            "error": "Antigravity CLI is not logged in. Run `agy` in a terminal to sign in, then resend.",
+        }
 
     entry = {
         "pid": proc.pid,
