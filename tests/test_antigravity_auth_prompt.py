@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import server  # noqa: F401  (import order: avoids circular import)
 from ccc_server import engines
 
 
