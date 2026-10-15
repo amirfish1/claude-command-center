@@ -1,0 +1,1 @@
+- Messages to a running Antigravity CLI (agy) session now go straight into that live session through agy's local language server, including from WatchTower. Steer now lands mid-turn and no longer waits for the turn to end. A session becomes reachable after its agent runs any `ccc` command; until then CCC falls back to the old `agy --conversation -p` resume.

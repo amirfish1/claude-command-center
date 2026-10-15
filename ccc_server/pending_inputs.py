@@ -3010,7 +3010,7 @@ def _consume_pending_input_id(
 # Transports whose successful result means the message really did reach the
 # session, so the durable queued copy must be withdrawn. Anything else leaves
 # the queue untouched — a steer that never landed has to stay queued.
-_QUEUED_STEER_CONSUMING_VIA = frozenset({"codex-steer", "acp-prompt"})
+_QUEUED_STEER_CONSUMING_VIA = frozenset({"codex-steer", "acp-prompt", "antigravity-ls"})
 
 
 def _finalize_queued_steer_batch_result(session_id, texts, result):

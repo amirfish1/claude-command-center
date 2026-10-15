@@ -32,6 +32,7 @@ import time
 import urllib.request
 import uuid
 
+from ccc_server import antigravity_ls
 from ccc_server import core as _core
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
@@ -4375,6 +4376,12 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     }
             except Exception:
                 pass
+    # A live agy process that registered its language server (any `ccc` call
+    # from inside it does) takes the message directly, mid-turn steer
+    # included -- including a TUI the terminal-holder check below would refuse.
+    delivered = antigravity_ls.send(session_id, text, mode=mode)
+    if delivered:
+        return delivered
     term_pid = _antigravity_terminal_holder_pid(session_id)
     if term_pid is not None:
         return {

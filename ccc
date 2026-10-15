@@ -2083,8 +2083,24 @@ def cmd_secret(args):
                 pass  # bounded server expiry is the fallback
 
 
+def _register_antigravity_session():
+    """Inside an agy shell, record its live language server so CCC (and
+    WatchTower through CCC) can deliver replies into that running session."""
+    if not os.environ.get("ANTIGRAVITY_CSRF_TOKEN"):
+        return
+    try:
+        repo_dir = os.path.dirname(os.path.realpath(__file__))
+        if repo_dir not in sys.path:
+            sys.path.append(repo_dir)
+        from ccc_server import antigravity_ls
+        antigravity_ls.register_from_env()
+    except Exception:
+        pass
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    _register_antigravity_session()
     # `ccc` is also the Homebrew launcher's name (foreground server /
     # --install-service). Keep one name for both roles: known query
     # subcommands run the client below; anything else (no args, unknown
