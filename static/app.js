@@ -61492,6 +61492,7 @@
 
   function closeActivityLogModal() {
     if (!_activityLogModalEl) return;
+    _activityLogModalEl._activityLogRequest?.abort();
     _activityLogModalEl.remove();
     _activityLogModalEl = null;
     if (_activityLogModalKeydownHandler) {
@@ -61501,14 +61502,18 @@
   }
 
   async function _loadActivityLogInto(overlay, body, sessionId, scopeAll) {
+    overlay._activityLogRequest?.abort();
+    const request = new AbortController();
+    overlay._activityLogRequest = request;
+    const isCurrent = () => _activityLogModalEl === overlay && overlay._activityLogRequest === request;
     body.innerHTML = '<div class="activity-log-empty">Loading…</div>';
     try {
       const useSession = sessionId && !scopeAll;
       const qs = useSession ? ('?session_id=' + encodeURIComponent(sessionId) + '&limit=200') : '?limit=200';
-      const res = await fetch('/api/activity-log' + qs);
+      const res = await fetch('/api/activity-log' + qs, { signal: request.signal });
       const data = await res.json();
-      if (!_activityLogModalEl || _activityLogModalEl !== overlay) return;  // closed while in flight
-      if (!data || !data.ok) {
+      if (!isCurrent()) return;  // scope changed or modal closed while in flight
+      if (!res.ok || !data || !data.ok) {
         body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
         return;
       }
@@ -61521,7 +61526,7 @@
       // Newest first for reading — the API returns oldest-first (tail order).
       _renderReadableActivityLog(body, events);
     } catch (e) {
-      if (!_activityLogModalEl || _activityLogModalEl !== overlay) return;
+      if (!isCurrent()) return;
       body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
     }
   }
@@ -64536,14 +64541,17 @@
   // The RHS "Log" tab: the unified activity log (~/.claude/command-center/
   // logs/activity.log via GET /api/activity-log) living in the status rail
   // instead of a modal. Global ("All") or narrowed to the open conversation
-  // ("This session"), plus a free-text filter over category/verb/detail.
+  // ("This session"), plus a free-text filter over summaries and raw fields.
   // Auto-refreshes on an interval while the tab is visible — no refresh
   // button (staleness is fixed at the source, per the house rule).
   const RAIL_LOG_POLL_MS = 5000;
   let _railLogEvents = [];
   let _railLogScope = 'all';
   let _railLogFilter = '';
-  let _railLogFetchInFlight = false;
+  let _railLogRequest = null;
+  let _railLogContext = null;
+  let _railLogEmptyMessage = 'No activity-log entries yet.';
+  let _railLogLoadError = false;
   let _railLogShowHeartbeats = false;
   let _railLogShowInjects = true;
   let _railLogOnlyAttention = false;
@@ -64613,21 +64621,19 @@
     const body = document.getElementById('railLogBody');
     if (!body) return;
     const needle = _railLogFilter.trim().toLowerCase();
-    let events = _railLogEvents.filter(ev =>
-      (_railLogShowHeartbeats || !_isSuccessfulHeartbeat(ev))
-      && (_railLogShowInjects || !_isRoutineInjectEvent(ev))
-      && (!_railLogOnlyAttention || ['error', 'warning'].includes(_readableLogPresentation(ev).level)));
-    if (needle) {
-      events = events.filter((ev) => (
-        _readableLogPresentation(ev).headline.toLowerCase().includes(needle)
-        || String(ev.category || '').toLowerCase().includes(needle)
-        || String(ev.verb || '').toLowerCase().includes(needle)
-        || String(ev.detail || '').toLowerCase().includes(needle)
-      ));
-    }
+    const events = _railLogEvents.filter(ev => {
+      if (!_railLogShowHeartbeats && _isSuccessfulHeartbeat(ev)) return false;
+      if (!_railLogShowInjects && _isRoutineInjectEvent(ev)) return false;
+      const presentation = _readableLogPresentation(ev);
+      if (presentation.hidden) return false;
+      if (_railLogOnlyAttention && !['error', 'warning'].includes(presentation.level)) return false;
+      return !needle || [presentation.headline, presentation.origin, ev.ts,
+        ev.category, ev.verb, ev.detail, _activityLogTimestampLocal(ev.ts), _readableLogTime(ev.ts)]
+        .some(value => String(value || '').toLowerCase().includes(needle));
+    });
     if (!events.length) {
-      body.innerHTML = '<div class="activity-log-empty">'
-        + (_railLogEvents.length ? 'No events match the filter.' : 'No activity-log entries yet.')
+      body.innerHTML = '<div class="activity-log-' + (_railLogLoadError ? 'error' : 'empty') + '">'
+        + escapeHtml(_railLogEvents.length ? 'No events match the filter.' : _railLogEmptyMessage)
         + '</div>';
       _syncRailLogToggleAll();
       return;
@@ -64655,43 +64661,64 @@
     button.disabled = !entries.length;
   }
 
+  function _railLogContextKey() {
+    if (_railLogScope !== 'session') return 'all';
+    const sid = typeof currentConversation === 'string' && currentConversation !== '__new__' ? currentConversation : '';
+    return 'session:' + sid;
+  }
+
+  function _setRailLogMessage(message, error = false) {
+    _railLogEvents = [];
+    _railLogEmptyMessage = message;
+    _railLogLoadError = error;
+    _renderRailLogPane();
+  }
+
   async function refreshRailLogPane() {
-    if (_railLogFetchInFlight) return;
     const body = document.getElementById('railLogBody');
     if (!body) return;
+    const key = _railLogContextKey();
+    if (_railLogRequest && _railLogRequest.key === key) return;
+    _railLogRequest?.controller.abort();
+    _railLogRequest = null;
+    if (_railLogContext !== key) {
+      _railLogContext = key;
+      _setRailLogMessage('Loading…');
+    }
     let qs = '?limit=300';
     let emptyHint = 'No activity-log entries yet.';
-    if (_railLogScope === 'session') {
-      const sid = (typeof currentConversation === 'string' && currentConversation) || '';
+    if (key !== 'all') {
+      const sid = key.slice('session:'.length);
       if (!sid) {
-        _railLogEvents = [];
-        body.innerHTML = '<div class="activity-log-empty">Select a session to scope the log, or switch to All.</div>';
+        _setRailLogMessage('Select a session to scope the log, or switch to All.');
         return;
       }
       qs = '?session_id=' + encodeURIComponent(sid) + '&limit=300';
       emptyHint = 'No activity-log entries for this session yet.';
     }
-    _railLogFetchInFlight = true;
+    const request = { key, controller: new AbortController() };
+    _railLogRequest = request;
+    const isCurrent = () => _railLogRequest === request && _railLogContextKey() === key && _railLogPaneVisible();
     try {
-      const res = await fetch('/api/activity-log' + qs, { cache: 'no-store' });
+      const res = await fetch('/api/activity-log' + qs, { cache: 'no-store', signal: request.controller.signal });
       const data = await res.json();
-      if (!_railLogPaneVisible()) return;  // tab switched while in flight
-      if (!data || !data.ok) {
-        body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
+      if (!isCurrent()) return;
+      if (!res.ok || !data || !data.ok) {
+        _setRailLogMessage('Could not load the activity log.', true);
         return;
       }
       _railLogEvents = Array.isArray(data.events) ? data.events : [];
-      if (!_railLogEvents.length) {
-        body.innerHTML = '<div class="activity-log-empty">' + emptyHint + '</div>';
-        return;
-      }
+      _railLogEmptyMessage = emptyHint;
+      _railLogLoadError = false;
       _renderRailLogPane();
     } catch (e) {
-      if (_railLogPaneVisible()) {
-        body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
-      }
+      if (isCurrent()) _setRailLogMessage('Could not load the activity log.', true);
     } finally {
-      _railLogFetchInFlight = false;
+      if (_railLogRequest === request) {
+        _railLogRequest = null;
+        // A conversation can change without a scope-button click.
+        if (_railLogPaneVisible() && _railLogContextKey() !== key) refreshRailLogPane();
+      }
     }
   }
 
@@ -64705,7 +64732,6 @@
         pane.querySelectorAll('[data-rail-log-scope]').forEach((b) => b.classList.remove('is-active'));
         btn.classList.add('is-active');
         _railLogScope = btn.getAttribute('data-rail-log-scope') || 'all';
-        _railLogEvents = [];
         refreshRailLogPane();
       });
     });
@@ -64743,6 +64769,9 @@
         if (_railLogEvents.length) _renderRailLogPane();
       });
     }
+    window.addEventListener('ccc-repo-changed', () => {
+      if (_railLogScope === 'session' && _railLogPaneVisible()) refreshRailLogPane();
+    });
     setInterval(() => {
       if (_railLogPaneVisible()) refreshRailLogPane();
     }, RAIL_LOG_POLL_MS);

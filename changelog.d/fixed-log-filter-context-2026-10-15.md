@@ -1,0 +1,1 @@
+- Activity-log scope changes discard outdated responses in the rail and modal. Search now matches timestamps and displayed session names, and filtered or empty logs keep a clear message and disabled expansion controls.
