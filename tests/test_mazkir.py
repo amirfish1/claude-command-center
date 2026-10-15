@@ -79,7 +79,7 @@ class McpProtocolTest(unittest.TestCase):
             names = [t["name"] for t in self.rpc("tools/list")["result"]["tools"]]
         self.assertEqual(names, ["list_sessions", "live_activity", "throughput_window", "queue_status",
                                  "session_detail", "fleet_diagnostics", "inject_diagnostics", "daily_checkin", "daily_brief",
-                                 "propose_spawn_session", "propose_inject",
+                                 "decisions", "propose_spawn_session", "propose_inject",
                                  "propose_wt_add", "propose_wt_comment"])
 
     def test_tools_call_and_errors(self):
@@ -166,7 +166,8 @@ class RunMazkirTest(unittest.TestCase):
         prefetch = lambda argv, **kw: _Proc(stdout="[]")
         body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(returncode=1, stderr="boom"),
                                          base="http://x", claude_bin="/x/claude", fetch=fake_fetch,
-                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db",
+                                         peer_fan_out=lambda a, b: [])
         self.assertEqual((status, body["code"]), (502, "ask_engine_error"))
         body, status = mazkir.run_mazkir("", base="http://x", fetch=fake_fetch)
         self.assertEqual(status, 400)
@@ -179,7 +180,8 @@ class RunMazkirTest(unittest.TestCase):
         out = json.dumps({"result": "Not logged in · Please run /login", "is_error": True})
         body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=out), base="http://x",
                                          claude_bin="/x/claude", fetch=fake_fetch,
-                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db",
+                                         peer_fan_out=lambda a, b: [])
         self.assertEqual((status, body["code"]), (401, "ask_engine_unauthenticated"))
         self.assertIn("/login", body["error"])
         self.assertFalse(body["ok"])
@@ -187,7 +189,8 @@ class RunMazkirTest(unittest.TestCase):
                               "is_error": True})
         body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=expired), base="http://x",
                                          claude_bin="/x/claude", fetch=fake_fetch,
-                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db",
+                                         peer_fan_out=lambda a, b: [])
         self.assertEqual(status, 401)
 
     def test_warm_up_reports_optional_features(self):

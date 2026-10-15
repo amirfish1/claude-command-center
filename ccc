@@ -870,6 +870,8 @@ def cmd_decisions(args):
               file=sys.stderr)
         return 2
     qs = urllib.parse.urlencode({"topic": text, "limit": args.limit})
+    if getattr(args, "repo", None):
+        qs += "&" + urllib.parse.urlencode({"repo": args.repo})
     try:
         payload = _get_json(base, f"/api/memory/decisions?{qs}", timeout=15)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -885,6 +887,15 @@ def cmd_decisions(args):
     for r in results:
         meta = " | ".join(x for x in (r.get("title"), r.get("repo"), r.get("date")) if x)
         print(f"{r.get('session_id') or '?':<38} {meta}")
+        provenance = r.get("provenance")
+        if provenance:
+            label = ("user quote (candidate)" if provenance == "extracted_user_quote"
+                     else "session snippet (unverified)")
+            source = r.get("source") or {}
+            location = source.get("path") or ""
+            if location and source.get("line"):
+                location += f":{source['line']}"
+            print(f"  [{label}]" + (f" {location}" if location else ""))
         if r.get("snippet"):
             print(f"  {r['snippet']}")
     return 0
@@ -2195,15 +2206,15 @@ def main(argv=None):
     p = sub.add_parser(
         "decisions",
         help="find sessions that recorded a decision on a topic",
-        description="GET /api/memory/decisions: search_sessions() hits whose "
-                    "snippet reads as a decision (\"went with\", \"instead "
-                    "of\", ...) for the topic. Heuristic stand-in pending a "
-                    "dedicated decision store.",
+        description="GET /api/memory/decisions: stored user decision quotes "
+                    "with provenance and source citations. Falls back to "
+                    "unverified session snippets when no quotes match.",
     )
     p.add_argument("topic", nargs="*", help="the topic (or pipe it on stdin)")
     p.add_argument("--limit", type=int, default=10, metavar="N",
                    help="max sessions to return (default 10, server caps at 50)")
     p.add_argument("--json", action="store_true", help="raw decisions result JSON")
+    p.add_argument("--repo", metavar="NAME", help="exact repository name to search")
     p.set_defaults(func=cmd_decisions)
 
     p = sub.add_parser(

@@ -30057,9 +30057,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self.send_json({"found": True, "error": str(exc)}, 502)
         elif path == "/api/memory/decisions":
-            # Heuristic decision-shaped filter over ship_graph.search_sessions()
-            # — see ccc_server/memory_api.py. Powers `ccc decisions`. Stand-in
-            # backend for MEMO-FIX-7's dedicated decision store.
+            # Stored user quotes with provenance, then session-snippet fallback.
+            # Powers `ccc decisions` and the Ask agent's read-only memory tool.
             from ccc_server.memory_api import decisions as _memory_decisions
             qs = urllib.parse.parse_qs(parsed.query)
             topic = (qs.get("topic", [""])[0] or "").strip()
@@ -30071,13 +30070,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     limit = max(1, min(int(limit_raw), 50))
                 except ValueError:
                     limit = 10
-                self.send_json(_memory_decisions(topic, limit=limit))
+                repo = (qs.get("repo", [""])[0] or "").strip() or None
+                self.send_json(_memory_decisions(topic, limit=limit, repo=repo))
         elif path == "/api/memory/decisions/extracted":
             # ccc_server/decision_extraction.py -- explicit user rulings
-            # found by the nightly scan (distinct from the topic-search
-            # stand-in above at /api/memory/decisions; this is MEMO-FIX-7's
-            # dedicated decision store, the plain function contract a
-            # decisions UI (MEMO-FIX-5, not yet landed) can call).
+            # found by the nightly scan, listed by recency. Topic search
+            # above uses the same store with a session-snippet fallback.
             qs = urllib.parse.parse_qs(parsed.query)
             repo = (qs.get("repo", [""])[0] or "").strip() or None
             limit_raw = (qs.get("limit", ["50"])[0] or "50").strip()
