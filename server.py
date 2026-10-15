@@ -26705,6 +26705,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if path.startswith("/api/secrets/"):
+            from ccc_server import credential_broker
+            credential_broker.handle(self, self.command)
+            return
+
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
@@ -30979,6 +30984,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
             return
+        if path.startswith("/api/secrets/"):
+            from ccc_server import credential_broker
+            credential_broker.handle(self, self.command)
+            return
+
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
@@ -40051,7 +40061,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 _ms = (time.time() - _t0) * 1000.0
                 _p = getattr(self, "path", "?").split("?", 1)[0]
-                if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events") and _ms >= SLOW_REQ_MS:
+                if (not _p.startswith("/api/secrets/")
+                        and _p not in ("/api/events", "/api/sessions/events", "/api/queue/events")
+                        and _ms >= SLOW_REQ_MS):
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)
@@ -40059,6 +40071,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 pass
 
     def log_message(self, format, *args):
+        # Never log credential endpoint URLs, including malformed callers
+        # that accidentally put sensitive data in a path or query string.
+        if getattr(self, "path", "").startswith("/api/secrets/"):
+            return
         # Quieter logging — only errors
         if args and "404" in str(args[0]):
             super().log_message(format, *args)

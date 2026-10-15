@@ -84,7 +84,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "brief", "where",
-               "brain", "consent", "jobs", "vault")
+               "brain", "consent", "jobs", "vault", "secret")
 
 BRAIN_CONFIG_FILE = os.path.expanduser("~/.claude/command-center/brain-plugin.json")
 
@@ -2007,6 +2007,82 @@ def cmd_vault_exec(args):
     return 128 - rc if rc < 0 else rc
 
 
+def _secret_post(base, action, payload):
+    """Local transport only; no environment proxy or redirects for secrets."""
+    parsed = urllib.parse.urlsplit(base)
+    if (parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
+            or parsed.username or parsed.password or parsed.path not in ("", "/")
+            or parsed.query or parsed.fragment):
+        raise ValueError("credential broker requires a local HTTP server")
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    request = urllib.request.Request(
+        base.rstrip("/") + "/api/secrets/" + action,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(request, timeout=5) as response:
+        return json.loads(response.read())
+
+
+def cmd_secret(args):
+    import time
+    base = _resolve_server(args.server)
+    capability = None
+    try:
+        if args.secret_command == "forget":
+            _secret_post(base, "forget", {"name": args.name})
+            print("Saved credential forgotten; outstanding deliveries revoked.")
+            return 0
+        if not args.stdout or sys.stdout.isatty():
+            print("ccc secret: use --stdout only in a pipe to the consuming program; "
+                  "never print credentials into an agent transcript.", file=sys.stderr)
+            return 2
+        if not 1 <= args.timeout <= 900:
+            print("ccc secret: timeout must be 1-900 seconds", file=sys.stderr)
+            return 2
+        deadline = time.monotonic() + args.timeout
+        created = _secret_post(base, "request", {
+            "name": args.name, "kind": args.kind, "reason": args.reason,
+            "session_id": args.session_id or os.environ.get("CCC_SESSION_ID")
+                or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID", ""),
+            "timeout": args.timeout,
+        })
+        capability = {"id": created["id"], "token": created["token"]}
+        print("Waiting for credential approval in CCC…", file=sys.stderr)
+        while time.monotonic() < deadline:
+            result = _secret_post(base, "take", capability)
+            if result.get("status") == "ready":
+                capability = None
+                sys.stdout.write(result["value"])
+                sys.stdout.flush()
+                return 0
+            if result.get("status") == "denied":
+                capability = None
+                print("ccc secret: request denied", file=sys.stderr)
+                return 1
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
+        print("ccc secret: request timed out", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("ccc secret: cancelled", file=sys.stderr)
+        return 130
+    except (OSError, ValueError, KeyError, TypeError):
+        # Transport errors can contain URLs/payload details. Never echo them.
+        print("ccc secret: request failed or expired; check the local CCC server", file=sys.stderr)
+        return 1
+    finally:
+        if capability:
+            try:
+                _secret_post(base, "cancel", capability)
+            except (OSError, ValueError):
+                pass  # bounded server expiry is the fallback
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # `ccc` is also the Homebrew launcher's name (foreground server /
@@ -2347,6 +2423,20 @@ def main(argv=None):
                     help="with --wait: give up after this long (default 1800)")
     jp.add_argument("--json", action="store_true", help="raw result JSON")
     jp.set_defaults(func=cmd_jobs_add)
+
+    p = sub.add_parser("secret", help="request a credential through the CCC dashboard")
+    ssub = p.add_subparsers(dest="secret_command", required=True)
+    sp = ssub.add_parser("request", help="wait for approval; pipe the value directly to a program")
+    sp.add_argument("name", help="service/account alias, never a credential value")
+    sp.add_argument("--reason", required=True, help="public-safe explanation shown in the dashboard")
+    sp.add_argument("--kind", choices=("password", "token", "ssh-passphrase", "otp"), default="password")
+    sp.add_argument("--session-id", help="requesting session (defaults to agent session environment)")
+    sp.add_argument("--timeout", type=int, default=300, help="wait seconds, 1-900 (default 300)")
+    sp.add_argument("--stdout", action="store_true", help="write exact value for piping; refuses a terminal")
+    sp.set_defaults(func=cmd_secret)
+    sp = ssub.add_parser("forget", help="delete a remembered service credential on this machine")
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_secret)
 
     p = sub.add_parser(
         "vault",
