@@ -33454,6 +33454,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
+                _ux_fixes_cache_ack(item)
                 self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
