@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { before, after, test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
-const puppeteer = require('puppeteer');
+const puppeteer = require('../require-puppeteer.js');
+const { findChromePath } = require('../puppeteer-browser-config.js');
 
 const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 function between(start, end) {
@@ -14,6 +15,8 @@ function between(start, end) {
   return source.slice(first, last);
 }
 const lifecycle = [
+  between('  function queuedSteerSource(', '  function syncUserMessageSteerButtons('),
+  between('  function takeQueuedSendAcknowledgement(', '  // Queued sends are actionable steer candidates'),
   between('  function syncPendingSendsMapForConv(', '  function removePendingSendEcho('),
   between('  function markPendingSendQueued(', '  // State 2 of the echo lifecycle:'),
   between('  function removePendingSendEcho(', '  // A send the server *queued*'),
@@ -23,13 +26,13 @@ const reconciliation = between(
   '        const normed = _normSend(ev.text);\n        let _reconciledExact',
   '        // Webui panes: collapse a durable user bubble');
 const renderedUserReconciliation = between(
-  '      if (_pendingSends.length) {\n        const _durableUserTexts',
+  '      if (_pendingSends.length) {\n        const _durableUserRows',
   '\n    }\n    if (!opts.provisionalOverlay) {\n      for (const p of _pendingSends) {');
 const renderTail = between(
   '    // The app-server live overlay is agent-output-only.',
   '    // Re-evaluate the end-of-session outcome banner');
 let browser;
-before(async () => { browser = await puppeteer.launch({ headless: true }); });
+before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
 
 async function fixture(run, input) {
@@ -93,7 +96,16 @@ async function fixture(run, input) {
         return row;
       };
       (0, eval)(lifecycle);
-      window.reconcileUserEvent = new Function('ev', 'paneId', '$view', reconciliation);
+      const reconcileEvent = new Function('ev', 'paneId', '$view', 'div', reconciliation);
+      window.reconcileUserEvent = (ev, paneId, view) => {
+        const row = document.createElement('div');
+        row.className = 'event user_text';
+        if (ev.ts) row.dataset.tsEpoch = String(Date.parse(ev.ts));
+        row.innerHTML = '<div class="user-msg"></div>';
+        row.firstChild.textContent = ev.text;
+        reconcileEvent(ev, paneId, view, row);
+        return row;
+      };
       window.reconcileRenderedUserRows = new Function('$view', 'paneId', renderedUserReconciliation);
       window.runRenderTail = new Function('$view', 'paneId', 'opts', 'events', renderTail);
     }, { lifecycle, reconciliation, renderedUserReconciliation, renderTail });
@@ -173,6 +185,50 @@ test('one durable event acknowledges only one of two repeated queued sends', asy
     markPendingSendQueued(first, '', { sync: false });
     markPendingSendQueued(second, '', { sync: false });
     reconcileUserEvent({ text: 'Again' }, 'main', getConvView());
+    return { first: first.element.isConnected, second: second.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { first: false, second: true, tracked: 1 });
+});
+
+test('event reconciliation and repeated render sweeps share one delivery receipt', async () => {
+  const result = await fixture(() => {
+    const first = appendPendingSendEcho('Again', 'session', 'main');
+    const second = appendPendingSendEcho('Again', 'session', 'main');
+    const stamp = Math.max(first.entry.ts, second.entry.ts) + 1000;
+    const row = reconcileUserEvent({ text: 'Again', ts: new Date(stamp).toISOString() }, 'main', getConvView());
+    getConvView().append(row);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    reconcileRenderedUserRows(getConvView(), 'main');
+    return { first: first.element.isConnected, second: second.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { first: false, second: true, tracked: 1 });
+});
+
+test('rendered history cannot acknowledge a newer pending send', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Again', 'session', 'main');
+    const row = document.createElement('div');
+    row.className = 'event user_text';
+    row.dataset.tsEpoch = String(pending.entry.ts - 60000);
+    row.innerHTML = '<div class="user-msg">Again</div>';
+    getConvView().append(row);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    return { connected: pending.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { connected: true, tracked: 1 });
+});
+
+test('one rendered durable occurrence clears one pending send across repeated sweeps', async () => {
+  const result = await fixture(() => {
+    const first = appendPendingSendEcho('Again', 'session', 'main');
+    const second = appendPendingSendEcho('Again', 'session', 'main');
+    const row = document.createElement('div');
+    row.className = 'event user_text';
+    row.dataset.tsEpoch = String(Math.max(first.entry.ts, second.entry.ts) + 1000);
+    row.innerHTML = '<div class="user-msg">Again</div>';
+    getConvView().append(row);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    reconcileRenderedUserRows(getConvView(), 'main');
     return { first: first.element.isConnected, second: second.element.isConnected, tracked: _pendingSends.length };
   });
   assert.deepEqual(result, { first: false, second: true, tracked: 1 });

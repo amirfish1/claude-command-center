@@ -58777,6 +58777,23 @@
     }
   }
 
+  // A durable row proves delivery of one occurrence, across every cleanup
+  // pass on this transcript. Keep the receipt on that row so a later sync
+  // cannot consume it again for an identical queued or steered message.
+  function takeQueuedSendAcknowledgement(rows, text, queuedAt) {
+    if (!text || !queuedAt) return false;
+    const match = rows.find(row => {
+      if (row.dataset.sendAcknowledged === 'true') return false;
+      const stamp = Number(row.dataset.tsEpoch || 0);
+      const msg = row.querySelector('.user-msg');
+      return stamp >= queuedAt && msg
+        && _normSend(msg.getAttribute('data-raw-text') || msg.textContent) === text;
+    });
+    if (!match) return false;
+    match.dataset.sendAcknowledged = 'true';
+    return true;
+  }
+
   // Queued sends are actionable steer candidates, not past conversation.
   // Keep their real event nodes in a separate tray immediately above the composer
   // so ongoing output cannot scroll them out of reach.
@@ -58804,17 +58821,15 @@
     const settledSteerRows = Array.from(
       $view.querySelectorAll('.event.user_text[data-steer-settled]'));
     if (settledSteerRows.length) {
-      const durableNow = new Set(Array.from($view.querySelectorAll(
+      const durableNow = Array.from($view.querySelectorAll(
         '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'
         + ':not(.provisional):not(.peer-message):not(.steering-optimistic)'
-      )).map(el => {
-        const msg = el.querySelector('.user-msg');
-        return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-      }).filter(Boolean));
+      ));
       settledSteerRows.forEach(el => {
         const msg = el.querySelector('.user-msg');
         const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-        if (text && durableNow.has(text) && el.parentNode) el.parentNode.removeChild(el);
+        const queuedAt = Number(el.dataset.tsEpoch || 0);
+        if (takeQueuedSendAcknowledgement(durableNow, text, queuedAt)) el.remove();
       });
     }
     if (replaceServerCandidates && tray) {
@@ -58983,15 +58998,10 @@
     // event, and consume each event once. Synthetic queue rows never count.
     const durableRows = Array.from($view.querySelectorAll(
       '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged):not(.steering-optimistic):not(.peer-message):not(.provisional)'));
-    const usedDurable = new Set();
     tray.querySelectorAll('.event.user_text').forEach(el => {
       const text = queuedRowText(el);
       const queuedAt = Number(el._pendingRef?.entry?.ts || el.dataset.tsEpoch || 0);
-      if (!text || !queuedAt) return;
-      const match = durableRows.find(row => !usedDurable.has(row)
-        && Number(row.dataset.tsEpoch || 0) >= queuedAt && queuedRowText(row) === text);
-      if (!match) return;
-      usedDurable.add(match);
+      if (!takeQueuedSendAcknowledgement(durableRows, text, queuedAt)) return;
       if (el._pendingRef) removePendingSendEcho(el._pendingRef);
       else el.remove();
     });
@@ -62534,6 +62544,7 @@
             && _pendingSends.length && canAcknowledgeSend(_pendingSends[0])) {
           const oldest = _pendingSends.shift();
           if (oldest) {
+            _reconciledExact = true;
             if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
             if (oldest.timer) clearTimeout(oldest.timer);
             if (oldest.sid) clearSessionSending(oldest.sid);
@@ -62541,6 +62552,9 @@
             if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
           }
         }
+        // The render-tail and tray sweeps see this same durable row next.
+        // They must not reuse its receipt to clear a second identical send.
+        if (_reconciledExact) div.dataset.sendAcknowledged = 'true';
         // Webui panes: collapse a durable user bubble that repeats the most
         // recent durable user bubble when that bubble was NEVER ANSWERED.
         // The Codex queue pump can persist the same queued text several
@@ -63467,18 +63481,17 @@
       syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || opts.queueSnapshot !== false));
       // Self-heal optimistic echoes only against durable user rows.
       if (_pendingSends.length) {
-        const _durableUserTexts = [];
+        const _durableUserRows = [];
         for (const el of $view.querySelectorAll(
             '.event.user_text:not(.pending):not(.send-queued)'
             + ':not(.send-delivered):not(.not-acknowledged):not(.provisional)'
             + ':not(.peer-message):not(.steering-optimistic)')) {
-          const um = el.querySelector('.user-msg');
-          if (um) _durableUserTexts.push(_normSend(um.getAttribute('data-raw-text') || um.textContent));
+          _durableUserRows.push(el);
         }
-        if (_durableUserTexts.length) {
+        if (_durableUserRows.length) {
           for (const p of _pendingSends.slice()) {
             if (!p || !p.text) continue;
-            if (_durableUserTexts.indexOf(_normSend(p.text)) < 0) continue;
+            if (!takeQueuedSendAcknowledgement(_durableUserRows, _normSend(p.text), Number(p.ts || 0))) continue;
             if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
             if (p.timer) clearTimeout(p.timer);
             if (p.sid) clearSessionSending(p.sid);

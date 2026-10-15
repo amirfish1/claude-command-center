@@ -5,9 +5,9 @@ const vm = require('node:vm');
 
 const app = fs.readFileSync('static/app.js', 'utf8');
 function recentWork(items) {
-  const start = app.indexOf('  function _uxqRecentWorkItems(');
+  const start = app.indexOf('  function _uxqWithMachine(');
   assert.notEqual(start, -1, 'recent work selector exists');
-  const end = app.indexOf('\n  function ', start + 1);
+  const end = app.indexOf('  // The first N rows carry', start);
   const ctx = { items };
   vm.createContext(ctx);
   return vm.runInContext(app.slice(start, end) + '\n_uxqRecentWorkItems(items)', ctx);

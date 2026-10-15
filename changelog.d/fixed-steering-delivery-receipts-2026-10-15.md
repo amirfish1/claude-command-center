@@ -1,0 +1,1 @@
+Queued and steered messages now match delivery by timestamp and occurrence, so older identical history cannot hide a new message and repeated cleanup passes cannot acknowledge several sends with one transcript entry.
