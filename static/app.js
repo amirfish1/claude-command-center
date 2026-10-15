@@ -9260,6 +9260,7 @@
     const btn = ev.target.closest && ev.target.closest('[data-read-assistant-message], [data-read-agent-answer]');
     if (!btn || _ttsActive || _ttsPaused) return;
     clearTimeout(_ttsHoverTimer);
+    _ttsHoverBtn = btn;
     _ttsHoverTimer = setTimeout(() => {
       try {
         const resultEl = btn.closest('.event.result');
@@ -13004,12 +13005,24 @@
   }
   function _ttsMarkCache(paneId, headText, st, f) {
     if (headText) _ttsCacheState.set(headText, { st, f });
-    ttsButtons().forEach((btn) => {
-      if (paneId && ttsButtonPaneId(btn) !== paneId) return;
+    const apply = (btn) => {
       if (st) { btn.dataset.ttsCache = st; btn.style.setProperty('--tts-cache-f', String(f == null ? 1 : f)); }
       else { delete btn.dataset.ttsCache; btn.style.removeProperty('--tts-cache-f'); }
+    };
+    ttsButtons().forEach((btn) => {
+      if (paneId && ttsButtonPaneId(btn) !== paneId) return;
+      apply(btn);
+    });
+    // The per-turn speaker shows the same bar: the last turn's of each pane, or
+    // the hovered older turn (quiet prefetch).
+    if (paneId === '__quiet') { if (_ttsHoverBtn && _ttsHoverBtn.isConnected) apply(_ttsHoverBtn); return; }
+    document.querySelectorAll('.conv-pane').forEach((pane) => {
+      if (paneId && pane.dataset.paneId !== paneId) return;
+      const btns = pane.querySelectorAll('.event.assistant [data-read-assistant-message]');
+      btns.forEach((b, i) => { if (i === btns.length - 1) apply(b); else if (b !== _ttsHoverBtn) delete b.dataset.ttsCache; });
     });
   }
+  let _ttsHoverBtn = null;
   // quiet = a hovered older turn: make the clips but leave the composer bar alone.
   function _ttsPrefetchHead(rawText, paneId, quiet) {
     const mk = quiet ? '__quiet' : paneId;

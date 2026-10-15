@@ -30956,12 +30956,16 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 /* Voiceover cache bar: slim bar along the top of the Speak button, as wide as the
    share of the last message already generated. Amber while filling, green when done. */
 .tts-btn[data-tts-cache], .tts-btn.speaking { position: relative; }
-.tts-btn[data-tts-cache]::before {
+.tts-btn[data-tts-cache]::before,
+.assistant-message-action[data-tts-cache]::before {
   content: ''; position: absolute; top: 2px; left: 9px; height: 3px; border-radius: 2px;
   width: calc((100% - 18px) * var(--tts-cache-f, 1));
   background: var(--green); transition: width 0.3s;
 }
-.tts-btn[data-tts-cache="partial"]::before { background: #d29922; }
+.tts-btn[data-tts-cache="partial"]::before,
+.assistant-message-action[data-tts-cache="partial"]::before { background: #d29922; }
+.assistant-message-action[data-tts-cache] { position: relative; }
+.assistant-message-action[data-tts-cache]::before { left: 2px; top: 0; width: calc((100% - 4px) * var(--tts-cache-f, 1)); }
 .tts-btn.speaking::before {
   content: ''; position: absolute; top: 2px; left: 9px; height: 4px; border-radius: 2px;
   width: calc(100% - 18px); transition: none;
