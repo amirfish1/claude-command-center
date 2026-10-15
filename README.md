@@ -314,6 +314,8 @@ secret storage, and safe CLI use.
 
 [Environment variables, defaults, and persistent settings](docs/configuration.md).
 
+[Optional shared-clone Git guard for Claude Code](docs/shared-clone-guard.md).
+
 ## Python stack diagnostics
 
 [Dump thread stacks without a restart](docs/configuration.md#python-stack-diagnostics).

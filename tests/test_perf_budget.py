@@ -13,6 +13,7 @@ If one fails, a hot path lost its gating or caching — don't relax the bound,
 restore the gate. See CLAUDE.md "Performance gates".
 """
 import importlib
+import importlib.util
 import concurrent.futures
 import gzip
 import json
@@ -31,6 +32,50 @@ import pytest
 from ccc_server import sandbox_harvest
 
 server = importlib.import_module("server")
+
+
+def test_shared_clone_guard_reads_only_live_candidates_and_caches(tmp_path, monkeypatch):
+    """The opt-in hook must not walk session archives or reparse warm rows."""
+    spec = importlib.util.spec_from_file_location(
+        "perf_shared_clone_guard",
+        Path(__file__).resolve().parents[1] / "hooks" / "shared-clone-guard.py",
+    )
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    config_dir = tmp_path / "config"
+    sessions = config_dir / "sessions"
+    sessions.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    for pid, sid in [(11, "current"), (22, "peer")]:
+        (sessions / (str(pid) + ".json")).write_text(json.dumps({
+            "pid": pid, "sessionId": sid, "cwd": str(repo)}))
+    # Archived/dead entries cannot become candidates, whatever their count.
+    for pid in range(100, 200):
+        (sessions / (str(pid) + ".json")).write_text("{}")
+    monkeypatch.setattr(guard, "_live_claude_pids", lambda: [11, 22])
+    def forbidden(*args, **kwargs):
+        raise AssertionError("hook walked a session directory or forked per row")
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(guard.subprocess, "run", forbidden)
+    reads = []
+    original = guard._read_json
+    def read_json(file, limit):
+        reads.append(file.name)
+        return original(file, limit)
+    monkeypatch.setattr(guard, "_read_json", read_json)
+    assert guard.peer_roots("current", config_dir, float("inf")) == {str(repo)}
+    assert reads == ["git-guard-cache.json", "11.json", "22.json"]
+    reads.clear()
+    assert guard.peer_roots("current", config_dir, float("inf")) == {str(repo)}
+    assert reads == ["git-guard-cache.json"], "warm hook re-parsed unchanged session rows"
+    reads.clear()
+    (sessions / "22.json").write_text("{}")
+    assert guard.peer_roots("current", config_dir, float("inf")) == set()
+    assert reads == ["git-guard-cache.json", "22.json"]
 
 
 def test_healthcheck_cold_cache_build_is_singleflight(monkeypatch):
