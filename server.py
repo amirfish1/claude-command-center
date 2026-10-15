@@ -14555,6 +14555,7 @@ def _read_archive_response_cache_file():
 
 _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S = 30.0
 _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = 0.0
+_ARCHIVE_RESPONSE_CACHE_SAVE_LOCK = threading.Lock()
 
 
 def _save_archive_response_cache(force=False):
@@ -14562,11 +14563,23 @@ def _save_archive_response_cache(force=False):
     this per merge and the snapshot is ~17MB, so every live session used to
     cost a ~180ms disk write on the request thread. It's a rebuildable cache
     — losing ≤30s of merges to a crash only costs one rebuild."""
+    # A process-local gate avoids duplicate serializations; the persistence
+    # helper also locks across detached refresh workers before merging.
+    if not _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.acquire(blocking=False):
+        return
+    try:
+        _persist_archive_response_cache(force=force)
+    finally:
+        _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.release()
+
+
+def _persist_archive_response_cache(force=False):
+    from ccc_server import archive_snapshot
+
     global _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT
     now = time.time()
     if not force and now - _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT < _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S:
         return
-    _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = now
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         entries = dict(_ARCHIVE_RESPONSE_CACHE)
     referenced_signatures = {
@@ -14593,11 +14606,8 @@ def _save_archive_response_cache(force=False):
         "signature_maps": signature_maps,
     }
     try:
-        _ARCHIVE_RESPONSE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".json.tmp")
-        with tmp.open("w") as f:
-            json.dump(snapshot, f)
-        tmp.replace(_ARCHIVE_RESPONSE_CACHE_FILE)
+        if archive_snapshot.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot):
+            _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = time.time()
     except OSError as e:
         print(f"  [archive-cache] save failed: {e}")
 

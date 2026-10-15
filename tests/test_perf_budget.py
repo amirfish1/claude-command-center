@@ -3019,6 +3019,36 @@ def test_archive_build_under_budget(big_projects):
 # (~12s warm, 60-95s under live GIL contention), so list/search freshness
 # equaled the rebuild duration.
 
+def test_archive_snapshot_publication_reads_only_cached_metadata(tmp_path, monkeypatch):
+    """Persisting a large snapshot must not reopen any transcript or rediscover rows."""
+    cache_file = tmp_path / "archive.json"
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache_file)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT", 0.0)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {
+        "base": {"cached_at": time.time(), "signature": "sig", "conversations": [
+            {"session_id": str(i), "jsonl_path": str(tmp_path / f"{i}.jsonl")}
+            for i in range(300)
+        ]},
+    })
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {"sig": ({}, {})})
+    for name in ("find_all_conversations", "_archive_corpus_signature", "_build_archive_conversations"):
+        monkeypatch.setattr(server, name, lambda *a, **k: pytest.fail("persistence scanned sessions"))
+
+    reads = []
+    original_open = Path.open
+
+    def tracked_open(candidate, *args, **kwargs):
+        reads.append(candidate)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    server._save_archive_response_cache(force=True)
+    assert reads == [cache_file], "publication must read just the previous metadata snapshot"
+    server._save_archive_response_cache()
+    assert reads == [cache_file], "debounced publications must do no disk reads"
+    assert len(json.loads(cache_file.read_text())["entries"]["base"]["conversations"]) == 300
+
+
 def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     big_projects, monkeypatch, tmp_path
 ):
