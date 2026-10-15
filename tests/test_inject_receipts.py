@@ -9,6 +9,10 @@ close on proven landing, stay outstanding otherwise) and the paired
 watcher log lines that turned two previously-silent retry branches audible.
 """
 import importlib
+import json
+from contextlib import nullcontext
+
+import pytest
 
 from ccc_server import inject_receipts as rc
 
@@ -108,3 +112,38 @@ def test_open_receipt_is_wired_into_inject_input_handler():
     server_py = pathlib.Path(__file__).parent.parent.joinpath("server.py").read_text(encoding="utf-8")
     assert "if result.get(\"ok\") and result.get(\"queued\"):" in server_py
     assert "_inject_receipts.open_receipt(" in server_py
+
+
+@pytest.mark.parametrize("lock_error", [False, True])
+@pytest.mark.parametrize("newer_receipt", [False, True])
+def test_discarded_auto_continue_settles_only_its_receipt(
+    monkeypatch, tmp_path, lock_error, newer_receipt,
+):
+    server = importlib.import_module("server")
+    monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_codex_queue_pump_lock", lambda sid: nullcontext())
+
+    def barrier():
+        if lock_error:
+            raise OSError("barrier unavailable")
+        return nullcontext()
+
+    monkeypatch.setattr(server, "_auto_resume_exclusive_lock", barrier)
+    monkeypatch.setattr(server, "_is_auto_resume_opted_in", lambda sid: False)
+    completed = []
+    monkeypatch.setattr(server, "_complete_pending_input_handoff", completed.append)
+    rc.open_receipt("s1", "auto", "continue", now=NOW)
+    if newer_receipt:
+        rc.open_receipt("s1", "user", "please finish", now=NOW + 1)
+
+    assert server._requeue_terminal_input_front("s1", "continue") is False
+
+    assert completed == ["continue"]
+    receipt = rc.outstanding("s1", now=NOW + 1000)
+    if newer_receipt:
+        assert receipt["inject_id"] == "user"
+    else:
+        assert receipt is None
+        state = json.loads((tmp_path / "inject-receipts.json").read_text())
+        assert state["_dropped"][0]["inject_id"] == "auto"
+        assert "_landed" not in state

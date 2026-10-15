@@ -5234,10 +5234,12 @@ def _requeue_terminal_input_front(sid, text):
             try:
                 with _core._auto_resume_exclusive_lock():
                     if not _core._is_auto_resume_opted_in(sid):
+                        _inject_receipts.close_receipt(sid, text=text, outcome="dropped")
                         _core._complete_pending_input_handoff(text)
                         return False
                     return _requeue_terminal_input_front_unlocked(sid, text)
             except OSError:
+                _inject_receipts.close_receipt(sid, text=text, outcome="dropped")
                 _core._complete_pending_input_handoff(text)
                 return False
         return _requeue_terminal_input_front_unlocked(sid, text)
