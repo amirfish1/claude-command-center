@@ -5999,6 +5999,18 @@
       });
       const res = await fetch('/api/session-status?' + params.toString(), { signal: convScopeSignal() });
       const data = await res.json();
+      // A 'spawning-<pid>' placeholder has no registry row yet, so the server
+      // reports it not-live even though its fire-and-watch child (e.g. an
+      // Antigravity -p run) is running. Report it as a live headless process
+      // until the real row replaces the placeholder.
+      const _spawnPh = String(_fetchedFor).indexOf('spawning-') === 0
+        ? (conversationsData || []).find(x => x && x.id === _fetchedFor && x.pending_spawn && !x.spawn_failed)
+        : null;
+      if (_spawnPh && !data.live && typeof _spawnPh.spawn_pid === 'number') {
+        data.live = true;
+        data.headless_present = true;
+        data.headless_pid = _spawnPh.spawn_pid;
+      }
       liveStatus = {
         forSessionId: _fetchedFor,
         live: !!data.live,

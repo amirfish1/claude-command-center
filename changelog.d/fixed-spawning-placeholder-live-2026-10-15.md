@@ -1,0 +1,1 @@
+- A just-spawned Antigravity (and other fire-and-watch) session now shows as started and live instead of "not-live, no process" while its placeholder row awaits the real session.
