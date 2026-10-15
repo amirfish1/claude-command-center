@@ -12165,7 +12165,8 @@ def _reap_orphaned_automation_browsers():
 def system_process_kill(pids, force=False):
     my_pid = os.getpid()
     parent_pid = os.getppid()
-    sig = signal.SIGKILL if force else signal.SIGTERM
+    # Windows has no SIGKILL; os.kill(..., SIGTERM) already terminates it.
+    sig = getattr(signal, "SIGKILL", signal.SIGTERM) if force else signal.SIGTERM
     sig_name = "SIGKILL" if force else "SIGTERM"
     killed, blocked, errors = [], [], {}
     for p in pids:
