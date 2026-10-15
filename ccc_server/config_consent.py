@@ -160,7 +160,7 @@ def _find_wt():
     found = shutil.which("wt")
     # Windows Terminal's app alias (...\WindowsApps\wt.exe) shadows
     # WatchTower's `wt` on PATH; running it opens a terminal tab instead.
-    if found and os.name == "nt" and "\\windowsapps\\" in found.lower():
+    if found and os.name == "nt" and "/windowsapps/" in found.replace("\\", "/").lower():
         found = None
     if found:
         return found

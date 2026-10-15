@@ -12165,7 +12165,8 @@ def _reap_orphaned_automation_browsers():
 def system_process_kill(pids, force=False):
     my_pid = os.getpid()
     parent_pid = os.getppid()
-    sig = signal.SIGKILL if force else signal.SIGTERM
+    # Windows has no SIGKILL; os.kill(..., SIGTERM) already terminates it.
+    sig = getattr(signal, "SIGKILL", signal.SIGTERM) if force else signal.SIGTERM
     sig_name = "SIGKILL" if force else "SIGTERM"
     killed, blocked, errors = [], [], {}
     for p in pids:
@@ -14555,6 +14556,7 @@ def _read_archive_response_cache_file():
 
 _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S = 30.0
 _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = 0.0
+_ARCHIVE_RESPONSE_CACHE_SAVE_LOCK = threading.Lock()
 
 
 def _save_archive_response_cache(force=False):
@@ -14562,11 +14564,23 @@ def _save_archive_response_cache(force=False):
     this per merge and the snapshot is ~17MB, so every live session used to
     cost a ~180ms disk write on the request thread. It's a rebuildable cache
     — losing ≤30s of merges to a crash only costs one rebuild."""
+    # A process-local gate avoids duplicate serializations; the persistence
+    # helper also locks across detached refresh workers before merging.
+    if not _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.acquire(blocking=False):
+        return
+    try:
+        _persist_archive_response_cache(force=force)
+    finally:
+        _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.release()
+
+
+def _persist_archive_response_cache(force=False):
+    from ccc_server import archive_snapshot
+
     global _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT
     now = time.time()
     if not force and now - _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT < _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S:
         return
-    _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = now
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         entries = dict(_ARCHIVE_RESPONSE_CACHE)
     referenced_signatures = {
@@ -14593,11 +14607,8 @@ def _save_archive_response_cache(force=False):
         "signature_maps": signature_maps,
     }
     try:
-        _ARCHIVE_RESPONSE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".json.tmp")
-        with tmp.open("w") as f:
-            json.dump(snapshot, f)
-        tmp.replace(_ARCHIVE_RESPONSE_CACHE_FILE)
+        if archive_snapshot.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot):
+            _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = time.time()
     except OSError as e:
         print(f"  [archive-cache] save failed: {e}")
 
@@ -26694,6 +26705,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if path.startswith("/api/secrets/"):
+            from ccc_server import credential_broker
+            credential_broker.handle(self, self.command)
+            return
+
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
@@ -30046,9 +30062,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self.send_json({"found": True, "error": str(exc)}, 502)
         elif path == "/api/memory/decisions":
-            # Heuristic decision-shaped filter over ship_graph.search_sessions()
-            # — see ccc_server/memory_api.py. Powers `ccc decisions`. Stand-in
-            # backend for MEMO-FIX-7's dedicated decision store.
+            # Stored user quotes with provenance, then session-snippet fallback.
+            # Powers `ccc decisions` and the Ask agent's read-only memory tool.
             from ccc_server.memory_api import decisions as _memory_decisions
             qs = urllib.parse.parse_qs(parsed.query)
             topic = (qs.get("topic", [""])[0] or "").strip()
@@ -30060,13 +30075,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     limit = max(1, min(int(limit_raw), 50))
                 except ValueError:
                     limit = 10
-                self.send_json(_memory_decisions(topic, limit=limit))
+                repo = (qs.get("repo", [""])[0] or "").strip() or None
+                self.send_json(_memory_decisions(topic, limit=limit, repo=repo))
         elif path == "/api/memory/decisions/extracted":
             # ccc_server/decision_extraction.py -- explicit user rulings
-            # found by the nightly scan (distinct from the topic-search
-            # stand-in above at /api/memory/decisions; this is MEMO-FIX-7's
-            # dedicated decision store, the plain function contract a
-            # decisions UI (MEMO-FIX-5, not yet landed) can call).
+            # found by the nightly scan, listed by recency. Topic search
+            # above uses the same store with a session-snippet fallback.
             qs = urllib.parse.parse_qs(parsed.query)
             repo = (qs.get("repo", [""])[0] or "").strip() or None
             limit_raw = (qs.get("limit", ["50"])[0] or "50").strip()
@@ -30970,6 +30984,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
             return
+        if path.startswith("/api/secrets/"):
+            from ccc_server import credential_broker
+            credential_broker.handle(self, self.command)
+            return
+
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
@@ -33435,6 +33454,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
+                _ux_fixes_cache_ack(item)
                 self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -40042,7 +40062,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 _ms = (time.time() - _t0) * 1000.0
                 _p = getattr(self, "path", "?").split("?", 1)[0]
-                if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events") and _ms >= SLOW_REQ_MS:
+                if (not _p.startswith("/api/secrets/")
+                        and _p not in ("/api/events", "/api/sessions/events", "/api/queue/events")
+                        and _ms >= SLOW_REQ_MS):
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)
@@ -40050,6 +40072,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 pass
 
     def log_message(self, format, *args):
+        # Never log credential endpoint URLs, including malformed callers
+        # that accidentally put sensitive data in a path or query string.
+        if getattr(self, "path", "").startswith("/api/secrets/"):
+            return
         # Quieter logging — only errors
         if args and "404" in str(args[0]):
             super().log_message(format, *args)

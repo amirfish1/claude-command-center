@@ -27,6 +27,7 @@
 | `CCC_ORG_PATTERNS` | Empty | Issue tags in `Label1:pat1a\|pat1b;Label2:pat2` form; the first match wins |
 | `VERCEL_PROJECT` | Unset | Vercel project; leave empty to disable deploy polling |
 | `CCC_TELEMETRY_DISABLED` | Unset | `1` disables the anonymous daily open beacon at process level; see [Telemetry](telemetry.md) |
+| `CCC_SHARED_CLONE` | Auto-detect | With the optional [shared-clone Git guard](shared-clone-guard.md) installed, `1` protects a known shared checkout regardless of branch or live-session discovery |
 
 Network settings have no authentication safety net. Read
 [SECURITY.md](../SECURITY.md) before exposing the dashboard; every trusted

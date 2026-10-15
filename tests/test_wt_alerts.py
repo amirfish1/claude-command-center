@@ -11,6 +11,7 @@ import pathlib
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -28,11 +29,13 @@ class _Fixture(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.home = pathlib.Path(self._tmp.name) / "wt"
         self.home.mkdir()
+        self.items_path = self.home / "wt_items_snapshot.json"
         self.acks = pathlib.Path(self._tmp.name) / "state" / "wt-alert-acks.json"
         wt_alerts._log_cache["key"] = None
         wt_alerts._log_cache["alerts"] = []
         wt_alerts._outbox_cache["key"] = None
         wt_alerts._outbox_cache["alerts"] = []
+        wt_alerts._ticket_snapshot_cache.update(key=None, items={})
         wt_alerts._service_down_since = None
 
     def tearDown(self):
@@ -51,6 +54,7 @@ class _Fixture(unittest.TestCase):
     def collect(self, **kw):
         kw.setdefault("wt_home", self.home)
         kw.setdefault("acks_path", self.acks)
+        kw.setdefault("items_path", self.items_path)
         kw.setdefault("service_status", {"ok": True, "installed": True, "state": "online"})
         kw.setdefault("now", NOW)
         return wt_alerts.collect_wt_alerts(**kw)
@@ -146,8 +150,7 @@ class TestActivityErrorAlerts(_Fixture):
 
 
 class TestDeadNotifyAlerts(_Fixture):
-    """A notify=True message that dies in the outbox means a human was never
-    told their ticket needs input — it must pin to the strip until acked."""
+    """Undelivered requests stay visible until acked or superseded by state."""
 
     def _dead_notify(self, ref, verb="needs input", ts=None, msg_id="msg-dead1",
                      status="dead", notify=True, text=None):
@@ -175,7 +178,7 @@ class TestDeadNotifyAlerts(_Fixture):
         self.assertEqual(a["id"], "dead-notify:BECKY-DESIGN-1574")
         self.assertEqual(a["queue"], "BECKY-DESIGN")
         self.assertEqual(a["title"], "Needs your input: BECKY-DESIGN-1574")
-        self.assertEqual(a["detail"], "the session that filed it is gone")
+        self.assertEqual(a["detail"], "ticket notification could not be delivered")
 
     def test_dead_notice_does_not_fade_with_the_error_freshness_window(self):
         # The ERROR-line window is 15min; a dead notice is a one-shot fact and
@@ -202,6 +205,114 @@ class TestDeadNotifyAlerts(_Fixture):
         self._write_outbox([self._dead_notify("CCC-7", verb="closed")])
         a = self.collect()["alerts"][0]
         self.assertEqual(a["title"], "Notice never delivered: CCC-7")
+        self.assertEqual(a["severity"], "warning")
+
+    def _write_ticket(self, status, needs_input, ts=NOW, ref="Q-1"):
+        self.items_path.write_text(json.dumps({"items": [{
+            "ref": ref, "status": status, "needs_input": needs_input,
+            "updated_at": wt_alerts._iso(ts),
+        }]}))
+
+    def test_resolved_question_clears_without_changing_outbox(self):
+        self._write_outbox([self._dead_notify("Q-1")])
+        self._write_ticket("in_progress", True)
+        self.assertEqual(self.collect()["total"], 1)
+        outbox_key = wt_alerts._outbox_cache["key"]
+        # Real transitions update the ticket without rewriting dead messages.
+        for status in ("open", "in_progress", "in_review", "closed"):
+            with self.subTest(status=status):
+                self._write_ticket(status, False)
+                self.assertEqual(self.collect()["alerts"], [])
+                self.assertEqual(wt_alerts._outbox_cache["key"], outbox_key)
+
+    def test_closed_ticket_wins_over_leftover_needs_input_flag(self):
+        self._write_outbox([self._dead_notify("Q-1")])
+        self._write_ticket("closed", True)
+        self.assertEqual(self.collect()["alerts"], [])
+
+    def test_late_retry_does_not_make_an_answered_question_current(self):
+        notice = self._dead_notify("Q-1", ts=NOW - 3600)
+        notice["next_attempt_at"] = wt_alerts._iso(NOW + 100)
+        self._write_outbox([notice])
+        self._write_ticket("in_progress", False, ts=NOW - 60)
+        self.assertEqual(self.collect()["alerts"], [])
+
+    def test_older_closed_snapshot_cannot_hide_reopened_question(self):
+        self._write_outbox([self._dead_notify("Q-1", ts=NOW - 60)])
+        self._write_ticket("closed", False, ts=NOW - 120)
+        self.assertEqual(self.collect()["total"], 1)
+
+    def test_unknown_or_unreadable_ticket_state_keeps_request_visible(self):
+        self._write_outbox([self._dead_notify("Q-1")])
+        for data in ("{broken", "[]", '{"items": [null, {}]}',
+                     '{"items": [{"ref": "Q-1", "status": "open"}]}'):
+            with self.subTest(data=data):
+                self.items_path.write_text(data)
+                self.assertEqual(self.collect()["total"], 1)
+        self._write_ticket("closed", False, ref="Q-2")
+        self.assertEqual(self.collect()["total"], 1)
+
+    def test_newer_pending_or_delivered_notice_supersedes_dead_question(self):
+        for status in ("pending", "delivered"):
+            with self.subTest(status=status):
+                self._write_outbox([
+                    self._dead_notify("Q-1", ts=NOW - 300),
+                    self._dead_notify("Q-1", "closed", ts=NOW - 30,
+                                      status=status, msg_id="msg-new"),
+                ])
+                self.assertEqual(self.collect()["alerts"], [])
+
+    def test_retry_time_does_not_override_newer_event(self):
+        old = self._dead_notify("Q-1", ts=NOW - 300)
+        old["next_attempt_at"] = wt_alerts._iso(NOW + 100)
+        self._write_outbox([
+            old,
+            self._dead_notify("Q-1", "closed", ts=NOW - 30, msg_id="msg-new"),
+        ])
+        alert = self.collect()["alerts"][0]
+        self.assertEqual(alert["title"], "Notice never delivered: Q-1")
+        self.assertEqual(alert["count"], 1)
+        self.assertFalse(any(k.startswith("_") for k in alert))
+
+    def test_new_block_after_close_surfaces_again(self):
+        self._write_ticket("closed", False, ts=NOW - 120)
+        self._write_outbox([
+            self._dead_notify("Q-1", "closed", ts=NOW - 120),
+            self._dead_notify("Q-1", ts=NOW - 30, msg_id="msg-new"),
+        ])
+        alert = self.collect()["alerts"][0]
+        self.assertEqual(alert["title"], "Needs your input: Q-1")
+        self.assertEqual(alert["count"], 1)
+
+    def test_unrelated_or_cancelled_messages_do_not_supersede(self):
+        self._write_outbox([
+            self._dead_notify("Q-1", ts=NOW - 300),
+            self._dead_notify("Q-2", "closed", ts=NOW - 30, status="delivered"),
+            self._dead_notify("Q-1", "closed", ts=NOW - 20, status="cancelled"),
+            self._dead_notify("Q-1", "closed", ts=NOW - 10, notify=False),
+        ])
+        self.assertEqual(self.collect()["alerts"][0]["title"], "Needs your input: Q-1")
+
+    def test_same_event_to_multiple_targets_is_counted(self):
+        other = self._dead_notify("Q-1", msg_id="msg-other")
+        other["to"] = "another-session"
+        self._write_outbox([self._dead_notify("Q-1"), other])
+        self.assertEqual(self.collect()["alerts"][0]["count"], 2)
+
+    def test_warm_reads_reuse_file_parses_but_update_age(self):
+        self._write_outbox([self._dead_notify("Q-1")])
+        self._write_ticket("in_progress", True)
+        self.collect()
+        with patch.object(wt_alerts.json, "load", side_effect=AssertionError("reparsed")):
+            alert = self.collect(now=NOW + 30)["alerts"][0]
+        self.assertEqual(alert["age_seconds"], 90)
+
+    def test_snapshot_not_read_without_dead_notice_candidates(self):
+        self._write_outbox([self._dead_notify("Q-1", status="pending")])
+        with patch.object(wt_alerts, "_alert_ticket_snapshot",
+                          side_effect=AssertionError("unnecessary snapshot read")):
+            self.assertEqual(self.collect()["alerts"], [])
+            self.assertEqual(self.collect()["alerts"], [])
 
     def test_ack_hides_until_a_newer_death_for_the_same_ref(self):
         self._write_outbox([self._dead_notify("CCC-9", ts=NOW - 100)])

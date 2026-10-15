@@ -275,6 +275,9 @@ secret storage, and safe CLI use.
 
 [Store and use non-provider secrets](docs/byok-and-vault.md#vault-any-other-secret).
 
+[Request credentials through the dashboard](docs/credential-broker.md) when an
+agent needs a password, token, passphrase or one-time code.
+
 ## Features
 
 [Full feature guide](docs/features.md) · [Free models](docs/free-models.md) ·
@@ -313,6 +316,8 @@ secret storage, and safe CLI use.
 ## Configuration
 
 [Environment variables, defaults, and persistent settings](docs/configuration.md).
+
+[Optional shared-clone Git guard for Claude Code](docs/shared-clone-guard.md).
 
 ## Python stack diagnostics
 

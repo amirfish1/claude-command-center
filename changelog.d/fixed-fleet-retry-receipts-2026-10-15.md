@@ -1,0 +1,1 @@
+- Fleet plan retries now replay durable step results across node restarts without repeating pushes or session nudges. Interrupted steps with an unknown outcome stop safely for review.

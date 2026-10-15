@@ -118,8 +118,24 @@ deletion stays a separate action). Deselect anything, confirm once. The job
 persists under `~/.claude/command-center/fleet-jobs/` with step logs;
 every step revalidates preconditions immediately before mutating, so stale
 plans stop safely, and a CCC restart can resume the job without repeating
-completed external mutations (each executor checks whether the end state
-already holds).
+completed external mutations. Each confirmed step has a stable identity scoped
+to its coordinator, plan, and action. The owning node reserves a receipt before
+dispatch and saves the outcome under `fleet-jobs/receipts/`. A retry returns
+that outcome with `replayed: true`, even after both nodes restart or the generic
+peer request cache is evicted. These receipts also protect local plan steps.
+
+If a step is still running, or execution stopped before the outcome could be
+saved, a retry returns `execution_uncertain` and does not dispatch again.
+Inspect the target before creating and confirming a new plan. Known failed
+outcomes also replay; use a new plan after resolving their blockers. Changing
+the intent of an existing step returns `idempotency_conflict`. Receipts are
+retained without automatic expiry so old plans cannot repeat effects after a
+cache timeout. Standalone `/api/fleet/step` calls without plan identity retain
+their existing behavior; the executor still checks Git/PR end state before
+mutating. Restart all participating CCC dashboard servers after upgrading to
+enable receipt protection on every node.
+Protection starts when an upgraded owner first dispatches a step; it cannot
+reconstruct outcomes of steps executed before the upgrade.
 
 ## Memory across machines
 

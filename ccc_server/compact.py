@@ -120,6 +120,20 @@ def _compact_via_hidden_pty(session_id, cwd):
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "via": "hidden-pty", "error": "missing session_id"}
+    # Check before retiring a live headless session: native Windows has no
+    # POSIX pty/termios, and a failed import must leave that session intact.
+    unavailable = {"ok": False, "via": "hidden-pty",
+                   "error": "Hidden terminal compaction is unavailable on this platform."}
+    if sys.platform == "win32":
+        return unavailable
+    try:
+        import pty
+        import select as _select
+        import fcntl as _fcntl
+        import termios as _termios
+        import struct as _struct
+    except ImportError:
+        return unavailable
     claude_bin = _core._resolve_claude_bin()
     if not claude_bin.get("available"):
         return {
@@ -164,12 +178,6 @@ def _compact_via_hidden_pty(session_id, cwd):
             # External headless we don't own — leave it for the visible
             # fallback, which warns instead of silently killing it.
             return {"ok": False, "via": "hidden-pty", "error": "external headless owns this session"}
-
-    import pty
-    import select as _select
-    import fcntl as _fcntl
-    import termios as _termios
-    import struct as _struct
 
     jsonl = _core._resolve_conversation_path(sid)
     n0 = _tail_count(jsonl, b'"compact_boundary"')

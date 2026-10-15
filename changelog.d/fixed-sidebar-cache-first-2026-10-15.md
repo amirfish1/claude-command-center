@@ -1,0 +1,1 @@
+- Paint the conversation sidebar from a bounded, day-old-or-newer local cache while refreshing the lightweight list endpoint. Cache only display and lifecycle metadata; fresh server results replace the preview, including when history is empty.

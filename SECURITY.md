@@ -37,6 +37,29 @@ If you expose the port to the network, the LAN, or the internet, you are giving 
 - **No encryption at rest.** State files (`~/.claude/command-center/*.json`) are plaintext.
 - **No rate limiting.** A misbehaving local script can spam the API.
 
+## Credential requests
+
+The [credential broker](docs/credential-broker.md) lets local programs ask for a
+value through a masked dashboard prompt. Broker values and retrieval tokens are
+excluded from request logs, transcripts, activity feeds and browser storage.
+Responses bypass generic event hooks and use `Cache-Control: no-store`. Request
+metadata (name, kind, reason and reported session ID) is public to dashboard
+users and must not contain credentials. Submission inherits the Origin and PIN
+gates; remotely submitted values additionally require an HTTPS Origin. Creation,
+retrieval, cancellation and deletion require a direct loopback program without
+Origin/proxy headers. A random per-request token is required to retrieve or
+cancel; retrieval is atomic and one-shot. This remains a single-OS-user tool,
+not a sandbox between agents. A consumer can still leak a value it receives.
+
+Ephemeral values expire in memory after at most 15 minutes. Explicitly remembered
+values use owner-only plaintext files (`0600`) under the owner-only `secrets/`
+directory (`0700`), separate from Vault/BYOK. Existing symlinks, foreign owners
+and permissive modes are rejected. This portable fallback provides no encryption
+at rest; other programs running as the same OS user and administrators can read
+it. One-time codes cannot be remembered. `ccc secret forget NAME` deletes all
+saved kinds for that alias and revokes outstanding deliveries. No askpass hooks,
+remote listener, keychain integration or cloud/federation forwarding is installed.
+
 ## Logs may contain secrets
 
 Spawn logs under `<repo>/.claude/logs/spawn-*.log` capture the full prompt and Claude output. If Claude reads a file containing a token or credential, it ends up in that log. The `.gitignore` excludes `.claude/logs/`, but the files are local and readable by other users on the same machine. `chmod 700` the logs directory if that's a concern.

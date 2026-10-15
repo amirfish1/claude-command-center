@@ -35,6 +35,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -476,6 +477,16 @@ TOOLS = [
                     "(dry run; nothing filed). Call for 'daily brief', 'what happened overnight', "
                     "'what's stuck', or before filing a brief proposal.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "decisions",
+     "description": "What did we decide about a topic? Searches stored user decision quotes, "
+                    "with session, date, transcript line and provenance. If none match, returns "
+                    "unverified session snippets. Quotes are candidate evidence, not proof of "
+                    "current policy; report conflicting or newer rulings. Read-only; no scan or model call.",
+     "inputSchema": {"type": "object", "properties": {
+         "topic": {"type": "string"},
+         "repo": {"type": "string", "description": "Exact repository name (optional)."},
+         "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20}},
+         "required": ["topic"]}},
     {"name": "propose_spawn_session",
      "description": "PROPOSE starting a new agent session (also how git work like a push gets done). "
                     "Does not start anything: the user must click Confirm in CCC. Returns an action_id to cite as [[action:confirm:ID]].",
@@ -569,6 +580,14 @@ class CccState:
             return tool_daily_checkin(include_closed=bool(args.get("include_closed")))
         if name == "daily_brief":
             return tool_daily_brief()
+        if name == "decisions":
+            topic = str(args.get("topic") or "").strip()
+            if not topic:
+                raise ValueError("topic is required")
+            query = {"topic": topic, "limit": max(1, min(int(args.get("limit", 5)), 20))}
+            if args.get("repo"):
+                query["repo"] = str(args["repo"]).strip()
+            return self.get("/api/memory/decisions?" + urllib.parse.urlencode(query))
         if name in PROPOSE_TOOLS:
             # Proposal only: CCC stores it and keeps the confirm token to itself.
             params = {k: v for k, v in args.items() if k != "reason"}
@@ -661,11 +680,12 @@ Tools:
 - claude-index: search_sessions (find which sessions are about X), search (specific facts/strings), session_info (confirm a session, see how it ended), show_message, recent_sessions.
 - ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail, inject_diagnostics (why a session won't accept a message).
 - ccc-state (brief): daily_brief (the proactive morning brief: changes, stuck items, numbered proposed tickets).
+- ccc-state (memory): decisions (stored user decision quotes with provenance and source citations; unverified snippets only when no quotes match). Available even without claude-index.
 - ccc-state (actions, propose only): propose_spawn_session, propose_inject, propose_wt_add, propose_wt_comment. These never act; the user confirms in CCC.
 
 Method:
-1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages, best match first, with currently-live sessions already excluded (a session still open right now cannot be where past work "already happened" — it's likely the very session asking). If they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
-2. Otherwise call search_sessions once (rephrase with 2-4 topic words), then at most one or two follow-ups. Never loop.
+1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages, best match first, with currently-live sessions already excluded (a session still open right now cannot be where past work "already happened" — it's likely the very session asking). Except for decision questions (step 2), if they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
+2. For "what did we decide" call decisions once with 2-4 topic words, even if CANDIDATES mention that topic. Cite the returned session and date, distinguish extracted user quotes from unverified snippets, and surface conflicting rulings instead of inventing a current policy. Otherwise call search_sessions once, then at most one or two follow-ups. Never loop.
 3. Candidates marked machine=NAME were found on another of the user's CCC machines (e.g. the VM), not this one. Cite them the same way and say which machine the work happened on.
 4. Trust the candidate order: it already ranks by relevance with only a small recency tie-break, and demotes planning-only/self-referential sessions. Don't override it just because a lower-ranked candidate is more recent.
 5. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
@@ -692,7 +712,7 @@ Daily check-in: ccc-state also has daily_checkin (the user's standing agenda). F
 
 _NO_INDEX_PROMPT = """
 
-claude-index is not installed on this machine, so the search_sessions/search/session_info tools do not exist. CANDIDATES come from CCC's built-in keyword search (titles and short snippets only) and you cannot search further. Answer from them when they fit; otherwise say what was searched and that nothing matched, and mention once that installing claude-index enables deeper history search. Never invent past sessions."""
+claude-index is not installed on this machine, so the search_sessions/search/session_info tools do not exist. CANDIDATES come from CCC's built-in keyword search (titles and short snippets only). The ccc-state decisions tool still searches stored user quotes: use it for decision questions. For other history questions, answer from candidates when they fit; otherwise say what was searched and that nothing matched. Never invent past sessions."""
 
 
 def system_prompt(index_bin: str | None = INDEX_BIN) -> str:
@@ -1224,7 +1244,7 @@ def source_row(s: dict, live_ids: set | None = None) -> dict:
     row = {
         "id": sid,
         "title": title or (sid or "")[:8],
-        "repo": Path(str(s.get("cwd") or "")).name or None,
+        "repo": Path(str(s.get("cwd") or "")).name or s.get("repo") or None,
         "status": "live" if live_ids and sid in live_ids else s.get("status") or "idle",
         "ts_unix": _ts_unix(s.get("last_ts")) or s.get("ts_unix"),
         "cwd": s.get("cwd"),
@@ -1246,6 +1266,10 @@ def assemble_sources(answer: str, candidates: list[dict], db_path: str = INDEX_D
             cited.append(sid)
     missing = [sid for sid in cited if sid not in by_id]
     by_id.update(lookup_sessions(missing, db_path))
+    missing = [sid for sid in missing if sid not in by_id]
+    if missing:
+        from ccc_server.decision_extraction import lookup_decision_sessions
+        by_id.update(lookup_decision_sessions(missing))
     valid = [sid for sid in cited if sid in by_id]
     sources = [dict(source_row(by_id[sid], live_ids), cited=True) for sid in valid]
     sources += [dict(source_row(c, live_ids), cited=False) for c in candidates if c["session_id"] not in valid]

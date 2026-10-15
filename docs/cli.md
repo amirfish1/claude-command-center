@@ -50,4 +50,6 @@ model id; it lists the live catalog and each engine's reasoning-effort ladder.
 whether a CLI binary resolves. It does not launch an agent or spend tokens.
 
 For provider keys and other secrets, see [BYOK and Vault](byok-and-vault.md).
+For masked dashboard prompts and one-shot delivery, see
+[`ccc secret request` and `ccc secret forget`](credential-broker.md).
 For local memory and recent-work tools, see [the release history](../CHANGELOG.md).

@@ -7178,7 +7178,10 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
     )
     if terminate and pid is not None:
         try:
-            os.killpg(int(pid), signal.SIGTERM)
+            if sys.platform == "win32":
+                os.kill(int(pid), signal.SIGTERM)
+            else:
+                os.killpg(int(pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
         except (PermissionError, OSError, ValueError):
@@ -7262,6 +7265,10 @@ def _poll_spawn_entry(entry):
 
 
 def _set_fd_nonblocking(fd):
+    # The Windows fcntl shim is a no-op and O_NONBLOCK is unavailable.
+    # Refuse this POSIX FIFO transport instead of risking a blocking write.
+    if sys.platform == "win32":
+        return False
     try:
         flags = fcntl.fcntl(fd, fcntl.F_GETFL)
         if not (flags & os.O_NONBLOCK):

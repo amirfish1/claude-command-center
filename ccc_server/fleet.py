@@ -649,7 +649,16 @@ def _federation_execute_route(envelope, peer=None):
                 "detail": "hop limit exhausted"}, 400
     method, api_path, mutating = spec
     req_id = str(envelope.get("req_id") or "")
-    if mutating and req_id:
+    # Confirmed Fleet steps have permanent executor receipts. Do not cache a
+    # transient loopback timeout or an in-progress response over that receipt:
+    # a later retry must be able to recover the actual completed outcome.
+    from ccc_server import fleet_receipts
+    planned_step = (
+        action == "fleet_step" and isinstance(args.get("action"), dict)
+        and fleet_receipts.request_id(args["action"]) is not None
+    )
+    dedupe = mutating and req_id and not planned_step
+    if dedupe:
         prior = federation.check_and_record_request(req_id)
         if prior is not None:
             if "result" in prior:
@@ -743,12 +752,12 @@ def _federation_execute_route(envelope, peer=None):
         result = _federation_self_api(method, api_path, body=args, timeout=timeout)
     if action in _MEMORY_ROUTE_ACTIONS:
         result = _federation_cap_memory_response(result)
-    if mutating and req_id:
+    if dedupe:
         federation.record_request_result(req_id, result)
     return {"ok": True, "result": result}, 200
 
 
-def _federation_proxy_session_action(owner_node, action, args, timeout=60.0):
+def _federation_proxy_session_action(owner_node, action, args, timeout=60.0, req_id=None):
     """Proxy an inject/ask/spawn to the CCC that owns the session. Returns the
     remote action's own result dict (typed errors on transport failure)."""
     peer = federation.get_peer(owner_node)
@@ -757,6 +766,8 @@ def _federation_proxy_session_action(owner_node, action, args, timeout=60.0):
                 "detail": f"session owner {owner_node[:13]}… is not a paired peer "
                           "of this node"}
     envelope = federation.make_route_envelope(action, args)
+    if req_id:
+        envelope["req_id"] = req_id
     try:
         routed = federation.PeerClient(peer).request(
             "POST", "/api/federation/v1/route", envelope, timeout=timeout)
