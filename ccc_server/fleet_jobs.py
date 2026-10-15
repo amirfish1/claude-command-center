@@ -25,6 +25,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import fleet_receipts
 from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 
 # ---------------------------------------------------------------------------
@@ -107,15 +108,21 @@ def _fleet_revalidate_and_execute(action):
     """Execute ONE action on its owning node, revalidating first. Cross-node
     steps route through the idempotent peer envelope."""
     me = federation.node_id()
+    action = {**action, "coordinator_node": action.get("coordinator_node") or me}
     if action.get("node_id") and action["node_id"] != me:
-        args = {"action": action,
-                "req_id": f"{action.get('plan_id', '')}:{action['id']}"}
         return _core._federation_proxy_session_action(
-            action["node_id"], "fleet_step", args, timeout=180.0)
+            action["node_id"], "fleet_step", {"action": action}, timeout=180.0,
+            req_id=fleet_receipts.request_id(action))
     return _fleet_execute_local_step(action)
 
 
 def _fleet_execute_local_step(action):
+    """Apply a confirmed step once on its owning node, even after a restart."""
+    return fleet_receipts.execute(
+        FLEET_JOBS_DIR / "receipts", action, _fleet_apply_local_step)
+
+
+def _fleet_apply_local_step(action):
     """The single-step executor. Precondition → end-state-already? → mutate."""
     kind = action.get("kind")
     ident = action.get("repo_identity") or ""
@@ -296,6 +303,7 @@ def _fleet_run_job(plan_id):
         if action.get("status") not in ("selected", "running"):
             continue
         action["plan_id"] = plan_id
+        action["coordinator_node"] = job.get("created_by_node") or federation.node_id()
         action["status"] = "running"
         _fleet_job_log(job, action, f"running {action['kind']} on "
                        f"{action.get('node_name') or 'this node'}: "
