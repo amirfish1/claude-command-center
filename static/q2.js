@@ -259,9 +259,19 @@
     return stage.indexOf('review:') === 0 ? (stage.slice(7).trim() || 'submitter') : 'submitter';
   }
 
+  function resolutionAcked(res, field, index) {
+    var acks = res && res[field + '_ack'];
+    return !!(acks && typeof acks === 'object' && !Array.isArray(acks)
+      && Object.prototype.hasOwnProperty.call(acks, String(index)));
+  }
+
   function unresolvedNotes(it) {
-    return (it && it.resolution && Array.isArray(it.resolution.unresolved))
-      ? it.resolution.unresolved.filter(Boolean) : [];
+    var res = it && it.resolution;
+    if (!res || !Array.isArray(res.unresolved)) return [];
+    // Filter against the original indexes: blank entries must not shift acks.
+    return res.unresolved.filter(function (value, index) {
+      return value && !resolutionAcked(res, 'unresolved', index);
+    });
   }
 
   // Closed-list admission for the default "Recent closed" view: rows in the
@@ -2567,19 +2577,35 @@
   // A close event carries the worker's own account of what it did. Flattening
   // that to one blob loses the distinction that matters most: what was fixed
   // versus what was explicitly NOT.
-  function resolutionHtml(resolution) {
+  function resolutionHtml(resolution, ref) {
     var res = (resolution && typeof resolution === 'object') ? resolution : {};
     var rows = [
       ['Summary', res.summary, ''],
-      ['Caveat', res.caveats || res.caveat, 'is-caveat'],
-      ['Follow-up', res.follow_ups || res.follow_up, ''],
-      ['Unresolved', res.unresolved, 'is-unresolved'],
+      ['Caveat', res.caveats || res.caveat, 'is-caveat', 'caveats'],
+      ['Follow-up', res.follow_ups || res.follow_up, '', 'follow_ups'],
+      ['Unresolved', res.unresolved, 'is-unresolved', 'unresolved'],
     ].filter(function (r) { return resList(r[1]); });
     if (!rows.length) return '';
     return '<div class="q2-res">' + rows.map(function (r) {
+      var content = resList(r[1]);
+      if (r[3] && Array.isArray(res[r[3]])) {
+        content = res[r[3]].map(function (value, index) {
+          if (!value) return '';
+          var acked = resolutionAcked(res, r[3], index);
+          var label = acked ? 'Undo acknowledgment' : 'Acknowledge';
+          return '<div class="q2-res-entry' + (acked ? ' is-acked' : '') + '">'
+            + '<span class="q2-res-text">' + esc(String(value)) + '</span>'
+            + (ref ? '<button type="button" class="q2-linkbtn q2-res-ack"'
+              + ' data-q2-ack="' + esc(ref) + '" data-q2-ack-field="' + r[3] + '"'
+              + ' data-q2-ack-index="' + index + '" data-q2-ack-undo="' + (acked ? '1' : '0') + '"'
+              + ' aria-label="' + label + ' ' + r[0].toLowerCase() + ' ' + (index + 1) + '"'
+              + ' title="' + label + ' (keeps the original note)">'
+              + (acked ? '↺ Acked' : '✓ Acknowledge') + '</button>' : '') + '</div>';
+        }).join('');
+      }
       return '<div class="q2-res-row ' + r[2] + '">'
         + '<span class="q2-res-k">' + esc(r[0]) + '</span>'
-        + '<div class="q2-res-v">' + resList(r[1]) + '</div></div>';
+        + '<div class="q2-res-v">' + content + '</div></div>';
     }).join('') + '</div>';
   }
 
@@ -2617,6 +2643,8 @@
   function timelineHtml(item) {
     var tl = Array.isArray(item.timeline) ? item.timeline : [];
     if (!tl.length) return '<div class="q2-empty">No activity yet.</div>';
+    var lastClose = -1;
+    tl.forEach(function (ev, index) { if (ev.event === 'close') lastClose = index; });
 
     function head(label, ev) {
       var by = (ev && ev.by && typeof ev.by === 'object') ? ev.by : {};
@@ -2638,7 +2666,7 @@
       return '<div class="' + (cls || 'q2-tl-note') + '">' + body + '</div>';
     }
 
-    var rows = tl.map(function (ev) {
+    var rows = tl.map(function (ev, index) {
       var type = String((ev && ev.event) || '');
       if (type === 'filed') {
         return evt('filed', head('Filed', ev)
@@ -2652,7 +2680,13 @@
       if (type === 'answer')   return evt('answer', head('Answered', ev), text(ev.text, 'q2-tl-note is-answer'));
       if (type === 'comment')  return evt('comment', head('Comment', ev), text(ev.text));
       if (type === 'reopen')   return evt('reopen', head('Reopened', ev), text(ev.reason));
-      if (type === 'close')    return evt('close', head('Closed', ev), resolutionHtml(ev.resolution));
+      if (type === 'close') {
+        // Only the latest close uses live ack state. Previous close events
+        // remain historical snapshots, including after a reopen/reclose.
+        var live = item.status === 'closed' && index === lastClose && item.resolution;
+        return evt('close', head('Closed', ev), resolutionHtml(
+          live || ev.resolution, live ? item.ref : ''));
+      }
       if (type === 'move') {
         var mv = [ev.from_ref, ev.to_ref].filter(Boolean).join(' → ');
         return evt('move', head('Moved', ev), text(mv));
@@ -3187,6 +3221,35 @@
       await refresh();
     } catch (err) {
       note('Could not save ' + field + ': ' + err.message);
+    }
+  }
+
+  async function acknowledgeResolution(btn) {
+    if (btn.disabled) return;
+    var ref = btn.getAttribute('data-q2-ack');
+    var undo = btn.getAttribute('data-q2-ack-undo') === '1';
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = undo ? 'Undoing…' : 'Acknowledging…';
+    try {
+      var data = await postJson('/api/ux-fixes/ack', {
+        ref: ref,
+        field: btn.getAttribute('data-q2-ack-field'),
+        index: Number(btn.getAttribute('data-q2-ack-index')),
+        undo: undo,
+      });
+      if (data.item) {
+        state.items = state.items.map(function (it) { return it.ref === ref ? data.item : it; });
+        if (state.ref === ref) state.detail = data.item;
+        renderAll();
+      }
+      note(undo ? 'Acknowledgment undone' : 'Acknowledged — original note kept');
+      await refresh();
+    } catch (err) {
+      note('Could not acknowledge note: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
     }
   }
 
@@ -3907,6 +3970,8 @@
   }
 
   document.addEventListener('click', function (e) {
+    var ack = e.target.closest('[data-q2-ack]');
+    if (ack) { e.stopPropagation(); acknowledgeResolution(ack); return; }
     var back = e.target.closest('[data-q2-mobile-back]');
     if (back) {
       showMobileColumn(back.getAttribute('data-q2-mobile-back'));

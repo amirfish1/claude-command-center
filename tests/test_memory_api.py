@@ -73,6 +73,7 @@ def mock_memory_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "0")  # disable cutoff for tests
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(fts_db))
+    monkeypatch.setenv("CCC_DECISIONS_DB", str(tmp_path / "decisions.sqlite"))
     # Keep the host's real ~/.hermes sessions out of search results.
     from ccc_server import hermes as _hermes
     monkeypatch.setattr(_hermes, "search_hermes_messages", lambda *a, **k: [])

@@ -282,5 +282,53 @@ class TestFleetExecutorTwoNode(unittest.TestCase):
         self.assertEqual(self._origin_main_sha(), origin_before)
 
 
+    def test_07_lost_reply_replays_after_both_nodes_restart(self):
+        # New work must not hitch a ride when an interrupted plan is resumed
+        # after losing the coordinator's acknowledgement of a completed push.
+        git(self.fleet.repo_b, "pull", "-q", "--ff-only", "origin", "main")
+        first_sha = self.fleet.commit_on(
+            self.fleet.repo_b, "reviewed.txt", "reviewed\n", "feat: reviewed")
+        # Exercise the executor with an explicit reviewed plan. Full inventory
+        # collection is covered above and is unrelated to reply recovery.
+        push = {
+            "id": "reviewed-push", "kind": "push", "repo_identity": self.identity,
+            "node_id": self.fleet.node_b.node_id, "node_name": "node-b",
+            "target": "main", "status": "proposed", "evidence": {},
+            "blockers": [], "requires": [],
+        }
+        plan = {
+            "plan_id": str(uuid.uuid4()), "created_by_node": self.fleet.node_a.node_id,
+            "status": "draft", "actions": [push], "log": [],
+        }
+        job_path = self.fleet.node_a.state_dir / "fleet-jobs" / f"{plan['plan_id']}.json"
+        job_path.parent.mkdir(parents=True, exist_ok=True)
+        job_path.write_text(json.dumps(plan))
+        self.fleet.node_a.post("/api/fleet/execute", {
+            "plan_id": plan["plan_id"], "selected": [push["id"]]})
+        job = _wait_job(self.fleet.node_a, plan["plan_id"])
+        completed = next(a for a in job["actions"] if a["id"] == push["id"])
+        self.assertEqual(completed["status"], "done", completed)
+        self.assertEqual(self._origin_main_sha(), first_sha)
+        self.fleet.commit_on(
+            self.fleet.repo_b, "later.txt", "not reviewed\n", "feat: later work")
+
+        self.fleet.node_a.stop()
+        self.fleet.node_b.stop()
+        (self.fleet.node_b.state_dir / "federation" / "route-dedupe.json").unlink(missing_ok=True)
+        job["status"] = "running"
+        completed["status"] = "running"
+        completed.pop("result", None)
+        job_path.write_text(json.dumps(job))
+        for node in (self.fleet.node_a, self.fleet.node_b):
+            node.start()
+            node.wait_ready()
+        self.fleet.node_a.post("/api/fleet/job/resume", {"plan_id": plan["plan_id"]})
+        resumed = _wait_job(self.fleet.node_a, plan["plan_id"])
+        result = next(a for a in resumed["actions"] if a["id"] == push["id"])
+        self.assertEqual(result["status"], "done", result)
+        self.assertTrue(result["result"].get("replayed"), result)
+        self.assertEqual(self._origin_main_sha(), first_sha)
+
+
 if __name__ == "__main__":
     unittest.main()

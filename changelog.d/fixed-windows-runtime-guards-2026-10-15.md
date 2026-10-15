@@ -1,0 +1,1 @@
+- Harden native Windows process checks and force-stop handling, preserve live sessions when hidden-terminal compaction is unavailable, refuse unsupported nonblocking FIFO writes, and reject Windows Terminal's `wt.exe` alias with either path separator.

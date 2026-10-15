@@ -1,0 +1,1 @@
+- Optional Claude Code PreToolUse hook blocks destructive Git commands and broad staging in shared checkouts, with automatic live-session detection, a force-protection flag, and setup documentation.

@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 const app=fs.readFileSync('static/app.js','utf8');
-const helpers=app.slice(app.indexOf('  function queuedSteerCardCount('),app.indexOf('  // ── Conversation presentation modes',app.indexOf('  function queuedSteerCardCount(')));
+const sourceHelper=app.slice(app.indexOf('  function queuedSteerSource('),app.indexOf('  function sessionSupportsQueuedSteer('));
+const helpers=sourceHelper+app.slice(app.indexOf('  function queuedSteerCardCount('),app.indexOf('  // ── Conversation presentation modes',app.indexOf('  function queuedSteerCardCount(')));
 const css=fs.readFileSync('static/app.css','utf8');
 let browser;
 test.before(async()=>{browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});});
@@ -86,9 +87,9 @@ test('a repeated queue acknowledgement still renders only one set of controls pe
   assert.deepEqual(out,{buttons:3,actions:3});
  }finally{await page.close();}
 });
-test('one later durable occurrence retires only one stale queued copy',async()=>{
+test('one later durable occurrence retires only one stale queued copy across repeated syncs',async()=>{
  const page=await fixture();try{
-  const count=await page.evaluate(()=>{const now=Date.now();makeRow('again','server',now-10000);makeRow('again','server',now-5000);makeRow('again','durable',now);sync();return queuedSteerCardCount(document.querySelector('.queued-steer-tray'));});
+  const count=await page.evaluate(()=>{const now=Date.now();makeRow('again','server',now-10000);makeRow('again','server',now-5000);makeRow('again','durable',now);sync();sync();return queuedSteerCardCount(document.querySelector('.queued-steer-tray'));});
   assert.equal(count,1);
  }finally{await page.close();}
 });
@@ -105,6 +106,65 @@ test('peer and optimistic-steer rows cannot retire a settled server steer card',
    assert.equal(connected,true,cls);
   }finally{await page.close();}
  }
+});
+test('older identical history cannot acknowledge a newly steered server card',async()=>{
+ const page=await fixture();try{
+  const out=await page.evaluate(()=>{
+   const now=Date.now();
+   makeRow('repeat this','durable',now-60000);
+   const row=makeRow('repeat this','server',now-5000);
+   settleSteeredServerCard(row);
+   sync();
+   const before=row.isConnected;
+   makeRow('repeat this','durable',now);
+   sync();
+   return {before,after:row.isConnected};
+  });
+  assert.deepEqual(out,{before:true,after:false});
+ }finally{await page.close();}
+});
+test('one durable occurrence acknowledges only one steered card across repeated syncs',async()=>{
+ const page=await fixture();try{
+  const out=await page.evaluate(()=>{
+   const now=Date.now();
+   const rows=[makeRow('again','server',now-10000),makeRow('again','server',now-5000)];
+   rows.forEach(settleSteeredServerCard);
+   makeRow('again','durable',now);
+   sync();
+   const first=rows.filter(row=>row.isConnected).length;
+   sync();
+   const second=rows.filter(row=>row.isConnected).length;
+   makeRow('again','durable',now+1000);
+   sync();
+   return [first,second,rows.filter(row=>row.isConnected).length];
+  });
+  assert.deepEqual(out,[1,1,0]);
+ }finally{await page.close();}
+});
+test('settled and queued cards cannot share the same delivery acknowledgement',async()=>{
+ const page=await fixture();try{
+  const out=await page.evaluate(()=>{
+   const now=Date.now();
+   const settled=makeRow('again','server',now-10000);
+   settleSteeredServerCard(settled);
+   makeRow('again','server',now-5000);
+   makeRow('again','durable',now);
+   sync();sync();
+   return {settled:settled.isConnected,queued:queuedSteerCardCount(document.querySelector('.queued-steer-tray'))};
+  });
+  assert.deepEqual(out,{settled:false,queued:1});
+ }finally{await page.close();}
+});
+test('unknown timestamps do not establish delivery of a steered card',async()=>{
+ const page=await fixture();try{
+  const connected=await page.evaluate(()=>{
+   const row=makeRow('again','server',0);
+   settleSteeredServerCard(row);
+   makeRow('again','durable');sync();
+   return row.isConnected;
+  });
+  assert.equal(connected,true);
+ }finally{await page.close();}
 });
 test('an authoritative queue snapshot retires a server card that was already delivered',async()=>{
  const page=await fixture();try{

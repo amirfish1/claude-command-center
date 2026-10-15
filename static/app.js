@@ -58789,6 +58789,23 @@
     }
   }
 
+  // A durable row proves delivery of one occurrence, across every cleanup
+  // pass on this transcript. Keep the receipt on that row so a later sync
+  // cannot consume it again for an identical queued or steered message.
+  function takeQueuedSendAcknowledgement(rows, text, queuedAt) {
+    if (!text || !queuedAt) return false;
+    const match = rows.find(row => {
+      if (row.dataset.sendAcknowledged === 'true') return false;
+      const stamp = Number(row.dataset.tsEpoch || 0);
+      const msg = row.querySelector('.user-msg');
+      return stamp >= queuedAt && msg
+        && _normSend(msg.getAttribute('data-raw-text') || msg.textContent) === text;
+    });
+    if (!match) return false;
+    match.dataset.sendAcknowledged = 'true';
+    return true;
+  }
+
   // Queued sends are actionable steer candidates, not past conversation.
   // Keep their real event nodes in a separate tray immediately above the composer
   // so ongoing output cannot scroll them out of reach.
@@ -58816,17 +58833,15 @@
     const settledSteerRows = Array.from(
       $view.querySelectorAll('.event.user_text[data-steer-settled]'));
     if (settledSteerRows.length) {
-      const durableNow = new Set(Array.from($view.querySelectorAll(
+      const durableNow = Array.from($view.querySelectorAll(
         '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'
         + ':not(.provisional):not(.peer-message):not(.steering-optimistic)'
-      )).map(el => {
-        const msg = el.querySelector('.user-msg');
-        return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-      }).filter(Boolean));
+      ));
       settledSteerRows.forEach(el => {
         const msg = el.querySelector('.user-msg');
         const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-        if (text && durableNow.has(text) && el.parentNode) el.parentNode.removeChild(el);
+        const queuedAt = Number(el.dataset.tsEpoch || 0);
+        if (takeQueuedSendAcknowledgement(durableNow, text, queuedAt)) el.remove();
       });
     }
     if (replaceServerCandidates && tray) {
@@ -58995,15 +59010,10 @@
     // event, and consume each event once. Synthetic queue rows never count.
     const durableRows = Array.from($view.querySelectorAll(
       '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged):not(.steering-optimistic):not(.peer-message):not(.provisional)'));
-    const usedDurable = new Set();
     tray.querySelectorAll('.event.user_text').forEach(el => {
       const text = queuedRowText(el);
       const queuedAt = Number(el._pendingRef?.entry?.ts || el.dataset.tsEpoch || 0);
-      if (!text || !queuedAt) return;
-      const match = durableRows.find(row => !usedDurable.has(row)
-        && Number(row.dataset.tsEpoch || 0) >= queuedAt && queuedRowText(row) === text);
-      if (!match) return;
-      usedDurable.add(match);
+      if (!takeQueuedSendAcknowledgement(durableRows, text, queuedAt)) return;
       if (el._pendingRef) removePendingSendEcho(el._pendingRef);
       else el.remove();
     });
@@ -61504,6 +61514,7 @@
 
   function closeActivityLogModal() {
     if (!_activityLogModalEl) return;
+    _activityLogModalEl._activityLogRequest?.abort();
     _activityLogModalEl.remove();
     _activityLogModalEl = null;
     if (_activityLogModalKeydownHandler) {
@@ -61513,14 +61524,18 @@
   }
 
   async function _loadActivityLogInto(overlay, body, sessionId, scopeAll) {
+    overlay._activityLogRequest?.abort();
+    const request = new AbortController();
+    overlay._activityLogRequest = request;
+    const isCurrent = () => _activityLogModalEl === overlay && overlay._activityLogRequest === request;
     body.innerHTML = '<div class="activity-log-empty">Loading…</div>';
     try {
       const useSession = sessionId && !scopeAll;
       const qs = useSession ? ('?session_id=' + encodeURIComponent(sessionId) + '&limit=200') : '?limit=200';
-      const res = await fetch('/api/activity-log' + qs);
+      const res = await fetch('/api/activity-log' + qs, { signal: request.signal });
       const data = await res.json();
-      if (!_activityLogModalEl || _activityLogModalEl !== overlay) return;  // closed while in flight
-      if (!data || !data.ok) {
+      if (!isCurrent()) return;  // scope changed or modal closed while in flight
+      if (!res.ok || !data || !data.ok) {
         body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
         return;
       }
@@ -61533,7 +61548,7 @@
       // Newest first for reading — the API returns oldest-first (tail order).
       _renderReadableActivityLog(body, events);
     } catch (e) {
-      if (!_activityLogModalEl || _activityLogModalEl !== overlay) return;
+      if (!isCurrent()) return;
       body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
     }
   }
@@ -62541,6 +62556,7 @@
             && _pendingSends.length && canAcknowledgeSend(_pendingSends[0])) {
           const oldest = _pendingSends.shift();
           if (oldest) {
+            _reconciledExact = true;
             if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
             if (oldest.timer) clearTimeout(oldest.timer);
             if (oldest.sid) clearSessionSending(oldest.sid);
@@ -62548,6 +62564,9 @@
             if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
           }
         }
+        // The render-tail and tray sweeps see this same durable row next.
+        // They must not reuse its receipt to clear a second identical send.
+        if (_reconciledExact) div.dataset.sendAcknowledged = 'true';
         // Webui panes: collapse a durable user bubble that repeats the most
         // recent durable user bubble when that bubble was NEVER ANSWERED.
         // The Codex queue pump can persist the same queued text several
@@ -63474,18 +63493,17 @@
       syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || opts.queueSnapshot !== false));
       // Self-heal optimistic echoes only against durable user rows.
       if (_pendingSends.length) {
-        const _durableUserTexts = [];
+        const _durableUserRows = [];
         for (const el of $view.querySelectorAll(
             '.event.user_text:not(.pending):not(.send-queued)'
             + ':not(.send-delivered):not(.not-acknowledged):not(.provisional)'
             + ':not(.peer-message):not(.steering-optimistic)')) {
-          const um = el.querySelector('.user-msg');
-          if (um) _durableUserTexts.push(_normSend(um.getAttribute('data-raw-text') || um.textContent));
+          _durableUserRows.push(el);
         }
-        if (_durableUserTexts.length) {
+        if (_durableUserRows.length) {
           for (const p of _pendingSends.slice()) {
             if (!p || !p.text) continue;
-            if (_durableUserTexts.indexOf(_normSend(p.text)) < 0) continue;
+            if (!takeQueuedSendAcknowledgement(_durableUserRows, _normSend(p.text), Number(p.ts || 0))) continue;
             if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
             if (p.timer) clearTimeout(p.timer);
             if (p.sid) clearSessionSending(p.sid);
@@ -64548,14 +64566,17 @@
   // The RHS "Log" tab: the unified activity log (~/.claude/command-center/
   // logs/activity.log via GET /api/activity-log) living in the status rail
   // instead of a modal. Global ("All") or narrowed to the open conversation
-  // ("This session"), plus a free-text filter over category/verb/detail.
+  // ("This session"), plus a free-text filter over summaries and raw fields.
   // Auto-refreshes on an interval while the tab is visible — no refresh
   // button (staleness is fixed at the source, per the house rule).
   const RAIL_LOG_POLL_MS = 5000;
   let _railLogEvents = [];
   let _railLogScope = 'all';
   let _railLogFilter = '';
-  let _railLogFetchInFlight = false;
+  let _railLogRequest = null;
+  let _railLogContext = null;
+  let _railLogEmptyMessage = 'No activity-log entries yet.';
+  let _railLogLoadError = false;
   let _railLogShowHeartbeats = false;
   let _railLogShowInjects = true;
   let _railLogOnlyAttention = false;
@@ -64625,21 +64646,19 @@
     const body = document.getElementById('railLogBody');
     if (!body) return;
     const needle = _railLogFilter.trim().toLowerCase();
-    let events = _railLogEvents.filter(ev =>
-      (_railLogShowHeartbeats || !_isSuccessfulHeartbeat(ev))
-      && (_railLogShowInjects || !_isRoutineInjectEvent(ev))
-      && (!_railLogOnlyAttention || ['error', 'warning'].includes(_readableLogPresentation(ev).level)));
-    if (needle) {
-      events = events.filter((ev) => (
-        _readableLogPresentation(ev).headline.toLowerCase().includes(needle)
-        || String(ev.category || '').toLowerCase().includes(needle)
-        || String(ev.verb || '').toLowerCase().includes(needle)
-        || String(ev.detail || '').toLowerCase().includes(needle)
-      ));
-    }
+    const events = _railLogEvents.filter(ev => {
+      if (!_railLogShowHeartbeats && _isSuccessfulHeartbeat(ev)) return false;
+      if (!_railLogShowInjects && _isRoutineInjectEvent(ev)) return false;
+      const presentation = _readableLogPresentation(ev);
+      if (presentation.hidden) return false;
+      if (_railLogOnlyAttention && !['error', 'warning'].includes(presentation.level)) return false;
+      return !needle || [presentation.headline, presentation.origin, ev.ts,
+        ev.category, ev.verb, ev.detail, _activityLogTimestampLocal(ev.ts), _readableLogTime(ev.ts)]
+        .some(value => String(value || '').toLowerCase().includes(needle));
+    });
     if (!events.length) {
-      body.innerHTML = '<div class="activity-log-empty">'
-        + (_railLogEvents.length ? 'No events match the filter.' : 'No activity-log entries yet.')
+      body.innerHTML = '<div class="activity-log-' + (_railLogLoadError ? 'error' : 'empty') + '">'
+        + escapeHtml(_railLogEvents.length ? 'No events match the filter.' : _railLogEmptyMessage)
         + '</div>';
       _syncRailLogToggleAll();
       return;
@@ -64667,43 +64686,64 @@
     button.disabled = !entries.length;
   }
 
+  function _railLogContextKey() {
+    if (_railLogScope !== 'session') return 'all';
+    const sid = typeof currentConversation === 'string' && currentConversation !== '__new__' ? currentConversation : '';
+    return 'session:' + sid;
+  }
+
+  function _setRailLogMessage(message, error = false) {
+    _railLogEvents = [];
+    _railLogEmptyMessage = message;
+    _railLogLoadError = error;
+    _renderRailLogPane();
+  }
+
   async function refreshRailLogPane() {
-    if (_railLogFetchInFlight) return;
     const body = document.getElementById('railLogBody');
     if (!body) return;
+    const key = _railLogContextKey();
+    if (_railLogRequest && _railLogRequest.key === key) return;
+    _railLogRequest?.controller.abort();
+    _railLogRequest = null;
+    if (_railLogContext !== key) {
+      _railLogContext = key;
+      _setRailLogMessage('Loading…');
+    }
     let qs = '?limit=300';
     let emptyHint = 'No activity-log entries yet.';
-    if (_railLogScope === 'session') {
-      const sid = (typeof currentConversation === 'string' && currentConversation) || '';
+    if (key !== 'all') {
+      const sid = key.slice('session:'.length);
       if (!sid) {
-        _railLogEvents = [];
-        body.innerHTML = '<div class="activity-log-empty">Select a session to scope the log, or switch to All.</div>';
+        _setRailLogMessage('Select a session to scope the log, or switch to All.');
         return;
       }
       qs = '?session_id=' + encodeURIComponent(sid) + '&limit=300';
       emptyHint = 'No activity-log entries for this session yet.';
     }
-    _railLogFetchInFlight = true;
+    const request = { key, controller: new AbortController() };
+    _railLogRequest = request;
+    const isCurrent = () => _railLogRequest === request && _railLogContextKey() === key && _railLogPaneVisible();
     try {
-      const res = await fetch('/api/activity-log' + qs, { cache: 'no-store' });
+      const res = await fetch('/api/activity-log' + qs, { cache: 'no-store', signal: request.controller.signal });
       const data = await res.json();
-      if (!_railLogPaneVisible()) return;  // tab switched while in flight
-      if (!data || !data.ok) {
-        body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
+      if (!isCurrent()) return;
+      if (!res.ok || !data || !data.ok) {
+        _setRailLogMessage('Could not load the activity log.', true);
         return;
       }
       _railLogEvents = Array.isArray(data.events) ? data.events : [];
-      if (!_railLogEvents.length) {
-        body.innerHTML = '<div class="activity-log-empty">' + emptyHint + '</div>';
-        return;
-      }
+      _railLogEmptyMessage = emptyHint;
+      _railLogLoadError = false;
       _renderRailLogPane();
     } catch (e) {
-      if (_railLogPaneVisible()) {
-        body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
-      }
+      if (isCurrent()) _setRailLogMessage('Could not load the activity log.', true);
     } finally {
-      _railLogFetchInFlight = false;
+      if (_railLogRequest === request) {
+        _railLogRequest = null;
+        // A conversation can change without a scope-button click.
+        if (_railLogPaneVisible() && _railLogContextKey() !== key) refreshRailLogPane();
+      }
     }
   }
 
@@ -64717,7 +64757,6 @@
         pane.querySelectorAll('[data-rail-log-scope]').forEach((b) => b.classList.remove('is-active'));
         btn.classList.add('is-active');
         _railLogScope = btn.getAttribute('data-rail-log-scope') || 'all';
-        _railLogEvents = [];
         refreshRailLogPane();
       });
     });
@@ -64755,6 +64794,9 @@
         if (_railLogEvents.length) _renderRailLogPane();
       });
     }
+    window.addEventListener('ccc-repo-changed', () => {
+      if (_railLogScope === 'session' && _railLogPaneVisible()) refreshRailLogPane();
+    });
     setInterval(() => {
       if (_railLogPaneVisible()) refreshRailLogPane();
     }, RAIL_LOG_POLL_MS);
@@ -69312,6 +69354,7 @@
   // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
+  let _archiveFromLocalCache = false;
   let _archiveFirstLoadedResolve = null;
   const _archiveFirstLoaded = new Promise(resolve => { _archiveFirstLoadedResolve = resolve; });
   function _markArchiveFirstLoaded() {
@@ -70398,7 +70441,102 @@
     requestAnimationFrame(restore);
   }
 
-  // Dedupe concurrent /api/conversations/all fetches keyed by URL. Recovery,
+  // A single origin-scoped, versioned snapshot makes reloads useful before
+  // the list request finishes. Persist only row identity/display/lifecycle
+  // metadata, never transcripts or stale live/approval/tool status. This is a
+  // bounded preview, not a complete archive or a body usable with an ETag.
+  const ARCHIVE_SIDEBAR_CACHE_KEY = 'ccc-sidebar-snapshot-v1';
+  const ARCHIVE_SIDEBAR_CACHE_MAX_ROWS = 500;
+  const ARCHIVE_SIDEBAR_CACHE_MAX_CHARS = 256 * 1024;
+  const ARCHIVE_SIDEBAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const ARCHIVE_SIDEBAR_CACHE_FIELDS = [
+    'id', 'session_id', 'source', 'engine', 'source_platform', 'thread_source',
+    'folder_label', 'folder_path', 'slug', 'pinned_repo', 'session_cwd',
+    'session_cwd_exists', 'session_cwd_is_worktree', 'mtime', 'modified',
+    'last_interacted', 'size', 'first_message', 'ai_title', 'display_name',
+    'name_overridden', 'auto_titled', 'spawn_named', 'archived', 'trashed', 'verified',
+    'pinned', 'pin_rank', 'all_lane_override', 'parent_session_id',
+    'continued_from_session_id', 'hermes_parent_session_id', 'hermes_continued_from',
+    'hermes_source', 'hermes_profile', 'hermes_chat_type', 'spawned_via',
+    'model', 'runtime', 'git_branch', 'effective_branch', 'effective_kind',
+    'worktree_label',
+  ];
+  function _archiveSidebarCacheRow(row) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+    if (typeof (row.session_id || row.id) !== 'string') return null;
+    const out = {};
+    for (const key of ARCHIVE_SIDEBAR_CACHE_FIELDS) {
+      const value = row[key];
+      if (typeof value === 'string') {
+        out[key] = (key === 'first_message' || key === 'ai_title' || key === 'display_name')
+          ? value.slice(0, 400) : value;
+      } else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+  function _readArchiveSidebarCache(windowName) {
+    try {
+      const raw = localStorage.getItem(ARCHIVE_SIDEBAR_CACHE_KEY);
+      if (!raw || raw.length > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) return null;
+      const cached = JSON.parse(raw);
+      const age = Date.now() - cached.savedAt;
+      if (cached.version !== 1 || cached.window !== windowName
+        || !Number.isFinite(age) || age < 0 || age > ARCHIVE_SIDEBAR_CACHE_TTL_MS
+        || !Array.isArray(cached.rows) || cached.rows.length > ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) return null;
+      return cached.rows.map(_archiveSidebarCacheRow).filter(Boolean);
+    } catch (_) { return null; }
+  }
+  function _writeArchiveSidebarCache(rows, windowName) {
+    try {
+      const entries = [];
+      // Leave room for the small envelope; count serialized characters so
+      // UTF-16 localStorage usage stays below 512 KiB even with long titles.
+      let chars = 256;
+      for (const row of rows.slice(0, ARCHIVE_SIDEBAR_CACHE_MAX_ROWS)) {
+        const projected = _archiveSidebarCacheRow(row);
+        if (!projected) continue;
+        const entry = JSON.stringify(projected);
+        if (chars + entry.length + 1 > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) continue;
+        entries.push(entry);
+        chars += entry.length + 1;
+      }
+      const envelope = JSON.stringify({ version: 1, window: windowName, savedAt: Date.now() });
+      localStorage.setItem(ARCHIVE_SIDEBAR_CACHE_KEY,
+        envelope.slice(0, -1) + ',"rows":[' + entries.join(',') + ']}');
+    } catch (_) { /* Storage disabled/full: the network list still works. */ }
+  }
+  let _archiveSidebarCachePending = null;
+  let _archiveSidebarCacheScheduled = false;
+  function _scheduleArchiveSidebarCache(rows, windowName) {
+    _archiveSidebarCachePending = { rows, windowName };
+    if (_archiveSidebarCacheScheduled) return;
+    _archiveSidebarCacheScheduled = true;
+    const save = () => {
+      _archiveSidebarCacheScheduled = false;
+      const pending = _archiveSidebarCachePending;
+      _archiveSidebarCachePending = null;
+      if (pending && pending.windowName === _archiveWindow()) {
+        _writeArchiveSidebarCache(pending.rows, pending.windowName);
+      }
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(save, { timeout: 2000 });
+    else setTimeout(save, 0);
+  }
+  function _paintArchiveSidebarCache() {
+    if (archiveLoaded || archiveData.length) return;
+    const rows = _readArchiveSidebarCache(_archiveWindow());
+    if (!rows || !rows.length) return;
+    archiveData = rows;
+    archiveLoaded = true;
+    _archiveFromLocalCache = true;
+    // Leave archiveDataWindow unset: this preview may have been truncated.
+    // Restore the selected reader only after authoritative rows arrive.
+    renderArchiveList(_archiveQuery(), { force: true, skipRestore: true });
+  }
+
+  // Dedupe concurrent /api/conversations/list fetches keyed by URL. Recovery,
   // PR-hydration, and refresh paths all call loadArchiveAll independently;
   // without this they fire 3+ parallel ~500KB requests for the same payload.
   const _archiveAllInflight = new Map();
@@ -70489,6 +70627,7 @@
         // an empty list.
         _archiveAllData.set(url, convs);
         if (etag) _archiveAllEtag.set(url, etag);
+        if (!opts.includePrs) _scheduleArchiveSidebarCache(convs, params.get('window'));
         return convs;
       } catch (e) {
         _clientLog('[ARCHIVE-DIAG] conversations/list threw: ' + ((e && e.name) || '?') + ' ' + String((e && e.message) || '').slice(0, 120));
@@ -70857,10 +70996,13 @@
         return archiveData;
       }
       if (!convs.length && Array.isArray(archiveData) && archiveData.length) {
-        _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
-          + archiveData.length + ' (empty payload)');
-        return archiveData;
+        if (!_archiveFromLocalCache) {
+          _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
+            + archiveData.length + ' (empty payload)');
+          return archiveData;
+        }
       }
+      _archiveFromLocalCache = false;
       archiveData = _applyPendingDashboardConversationPatches(
         _mergeArchivePrSnapshot(convs, archiveData)
       );
@@ -71573,6 +71715,7 @@
     // its small metadata request first so its scope picker remains usable
     // while a cold archive walk is still reading conversation history.
     _renderQueuePanel();
+    _paintArchiveSidebarCache();
     await refreshArchiveData();
     // Shape only the saved active row first. This uses the normal archive
     // pipeline to initialize session metadata/capabilities, but avoids making

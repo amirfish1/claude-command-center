@@ -1,0 +1,1 @@
+- Clear outstanding delivery receipts when an unattended continuation is discarded after auto-resume is disabled or its permission check is unavailable; record it as dropped rather than delivered.

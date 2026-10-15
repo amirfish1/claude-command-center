@@ -1,0 +1,1 @@
+- Block pushes with a setup message when pytest is unavailable, so the performance gate cannot silently pass without running.

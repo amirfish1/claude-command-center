@@ -1,0 +1,1 @@
+- Ask and `ccc decisions` now retrieve stored user decision quotes with source citations and provenance, with repository filtering and a labelled session-snippet fallback. Background rescans replace prior quotes instead of duplicating them.

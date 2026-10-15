@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
 """API-layer glue for ccc_server.ship_graph (is_shipped, search_sessions).
 
-Both functions already exist and are fully working — until now the only
-caller was the ~/rnd/ccc-memory benchmark, so no running agent could reach
-them. This module is the thin read-only surface that powers:
+This module is the thin read-only surface that powers:
 
   - GET /api/memory/recall?q=&limit=              -> recall()
   - GET /api/memory/shipped?topic=                -> shipped()
@@ -352,10 +350,8 @@ def file_history(path: str, repo: str = "", limit: int = 20, scope: str = "local
 
 # Words that mark a snippet as recording a DECISION rather than just
 # mentioning a topic — "we added X" isn't a decision, "we went with X
-# instead of Y" is. Heuristic-only: this is a stand-in backend for
-# MEMO-FIX-7's dedicated decision store. _decision_hits() is the seam —
-# MEMO-FIX-7 can replace its body with a real store lookup without touching
-# decisions()'s signature or the /api/memory/decisions route.
+# instead of Y" is. This weaker fallback is used only when the nightly
+# extraction has no matching user quotes.
 _DECISION_MARKERS = (
     "decided", "decision", "we'll use", "we will use", "going with",
     "went with", "instead of", "rather than", "chose", "chosen",
@@ -369,8 +365,7 @@ def _looks_like_decision(text: str) -> bool:
 
 
 def _decision_hits(topic: str, limit: int) -> list[dict]:
-    """Heuristic decision-shaped filter over search_sessions() hits. See the
-    module-level note above _DECISION_MARKERS for the MEMO-FIX-7 hand-off."""
+    """Heuristic decision-shaped filter over search_sessions() hits."""
     hits = _sg.search_sessions(topic, limit=max(limit * 3, 20))
     sids = [h["session_id"] for h in hits if h.get("session_id")]
     sdoc = _sdoc_rows(sids) if sids else {}
@@ -386,27 +381,46 @@ def _decision_hits(topic: str, limit: int) -> list[dict]:
     return out
 
 
-def decisions(topic: str, limit: int = 10) -> dict:
-    """GET /api/memory/decisions — sessions whose recall snippet reads as a
-    decision (`decided`, `instead of`, `went with`, ...) for `topic`.
+def decisions(topic: str, limit: int = 10, repo: str | None = None) -> dict:
+    """Stored user decision quotes first; labelled session snippets as fallback.
 
-    Backed by search_sessions() plus a decision-language filter for now;
-    MEMO-FIX-7's real decision store is meant to plug into `_decision_hits`
-    later without changing this function's contract."""
+    The request never runs extraction. Quotes remain candidate evidence, not
+    approved or necessarily current policy. All original result fields stay
+    available to older CLI/UI consumers.
+    """
+    from ccc_server import decision_extraction as _dex
+
     t = (topic or "").strip()
     if not t:
         return {"topic": "", "results": []}
-    hits = _decision_hits(t, limit)
+    limit = max(1, min(int(limit), 50))
+    repo = (repo or "").strip() or None
+    extracted = _dex.search_decisions(t, repo=repo, limit=limit)
+    if extracted:
+        return {"topic": t, "results": [{
+            "session_id": d["session_id"],
+            "title": "Decision: " + d["quote"][:120],
+            "repo": d["repo"], "date": d["date"], "snippet": d["quote"],
+            "decision_id": d["id"], "provenance": "extracted_user_quote",
+            "status": "candidate", "confidence": d["confidence"],
+            "source": {"path": d["source_path"], "line": d["source_line"],
+                       "timestamp": d["ts"], "engine": d["engine"]},
+        } for d in extracted]}
+
+    hits = _decision_hits(t, 50 if repo else limit)
     sids = [h["session_id"] for h in hits]
     session_meta = _session_meta_rows(_sg._get_connection(), sids) if sids else {}
     results = []
     for h in hits:
         sm = session_meta.get(h["session_id"], {})
+        if repo and sm.get("repo") != repo:
+            continue
         results.append({
             "session_id": h["session_id"],
             "title": h["title"],
             "repo": sm.get("repo", ""),
             "date": sm.get("date", ""),
             "snippet": h["snippet"],
+            "provenance": "session_snippet", "status": "unverified",
         })
-    return {"topic": t, "results": results}
+    return {"topic": t, "results": results[:limit]}

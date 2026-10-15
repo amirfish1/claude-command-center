@@ -186,7 +186,7 @@ def test_archive_scroll_restore_skips_layout_reads_for_a_pristine_capture():
     # remaining JS chunk between list arrival and rows painted. On first boot
     # the capture is pristine (placeholder at scrollTop 0, no anchor row), so
     # there is nothing to restore and no reason to touch layout.
-    restore = _function("function _restoreArchiveListScroll", "// Dedupe concurrent /api/conversations/all")
+    restore = _function("function _restoreArchiveListScroll", "const ARCHIVE_SIDEBAR_CACHE_KEY")
     assert "function _archiveScrollStateIsPristine(" in SOURCE
     assert restore.index("_archiveScrollStateIsPristine(state)") < restore.index("restore();")
     pristine = _function("function _archiveScrollStateIsPristine(", "function _restoreArchiveListScroll")

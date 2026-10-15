@@ -18,11 +18,11 @@ Four sources, all cheap (no subprocess, no O(all sessions) work):
   Only the tail of the file is read (``_LOG_TAIL_BYTES``) and the parse is
   cached by ``(mtime, size)``. Identical messages per queue collapse into one
   alert with a count and a last-seen time.
-* ``outbox.json`` dead ``notify`` messages -- a needs-input/status notice whose
-  target session is gone dies after 20 retries as a DEADMSG line nobody reads.
+* ``outbox.json`` dead ``notify`` messages -- a needs-input/status notice that
+  cannot be delivered dies after 20 retries as a DEADMSG line nobody reads.
   The outbox keeps the dead record (with its ``[watchtower] REF verb`` text),
-  so the strip can surface it until acked; a retried/delivered message leaves
-  ``dead`` status and the alert clears itself.
+  so the strip can surface it until acked. Later notices and the existing
+  ticket snapshot clear superseded requests without fetching ticket state.
 * WatchTower service state -- ``_watchtower_service_status`` (already cached
   by the server). A stopped or degraded daemon means NO queue drains.
 
@@ -76,6 +76,7 @@ _lock = threading.Lock()
 _log_cache = {"key": None, "alerts": []}
 # outbox.json dead-notify parse cache: same (mtime, size) keying as the log.
 _outbox_cache = {"key": None, "alerts": []}
+_ticket_snapshot_cache = {"key": None, "items": {}}
 # First time the WatchTower daemon was seen not-online (epoch). None = online.
 _service_down_since = None
 
@@ -312,8 +313,8 @@ def activity_error_alerts(wt_home=None, now=None):
 # ── source 3: outbox.json dead notify messages ─────────────────────────────
 
 # Ticket-event notices are sent as "[watchtower] REF verb — detail" with
-# notify=True (watchtower/queue.py _notify_ticket_event). A dead one means the
-# session it was addressed to is gone and the human was never told.
+# notify=True (watchtower/queue.py _notify_ticket_event). A dead one proves
+# delivery failed, not that its recipient is gone or its question still open.
 _DEAD_NOTIFY_RE = re.compile(r"^\[watchtower\]\s+(\S+)\s+(.*?)(?:\s*—\s*|$)")
 # Verbs that hand something to a human get "Needs your input" wording; a dead
 # claimed/closed echo is informational, not a question.
@@ -339,12 +340,73 @@ def _dead_notify_ts(msg):
     return 0.0
 
 
-def dead_notify_alerts(wt_home=None, now=None):
-    """Dead ``notify=True`` outbox messages, grouped per ticket ref.
+def _ticket_snapshot_path():
+    try:
+        return Path(_core._WT_ITEMS_SNAPSHOT_FILE)
+    except Exception:
+        return Path.home() / ".claude" / "command-center" / "wt_items_snapshot.json"
 
-    Unlike transient ERROR lines these are one-shot facts, so they are NOT
-    subject to ``_ACTIVITY_ERROR_FRESH_S``: the alert stands until acked or
-    until WatchTower retries/removes the dead message (``wt outbox retry``).
+
+def _alert_ticket_snapshot(path):
+    """Read the existing display snapshot, never fetch tickets on an alert poll.
+
+    A missing ticket is unknown (snapshots can be partial). Cache the small
+    ref/state index by file identity; do not retain full ticket histories.
+    """
+    path = Path(path)
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    with _lock:
+        if _ticket_snapshot_cache["key"] == key:
+            return _ticket_snapshot_cache["items"]
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    rows = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    items = {
+        str(row["ref"]): {k: row.get(k) for k in
+                          ("status", "needs_input", "updated_at")}
+        for row in rows if isinstance(row, dict) and row.get("ref")
+    }
+    with _lock:
+        _ticket_snapshot_cache.update(key=key, items=items)
+    return items
+
+
+def _current_dead_notices(alerts, items, now):
+    out = []
+    for a in alerts:
+        ref = a["id"].removeprefix("dead-notify:")
+        item = items.get(ref) or {}
+        # Compare to the EVENT time, not the last retry: a resolved question
+        # can continue failing delivery for hours. Never let an older snapshot
+        # hide a newer request after a ticket was reopened.
+        event_ts = a["_event_ts"]
+        if event_ts and _iso_to_epoch(item.get("updated_at")) >= event_ts:
+            if a["_needs_input"] and (
+                item.get("status") == "closed"
+                or (item.get("status") in ("open", "in_progress", "in_review")
+                    and item.get("needs_input") is False)
+            ):
+                continue
+        out.append({k: v for k, v in a.items() if not k.startswith("_")})
+        out[-1]["age_seconds"] = max(0, int(now - a["ts"])) if a["ts"] else None
+    return out
+
+
+def dead_notify_alerts(wt_home=None, now=None, items_path=None):
+    """Failed notices that have not been superseded, grouped per ticket ref.
+
+    A later notice supersedes an older event even while pending or delivered.
+    An input request also clears when a newer ticket snapshot shows it no
+    longer needs input. Unknown state stays visible; age alone never clears it.
     """
     now = time.time() if now is None else now
     path = Path(wt_home or _wt_home()) / "outbox.json"
@@ -352,11 +414,12 @@ def dead_notify_alerts(wt_home=None, now=None):
         st = path.stat()
     except OSError:
         return []
-    key = (st.st_mtime, st.st_size)
+    key = (str(path), st.st_mtime_ns, st.st_size)
     with _lock:
-        if _outbox_cache["key"] == key:
-            return [dict(a, age_seconds=max(0, int(now - a["ts"])))
-                    for a in _outbox_cache["alerts"]]
+        cached = _outbox_cache["alerts"] if _outbox_cache["key"] == key else None
+    if cached is not None:
+        items = _alert_ticket_snapshot(items_path or _ticket_snapshot_path()) if cached else {}
+        return _current_dead_notices(cached, items, now)
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -365,50 +428,56 @@ def dead_notify_alerts(wt_home=None, now=None):
     messages = data.get("messages") if isinstance(data, dict) else None
     if not isinstance(messages, list):
         return []
-    groups = {}
+    notices = []
+    latest = {}
     for m in messages:
-        if not isinstance(m, dict):
+        if not isinstance(m, dict) or not m.get("notify"):
             continue
-        if m.get("status") != "dead" or not m.get("notify"):
+        if m.get("status") not in ("dead", "pending", "delivered"):
             continue
-        text = str(m.get("text") or "")
-        parsed = _DEAD_NOTIFY_RE.match(text.strip())
+        parsed = _DEAD_NOTIFY_RE.match(str(m.get("text") or "").strip())
         ref = parsed.group(1) if parsed else ""
         verb = (parsed.group(2) or "").strip() if parsed else ""
+        event_ts = _iso_to_epoch(m.get("created_at"))
+        notices.append((m, ref, verb, event_ts))
+        if ref:
+            latest[ref] = max(latest.get(ref, 0), event_ts)
+    groups = {}
+    for m, ref, verb, event_ts in notices:
+        if m.get("status") != "dead":
+            continue
+        if ref and event_ts and event_ts < latest[ref]:
+            continue
         key_ref = ref or str(m.get("id") or "?")
         g = groups.get(key_ref)
         ts = _dead_notify_ts(m)
         if g is None:
             g = groups[key_ref] = {"ref": ref, "verb": verb, "ts": ts,
-                                   "count": 0, "msg_id": str(m.get("id") or "")}
+                                   "event_ts": event_ts, "count": 0}
         g["count"] += 1
         if ts > g["ts"]:
             g["ts"] = ts
-            g["msg_id"] = str(m.get("id") or "")
+            g["event_ts"] = event_ts
             if ref:
                 g["ref"], g["verb"] = ref, verb
     out = []
     for key_ref, g in groups.items():
         ref = g["ref"]
-        # "BECKY-DESIGN-1574" -> "BECKY-DESIGN"; unparseable -> generic.
         queue = ref.rsplit("-", 1)[0] if re.match(r"^.+-\d+$", ref) else ""
-        if g["verb"] in _NEEDS_INPUT_VERBS:
-            title = "Needs your input: %s" % (ref or key_ref)
-        else:
-            title = "Notice never delivered: %s" % (ref or key_ref)
+        needs_input = g["verb"] in _NEEDS_INPUT_VERBS
+        title = ("Needs your input: " if needs_input else "Notice never delivered: ") + (ref or key_ref)
         out.append({
             "id": "dead-notify:%s" % key_ref,
             "kind": "dead_notify",
-            "severity": "error",
+            "severity": "error" if needs_input else "warning",
             "queue": queue.upper() or "WATCHTOWER",
             "engine": "",
             "model": "",
             "worker_id": "",
             "title": title,
-            "detail": "the session that filed it is gone",
+            "detail": "ticket notification could not be delivered",
             "ts": g["ts"],
             "ts_iso": _iso(g["ts"]),
-            "age_seconds": max(0, int(now - g["ts"])) if g["ts"] else None,
             "first_ts_iso": _iso(g["ts"]),
             "count": g["count"],
             "cooldown_until": None,
@@ -416,11 +485,14 @@ def dead_notify_alerts(wt_home=None, now=None):
             "cooldown_active": False,
             "log": "",
             "session_id": "",
+            "_event_ts": g["event_ts"],
+            "_needs_input": needs_input,
         })
     with _lock:
         _outbox_cache["key"] = key
         _outbox_cache["alerts"] = out
-    return [dict(a, age_seconds=max(0, int(now - a["ts"]))) for a in out]
+    items = _alert_ticket_snapshot(items_path or _ticket_snapshot_path()) if out else {}
+    return _current_dead_notices(out, items, now)
 
 
 # ── source 4: WatchTower daemon state ───────────────────────────────────────
@@ -587,7 +659,7 @@ _SEVERITY_RANK = {"critical": 0, "error": 1, "warning": 2}
 
 
 def collect_wt_alerts(*, wt_home=None, acks_path=None, service_status=None,
-                      now=None, include_acked=False):
+                      now=None, include_acked=False, items_path=None):
     """All current WatchTower alerts, un-acked first, severity then newest.
 
     Returns ``{"alerts": [...], "total": n, "acked": m}`` where ``alerts``
@@ -599,7 +671,7 @@ def collect_wt_alerts(*, wt_home=None, acks_path=None, service_status=None,
     alerts.extend(service_alerts(service_status=service_status, now=now))
     alerts.extend(launch_failure_alerts(wt_home=wt_home, now=now))
     alerts.extend(activity_error_alerts(wt_home=wt_home, now=now))
-    alerts.extend(dead_notify_alerts(wt_home=wt_home, now=now))
+    alerts.extend(dead_notify_alerts(wt_home=wt_home, now=now, items_path=items_path))
     acks = load_wt_alert_acks(acks_path)
     visible = []
     acked_n = 0

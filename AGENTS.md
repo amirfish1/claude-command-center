@@ -120,6 +120,16 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
   `CCC_ALLOW_DUPLICATE_REPO=1`.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
 
+## Credential requests
+
+When a task needs a credential, use the [credential broker](docs/credential-broker.md)
+to show a masked dashboard prompt instead of asking for the value in chat or
+asking the user to SSH in. Pipe `ccc secret request NAME --reason "..." --stdout`
+directly into a program that accepts credentials on stdin; never let a tool
+capture the value into a transcript. Keep names/reasons free of secrets. This
+first slice requires explicit consumer integration; it does not intercept login
+prompts automatically.
+
 ## Testing
 
 `tests/test_smoke.py` imports `server.py` and checks nothing explodes. CI is minimal by design. If you add a feature, a smoke-level assertion is nice-to-have but not required — the bar is "doesn't break the import."

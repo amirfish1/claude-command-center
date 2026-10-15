@@ -102,8 +102,8 @@ def _is_pid_alive(pid, perm_alive=False):
     """Check if a process is alive without sending a terminating signal.
 
     On Unix, `os.kill(pid, 0)` performs an error check only (does not send a signal).
-    On Windows, `os.kill(pid, 0)` maps signal 0 to CTRL_C_EVENT and terminates the
-    target process. We use Win32 OpenProcess + WaitForSingleObject on Windows.
+    On Windows, `os.kill(pid, 0)` terminates the target process. We use Win32
+    OpenProcess + WaitForSingleObject on Windows.
 
     `perm_alive`: on POSIX, treat PermissionError (pid owned by another user)
     as alive. Default False keeps the historical OSError -> dead behaviour.
@@ -119,7 +119,19 @@ def _is_pid_alive(pid, perm_alive=False):
     if sys.platform == "win32":
         try:
             import ctypes
+            from ctypes import wintypes
             kernel32 = ctypes.windll.kernel32
+            # ctypes defaults to C int for both results and untyped arguments.
+            # HANDLE is pointer-sized, so declare the ABI before passing it
+            # between calls (including CloseHandle) on 64-bit Windows.
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.GetLastError.argtypes = []
+            kernel32.GetLastError.restype = wintypes.DWORD
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             SYNCHRONIZE = 0x00100000
             handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)

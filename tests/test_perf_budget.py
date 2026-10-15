@@ -13,6 +13,7 @@ If one fails, a hot path lost its gating or caching — don't relax the bound,
 restore the gate. See CLAUDE.md "Performance gates".
 """
 import importlib
+import importlib.util
 import concurrent.futures
 import gzip
 import json
@@ -31,6 +32,50 @@ import pytest
 from ccc_server import sandbox_harvest
 
 server = importlib.import_module("server")
+
+
+def test_shared_clone_guard_reads_only_live_candidates_and_caches(tmp_path, monkeypatch):
+    """The opt-in hook must not walk session archives or reparse warm rows."""
+    spec = importlib.util.spec_from_file_location(
+        "perf_shared_clone_guard",
+        Path(__file__).resolve().parents[1] / "hooks" / "shared-clone-guard.py",
+    )
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    config_dir = tmp_path / "config"
+    sessions = config_dir / "sessions"
+    sessions.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    for pid, sid in [(11, "current"), (22, "peer")]:
+        (sessions / (str(pid) + ".json")).write_text(json.dumps({
+            "pid": pid, "sessionId": sid, "cwd": str(repo)}))
+    # Archived/dead entries cannot become candidates, whatever their count.
+    for pid in range(100, 200):
+        (sessions / (str(pid) + ".json")).write_text("{}")
+    monkeypatch.setattr(guard, "_live_claude_pids", lambda: [11, 22])
+    def forbidden(*args, **kwargs):
+        raise AssertionError("hook walked a session directory or forked per row")
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(guard.subprocess, "run", forbidden)
+    reads = []
+    original = guard._read_json
+    def read_json(file, limit):
+        reads.append(file.name)
+        return original(file, limit)
+    monkeypatch.setattr(guard, "_read_json", read_json)
+    assert guard.peer_roots("current", config_dir, float("inf")) == {str(repo)}
+    assert reads == ["git-guard-cache.json", "11.json", "22.json"]
+    reads.clear()
+    assert guard.peer_roots("current", config_dir, float("inf")) == {str(repo)}
+    assert reads == ["git-guard-cache.json"], "warm hook re-parsed unchanged session rows"
+    reads.clear()
+    (sessions / "22.json").write_text("{}")
+    assert guard.peer_roots("current", config_dir, float("inf")) == set()
+    assert reads == ["git-guard-cache.json", "22.json"]
 
 
 def test_healthcheck_cold_cache_build_is_singleflight(monkeypatch):
@@ -195,6 +240,55 @@ def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
     assert [row["session_id"] for row in rows] == ["warm"]
     assert from_cache is True
     assert calls == [{"include_prs": False}]
+
+
+def test_archive_list_sidebar_payload_budget_at_corpus_scale(monkeypatch):
+    """A 1,543-row archive must project only the 234 visible-window rows.
+
+    Guard allocation/call counts and uncompressed bytes, not host-dependent
+    wall time or just the gzip ratio of repetitive synthetic transcripts.
+    """
+    now = 2_000_000.0
+    rows = [{
+        "id": f"session-{i:04d}", "session_id": f"session-{i:04d}",
+        "engine": "claude", "source": "interactive",
+        "folder_path": "/tmp/example", "folder_label": "example",
+        "mtime": now - (60 if i < 234 else 30 * 86400),
+        "first_message": "Review the example feature. " * 4,
+        "ai_title": f"Example task {i}", "state": "ended",
+        "archived": False, "trashed": False, "pinned": False,
+        "last_assistant_text": "Transcript-only detail. " * 120,
+        "debug": {"parser_notes": "not sidebar metadata " * 12},
+    } for i in range(1543)]
+    calls = []
+    project = server._archive_list_project_row
+
+    def counted(row):
+        calls.append(row["id"])
+        return project(row)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("sidebar projection performed transcript or process work")
+
+    monkeypatch.setattr(server, "_archive_list_project_row", counted)
+    monkeypatch.setattr(server._session_graph, "parent_of", lambda sid: None)
+    monkeypatch.setattr(server, "usage_limit_resume_at_for_session", lambda sid: None)
+    monkeypatch.setattr(server, "find_all_conversations", forbidden)
+    monkeypatch.setattr(server, "_tail_read_lines", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    full = json.dumps({"conversations": rows}).encode()
+
+    payload = server._archive_list_payload(rows, window="7d", now=now)
+    slim = json.dumps(payload).encode()
+
+    assert payload["count"] == 234
+    assert payload["total_count"] == 1543
+    assert calls == [row["id"] for row in rows[:234]]
+    assert len(slim) < 160_000
+    assert len(slim) < len(full) * 0.04
+    # The opt-in projection must never strip the shared /all source rows.
+    assert json.dumps({"conversations": rows}).encode() == full
 
 
 def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
@@ -2973,6 +3067,36 @@ def test_archive_build_under_budget(big_projects):
 # Before this gate, ANY corpus change re-ran the full O(all-rows) build
 # (~12s warm, 60-95s under live GIL contention), so list/search freshness
 # equaled the rebuild duration.
+
+def test_archive_snapshot_publication_reads_only_cached_metadata(tmp_path, monkeypatch):
+    """Persisting a large snapshot must not reopen any transcript or rediscover rows."""
+    cache_file = tmp_path / "archive.json"
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache_file)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT", 0.0)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {
+        "base": {"cached_at": time.time(), "signature": "sig", "conversations": [
+            {"session_id": str(i), "jsonl_path": str(tmp_path / f"{i}.jsonl")}
+            for i in range(300)
+        ]},
+    })
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {"sig": ({}, {})})
+    for name in ("find_all_conversations", "_archive_corpus_signature", "_build_archive_conversations"):
+        monkeypatch.setattr(server, name, lambda *a, **k: pytest.fail("persistence scanned sessions"))
+
+    reads = []
+    original_open = Path.open
+
+    def tracked_open(candidate, *args, **kwargs):
+        reads.append(candidate)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    server._save_archive_response_cache(force=True)
+    assert reads == [cache_file], "publication must read just the previous metadata snapshot"
+    server._save_archive_response_cache()
+    assert reads == [cache_file], "debounced publications must do no disk reads"
+    assert len(json.loads(cache_file.read_text())["entries"]["base"]["conversations"]) == 300
+
 
 def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     big_projects, monkeypatch, tmp_path
