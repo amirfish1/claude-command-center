@@ -242,6 +242,55 @@ def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
     assert calls == [{"include_prs": False}]
 
 
+def test_archive_list_sidebar_payload_budget_at_corpus_scale(monkeypatch):
+    """A 1,543-row archive must project only the 234 visible-window rows.
+
+    Guard allocation/call counts and uncompressed bytes, not host-dependent
+    wall time or just the gzip ratio of repetitive synthetic transcripts.
+    """
+    now = 2_000_000.0
+    rows = [{
+        "id": f"session-{i:04d}", "session_id": f"session-{i:04d}",
+        "engine": "claude", "source": "interactive",
+        "folder_path": "/tmp/example", "folder_label": "example",
+        "mtime": now - (60 if i < 234 else 30 * 86400),
+        "first_message": "Review the example feature. " * 4,
+        "ai_title": f"Example task {i}", "state": "ended",
+        "archived": False, "trashed": False, "pinned": False,
+        "last_assistant_text": "Transcript-only detail. " * 120,
+        "debug": {"parser_notes": "not sidebar metadata " * 12},
+    } for i in range(1543)]
+    calls = []
+    project = server._archive_list_project_row
+
+    def counted(row):
+        calls.append(row["id"])
+        return project(row)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("sidebar projection performed transcript or process work")
+
+    monkeypatch.setattr(server, "_archive_list_project_row", counted)
+    monkeypatch.setattr(server._session_graph, "parent_of", lambda sid: None)
+    monkeypatch.setattr(server, "usage_limit_resume_at_for_session", lambda sid: None)
+    monkeypatch.setattr(server, "find_all_conversations", forbidden)
+    monkeypatch.setattr(server, "_tail_read_lines", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    full = json.dumps({"conversations": rows}).encode()
+
+    payload = server._archive_list_payload(rows, window="7d", now=now)
+    slim = json.dumps(payload).encode()
+
+    assert payload["count"] == 234
+    assert payload["total_count"] == 1543
+    assert calls == [row["id"] for row in rows[:234]]
+    assert len(slim) < 160_000
+    assert len(slim) < len(full) * 0.04
+    # The opt-in projection must never strip the shared /all source rows.
+    assert json.dumps({"conversations": rows}).encode() == full
+
+
 def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
     """A short sidebar window must not copy/refresh every historical row."""
     expected = [{"session_id": "recent"}, {"session_id": "old"}]

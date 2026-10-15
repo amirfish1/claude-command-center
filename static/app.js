@@ -69342,6 +69342,7 @@
   // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
+  let _archiveFromLocalCache = false;
   let _archiveFirstLoadedResolve = null;
   const _archiveFirstLoaded = new Promise(resolve => { _archiveFirstLoadedResolve = resolve; });
   function _markArchiveFirstLoaded() {
@@ -70428,7 +70429,102 @@
     requestAnimationFrame(restore);
   }
 
-  // Dedupe concurrent /api/conversations/all fetches keyed by URL. Recovery,
+  // A single origin-scoped, versioned snapshot makes reloads useful before
+  // the list request finishes. Persist only row identity/display/lifecycle
+  // metadata, never transcripts or stale live/approval/tool status. This is a
+  // bounded preview, not a complete archive or a body usable with an ETag.
+  const ARCHIVE_SIDEBAR_CACHE_KEY = 'ccc-sidebar-snapshot-v1';
+  const ARCHIVE_SIDEBAR_CACHE_MAX_ROWS = 500;
+  const ARCHIVE_SIDEBAR_CACHE_MAX_CHARS = 256 * 1024;
+  const ARCHIVE_SIDEBAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const ARCHIVE_SIDEBAR_CACHE_FIELDS = [
+    'id', 'session_id', 'source', 'engine', 'source_platform', 'thread_source',
+    'folder_label', 'folder_path', 'slug', 'pinned_repo', 'session_cwd',
+    'session_cwd_exists', 'session_cwd_is_worktree', 'mtime', 'modified',
+    'last_interacted', 'size', 'first_message', 'ai_title', 'display_name',
+    'name_overridden', 'auto_titled', 'spawn_named', 'archived', 'trashed', 'verified',
+    'pinned', 'pin_rank', 'all_lane_override', 'parent_session_id',
+    'continued_from_session_id', 'hermes_parent_session_id', 'hermes_continued_from',
+    'hermes_source', 'hermes_profile', 'hermes_chat_type', 'spawned_via',
+    'model', 'runtime', 'git_branch', 'effective_branch', 'effective_kind',
+    'worktree_label',
+  ];
+  function _archiveSidebarCacheRow(row) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+    if (typeof (row.session_id || row.id) !== 'string') return null;
+    const out = {};
+    for (const key of ARCHIVE_SIDEBAR_CACHE_FIELDS) {
+      const value = row[key];
+      if (typeof value === 'string') {
+        out[key] = (key === 'first_message' || key === 'ai_title' || key === 'display_name')
+          ? value.slice(0, 400) : value;
+      } else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+  function _readArchiveSidebarCache(windowName) {
+    try {
+      const raw = localStorage.getItem(ARCHIVE_SIDEBAR_CACHE_KEY);
+      if (!raw || raw.length > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) return null;
+      const cached = JSON.parse(raw);
+      const age = Date.now() - cached.savedAt;
+      if (cached.version !== 1 || cached.window !== windowName
+        || !Number.isFinite(age) || age < 0 || age > ARCHIVE_SIDEBAR_CACHE_TTL_MS
+        || !Array.isArray(cached.rows) || cached.rows.length > ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) return null;
+      return cached.rows.map(_archiveSidebarCacheRow).filter(Boolean);
+    } catch (_) { return null; }
+  }
+  function _writeArchiveSidebarCache(rows, windowName) {
+    try {
+      const entries = [];
+      // Leave room for the small envelope; count serialized characters so
+      // UTF-16 localStorage usage stays below 512 KiB even with long titles.
+      let chars = 256;
+      for (const row of rows.slice(0, ARCHIVE_SIDEBAR_CACHE_MAX_ROWS)) {
+        const projected = _archiveSidebarCacheRow(row);
+        if (!projected) continue;
+        const entry = JSON.stringify(projected);
+        if (chars + entry.length + 1 > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) continue;
+        entries.push(entry);
+        chars += entry.length + 1;
+      }
+      const envelope = JSON.stringify({ version: 1, window: windowName, savedAt: Date.now() });
+      localStorage.setItem(ARCHIVE_SIDEBAR_CACHE_KEY,
+        envelope.slice(0, -1) + ',"rows":[' + entries.join(',') + ']}');
+    } catch (_) { /* Storage disabled/full: the network list still works. */ }
+  }
+  let _archiveSidebarCachePending = null;
+  let _archiveSidebarCacheScheduled = false;
+  function _scheduleArchiveSidebarCache(rows, windowName) {
+    _archiveSidebarCachePending = { rows, windowName };
+    if (_archiveSidebarCacheScheduled) return;
+    _archiveSidebarCacheScheduled = true;
+    const save = () => {
+      _archiveSidebarCacheScheduled = false;
+      const pending = _archiveSidebarCachePending;
+      _archiveSidebarCachePending = null;
+      if (pending && pending.windowName === _archiveWindow()) {
+        _writeArchiveSidebarCache(pending.rows, pending.windowName);
+      }
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(save, { timeout: 2000 });
+    else setTimeout(save, 0);
+  }
+  function _paintArchiveSidebarCache() {
+    if (archiveLoaded || archiveData.length) return;
+    const rows = _readArchiveSidebarCache(_archiveWindow());
+    if (!rows || !rows.length) return;
+    archiveData = rows;
+    archiveLoaded = true;
+    _archiveFromLocalCache = true;
+    // Leave archiveDataWindow unset: this preview may have been truncated.
+    // Restore the selected reader only after authoritative rows arrive.
+    renderArchiveList(_archiveQuery(), { force: true, skipRestore: true });
+  }
+
+  // Dedupe concurrent /api/conversations/list fetches keyed by URL. Recovery,
   // PR-hydration, and refresh paths all call loadArchiveAll independently;
   // without this they fire 3+ parallel ~500KB requests for the same payload.
   const _archiveAllInflight = new Map();
@@ -70519,6 +70615,7 @@
         // an empty list.
         _archiveAllData.set(url, convs);
         if (etag) _archiveAllEtag.set(url, etag);
+        if (!opts.includePrs) _scheduleArchiveSidebarCache(convs, params.get('window'));
         return convs;
       } catch (e) {
         _clientLog('[ARCHIVE-DIAG] conversations/list threw: ' + ((e && e.name) || '?') + ' ' + String((e && e.message) || '').slice(0, 120));
@@ -70887,10 +70984,13 @@
         return archiveData;
       }
       if (!convs.length && Array.isArray(archiveData) && archiveData.length) {
-        _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
-          + archiveData.length + ' (empty payload)');
-        return archiveData;
+        if (!_archiveFromLocalCache) {
+          _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
+            + archiveData.length + ' (empty payload)');
+          return archiveData;
+        }
       }
+      _archiveFromLocalCache = false;
       archiveData = _applyPendingDashboardConversationPatches(
         _mergeArchivePrSnapshot(convs, archiveData)
       );
@@ -71603,6 +71703,7 @@
     // its small metadata request first so its scope picker remains usable
     // while a cold archive walk is still reading conversation history.
     _renderQueuePanel();
+    _paintArchiveSidebarCache();
     await refreshArchiveData();
     // Shape only the saved active row first. This uses the normal archive
     // pipeline to initialize session metadata/capabilities, but avoids making
