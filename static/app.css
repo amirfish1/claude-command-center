@@ -31126,3 +31126,11 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 .ffv { position: fixed; }
 .ffv-md { padding: 4px 6px; font-size: 14px; }
 .ffv-view:has(.ffv-md) { display: block; }
+
+/* Continue-new dialog: editable copy of the prompt that will be sent. */
+.f2c-panel .f2c-config .f2c-prompt {
+  width: 100%; box-sizing: border-box; min-height: 84px; max-height: 220px; resize: vertical;
+  padding: 8px 10px; font: inherit; font-size: 13px; line-height: 1.45; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+}
+.f2c-panel .f2c-config .f2c-prompt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

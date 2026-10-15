@@ -4357,7 +4357,7 @@
   // never grows past one line. Reads as a sentence, not a form; model options
   // are scoped to the chosen engine — picking Codex must never leave
   // "sonnet-5" sitting in the box.
-  function f2ConfigHtml(launch) {
+  function f2ConfigHtml(launch, promptText) {
     // Only enabled engines are offered — except the one the select is
     // currently showing, which is never pulled out from under it (the same
     // rule applyDisabledEnginesToPickers uses for the spawn pickers).
@@ -4375,6 +4375,11 @@
       +   (efforts.length ? field('Effort', f2SelectHtml('effort', efforts, launch.effort)) : '')
       + '</div>'
       + f2QuickPickHtml(launch)
+      // The exact task the new session receives: seeded from the composer,
+      // editable here, and sent verbatim by Continue.
+      + '<label class="f2c-field f2c-prompt-field"><span class="f2c-field-label">Prompt</span>'
+      +   '<textarea class="f2c-prompt" data-f2-prompt rows="4" spellcheck="true"'
+      +   ' placeholder="Task for the new session (optional)">' + escapeHtml(promptText || '') + '</textarea></label>'
       // Every change applies immediately; the primary button starts the new
       // session, Close just dismisses the sheet.
       + '<div class="f2c-actions">'
@@ -4420,7 +4425,7 @@
       // Nested inside .route (not a sibling in .routes) so it can anchor via
       // CSS to the pill it belongs to and drop directly below it instead of
       // floating wherever the toolbar row's flex flow happens to place it.
-      + (st.configOpen ? f2ConfigHtml(st.launch) : '')
+      + (st.configOpen ? f2ConfigHtml(st.launch, st.promptEdited ? st.promptDraft : (st.composerText || '')) : '')
       + '</div>';
   }
 
@@ -4499,6 +4504,7 @@
 
     const st = f2StateFor(paneId, ctx.sid, gate);
     st.ctx = ctx;
+    st.composerText = f2ComposerText(paneId);
     const tokensLabel = f2FmtTokens(gate.tokens);
     const modelLabel = String(gate.model || 'the current model');
     const ageLabel = f2FmtAge(gate.ageMin);
@@ -4549,7 +4555,7 @@
     if (btn) btn.disabled = true;
     const sid = st.sid;
     const paneKey = f2PaneKey(paneId);
-    const ctx = Object.assign({}, st.ctx || {}, { text: f2ComposerText(paneId) });
+    const ctx = Object.assign({}, st.ctx || {}, { text: st.promptEdited ? st.promptDraft : f2ComposerText(paneId) });
     const launch = st.launch;
     // The parent row already has the human-facing title. Keep it on the
     // continuation instead of exposing an opaque session-id fragment. No
@@ -4610,6 +4616,7 @@
         // survive so going back to the origin session reopens the panel
         // exactly as it was (OPS-935).
         f2ManualPanes.delete(paneKey);
+        st.promptEdited = false; st.promptDraft = '';
         const newSid = d.session_id || '';
         const spawnId = d.spawn_id || d.pid || '';
         const placeholder = spawnId
@@ -4809,6 +4816,18 @@
       return;
     }
     try { f2RunContinue(paneId, st, el); } catch (_) {}
+  });
+
+  // Edits to the dialog's prompt box live on pane state (never re-rendered
+  // mid-typing, which would steal focus) and are what Continue sends.
+  document.addEventListener('input', (ev) => {
+    const ta = ev.target && ev.target.closest && ev.target.closest('.f2c-panel [data-f2-prompt]');
+    if (!ta) return;
+    const pane = ta.closest('.conv-pane');
+    const st = f2PaneState.get(f2PaneKey((pane && pane.getAttribute('data-pane-id')) || null));
+    if (!st) return;
+    st.promptDraft = ta.value;
+    st.promptEdited = true;
   });
 
   // Launch-spec overrides. Persisted on the pane state (not the DOM) so an
