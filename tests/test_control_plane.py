@@ -762,7 +762,7 @@ class TestEngineHost(unittest.TestCase):
             return None
 
         @staticmethod
-        def _tool_child_blocks_inject(_entry):
+        def _tool_child_blocks_inject(_entry, **_kwargs):
             return False
 
         def _reattach_spawned_orphans(self, **_kwargs):

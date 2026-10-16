@@ -1,0 +1,1 @@
+- Messages sent to a headless session no longer sit on "sending..." for up to 10 minutes after a turn or /compact ends while a background subagent still runs a long tool.

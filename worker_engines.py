@@ -626,7 +626,9 @@ class EngineHost:
                 # child presence with no age cap. `_tool_child_blocks_inject`
                 # is the same signal but bounded (_INJECT_TOOL_CHILD_MAX_HOLD_S),
                 # matching the in-process terminal-queue gate's intent.
-                tool_child_blocks = bool(legacy._tool_child_blocks_inject(spawn))
+                tool_child_blocks = bool(
+                    legacy._tool_child_blocks_inject(spawn, require_open_turn=True)
+                )
                 return {
                     "ok": True,
                     "owned": True,

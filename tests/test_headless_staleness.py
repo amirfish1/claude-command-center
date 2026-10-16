@@ -1437,3 +1437,25 @@ def test_background_subagent_events_do_not_reopen_finished_turn(server_mod, tmp_
     with log.open("a") as fh:
         fh.write(json.dumps({"type": "assistant"}) + "\n")
     assert server_mod._headless_turn_in_progress(entry) is True
+
+
+def test_tool_child_ignored_after_turn_result_for_queue_drain(server_mod, tmp_path):
+    """CCC-1294: a background subagent's Bash child must not hold queued input
+    once the main turn has produced its result."""
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    now = 1_000_000.0
+    child = {"pid": 99, "command": "sleep 500", "started_at": now - 30}
+    with mock.patch.object(server_mod, "_spawn_entry_active_tool_child",
+                           return_value=child):
+        # Turn open (target not reached): child still blocks either way.
+        entry["input_result_target"] = 5
+        assert server_mod._tool_child_blocks_inject(
+            entry, now=now, require_open_turn=True) is True
+        # Turn closed: the strict /clear//compact check still blocks, the
+        # queue-drain check does not.
+        log.write_text(_result_lines(5))
+        assert server_mod._tool_child_blocks_inject(entry, now=now) is True
+        assert server_mod._tool_child_blocks_inject(
+            entry, now=now, require_open_turn=True) is False

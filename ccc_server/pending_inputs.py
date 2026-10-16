@@ -3170,9 +3170,16 @@ def _spawn_entry_active_tool_child(entry):
 _INJECT_TOOL_CHILD_MAX_HOLD_S = 600
 
 
-def _tool_child_blocks_inject(spawn, now=None):
+def _tool_child_blocks_inject(spawn, now=None, require_open_turn=False):
     """True if `spawn` has an active tool child young enough to justify holding
     queued input for it.
+
+    With ``require_open_turn`` a child only blocks while the main turn is
+    still open. After the turn's ``result`` the child belongs to background
+    work (a subagent's Bash), so new input starts a fresh turn immediately
+    instead of sitting on "sending..." for up to the hold cap (CCC-1294).
+    Used by the queue-drain gate only; /clear and /compact keep the stricter
+    check because they must not race a live tool.
 
     Deliberately NOT used by the retire/staleness call sites: those kill the
     process, where a false "not busy" would destroy real work. Here the only
@@ -3180,6 +3187,8 @@ def _tool_child_blocks_inject(spawn, now=None):
     """
     child = _core._spawn_entry_active_tool_child(spawn)
     if not child:
+        return False
+    if require_open_turn and not _core._headless_turn_in_progress(spawn):
         return False
     started_at = child.get("started_at")
     if not started_at:
@@ -5693,7 +5702,9 @@ def _start_resume_queue_watcher() -> None:
                             continue
                     if status.get("live") and not status.get("tty"):
                         spawn = _core._find_live_spawn_entry_for_session(sid)
-                        if spawn is not None and _core._tool_child_blocks_inject(spawn):
+                        if spawn is not None and _core._tool_child_blocks_inject(
+                            spawn, require_open_turn=True,
+                        ):
                             _core._terminal_queue_hold_or_expire(sid, "tool_child_blocks_inject")
                             continue
                         # A live WatchTower-tracked worker's FIFO is a known,
