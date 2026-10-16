@@ -147,17 +147,29 @@ def _session_config(entry):
     return config
 
 
-def send(conversation_id, text, mode="send", registry_dir=None):
+def _is_running(entry):
+    data = _rpc(entry, "GetAllCascadeTrajectories", {"excludeSubtrajectories": True})
+    summary = (data.get("trajectorySummaries") or {}).get(entry["conversationId"]) or {}
+    return summary.get("status") == "CASCADE_RUN_STATUS_RUNNING"
+
+
+def send(conversation_id, text, mode="send", registry_dir=None, require_running=False):
     """Deliver ``text`` into the live agy session, or return None to fall back.
 
     The LS answers ``{}`` for an accepted message; agy then runs it (now, or
     after the current turn for a plain send) and persists it in the
     conversation like any typed turn.
+
+    ``require_running`` is for a headless `agy -p` run: it handles a message
+    queued mid-turn before it exits, but once its turn has ended it is about
+    to exit and would drop the message, so only deliver while it is running.
     """
     entry = lookup(conversation_id, registry_dir)
     if not entry or not text:
         return None
     try:
+        if require_running and not _is_running(entry):
+            return None
         config = _session_config(entry)
         if not config:
             return None

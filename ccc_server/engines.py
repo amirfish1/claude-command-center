@@ -4349,6 +4349,14 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     started = _spawn_entry_started_epoch(s)
                     if started and (time.time() - started) > _antigravity_resume_stale_seconds():
                         continue
+                    # Our own headless run is mid-turn. If its agent
+                    # registered the language server, hand the message to
+                    # that run directly: it handles a message queued
+                    # mid-turn before exiting (verified on agy 1.3.6).
+                    delivered = antigravity_ls.send(
+                        session_id, text, mode=mode, require_running=True)
+                    if delivered:
+                        return delivered
                     if mode == "steer":
                         # The text is already sitting in the durable queue
                         # (that's what put the Steer button in front of the
@@ -4379,10 +4387,13 @@ def resume_session_antigravity(session_id, text, mode="send"):
     # A live agy process that registered its language server (any `ccc` call
     # from inside it does) takes the message directly, mid-turn steer
     # included -- including a TUI the terminal-holder check below would refuse.
-    delivered = antigravity_ls.send(session_id, text, mode=mode)
+    # An untracked headless `-p` run only takes it while still mid-turn.
+    term_pid = _antigravity_terminal_holder_pid(session_id)
+    live_pid = _antigravity_live_resume_pid(session_id) if term_pid is None else None
+    delivered = antigravity_ls.send(
+        session_id, text, mode=mode, require_running=live_pid is not None)
     if delivered:
         return delivered
-    term_pid = _antigravity_terminal_holder_pid(session_id)
     if term_pid is not None:
         return {
             "ok": False,
@@ -4391,7 +4402,6 @@ def resume_session_antigravity(session_id, text, mode="send"):
             "via": "antigravity-resume",
             "error": f"This Antigravity conversation is open in a terminal (pid {term_pid}). Type in that terminal, or close it to send from here.",
         }
-    live_pid = _antigravity_live_resume_pid(session_id)
     if live_pid is not None:
         # `_spawned_sessions` has no entry for this sid (registry reattach
         # can drop a live PID under load, CCC-1011) but a real `agy

@@ -17,6 +17,7 @@ USER_CONFIG = {"plannerConfig": {"planModel": "MODEL_PLACEHOLDER_M300"}}
 
 class _FakeLS(BaseHTTPRequestHandler):
     calls = []
+    status = "CASCADE_RUN_STATUS_RUNNING"
 
     def log_message(self, *a):
         pass
@@ -34,6 +35,8 @@ class _FakeLS(BaseHTTPRequestHandler):
                 {"plannerResponse": {}},
                 {"userInput": {"items": [{"text": "second"}], "userConfig": USER_CONFIG}},
             ]}})
+        elif method == "GetAllCascadeTrajectories":
+            self._reply(200, {"trajectorySummaries": {CID: {"status": type(self).status}}})
         else:
             self._reply(200, {})
 
@@ -51,6 +54,7 @@ class AntigravityLSTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.reg = self.tmp.name
         _FakeLS.calls = []
+        _FakeLS.status = "CASCADE_RUN_STATUS_RUNNING"
         ls._config_cache.clear()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeLS)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -106,6 +110,17 @@ class AntigravityLSTest(unittest.TestCase):
         methods = [m for m, _ in _FakeLS.calls]
         self.assertEqual(methods.count("GetCascadeTrajectory"), 1)
         self.assertEqual(_FakeLS.calls[-1][1]["deliveryStrategy"], ls.DELIVERY_STEER)
+
+    def test_headless_run_takes_message_only_mid_turn(self):
+        ls.register_from_env(self._env(), registry_dir=self.reg)
+        self.assertEqual(
+            ls.send(CID, "mid", registry_dir=self.reg, require_running=True)["via"],
+            "antigravity-ls")
+        _FakeLS.status = "CASCADE_RUN_STATUS_IDLE"
+        sends = [m for m, _ in _FakeLS.calls].count("SendUserCascadeMessage")
+        self.assertIsNone(ls.send(CID, "late", registry_dir=self.reg, require_running=True))
+        self.assertEqual([m for m, _ in _FakeLS.calls].count("SendUserCascadeMessage"), sends)
+        self.assertIsNotNone(ls.lookup(CID, registry_dir=self.reg))
 
     def test_unregistered_session_falls_back(self):
         self.assertIsNone(ls.send(CID, "hello", registry_dir=self.reg))
