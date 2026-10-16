@@ -3762,14 +3762,17 @@
       };
     }
 
-    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken, slotMs = 3 * 3600000) {
+    // The previous cycle is [periodStart - 7d, periodStart). Accumulate from that
+    // fixed start (not the first visible row) and stop at the reset, so the
+    // 7-day view and the zoomed 48h view end on the same % (THROUGHPUT-1).
+    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken, slotMs = 3 * 3600000, periodStartMs = null) {
       const firstPreResetRow = sourceRows.find(row => row && row._prePeriod && !row._projected);
-      const start = firstPreResetRow ? chartRowTimeMs(firstPreResetRow) : null;
-      if (start == null) return null;
+      if (!firstPreResetRow || !Number.isFinite(periodStartMs)) return null;
+      const start = periodStartMs - 7 * 86400000;
       const events = ((componentSummary && componentSummary.hourly) || []).map(row => ({
         at: throughputSummaryRowTimeMs(row),
         tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
-      })).filter(event => event.at != null && event.at >= start);
+      })).filter(event => event.at != null && event.at >= start && event.at < periodStartMs);
       let lastPreResetIndex = -1;
       const values = sourceRows.map((row, index) => {
         const at = chartRowTimeMs(row);
@@ -3779,13 +3782,15 @@
           .reduce((sum, event) => sum + event.tokens, 0) * pctPerToken;
       });
       if (lastPreResetIndex < 0) return null;
+      // The last pre-reset column stands for the cycle's end, whatever its slot size.
+      const endPct = events.reduce((sum, event) => sum + event.tokens, 0) * pctPerToken;
+      values[lastPreResetIndex] = endPct;
       return {
         actual: values,
         values,
-        currentPct: values[lastPreResetIndex] || 0,
+        currentPct: endPct,
         lastActualIndex: lastPreResetIndex,
-        projectedEnd: values[lastPreResetIndex] || 0,
-        startAtZero: true,
+        projectedEnd: endPct,
       };
     }
 
@@ -3797,7 +3802,6 @@
         if (value == null) return;
         const point = `${xScale(index + 1)} ${yPct(value)}`;
         if (index <= series.lastActualIndex) {
-          if (!actualPath && series.startAtZero) actualPath = `M ${xScale(index + 1)} ${yPct(0)} `;
           actualPath += actualPath ? `L ${point} ` : `M ${point} `;
         }
         if (index >= series.lastActualIndex) projectedPath += projectedPath ? `L ${point} ` : `M ${point} `;
@@ -4478,9 +4482,11 @@
         const primaryComponent = activeThroughputEngine === 'codex' ? codexComponent
           : (activeThroughputEngine === 'kimi' ? kimiComponent : claudeComponent);
         // The current view includes a small lead-in from before the latest reset.
-        // Preserve its own zero-based progression without joining it to the new
+        // Draw the previous cycle's running total separately from the new
         // billing-period line, whose ending value must match the live meter.
-        const previousSeries = buildPreviousQuotaSeries(primaryComponent, sourceRows, ppt, chartSlotMs);
+        const previousSeries = buildPreviousQuotaSeries(
+          primaryComponent, sourceRows, ppt, chartSlotMs, selPeriodStart ? selPeriodStart.getTime() : null
+        );
         // Kimi's weekly line is purple so it never reads as the Claude meter.
         const weeklyLineColor = activeThroughputEngine === 'kimi' ? '#c084fc' : '#f59e0b';
 
