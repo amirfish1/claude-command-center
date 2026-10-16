@@ -12983,6 +12983,9 @@
     _ttsNeuralCooldownUntil = Date.now() + ms;
     _ttsNeuralCooldownWhy = 'HTTP ' + status;
     _ttsLog('COOLDOWN', Math.round(ms / 1000) + 's after ' + _ttsNeuralCooldownWhy);
+    // Re-arm once the cooldown ends: nothing else re-triggers the prefetch, so
+    // an open, idle session would otherwise never fill its speaker cache.
+    setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, ms + 500);
   }
   const _TTS_HEAD_CHARS = 80;
   // The free voice has no Hebrew (it spells out the letters), so Hebrew text goes
@@ -13100,6 +13103,10 @@
     if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
+  // A prefetch skipped while the tab was hidden has no other trigger.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { try { scheduleTtsPrefetch(); } catch (_) {} }
+  });
   // Called after a transcript render; waits for the text to stop changing.
   function scheduleTtsPrefetch() {
     clearTimeout(_ttsPrefetchTimer);
