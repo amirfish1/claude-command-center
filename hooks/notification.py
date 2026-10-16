@@ -21,10 +21,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from _notify import notify
+    from _notify import notify, is_throwaway_cwd
 except ImportError:
     def notify(*_a, **_k):
         pass
+
+    def is_throwaway_cwd(_cwd):
+        return False
 
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 
@@ -57,12 +60,13 @@ def main():
         # macOS banner so the user knows Claude is blocked on a permission
         # prompt even when CCC isn't focused. Falls through silently on
         # non-macOS systems or when CCC_NOTIFY=0.
-        notify(
-            title="Claude needs your approval",
-            message=message or "Permission requested",
-            subtitle=session_id[:8],
-            session_id=session_id,
-        )
+        if not is_throwaway_cwd(data.get("cwd")):
+            notify(
+                title="Claude needs your approval",
+                message=message or "Permission requested",
+                subtitle=session_id[:8],
+                session_id=session_id,
+            )
 
     except Exception:
         pass

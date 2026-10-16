@@ -14,10 +14,13 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from _notify import notify
+    from _notify import notify, is_throwaway_cwd
 except ImportError:
     def notify(*_a, **_k):
         pass
+
+    def is_throwaway_cwd(_cwd):
+        return False
 
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 STATE_DIR = os.path.expanduser("~/.claude/command-center")
@@ -176,7 +179,8 @@ def main():
         # match the banner to a card in the kanban.
         # CCC's own helper runs (auto-titler etc.) live in the scratch dir and
         # never wait on a human, so a banner for them is pure noise.
-        if "command-center/scratch" not in (data.get("cwd") or ""):
+        if ("command-center/scratch" not in (data.get("cwd") or "")
+                and not is_throwaway_cwd(data.get("cwd"))):
             notify(
                 title="Claude Command Center",
                 message="Ready for your input",

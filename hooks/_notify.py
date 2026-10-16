@@ -55,6 +55,17 @@ def _debounced(session_id, title):
     return False
 
 
+_TEMP_CWD_PREFIXES = ("/private/var/folders/", "/var/folders/", "/tmp/", "/private/tmp/")
+
+
+def is_throwaway_cwd(cwd):
+    """True for sessions started in an OS temp dir. Eval harnesses and other
+    scripts run hundreds of headless `claude -p` runs there; none wait on a
+    human, so a banner per run is noise (one flood hit ~100 banners/minute)."""
+    cwd = (cwd or "").rstrip("/") + "/"
+    return cwd.startswith(_TEMP_CWD_PREFIXES)
+
+
 def _esc(s):
     """Escape characters that would break out of an AppleScript string
     literal. Keep it simple: backslash, double-quote, and trim length so
