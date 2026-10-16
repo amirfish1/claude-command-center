@@ -213,6 +213,18 @@ def _emit(item, publish=None, os_notify=False):
     return item
 
 
+def _wants_os_banner(flag):
+    """`os: true` always banners via osascript; `os: "auto"` only when no
+    dashboard is listening (a connected app or browser shows its own, clickable
+    banner, so a second unclickable one would be noise)."""
+    if flag == "auto":
+        try:
+            return not _core._dashboard_events.listener_active()
+        except Exception:
+            return True
+    return bool(flag)
+
+
 def _rate_ok(now):
     with _lock:
         _rate_bucket[:] = [t for t in _rate_bucket if now - t < _RATE_WINDOW_S]
@@ -276,10 +288,18 @@ def post(data, publish=None, now=None):
         return {"ok": False, "error": err}, 400
     if not _rate_ok(now):
         return {"ok": False, "error": "too many notifications; try again shortly"}, 429
+    sid = item.get("session_id")
+    if sid and item["kind"] in ("needs_input", "task"):
+        # One banner per session turn: the hook and the session watcher both
+        # report the same turn end, and whichever lands first wins.
+        window = _NEEDS_INPUT_COOLDOWN_S
+        if not _cooldown_ok(sid, "needs_input", now, window):
+            return {"ok": True, "deduped": True, "id": ""}, 200
+        _last_kind_emit[(sid, "task")] = now
     dup_id = _dedupe_hit(item, now)
     if dup_id:
         return {"ok": True, "deduped": True, "id": dup_id}, 200
-    _emit(item, publish=publish, os_notify=bool(data.get("os")))
+    _emit(item, publish=publish, os_notify=_wants_os_banner(data.get("os")))
     if item.get("held"):
         return {"ok": True, "id": item["id"], "held": True}, 200
     return {"ok": True, "id": item["id"]}, 200
@@ -691,7 +711,7 @@ def _compose_digest(totals, savings, now):
         "kind": "digest",
         "title": "Your daily agent report",
         "body": body,
-        "url": "/",
+        "url": "/throughput",
         "session_id": "",
         "ts": float(now),
     }
@@ -713,7 +733,7 @@ def _milestone_items(totals, savings, state, now):
                 "title": f"{_fmt_usd(rung)} of agent work",
                 "body": f"Your AI dev team has now done {_fmt_usd(rung)} of work "
                         "at API prices. Not bad for a local dashboard.",
-                "url": "/",
+                "url": "/throughput",
                 "session_id": "",
                 "ts": float(now),
                 "_milestone_key": key,
@@ -727,7 +747,7 @@ def _milestone_items(totals, savings, state, now):
                 "kind": "milestone",
                 "title": f"{_fmt_usd(rung)} saved on free models",
                 "body": f"Free-model runs have saved {_fmt_usd(rung)} so far.",
-                "url": "/",
+                "url": "/throughput",
                 "session_id": "",
                 "ts": float(now),
                 "_milestone_key": key,
@@ -741,7 +761,7 @@ def _milestone_items(totals, savings, state, now):
                 "kind": "milestone",
                 "title": "1 billion tokens on free models",
                 "body": "A billion tokens of agent work, all at $0.",
-                "url": "/",
+                "url": "/throughput",
                 "session_id": "",
                 "ts": float(now),
                 "_milestone_key": key,

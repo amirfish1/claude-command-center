@@ -14,9 +14,9 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from _notify import notify, is_throwaway_cwd
+    from _notify import notify_session, is_throwaway_cwd
 except ImportError:
-    def notify(*_a, **_k):
+    def notify_session(*_a, **_k):
         pass
 
     def is_throwaway_cwd(_cwd):
@@ -181,13 +181,13 @@ def main():
         # never wait on a human, so a banner for them is pure noise.
         if ("command-center/scratch" not in (data.get("cwd") or "")
                 and not is_throwaway_cwd(data.get("cwd"))):
-            notify(
-                title="Claude Command Center",
-                message="Ready for your input",
-                subtitle=(session_title(session_id, data.get("transcript_path") or "")
-                          or first_prompt_snippet(data.get("transcript_path") or "")
-                          or session_id[:8]),
-                session_id=session_id,
+            notify_session(
+                "needs_input",
+                (session_title(session_id, data.get("transcript_path") or "")
+                 or first_prompt_snippet(data.get("transcript_path") or "")
+                 or session_id[:8]),
+                "Ready for your input",
+                session_id,
             )
 
         request_auto_title(session_id)

@@ -33,6 +33,7 @@
   // Approved pop-ups. Nothing else shows until Amir approves it.
   var APPROVED = [
     'moment-zero', // approved 2026-10-06
+    'notify-task', // approved 2026-10-16: clickable session-finished/needs-you banners
   ];
 
   var NOTIFY_KIND_IDS = {

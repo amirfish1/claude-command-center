@@ -36,6 +36,7 @@ ALL = {
 # Approved pop-ups. Nothing else shows until Amir approves it.
 APPROVED = frozenset({
     "moment-zero",  # approved 2026-10-06
+    "notify-task",  # approved 2026-10-16: clickable session-finished/needs-you banners
 })
 
 _NOTIFY_KIND_IDS = {

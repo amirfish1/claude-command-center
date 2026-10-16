@@ -1,0 +1,1 @@
+- Session "ready for your input" and approval banners now go through the CCC server: in the app they open the session when clicked, repeat banners for one session collapse into one, and the old unclickable macOS banner is only a fallback when no dashboard is open. Digest and milestone banners open the throughput page.

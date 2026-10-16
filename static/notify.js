@@ -263,6 +263,8 @@
           body: String(item.body || ''),
           url: String(item.url || ''),
           kind: String(item.kind || 'info'),
+          // Same session -> one banner that updates instead of a pile.
+          tag: item.session_id ? 'session-' + item.session_id : '',
         });
         return true;
       }

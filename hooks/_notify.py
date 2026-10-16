@@ -17,10 +17,12 @@ notify() is debounced per (session, title) pair via CCC_NOTIFY_COOLDOWN_S
 (default 30s) so bursts collapse to one sound.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import time
+import urllib.request
 
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 
@@ -96,3 +98,38 @@ def notify(title, message, subtitle="", session_id=""):
         )
     except OSError:
         pass
+
+
+PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
+
+
+def notify_session(kind, title, message, session_id):
+    """Route a session banner through the CCC server (POST /api/notify).
+
+    The server shows it in the open dashboard/app, where clicking it lands on
+    the session (/?session=<id>), and falls back to an osascript banner only
+    when no dashboard is listening. Server down or unreachable: the old direct
+    osascript banner, so a turn end is never silent."""
+    if not _enabled() or not session_id:
+        return
+    try:
+        with open(PORT_FILE) as f:
+            base = f.read().strip()
+        if not base:
+            raise OSError("no port")
+        req = urllib.request.Request(
+            f"{base}/api/notify",
+            data=json.dumps({
+                "kind": kind,
+                "title": title,
+                "body": message,
+                "url": f"/?session={session_id}",
+                "session_id": session_id,
+                "os": "auto",
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=1.5).read()
+    except Exception:
+        notify("Claude Command Center", message, subtitle=title, session_id=session_id)

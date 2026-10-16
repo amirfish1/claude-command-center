@@ -314,3 +314,21 @@ def test_unapproved_kind_is_held(monkeypatch, tmp_path):
     assert status == 200 and resp["held"] is True
     assert sent == []
     assert notify.history() == []
+
+
+def test_hook_item_dedupes_with_session_watcher_and_picks_os_banner():
+    notify.reset_for_tests()
+    sent = []
+    body = {"kind": "needs_input", "title": "My session", "body": "Ready for your input",
+            "url": "/?session=s9", "session_id": "s9", "os": "auto"}
+    resp, status = notify.post(dict(body), publish=sent.append, now=1000.0)
+    assert status == 200 and resp.get("id")
+    # The session watcher reporting the same turn end must not add a second banner.
+    resp2, _ = notify.post(dict(body, title="other"), publish=sent.append, now=1001.0)
+    assert resp2.get("deduped")
+    assert len(sent) == 1
+
+
+def test_scheduled_items_land_on_throughput():
+    assert notify._wants_os_banner(True) is True
+    assert notify._wants_os_banner(False) is False

@@ -21,9 +21,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from _notify import notify, is_throwaway_cwd
+    from _notify import notify_session, is_throwaway_cwd
 except ImportError:
-    def notify(*_a, **_k):
+    def notify_session(*_a, **_k):
         pass
 
     def is_throwaway_cwd(_cwd):
@@ -61,11 +61,11 @@ def main():
         # prompt even when CCC isn't focused. Falls through silently on
         # non-macOS systems or when CCC_NOTIFY=0.
         if not is_throwaway_cwd(data.get("cwd")):
-            notify(
-                title="Claude needs your approval",
-                message=message or "Permission requested",
-                subtitle=session_id[:8],
-                session_id=session_id,
+            notify_session(
+                "needs_input",
+                "Claude needs your approval",
+                message or "Permission requested",
+                session_id,
             )
 
     except Exception:

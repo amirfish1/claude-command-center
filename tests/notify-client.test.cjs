@@ -35,17 +35,17 @@ test('notification API supports callable and object callers without bypassing ap
     await page.goto(url, { waitUntil: 'load' });
     assert.equal(await page.evaluate(() => typeof window.cccNotify), 'function');
     const held = await page.evaluate(() => ({
-      callable: window.cccNotify({ title: 'Held task', kind: 'task' }),
-      object: window.cccNotify.show({ title: 'Held task', kind: 'task' }),
+      callable: window.cccNotify({ title: 'Held digest', kind: 'digest' }),
+      object: window.cccNotify.show({ title: 'Held digest', kind: 'digest' }),
     }));
     assert.deepEqual(held, { callable: false, object: false });
     assert.equal(await page.$('.ccc-toast'), null);
     const shown = await page.evaluate(() => {
-      localStorage.setItem('ccc-popups-preview', 'notify-task');
-      return window.cccNotify({ title: 'Task finished', body: 'A synthetic test.', kind: 'task' });
+      localStorage.setItem('ccc-popups-preview', 'notify-digest');
+      return window.cccNotify({ title: 'Daily report', body: 'A synthetic test.', kind: 'digest' });
     });
     assert.equal(shown, true);
-    await page.waitForSelector('.ccc-toast-kind-task');
+    await page.waitForSelector('.ccc-toast-kind-digest');
     assert.equal(await page.$('[aria-label="Turn on notifications"]'), null);
     const legacy = await page.evaluate(() => {
       localStorage.setItem('ccc-popups-preview', 'notify-other');
