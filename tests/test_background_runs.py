@@ -34,3 +34,4 @@ def test_groups_temp_dir_runs_by_spawner_and_ignores_real_projects(tmp_path):
     assert by["evalx"]["tokens_last_day"] == 26  # both runs are inside the day window
     assert by["unknown"]["runs"] == 1
     assert p["totals"]["runs"] == 3
+    assert by["evalx"]["cost_usd"] > 0

@@ -68805,7 +68805,7 @@
     $bgRunsPanel.innerHTML = (p.groups || []).filter(g => g.runs_last_day).map(g => {
       const name = escapeHtml(g.spawner + (g.kind ? ' · ' + g.kind : ''));
       const cls = alerting.has(g.spawner + '|' + g.kind) ? ' is-alert' : '';
-      return `<div class="bg-runs-row${cls}"><span>${name}</span><span class="bg-runs-meta">${g.runs_last_hour}/h · ${g.runs_last_day}/d · ${formatTokens(g.tokens_last_day)} tok</span></div>`;
+      return `<div class="bg-runs-row${cls}"><span>${name}</span><span class="bg-runs-meta">${g.runs_last_hour}/h · ${g.runs_last_day}/d · ${formatTokens(g.tokens_last_day)} tok · ~$${(g.cost_usd_last_day || 0).toFixed(2)}</span></div>`;
     }).join('');
   }
   async function pollBgRuns() {

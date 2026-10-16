@@ -53,14 +53,27 @@ def _temp_transcripts(projects_root):
             yield f.name[: -len(".jsonl")], f.path, st.st_mtime
 
 
+def _estimate_cost(model, tin, tcache, tout):
+    """List-price estimate; cache tokens priced at the cache-read rate, so a
+    lower bound (the per-file aggregate does not split cache writes)."""
+    w = _core._throughput_usage_weights(model or "", engine="claude")
+    return (tin * w["rate_in"] + tcache * w["rate_cache_read"] + tout * w["rate_out"]) / 1_000_000
+
+
 def _tokens(path):
     agg = _core._stats_get_file_agg(path) or {}
-    total = {"in": 0, "cache": 0, "out": 0, "messages": 0}
+    total = {"in": 0, "cache": 0, "out": 0, "messages": 0, "cost": 0.0}
+    models = {}
+    for day in (agg.get("by_date") or {}).values():
+        for m, n in (day.get("models") or {}).items():
+            models[m] = models.get(m, 0) + n
     for day in (agg.get("by_date") or {}).values():
         total["in"] += day.get("in_tokens", 0)
         total["cache"] += day.get("cache_tokens", 0)
         total["out"] += day.get("out_tokens", 0)
         total["messages"] += day.get("messages", 0)
+    top = max(models, key=models.get) if models else ""
+    total["cost"] = _estimate_cost(top, total["in"], total["cache"], total["out"])
     return total
 
 
@@ -68,6 +81,24 @@ def _spawner_key(marker):
     marker = marker or {}
     via = marker.get("spawned_via") or marker.get("caller") or UNKNOWN
     return via, marker.get("kind") or ""
+
+
+_ALERTED = set()
+
+
+def _log_new_alerts(alerts):
+    """One activity-log line when a spawner first crosses the threshold (no
+    per-run notification; the sidebar pill carries the live signal)."""
+    now_keys = {(a["spawner"], a["kind"]) for a in alerts}
+    for a in alerts:
+        if (a["spawner"], a["kind"]) not in _ALERTED:
+            try:
+                _core._log_activity("BACKGROUND_RUNS", "ALERT",
+                                    f"{a['spawner']}/{a['kind']} {a['runs_last_hour']} runs in the last hour")
+            except Exception:
+                pass
+    _ALERTED.intersection_update(now_keys)
+    _ALERTED.update(now_keys)
 
 
 def background_runs_payload(now=None, projects_root=None, markers=None, use_cache=True):
@@ -82,7 +113,8 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
         g = groups.setdefault((via, kind), {
             "spawner": via, "kind": kind, "runs": 0, "runs_last_hour": 0,
             "runs_last_day": 0, "in_tokens": 0, "cache_tokens": 0,
-            "out_tokens": 0, "tokens_last_day": 0, "last_run_ts": 0.0,
+            "out_tokens": 0, "tokens_last_day": 0, "cost_usd": 0.0,
+            "cost_usd_last_day": 0.0, "last_run_ts": 0.0,
         })
         t = _tokens(path)
         age = now - mtime
@@ -90,12 +122,17 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
         g["in_tokens"] += t["in"]
         g["cache_tokens"] += t["cache"]
         g["out_tokens"] += t["out"]
+        g["cost_usd"] += t["cost"]
         if age <= _HOUR:
             g["runs_last_hour"] += 1
         if age <= _DAY:
             g["runs_last_day"] += 1
             g["tokens_last_day"] += t["in"] + t["cache"] + t["out"]
+            g["cost_usd_last_day"] += t["cost"]
         g["last_run_ts"] = max(g["last_run_ts"], mtime)
+    for g in groups.values():
+        g["cost_usd"] = round(g["cost_usd"], 4)
+        g["cost_usd_last_day"] = round(g["cost_usd_last_day"], 4)
     rows = sorted(groups.values(), key=lambda g: (-g["runs_last_hour"], -g["tokens_last_day"]))
     payload = {
         "ok": True,
@@ -105,12 +142,14 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
             "runs_last_hour": sum(g["runs_last_hour"] for g in rows),
             "runs_last_day": sum(g["runs_last_day"] for g in rows),
             "tokens_last_day": sum(g["tokens_last_day"] for g in rows),
+            "cost_usd_last_day": round(sum(g["cost_usd_last_day"] for g in rows), 4),
         },
         "alerts": [
             {"spawner": g["spawner"], "kind": g["kind"], "runs_last_hour": g["runs_last_hour"]}
             for g in rows if g["runs_last_hour"] >= _core.BACKGROUND_RUNS_HOURLY_ALERT
         ],
     }
+    _log_new_alerts(payload["alerts"])
     if use_cache:
         _CACHE.update(ts=now, payload=payload)
     return payload
