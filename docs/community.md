@@ -7,23 +7,25 @@ question, an idea, a bug, or a setup worth sharing.
 
 | You have | Go to | Why |
 |---|---|---|
-| A question or "how do I" | [Discussions → Q&A](https://github.com/amirfish1/claude-command-center/discussions/categories/q-a) | Public, searchable, so the next person finds the answer too. |
+| Live chat, fleet setups, or quick questions | [Discord (`#general-fleet`)](https://discord.gg/aK325db94M) | Hang out with other builders running multi-agent fleets and share workflows in real time. |
+| A bug report or feature idea in chat | [Discord (`#bugs-and-ideas`)](https://discord.gg/aK325db94M) | Bridged directly into the maintainer's local WatchTower queue (`wt`) so every post is tracked. |
+| Live stream of releases and demo clips | [Discord (`#ship-log`)](https://discord.gg/aK325db94M) | Automated feed of new commits, releases, and feature clips as they ship. |
+| A searchable question or "how do I" | [Discussions → Q&A](https://github.com/amirfish1/claude-command-center/discussions/categories/q-a) | Public, searchable, so the next person finds the answer too. |
 | A setup, a Flow layout, a workflow to share | [Discussions → Show and tell](https://github.com/amirfish1/claude-command-center/discussions/categories/show-and-tell) | Show how you run your fleet. |
 | A feature idea or request | [Discussions → Ideas](https://github.com/amirfish1/claude-command-center/discussions/categories/ideas) | Ideas get discussed here before they become issues. |
 | A bug or a clear defect | [Issues](https://github.com/amirfish1/claude-command-center/issues/new/choose) | A stack trace, a broken flow, something that should work and does not. |
 | A security concern | [Security advisories](https://github.com/amirfish1/claude-command-center/security/advisories/new) | Report privately. See [SECURITY.md](https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md). |
 | Release news | [Discussions → Announcements](https://github.com/amirfish1/claude-command-center/discussions/categories/announcements) | Each release gets a thread. Watch the repo to follow along. |
 
-Not sure which one? Ask in Q&A. It is easy to move a post later.
+Not sure which one? Jump into [Discord](https://discord.gg/aK325db94M) or ask in Q&A.
 
 ## What to expect
 
-- One founder answers here. Most questions get a first reply within two days.
-  Some take longer. Thank you for the patience.
+- One founder answers here, backed by CCC and WatchTower. Posts in Discord `#bugs-and-ideas` automatically file into the local WatchTower queue and ping the CCC dashboard.
+- Most questions get a first reply within a day or two. Thank you for the patience.
 - A question with a version, an OS, and what you already tried gets answered
   faster, because there is less back and forth.
-- If a question turns out to be a real bug, it gets converted to an Issue so it
-  can be tracked and closed. You do not need to refile it.
+- If a question turns out to be a real bug, it gets tracked in WatchTower or converted to a GitHub Issue so it can be closed cleanly.
 - Discussions are public and indexed. A good answer here helps everyone who
   searches the same problem next month.
 

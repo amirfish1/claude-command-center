@@ -10,6 +10,7 @@ agent) so it implements the integration in your project for you.
 |---|---|
 | [Annotate → UX-fixes queue](annotate-to-ux-fixes-queue.md) | Click any element in your running app, type a note, and it becomes a numbered work item in CCC's durable queue — drained by a Claude session that implements the fix. |
 | [In-app bug report widget → GitHub issue](bug-report-widget-github-issues.md) | A floating "Report an issue" button that screenshots the page, posts to your backend, and opens a fully-contextualized GitHub issue — plus a customer-facing "Reported Issues" view (Open / Needs Attention / In progress / Icebox / Closed) derived live from GitHub. |
+| [Discord community → WatchTower queue + CCC notify](discord-community-relay.md) | Auto-provision a 4-channel Discord server (`#start-here`, `#general-fleet`, `#ship-log`, `#bugs-and-ideas`) and bridge community bug reports and questions directly into WatchTower (`wt`) and CCC notifications. |
 
 ## Conventions
 

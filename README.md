@@ -31,6 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ![Zero dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-purple)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)](CONTRIBUTING.md)
+[![Discord](https://img.shields.io/badge/Discord-join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/aK325db94M)
 
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white)
 ![Codex](https://img.shields.io/badge/Codex-000000)
@@ -328,6 +329,10 @@ agent needs a password, token, passphrase or one-time code.
 For current capabilities and limits, see [Features](docs/features.md) and
 [Engine support](docs/engine-support.md). Request improvements through
 [GitHub issues](https://github.com/amirfish1/claude-command-center/issues).
+
+## Community
+
+Join the [Discord server](https://discord.gg/aK325db94M) (`#general-fleet`, `#bugs-and-ideas`, `#ship-log`) or browse [GitHub Discussions](docs/community.md).
 
 ## Contributing
 
