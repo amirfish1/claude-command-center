@@ -2756,6 +2756,20 @@
     return canonical || evText;
   }
 
+  // True when `text` is the session's original ask (or no canonical ask is
+  // known). A tail-loaded window starts mid-conversation, so its first user
+  // bubble is NOT the original ask; hiding it as "pinned" lost the user's own
+  // reply because the sticky header shows the canonical original instead.
+  function _isOriginalAskText(text, paneId) {
+    const conv = convRowForPane(paneId) || {};
+    const canonical = (conv.original_ask || conv.first_message || '');
+    const norm = s => String(s).replace(/\s+/g, ' ').trim();
+    const canonPrefix = norm(canonical).replace(/(?:\.\.\.|…)$/, '').slice(0, 120);
+    if (!canonPrefix) return true;
+    const t = norm(text);
+    return t.startsWith(canonPrefix) || canonPrefix.startsWith(t.slice(0, 120));
+  }
+
   // Tiny inline-markdown renderer for card descriptions. Handles bold, code,
   // headings and bullet lines — enough to preserve Claude's summary formatting
   // without pulling in a full markdown lib.
@@ -58662,7 +58676,11 @@
       || (isActiveView && !!document.querySelector('#statusRail .csh-ask-original'));
     if (!hasOriginalElsewhere) return;
     const firstUser = $view.querySelector('.event.user_text:not(.is-dynamic-pinned-in-sticky)');
-    if (firstUser && !firstUser.classList.contains('is-pinned-in-sticky')) {
+    const _pane = $view.closest('.conv-pane');
+    const _firstMsg = firstUser && firstUser.querySelector('.user-msg');
+    const _firstText = _firstMsg ? (_firstMsg.getAttribute('data-raw-text') || _firstMsg.textContent || '') : '';
+    if (firstUser && !firstUser.classList.contains('is-pinned-in-sticky')
+        && _isOriginalAskText(_firstText, _pane && _pane.dataset.paneId)) {
       firstUser.classList.add('is-pinned-in-sticky');
     }
   }
@@ -62026,7 +62044,7 @@
         // the same text twice (sticky + bubble) when no scrolling has
         // happened yet. The dynamic-ask tracker still walks DOM and treats
         // index 0 as "viewing the original," so the hidden node is harmless.
-        div.classList.add('is-pinned-in-sticky');
+        if (_isOriginalAskText(ev.text, paneId)) div.classList.add('is-pinned-in-sticky');
         let sticky = $view.querySelector('.conv-sticky-header');
         if (!sticky) {
           sticky = document.createElement('div');

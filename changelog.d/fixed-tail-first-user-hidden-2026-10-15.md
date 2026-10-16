@@ -1,0 +1,1 @@
+- A tail-loaded transcript no longer hides your first visible message as the "original ask"; only the real original ask is pinned to the header.
