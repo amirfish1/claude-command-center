@@ -1,0 +1,1 @@
+- `GET /api/background-runs` groups headless `claude -p` runs launched from OS temp dirs by spawner (spawn marker), with run counts, tokens and an hourly-rate alert list; markerless runs land in an `unknown` bucket.

@@ -5120,6 +5120,8 @@ _SPAWN_MARKER_RUNTIMES = frozenset({"free"})
 # otherwise replays a cached body. One scandir plus a stat per entry now; a
 # file is decoded only when its (mtime_ns, size) changed.
 _SPAWN_MARKER_FILE_CACHE = {}
+# A spawner starting this many temp-dir headless runs in an hour raises an alert.
+BACKGROUND_RUNS_HOURLY_ALERT = 30
 
 
 def _decode_spawn_marker_file(path):
@@ -26744,6 +26746,7 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/throughput/daily",
     "/api/throughput/share",
     "/api/titler-turns",
+    "/api/background-runs",
     "/api/vercel-deploy",
     "/api/watchtower/service/status",
 })
@@ -28253,6 +28256,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(payload, status)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e), "daily": []}, 200)
+            return
+        elif path == "/api/background-runs":
+            # Headless/harness `claude -p` runs from OS temp dirs, grouped by spawner.
+            try:
+                from ccc_server import background_runs
+                self.send_json(background_runs.background_runs_payload(), 200)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e), "groups": []}, 200)
             return
         elif path == "/api/titler-turns":
             # Last-24h auto-titler turns + token total for the sidebar section.
