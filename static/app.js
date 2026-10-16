@@ -8235,6 +8235,18 @@
       if (_liveStripShown) { try { updateLiveStripOffset($view, null); } catch (_) {} _liveStripShown = false; }
       return;
     }
+    // CCC-1282: the "No active agent process" card is a one-shot verdict made
+    // while the resume spawn was still starting. If a process shows up
+    // afterwards (agy/codex resume registers late), the card used to stay
+    // forever while the turn ran -- "stuck in thinking, no response". Revert
+    // it to Thinking so the normal live/clear paths own it again.
+    const _staleCard = $view.querySelector('.conv-live-tool-inline.is-stale-no-process');
+    if (_staleCard && (liveStatus.live || liveStatus.headlessPresent || liveStatus.terminalPresent
+        || liveStatus.bgPresent || liveStatus.sidecarInFlight || liveStatus.codexState === 'working')) {
+      _staleCard.className = 'conv-live-tool-inline optimistic';
+      _staleCard.innerHTML = '<span class="cl-pulse"></span><span class="cl-tool"></span>';
+      setOptimisticAgentThinking($view);
+    }
     // Idle fast-path: nothing is live, so there's nothing to show. Bail
     // before the per-second document.querySelectorAll + innerHTML below —
     // on a deep conversation that's pure waste when no session is running.

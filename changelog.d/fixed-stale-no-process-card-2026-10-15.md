@@ -1,0 +1,1 @@
+- A resumed session no longer sticks on "No active agent process" once its process starts; the card goes back to Thinking.
