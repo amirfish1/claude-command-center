@@ -781,6 +781,7 @@ echo "→ Command Center"
 echo "  port     : $PORT"
 echo "  bind     : ${CCC_BIND_HOST:-(default 127.0.0.1, or from network.json)}"
 echo "  url      : http://localhost:$PORT"
+echo "  community: https://discord.gg/aK325db94M"
 
 # A launchd service has a minimal PATH, so select a known-compatible Python
 # 3.9+ interpreter explicitly instead of relying on its inherited environment.
