@@ -1,0 +1,1 @@
+- Opening a /compact-ed Claude session no longer drops recent replies that the compaction stored at early file lines.

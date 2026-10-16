@@ -23718,6 +23718,108 @@ def _read_tail_lines(filepath, n):
         return total, out
 
 
+_TS_RUNS_CACHE = {}
+_TS_RUNS_LOCK = threading.Lock()
+_TS_RUNS_CACHE_MAX = 128
+_TS_RUN_EXTRA_CAP = 2000
+_TS_RE = re.compile(rb'"timestamp": ?"([0-9T:.+\-Z]+)"')
+
+
+def _timestamp_runs(filepath):
+    """Monotonic-timestamp runs of a JSONL, scanned incrementally and cached.
+
+    Claude Code's /compact rewrites a transcript so chronologically recent rows
+    can sit at early line numbers. A run is a stretch of lines whose timestamps
+    never go backwards; ``[start_line, start_off, end_line, end_off, first_ts,
+    last_ts]`` (end exclusive, lines 1-based, ts None when the run has none).
+    Only complete lines are consumed, so a live append rescans just the new bytes.
+    """
+    try:
+        f = open(filepath, "rb")
+    except OSError:
+        return []
+    with f:
+        st = os.fstat(f.fileno())
+        key = str(filepath)
+        with _TS_RUNS_LOCK:
+            ent = _TS_RUNS_CACHE.get(key)
+        if ent is None or ent["ino"] != st.st_ino or st.st_size < ent["off"]:
+            ent = {"ino": st.st_ino, "off": 0, "line": 0, "runs": [], "last_ts": None}
+        else:
+            ent = {**ent, "runs": [list(r) for r in ent["runs"]]}
+        if st.st_size > ent["off"]:
+            f.seek(ent["off"])
+            data = f.read(st.st_size - ent["off"])
+            end_nl = data.rfind(b"\n")
+            if end_nl >= 0:
+                off = ent["off"]
+                line = ent["line"]
+                runs = ent["runs"]
+                last_ts = ent["last_ts"]
+                for raw in data[:end_nl + 1].split(b"\n")[:-1]:
+                    line += 1
+                    nxt = off + len(raw) + 1
+                    m = _TS_RE.search(raw)
+                    ts = m.group(1).decode("ascii") if m else None
+                    if not runs or (ts is not None and last_ts is not None and ts < last_ts):
+                        runs.append([line, off, line + 1, nxt, ts, ts])
+                    else:
+                        run = runs[-1]
+                        run[2], run[3] = line + 1, nxt
+                        if ts is not None:
+                            if run[4] is None:
+                                run[4] = ts
+                            run[5] = ts
+                    if ts is not None:
+                        last_ts = ts
+                    off = nxt
+                ent.update(off=off, line=line, last_ts=last_ts)
+                with _LINE_COUNT_LOCK:
+                    # Same pass counted the newlines: prime the tail reader's
+                    # cache so it need not re-read the whole file.
+                    _LINE_COUNT_CACHE[key] = (st.st_ino, off, line)
+        with _TS_RUNS_LOCK:
+            _TS_RUNS_CACHE.pop(key, None)
+            while len(_TS_RUNS_CACHE) >= _TS_RUNS_CACHE_MAX:
+                _TS_RUNS_CACHE.pop(next(iter(_TS_RUNS_CACHE)))
+            _TS_RUNS_CACHE[key] = ent
+        return ent["runs"]
+
+
+def _out_of_order_head_lines(filepath, tail_lines):
+    """(line_no, text) rows stored before the tail window but newer than it.
+
+    After /compact, recent rows can sit at early line numbers; a plain
+    last-N-lines window would drop them. Returns them in file order, capped.
+    """
+    if not tail_lines or tail_lines[0][0] <= 1:
+        return []
+    window_start = tail_lines[0][0]
+    window_ts = None
+    for _no, raw in tail_lines:
+        m = _TS_RE.search(raw.encode("utf-8", errors="replace"))
+        if m:
+            window_ts = m.group(1).decode("ascii")
+            break
+    if window_ts is None:
+        return []
+    picked = [r for r in _timestamp_runs(filepath)
+              if r[2] <= window_start and r[5] is not None and r[5] > window_ts]
+    if not picked:
+        return []
+    out = []
+    try:
+        with open(filepath, "rb") as f:
+            for r in picked:
+                f.seek(r[1])
+                chunk = f.read(r[3] - r[1])
+                for i, raw in enumerate(chunk.split(b"\n")[:-1]):
+                    out.append((r[0] + i, raw.decode("utf-8", errors="replace") + "\n"))
+    except OSError:
+        return []
+    return out[-_TS_RUN_EXTRA_CAP:]
+
+
 def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None):
     """Parse only a window of a conversation JSONL instead of the whole file.
 
@@ -23743,16 +23845,21 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     window = tail if tail else _CONV_TAIL_DEFAULT
     buf = collections.deque(maxlen=window)
     total = 0
+    extra_lines = []
     if before is None:
         # Click path: the last N lines come from the end of the file and the
         # absolute numbering from an incremental newline count. Iterating a
         # 15 MB transcript in Python to keep 120 lines cost 80-875 ms; this is
         # a few ms.
+        if not is_codex:
+            _timestamp_runs(filepath)
         loaded = _read_tail_lines(filepath, window)
         if loaded is None:
             return {"events": [], "last_line": 0, "first_line": 0, "truncated_before": False}
         total, tail_lines = loaded
         buf.extend(tail_lines)
+        if not is_codex:
+            extra_lines = _out_of_order_head_lines(filepath, tail_lines)
         starts_with_user = False
         if is_codex:
             for number, raw in tail_lines:
@@ -23859,6 +23966,26 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     first_line = events[0]["line"] if events else (buf[0][0] if buf else total)
+    if extra_lines:
+        # Compacted transcript: newer rows stored at early lines. Merge them
+        # in timestamp order (first_line stays the contiguous window start so
+        # "Load earlier" pages correctly; the client dedupes by line).
+        extra_events = []
+        for ln, raw_line in extra_lines:
+            try:
+                parsed = parser(json.loads(raw_line), ln)
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if parsed:
+                extra_events.append(parsed)
+        if extra_events:
+            merged = extra_events + events
+            keys, carry = [], ""
+            for e in merged:
+                carry = e.get("ts") or carry
+                keys.append(carry)
+            order = sorted(range(len(merged)), key=lambda i: keys[i])
+            events = [merged[i] for i in order]
     # A window that already covers the whole file has no earlier history at
     # all, no matter which JSONL line the first *renderable* event sits on.
     # Fresh transcripts open with non-rendered records (custom-title, system

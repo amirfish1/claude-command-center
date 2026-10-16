@@ -34,7 +34,7 @@ def _write_claude_jsonl(path, n):
     for i in range(1, n + 1):
         lines.append(json.dumps({
             "type": "user",
-            "timestamp": f"2026-06-02T10:00:{i % 60:02d}Z",
+            "timestamp": f"2026-06-02T10:{(i // 60) % 60:02d}:{i % 60:02d}Z",
             "message": {"role": "user", "content": f"message {i}"},
         }))
     path.write_text("\n".join(lines) + "\n")
@@ -107,3 +107,24 @@ def test_parse_conversation_full_path_unchanged_without_window(tmp_path, monkeyp
     assert full["last_line"] == 40
     assert len(full["events"]) == 40
     assert len(win["events"]) == 10  # windowed honored through the public API
+
+
+def test_tail_includes_newer_rows_stored_at_early_lines_after_compact(tmp_path):
+    # /compact can rewrite a transcript so the newest rows sit at early lines.
+    def row(i, ts):
+        return json.dumps({"type": "user", "timestamp": ts,
+                           "message": {"role": "user", "content": f"m{i}"}})
+    lines = [row(i, f"2026-06-02T10:00:{i:02d}Z") for i in range(1, 11)]
+    lines += [row(100 + i, f"2026-06-03T00:10:{i:02d}Z") for i in range(5)]
+    lines += [row(200 + i, f"2026-06-02T23:15:{i % 60:02d}Z") for i in range(300)]
+    p = tmp_path / "c.jsonl"
+    p.write_text("\n".join(lines) + "\n")
+
+    tw = server._parse_conversation_windowed("sid", str(p), tail=120, before=None)
+    got = [e["line"] for e in tw["events"]]
+    assert all(n in got for n in range(11, 16))
+    assert tw["first_line"] == 316 - 120 + 1 + 0 or tw["first_line"] == len(lines) - 120 + 1
+    # newer rows land after the older window rows, in timestamp order
+    assert got[-5:] == [11, 12, 13, 14, 15]
+    # a second call (cache hit) is identical
+    assert server._parse_conversation_windowed("sid", str(p), tail=120, before=None)["events"] == tw["events"]
