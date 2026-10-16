@@ -56472,7 +56472,7 @@
           : (showsEffort ? '\nReasoning effort: engine default (CCC has not set one)' : ''))
         + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
         + (queuedEffort ? '\n(Switch to effort ' + queuedEffort + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
-        + (engine === 'antigravity' ? '' : '\n\nClick to change model');
+        + (engine === 'hermes' ? '' : '\n\nClick to change model');
       // CCC-823: the pill's visible label is now JUST the model short name
       // (plus 1M / pending-switch badges where relevant) — reasoning effort
       // no longer renders in the label itself. It still surfaces via
@@ -56486,7 +56486,7 @@
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
         + (pendingText ? ' <span class="wp-model-pending">→ ' + escapeHtml(pendingText) + '</span>' : '')
         + ' <span class="wp-model-chevron">&#x25be;</span>';
-      if (engine === 'antigravity' || engine === 'hermes') {
+      if (engine === 'hermes') {
         modelPill = ' <span class="wp-model-pill is-static" title="' + escapeHtml(modelTip) + '">'
           + modelInner
           + '</span>';
@@ -56758,6 +56758,9 @@
       { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
     ],
     antigravity: [
+      { id: 'Gemini 4 Argon (High)', label: 'Gemini 4 Argon (High)' },
+      { id: 'Gemini 4 Argon (Medium)', label: 'Gemini 4 Argon (Medium)' },
+      { id: 'Gemini 4 Argon (Low)', label: 'Gemini 4 Argon (Low)' },
       { id: 'Gemini 3.8 Flash (High)', label: 'Gemini 3.8 Flash (High)' },
       { id: 'Gemini 3.8 Flash (Medium)', label: 'Gemini 3.8 Flash (Medium)' },
       { id: 'Gemini 3.8 Flash (Low)', label: 'Gemini 3.8 Flash (Low)' },

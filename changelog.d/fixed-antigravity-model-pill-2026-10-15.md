@@ -1,0 +1,1 @@
+- The model pill on Antigravity sessions is now clickable, and the picker lists Gemini 4 Argon, so you can switch from Gemini 3.8 to 4.
