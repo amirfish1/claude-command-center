@@ -1,0 +1,1 @@
+- A `vault` skill teaches coding agents to use `ccc vault list` and `ccc vault exec` so they can use your saved secrets without seeing them.

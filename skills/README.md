@@ -122,3 +122,6 @@ Kept out on purpose — the cut reason is a fundamental, not a matter of time:
    the orchestrated version ran.
 5. **Drafts only** for the marketing skills: nothing is posted or published;
    publishing is a human decision.
+- [`vault.md`](vault.md) — use secrets saved in Settings > Vault via
+  `ccc vault exec`, which injects the value and redacts it from output.
+  Zero spawns.
