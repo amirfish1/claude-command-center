@@ -34,11 +34,16 @@ CODEX_THREAD_REGISTRY_FILE = (
 )
 SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
 
-CODEX_GOALS_DB_CANDIDATES = (
-    Path.home() / ".codex" / "goals_1.sqlite",
-    Path.home() / ".codex" / "sqlite" / "goals_1.sqlite",
+_CODEX_HOME_DIR = (
+    Path(os.path.expanduser(os.environ["CODEX_HOME"]))
+    if os.environ.get("CODEX_HOME")
+    else Path.home() / ".codex"
 )
-CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+CODEX_GOALS_DB_CANDIDATES = (
+    _CODEX_HOME_DIR / "goals_1.sqlite",
+    _CODEX_HOME_DIR / "sqlite" / "goals_1.sqlite",
+)
+CODEX_SESSIONS_ROOT = _CODEX_HOME_DIR / "sessions"
 CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _SPAWN_TIMELINE_FILE = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"

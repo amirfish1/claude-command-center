@@ -15,6 +15,7 @@ time. These pin that, and pin the cheap spawn probe that replaced a full
 
 import importlib
 import os
+from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
@@ -232,7 +233,11 @@ class CodexSignatureExtraKeysTests(unittest.TestCase):
         # no ~/.codex (CI) the check is vacuous. Give it a throwaway HOME
         # that has today's rollout dirs.
         with tempfile.TemporaryDirectory() as home, \
-                mock.patch.dict(os.environ, {"HOME": home}):
+                mock.patch.dict(os.environ, {
+                    "HOME": home,
+                    "USERPROFILE": home,
+                    "CODEX_HOME": str(Path(home) / ".codex"),
+                }):
             for day_dir in server._codex_rollout_day_dirs():
                 day_dir.mkdir(parents=True, exist_ok=True)
             _sig, _files, extras = server._archive_corpus_signature_parts()

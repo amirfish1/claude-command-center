@@ -188,10 +188,14 @@ def default_ctx():
         ccc_root = Path(__file__).resolve().parent.parent
     try:
         state_dir = Path(_core.COMMAND_CENTER_STATE_DIR)
+        if not str(state_dir).startswith(str(home)):
+            state_dir = home / ".claude" / "command-center"
     except Exception:
         state_dir = home / ".claude" / "command-center"
     try:
         scripts_dir = Path(_core.HOOK_SCRIPTS_DIR)
+        if not str(scripts_dir).startswith(str(home)):
+            scripts_dir = home / ".claude" / "command-center" / "hooks"
     except Exception:
         scripts_dir = home / ".claude" / "command-center" / "hooks"
     codex_home = Path(os.environ.get("CODEX_HOME") or (home / ".codex"))

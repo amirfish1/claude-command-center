@@ -255,6 +255,9 @@ def _get_codex_dir() -> Path:
     env = os.environ.get("CCC_CODEX_SESSIONS_ROOT")
     if env:
         return Path(env)
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        return Path(codex_home) / "sessions"
     return Path.home() / ".codex" / "sessions"
 
 

@@ -8192,6 +8192,9 @@ def _codex_home():
     return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 
 
+codex_home = _codex_home
+
+
 def _codex_configured_model():
     path = _codex_home() / "config.toml"
     try:
@@ -14908,7 +14911,7 @@ def _archive_codex_extra_keys():
     Must stay in lockstep with what _archive_corpus_signature_parts folds in
     for Codex, or a codex-only delta silently falls back to a full rebuild.
     """
-    keys = {str(Path.home() / ".codex" / "sessions"), "ccc-codex-captures"}
+    keys = {str(codex_home() / "sessions"), "ccc-codex-captures"}
     keys.update(str(p) for p in _codex_rollout_day_dirs())
     keys.add(str(cloud_catalog_signature_path()))
     return keys
@@ -14925,7 +14928,7 @@ def _codex_rollout_day_dirs():
     transcript growing does not. Yesterday is included so a session started
     just before midnight still invalidates the cache.
     """
-    root = Path.home() / ".codex" / "sessions"
+    root = codex_home() / "sessions"
     now = time.time()
     return [
         root / time.strftime("%Y/%m/%d", time.localtime(now - offset))
@@ -15035,7 +15038,7 @@ def _archive_corpus_signature_parts():
         # registers, but it CANNOT see new threads on its own: Codex nests
         # rollouts by date, so _codex_rollout_day_dirs() below is what actually
         # detects a session being added.
-        Path.home() / ".codex" / "sessions",
+        codex_home() / "sessions",
         *_codex_rollout_day_dirs(),
         Path.home() / ".cursor" / "projects",
         # Antigravity, both stores: the desktop app's brain AND the CLI brain
@@ -41171,7 +41174,7 @@ def _get_onboarding_status():
     codex_bin = codex_info.get("bin")
     codex_logged_in = False
     
-    codex_auth_file = Path.home() / ".codex" / "auth.json"
+    codex_auth_file = codex_home() / "auth.json"
     if codex_auth_file.is_file():
         try:
             with open(codex_auth_file, "r", encoding="utf-8") as f:
@@ -42226,12 +42229,16 @@ def _sync_hook_scripts():
     """
     import shutil
     repo_hooks = CCC_ROOT / "hooks"
-    HOOK_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    target_dir = Path(HOOK_SCRIPTS_DIR)
+    current_home = Path.home()
+    if not str(target_dir).startswith(str(current_home)):
+        target_dir = current_home / ".claude" / "command-center" / "hooks"
+    target_dir.mkdir(parents=True, exist_ok=True)
     for name in CCC_HOOK_SCRIPT_NAMES:
         src = repo_hooks / name
         if not src.exists():
             continue
-        dst = HOOK_SCRIPTS_DIR / name
+        dst = target_dir / name
         try:
             if not dst.exists() or dst.read_bytes() != src.read_bytes():
                 shutil.copy2(src, dst)

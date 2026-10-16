@@ -1,0 +1,1 @@
+- Windows: prevent test isolation leaks from touching real or root user directories by honoring CODEX_HOME across rollout day directory discovery and signature tracking, re-anchoring hook script sync under redirected home, and isolating USERPROFILE alongside HOME across test harnesses (#142).

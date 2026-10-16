@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -122,6 +124,43 @@ class TestWindowsCompatibility(unittest.TestCase):
         import server
         self.assertIn("session-start.py", server.CCC_HOOK_SCRIPT_NAMES)
         self.assertIn("_notify.py", server.CCC_HOOK_SCRIPT_NAMES)
+
+    def test_codex_rollout_day_dirs_honors_codex_home(self):
+        import server
+        with tempfile.TemporaryDirectory() as td:
+            custom_codex = Path(td) / "custom_codex"
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(custom_codex)}):
+                day_dirs = server._codex_rollout_day_dirs()
+                for d in day_dirs:
+                    self.assertTrue(str(d).startswith(str(custom_codex / "sessions")), f"{d} not in {custom_codex}")
+
+    def test_archive_codex_extra_keys_honors_codex_home(self):
+        import server
+        with tempfile.TemporaryDirectory() as td:
+            custom_codex = Path(td) / "custom_codex"
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(custom_codex)}):
+                keys = server._archive_codex_extra_keys()
+                self.assertIn(str(custom_codex / "sessions"), keys)
+
+    def test_sync_hook_scripts_anchors_to_redirected_home(self):
+        import server
+        with tempfile.TemporaryDirectory() as td:
+            fake_home = Path(td) / "fake_home"
+            fake_home.mkdir()
+            with mock.patch.object(server.Path, "home", return_value=fake_home):
+                server._sync_hook_scripts()
+                expected = fake_home / ".claude" / "command-center" / "hooks"
+                self.assertTrue(expected.is_dir())
+                self.assertTrue((expected / "session-start.py").is_file())
+
+    def test_config_consent_default_ctx_anchors_to_redirected_home(self):
+        from ccc_server import config_consent
+        with tempfile.TemporaryDirectory() as td:
+            fake_home = Path(td) / "fake_home"
+            with mock.patch.object(config_consent.Path, "home", return_value=fake_home):
+                ctx = config_consent.default_ctx()
+                self.assertTrue(str(ctx.state_dir).startswith(str(fake_home)))
+                self.assertTrue(str(ctx.hook_scripts_dir).startswith(str(fake_home)))
 
 
 if __name__ == "__main__":

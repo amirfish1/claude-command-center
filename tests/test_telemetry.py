@@ -39,7 +39,9 @@ class TelemetryTestBase(unittest.TestCase):
     def setUp(self):
         self.tmp_home = tempfile.mkdtemp(prefix="ccc-telemetry-home-")
         self._prev_home = os.environ.get("HOME")
+        self._prev_userprofile = os.environ.get("USERPROFILE")
         os.environ["HOME"] = str(pathlib.Path(self.tmp_home).resolve())
+        os.environ["USERPROFILE"] = str(pathlib.Path(self.tmp_home).resolve())
         # Clear the kill-switch / override / dev-mode env vars so each test
         # starts from a known state.
         self._prev_disabled = os.environ.pop("CCC_TELEMETRY_DISABLED", None)
@@ -54,6 +56,10 @@ class TelemetryTestBase(unittest.TestCase):
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = self._prev_home
+        if self._prev_userprofile is None:
+            os.environ.pop("USERPROFILE", None)
+        else:
+            os.environ["USERPROFILE"] = self._prev_userprofile
         for name, prev in (
             ("CCC_TELEMETRY_DISABLED", self._prev_disabled),
             ("CCC_TELEMETRY_ENDPOINT", self._prev_endpoint),
