@@ -1,0 +1,1 @@
+- Sidebar footer shows a "background" pill for headless temp-dir `claude -p` runs; click lists them by spawner with runs/hour and tokens.

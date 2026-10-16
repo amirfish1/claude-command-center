@@ -68789,6 +68789,42 @@
   }
 
   const $gcActiveBtn = document.getElementById('gcActiveBtn');
+
+  // Background / harness runs pill (bottom-left): headless claude -p runs from
+  // OS temp dirs, grouped by spawner. Polls /api/background-runs; hidden when none.
+  const $bgRunsBtn = document.getElementById('bgRunsBtn');
+  const $bgRunsPanel = document.getElementById('bgRunsPanel');
+  function renderBgRuns(p) {
+    if (!$bgRunsBtn || !p || !p.ok) return;
+    const t = p.totals || {};
+    const hot = (p.alerts || []).length > 0;
+    if (!t.runs_last_day) { $bgRunsBtn.style.display = 'none'; $bgRunsPanel.hidden = true; return; }
+    $bgRunsBtn.textContent = `${hot ? '⚠ ' : ''}⚙ ${t.runs_last_hour || 0}/h background`;
+    $bgRunsBtn.style.display = '';
+    const alerting = new Set((p.alerts || []).map(a => a.spawner + '|' + a.kind));
+    $bgRunsPanel.innerHTML = (p.groups || []).filter(g => g.runs_last_day).map(g => {
+      const name = escapeHtml(g.spawner + (g.kind ? ' · ' + g.kind : ''));
+      const cls = alerting.has(g.spawner + '|' + g.kind) ? ' is-alert' : '';
+      return `<div class="bg-runs-row${cls}"><span>${name}</span><span class="bg-runs-meta">${g.runs_last_hour}/h · ${g.runs_last_day}/d · ${formatTokens(g.tokens_last_day)} tok</span></div>`;
+    }).join('');
+  }
+  async function pollBgRuns() {
+    try {
+      const r = await fetch('/api/background-runs');
+      if (r.ok) renderBgRuns(await r.json());
+    } catch (_) { /* transient; next poll retries */ }
+  }
+  if ($bgRunsBtn) {
+    $bgRunsBtn.addEventListener('click', () => {
+      $bgRunsPanel.hidden = !$bgRunsPanel.hidden;
+      $bgRunsBtn.setAttribute('aria-expanded', String(!$bgRunsPanel.hidden));
+    });
+    document.addEventListener('click', (e) => {
+      if (!$bgRunsPanel.hidden && !e.target.closest('#bgRunsBtn, #bgRunsPanel')) $bgRunsPanel.hidden = true;
+    });
+    setTimeout(pollBgRuns, 4000);
+    setInterval(_gated('bgRuns', pollBgRuns), 30000);
+  }
   // The bottom-left "Active Group chat" pill lives near the end of <body>,
   // AFTER this <script> tag, so it is NOT in the DOM yet when this module first
   // evaluates — a plain getElementById() here returns null and the pill would

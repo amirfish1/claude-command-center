@@ -931,6 +931,12 @@
            glanceable from anywhere without crowding the topbar. JS toggles
            display + textContent in updateGcActiveBtn(). -->
       <button id="gcActiveBtn" class="sidebar-footer-pill" style="display:none;" title="Active group-chat coordinations - click to open the most recent one" aria-label="Active group chats"></button>
+      <!-- Background / harness runs (headless claude -p from temp dirs). JS
+           shows it only while such runs exist; click lists them by spawner. -->
+      <div style="position:relative;">
+        <button id="bgRunsBtn" class="sidebar-footer-pill" style="display:none;" title="Background / harness runs (headless claude -p)" aria-label="Background runs" aria-haspopup="true" aria-expanded="false"></button>
+        <div id="bgRunsPanel" class="bg-runs-panel" hidden></div>
+      </div>
       <div class="sidebar-footer-spacer"></div>
       <div style="position:relative;">
         <button type="button" class="sidebar-footer-btn" id="settingsBtn" data-tour="settings" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
