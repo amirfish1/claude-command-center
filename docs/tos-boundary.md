@@ -19,10 +19,11 @@ What CCC does with it:
 - **Shows who is signed in.** CCC reads the account email and organization ID
   that Claude Code keeps in `~/.claude.json`.
 - **Reads your own plan usage.** About every 5 minutes, CCC reads Claude Code's
-  login token on this computer and asks Anthropic's claude.ai usage endpoint
-  for your plan's usage numbers. That request goes only to Anthropic, and
-  only to read your quota for the limit and headroom meters. On macOS, CCC
-  can use the claude.ai cookie that CodexBar caches instead.
+  login token on this computer and asks the claude.ai usage endpoint for your
+  plan's usage numbers. That request goes only to Anthropic, and only to read
+  your quota for the limit and headroom meters. On macOS, CCC can use the
+  claude.ai cookie that CodexBar caches instead. See
+  [How the usage reading works](#how-the-usage-reading-works).
 - **Helps you sign in again.** When a login expires, the re-auth helper runs
   `claude auth login` on that computer. You approve in your browser and paste
   the one-time code. CCC never sees your password and never logs the code.
@@ -44,6 +45,32 @@ What CCC never does with it:
   free** waits for your approval, unless you turned on **Always** for that
   session. Switching back, by hand or after your limit resets, sends no
   prompt.
+
+## How the usage reading works
+
+The claude.ai usage endpoint is the one behind Claude Code's own usage view.
+Anthropic does not document it as a public API. The only documented quota
+data is the `rate_limits` object that Claude Code passes to a
+[status line](https://code.claude.com/docs/en/statusline) script, and that
+only exists inside a running session. CCC does not depend on any approval
+from Anthropic for this reading, and it can stop working at any time.
+
+How CCC makes the request:
+
+- **It says it is CCC.** The request uses a `claude-command-center/<version>`
+  User-Agent. It does not pretend to be a web browser.
+- **It goes only to `claude.ai`.** The organization ID must be a valid UUID.
+  CCC does not follow redirects, so your token or cookie is never sent to
+  another address. A response that comes from anywhere else is ignored.
+- **It never spends anything.** CCC does not send a model request, start a
+  session, or refresh your login to get a reading.
+- **A refusal means "unavailable".** CCC does not try to get around a
+  refusal: a 401, 403 or 429, a redirect, or a non-JSON page such as an
+  access check. Earlier readings stay in CCC's usage history, and CCC waits before
+  asking again: 5 minutes after a 401 and 30 minutes after other refusals,
+  or longer if Anthropic sends `Retry-After` (up to 6 hours).
+- **Errors hide your login.** Error messages remove any token or cookie value
+  before they are shown or logged.
 
 ## What the router carries
 
