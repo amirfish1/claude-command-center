@@ -1,0 +1,1 @@
+- Antigravity (agy) runs that CCC starts while agy is signed out now ask for the sign-in code in the dashboard's credential request panel and pass it to agy, so the turn continues. Before, the run stopped and you had to sign in from a terminal.

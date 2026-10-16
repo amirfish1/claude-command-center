@@ -18,6 +18,7 @@ import fcntl
 import json
 import math
 import os
+import pty
 import queue
 import re
 import select
@@ -4056,14 +4057,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            cwd=spawn_cwd,
-            start_new_session=True,
-        )
+        proc = _antigravity_popen(cmd, spawn_cwd, log_fh, log_path)
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-spawn"}
@@ -4302,6 +4296,97 @@ def _antigravity_auth_prompt_seen(proc, log_path, wait_seconds=4.0):
     return False
 
 
+# agy abandons a pending sign-in after this long ("timeout 60s").
+_ANTIGRAVITY_AUTH_CODE_WAIT_S = 60
+
+
+def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id=""):
+    """Start a headless agy run with a pseudo-terminal as stdin.
+
+    A logged-out agy prints a sign-in URL, opens the browser, and reads the
+    authorization code from a terminal. With stdin on /dev/null it can never
+    get that code. The pty gives it a terminal; _antigravity_auth_relay asks
+    the user for the code through the credential broker and types it in. The
+    pty closes once no sign-in is needed, so normal runs see no input.
+    """
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            start_new_session=True,
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    threading.Thread(
+        target=_antigravity_auth_relay,
+        args=(proc, master, log_path, session_id),
+        daemon=True,
+        name="agy-auth-relay",
+    ).start()
+    return proc
+
+
+def _antigravity_auth_relay(proc, master, log_path, session_id=""):
+    from ccc_server import credential_broker
+
+    try:
+        if not _antigravity_auth_prompt_seen(proc, log_path):
+            return
+        broker = credential_broker.broker()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{0,128}", session_id or ""):
+            session_id = ""
+        req = broker.request({
+            "name": "antigravity-sign-in",
+            "kind": "otp",
+            "session_id": session_id,
+            "timeout": _ANTIGRAVITY_AUTH_CODE_WAIT_S,
+            "reason": (
+                "Antigravity CLI is not signed in. A Google sign-in page opened "
+                "in your browser. Sign in, copy the authorization code it shows, "
+                "and paste it here."
+            ),
+        })
+        ticket = {"id": req["id"], "token": req["token"]}
+        deadline = time.time() + _ANTIGRAVITY_AUTH_CODE_WAIT_S
+        code = None
+        while time.time() < deadline and proc.poll() is None:
+            result = broker.take(ticket)
+            if result["status"] == "ready":
+                code = (result.get("value") or "").strip()
+                break
+            if result["status"] != "pending":
+                break
+            time.sleep(0.5)
+        else:
+            broker.take(ticket, cancel=True)
+        if not code:
+            return
+        # The code travels over the pty only: never argv, never the log.
+        size_before = os.path.getsize(log_path)
+        os.write(master, code.encode() + b"\n")
+        # Keep the pty open until agy reacts, or a closed pty could drop
+        # the line before agy reads it.
+        end = time.time() + 15
+        while time.time() < end and proc.poll() is None:
+            if os.path.getsize(log_path) > size_before:
+                break
+            time.sleep(0.25)
+    except (credential_broker.BrokerError, OSError) as e:
+        print(f"antigravity sign-in relay: {type(e).__name__}", file=sys.stderr)
+    finally:
+        try:
+            os.close(master)
+        except OSError:
+            pass
+
+
 def resume_session_antigravity(session_id, text, mode="send"):
     """Resume an Antigravity conversation through AGY CLI or the running app.
 
@@ -4475,38 +4560,12 @@ def resume_session_antigravity(session_id, text, mode="send"):
 
     log_fh = open(log_path, "w")
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            start_new_session=True,
-        )
+        # A logged-out agy asks for a sign-in code (CCC-1274); the helper
+        # relays it from the dashboard instead of leaving the turn hung.
+        proc = _antigravity_popen(cmd, cwd, log_fh, log_path, session_id)
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-resume"}
-
-    # A logged-out agy prints an OAuth prompt and then idles for 60s before
-    # exiting, so the UI shows "Thinking..." with no reason (CCC-1274). The
-    # prompt lands within a second or two: catch it, stop the stuck process
-    # and say so instead of leaving the turn silently hung.
-    if _antigravity_auth_prompt_seen(proc, log_path):
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            pass
-        try:
-            log_fh.close()
-        except OSError:
-            pass
-        return {
-            "ok": False,
-            "code": "antigravity_auth_required",
-            "via": "antigravity-resume",
-            "log": str(log_path),
-            "error": "Antigravity CLI is not logged in. Run `agy` in a terminal to sign in, then resend.",
-        }
 
     entry = {
         "pid": proc.pid,
