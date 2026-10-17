@@ -1,1 +1,0 @@
-- Speak skips Google's free voice for 15 minutes after it reports the quota is used up, so each read no longer wastes two failed requests first.

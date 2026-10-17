@@ -1,1 +1,0 @@
-- The Speak button reads replies of any length in a free Gemini voice (random per read, shown in the button tooltip), switches to Cloudflare MeloTTS when Google rate-limits, and uses the browser voice only if the free router is unavailable.

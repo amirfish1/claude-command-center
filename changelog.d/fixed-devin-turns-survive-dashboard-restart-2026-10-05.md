@@ -1,1 +1,0 @@
-- Devin turns sent over its live ACP connection now survive a dashboard restart. The shared `devin acp` connection lives in the persistent worker, like Kimi's and Grok's; it used to live in the dashboard, so every dashboard restart (each automatic update) cut off running Devin turns.

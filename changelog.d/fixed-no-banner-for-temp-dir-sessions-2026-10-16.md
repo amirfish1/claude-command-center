@@ -1,1 +1,0 @@
-- Finished-turn and approval banners no longer fire for headless runs started in an OS temp directory (eval harnesses could trigger ~100 banners a minute).

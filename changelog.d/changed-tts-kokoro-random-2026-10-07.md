@@ -1,1 +1,0 @@
-- Speak now picks a random local Kokoro voice (28 English voices, named on the button) ahead of the single MeloTTS voice when Google's free quota is used up.

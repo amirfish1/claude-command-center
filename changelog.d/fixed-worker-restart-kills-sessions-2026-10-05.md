@@ -1,1 +1,0 @@
-- Restarting the execution worker on Linux no longer kills every session it launched: the systemd user unit that `./run.sh --install-service` writes now sets `KillMode=process`, matching the system unit, so a new worker reattaches the running sessions. Existing installs pick it up on the next `--install-service`.

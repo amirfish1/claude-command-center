@@ -1,1 +1,0 @@
-- Hebrew text is now read with the Mac Hebrew voice, because the free offline voice only spells out the letters.

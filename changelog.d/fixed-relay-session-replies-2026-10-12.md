@@ -1,1 +1,0 @@
-- Claude sessions can now see CCC as the `ccc` peer and reply to it. A reply to a message that came through Cloud Relay goes back to the remote client as a question, which wakes it with a notification.

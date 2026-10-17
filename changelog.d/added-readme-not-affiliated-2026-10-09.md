@@ -1,1 +1,0 @@
-- README states CCC is not affiliated with Anthropic (English, Japanese and Chinese first screens).

@@ -1,1 +1,0 @@
-- Phone new-session composer shows engine, model and effort on their own full-width row so they are readable.

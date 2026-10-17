@@ -1,1 +1,0 @@
-- Ask (Mazkir): a git request like "push bym" now proposes a session in that repo to do it (one Confirm click) instead of answering that it can't push.

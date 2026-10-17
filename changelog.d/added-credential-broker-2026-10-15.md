@@ -1,1 +1,0 @@
-- Agents can request credentials through `ccc secret request` and a mobile-friendly masked dashboard prompt. Values are delivered once to the local requester, outside chat and activity logs, with expiry, denial, cancellation, optional owner-only local storage, and `ccc secret forget`.

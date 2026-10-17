@@ -1,1 +1,0 @@
-- The Sonnet 5 chip in the new-session model row now selects Sonnet 5 instead of falling back to Fable, and the $0 Free pill only looks pressed when it is on.

@@ -1,1 +1,0 @@
-- Preserve newer archive cache variants and incremental-refresh signatures when detached refresh workers save concurrently, avoiding lost snapshots and unnecessary full rebuilds.

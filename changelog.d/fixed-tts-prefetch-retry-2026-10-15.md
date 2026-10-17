@@ -1,1 +1,0 @@
-- The speaker cache now retries after a cooldown or a hidden tab instead of staying empty on an idle session.

@@ -1,1 +1,0 @@
-- Fixed delayed chat launch responses reopening a session over another chat, draft, or split pane. New chats still open immediately; late failures keep their Retry/Edit request without replacing a newer draft.

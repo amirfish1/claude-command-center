@@ -1,1 +1,0 @@
-- Ready-for-input banners for not-yet-titled sessions now show the opening of the first prompt instead of a bare hex id.

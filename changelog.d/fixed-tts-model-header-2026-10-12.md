@@ -1,1 +1,0 @@
-- Read-aloud shows the voice model (fp32 or int8) on the non-streaming path too.

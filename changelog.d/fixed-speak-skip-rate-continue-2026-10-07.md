@@ -1,1 +1,0 @@
-- Speak speed and skip buttons now continue from the current spot and keep the same voice, instead of restarting the text with a new voice.

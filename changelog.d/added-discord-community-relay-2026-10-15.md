@@ -1,1 +1,0 @@
-- Discord community relay: join the CCC community directly from the dashboard header or terminal banner, and route community bug reports into a dedicated, review-first WatchTower queue with live reactions and reply updates.

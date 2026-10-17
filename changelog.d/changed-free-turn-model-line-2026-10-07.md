@@ -1,1 +1,0 @@
-- Compact view keeps the per-turn token summary and model line on the newest reply. Free-router sessions show the provider, model, latency and failed attempts in that model line instead of "auto".

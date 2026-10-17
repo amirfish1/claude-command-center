@@ -1,1 +1,0 @@
-- Hovering the speaker on an older message now makes its audio ahead of the click, so it starts without a wait.

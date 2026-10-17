@@ -1,1 +1,0 @@
-- The Claude plan-usage meter now identifies itself as CCC instead of a web browser, refuses redirects, and shows a refused or rate-limited reading as unavailable (backing off instead of retrying); earlier readings stay in usage history.

@@ -1,1 +1,0 @@
-- Speak can use Deepgram Aura-2 voices (random voice per read) when a `DEEPGRAM_API_KEY` env var or `~/.ccc/deepgram.key` exists; set `CCC_DEEPGRAM=0` or delete the file to turn it off. Metered, so it is opt-in by key.

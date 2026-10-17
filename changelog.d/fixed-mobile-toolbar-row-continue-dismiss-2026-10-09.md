@@ -1,1 +1,0 @@
-- Phone composer toolbar is tidy (offer on its own row, icons in one row), and the Continue new offer has a × to dismiss it.

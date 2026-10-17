@@ -1,1 +1,0 @@
-- The Speak button shows a slim bar along its top edge that fills as the last message's voice audio is generated (amber while filling, green when done).

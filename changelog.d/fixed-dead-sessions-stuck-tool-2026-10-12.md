@@ -1,1 +1,0 @@
-- Sessions that died in the middle of a tool call no longer show as "tool call may be stuck" in Needs Your Attention forever, and CCC Cloud now reports a stuck tool call as stuck instead of as an approval request.

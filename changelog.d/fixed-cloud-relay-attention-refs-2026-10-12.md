@@ -1,1 +1,0 @@
-- CCC Cloud attention items now use the same session id as the sessions list and include the session title, so remote clients can tell which session needs you.

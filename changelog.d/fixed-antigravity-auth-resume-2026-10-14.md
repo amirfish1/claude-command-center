@@ -1,1 +1,0 @@
-- Antigravity: resuming a session while the `agy` CLI is signed out now fails fast with a "not logged in" message instead of hanging on "Thinking…".

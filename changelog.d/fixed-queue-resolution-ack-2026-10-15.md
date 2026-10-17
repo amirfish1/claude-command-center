@@ -1,1 +1,0 @@
-- Acknowledge or undo individual resolution notes in the queue board. Acknowledged follow-ups no longer keep closed tickets flagged or pinned as unresolved; the original notes and close history remain readable.

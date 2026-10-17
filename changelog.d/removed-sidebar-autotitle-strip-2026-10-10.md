@@ -1,1 +1,0 @@
-- Removed the sidebar auto-title activity strip and its 15s `/api/titler-turns` poll (the endpoint remains).

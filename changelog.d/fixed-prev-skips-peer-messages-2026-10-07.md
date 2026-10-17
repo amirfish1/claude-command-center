@@ -1,1 +1,0 @@
-- The conversation "Previous"/"Next" buttons now step only through messages you typed, skipping messages from other sessions.

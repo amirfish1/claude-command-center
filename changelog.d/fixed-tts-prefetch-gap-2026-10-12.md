@@ -1,1 +1,0 @@
-- Read-aloud audio is now made ahead: when a turn ends or you open a conversation, its last message is generated in the background so the Speak click plays with no wait or pauses.

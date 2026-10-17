@@ -1,1 +1,0 @@
-- Cloud Relay: when nothing changed, CCC sends a small heartbeat instead of repeating the full state snapshot every 20 seconds.

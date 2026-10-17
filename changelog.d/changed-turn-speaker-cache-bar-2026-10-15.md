@@ -1,1 +1,0 @@
-- Per-turn speaker (🔊) button now shows the voiceover cache bar, like the composer Speak button.

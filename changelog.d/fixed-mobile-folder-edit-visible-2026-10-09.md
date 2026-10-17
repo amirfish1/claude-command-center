@@ -1,1 +1,0 @@
-- Phone: tapping the new-session folder field hides the composer while you edit, so the field and its suggestions stay visible above the keyboard.

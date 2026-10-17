@@ -1,1 +1,0 @@
-- `/api/background-runs` now includes an estimated USD cost (list prices, cache priced at the read rate) and logs one activity-log line when a spawner crosses the hourly threshold.

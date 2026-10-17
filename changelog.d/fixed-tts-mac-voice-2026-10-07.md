@@ -1,1 +1,0 @@
-- Speak no longer drops to the Mac voice when the first sentence wasn't prepared in advance; it fetches the free voice on demand (about 1-2 s) and uses the Mac voice only if that fails or the free voice is cooling down.

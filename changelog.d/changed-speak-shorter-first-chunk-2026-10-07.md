@@ -1,1 +1,0 @@
-- Speak starts with a shorter first chunk (80 characters) so the voice begins sooner.

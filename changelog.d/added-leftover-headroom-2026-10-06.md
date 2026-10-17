@@ -1,1 +1,0 @@
-- Added account headroom estimates for Claude, Codex, and Kimi, showing how much usage may expire at reset without scanning session transcripts. Missing limits or history stay clearly unknown.

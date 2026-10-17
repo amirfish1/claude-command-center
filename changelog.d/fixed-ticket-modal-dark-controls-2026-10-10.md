@@ -1,1 +1,0 @@
-- Fixed ticket modal learnings button and comment textarea styling (CCC-49).

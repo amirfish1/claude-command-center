@@ -1,1 +1,0 @@
-- The header savings counter no longer plays a coin sound each time the value goes up.

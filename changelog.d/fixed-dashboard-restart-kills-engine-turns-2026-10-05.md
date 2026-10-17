@@ -1,1 +1,0 @@
-- Restarting the dashboard on Linux no longer kills engine turns it spawned (Devin, Gemini, and other one-shot CLI turns): the systemd user unit that `./run.sh --install-service` writes for the dashboard now sets `KillMode=process`, like the system unit. Existing installs pick it up on the next `--install-service`.

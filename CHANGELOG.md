@@ -7,6 +7,256 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.38.0] - 2026-10-17
+
+### Added
+- Messages to a running Antigravity CLI (agy) session now go straight into that live session through agy's local language server, including from WatchTower. Steer now lands mid-turn and no longer waits for the turn to end. A session becomes reachable after its agent runs any `ccc` command; until then CCC falls back to the old `agy --conversation -p` resume.
+- Ask answers now end with their cost in cache-adjusted tokens. Hover to see the fresh, cache-write, cache-read, and output breakdown.
+- `GET /api/background-runs` groups headless `claude -p` runs launched from OS temp dirs by spawner (spawn marker), with run counts, tokens and an hourly-rate alert list; markerless runs land in an `unknown` bucket.
+- `/api/background-runs` now includes an estimated USD cost (list prices, cache priced at the read rate) and logs one activity-log line when a spawner crosses the hourly threshold.
+- Sidebar footer shows a "background" pill for headless temp-dir `claude -p` runs; click lists them by spawner with runs/hour and tokens.
+- Throughput share screen: posting to X, LinkedIn, Bluesky or Threads, or the new Copy link button, uploads only the card PNG and its headline to a hosted card page, then shares that link so the post shows your card image. If the upload fails, CCC falls back to the repo link and the copied image. See SECURITY.md.
+- `scripts/e2e-failover-clean.sh`: runs the full limit, approval, free work and switch-back path on a clean HOME installed from the README, and checks the free child never gets paid credentials.
+- The free models boundary page now spells out what CCC does and never does with your Claude subscription login.
+- CCC Cloud relay (opt-in): pair this machine with a CCC Cloud relay from **Settings > Network access** to see sessions, attention items, queues and waiting questions on your phone, and answer or send input from there. The connection is outbound-only, pairing and settings work only from this machine, the relay can run only a short closed list of commands, and local and Tailscale access are unchanged. CCC ships no service URL; you enter the relay URL yourself. Protocol: `docs/cloud-relay/PROTOCOL.md`.
+- Cloud relay: the device can now answer a Claude Code permission prompt on request from the cloud (`approval.answer`). It acts only when the pending prompt still matches the action the cloud approved (sha256 check), reuses the dashboard's Approve/Deny path, and reports `unsupported` where that path is not available (non-macOS, sub-agent prompts, other engines).
+- CCC Cloud approvals now carry the complete tool input (up to 16 KB, with an explicit truncation flag) and are applied through a new `PermissionRequest` hook that only acts on the exact tool call the cloud judged (single use, 120 s expiry); the terminal keystroke remains as a fallback when the hook is not installed.
+- **Cloud relay presence.** The state snapshot now carries `presence`
+(`present`, `last_input_at`) and a per-session `last_human_input_at`, computed
+only from prompts you type in a terminal session or send from the dashboard
+composer. Relay, peer and WatchTower injections never count. The cloud uses it
+to wake an outside agent only when you are away, and to block that agent from
+typing into a session you are using. See `docs/cloud-relay/PROTOCOL.md`.
+- Cloud Relay: input sent by an agent (for example Instinct) now starts with a line naming the sender, `[From <name> via CCC Cloud, request <id>]`, so the session and anyone watching the transcript can see who sent it.
+- Keep a limit-hit session on your router for every later turn (not just the first resume), switch it back to Claude automatically when the limit resets, refuse routers that would carry a Claude model, and add a hermetic fake-router E2E for the whole hop.
+- Agents can request credentials through `ccc secret request` and a mobile-friendly masked dashboard prompt. Values are delivered once to the local requester, outside chat and activity logs, with expiry, denial, cancellation, optional owner-only local storage, and `ccc secret forget`.
+- Ask and `ccc decisions` now retrieve stored user decision quotes with source citations and provenance, with repository filtering and a labelled session-snippet fallback. Background rescans replace prior quotes instead of duplicating them.
+- Discord community relay: join the CCC community directly from the dashboard header or terminal banner, and route community bug reports into a dedicated, review-first WatchTower queue with live reactions and reply updates.
+- Add guided paid-key presets for GLM, Kimi, DeepSeek, Qwen and MiniMax, with international and China endpoints, local key storage, and direct Claude sessions that keep their provider on resume.
+- Added an opt-in end-to-end novice harness (`scripts/e2e-novice.sh`, run via `CCC_E2E_FREE=1 python3 -m pytest tests/test_e2e_novice_free.py`): in a throwaway HOME it builds the free model router from source, enables the keyless provider, spawns a real Claude Code session that creates a file, and proves the traffic cost $0 via the router's own analytics. Also `scripts/verify-onboarding.js`, a headless-Chrome walk of `/?onboarding=1`.
+- Detects free model routers you already run (freellmapi on :3001, 9Router/OmniRoute on :20128, free-claude-code, Ollama, LM Studio, or an OpenRouter key saved in BYOK) via `GET /api/free-router/detected`, offers "use yours instead" in onboarding and as a dashboard card, and can point Aider, OpenCode, and Codex at the free router (`POST /api/free-router/engine-setup`; `runtime:"free"` spawns inject the env per child).
+- Add an opt-in real Claude failover test with isolated router analytics and switch-back proof, document free-provider data boundaries, strip inherited subscription credentials from failover resumes, and reliably retire and reap free children after completed turns.
+- First magic task during onboarding: creates ~/CCC-Playground (a tiny site with a failing test), then runs one of three starter tasks on a live agent with streamed progress and a "cost $0, worth $X at API prices" celebration. Adds `POST/GET /api/onboarding/first-task*` and `window.cccFirstTask` (`/?first-task=1` opens it standalone).
+- Settings → Session limits groups stopped Claude, Codex and Devin sessions with checkboxes, free continuation where supported, and approved resumes spread across reset times. Weekly limits and registered headless/queue-worker logs are detected by the existing watcher. A single fleet banner is available for preview but stays off pending popup approval (`GET`/`POST /api/free-failover/fleet`).
+- Opening a folder or file link when the server host has no desktop (headless Linux viewed from another machine) now opens an in-page folder viewer with image/PDF/video/HTML previews, instead of a bare error.
+- A free-router session's bottom-bar chip now names the provider that last answered it (for example "$0 free · kilo"), with the model in the tooltip.
+- A session running on the free router now shows a $0 free chip in the bottom usage bar.
+- New free-key wizard (`GET /api/free-router/providers`, `POST /api/free-router/keys`, `static/free-key-wizard.js`): provider cards with signup links, paste-and-verify key setup, and one-click keyless enable so new users can reach a $0 model fast.
+- Free model leaderboard at /free-models: races every router model through five tiny coding tasks, scores pass rate + speed, and pins the winner as the default free model (GET /api/free-router/models, POST /api/free-router/eval).
+- Docs for the $0 onboarding: `docs/onboarding.md` (the five-minute welcome flow — per-step consent, what installs where, troubleshooting) and `docs/free-models.md` (how free runs route through the local freellmapi on `127.0.0.1:3017`, the provider list, Kilo's prompt-logging disclosure, and why a Claude OAuth token never goes through the router). SECURITY.md gains a free-router section covering loopback binding and key storage, and the README opens with "Start free in 5 minutes".
+- Settings gains a "Free models" panel: start or stop the local free-model router, add and remove provider keys, see per-provider usage and the dollar value of work done for $0, and pick which free model your agents run on.
+- Added a managed free-model router: CCC can now install, start, stop and supervise a private freellmapi on loopback (`/api/free-router/*`, `ccc_server/free_router.py`, `spawn_env()` for $0 agent runs) with a friendly status page at `/free-router`.
+- New "free $0" option when starting a session: with the free router running, a spawned Claude, OpenCode or Aider session runs on free models instead of your paid plan. Free sessions show a "$0 free" badge on their card and in the session rail, and a spawn that can't reach the router refuses rather than silently billing you.
+- **Sound + motion kit** (`window.cccFx` in `static/fx.js` / `static/fx.css`):
+six short cues synthesized live in Web Audio (`welcome`, `step`, `success`,
+`coin`, `error`, `whoosh` — no audio files), a canvas confetti burst, a
+count-up number animation, and `.fx-shimmer` / `.fx-glow` / `.fx-pop` helpers
+any view can opt into. Sounds obey the existing completion-sounds toggle and
+all motion honors `prefers-reduced-motion`. Try it all on `/fx-demo.html`.
+- Sidebar usage bars show how much of each plan is left and when it resets, colored by risk, with a hover or focus tooltip carrying the numbers. Engines without usage data yet are hidden, and so is the whole strip when the headroom engine is not installed.
+- Added a plain-language comparison guide and a light/dark SVG explaining CCC, model routers, and parallel coding tools, with pinned public README sources and the Crystal-to-Nimbalyst migration note.
+- Installer now speaks in plain numbered steps and opens `/?onboarding=1` (the guided setup tour) instead of the bare dashboard for anyone who has not finished onboarding yet; the site gains a "free AI dev team in 5 minutes" hero with a CSS-only install animation and a dedicated /install/ page with copy-to-clipboard one-liners.
+- An optional iOS app shell (`ios-app/`) hides the prev/next/done bar above the keyboard.
+- Jobs tab day view now shows each `CCC_EVENT:` line a scheduled job printed as its own timeline row, so meaningful work by high-frequency jobs (like a 5-minute ship tick re-pinning a release or merging a PR) appears at the time it happened instead of hiding behind the last run's outcome.
+- Add an opt-in offline Speak voice installer in voice settings with background progress, repair of missing MP3 streaming dependencies, and streaming health verification. The one-time Speak install offer stays off pending popup approval.
+- Add a 15-task free-model leaderboard runner (scripts/run-leaderboard-eval.py) that scores $0 models on pass rate, latency and tokens, and never calls a paid model.
+- Added a weekly free-model leaderboard refresh: `scripts/leaderboard-weekly.py` reruns the benchmark without changing your router's default model, stages a privacy-checked page in `~/.ccc/leaderboard/`, and records each run for a `health` check. `systemd/install-leaderboard-weekly.sh` installs it as a user timer. Publishing stays a manual, reviewed step.
+- The Claude Code plugin now ships CCC's skills: `/plugin marketplace add amirfish1/claude-command-center`, then `/plugin install ccc-dashboard@claude-command-center`. The bundle lives in `plugin/` and is generated from `skills/*.md` by `scripts/build-plugin.py`.
+- Added account headroom estimates for Claude, Codex, and Kimi, showing how much usage may expire at reset without scanning session transcripts. Missing limits or history stay clearly unknown.
+- Leftover Mode: when at least 20% of your Claude, Codex or Kimi plan may go unused within a day, CCC suggests 3 to 5 real tasks (WatchTower tasks, open GitHub issues, or TODO and FIXME notes) and starts one only when you click it. Turn it on or off in Settings > Leftover Mode. The floating offer and the once-a-day reminder stay hidden until approved.
+- Added a limit-hit approval card: when a session stops on a usage limit (now including Devin's free-model wall, with its reset time parsed from the error), you can continue it on a free model, schedule it to resume automatically when the limit resets (staggered at most 5 per minute), or do nothing. Once the reset passes, a running-free session offers to switch back to your plan.
+- Speak falls back to a local Kokoro voice (installed under ~/.ccc/local-tts, started on demand) when the free cloud voices are unavailable.
+- **Mac app first run.** A brand-new CCC.app opens straight into the
+guided onboarding flow (`/?onboarding=1`) on first launch, shows a real
+splash screen (icon, tagline, live setup status, gentle tips) while the
+server starts, and can turn dashboard notifications into native macOS
+banners via the new `window.webkit.messageHandlers.cccNotify` bridge.
+Returning users get the plain dashboard as before.
+- Phone ⋮ menu has a Reload app item, so a Home Screen app can pick up a new version without closing it.
+- Added Moment Zero: a cinematic first-run onboarding shell (animated logo,
+  typed "Your own AI dev team. Free." welcome, guided dependency setup,
+  free-key wizard, first $0 task, savings finale). Auto-opens on fresh
+  installs and at `/?onboarding=1`; replayable anytime from Settings, Help &
+  Onboarding, "Welcome & free setup".
+- Monthly share card: a "My October" button on the throughput page (and a new period in the share screen) makes a calendar card of one month with tokens, agent hours, active days, longest streak and busiest day. In the first week of a month it shows the month that just ended. Deep link: `/throughput.html?share=month` (optional `&m=YYYY-MM`).
+- Notifications: agents now ping you when they finish real work or stop for input — with a "Cost $0, saved $X" line for free-model runs — plus a 6pm daily digest of the day's agent work and savings-milestone celebrations. Delivers through the macOS app bridge, browser notifications (asked once at a success moment), or an in-app toast; toggles live in Settings > Notifications.
+- Added a no-build public free-model leaderboard with checked, privacy-safe local result exports, a dry-run-by-default Pages staging script, and Claude plugin directory metadata.
+- Queue picker now has an "ALL QUEUES" row at the top to view tickets across every queue.
+- Queue tickets can say where they run (Mac only, cloud only, or any machine). The ticket detail panel has a "Runs on" setting and a badge, so Mac-bound work waits for the Mac while an always-on server drains the rest.
+- Add a Japanese README (README.ja.md) covering install, first run, and engine support.
+- README states CCC is not affiliated with Anthropic (English, Japanese and Chinese first screens).
+- Add a Simplified Chinese README (README.zh-CN.md) covering install, first run, and the GLM, Kimi, DeepSeek, Qwen and MiniMax presets.
+- Added a Savings page (`/savings`, also in the app rail) with `GET /api/savings`: API-priced value of agent work vs your plan cost, ROI, and free-router $0 savings with an editable monthly plan (`POST /api/savings/plan`). Backed by an incremental sqlite ledger so unchanged transcripts are never re-parsed.
+- Added a savings surface: a header ticker that counts up the API-priced value of today's agent work (with a coin sound on live increases), a per-session chip showing "$0 · saved $X" on free-model runs, a savings panel with range tabs, ROI, and a milestone ladder, and one-time celebrations at $10 / $100 / $1,000 of work and 1B free tokens with a share button. Reads `GET /api/savings`; the surface stays hidden while that endpoint is absent.
+- Added a first-run setup service: `GET /api/setup/plan` detects everything a
+  fresh machine needs (Apple tools, Git, Python, Node.js, Claude Code, GitHub
+  CLI, plus the free-model steps), `POST /api/setup/run` installs them in a
+  streamed background job, and `GET /api/setup/jobs/<id>` polls progress. A
+  new `/setup` page renders the one-click wizard (`window.cccSetup`) with
+  per-step consent, a live log, and a cancel button. Node.js installs are
+  downloaded from nodejs.org into `~/.ccc/runtime/node` and verified against
+  the official SHASUMS256 checksums, no admin password required.
+- Throughput page: new Share button opens a share screen that renders a 1200x630 or 1080x1080 card (activity heatmap, one headline number, three small stats) with Copy image, Download PNG, and compose links for X, LinkedIn, Bluesky and Threads. The card holds totals only, never session names or paths.
+- Share card gains "$ saved" and "$0 runs" headline metrics plus a savings extras line, a milestone share prompt (Share button pulses when you pass $10/$100/$1k/$10k saved on $0 runs), and a `?share=saved` deep link so other views can open the card straight on the savings numbers.
+- Optional Claude Code PreToolUse hook blocks destructive Git commands and broad staging in shared checkouts, with automatic live-session detection, a force-protection flag, and setup documentation.
+- Speak can use Deepgram Aura-2 voices (random voice per read) when a `DEEPGRAM_API_KEY` env var or `~/.ccc/deepgram.key` exists; set `CCC_DEEPGRAM=0` or delete the file to turn it off. Metered, so it is opt-in by key.
+- The Speak button reads replies of any length in a free Gemini voice (random per read, shown in the button tooltip), switches to Cloudflare MeloTTS when Google rate-limits, and uses the browser voice only if the free router is unavailable.
+- Added a per-session Speak voice picker in the right rail. The default voice is set in Settings.
+- Added a gentle "star us on GitHub" prompt at success moments (task done, PR merged, milestones): one click stars via the local `gh` CLI through `/api/star`, with a GitHub-link fallback. Asked at most once per 14 days and 3 times ever; "Don't ask again" persists.
+- Throughput dashboard: each session in the sidebar now shows its API-price cost next to its token count.
+- While reading aloud, the Speak button's bar shows both the read position and how much audio is already made ahead of it.
+- Read-aloud button now shows a green dot when the whole last message is ready (amber when only the first clip is), names the voice model (fp32 or int8), and grows to fit the voice name.
+- Speak now explains itself: the button names the voice that is speaking (including "Mac voice" with the reason in its tooltip), and every decision is logged to the console, `window.__cccTtsLog`, and activity.log.
+- Hovering the speaker on an older message now makes its audio ahead of the click, so it starts without a wait.
+- The Speak button shows a slim bar along its top edge that fills as the last message's voice audio is generated (amber while filling, green when done).
+- A `vault` skill teaches coding agents to use `ccc vault list` and `ccc vault exec` so they can use your saved secrets without seeing them.
+- WatchTower error rows in the Queue panel have an Investigate button that files a ticket in the WATCHTOWER queue for a worker to fix the root cause (once per alert).
+- Run CCC from a locally built wheel with uvx or pipx, including the dashboard, hooks, bundled skills, and first-launch WatchTower setup. State stays in the usual user folders; no PyPI publication is required.
+
+### Changed
+- Blocked-ticket questions with inline (a)/(b)/(c) options now render as a lead-in, a list of options, and a highlighted recommendation instead of one dense paragraph.
+- Session "ready for your input" and approval banners now go through the CCC server: in the app they open the session when clicked, repeat banners for one session collapse into one, and the old unclickable macOS banner is only a fallback when no dashboard is open. Digest and milestone banners open the throughput page.
+- Cloud Relay replies from a session now go up as a top-level `replies` field (for the relay's ask API) with a `reply` attention item, instead of a fake question that fired a "question waiting" notification.
+- Cloud Relay attention items now name the parent session, the sub-agent's description and the pending tool action (for example `Bash: git push origin main`) for background sub-agents, and `session.detail` returns the title, parent, state and pending approval with the recent turns. With titles off, none of that text is sent.
+- Cloud Relay: when nothing changed, CCC sends a small heartbeat instead of repeating the full state snapshot every 20 seconds.
+- Cloud Relay: when the state changed, CCC sends only the changed sessions and sections instead of the full snapshot.
+- Codex cloud threads now appear under the Other tab instead of Coding.
+- Codex tool-output peeks no longer repeat the "Script completed / Wall time / Output:" boilerplate.
+- Continue-in-new-session dialog now shows the composer prompt in an editable box, so you can see and change exactly what the new session receives.
+- The Continue new picker is a clean sheet: labeled engine, model and effort fields, pill chips for recent picks, and one big Continue button.
+- The in-page folder viewer is now a movable, resizable window (drag the title bar, resize from the corner; position is remembered) and previews Markdown files rendered.
+- New sessions get a clear "$0 Free" choice first in the model row (it replaces the small "free $0" checkbox). If free models are not set up, it says "Set up free models" and opens the setup page.
+- Compact view keeps the per-turn token summary and model line on the newest reply. Free-router sessions show the provider, model, latency and failed attempts in that model line instead of "auto".
+- The usage-left strip now keeps Claude and Devin as a muted "No reading" chip (with a reason in the tooltip) when CCC has no quota for them, instead of leaving them out.
+- Claude model pickers now list only the newest version of each family (for example Opus 5.5 without Opus 5 or 4.8); a model you already selected stays listed.
+- Codex model pickers also list only the newest Sol, Terra, Luna and Astra.
+- Leftover Mode now suggests open tickets from all your WatchTower queues (this folder's queues first), and one click queues the ticket back in WatchTower (`wt run`) so a WatchTower worker claims it instead of a loose session.
+- Speak now uses the local Kokoro voice first and streams it a sentence at a time, so long replies start playing after the first sentence instead of after the whole clip. Deepgram is used only when explicitly turned on (`CCC_DEEPGRAM=1` or `~/.ccc/deepgram.on`); a stored key alone no longer enables it.
+- Car Mode no longer needs a Deepgram key: speech runs locally (whisper.cpp + Kokoro) by default, and the status banner names the engine. `CCC_VOICE_ENGINE=deepgram` opts back into Deepgram.
+- New `scripts/install_local_speech.sh` installs the Kokoro voice into `~/.ccc/local-tts`.
+- Ask (Mazkir): a git request like "push bym" now proposes a session in that repo to do it (one Confirm click) instead of answering that it can't push.
+- On phones the + is now a ⋯ actions menu (Attach, Compact, Continue in new session), and long-pressing Send opens the send options.
+- New-session model chips now offer one chip per enabled engine, not just the most-used one.
+- Promo pop-ups (savings milestones, notification ask, daily report, star ask, router card, limit cards, Moment Zero auto-open) now stay off until each one is approved in `ccc_server/popups.py` and `static/popups.js`.
+- The session cost rail no longer shows an "Unavailable" headline when quota cost can't be computed; the API list-price line stands alone.
+- Shortened the README to a quick start and visual tour, with linked guides for installation, engine support, CLI/API use, secrets, and internals. Added checks for the line limit and local documentation links.
+- README first screen now leads with the pitch, a real share card, the one-line install, and three bullets; badges moved below. Licence copy says source-available (FSL-1.1-MIT) everywhere, including the site footer, and the README and site say CCC is not affiliated with Anthropic.
+- New Session repo guess now switches the folder by itself when Jev is at least 80% sure (was 95%). Local path or name matches still only suggest.
+- New Session repo guess now knows what each repo is for: it reads CLAUDE.md and AGENTS.md as well as the README, skips language-switcher and tool-managed lines, and sends Jev your past session titles in each repo, so a prompt like "send the digest to owners" finds the right repo without naming it.
+- The header savings counter no longer plays a coin sound each time the value goes up.
+- Free voice reads start after about 3 seconds (short first chunk, then medium chunks), and the Speak button shows the name of the voice that is speaking.
+- Speak starts with no wait: the first sentence of each new reply is prepared in the background, and Speak uses the browser voice at once when it is not ready.
+- Speak starts with a shorter first chunk (80 characters) so the voice begins sooner.
+- Speak streams Deepgram audio as it is made, so the voice starts in under a second.
+- Local read-aloud voice now uses the fp32 model on every Mac and PC; it made speech about 2.5x faster than int8 in a benchmark.
+- Speak skips Google's free voice for 15 minutes after it reports the quota is used up, so each read no longer wastes two failed requests first.
+- Speak now picks a random local Kokoro voice (28 English voices, named on the button) ahead of the single MeloTTS voice when Google's free quota is used up.
+- Landing on the final reply start when a live turn ends (was: scrolled to the very bottom).
+- Per-turn speaker (🔊) button now shows the voiceover cache bar, like the composer Speak button.
+- The Claude plan-usage meter now identifies itself as CCC instead of a web browser, refuses redirects, and shows a refused or rate-limited reading as unavailable (backing off instead of retrying); earlier readings stay in usage history.
+
+### Removed
+- Removed the sidebar auto-title activity strip and its 15s `/api/titler-turns` poll (the endpoint remains).
+
+### Fixed
+- Antigravity (agy) runs that CCC starts while agy is signed out now ask for the sign-in code in the dashboard's credential request panel and pass it to agy, so the turn continues. Before, the run stopped and you had to sign in from a terminal.
+- Antigravity: resuming a session while the `agy` CLI is signed out now fails fast with a "not logged in" message instead of hanging on "Thinking…".
+- The model pill on Antigravity sessions is now clickable, and the picker lists Gemini 4 Argon, so you can switch from Gemini 3.8 to 4.
+- Antigravity input is refused with a clear message when a terminal agy already holds the conversation.
+- CCC.app now replaces an out-of-date local server on launch: when port 8090 is already served by a server whose code is older than the install on disk, the app asks it to restart itself (via `/api/restart`) and waits for the new code before loading the dashboard, instead of showing new UI against an old API.
+- Preserve newer archive cache variants and incremental-refresh signatures when detached refresh workers save concurrently, avoiding lost snapshots and unnecessary full rebuilds.
+- Ask no longer surfaces WatchTower worker sessions (queue drains, ticket fixers, verifiers) when searching past work, unless the question is about workers or queues. The trace shows how many were hidden.
+- Needs Your Attention now catches sessions whose next step hands a choice back to you ("Say X if you want Y", "Tell me which"), not only ones that end on a question mark.
+- Ready-for-input banners for not-yet-titled sessions now show the opening of the first prompt instead of a bare hex id.
+- Bare image/PDF/video filenames in a message (e.g. `01-gate.png`) now resolve against the directory named earlier in the same message, so the links open from a remote machine.
+- CCC Cloud attention items now use the same session id as the sessions list and include the session title, so remote clients can tell which session needs you.
+- Cloud relay: approvals now carry the complete pending tool input (full Bash command, Edit/Write file and change summary) and prose questions carry the full final assistant message, both redacted and size-capped; `session.detail` no longer returns empty turns for tool-heavy or Codex transcripts, reports `turn_count`, and repo names like `claude-command-center` are no longer redacted. A long-running tool is now reported as working instead of "paused on Bash" unless a real permission prompt is pending.
+- Queued messages on a Codex session now show the Steer button even when the row's source is "interactive" with engine "codex".
+- First load on a fresh install now shows live scan progress (step, transcripts N of M, elapsed time) on the Simple home list and the archive stage list, instead of a silent spinner that could fall back to an empty list mid-scan.
+- Compact view no longer stacks a smear of timestamps after the last reply.
+- Compact view now shows the speak and copy icons on every turn's final reply card, not only the newest reply.
+- Compact transcript view now shows the timestamp on each turn's final reply, not just the newest one.
+- Opening a /compact-ed Claude session no longer drops recent replies that the compaction stored at early file lines.
+- Agent config notice can be dismissed from a remote/tunnel session, and the "local-only" error now explains itself.
+- The Continue new picker now has a Done button, and its quick picks no longer repeat models or offer the one already selected.
+- The Continue new sheet fits the phone screen, and Done closes it together with the offer.
+- Restarting the dashboard on Linux no longer kills engine turns it spawned (Devin, Gemini, and other one-shot CLI turns): the systemd user unit that `./run.sh --install-service` writes for the dashboard now sets `KillMode=process`, like the system unit. Existing installs pick it up on the next `--install-service`.
+- Sessions that died in the middle of a tool call no longer show as "tool call may be stuck" in Needs Your Attention forever, and CCC Cloud now reports a stuck tool call as stuck instead of as an approval request.
+- Devin turns sent over its live ACP connection now survive a dashboard restart. The shared `devin acp` connection lives in the persistent worker, like Kimi's and Grok's; it used to live in the dashboard, so every dashboard restart (each automatic update) cut off running Devin turns.
+- Fleet limit actions (continue / switch back for many sessions) now run one at a time on Windows, where file locks are unavailable, so they cannot overwrite each other's failover state.
+- Fleet plan retries now replay durable step results across node restarts without repeating pushes or session nudges. Interrupted steps with an unknown outcome stop safely for review.
+- Folder picker list rows (.fp-item) clipped when many entries: flex column + overflow:hidden shrinks them; needs flex:0 0 auto.
+- Free model setup on Linux and WSL: the router no longer inherits the dashboard's `PORT` and collides with CCC itself, which made setup fail at "Starting it up".
+- With "$0 Free" picked, the new-session composer shows "Free model" in place of the Claude model and effort menus, and the free router picks the model (the paid default model is no longer sent).
+- A fresh install no longer shows a red "model-policy.json is missing" health error: first launch writes an empty policy once, and deleting it later is still flagged. The dashboard no longer loads a script from local port 8765 unless you opt in with `localStorage['ccc.hermesBridge'] = '1'`.
+- Hide stale usage-left bars (e.g. a lapsed Kimi plan) once their reset window ended over a day ago.
+- Clear outstanding delivery receipts when an unattended continuation is discarded after auto-resume is disabled or its permission check is unavailable; record it as dropped rather than delivered.
+- The installer now picks the next free port when another program already uses 8090, and `run.sh` stops with one clear line instead of a traceback (it used to leave a stray worker behind).
+- On iPhone, the composer now sits above the keyboard's ✓ accessory bar so Send is no longer covered.
+- The Jobs tab now opens on this machine's own view: the VM shows its systemd timers (no empty Laptop view), and a Mac defaults to All so it lists both its launchd jobs and the hermes-gcp jobs.
+- Activity-log scope changes discard outdated responses in the rail and modal. Search now matches timestamps and displayed session names, and filtered or empty logs keep a clear message and disabled expansion controls.
+- A minimized phone composer on the new-session screen is a single tidy row again instead of a squeezed sliver.
+- Phone: the folder field shows the end of a long path, an attached image no longer pushes Send off screen, and tapping the context pill offers Compact with a confirm.
+- Phones show the context usage numbers again, and the MiniMax chip no longer opens a new session on Fable.
+- Phone new-session screen shows recent-folder chips again, and the folder button opens the in-page folder picker.
+- Phone: tapping the new-session folder field hides the composer while you edit, so the field and its suggestions stay visible above the keyboard.
+- Mobile new-session folder suggestions are no longer cut off by the strip; they open as a full-width sheet.
+- Mobile Queues tab: the header (queue label, filters, status strip, chips) is more compact, so more tickets fit on a phone screen.
+- Phone: while typing with an image attached, the composer shrinks (selectors hidden, small thumbnails) so Send stays above the keyboard.
+- Phone new-session composer shows engine, model and effort on their own full-width row so they are readable.
+- Phone composer toolbar is tidy (offer on its own row, icons in one row), and the Continue new offer has a × to dismiss it.
+- The Sonnet 5 chip in the new-session model row now selects Sonnet 5 instead of falling back to Fable, and the $0 Free pill only looks pressed when it is on.
+- New-session model chips no longer offer picks for engines that cannot be launched there, so clicking MiniMax no longer switches to Fable.
+- New-session model pills no longer show "Sonnet 5" once "Sonnet 5.5" is available for the same engine.
+- Fixed delayed chat launch responses reopening a session over another chat, draft, or split pane. New chats still open immediately; late failures keep their Retry/Edit request without replacing a newer draft.
+- Finished-turn and approval banners no longer fire for headless runs started in an OS temp directory (eval harnesses could trigger ~100 banners a minute).
+- Fixed free onboarding so router setup and the first task use the right APIs, failed or paid runs never appear as a free success, notifications work for both supported call styles, concurrent setup stays reliable, Free models Settings links open reliably, leaderboard readiness and tool support stay accurate, and isolated installs cannot replace the normal macOS router service.
+- Opening a folder from a remote browser against a headless server host now copies the path and explains why, instead of only showing "Open failed".
+- Opening a file or folder link on a Linux server host no longer fails with `No such file or directory: 'open'`; it uses `xdg-open` when present and otherwise shows a clear message.
+- Perf self-filer no longer files archive/conv-open tickets for single slow samples taken while the host load is over 4x its core count.
+- Block pushes with a setup message when pytest is unavailable, so the performance gate cannot silently pass without running.
+- The conversation "Previous"/"Next" buttons now step only through messages you typed, skipping messages from other sessions.
+- Messages sent to a headless session no longer sit on "sending..." for up to 10 minutes after a turn or /compact ends while a background subagent still runs a long tool.
+- Acknowledge or undo individual resolution notes in the queue board. Acknowledged follow-ups no longer keep closed tickets flagged or pinned as unresolved; the original notes and close history remain readable.
+- The conversation reader no longer creeps up toward older messages on its own on iPhone when lazy images or blocks above the viewport finish loading.
+- Claude sessions can now see CCC as the `ccc` peer and reply to it. A reply to a message that came through Cloud Relay goes back to the remote client as a question, which wakes it with a notification.
+- Local repo-name matching now accepts a unique leading segment (e.g. ERGO for ERGO-NEXT), so such prompts show a suggestion chip.
+- Scrolling up a few pixels from the end of a conversation no longer snaps back to the bottom.
+- Paint the conversation sidebar from a bounded, day-old-or-newer local cache while refreshing the lightweight list endpoint. Cache only display and lifecycle metadata; fresh server results replace the preview, including when history is empty.
+- Simple mode's All past tasks screen now shows the current loading step, its progress, and the time spent during a slow first load, and keeps waiting instead of saying there are no tasks yet.
+- Simple mode: the Settings screen now has an "All settings" row that opens the full Settings window without leaving Simple mode, and the ⋯ bottom-nav button is labeled "Settings" for screen readers.
+- A just-spawned Antigravity (and other fire-and-watch) session now shows as started and live instead of "not-live, no process" while its placeholder row awaits the real session.
+- Speak speed and skip buttons now continue from the current spot and keep the same voice, instead of restarting the text with a new voice.
+- Split-pane [+] attach: buildPaneElement clones drop listeners; fixed by binding attachFilePickerButton per clone.
+- A resumed session no longer sticks on "No active agent process" once its process starts; the card goes back to Thinking.
+- WatchTower input alerts clear when a later notice or ticket snapshot shows the
+request has been resolved. Failed status notices appear as warnings, and delivery
+failures no longer claim the recipient session is gone. Reopened requests remain
+visible, and unknown ticket state keeps the original alert available.
+- Queued and steered messages now match delivery by timestamp and occurrence, so older identical history cannot hide a new message and repeated cleanup passes cannot acknowledge several sends with one transcript entry.
+- A tail-loaded transcript no longer hides your first visible message as the "original ask"; only the real original ask is pinned to the header.
+- Throughput 3-hour chart now shows a cumulative-tokens line when weekly quota data is unavailable or stale, instead of dropping the line.
+- Fixed ticket modal learnings button and comment textarea styling (CCC-49).
+- Hebrew text is now read with the Mac Hebrew voice, because the free offline voice only spells out the letters.
+- Speak no longer drops to the Mac voice when the first sentence wasn't prepared in advance; it fetches the free voice on demand (about 1-2 s) and uses the Mac voice only if that fails or the free voice is cooling down.
+- Read-aloud shows the voice model (fp32 or int8) on the non-streaming path too.
+- Read-aloud audio is now prepared for every visible conversation pane, not just the active one.
+- Read-aloud audio is now made ahead: when a turn ends or you open a conversation, its last message is generated in the background so the Speak click plays with no wait or pauses.
+- The speaker cache now retries after a cooldown or a hidden tab instead of staying empty on an idle session.
+- Read-aloud retries the free voice after 15 seconds (not 5 minutes) when the connection drops, and the playing button label is dark so it is readable.
+- The skip-sentence button no longer pauses while the voice is re-made: it jumps inside the audio that is already generated.
+- Windows: process liveness checks no longer use `os.kill(pid, 0)` (which terminates the target on Windows), and "Open in desktop app" deep links are enabled on Windows (#142).
+- Harden native Windows process checks and force-stop handling, preserve live sessions when hidden-terminal compaction is unavailable, refuse unsupported nonblocking FIFO writes, and reject Windows Terminal's `wt.exe` alias with either path separator.
+- Windows: prevent test isolation leaks from touching real or root user directories by honoring CODEX_HOME across rollout day directory discovery and signature tracking, re-anchoring hook script sync under redirected home, and isolating USERPROFILE alongside HOME across test harnesses (#142).
+- On Windows, CCC no longer launches Windows Terminal (`error 0x80070002 when launching 'skills status'` / `'status --json'`) when it means to run WatchTower's `wt` CLI; every `wt` call now uses WatchTower's `wt.exe` from Python's Scripts folder.
+- On Linux, CCC no longer starts a second execution worker beside the systemd one. Both `run.sh` and the in-app restart used to fall back to a detached `ccc_worker.py` when `launchctl` was missing; that copy held the worker socket while the systemd worker crash-looped "already running" thousands of times. They now start and restart the worker only through `systemctl --user`. An idle worker running stale code is again restarted automatically, because sessions survive the restart; set `CCC_WORKER_AUTO_RESTART=0` to restart it yourself from Settings → Maintenance.
+- Restarting the execution worker on Linux no longer kills every session it launched: the systemd user unit that `./run.sh --install-service` writes now sets `KillMode=process`, matching the system unit, so a new worker reattaches the running sessions. Existing installs pick it up on the next `--install-service`.
+- The Workers tab now highlights the row of the session open in the conversation view.
+- A WatchTower worker row with no transcript now says "no session yet" after 5 minutes instead of "starting…", and clicking it opens its session when known instead of the old queue view.
+
+### Security
+- Harden local image responses: `/api/local-image` now sends `Content-Security-Policy: default-src 'none'; sandbox` so a crafted on-disk `.svg` opened as a top-level document can't run script in CCC's origin (rendering via `<img>` is unaffected), and `X-Content-Type-Options: nosniff` is added to `/api/local-image`, `/image-cache/`, `/api/pasted-image`, and `/api/conv-image`.
+
 ## [5.37.0] - 2026-10-04
 
 ### Added
@@ -3688,7 +3938,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.37.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.38.0...HEAD
+[5.38.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.38.0
 [5.37.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.37.0
 [5.36.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.36.0
 [5.35.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.35.0

@@ -1,1 +1,0 @@
-- Speak starts with no wait: the first sentence of each new reply is prepared in the background, and Speak uses the browser voice at once when it is not ready.

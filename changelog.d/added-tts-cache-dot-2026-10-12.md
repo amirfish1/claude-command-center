@@ -1,1 +1,0 @@
-- Read-aloud button now shows a green dot when the whole last message is ready (amber when only the first clip is), names the voice model (fp32 or int8), and grows to fit the voice name.

@@ -1,1 +1,0 @@
-- Compact view no longer stacks a smear of timestamps after the last reply.

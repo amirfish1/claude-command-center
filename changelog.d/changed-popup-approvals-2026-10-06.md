@@ -1,1 +1,0 @@
-- Promo pop-ups (savings milestones, notification ask, daily report, star ask, router card, limit cards, Moment Zero auto-open) now stay off until each one is approved in `ccc_server/popups.py` and `static/popups.js`.

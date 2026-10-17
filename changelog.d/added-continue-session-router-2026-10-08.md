@@ -1,1 +1,0 @@
-- Keep a limit-hit session on your router for every later turn (not just the first resume), switch it back to Claude automatically when the limit resets, refuse routers that would carry a Claude model, and add a hermetic fake-router E2E for the whole hop.

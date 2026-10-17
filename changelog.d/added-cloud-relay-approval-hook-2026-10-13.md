@@ -1,1 +1,0 @@
-- CCC Cloud approvals now carry the complete tool input (up to 16 KB, with an explicit truncation flag) and are applied through a new `PermissionRequest` hook that only acts on the exact tool call the cloud judged (single use, 120 s expiry); the terminal keystroke remains as a fallback when the hook is not installed.

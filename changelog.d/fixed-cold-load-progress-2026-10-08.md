@@ -1,1 +1,0 @@
-- First load on a fresh install now shows live scan progress (step, transcripts N of M, elapsed time) on the Simple home list and the archive stage list, instead of a silent spinner that could fall back to an empty list mid-scan.
