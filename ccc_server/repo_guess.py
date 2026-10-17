@@ -41,6 +41,8 @@ _RG_NAME_STOPLIST = frozenset((
     "test", "tests", "apps", "app", "dev", "src", "docs", "tools", "web", "api", "work",
     "scratch", "tmp", "data", "notes", "projects", "code", "repo", "repos",
 ))
+# Words too common in prompts to stand for a repo by their first segment.
+_RG_LEAD_STOPLIST = frozenset(("claude", "codex", "chat", "next", "the", "new", "old", "my"))
 _RG_MAX_PROMPT_CHARS = 3000
 _RG_DESC_MAX = 300
 _RG_OVERRIDE_MAX = 500
@@ -269,6 +271,17 @@ def _rg_match_names(prompt, cands):
     for a, owners in acr.items():
         if len(owners) == 1 and a not in _RG_NAME_STOPLIST and owners[0] not in hits \
                 and _rg_word_in(prompt, a):
+            hits.append(owners[0])
+    # Leading segment of a hyphen/underscore name ("ERGO" for ERGO-NEXT), when
+    # exactly one repo owns it and no repo is literally named that.
+    lead = {}
+    for p, b in bases.items():
+        seg = re.split(r"[-_ ]", b, 1)[0].lower()
+        if seg != b.lower() and len(seg) >= 3 and seg not in _RG_NAME_STOPLIST \
+                and seg not in _RG_LEAD_STOPLIST and seg not in lower:
+            lead.setdefault(seg, []).append(p)
+    for seg, owners in lead.items():
+        if len(owners) == 1 and owners[0] not in hits and _rg_word_in(prompt, seg):
             hits.append(owners[0])
     return hits
 

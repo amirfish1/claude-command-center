@@ -522,3 +522,13 @@ def test_container_current_repo_not_sent_as_hint(rg, tmp_path, monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake)
     rg.repo_guess_request({"prompt": "something vague about pricing", "current_repo": container})
     assert seen["body"]["state"]["last_used_workspace"] is None
+
+
+def test_leading_segment_alias_only_when_unique(rg, tmp_path, monkeypatch):
+    ergo, _ = _repos(tmp_path, monkeypatch, "ERGO-NEXT", "billing")
+    cands, _c = rg._rg_candidates("")
+    assert rg._rg_match_names("About the latest ERGO meeting", cands) == [ergo]
+    assert rg._rg_match_names("ask claude about it", cands) == []
+    _repos(tmp_path, monkeypatch, "ERGO-NEXT", "ergo-tools")
+    cands, _c = rg._rg_candidates("")
+    assert rg._rg_match_names("About the latest ERGO meeting", cands) == []
