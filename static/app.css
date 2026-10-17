@@ -30820,12 +30820,13 @@ body.conv-compact.conv-compact .conversations-view .msg-ts,
 body.conv-compact.conv-compact .conversations-view .line-num,
 body.conv-compact.conv-compact .conversations-view .assistant-message-actions,
 body.conv-compact.conv-compact .conversations-view details.tool-command-disclosure { display: none !important; }
-/* The newest assistant reply is shown fully open, so keep its speak/copy
-   actions and timestamp; the rest of the per-message chrome stays hidden.
-   :has(> .assistant-text) matters: the tool-only events after it also have
-   no later text, and their absolute-positioned stamps stacked into a smear. */
-body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) .msg-ts { display: inline !important; }
-body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) .assistant-message-actions { display: inline-flex !important; }
+/* Every assistant text message keeps its speak/copy actions and timestamp
+   (a long single-turn Codex run has many narration messages, none of which
+   is a "final" card); the rest of the per-message chrome stays hidden.
+   :has(> .assistant-text) matters: tool-only events have no text of their
+   own, and their absolute-positioned stamps stacked into a smear. */
+body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) .msg-ts { display: inline !important; }
+body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) .assistant-message-actions { display: inline-flex !important; }
 /* Each turn's final card (.cc-final) also keeps speak/copy and its timestamp:
    otherwise only the very last reply in the whole conversation has them, and
    there is no way to tell when an earlier turn happened. */

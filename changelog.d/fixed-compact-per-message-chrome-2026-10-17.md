@@ -1,0 +1,1 @@
+Compact transcript view now keeps the timestamp and speak/copy buttons on every assistant text message, not just the newest reply and each turn's final card, so long single-turn Codex sessions no longer look like they have no per-message metadata.
