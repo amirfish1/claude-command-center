@@ -31155,3 +31155,6 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
 }
 .f2c-panel .f2c-config .f2c-prompt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Reader anchoring is done in JS (_observeConvEventSizes) so iOS, which has none, behaves like Chrome. */
+.conversations-view { overflow-anchor: none; }

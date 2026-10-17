@@ -1,0 +1,1 @@
+- The conversation reader no longer creeps up toward older messages on its own on iPhone when lazy images or blocks above the viewport finish loading.

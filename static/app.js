@@ -43945,6 +43945,7 @@
           hasContentMutation = true;
           break;
         }
+        _observeConvEventSizes(view, mutations);
         if (!hasContentMutation) return;
         if (view._pinnedToBottom) {
           scrollConversationToEnd(view);
@@ -53700,6 +53701,59 @@
     return el;
   }
 
+  // iOS Safari has no CSS scroll anchoring, so anything above the viewport
+  // that grows while the reader sits still (a loading="lazy" image finishing
+  // its fetch, a block re-measuring) pushes the visible text down: the
+  // transcript appears to creep UP toward older messages in steps, with no
+  // input. Chrome hides this with native anchoring. We turn native anchoring
+  // off for the reader (app.css) and do it ourselves on every platform: when
+  // an .event wholly above the viewport changes height, shift scrollTop by
+  // the same amount. Skipped when tailing (the pin observer owns that) and
+  // when the pane itself was resized (the resize handler owns that).
+  function _observeConvEventSizes(view, mutations) {
+    if (typeof ResizeObserver !== 'function') return;
+    let ro = view._convEventRO;
+    if (!ro) {
+      const sizes = new WeakMap();
+      view._convEventW = view.clientWidth;
+      ro = new ResizeObserver((entries) => {
+        const w = view.clientWidth;
+        const widthChanged = w !== view._convEventW;
+        view._convEventW = w;
+        const rows = [];
+        for (const e of entries) {
+          const h = (e.borderBoxSize && e.borderBoxSize[0])
+            ? e.borderBoxSize[0].blockSize : e.contentRect.height;
+          const prev = sizes.get(e.target);
+          sizes.set(e.target, h);
+          if (prev == null || h === prev) continue;
+          rows.push({ el: e.target, delta: h - prev });
+        }
+        if (!rows.length || widthChanged || view._pinnedToBottom) return;
+        const vTop = view.getBoundingClientRect().top;
+        const withRect = rows.map((r) => ({ r, rect: r.el.getBoundingClientRect() }))
+          .sort((x, y) => x.rect.top - y.rect.top);
+        let cum = 0;
+        let shift = 0;
+        for (const { r, rect } of withRect) {
+          // Pre-change bottom edge = measured bottom minus every growth at
+          // or above it in the document.
+          if (rect.bottom - cum - r.delta <= vTop) shift += r.delta;
+          cum += r.delta;
+        }
+        if (shift) view.scrollTop += shift;
+      });
+      view._convEventRO = ro;
+      view.querySelectorAll('.event').forEach((n) => ro.observe(n));
+    }
+    for (const m of mutations) {
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.matches && n.matches('.event')) ro.observe(n);
+        if (n.querySelectorAll) n.querySelectorAll('.event').forEach((x) => ro.observe(x));
+      }
+    }
+  }
   // The .event nearest the top of the viewport plus its exact offset within
   // it (`delta` = how far its top sits above the viewport edge), so the reader's
   // position is restored precisely after a re-render adds content above it.
