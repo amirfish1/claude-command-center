@@ -43746,13 +43746,24 @@
     if (!sid || !line) return;
     const bar = document.createElement('div');
     bar.className = 'tapback-bar';
-    bar.title = 'Sent with your next message (no extra turn)';
+    bar.title = 'Sent with your next message (no extra turn). Shift-click sends now.';
     bar.innerHTML = '<button type="button" data-kind="up" aria-label="Thumbs up">' + TAPBACK_EMOJI.up + '</button>'
       + '<button type="button" data-kind="down" aria-label="Thumbs down">' + TAPBACK_EMOJI.down + '</button>';
     bar.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b) return;
       e.stopPropagation();
+      if (e.shiftKey) {
+        // Immediate tier: inject now and accept the extra turn.
+        fetch('/api/inject-input', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({session_id: sid, text: '[' + line + '] ' + TAPBACK_LABEL[b.dataset.kind],
+            source: 'composer', mode: 'send', idempotency_key: durableActionId('inject')}),
+        }).then(r => { if (!r.ok) showOpToast('Could not send reaction', 'error'); })
+          .catch(() => showOpToast('Could not send reaction', 'error'));
+        return;
+      }
       tapbackToggle(sid, line, b.dataset.kind);
       tapbackSyncBar(bar, sid, line);
     });
