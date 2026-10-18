@@ -1,0 +1,1 @@
+- Saving an annotation without a screenshot now shows a plain "Annotation saved" toast instead of a red macOS permissions error.
