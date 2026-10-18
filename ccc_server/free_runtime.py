@@ -568,10 +568,89 @@ def local_tts_open(text, voice=""):
     if not text or not _local_tts_start():
         return None, ""
     voice = _kokoro_voice(voice)
+    key = (text, voice)
+    cached = _clip_cache_get(key)
+    if cached is not None:
+        return _CachedClip(cached), _KOKORO_LABEL + voice
     try:
-        return urllib.request.urlopen(_local_tts_request("/stream", text, voice), timeout=60), _KOKORO_LABEL + voice
+        resp = urllib.request.urlopen(_local_tts_request("/stream", text, voice), timeout=60)
+        return _TeeClip(resp, key), _KOKORO_LABEL + voice
     except Exception:  # older venv without lameenc answers 404: caller uses local_tts()
         return None, ""
+
+
+# Kokoro runs near realtime on a busy CPU (a 400-char clip takes ~20s), so a
+# clip read again (Speak pressed twice, re-read after a Stop) is kept in memory
+# and replayed instantly. Bounded by bytes; only fully-made clips are stored.
+_CLIP_CACHE_MAX_BYTES = 48 * 1024 * 1024
+_CLIP_CACHE = {}   # (text, voice) -> mp3 bytes, oldest first
+_CLIP_CACHE_LOCK = threading.Lock()
+
+
+def _clip_cache_get(key):
+    with _CLIP_CACHE_LOCK:
+        data = _CLIP_CACHE.pop(key, None)
+        if data is not None:
+            _CLIP_CACHE[key] = data   # most recently used goes last
+        return data
+
+
+def _clip_cache_put(key, data):
+    if not data or len(data) > _CLIP_CACHE_MAX_BYTES:
+        return
+    with _CLIP_CACHE_LOCK:
+        _CLIP_CACHE.pop(key, None)
+        _CLIP_CACHE[key] = data
+        total = sum(len(v) for v in _CLIP_CACHE.values())
+        for old in list(_CLIP_CACHE):
+            if total <= _CLIP_CACHE_MAX_BYTES or old == key:
+                break
+            total -= len(_CLIP_CACHE.pop(old))
+
+
+class _CachedClip:
+    """Response-shaped reader over a cached clip."""
+
+    def __init__(self, data):
+        self._data, self._pos = data, 0
+
+    def read(self, n=-1):
+        end = len(self._data) if n is None or n < 0 else self._pos + n
+        chunk = self._data[self._pos:end]
+        self._pos += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _TeeClip:
+    """Passes the live stream through and caches it once it ends cleanly."""
+
+    def __init__(self, resp, key):
+        self._resp, self._key, self._parts, self._done = resp, key, [], False
+
+    def read(self, n=-1):
+        chunk = self._resp.read(n)
+        if chunk:
+            self._parts.append(chunk)
+        else:
+            self._done = True
+        return chunk
+
+    def __enter__(self):
+        self._resp.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            return self._resp.__exit__(*exc)
+        finally:
+            if self._done and exc[0] is None:
+                _clip_cache_put(self._key, b"".join(self._parts))
 
 
 def local_tts(text, voice=""):

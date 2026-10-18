@@ -1,0 +1,1 @@
+- Read-aloud replays a clip you already heard (or prefetched) instantly instead of regenerating it, which took ~20s per 400 characters on a busy machine.
