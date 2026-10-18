@@ -18,7 +18,10 @@ import fcntl
 import json
 import math
 import os
-import pty
+try:
+    import pty
+except ImportError:  # Windows: pty pulls in termios, which does not exist
+    pty = None
 import queue
 import re
 import select
@@ -4309,6 +4312,8 @@ def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id=""):
     the user for the code through the credential broker and types it in. The
     pty closes once no sign-in is needed, so normal runs see no input.
     """
+    if pty is None:
+        raise OSError("pseudo-terminals are not available on this platform")
     master, slave = pty.openpty()
     try:
         proc = subprocess.Popen(
