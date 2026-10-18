@@ -9472,10 +9472,10 @@
         else if (row) row.remove();
       }
       btn.textContent = '✓';
-      showOpToast(
+      showOpToast(subagentRelayToastText(data) || (
         data.via === 'codex-steer' ? 'Steered running Codex turn.'
         : currentSession.source === 'devin-cli' ? 'Steered running Devin turn.'
-        : 'Sent to Codex.');
+        : 'Sent to Codex.'));
       setTimeout(refreshConversationList, 1500);
       setTimeout(refreshConversationList, 3500);
     } catch (err) {
@@ -9542,7 +9542,7 @@
         if (row._pendingRef) removePendingSendEcho(row._pendingRef);
         else if (row.parentNode) row.parentNode.removeChild(row);
       });
-      showOpToast('Steered ' + texts.length + ' queued messages as one turn.');
+      showOpToast(subagentRelayToastText(data) || ('Steered ' + texts.length + ' queued messages as one turn.'));
       setTimeout(refreshConversationList, 500);
     } catch (err) {
       setQueuedSteerError(sid, texts, (err && err.message) || 'steer failed');
@@ -33426,10 +33426,18 @@
   }
 
   function steeredToastText(data) {
+    const relayed = subagentRelayToastText(data);
+    if (relayed) return relayed;
     const via = String((data && data.via) || '');
     if (via === 'codex-steer') return 'Steered running Codex turn.';
     if (via.indexOf('acp') === 0) return 'Steered - the running turn was interrupted to take it.';
     return 'Steered.';
+  }
+
+  function subagentRelayToastText(data) {
+    if (!data || !data.relayed_via_parent) return '';
+    const agent = data.relay_agent_path || 'this sub-agent';
+    return 'Sent to ' + agent + ' through its parent agent (Codex sub-agents only take input that way).';
   }
 
   function codexSteerUnavailable(data) {

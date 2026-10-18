@@ -2227,6 +2227,73 @@ def _codex_spawn_ephemeral_continuation(
     }
 
 
+_CODEX_SUBAGENT_RELAY_DEPTH = threading.local()
+_CODEX_SUBAGENT_RELAY_MAX_DEPTH = 4
+
+
+def _codex_subagent_relay_text(session_id, text, meta):
+    agent = meta.get("agent_path") or "the sub-agent"
+    who = f"{agent} ({meta['nickname']})" if meta.get("nickname") else agent
+    return (
+        f"[CCC relay] The user sent the message below to your sub-agent {who}, "
+        f"thread {session_id}. Codex does not accept direct input to multi-agent "
+        f"sub-agents, so forward it verbatim to {agent} with followup_task and "
+        f"relay its answer. Answer it yourself only if that agent no longer exists.\n\n"
+        f"{text}"
+    )
+
+
+def _codex_relay_subagent_input(session_id, text, *, steer, result):
+    """Deliver input Codex refused for a multi-agent v2 sub-agent via its parent.
+
+    Codex rejects direct app-server input to v2 sub-agents; the only path in is
+    the parent's followup_task. Without this the message bounced back to the
+    durable queue on every pump and every Steer click, forever. Steers the
+    parent's running turn when it has one, else starts a turn on it. Returns
+    None when the refusal is something else or no parent is known.
+
+    The relay never writes the parent's durable queue: a busy parent comes back
+    as queued/failed and the child's own claim is restored and retried, so a
+    retry cannot duplicate the message.
+    """
+    if not _core._codex_error_is_subagent_input_forbidden(result):
+        return None
+    depth = getattr(_CODEX_SUBAGENT_RELAY_DEPTH, "value", 0)
+    if depth >= _CODEX_SUBAGENT_RELAY_MAX_DEPTH:
+        return None
+    meta = _core._codex_subagent_meta(session_id)
+    parent = meta.get("parent") or _core._codex_thread_parent_id(session_id)
+    if not parent:
+        return None
+    framed = _codex_subagent_relay_text(session_id, text, meta)
+    _core._resume_ledger_append(
+        "codex_subagent_relay", sid=session_id, parent=parent,
+        agent_path=meta.get("agent_path") or "", steer=bool(steer),
+    )
+    _CODEX_SUBAGENT_RELAY_DEPTH.value = depth + 1
+    try:
+        relayed = _core.resume_session_codex(
+            parent, framed, steer=True, _native_delivery=True,
+        )
+        if not relayed.get("ok"):
+            relayed = _core.resume_session_codex(
+                parent, framed, steer=False, _native_delivery=True, _from_queue=True,
+            )
+    finally:
+        _CODEX_SUBAGENT_RELAY_DEPTH.value = depth
+    relayed = dict(relayed or {})
+    relayed["relayed_via_parent"] = parent
+    relayed["relay_agent_path"] = meta.get("agent_path") or ""
+    relayed["relay_from_session_id"] = session_id
+    if relayed.get("ok") and not relayed.get("queued"):
+        relayed["relay_via"] = relayed.get("via")
+        if steer:
+            # The queued-steer transaction commits only a "codex-steer" result;
+            # the message was delivered now, so the queued copy must go.
+            relayed["via"] = "codex-steer"
+    return relayed
+
+
 def resume_session_codex(
     session_id, text, *, steer=False, _from_queue=False, idempotency_key=None,
     preserve_queued_steer=False, _native_delivery=False,
@@ -2421,13 +2488,15 @@ def resume_session_codex(
     if desktop_result is not None and desktop_result.get("fallback") != "queue":
         return desktop_result
     if steer:
-        return _core._codex_steer_via_app_server(
+        steered = _core._codex_steer_via_app_server(
             session_id,
             text,
             cwd=cwd,
             model=model,
             image_paths=image_paths,
         )
+        relayed = _codex_relay_subagent_input(session_id, text, steer=True, result=steered)
+        return relayed if relayed is not None else steered
     app_result = desktop_result if desktop_result is not None else _core._codex_resume_or_steer_via_app_server(
         session_id,
         text,
@@ -2437,6 +2506,13 @@ def resume_session_codex(
         allow_start=active_resume_entry is None,
         reasoning_effort=reasoning_effort,
     )
+    relayed = _codex_relay_subagent_input(session_id, text, steer=False, result=app_result)
+    if relayed is not None:
+        if relayed.get("ok") and not relayed.get("queued"):
+            return relayed
+        # Parent busy or unreachable: keep the child's own queue/retry path,
+        # which re-attempts the relay on the next pump.
+        app_result = dict(app_result, error=relayed.get("error") or relayed.get("queued_reason") or app_result.get("error"))
     if app_result.get("ok"):
         # Accepted means the engine already started this turn. Re-queueing
         # the same text (especially a lone "continue") fires a second turn

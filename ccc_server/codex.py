@@ -3376,7 +3376,142 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
 
     The app-server is the only local Codex interface that can append input to
     a loaded thread; `codex exec resume` can only start a one-shot process.
+
+    A multi-agent v2 sub-agent thread can only be resumed after its parent is
+    loaded; that rejection is repaired here, at the one choke point every
+    resume passes through, so no send/steer/pump path can bounce on it.
     """
+    response = _codex_app_server_request_once(
+        method, params, timeout,
+        _route=_route, _null_params=_null_params,
+        _expected_generation=_expected_generation,
+    )
+    if method == "thread/resume" and _codex_error_needs_parent_resume(response):
+        response = _codex_resume_subagent_via_parent(
+            params, response, timeout,
+            _route=_route, _expected_generation=_expected_generation,
+        )
+    return response
+
+
+_CODEX_SUBAGENT_PARENT_RESUME_MAX_DEPTH = 8
+
+
+def _codex_error_needs_parent_resume(response):
+    """True for Codex's 'cannot resume an unloaded multi-agent v2 sub-agent
+    through its parent; resume the parent first' rejection."""
+    lowered = _codex_error_text(response).lower()
+    return "sub-agent" in lowered and "resume the parent first" in lowered
+
+
+def _codex_error_is_subagent_input_forbidden(response):
+    """True when Codex refused input because the thread is a multi-agent v2
+    sub-agent ('direct app-server input is not allowed for multi-agent v2
+    sub-agents', or a resume rejection naming a v2 sub-agent/child). Such a
+    thread only takes input through its parent, never directly."""
+    lowered = _codex_error_text(response).lower()
+    return "multi-agent v2" in lowered and ("sub-agent" in lowered or "child" in lowered)
+
+
+def _codex_subagent_meta(thread_id):
+    """{"parent", "agent_path", "nickname"} from a sub-agent rollout's
+    session_meta line; empty strings when absent. Error path only."""
+    out = {"parent": "", "agent_path": "", "nickname": ""}
+    try:
+        path = _core._resolve_codex_rollout_path(thread_id)
+    except Exception:
+        path = None
+    if not path:
+        return out
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            first = json.loads(fh.readline() or "{}")
+    except (OSError, ValueError):
+        return out
+    payload = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
+    if not isinstance(payload, dict):
+        return out
+    source = payload.get("source")
+    sub = source.get("subagent") if isinstance(source, dict) else None
+    spawn = sub.get("thread_spawn") if isinstance(sub, dict) else None
+    spawn = spawn if isinstance(spawn, dict) else {}
+    parent = str(payload.get("parent_thread_id") or spawn.get("parent_thread_id") or "").strip()
+    out["parent"] = parent if parent != thread_id else ""
+    out["agent_path"] = str(payload.get("agent_path") or spawn.get("agent_path") or "").strip()
+    out["nickname"] = str(payload.get("agent_nickname") or spawn.get("agent_nickname") or "").strip()
+    return out
+
+
+def _codex_thread_parent_id(thread_id):
+    """Parent thread of a Codex sub-agent thread, or ''.
+
+    The rollout's session_meta line names it (``parent_thread_id``, or
+    ``source.subagent.thread_spawn.parent_thread_id``); the state DB's
+    ``thread_spawn_edges`` is the fallback. Error path only, so the file read
+    and DB scan never run per row.
+    """
+    parent = _codex_subagent_meta(thread_id)["parent"]
+    if parent:
+        return parent
+    try:
+        parent = _codex_spawn_parent_by_child().get(thread_id) or ""
+    except Exception:
+        parent = ""
+    return parent if parent != thread_id else ""
+
+
+def _codex_resume_subagent_via_parent(params, response, timeout, *, _route=True, _expected_generation=None):
+    """Load a sub-agent's ancestor chain, then retry its thread/resume.
+
+    Walks up parents until one resumes (nested sub-agents need their whole
+    chain loaded), then resumes back down to the original thread. Returns the
+    original rejection when no parent is known or an ancestor fails, so the
+    caller's durable-queue fallback still applies.
+    """
+    child = str((params or {}).get("threadId") or "").strip()
+    if not child:
+        return response
+    chain = []
+    seen = {child}
+    current = child
+    for _ in range(_CODEX_SUBAGENT_PARENT_RESUME_MAX_DEPTH):
+        parent = _codex_thread_parent_id(current)
+        if not parent or parent in seen:
+            return response
+        seen.add(parent)
+        chain.append(parent)
+        try:
+            _core._resume_ledger_append(
+                "codex_wake_stage", sid=child, stage="parent-resume", parent=parent,
+            )
+        except Exception:
+            pass
+        loaded = _codex_app_server_request_once(
+            "thread/resume", {"threadId": parent, "excludeTurns": True}, timeout,
+            _route=_route, _expected_generation=_expected_generation,
+        )
+        if not _codex_error_needs_parent_resume(loaded):
+            if loaded.get("error"):
+                return response
+            break
+        current = parent
+    else:
+        return response
+    # chain[-1] is now loaded; load the intermediate ancestors top-down.
+    for ancestor in reversed(chain[:-1]):
+        loaded = _codex_app_server_request_once(
+            "thread/resume", {"threadId": ancestor, "excludeTurns": True}, timeout,
+            _route=_route, _expected_generation=_expected_generation,
+        )
+        if loaded.get("error"):
+            return response
+    return _codex_app_server_request_once(
+        "thread/resume", params, timeout,
+        _route=_route, _expected_generation=_expected_generation,
+    )
+
+
+def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=True, _null_params=False, _expected_generation=None):
     params = params or {}
     if method in ("thread/start", "thread/resume"):
         params = dict(params)
