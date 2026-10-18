@@ -42,7 +42,7 @@ from datetime import datetime
 
 import federation
 
-PEER_DEADLINE_S = 1.5
+PEER_DEADLINE_S = 4.0  # ssh peer recall is ~1-1.2s idle, >1.5s beside a busy local recall (OPS-1431)
 _TRANSPORT_TIMEOUT_S = 8.0
 RRF_K = 60
 _BREAKER_BASE_S = 60.0
