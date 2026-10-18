@@ -13063,7 +13063,17 @@
     if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
-    if (_ttsHeadCache.has(head.text)) { const c = _ttsCacheState.get(head.text); _ttsMarkCache(mk, null, c ? c.st : null, c ? c.f : 0); return; }
+    if (_ttsHeadCache.has(head.text)) {
+      const c = _ttsCacheState.get(head.text);
+      _ttsMarkCache(mk, null, c ? c.st : null, c ? c.f : 0);
+      // A newer prefetch in the same pane may have abandoned this message's
+      // chain half-way; without a restart its speaker stays amber forever.
+      const hit = _ttsHeadCache.get(head.text);
+      if (hit && hit.got && !_ttsChainRunning.has(head.text) && !(c && c.st === 'ready')) {
+        _ttsStartChain(clean, head, hit.got, mk);
+      }
+      return;
+    }
     _ttsMarkCache(mk, null, null);
     const entry = { ready: false, got: null };
     const t0 = Date.now();
@@ -13072,9 +13082,7 @@
       entry.ready = true; entry.got = got; entry.voice = got.voice;
       _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
       _ttsMarkCache(mk, head.text, 'partial', 0.1);
-      const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
-      // One pane's clips at a time: two chains would share the CPU and both finish late.
-      _ttsChainQueue = _ttsChainQueue.then(() => _ttsPrefetchRest(clean, head, got, token, mk)).catch(() => {});
+      _ttsStartChain(clean, head, got, mk);
       return got;
     });
     entry.p.catch((status) => {
@@ -13098,24 +13106,49 @@
   const _ttsChainTokens = {};   // pane id -> latest chain token
   let _ttsChainQueue = Promise.resolve();
   const _TTS_PREFETCH_CLIPS = 8;
+  const _ttsChainRunning = new Set();   // head texts whose chain is queued or running
+  function _ttsStartChain(clean, head, got, mk) {
+    const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
+    _ttsChainRunning.add(head.text);
+    // One message's clips at a time; within it the clips are made in parallel.
+    _ttsChainQueue = _ttsChainQueue
+      .then(() => _ttsPrefetchRest(clean, head, got, token, mk))
+      .catch(() => {})
+      .then(() => { _ttsChainRunning.delete(head.text); });
+  }
+  // One synth call does not use all cores, so a few clips run side by side
+  // (4 sentences: 45s one after another, 27s together on this host). Wider
+  // than this only slows the clip being heard first.
+  const _TTS_PREFETCH_WIDTH = 3;
   async function _ttsPrefetchRest(clean, head, headGot, token, paneId) {
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
     const end = head.start + head.text.length;
     const rest = _chunkTtsText(clean.slice(end), 400, end).slice(0, _TTS_PREFETCH_CLIPS);
-    let prev = headGot;
-    for (let i = 0; i < rest.length; i++) {
-      const c = rest[i];
-      try { await prev.done; } catch (_) { return; }
-      if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'partial', (i + 1) / (rest.length + 1));
-      if (token !== _ttsChainTokens[paneId || ''] || _ttsActive || Date.now() < _ttsNeuralCooldownUntil) return;
-      if (_ttsHeadCache.has(c.text)) continue;
-      const entry = { ready: false, got: null, voice: headGot.voice };
-      entry.p = _ttsFetchNeural(c.text, headGot.voice).then((got) => { entry.ready = true; entry.got = got; return got; });
-      _ttsHeadCache.set(c.text, entry);
-      _ttsEvictCache();
-      try { prev = await entry.p; } catch (_) { _ttsHeadCache.delete(c.text); return; }
-    }
-    try { await prev.done; } catch (_) { return; }
+    const live = () => token === _ttsChainTokens[paneId || ''] && !_ttsActive && Date.now() >= _ttsNeuralCooldownUntil;
+    const entries = [];
+    const settle = async (i) => {   // clip i fully made; the bar moves past it
+      const got = await entries[i].p;
+      await got.done;
+      if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'partial', (i + 2) / (rest.length + 1));
+    };
+    try {
+      for (let i = 0; i < rest.length; i++) {
+        if (i >= _TTS_PREFETCH_WIDTH) await settle(i - _TTS_PREFETCH_WIDTH);
+        if (!live()) return;
+        const c = rest[i];
+        let entry = _ttsHeadCache.get(c.text);
+        if (!entry) {
+          entry = { ready: false, got: null, voice: headGot.voice };
+          entry.p = _ttsFetchNeural(c.text, headGot.voice).then((got) => { entry.ready = true; entry.got = got; return got; });
+          entry.p.catch(() => { if (_ttsHeadCache.get(c.text) === entry) _ttsHeadCache.delete(c.text); });
+          _ttsHeadCache.set(c.text, entry);
+          _ttsEvictCache();
+        }
+        entries.push(entry);
+      }
+      await headGot.done;
+      for (let i = Math.max(0, rest.length - _TTS_PREFETCH_WIDTH); i < rest.length; i++) await settle(i);
+    } catch (_) { return; }
     if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
