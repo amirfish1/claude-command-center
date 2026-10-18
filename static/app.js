@@ -86038,6 +86038,7 @@
     let _chatFindLastBuiltQuery = '';
     let _chatFindInputTimer = null;
     let _chatFindBuildGeneration = 0;
+    const CHAT_FIND_FULL_LOAD_MAX_LINES = 2000;
 
     function chatFindGetRoot() {
       try {
@@ -86112,6 +86113,10 @@
       const root = chatFindGetRoot();
       const pane = paneByPaneId(paneId);
       if (!root || !pane || !root.querySelector('.conv-load-earlier')) return;
+      // Opening find on a huge session (one was 700 MB / 60k lines) fetched
+      // and rendered the whole transcript and froze the tab. Only pull in
+      // hidden history when it is small; otherwise search what is loaded.
+      if (Number(pane.firstLine || 0) > CHAT_FIND_FULL_LOAD_MAX_LINES) return;
       pane.wantFull = true;
       pane.lastLine = 0;
       await fetchConversationEvents(paneId);

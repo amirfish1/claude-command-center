@@ -1,0 +1,1 @@
+- Opening the in-conversation find bar (Cmd+F) on a very large session no longer freezes CCC; find searches the loaded part instead of pulling in the whole transcript.
