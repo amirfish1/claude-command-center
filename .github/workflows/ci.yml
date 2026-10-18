@@ -16,7 +16,9 @@ jobs:
         shell: bash
         run: |
           pip install pytest
-          python -m pytest tests/test_windows_compatibility.py tests/test_windows_runtime_guards.py tests/test_no_raw_pid_probe.py tests/test_codex_title_freshness.py tests/test_federation_handoff.py tests/test_federation_identity.py tests/test_telemetry.py -q -p no:cacheprovider || echo "TESTS_FAILED"
+          WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          python -c "import watchtower.queue"
+          python -m pytest tests/test_windows_compatibility.py tests/test_windows_runtime_guards.py tests/test_no_raw_pid_probe.py tests/test_codex_title_freshness.py tests/test_federation_handoff.py tests/test_federation_identity.py tests/test_telemetry.py -q -p no:cacheprovider -rfE || echo "TESTS_FAILED"
       - name: Check for leaked drive-root dirs
         shell: bash
         run: |
