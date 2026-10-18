@@ -12917,7 +12917,7 @@
   // localStorage value (e.g. 1.5 from the old range) back into the
   // new window on next boot.
   const _TTS_RATE_MIN = 0.8;
-  const _TTS_RATE_MAX = 1.3;
+  const _TTS_RATE_MAX = 1.8;
   const _TTS_RATE_DEFAULT = 1.25;
   function _readPersistedTtsRate() {
     try {
