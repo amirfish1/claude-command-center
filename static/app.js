@@ -11851,9 +11851,10 @@
           return;
         }
       } else {
+        const _tapbackPrefix = tapbackTakePending(sid);
         const payload = {
           session_id: sid,
-          text,
+          text: _tapbackPrefix ? _tapbackPrefix + '\n' + text : text,
           source: 'composer',
           // send_queue isn't a real backend mode - it's plain "send" plus an
           // explicit opt-in to always defer to the next turn boundary
@@ -11877,6 +11878,7 @@
       }
       let data = {};
       try { data = await res.json(); } catch (_) {}
+      if (typeof _tapbackPrefix !== 'undefined' && _tapbackPrefix && !(res && res.ok)) tapbackRestorePending(sid, _tapbackPrefix);
       // Soft-block: CCC suspects a terminal is running on this session but
       // couldn't route to it. Ask the user before delivering to the headless.
       if (res.ok && data.soft_block && data.code === 'terminal_suspected') {
@@ -43690,6 +43692,73 @@
     }
     updateConversationEndAffordance(view);
   }
+
+  // CCC-1299 tap-backs (docs/tapbacks-design.md): a reaction on an agent
+  // message is stored locally and piggybacks on the user's next real send as
+  // "[<line>] Thumbs up", so it never costs a turn of its own.
+  const TAPBACK_KEY = 'ccc-tapbacks-pending';
+  const TAPBACK_EMOJI = {up: '👍', down: '👎'};
+  const TAPBACK_LABEL = {up: 'Thumbs up', down: 'Thumbs down'};
+  function tapbackLoad() {
+    try { return JSON.parse(localStorage.getItem(TAPBACK_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function tapbackSave(all) {
+    try { localStorage.setItem(TAPBACK_KEY, JSON.stringify(all)); } catch (_) {}
+  }
+  function tapbackToggle(sid, line, kind) {
+    if (!sid || !line) return null;
+    const all = tapbackLoad();
+    const m = all[sid] || (all[sid] = {});
+    if (m[line] === kind) delete m[line]; else m[line] = kind;
+    if (!Object.keys(m).length) delete all[sid];
+    tapbackSave(all);
+    return m[line] || null;
+  }
+  function tapbackTakePending(sid) {
+    const all = tapbackLoad();
+    const m = all[sid];
+    if (!m) return '';
+    delete all[sid];
+    tapbackSave(all);
+    return Object.keys(m).sort((a, b) => Number(a) - Number(b))
+      .map(l => '[' + l + '] ' + (TAPBACK_LABEL[m[l]] || 'Reaction')).join('\n');
+  }
+  function tapbackRestorePending(sid, prefix) {
+    const all = tapbackLoad();
+    const m = all[sid] || (all[sid] = {});
+    String(prefix).split('\n').forEach(row => {
+      const mm = /^\[(\d+)\] (Thumbs up|Thumbs down)$/.exec(row);
+      if (mm && !m[mm[1]]) m[mm[1]] = mm[2] === 'Thumbs up' ? 'up' : 'down';
+    });
+    tapbackSave(all);
+  }
+  function tapbackSyncBar(bar, sid, line) {
+    const cur = (tapbackLoad()[sid] || {})[line] || '';
+    bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.kind === cur));
+  }
+  document.addEventListener('mouseover', (ev) => {
+    const evEl = ev.target && ev.target.closest ? ev.target.closest('.event.assistant[data-jsonl-line]') : null;
+    if (!evEl || evEl.querySelector(':scope > .tapback-bar')) return;
+    const paneEl = evEl.closest('.conv-pane[data-pane-id]');
+    const pane = paneEl ? paneByPaneId(paneEl.dataset.paneId) : null;
+    const line = evEl.getAttribute('data-jsonl-line');
+    const sid = pane && pane.conversationId ? (sessionIdByConv[pane.conversationId] || pane.conversationId) : '';
+    if (!sid || !line) return;
+    const bar = document.createElement('div');
+    bar.className = 'tapback-bar';
+    bar.title = 'Sent with your next message (no extra turn)';
+    bar.innerHTML = '<button type="button" data-kind="up" aria-label="Thumbs up">' + TAPBACK_EMOJI.up + '</button>'
+      + '<button type="button" data-kind="down" aria-label="Thumbs down">' + TAPBACK_EMOJI.down + '</button>';
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      e.stopPropagation();
+      tapbackToggle(sid, line, b.dataset.kind);
+      tapbackSyncBar(bar, sid, line);
+    });
+    tapbackSyncBar(bar, sid, line);
+    evEl.appendChild(bar);
+  });
 
   // CCC-1257: when a turn ends, put the top of the final assistant message
   // near the top of the view (with a little headroom) rather than at the tail.

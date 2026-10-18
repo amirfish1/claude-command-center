@@ -31187,3 +31187,10 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 
 /* Reader anchoring is done in JS (_observeConvEventSizes) so iOS, which has none, behaves like Chrome. */
 .conversations-view { overflow-anchor: none; }
+
+/* CCC-1299 tap-backs: hover chip on agent messages; sent with the next message. */
+.event.assistant { position: relative; }
+.tapback-bar { position: absolute; right: 6px; bottom: 4px; display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.event.assistant:hover > .tapback-bar, .tapback-bar:has(button.on) { opacity: 1; }
+.tapback-bar button { background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 0 5px; font-size: 13px; cursor: pointer; filter: grayscale(1); opacity: .6; }
+.tapback-bar button:hover, .tapback-bar button.on { filter: none; opacity: 1; border-color: var(--border, #444); }
