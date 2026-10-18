@@ -490,7 +490,7 @@
      reader needs an explicit, discoverable way to restore its side panel. */
   .popout-side-panel-btn { display: none; }
   body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn,
-  body.conversation-popout.popout-rail-forced #popoutSidePanelBtn {
+  body.popout-rail-forced #popoutSidePanelBtn {
     display: inline-flex;
     position: fixed;
     right: 12px;
@@ -511,8 +511,8 @@
   }
   body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn:hover,
   body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn:focus-visible,
-  body.conversation-popout.popout-rail-forced #popoutSidePanelBtn:hover,
-  body.conversation-popout.popout-rail-forced #popoutSidePanelBtn:focus-visible {
+  body.popout-rail-forced #popoutSidePanelBtn:hover,
+  body.popout-rail-forced #popoutSidePanelBtn:focus-visible {
     background: rgba(57,210,192,0.16);
     outline: none;
   }
@@ -9587,10 +9587,14 @@
      and reduce the usage pill to just the pct (font-size:0 hides the text
      node, child span gets a real size back). */
   @media (max-width: 1200px) {
-    .wp-path { display: none !important; }
     .wp-quality-pill { display: none !important; }
     .wp-usage-pill { font-size: 0 !important; white-space: nowrap; }
     .wp-usage-pill .wp-usage-pct { font-size: 11px !important; }
+  }
+  /* The path only crowds out the model pill on touch phones; a narrow
+     desktop window keeps it (it ellipsifies via the container queries). */
+  @media (max-width: 1200px) and (pointer: coarse), (max-width: 480px) {
+    .wp-path { display: none !important; }
   }
   /* Phones: the ≤550px container query above hides the context pill entirely,
      which is every phone. Show it, with its numbers, on touch devices. */
@@ -27737,7 +27741,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     cursor: pointer;
     font: 600 12px/1 inherit;
   }
-  body.conversation-popout.popout-rail-forced .conv-pane.has-status-rail {
+  body.popout-rail-forced .conv-pane.has-status-rail {
     grid-template-rows: auto 1fr auto auto auto auto auto auto;
     grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
     grid-template-areas:
@@ -27750,8 +27754,32 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "context rail"
       "hint    rail";
   }
-  body.conversation-popout.popout-rail-forced .conv-pane.has-status-rail > .status-rail {
+  body.popout-rail-forced .conv-pane.has-status-rail > .status-rail {
     display: flex;
+  }
+  /* CCC-95: same dead end in the main window. A narrow desktop window with
+     a conversation open hid the rail with no knob to reopen it. Phones
+     (coarse pointer) keep the stacked mobile layout instead. */
+  @media not all and (pointer: coarse) {
+    body.mobile-show-main:not(.conversation-popout):not(.popout-rail-forced) #popoutSidePanelBtn {
+      display: inline-flex;
+      position: fixed;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      padding: 0 10px;
+      border: 1px solid rgba(57,210,192,0.55);
+      border-radius: 999px;
+      background: var(--panel, #161b22);
+      color: var(--text);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+      cursor: pointer;
+      font: 600 12px/1 inherit;
+    }
   }
 }
 

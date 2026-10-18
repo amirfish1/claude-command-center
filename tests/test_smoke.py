@@ -4285,6 +4285,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn', app_css)
         self.assertIn("const $popoutSidePanel = document.getElementById('popoutSidePanelBtn');", app_js)
         self.assertIn('$statusRailRestore.click();', app_js)
+        # CCC-95: the main window needs the same knob when narrowed.
+        self.assertIn('body.mobile-show-main:not(.conversation-popout):not(.popout-rail-forced) #popoutSidePanelBtn', app_css)
+        self.assertIn('body.popout-rail-forced .conv-pane.has-status-rail', app_css)
 
     def test_global_breadcrumb_streaming_status_stays_compact(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
