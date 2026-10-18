@@ -1037,6 +1037,15 @@
   .top-sess-bar { height: 4px; border-radius: 2px; background: var(--accent); min-width: 2px; }
   .top-sess-name { display: block; overflow-wrap: anywhere; }
   .top-sess-details { display: block; margin-top: 4px; color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+  body.throughput-inspecting #normal-model-section,
+  body.throughput-inspecting #top-sessions-section { display: none !important; }
+  #inspected-throughput-section { margin: 18px 0; }
+  .inspected-window-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .inspected-window-table th, .inspected-window-table td { text-align: right; padding: 10px; border-bottom: 1px solid var(--border); }
+  .inspected-window-table th:first-child, .inspected-window-table td:first-child { text-align: left; }
+  .inspected-window-table a { color: var(--accent); text-decoration: none; }
+  .inspected-window-table a:hover { text-decoration: underline; }
+  .inspected-window-table td:first-child { max-width: 500px; overflow-wrap: anywhere; }
   .throughput-attribution-note { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: 8px 0 14px; }
   .throughput-attribution-note button { color: var(--accent); background: none; border: 1px solid var(--border); border-radius: 5px; padding: 3px 8px; cursor: pointer; }
 
@@ -1387,7 +1396,7 @@
       </div>
       <div class="search-container">
         <input type="text" class="search-input" id="search-input" placeholder="Search sessions..." oninput="filterSessions()">
-        <div class="throughput-range-tabs" role="group" aria-label="Session activity window">
+        <div id="throughput-range-tabs" class="throughput-range-tabs" role="group" aria-label="Session activity window">
           <button type="button" class="throughput-range-tab" data-throughput-range="1d" onclick="setThroughputRange('1d')">1D</button>
           <button type="button" class="throughput-range-tab" data-throughput-range="2d" onclick="setThroughputRange('2d')">2D</button>
           <button type="button" class="throughput-range-tab active" data-throughput-range="7d" onclick="setThroughputRange('7d')">7D</button>
@@ -1562,6 +1571,8 @@
           </div>
         </div>
         
+        <section id="inspected-throughput-section" hidden aria-live="polite"></section>
+        <div id="normal-model-section">
         <div class="section-title">
           <span>🧭</span> Model Breakdown
         </div>
@@ -1574,6 +1585,7 @@
           <!-- Model rows populated by JS -->
         </div>
 
+        </div>
         <!-- Session waste (per-session only): agent-throughput's `throughput analyze`, on demand -->
         <div id="waste-section" style="display:none">
           <div class="section-title"><span>🧯</span> Session Waste</div>
@@ -2615,10 +2627,8 @@
           s._window_details = detailMap[s.session_id] || {};
         });
         renderSessionList();
-        if (document.getElementById('top-sessions-section') &&
-            document.getElementById('top-sessions-section').style.display !== 'none') {
-          renderTopSessions();
-        }
+        const selected = findSessionById(activeSessionId);
+        if (selected && selected.aggregate) renderTopSessions();
       } catch (_e) {
         // Non-critical — silently ignore network or parse errors.
       }
@@ -5522,7 +5532,9 @@
   <script>
   // ── W87 zoom ladder: 3h → 1h → per-session drill ─────────────────────────
   // Level 1 re-renders the already-loaded `lastRender.summary.hourly` rows at
-  // 1h granularity for a 12h window around the clicked 3h bar (zero fetches).
+  // 1h granularity for a 12h window around the clicked 3h bar. The visible
+  // session table fetches only that inspected interval, then narrows to one
+  // hour when clicked; broad aggregate tables stay hidden until backing out.
   // Level 2 calls /api/throughput/window (bounded, server-cached) for the
   // per-session breakdown of one clicked hour; each session row clicks
   // through to its conversation. Escape (or ‹ back) pops one level.
@@ -5530,6 +5542,7 @@
   // drawChart pipeline is untouched.
   (function () {
     'use strict';
+    let inspectionVersion = 0;
     let zoom = null; // null | {level:1,startMs,endMs} | {level:2,hourMs,l1:{startMs,endMs}}
 
     // Bucket keys are local wall-clock strings ("YYYY-MM-DD HH:00" or
@@ -5602,8 +5615,57 @@
 
     function closeZoom() {
       zoom = null;
+      inspectionVersion++;
+      document.body.classList.remove('throughput-inspecting');
+      const panel = document.getElementById('inspected-throughput-section');
+      if (panel) panel.hidden = true;
       const el = document.getElementById('tput-zoom-overlay');
       if (el) el.remove();
+    }
+
+    async function inspectWindow(startMs, endMs) {
+      const panel = document.getElementById('inspected-throughput-section');
+      if (!panel) return;
+      const request = ++inspectionVersion;
+      const engine = typeof activeThroughputEngine === 'string' ? activeThroughputEngine : 'claude';
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const label = dayLabel(startMs) + ' ' + hm(startMs) + '–' + hm(endMs) + ' (' + zone + ')';
+      document.body.classList.add('throughput-inspecting');
+      panel.hidden = false;
+      panel.innerHTML = '<div class="section-title">Sessions in inspected window · ' + esc(label) + '</div><p class="throughput-attribution-note">Loading turns in this time window…</p>';
+      try {
+        const engines = engine === 'combined' ? ['claude', 'codex'] : [engine];
+        const results = await Promise.all(engines.map(async selectedEngine => {
+          const response = await fetch('/api/throughput/window?start=' + startMs / 1000 + '&end=' + endMs / 1000 + '&engine=' + encodeURIComponent(selectedEngine) + '&limit=200', {cache: 'no-store'});
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) throw new Error(payload.error || 'Could not load inspected window');
+          return payload;
+        }));
+        const data = results.length === 1 ? results[0] : {
+          ok: true,
+          totals: results.reduce((total, result) => ({turns: total.turns + (result.totals.turns || 0), cache_adjusted_tokens: total.cache_adjusted_tokens + (result.totals.cache_adjusted_tokens || 0)}), {turns: 0, cache_adjusted_tokens: 0}),
+          sessions: results.flatMap(result => result.sessions || []).sort((a, b) => b.cache_adjusted_tokens - a.cache_adjusted_tokens),
+          session_count: results.reduce((sum, result) => sum + (result.session_count || 0), 0),
+        };
+        if (!zoom || request !== inspectionVersion) return;
+        if (!data.ok) throw new Error(data.error || 'Could not load inspected window');
+        const total = data.totals || {};
+        const totalTokens = Number(total.cache_adjusted_tokens) || 0;
+        const rows = (data.sessions || []).map(session => {
+          const fullName = typeof throughputSessionName === 'function' ? throughputSessionName({session_id: session.session_id, display_name: session.session_name, _window_details: {name: session.session_name}}) : session.session_name;
+          const firstLine = String(fullName || '').replace(/\\n/g, '\n').split('\n')[0];
+          const name = firstLine.length > 240 ? firstLine.slice(0, 237) + '…' : firstLine;
+          const share = totalTokens ? (100 * session.cache_adjusted_tokens / totalTokens).toFixed(1) + '%' : '—';
+          const cost = session.unpriced_turns ? (session.cost_usd ? fmtUsd(session.cost_usd) + ' + unpriced' : 'n/a') : fmtUsd(session.cost_usd);
+          return '<tr><td><a href="/?ccc_popout=conversation&amp;conv=' + encodeURIComponent(session.session_id) + '" target="_blank" rel="noopener">' + esc(name || 'Untitled session') + '</a><span class="top-sess-details">' + esc((session.models || []).join(', ')) + ' · ' + esc(session.session_id.slice(0, 13)) + '</span></td><td>' + (session.turns || 0) + '</td><td>' + fmtTok(session.raw_context_tokens) + '</td><td>' + fmtTok(session.cache_adjusted_tokens) + '</td><td>' + share + '</td><td>' + cost + '</td></tr>';
+        }).join('');
+        panel.innerHTML = '<div class="section-title">Sessions in inspected window · ' + esc(label) + '</div>' +
+          '<p class="throughput-attribution-note">' + (total.turns || 0) + ' turns (model calls) · ' + fmtTok(totalTokens) + ' cache-adjusted tokens · ' + (data.session_count || 0) + ' sessions. Every number below counts only turns completed in this window. Token share does not measure subscription quota attribution.</p>' +
+          '<table class="inspected-window-table"><thead><tr><th>Session / model</th><th>Turns</th><th>Raw input</th><th>Cache-adjusted</th><th>Window share</th><th>API equiv.</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6">No turns in this window</td></tr>') + '</tbody></table>';
+      } catch (error) {
+        if (request !== inspectionVersion || !zoom) return;
+        panel.innerHTML = '<p class="throughput-attribution-note">Could not load inspected sessions: ' + esc(error.message) + '</p>';
+      }
     }
 
     function head(backLabel, title, hint) {
@@ -5634,20 +5696,23 @@
     }
 
     function renderL1() {
+      // A queued resize can fire after the user has entered an hour.
+      if (!zoom || zoom.level !== 1) return;
       const el = overlayEl();
-      if (!el || !zoom) return;
+      if (!el) return;
       const { startMs, endMs } = zoom;
       const rows = hourRowsInWindow(startMs, endMs);
       const byHour = {};
       rows.forEach((r) => { byHour[r.ms] = r; });
       const nHours = Math.round((endMs - startMs) / 3600e3);
       const total = rows.reduce((a, r) => a + r.tokens, 0);
+      const totalTurns = rows.reduce((sum, row) => sum + row.turns, 0);
       const title = dayLabel(startMs) + ' ' + hm(startMs) + '–' + hm(endMs - 1) +
-        ' · 1h buckets · ' + fmtTok(total) + ' cache-adj';
+        ' · 1h buckets · ' + fmtTok(total) + ' cache-adj · ' + totalTurns + ' turns';
       let html = head('3h view', esc(title), 'click an hour for its sessions');
       const bodyW = Math.max(320, (el.clientWidth || 800) - 16);
       const H = Math.max(160, (el.clientHeight || 300) - 70);
-      const padB = 22, padT = 12, padL = 8, padR = 8;
+      const padB = 40, padT = 12, padL = 8, padR = 8;
       const slotW = (bodyW - padL - padR) / nHours;
       const barW = Math.max(6, slotW * 0.66);
       const max = Math.max(1, ...rows.map((r) => r.tokens));
@@ -5673,10 +5738,12 @@
         }
         bars += '<text x="' + (padL + i * slotW + slotW / 2).toFixed(1) + '" y="' + (H - 6) +
           '" text-anchor="middle" font-size="9">' + label.slice(0, 2) + '</text>';
+        bars += '<text x="' + (padL + i * slotW + slotW / 2).toFixed(1) + '" y="' + (H - 21) + '" text-anchor="middle" font-size="9">' + (r ? r.turns : 0) + ' turns</text>';
       }
       html += '<div class="tz-body"><svg width="' + bodyW + '" height="' + H + '" viewBox="0 0 ' + bodyW + ' ' + H + '">' +
         bars + '</svg></div>';
       el.innerHTML = html;
+      void inspectWindow(startMs, endMs);
       el.querySelector('.tz-back').addEventListener('click', closeZoom);
       el.querySelectorAll('.tz-bar').forEach((b) => {
         b.addEventListener('click', () => enterDrill(Number(b.getAttribute('data-ms'))));
@@ -5694,6 +5761,7 @@
       const el = overlayEl();
       if (!el || !zoom || zoom.level !== 2) return;
       const { hourMs } = zoom;
+      void inspectWindow(hourMs, hourMs + 3600e3);
       const title = dayLabel(hourMs) + ' ' + hm(hourMs) + '–' + hm(hourMs + 3600e3 - 1) + ' · sessions';
       el.innerHTML = head('1h view', esc(title), 'click a session to open its conversation') +
         '<div class="tz-body"><div class="tz-note">Loading sessions…</div></div>';
@@ -5722,7 +5790,7 @@
           const tot = d.totals || {};
           let rowsHtml = '';
           sessions.forEach((s, i) => {
-            const name = s.session_name || (s.session_id || '').slice(0, 8) || '(unknown)';
+            const name = typeof throughputSessionName === 'function' ? throughputSessionName({session_id: s.session_id, display_name: s.session_name, _window_details: {name: s.session_name}}) : s.session_name || (s.session_id || '').slice(0, 13) || '(unknown)';
             const models = (s.models || []).map((m) => String(m).replace(/^claude-/, '')).join(', ');
             rowsHtml += '<tr class="tz-row" data-sid="' + esc(s.session_id || '') + '" title="Open this conversation">' +
               '<td><span class="tz-name">' + (i + 1) + '. ' + esc(name) + '</span>' +
@@ -5737,7 +5805,7 @@
               (sessions.length === 1 ? '' : 's') +
               (d.sessions_truncated ? ' (+' + d.sessions_truncated + ' more)' : '') +
               ' · window total ' + fmtTok(tot.cache_adjusted_tokens) + ' cache-adj · ' + fmtUsd(tot.cost_usd) + '</div>' +
-            '<table class="tz-table"><thead><tr><th>session</th><th>calls</th><th>cache-adj</th><th>out</th><th>cost</th></tr></thead>' +
+            '<table class="tz-table"><thead><tr><th>session</th><th>turns</th><th>cache-adj</th><th>out</th><th>cost</th></tr></thead>' +
             '<tbody>' + rowsHtml + '</tbody></table>';
           body.querySelectorAll('.tz-row').forEach((tr) => {
             tr.addEventListener('click', () => {
@@ -5781,7 +5849,7 @@
 
     // Session/engine switches repaint the chart beneath the overlay with new
     // data — close the (now stale) zoom rather than showing the wrong window.
-    ['throughput-engine-tabs', 'session-list'].forEach((id) => {
+    ['throughput-engine-tabs', 'session-list', 'throughput-range-tabs'].forEach((id) => {
       const host = document.getElementById(id);
       if (host) host.addEventListener('click', closeZoom, true);
     });
