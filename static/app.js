@@ -72234,7 +72234,8 @@
     model_profiles: {},
     worker_fallback_engines: ['claude', 'codex', 'kimi', 'grok'],
     model_profile_engines: ['claude'],
-    codex_context_1m: true,
+    codex_context_1m: false,
+    codex_context_tokens: 250000,
     blockedModels: new Set(),
   };
   // The "new session modal" was removed from index.html, but several call
@@ -72480,6 +72481,7 @@
     spawnDefaultsState.auto_compact_k = _mergeAutoCompactK(data.auto_compact_k);
     spawnDefaultsState.worker_auto_compact_k = _mergeAutoCompactK(data.worker_auto_compact_k);
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
+    if (Number.isFinite(data.codex_context_tokens) && data.codex_context_tokens > 0) spawnDefaultsState.codex_context_tokens = data.codex_context_tokens;
     if (Array.isArray(data.disabled_engines)) {
       spawnDefaultsState.disabled_engines = data.disabled_engines.filter(e => typeof e === 'string');
     }
@@ -72686,11 +72688,9 @@
     const _isNewSession = (typeof currentConversation !== 'undefined' && currentConversation === '__new__');
     if (_uSlot && _isNewSession) {
       if (engine === 'codex') {
-        const ctx1m = spawnDefaultsState.codex_context_1m;
-        const ctxLabel = ctx1m ? '1M ctx' : 'default ctx';
-        const ctxTitle = ctx1m
-          ? 'Codex will start with model_context_window=1000000 (CCC_CODEX_CONTEXT_1M=1)\nSet CCC_CODEX_CONTEXT_1M=0 to disable.'
-          : 'Codex will use the model\'s default context window.\nSet CCC_CODEX_CONTEXT_1M=1 to opt into the 1M max.';
+        const contextTokens = spawnDefaultsState.codex_context_tokens;
+        const ctxLabel = Math.round(contextTokens / 1000) + 'K ctx';
+        const ctxTitle = 'Codex context ceiling: ' + contextTokens.toLocaleString() + ' tokens; auto-compaction starts at ' + Math.floor(contextTokens * 0.9).toLocaleString() + ' tokens.';
         _uSlot.innerHTML = '<span class="wp-usage-pill wp-spawn-ctx-badge" title="' + ctxTitle + '">' + ctxLabel + '</span>';
         if (_cicSlot) _cicSlot.classList.add('visible');
       } else {

@@ -421,3 +421,89 @@ def test_forward_target_composes_manual_forward_with_later_continuation(lineage_
     monkeypatch.setattr(server, "_sessions_state_snapshot", lambda: {"old-sid": {"state": "idle"}})
     continuation.record_manual_forward("old-sid", "rebound-sid")
     assert continuation.forward_target("old-sid") == "continued-sid"
+
+
+def _dedupe_context(monkeypatch):
+    monkeypatch.setattr(continuation, "session_context", lambda query: {
+        "session_id": "source", "latest": "source", "title": "Example task",
+        "cwd": "/repo", "engine": "claude", "context_tokens": 0,
+        "idle_seconds": 0, "transcript_path": "", "model": None,
+        "effort": None, "report_to": None,
+    })
+    monkeypatch.setattr(continuation, "rebind_chain_to", lambda *args: [])
+
+
+def test_continuation_task_key_retry_returns_existing_and_tags_registry(monkeypatch):
+    _dedupe_context(monkeypatch)
+    rows = []
+    calls = []
+    monkeypatch.setattr(server, "_spawn_dedupe_lookup", lambda **kw: (
+        next((r for r in rows if r["task_key"] == kw["task_key"]), None), None,
+    ))
+
+    def spawn(prompt, **kwargs):
+        calls.append(kwargs)
+        assert continuation._usage_limit._spawn_request_meta()["task_key"] == "example-task"
+        return {"ok": True, "session_id": "child", "pid": 123}
+
+    def tag(pid=None, session_id=None, meta=None):
+        rows.append(dict(meta, session_id=session_id, pid=pid, cwd="/repo"))
+
+    monkeypatch.setattr(server, "spawn_session", spawn)
+    monkeypatch.setattr(server, "_tag_spawn_task_meta_in_registry", tag)
+    first = continuation.spawn_continuation("source", prompt="finish", task_key="example-task", name="worker")
+    retry = continuation.spawn_continuation("source", prompt="finish", task_key="example-task", name="worker")
+    assert len(calls) == 1
+    assert calls[0]["name"] == "worker"
+    assert first["session_id"] == first["new_session_id"] == retry["new_session_id"] == "child"
+    assert retry["existing"] is True
+    assert continuation._usage_limit._spawn_request_meta() == {}
+
+
+def test_continuation_concurrent_key_waits_for_first_spawn(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    _dedupe_context(monkeypatch)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+    monkeypatch.setattr(server, "_spawn_dedupe_lookup", lambda **kw: (None, None))
+    monkeypatch.setattr(server, "_tag_spawn_task_meta_in_registry", lambda **kw: None)
+
+    def spawn(prompt, **kwargs):
+        calls.append(kwargs)
+        entered.set()
+        assert release.wait(5)
+        return {"ok": True, "session_id": "child"}
+
+    monkeypatch.setattr(server, "spawn_session", spawn)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(continuation.spawn_continuation, "source", task_key="concurrent")
+        assert entered.wait(5)
+        # Wait until the second caller has reached the shared in-flight slot.
+        original_wait = server._SPAWN_DEDUPE_INFLIGHT[("concurrent", "/repo")]["event"].wait
+        waiting = threading.Event()
+        def wait(timeout):
+            waiting.set()
+            return original_wait(timeout)
+        monkeypatch.setattr(server._SPAWN_DEDUPE_INFLIGHT[("concurrent", "/repo")]["event"], "wait", wait)
+        second = pool.submit(continuation.spawn_continuation, "source", task_key="concurrent")
+        assert waiting.wait(5)
+        release.set()
+        assert first.result(timeout=5)["session_id"] == "child"
+        result = second.result(timeout=5)
+    assert len(calls) == 1
+    assert result["existing"] is True
+    assert result["new_session_id"] == "child"
+
+
+def test_unkeyed_continuations_remain_independent(monkeypatch):
+    _dedupe_context(monkeypatch)
+    calls = []
+    def spawn(prompt, **kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "session_id": f"child-{len(calls)}"}
+    monkeypatch.setattr(server, "spawn_session", spawn)
+    assert continuation.spawn_continuation("source")["session_id"] == "child-1"
+    assert continuation.spawn_continuation("source")["session_id"] == "child-2"

@@ -691,6 +691,21 @@ class CostTests(UsageDbCase):
         self.assertEqual(n, again)
         self.assertEqual(self.one("SELECT COUNT(*) n FROM price_rates")["n"], n)
 
+    def test_new_packaged_model_added_without_overwriting_custom_rates(self):
+        self.add_rate("claude-sonnet-5", 123, 12, 150, 600)
+        pricing.ensure_rates(self.conn)
+        pricing.ensure_rates(self.conn)
+        self.assertEqual(self.one(
+            "SELECT input_rate FROM price_rates WHERE pricing_key='claude-sonnet-5'"
+        )["input_rate"], 123)
+        rows = self.conn.execute(
+            "SELECT * FROM price_rates WHERE pricing_key='gpt-6-1-sol'"
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(tuple(rows[0][key] for key in (
+            "input_rate", "cache_read_rate", "cache_write_5m_rate", "output_rate"
+        )), (2.0, 0.1, 2.5, 10.0))
+
     def test_list_sessions_order_whitelist(self):
         with self.assertRaises(ValueError):
             queries.list_sessions(self.conn, order="started_at; DROP TABLE sessions")

@@ -77,6 +77,19 @@ class ContinuationCliTests(unittest.TestCase):
         self.assertNotIn("dry_run", posted["payload"])
         self.assertIn("new session new-sid", out.getvalue())
 
+    def test_spawn_continue_from_forwards_dedupe_identity(self):
+        ccc = self.ccc
+        result = {"ok": True, "continue_from": "old", "latest_session_id": "old",
+                  "new_session_id": "child", "engine": "codex"}
+        with mock.patch.object(ccc, "_post_json", return_value=(200, result)) as post, \
+             redirect_stdout(io.StringIO()):
+            ccc._spawn_continue_from("http://localhost:8099", "old", "finish",
+                                     _spawn_args(name="worker", task_key="task", dedupe=True))
+        self.assertEqual(post.call_args.args[2], {
+            "continue_from": "old", "prompt": "finish", "name": "worker",
+            "task_key": "task", "dedupe": True,
+        })
+
     def test_spawn_continue_from_dry_run_forwards_flag(self):
         ccc = self.ccc
         posted = {}

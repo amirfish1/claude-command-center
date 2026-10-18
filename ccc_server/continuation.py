@@ -22,9 +22,11 @@ existing background transcript parser does the rest
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
+import threading
 import time
 
 from ccc_server import core as _core
@@ -201,12 +203,79 @@ def rebind_chain_to(old_sid, new_sid):
 
 
 def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None,
-                        dry_run=False, rebind_chain=True):
+                        dry_run=False, rebind_chain=True, name=None,
+                        task_key="", dedupe=False):
+    """Continue a session; honor the same explicit dedupe contract as spawn.
+
+    Unkeyed requests still create independent sessions. A task key denotes
+    one task even after it finishes; dedupe=True matches a live raw prompt.
+    """
+    ctx = session_context(query)
+    if ctx is None:
+        return {"ok": False, "error": f"no session found for {query!r}"}
+    task_key = str(task_key or "").strip()[:200]
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8", "replace")).hexdigest()[:16]
+    meta = {"task_key": task_key, "prompt_hash": prompt_hash,
+            "task_summary": " ".join(prompt.split())[:200]}
+    kwargs = dict(prompt=prompt, model=model, effort=effort, report_to=report_to,
+                  dry_run=dry_run, rebind_chain=rebind_chain, name=name, _context=ctx)
+    if dry_run or not (task_key or dedupe):
+        return _spawn_continuation(query, **kwargs)
+    scope = str(ctx["cwd"] or "")
+    key = (task_key or f"prompt:{prompt_hash}", scope)
+    with _core._SPAWN_DEDUPE_LOCK:
+        slot = _core._SPAWN_DEDUPE_INFLIGHT.get(key)
+        owner = slot is None
+        if owner:
+            slot = {"event": threading.Event(), "result": None}
+            _core._SPAWN_DEDUPE_INFLIGHT[key] = slot
+    if not owner:
+        if not slot["event"].wait(_core._SPAWN_DEDUPE_WAIT_S):
+            return {"ok": False, "error": "timed out waiting for duplicate continuation",
+                    "code": "dedupe_wait_timeout"}
+        result = dict(slot["result"] or {})
+        result.update(continue_from=ctx["session_id"], latest_session_id=ctx["latest"],
+                      new_session_id=result.get("new_session_id") or result.get("session_id"),
+                      dry_run=False)
+        if result.get("ok"):
+            result.update(existing=True, deduped="in_flight")
+        return result
+    result = None
+    try:
+        live, finished = _core._spawn_dedupe_lookup(
+            task_key=task_key, prompt_hash=prompt_hash if dedupe else "", scope=scope,
+        )
+        if live is not None or finished is not None:
+            result = _core._dedupe_existing_response(
+                live if live is not None else finished, finished=finished is not None,
+            )
+            result.update(continue_from=ctx["session_id"], latest_session_id=ctx["latest"],
+                          new_session_id=result.get("session_id"), dry_run=False)
+            return result
+        _usage_limit._set_spawn_request_meta(**meta)
+        try:
+            result = _spawn_continuation(query, **kwargs)
+            spawn = result.get("spawn_result") or {}
+            _core._tag_spawn_task_meta_in_registry(
+                meta=meta, pid=spawn.get("pid"), session_id=result.get("session_id"),
+            )
+        finally:
+            _usage_limit._clear_spawn_request_meta()
+        return result
+    finally:
+        with _core._SPAWN_DEDUPE_LOCK:
+            slot["result"] = result or {"ok": False, "error": "continuation spawn failed"}
+            _core._SPAWN_DEDUPE_INFLIGHT.pop(key, None)
+            slot["event"].set()
+
+
+def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=None,
+                         dry_run=False, rebind_chain=True, name=None, _context=None):
     """Resolve `query` to its latest successor, spawn a fresh session that
     continues it, and (unless `dry_run`) rebind the old chain's report routes
     to the new session. `model`/`effort`/`report_to` override the old
     session's own values when given."""
-    ctx = session_context(query)
+    ctx = _context if _context is not None else session_context(query)
     if ctx is None:
         return {"ok": False, "error": f"no session found for {query!r}"}
     engine = ctx["engine"]
@@ -220,7 +289,7 @@ def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None
     final_model = model if model is not None else ctx["model"]
     final_effort = effort if effort is not None else ctx["effort"]
     final_report_to = report_to if report_to is not None else ctx["report_to"]
-    name = ("Continue " + (ctx["title"] or ctx["latest"]))[:60]
+    name = str(name or "").strip() or ("Continue " + (ctx["title"] or ctx["latest"]))[:60]
 
     preview = {
         "ok": True,
@@ -282,6 +351,8 @@ def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None
         "continue_from": ctx["session_id"],
         "latest_session_id": ctx["latest"],
         "new_session_id": new_sid,
+        "session_id": new_sid,
+        "name": name,
         "engine": engine,
         "cwd": ctx["cwd"],
         "model": final_model,

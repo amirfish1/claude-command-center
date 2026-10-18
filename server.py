@@ -7583,7 +7583,7 @@ def _clean_spawn_default_model(value):
 
 
 def _codex_context_1m_enabled():
-    return os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no")
+    return _codex_context_config()["model_context_window"] >= 1000000
 
 
 def _codex_default_model():
@@ -30309,7 +30309,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "efforts_by_engine": _reasoning_efforts_by_engine(
                     _ORCHESTRATION_SPAWN_ENGINES
                 ),
-                "codex_context_1m": os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no"),
+                "codex_context_1m": _codex_context_1m_enabled(),
+                "codex_context_tokens": _codex_context_config()["model_context_window"],
                 # Client-side gate for the spawn/queue-config confirm prompt --
                 # let the UI warn before it sends confirm_blocked_model, rather
                 # than round-tripping a 400 first.
@@ -38207,6 +38208,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     report_to=payload.get("report_to"),
                     dry_run=bool(payload.get("dry_run")),
                     rebind_chain=payload.get("rebind_chain", True),
+                    name=payload.get("name"),
+                    task_key=payload.get("task_key") or "",
+                    dedupe=bool(payload.get("dedupe")),
                 )
                 if not result.get("ok"):
                     self.send_json(result, 400)

@@ -1035,7 +1035,10 @@
   .top-sess-row.total-row { background: rgba(255,255,255,0.04); border-top: 1px solid var(--border); }
   .top-sess-bar-cell { display: flex; align-items: center; gap: 8px; }
   .top-sess-bar { height: 4px; border-radius: 2px; background: var(--accent); min-width: 2px; }
-  .top-sess-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+  .top-sess-name { display: block; overflow-wrap: anywhere; }
+  .top-sess-details { display: block; margin-top: 4px; color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+  .throughput-attribution-note { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: 8px 0 14px; }
+  .throughput-attribution-note button { color: var(--accent); background: none; border: 1px solid var(--border); border-radius: 5px; padding: 3px 8px; cursor: pointer; }
 
   .model-row {
     display: grid;
@@ -1562,6 +1565,11 @@
         <div class="section-title">
           <span>🧭</span> Model Breakdown
         </div>
+        <div class="throughput-attribution-note" id="throughput-attribution-note">
+          Tables show activity in the selected window. Model and session token shares do not measure subscription quota attribution. Costs are API-equivalent estimates.
+          <button type="button" onclick="setThroughputRange('1d')">Inspect last 24 hours</button>
+          Click a chart bar, then an hour, to see the sessions behind a spike.
+        </div>
         <div class="model-breakdown" id="model-breakdown">
           <!-- Model rows populated by JS -->
         </div>
@@ -1606,6 +1614,7 @@
     let allSessions = [];
     let sessionListExpanded = false;
     let activeSessionId = null;
+    let throughputSelectionVersion = 0;
     const THROUGHPUT_ENGINE_STORE_KEY = 'ccc-throughput-engine';
     function initialThroughputEngine() {
       try {
@@ -2003,10 +2012,16 @@
       return Number(candidate && candidate.generated_at || 0) > Number(current.generated_at || 0);
     }
 
+    function bootstrapSelectionMatches(session, engine) {
+      return activeThroughputRange === '7d' && engine === activeThroughputEngine &&
+        activeSessionId === session.session_id;
+    }
+
     function applyThroughputBootstrap(model, source) {
       const applyStarted = performance.now();
       const session = currentAggregateSession();
-      if (!validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
+      if (!bootstrapSelectionMatches(session, activeThroughputEngine) ||
+          !validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
       visibleBootstrap = model;
       activeSessionId = session.session_id;
       weeklyData = stabilizeWeeklyQuota(overlayLiveCodexWeeklyQuota(
@@ -2026,7 +2041,8 @@
       window.__throughputBootstrapApplyMs = performance.now() - applyStarted;
       window.__throughputBootstrapSource = source;
       requestAnimationFrame(() => {
-        if (activeSessionId === session.session_id) {
+        if (activeThroughputRange === '7d' && visibleBootstrap === model &&
+            bootstrapSelectionMatches(session, model.engine)) {
           const summary = model.throughput.summary || {};
           const modelRows = summary.per_model || [];
           renderModelBreakdown(modelRows, modelBreakdownContext(modelRows));
@@ -2112,7 +2128,7 @@
           fetchInitialBootstrapForEngine('claude', session),
           fetchInitialBootstrapForEngine('codex', session),
         ]);
-        if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return null;
+        if (!bootstrapSelectionMatches(session, engineAtStart) || engineAtStart !== 'combined') return null;
         if (claudeModel) writeThroughputBootstrap(claudeModel);
         if (codexModel) writeThroughputBootstrap(codexModel);
         const combined = composeCombinedBootstrap(claudeModel, codexModel);
@@ -2123,7 +2139,7 @@
       } catch (_error) {
         return null;
       } finally {
-        if (engineAtStart === 'combined' && activeThroughputEngine === 'combined') {
+        if (engineAtStart === 'combined' && bootstrapSelectionMatches(session, engineAtStart)) {
           startCombinedRefreshStatusPolling(session);
         }
       }
@@ -2139,7 +2155,7 @@
         if (!response.ok) return null;
         const data = await response.json();
         const model = data && data.bootstrap;
-        if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return null;
+        if (!bootstrapSelectionMatches(session, engineAtStart)) return null;
         if (validateThroughputBootstrap(model, session.session_id, engineAtStart) &&
             isNewerThroughputBootstrap(model, visibleBootstrap)) {
           writeThroughputBootstrap(model);
@@ -2149,7 +2165,7 @@
       } catch (_error) {
         return null;
       } finally {
-        if (engineAtStart === activeThroughputEngine && activeSessionId === session.session_id) {
+        if (bootstrapSelectionMatches(session, engineAtStart)) {
           startRefreshStatusPolling(session);
         }
       }
@@ -2203,6 +2219,7 @@
 
     function setThroughputRange(range) {
       if (!Object.hasOwn(THROUGHPUT_RANGE_LABELS, range) || range === activeThroughputRange) return;
+      stopRefreshStatusPolling();
       activeThroughputRange = range;
       sessionListExpanded = false;
       weekRankings = {};
@@ -2217,6 +2234,8 @@
     async function setThroughputEngine(engine) {
       const next = ['combined', 'codex', 'kimi'].includes(engine) ? engine : 'claude';
       if (next === activeThroughputEngine) return;
+      stopRefreshStatusPolling();
+      throughputSelectionVersion++;
       activeThroughputEngine = next;
       try { localStorage.setItem(THROUGHPUT_ENGINE_STORE_KEY, next); } catch (_e) {}
       activeSessionId = null;
@@ -2406,14 +2425,13 @@
       if (!response.ok) return false;
       const data = await response.json();
       const model = data && data.bootstrap;
-      if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return false;
+      if (!bootstrapSelectionMatches(session, engineAtStart)) return false;
       if (!validateThroughputBootstrap(model, session.session_id, engineAtStart)) return false;
       writeThroughputBootstrap(model);
       applyThroughputBootstrap(model, 'refresh');
       renderRefreshPanel(status);
-      fetchWeekRankings();
       loadWeeklyHistory();
-      loadSessions({ selectDefault: false });
+      void loadSessions({ selectDefault: false }).then(fetchWeekRankings);
       return true;
     }
 
@@ -2422,7 +2440,7 @@
         fetchInitialBootstrapForEngine('claude', session, statuses.claude && statuses.claude.last_refreshed_at),
         fetchInitialBootstrapForEngine('codex', session, statuses.codex && statuses.codex.last_refreshed_at),
       ]);
-      if (activeThroughputEngine !== 'combined') return false;
+      if (!bootstrapSelectionMatches(session, 'combined')) return false;
       if (claudeModel) writeThroughputBootstrap(claudeModel);
       if (codexModel) writeThroughputBootstrap(codexModel);
       const combined = composeCombinedBootstrap(claudeModel, codexModel);
@@ -2433,6 +2451,7 @@
     }
 
     async function startCombinedRefreshStatusPolling(session) {
+      if (!bootstrapSelectionMatches(session, 'combined')) return;
       stopRefreshStatusPolling();
       const engines = ['claude', 'codex'];
       const engineAtStart = activeThroughputEngine;
@@ -2445,12 +2464,12 @@
         statuses[engine] = response.ok ? await response.json() : { state: 'failed' };
       }));
       void starts;
-      if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return;
+      if (!bootstrapSelectionMatches(session, engineAtStart) || engineAtStart !== 'combined') return;
       refreshStatus = combineRefreshStatuses(Object.values(statuses));
       renderRefreshPanel(refreshStatus);
 
       refreshElapsedTimer = setInterval(() => {
-        if (activeThroughputEngine !== 'combined') return;
+        if (!bootstrapSelectionMatches(session, 'combined')) return;
         Object.values(statuses).forEach(status => {
           if (status.state === 'refreshing') {
             status.elapsed_ms = Math.max(0, Date.now() - Number(status.started_at || 0) * 1000);
@@ -2460,7 +2479,7 @@
       }, 100);
 
       const poll = async () => {
-        if (activeThroughputEngine !== 'combined') return;
+        if (!bootstrapSelectionMatches(session, 'combined')) return;
         await Promise.all(engines.map(async engine => {
           if (statuses[engine] && ['complete', 'failed'].includes(statuses[engine].state)) return;
           const response = await fetch(
@@ -2469,6 +2488,7 @@
           );
           if (response.ok) statuses[engine] = await response.json();
         }));
+        if (!bootstrapSelectionMatches(session, 'combined')) return;
         refreshStatus = combineRefreshStatuses(Object.values(statuses));
         renderRefreshPanel(refreshStatus);
         if (refreshStatus.state === 'complete') {
@@ -2483,13 +2503,14 @@
     }
 
     async function startRefreshStatusPolling(session) {
-      if (!session) return;
+      if (!session || !bootstrapSelectionMatches(session, activeThroughputEngine)) return;
       stopRefreshStatusPolling();
       const engineAtStart = activeThroughputEngine;
       const startResponse = await fetch(
         throughputFetchUrl('/api/throughput/refresh/start', session.session_id),
         { cache: 'no-store' }
       );
+      if (!bootstrapSelectionMatches(session, engineAtStart)) return;
       if (!startResponse.ok) {
         renderRefreshPanel({
           state: 'failed',
@@ -2500,6 +2521,7 @@
         return;
       }
       refreshStatus = await startResponse.json();
+      if (!bootstrapSelectionMatches(session, engineAtStart)) return;
       renderRefreshPanel(refreshStatus);
 
       const renderElapsed = () => {
@@ -2515,8 +2537,9 @@
             throughputFetchUrl('/api/throughput/refresh/status', session.session_id),
             { cache: 'no-store' }
           );
-          if (!response.ok || engineAtStart !== activeThroughputEngine) return;
+          if (!response.ok || !bootstrapSelectionMatches(session, engineAtStart)) return;
           refreshStatus = await response.json();
+          if (!bootstrapSelectionMatches(session, engineAtStart)) return;
           renderRefreshPanel(refreshStatus);
           if (refreshStatus.state === 'complete') {
             stopRefreshStatusPolling();
@@ -2536,6 +2559,11 @@
     function refreshThroughput() {
       const session = currentAggregateSession();
       activeSessionId = session.session_id;
+      if (activeThroughputRange !== '7d') {
+        void selectSession(session);
+        void fetchWeekRankings();
+        return;
+      }
       if (activeThroughputEngine === 'combined') startCombinedRefreshStatusPolling(session);
       else startRefreshStatusPolling(session);
     }
@@ -2554,6 +2582,7 @@
         const end = Math.floor(Date.now() / 1000);
         const start = end - throughputRangeSeconds();
         const engine = activeThroughputEngine;
+        const range = activeThroughputRange;
         const res = await fetch(
           `/api/throughput/window?start=${start}&end=${end}&engine=${encodeURIComponent(engine)}&limit=200`,
           { cache: 'no-store' }
@@ -2561,14 +2590,16 @@
         if (!res.ok) return;
         const data = await res.json();
         if (!data.ok) return;
-        if (engine !== activeThroughputEngine) return;
+        if (engine !== activeThroughputEngine || range !== activeThroughputRange) return;
         const rankings = data.sessions || [];
         weekRankings = {};
         const tokenMap = {};
         const costMap = {};
+        const detailMap = {};
         rankings.forEach((r, i) => {
           weekRankings[r.session_id] = i + 1;
           tokenMap[r.session_id] = Number(r.cache_adjusted_tokens || 0);
+          detailMap[r.session_id] = { models: r.models || [], turns: r.turns || 0, name: r.session_name || '' };
           costMap[r.session_id] = {
             usd: Number(r.cost_usd) || 0,
             unpriced: Number(r.unpriced_turns) || 0,
@@ -2581,6 +2612,7 @@
           const c = costMap[s.session_id];
           s._week_cost = c ? c.usd : 0;
           s._week_unpriced = c ? c.unpriced : 0;
+          s._window_details = detailMap[s.session_id] || {};
         });
         renderSessionList();
         if (document.getElementById('top-sessions-section') &&
@@ -2598,11 +2630,14 @@
         renderSessionList();
         return;
       }
+      const engineAtStart = activeThroughputEngine;
+      const rangeAtStart = activeThroughputRange;
       if (selectDefault) setStatus('Loading sessions...', true);
       try {
         const convRes = await fetch(`/api/conversations?all=1&compact=1&${throughputEngineParam()}`);
         if (!convRes.ok) throw new Error('API failed');
         const data = await convRes.json();
+        if (engineAtStart !== activeThroughputEngine || rangeAtStart !== activeThroughputRange) return;
         allSessions = data.conversations || data.sessions || [];
         renderSessionList();
         if (selectDefault) fetchWeekRankings();
@@ -2789,6 +2824,10 @@
     }
 
     async function selectAggregateSession(session) {
+      const version = ++throughputSelectionVersion;
+      const engineAtStart = activeThroughputEngine;
+      const rangeAtStart = activeThroughputRange;
+      const stillSelected = () => version === throughputSelectionVersion && engineAtStart === activeThroughputEngine && rangeAtStart === activeThroughputRange && activeSessionId === session.session_id;
       activeSessionId = session.session_id;
       renderSessionList();
       updateActiveEngineBadge(session);
@@ -2803,6 +2842,7 @@
           if (!response.ok) throw new Error('API failed');
           return response.json();
         }));
+        if (!stillSelected()) return;
         if (!payloads.every(data => data && data.ok)) throw new Error('API returned an error');
         let data = payloads[0];
         if (activeThroughputEngine === 'combined') {
@@ -2818,15 +2858,20 @@
         renderDashboard(session, data);
         setStatus('Idle');
       } catch (err) {
+        if (!stillSelected()) return;
         console.error(err);
         setStatus('Error loading throughput');
       } finally {
-        hideLoader();
+        if (stillSelected()) hideLoader();
       }
     }
 
     async function selectSession(s) {
       if (s.aggregate) return selectAggregateSession(s);
+      stopRefreshStatusPolling();
+      const version = ++throughputSelectionVersion;
+      const engineAtStart = activeThroughputEngine;
+      const stillSelected = () => version === throughputSelectionVersion && engineAtStart === activeThroughputEngine && activeSessionId === s.session_id;
       activeSessionId = s.session_id;
 
       // Update UI active class in list
@@ -2844,6 +2889,7 @@
         if (!res.ok) throw new Error('API failed');
         const data = await res.json();
 
+        if (!stillSelected()) return;
         if (data.ok) {
           renderDashboard(s, data);
         } else {
@@ -2851,10 +2897,11 @@
         }
         setStatus('Idle');
       } catch (err) {
+        if (!stillSelected()) return;
         console.error(err);
         setStatus('Error loading throughput');
       } finally {
-        hideLoader();
+        if (stillSelected()) hideLoader();
       }
     }
 
@@ -3265,6 +3312,25 @@
       container.appendChild(svg);
     }
 
+    function escapeThroughputText(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      })[c]);
+    }
+
+    function windowSessionCost(session) {
+      const cost = Number(session._week_cost || 0);
+      return session._week_unpriced ? (cost ? `${fmtCost(cost)} + unpriced` : 'n/a') : fmtCost(cost);
+    }
+
+    function throughputSessionName(session) {
+      const name = String(session.display_name || session.name || session.title || '').trim();
+      if (!/^You continue the work of session\b/i.test(name)) return name || session.session_id;
+      const source = String((session._window_details || {}).name || name).replace(/\\n/g, '\n');
+      const task = source.match(/(?:^|\n)Task:\s*([^\n]+)/i);
+      return task && task[1].trim() ? `Continuation: ${task[1].trim()}` : 'Continuation';
+    }
+
     function renderTopSessions() {
       const el = document.getElementById('top-sessions-table');
       if (!el) return;
@@ -3288,7 +3354,7 @@
       // Header
       const hdr = document.createElement('div');
       hdr.className = 'top-sess-row header';
-      hdr.innerHTML = `<div>Session</div><div>Window share</div><div>Cache-adjusted</div><div>Cost</div>`;
+      hdr.innerHTML = `<div>Session</div><div>Window share</div><div>Cache-adjusted</div><div>API equiv.</div>`;
       el.appendChild(hdr);
 
       top.forEach(s => {
@@ -3299,15 +3365,17 @@
         row.className = 'top-sess-row';
         row.style.cursor = 'pointer';
         row.onclick = () => selectSession(s);
-        const name = s.display_name || s.name || s.title || s.session_id.substring(0, 8);
+        const name = escapeThroughputText(throughputSessionName(s));
+        const details = s._window_details || {};
+        const routing = escapeThroughputText((details.models || [s.model || s.engine || 'unknown']).join(', '));
         row.innerHTML = `
           <div class="top-sess-bar-cell">
             <div class="top-sess-bar" style="width:${barW}px"></div>
-            <span class="top-sess-name" title="${name}">${name}</span>
+            <span><span class="top-sess-name">${name}</span><span class="top-sess-details">${routing} · ${fmtNum(details.turns || 0)} calls · ${escapeThroughputText(s.session_id.substring(0, 13))}</span></span>
           </div>
           <div style="font-weight:600;color:var(--accent)">${pctStr}</div>
           <div style="color:var(--text-muted)">${fmtNum(tok)}</div>
-          <div style="color:var(--text-muted)">${s._cost_usd ? fmtCost(s._cost_usd) : '-'}</div>`;
+          <div style="color:var(--text-muted)">${windowSessionCost(s)}</div>`;
         el.appendChild(row);
       });
 
@@ -3325,7 +3393,8 @@
       }
 
       // Total row
-      const totalCost = withTokens.reduce((s, r) => s + (r._cost_usd || 0), 0);
+      const totalCost = withTokens.reduce((s, r) => s + (r._week_cost || 0), 0);
+      const unpriced = withTokens.some(s => s._week_unpriced);
       const totalPct = totalTok ? '100%' : '-';
       const totalRow = document.createElement('div');
       totalRow.className = 'top-sess-row total-row';
@@ -3333,70 +3402,24 @@
         <div style="font-weight:700">Total (${withTokens.length} sessions)</div>
         <div style="font-weight:700;color:var(--accent)">${totalPct}</div>
         <div style="font-weight:700">${fmtNum(totalTok)}</div>
-        <div style="font-weight:700">${totalCost ? fmtCost(totalCost) : '-'}</div>`;
+        <div style="font-weight:700">${windowSessionCost({ _week_cost: totalCost, _week_unpriced: unpriced })}</div>`;
       el.appendChild(totalRow);
     }
 
-    function modelWeeklyBasisTokens(model) {
-      if (!model) return 0;
-      return (model.raw_context_tokens || 0) + (model.output_tokens || 0);
-    }
-
     function modelBreakdownContext(models) {
-      const rows = models || [];
-      const claudeWeeklyPct = weeklyData && weeklyData.display_pct;
-      const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
-        ? weeklyData.codex.weekly_pct
-        : null;
-      const kimiWeeklyPct = weeklyData && weeklyData.kimi && weeklyData.kimi.ok
-        ? weeklyData.kimi.weekly_pct
-        : null;
       return {
-        claudeWeeklyPct,
-        claudeWeeklyTotalTokens: rows.reduce((sum, model) =>
-          sum + ((isCodexModelRow(model) || isKimiModelRow(model)) ? 0 : modelWeeklyBasisTokens(model)), 0),
-        codexWeeklyPct,
-        codexWeeklyTotalTokens: rows.reduce((sum, model) =>
-          sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
-        kimiWeeklyPct,
-        kimiWeeklyTotalTokens: rows.reduce((sum, model) =>
-          sum + (isKimiModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
-        engine: activeThroughputEngine,
+        windowAdjustedTokens: (models || []).reduce((sum, m) =>
+          sum + (m.effective_input_tokens || 0) + (m.output_tokens || 0), 0),
       };
     }
 
-    function isCodexModelRow(model, fallbackEngine) {
-      const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
-      const label = String((model && (model.model || model.engine)) || '').toLowerCase();
-      return engine === 'codex' || label.startsWith('gpt-') || label.includes('codex');
-    }
-
-    function isKimiModelRow(model, fallbackEngine) {
-      const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
-      const label = String((model && (model.model || model.engine)) || '').toLowerCase();
-      return engine === 'kimi' || label.startsWith('kimi');
-    }
-
     function formatModelWeeklyPct(model, context) {
+      // Subscription meters expose account totals, not per-model attribution.
+      // Keep every row on the same selected-window cache-adjusted basis.
       const ctx = context || {};
-      const tokens = modelWeeklyBasisTokens(model);
-      if (!(tokens > 0)) return '-';
-      if (isCodexModelRow(model, ctx.engine)) {
-        const total = Number(ctx.codexWeeklyTotalTokens || 0);
-        const pct = Number(ctx.codexWeeklyPct);
-        if (!(total > 0) || !Number.isFinite(pct)) return '-';
-        return `${((tokens / total) * pct).toFixed(2)}%`;
-      }
-      if (isKimiModelRow(model, ctx.engine)) {
-        const total = Number(ctx.kimiWeeklyTotalTokens || 0);
-        const pct = Number(ctx.kimiWeeklyPct);
-        if (!(total > 0) || !Number.isFinite(pct)) return '-';
-        return `${((tokens / total) * pct).toFixed(2)}%`;
-      }
-      const total = Number(ctx.claudeWeeklyTotalTokens || 0);
-      const pct = Number(ctx.claudeWeeklyPct);
-      if (!(total > 0) || !Number.isFinite(pct)) return '-';
-      return `${((tokens / total) * pct).toFixed(2)}%`;
+      const tokens = (model.effective_input_tokens || 0) + (model.output_tokens || 0);
+      const total = ctx.windowAdjustedTokens || 0;
+      return total > 0 ? `${(100 * tokens / total).toFixed(2)}%` : '-';
     }
 
     function renderModelBreakdown(models, context) {
@@ -3430,9 +3453,9 @@
           <div class="model-cell">Active</div>
           <div class="model-cell">Adj tokens</div>
           <div class="model-cell">Raw tokens</div>
-          <div class="model-cell">% Weekly</div>
+          <div class="model-cell" title="Cache-adjusted tokens in the selected activity window">Window share</div>
           <div class="model-cell">Cache</div>
-          <div class="model-cell">Cost</div>
+          <div class="model-cell">API equiv.</div>
         </div>
         ${rows}
       `;

@@ -3269,23 +3269,38 @@ def _codex_app_server_request_to_transport(
                 _core._CODEX_APP_SERVER_INFLIGHT -= 1
 
 
-def _codex_context_window_args():
-    """Opt every Codex invocation into the model's full context window.
+def _codex_context_config():
+    """Apply the configured CCC context budget to Codex, with compaction headroom.
 
-    Codex CLAMPS `model_context_window` to the model's advertised
-    `max_context_window`, so passing 1M is a safe "give me the max" request, not
-    a foot-gun — it is silently capped per model:
-      - gpt-5.4: 272K default, 1M max -> reports ~950K effective context.
-      - gpt-5.5: 272K max -> clamped to ~258K after reserved output/system
-        tokens.
-      - gpt-6-astra (CCC default): 272K default, 872K advertised maximum.
-    Passed as a global `-c` override on spawn, resume, and the app-server so the
-    window is consistent across a session's whole life. Set CCC_CODEX_CONTEXT_1M=0
-    to fall back to the model default.
+    The shared spawn preference used to reach Claude only. Codex instead
+    requested its maximum window, allowing hundreds of thousands of tokens
+    beyond that preference. Keep a 10% margin for the next response/tool
+    results. The legacy CCC_CODEX_CONTEXT_1M flag no longer lifts this budget;
+    larger windows require an explicit numeric CCC_CODEX_CONTEXT_TOKENS.
     """
-    if not _core._codex_context_1m_enabled():
-        return []
-    return ["-c", "model_context_window=1000000"]
+    configured = _core._spawn_auto_compact_k_tokens()
+    window = configured or 250000
+    override = os.environ.get("CCC_CODEX_CONTEXT_TOKENS", "").strip()
+    if override:
+        try:
+            requested = int(override)
+        except ValueError:
+            requested = 0
+        if 10000 <= requested <= 1000000:
+            window = requested
+    return {
+        "model_context_window": window,
+        "model_auto_compact_token_limit": window * 9 // 10,
+        "model_auto_compact_token_limit_scope": "total",
+    }
+
+
+def _codex_context_window_args():
+    """Use the same explicit budget for the daemon and CLI invocations."""
+    args = []
+    for key, value in _codex_context_config().items():
+        args.extend(["-c", f"{key}={json.dumps(value)}"])
+    return args
 
 
 _CODEX_APP_SERVER_FALSE_MISS_LIMIT = 3
@@ -3363,6 +3378,9 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
     a loaded thread; `codex exec resume` can only start a one-shot process.
     """
     params = params or {}
+    if method in ("thread/start", "thread/resume"):
+        params = dict(params)
+        params["config"] = {**(params.get("config") or {}), **_codex_context_config()}
     from ccc_server.codex_capabilities import codex_method_is_mutating
     mutating = codex_method_is_mutating(method)
     routed = _core._control_plane_engine_call(
@@ -6305,8 +6323,7 @@ def _codex_app_server_thread_start_params(cwd=None, model=None):
         params["runtimeWorkspaceRoots"] = [cwd]
     if model:
         params["model"] = model
-    if _core._codex_context_1m_enabled():
-        params["config"] = {"model_context_window": 1000000}
+    params["config"] = _codex_context_config()
     return params
 
 

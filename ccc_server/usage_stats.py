@@ -933,7 +933,7 @@ def _throughput_codex_turns_from_file(
                 effective_input_tps = effective_input / dur_sec if dur_sec > 0 else 0.0
                 effective_total_tps = effective_total / dur_sec if dur_sec > 0 else 0.0
                 turns.append({
-                    "codex_usage_schema": 3,
+                    "codex_usage_schema": 4,
                     "turn_index": len(turns) + 1,
                     "session_id": session_id,
                     "session_name": session_name,
@@ -1532,6 +1532,7 @@ def _throughput_build_bootstrap(
     engine = _core._throughput_engine_filter(engine_filter)
     return {
         "schema": _core._THROUGHPUT_BOOTSTRAP_SCHEMA,
+        "pricing_schema": 2,
         "session_id": session_id,
         "engine": engine,
         "generated_at": float(time.time() if generated_at is None else generated_at),
@@ -1557,6 +1558,8 @@ def _throughput_bootstrap_valid(model, session_id, engine_filter=None):
     if not isinstance(model, dict):
         return False
     if model.get("schema") != _core._THROUGHPUT_BOOTSTRAP_SCHEMA:
+        return False
+    if model.get("pricing_schema") != 2:
         return False
     if model.get("session_id") != session_id or model.get("engine") != engine:
         return False
@@ -1834,6 +1837,7 @@ def _throughput_persist_aggregate_snapshot(session_id, payload, status, engine_f
     try:
         _core._THROUGHPUT_DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         body = {
+            "pricing_schema": 2,
             "generated_at": time.time(),
             "payload": payload,
             "status": status,
@@ -1859,7 +1863,7 @@ def _throughput_initial_payload(session_id, repo_path=None, range_key=None, engi
         stored = json.loads(raw)
         payload = stored.get("payload") or {}
         status = int(stored.get("status") or 200)
-        if status == 200 and payload.get("ok"):
+        if status == 200 and payload.get("ok") and stored.get("pricing_schema") == 2:
             payload = dict(payload)
             payload["snapshot"] = {
                 "state": "cached",
@@ -1973,7 +1977,7 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     size = st.st_size
 
     def current_usage_schema(turns):
-        return all(turn.get("engine") != "codex" or turn.get("codex_usage_schema") == 3
+        return all(turn.get("engine") != "codex" or turn.get("codex_usage_schema") == 4
                    for turn in turns)
 
     # 1. In-memory hit
@@ -2941,7 +2945,7 @@ _THROUGHPUT_WINDOW_CACHE_TTL = 60
 _THROUGHPUT_WINDOW_CACHE_MAX = 64
 _THROUGHPUT_WINDOW_MAX_SPAN_SEC = 7 * 86400
 _THROUGHPUT_WINDOW_MAX_AGE_SEC = 56 * 86400
-_THROUGHPUT_DAILY_SCHEMA = 1
+_THROUGHPUT_DAILY_SCHEMA = 2
 _THROUGHPUT_DAILY_CACHE = {}       # (iso_date,engine) -> {"ts","payload","status"}
 _THROUGHPUT_DAILY_CACHE_TTL = 180
 _THROUGHPUT_DAILY_LOCK = threading.Lock()

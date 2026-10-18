@@ -98,10 +98,10 @@ def test_spawn_continue_from_success(httpd, monkeypatch):
     seen = {}
 
     def fake_spawn(continue_from, prompt="", model=None, effort=None, report_to=None,
-                   dry_run=False, rebind_chain=True):
+                   dry_run=False, rebind_chain=True, name=None, task_key="", dedupe=False):
         seen.update(continue_from=continue_from, prompt=prompt, model=model,
                     effort=effort, report_to=report_to, dry_run=dry_run,
-                    rebind_chain=rebind_chain)
+                    rebind_chain=rebind_chain, name=name, task_key=task_key, dedupe=dedupe)
         return {"ok": True, "dry_run": False, "continue_from": continue_from,
                 "latest_session_id": continue_from, "new_session_id": "new-sid",
                 "engine": "claude", "rebound": []}
@@ -109,6 +109,7 @@ def test_spawn_continue_from_success(httpd, monkeypatch):
     monkeypatch.setattr(continuation, "spawn_continuation", fake_spawn)
     status, body = _request(httpd, "/api/sessions/spawn-continue-from", {
         "continue_from": "old-sid", "prompt": "keep going", "model": "opus-5",
+        "name": "worker", "task_key": "example-task", "dedupe": True,
     })
     assert status == 200
     assert body["ok"] is True
@@ -116,6 +117,9 @@ def test_spawn_continue_from_success(httpd, monkeypatch):
     assert seen["continue_from"] == "old-sid"
     assert seen["prompt"] == "keep going"
     assert seen["model"] == "opus-5"
+    assert seen["name"] == "worker"
+    assert seen["task_key"] == "example-task"
+    assert seen["dedupe"] is True
     assert seen["dry_run"] is False
 
 

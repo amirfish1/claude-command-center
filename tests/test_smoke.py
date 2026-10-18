@@ -12242,7 +12242,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(start_params["approvalPolicy"], "never")
         self.assertEqual(start_params["sandbox"], "danger-full-access")
         self.assertEqual(start_params["model"], "gpt-5.6-terra")
-        self.assertEqual(start_params["config"]["model_context_window"], 1000000)
+        self.assertEqual(start_params["config"]["model_context_window"], server._codex_context_config()["model_context_window"])
 
         # turn/start now runs second (was third, behind the rename).
         turn_params = calls[1][1]
@@ -12448,8 +12448,8 @@ class TestRepoContextHelpers(unittest.TestCase):
         finally:
             server._CODEX_APP_SERVER_FALSE_MISSES = 0
 
-    def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
-        """Default Codex spawns should prefer GPT-5.6 Terra while requesting max context."""
+    def test_spawn_codex_defaults_to_best_model_and_configured_context(self):
+        """Default Codex spawns should use the model and configured context budget."""
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         calls = []
@@ -12501,7 +12501,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         start_params = next(params for method, params in calls if method == "thread/start")
         self.assertEqual(start_params.get("model"), "gpt-5.6-terra")
-        self.assertEqual(start_params["config"]["model_context_window"], 1000000)
+        self.assertEqual(start_params["config"]["model_context_window"], server._codex_context_config()["model_context_window"])
 
     def test_resume_codex_attaches_command_center_pasted_images(self):
         """Resumed Codex sessions carry pasted images as localImage inputs."""

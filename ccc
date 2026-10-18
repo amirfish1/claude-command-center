@@ -1396,11 +1396,17 @@ def _print_continue_from_result(result, status, args):
     if rebound:
         print(f"  rebound {len(rebound)} report route(s) from the old chain")
     print("track it: ccc sessions")
+    if result.get("report_to") and not result.get("existing"):
+        print("Completion reports arrive automatically; finish independent work, then "
+              "end your turn while waiting. Do not repeatedly sleep or poll child status.")
     return 0
 
 
 def _spawn_continue_from(base, sid, prompt, args):
     payload = {"continue_from": sid, "prompt": prompt}
+    for field in ("name", "task_key", "dedupe"):
+        if getattr(args, field, None):
+            payload[field] = getattr(args, field)
     if getattr(args, "model", None):
         payload["model"] = args.model
     if getattr(args, "effort", None):
@@ -1518,6 +1524,9 @@ def cmd_spawn(args):
                   "dispatcher, not this spawn")
     else:
         print(f"spawned {engine} {ident}{suffix}")
+    if result.get("report_to") and not result.get("existing"):
+        print("Completion reports arrive automatically; finish independent work, then "
+              "end your turn while waiting. Do not repeatedly sleep or poll child status.")
     print("track it: ccc sessions")
     return 0
 

@@ -1736,6 +1736,9 @@ _MODEL_RATES = {
     "claude-haiku-4-5-20251001": (1.00, 1.25, 0.10, 5.00),
     # https://developers.openai.com/api/docs/models/gpt-6-astra (2026-09).
     "gpt-6-astra": (10.00, 0.00, 1.00, 50.00),
+    # Standard short-context API equivalent (not subscription quota pricing).
+    # https://developers.openai.com/api/docs/pricing (checked 2026-10-18).
+    "gpt-6.1-sol": (2.00, 2.50, 0.10, 10.00),
     "gpt-5.5": (5.00, 0.00, 0.50, 30.00),
     # GPT-5.6 cache writes are 1.25x input and cache reads are 10% of input.
     # https://openai.com/index/gpt-5-6/ (checked 2026-08)

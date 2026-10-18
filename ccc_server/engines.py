@@ -5526,6 +5526,17 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
         "- REASON: if FAILED, the reason and what blocked you (omit if succeeded)\n\n"
         "Send the report once, at the very end — not progress updates mid-task. "
         "Remember to JSON-escape the text (quotes, newlines) so the payload is valid.\n"
+        "\nWaiting for delegated work: give each child your session id as "
+        "`report_to`; its completion report will resume you through CCC. Finish "
+        "any independent work, then end your current turn while waiting. Do not "
+        "repeatedly call sleep or poll child status to keep the turn alive. "
+        "Waiting is not task completion: send your own completion report only "
+        "after the required child results arrive and you have checked them.\n"
+        "For external deployments or checks without callbacks, use one bounded "
+        "CLI watcher (for example `gh run watch <run-id> --exit-status`) rather "
+        "than alternating model turns, sleep calls, and status checks. Give the "
+        "watcher a timeout and retain its process handle; resume on completion "
+        "or a meaningful change, not on a fixed stream of short polling turns.\n"
     )
     return prompt + footer
 

@@ -1,0 +1,1 @@
+- Show selected-window token shares instead of inferred quota attribution, expose session models/call counts and API-equivalent costs, and price GPT-6.1 Sol with refreshed usage caches.

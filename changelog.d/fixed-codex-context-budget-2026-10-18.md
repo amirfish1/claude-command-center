@@ -1,0 +1,1 @@
+Codex now applies the configured context budget (250K by default), starts automatic compaction with 10% headroom, and reapplies that budget when resuming older threads. Larger windows require an explicit `CCC_CODEX_CONTEXT_TOKENS` override instead of the legacy full-window flag.
