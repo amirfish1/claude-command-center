@@ -1,0 +1,105 @@
+# Claude Command Center — HARDENED deployment (Layer A: reverse proxy + auth + TLS).
+#
+# WHY THIS EXISTS
+#   CCC has no authentication. Its own SECURITY.md is explicit: the trust
+#   boundary is "anything that can reach the port can run commands as you".
+#   The stock docker-compose.yml publishes the dashboard on 127.0.0.1:8090
+#   with no auth, so any process on the host — or any peer, if you widen the
+#   bind — gets the full, unauthenticated API (including agent spawn, which
+#   runs with --dangerously-skip-permissions).
+#
+#   This file puts CCC behind a Caddy reverse proxy that enforces TLS and
+#   HTTP Basic auth, and — critically — removes CCC's own host port entirely.
+#   CCC listens ONLY on an internal Docker network that nothing on the host
+#   or LAN can route to. The only reachable surface is Caddy, and Caddy
+#   demands credentials before it forwards a single byte to CCC.
+#
+# WHAT THIS DOES AND DOES NOT PROTECT
+#   Protects against: LAN / remote access, browser-tab CSRF, and — because
+#   there is no host-published CCC port — other host processes connecting to
+#   CCC directly. In this containerized layout there is no 127.0.0.1:8090 and
+#   no port.txt TCP target on the host for a local process to hijack.
+#   Does NOT change: the fact that anyone who authenticates through Caddy has
+#   the full CCC API. Auth gates access; it does not sandbox capability. Guard
+#   the credentials accordingly.
+#
+# USAGE
+#   1. cp .env.hardened.example .env.hardened
+#   2. Generate a bcrypt password hash and put it in .env.hardened:
+#        docker run --rm caddy caddy hash-password --plaintext 'your-strong-password'
+#      Set CCC_BASIC_AUTH_USER and CCC_BASIC_AUTH_HASH.
+#   3. docker compose --env-file .env.hardened -f docker-compose.hardened.yml up --build
+#   4. Open https://localhost:8443  (accept the local self-signed cert once)
+#      and log in with the user/password from step 2.
+#
+# See docs/hardened-deploy.md for the full write-up and verification steps.
+
+services:
+  ccc:
+    build: .
+    image: claude-command-center:local
+    container_name: ccc-hardened
+    # NO host port publish. CCC is reachable only via the `internal` network,
+    # which Caddy also joins. Nothing on the host or LAN can route to it.
+    expose:
+      - "8090"
+    environment:
+      PORT: "8090"
+      # Bind 0.0.0.0 INSIDE the container namespace so Caddy (on the same
+      # internal Docker network) can reach it. This is not a host-facing
+      # bind: the `internal` network below has no gateway to the host or
+      # outside world, and this service publishes no ports.
+      CCC_BIND_HOST: "0.0.0.0"
+      # Trust the reverse proxy's forwarded Origin. Caddy presents requests
+      # to CCC as coming from the ccc service origin; CCC's same-origin POST
+      # check allows loopback + this allowlist. See docs/hardened-deploy.md.
+      CCC_ALLOWED_ORIGIN: "https://localhost:8443,http://localhost:8443"
+      # Telemetry off by default in this hardened profile.
+      CCC_TELEMETRY_DISABLED: "1"
+    volumes:
+      # Surface the host's Claude state. Read-write so CCC can persist its own
+      # sidecar state under ~/.claude/command-center/. Append `:ro` if you
+      # want a look-only dashboard (some writes will then fail).
+      - ${HOME}/.claude:/root/.claude
+    networks:
+      - internal
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    container_name: ccc-caddy
+    depends_on:
+      - ccc
+    # The ONLY host-published port in this stack. Bound to loopback by
+    # default so the proxy itself isn't exposed to the LAN. To reach it from
+    # another trusted device (e.g. over a VPN/Tailscale), change the left
+    # side to the interface you want — but understand you are then exposing
+    # an auth-gated, full-capability control plane. Read docs/hardened-deploy.md.
+    ports:
+      - "127.0.0.1:8443:8443"
+    environment:
+      CCC_BASIC_AUTH_USER: "${CCC_BASIC_AUTH_USER:?set CCC_BASIC_AUTH_USER in .env.hardened}"
+      CCC_BASIC_AUTH_HASH: "${CCC_BASIC_AUTH_HASH:?set CCC_BASIC_AUTH_HASH in .env.hardened (see docker-compose.hardened.yml header)}"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist Caddy's locally-generated TLS cert + internal CA so the cert
+      # is stable across restarts (you only trust it once).
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+      - frontend
+    restart: unless-stopped
+
+networks:
+  # No host/LAN routing: CCC lives here, unreachable except from other
+  # containers on this same network (i.e. Caddy). `internal: true` is what
+  # makes the local-process bypass go away in the container layout.
+  internal:
+    internal: true
+  # Caddy's public side.
+  frontend: {}
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
