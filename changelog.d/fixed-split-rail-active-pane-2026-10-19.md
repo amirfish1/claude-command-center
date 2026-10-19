@@ -1,0 +1,1 @@
+- Split view: the sidebar now shows the details of the active conversation instead of always the left pane's.

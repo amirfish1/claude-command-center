@@ -66504,7 +66504,12 @@
   };
 
   function _applyStatusRailLayout() {
-    const sticky = document.querySelector('.conv-sticky-header');
+    // Split view: the rail follows the ACTIVE pane, so its source nodes must
+    // come from that pane's sticky header, not the first one in the document
+    // (which is always the left pane's).
+    const activeStickyHost = getConvViewForPane(activePaneId());
+    const sticky = (activeStickyHost && activeStickyHost.querySelector('.conv-sticky-header'))
+      || document.querySelector('.conv-sticky-header');
     const rail = document.getElementById('statusRail');
     if (!rail) return;
     const inRail = document.body.classList.contains('status-pos-right')
@@ -66522,8 +66527,14 @@
     // Drop every other copy in the document — these are orphans left
     // over from previous conversations whose sticky was rebuilt while
     // we were in rail mode.
-    document.querySelectorAll('.csh-ask-original').forEach(n => { if (n !== liveOrig) n.remove(); });
-    document.querySelectorAll('.csh-col-activity').forEach(n => { if (n !== liveAct) n.remove(); });
+    // Other panes' own sticky headers keep their nodes; only rail copies and
+    // nodes in the active pane's host are orphans.
+    const _isOtherPaneNode = (n) => {
+      const st = n.closest('.conv-sticky-header');
+      return !!st && st !== sticky;
+    };
+    document.querySelectorAll('.csh-ask-original').forEach(n => { if (n !== liveOrig && !_isOtherPaneNode(n)) n.remove(); });
+    document.querySelectorAll('.csh-col-activity').forEach(n => { if (n !== liveAct && !_isOtherPaneNode(n)) n.remove(); });
 
     // Place the live nodes in the target slot for the current mode.
     if (inRail) {
