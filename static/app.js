@@ -49336,7 +49336,10 @@
       + '</div>'
       + '<div class="uxq-td-pg">'
       + '<div class="uxq-td-pg-label">Assignment</div>'
-      + (item.claimed_by ? _propRow('Worker', '<span class="uxq-td-worker-id">' + escapeHtml(item.claimed_by) + '</span>') : _propRow('Worker', '<span class="uxq-td-pr-empty">unassigned</span>'))
+      + (item.claimed_by ? _propRow('Worker', '<span class="uxq-td-worker-id">' + escapeHtml(item.claimed_by) + '</span>')
+        : (!item.closed_at && item.parked && item.parked.worker_id)
+          ? _propRow('Worker', '<span class="uxq-td-worker-id">' + escapeHtml(item.parked.worker_id) + '</span> <span class="uxq-td-pr-empty">(parked)</span>')
+          : _propRow('Worker', '<span class="uxq-td-pr-empty">unassigned</span>'))
       + (function () {
           // claimed_session_id is backfilled by the queue reconciler and can
           // stay empty for a worker-id claim (e.g. "bymprod-cda69c9a") even
@@ -49385,6 +49388,21 @@
                   break;
                 }
               }
+            }
+          }
+          // `wt block` drops the claim (claimed_by and claimed_session_id go
+          // null) and records the session under `parked`, so a blocked ticket
+          // lost its link exactly when the user needed it. Fall back to the
+          // parked session, then the newest timeline actor, like q2.js
+          // sessionOf().
+          if (!sid && item.parked && item.parked.session_id) {
+            sid = String(item.parked.session_id).trim();
+          }
+          if (!sid && !item.claimed_by) {
+            const tl = Array.isArray(item.timeline) ? item.timeline : [];
+            for (let i = tl.length - 1; i >= 0 && !sid; i--) {
+              const by = tl[i] && tl[i].by;
+              if (by && typeof by === 'object' && by.session_id) sid = String(by.session_id).trim();
             }
           }
           if (!sid) return '';

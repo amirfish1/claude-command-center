@@ -229,6 +229,17 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("state.workerSessionMap", q2_js)
         self.assertIn("state.pastWorkers", q2_js)
 
+    def test_ticket_detail_session_link_survives_wt_block(self):
+        """`wt block` nulls claimed_by/claimed_session_id and keeps the session
+        under `parked`; the Assignment panel must still link to it."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        block = app_js[
+            app_js.index('<div class="uxq-td-pg-label">Assignment</div>'):
+            app_js.index("open in CCC ↗")]
+        self.assertIn("item.parked.session_id", block)
+        self.assertIn("item.parked.worker_id", block)
+        self.assertIn("by.session_id", block)
+
     def test_pending_worker_row_retires_on_devincli_conv_id(self):
         """The Workers lane's 'starting…' pending row must retire once the
         worker's session row lands — for devin workers that means matching
