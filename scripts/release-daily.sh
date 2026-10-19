@@ -4,8 +4,10 @@
 # or over ssh from another host.
 #
 # It WAIVES (exit 0, nothing released) unless all of these hold:
-#   1. this repo and every repo in $CCC_RELEASE_REPOS are on main, with no
-#      uncommitted changes and nothing unpushed
+#   1. this repo and every repo in $CCC_RELEASE_REPOS pass
+#      scripts/repo-clean-check.sh: on main, no uncommitted/untracked files,
+#      nothing unpushed on any branch, no extra worktrees (cut-release also runs
+#      the optional machine-local preflight, which checks other hosts)
 #   2. changelog.d/ holds at least $CCC_RELEASE_MIN_ENTRIES entries (default 3),
 #      at least one of them "added-*" or "fixed-*"
 #   3. the last release tag is at least 24h old
@@ -41,15 +43,10 @@ mkdir "$LOCK" 2>/dev/null || waive "another release run holds $LOCK"
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 check_repo() {
-  local r="$1" branch dirty ahead
-  [ -d "$r/.git" ] || [ -f "$r/.git" ] || waive "$r is not a git repo"
-  git -C "$r" fetch --quiet origin 2>/dev/null || waive "cannot fetch $r"
-  branch="$(git -C "$r" branch --show-current)"
-  [ "$branch" = "main" ] || waive "$r is on '$branch', not main"
-  dirty="$(git -C "$r" status --porcelain)"
-  [ -z "$dirty" ] || waive "$r has uncommitted changes ($(echo "$dirty" | wc -l | tr -d ' ') files)"
-  ahead="$(git -C "$r" rev-list --count @{u}..HEAD 2>/dev/null || echo 1)"
-  [ "$ahead" = 0 ] || waive "$r has $ahead unpushed commit(s)"
+  local problems
+  problems="$("$REPO_ROOT/scripts/repo-clean-check.sh" "$1" 2>&1)" || waive "$1 is not fully landed:
+$problems
+   (find the owning sessions with the clean-all-repos skill; stale worktrees/branches go to REPO-FIXER)"
 }
 check_repo "$REPO_ROOT"
 for r in $EXTRA_REPOS; do check_repo "$r"; done
@@ -77,4 +74,19 @@ else
   ./scripts/cut-release.sh "$NEXT" >>"$LOG" 2>&1; rc=$?
 fi
 if [ "$rc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED): v$NEXT"; else say "FAILED: cut-release exit $rc (see $LOG)"; fi
-exit "$([ "$rc" = 0 ] && echo 0 || echo 1)"
+[ "$rc" = 0 ] || exit 1
+
+# Also publish each sibling repo that has its own cut-release.sh and commits
+# since its last tag (WatchTower: patch bump). A failure here is reported last so
+# the verdict line is FAILED even though CCC itself shipped.
+for r in $EXTRA_REPOS; do
+  [ -x "$r/scripts/cut-release.sh" ] || continue
+  wtag="$(git -C "$r" describe --tags --abbrev=0 2>/dev/null || true)"
+  [ -n "$wtag" ] || continue
+  if [ "$(git -C "$r" rev-list --count "$wtag"..HEAD)" = 0 ]; then say "$(basename "$r"): no commits since $wtag, not releasing"; continue; fi
+  say "releasing $(basename "$r") (patch bump from $wtag, dry-run=$DRY)"
+  if [ "$DRY" = 1 ]; then (cd "$r" && ./scripts/cut-release.sh patch --dry-run) >>"$LOG" 2>&1; wrc=$?
+  else (cd "$r" && ./scripts/cut-release.sh patch) >>"$LOG" 2>&1; wrc=$?; fi
+  if [ "$wrc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED): $(basename "$r") patch"; else say "FAILED: $(basename "$r") cut-release exit $wrc (CCC v$NEXT did ship)"; exit 1; fi
+done
+exit 0

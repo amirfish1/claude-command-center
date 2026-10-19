@@ -1,0 +1,1 @@
+- Daily release gate is strict (no uncommitted files, unpushed branches or open worktrees in CCC and WatchTower, plus the hermes-gcp clones) and also releases WatchTower with a patch bump.
