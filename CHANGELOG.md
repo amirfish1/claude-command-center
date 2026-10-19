@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.39.0] - 2026-10-18
+
+### Added
+- `scripts/release-daily.sh`: once-a-day release gate; waives unless repos are clean+pushed and changelog.d has enough entries, else cuts the next release.
+- `cut-release.sh` runs an optional machine-local preflight (`~/.claude/command-center/release-preflight.sh`, or `$CCC_RELEASE_PREFLIGHT`) and aborts the release if it fails.
+- Tap-backs: hover an agent message and tap a thumb; the reaction is sent as "[158] Thumbs up" with your next message, so it costs no extra turn.
+- `scripts/uninstall.sh` removes the services, the `ccc` CLI link and the checkout; `--purge-data` also deletes `~/.claude/command-center`.
+- Voice agent: new read-only `ccc_jobs` tool answers whether a scheduled job ran, succeeded, when it runs next, and why not. The Jobs feed (`/api/jobs`) now also covers user-level systemd timers and crontab entries (previously only system timers: 13 of 75 jobs), marks interval timers healthy by last-run recency instead of `stale`, and `ccc_session` reports pid-verified liveness.
+
+### Changed
+- Saving an annotation without a screenshot now shows a plain "Annotation saved" toast instead of a red macOS permissions error.
+- Read-aloud now pre-makes only the first ~40 seconds of a message, so the speaker turns green quickly instead of staying amber while whole messages generate.
+- Read-aloud speed control now goes up to 1.8×.
+
+### Fixed
+- The annotate popup now stays fully inside the viewport (including its Queue/Cancel buttons) when it grows or opens near the bottom edge.
+- Codex now applies the configured context budget (250K by default), starts automatic compaction with 10% headroom, and reapplies that budget when resuming older threads. Larger windows require an explicit `CCC_CODEX_CONTEXT_TOKENS` override instead of the legacy full-window flag.
+- Messages and steers sent to a Codex multi-agent sub-agent no longer bounce back to the queue forever. Codex only accepts input to a v2 sub-agent through its parent, so CCC now loads the parent before resuming the sub-agent and relays the message through the parent (which forwards it with `followup_task`). A toast says when a message went through the parent.
+- Codex and Kimi turns now show their turn number and timestamp, including in Compact view.
+- Compact transcript view no longer draws the message timestamp and speak/copy icons on top of the first line of assistant text; they appear on hover (or in a reserved strip on touch devices).
+- Compact transcript view now keeps the timestamp and speak/copy buttons on every assistant text message, not just the newest reply and each turn's final card, so long single-turn Codex sessions no longer look like they have no per-message metadata.
+- Continuation spawns honor task keys and prompt deduplication, preserve requested names, and return the standard session ID so retries can find the existing session.
+- Spawned coordinators are instructed to yield while awaiting completion reports and use bounded CLI watchers for external checks, avoiding repeated model sleep and status-polling turns.
+- A second same-repo CCC server no longer crash-loops the primary: startup shows a loopback-only "kill it?" page that re-verifies the process is this checkout's server.py before signalling, and servers started with CCC_ALLOW_DUPLICATE_REPO=1 never block the primary.
+- Opening the in-conversation find bar (Cmd+F) on a very large session no longer freezes CCC; find searches the loaded part instead of pulling in the whole transcript.
+- Narrow main windows now have a "Show side panel" button to reopen the right-hand session rail, and the bottom context bar keeps the repo path on non-touch devices.
+- `ccc recall` and session search now index Antigravity (agy) sessions from both the desktop app and the CLI.
+- Show selected-window token shares instead of inferred quota attribution, expose session models/call counts and API-equivalent costs, and price GPT-6.1 Sol with refreshed usage caches.
+- Show session token usage and model turn counts for the inspected chart interval, narrowing to the selected hour, and hide broader session tables until inspection ends.
+- Read-aloud replays a clip you already heard (or prefetched) instantly instead of regenerating it, which took ~20s per 400 characters on a busy machine.
+- Read-aloud now makes a message's clips three at a time instead of one by one, and a speaker stuck amber after switching sessions resumes and turns green.
+- Voice agent: `ccc_sessions` no longer drops idle-but-open Claude sessions (liveness now trusts the pid-verified session registry, not only a 30-minute hook marker); `ccc_sessions`, `ccc_attention`, `ccc_queues` and `ccc_ticket` now report as-of times, liveness proof, and label ticket needs-input questions as recorded reports with their age. `ccc_attention` now includes WatchTower tickets parked on the user instead of contradicting `ccc_queues`.
+- Windows: the server no longer fails to import because the `pty` module needs `termios`.
+
 ## [5.38.0] - 2026-10-17
 
 ### Added
@@ -3938,7 +3972,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.38.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.39.0...HEAD
+[5.39.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.39.0
 [5.38.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.38.0
 [5.37.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.37.0
 [5.36.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.36.0

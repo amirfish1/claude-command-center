@@ -1,1 +1,0 @@
-- `scripts/uninstall.sh` removes the services, the `ccc` CLI link and the checkout; `--purge-data` also deletes `~/.claude/command-center`.

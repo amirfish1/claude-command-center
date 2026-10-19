@@ -1,1 +1,0 @@
-- A second same-repo CCC server no longer crash-loops the primary: startup shows a loopback-only "kill it?" page that re-verifies the process is this checkout's server.py before signalling, and servers started with CCC_ALLOW_DUPLICATE_REPO=1 never block the primary.

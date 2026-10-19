@@ -1,1 +1,0 @@
-- Tap-backs: hover an agent message and tap a thumb; the reaction is sent as "[158] Thumbs up" with your next message, so it costs no extra turn.

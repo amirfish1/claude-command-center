@@ -1,1 +1,0 @@
-- Read-aloud speed control now goes up to 1.8×.

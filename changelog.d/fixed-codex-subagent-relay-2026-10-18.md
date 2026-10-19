@@ -1,1 +1,0 @@
-- Messages and steers sent to a Codex multi-agent sub-agent no longer bounce back to the queue forever. Codex only accepts input to a v2 sub-agent through its parent, so CCC now loads the parent before resuming the sub-agent and relays the message through the parent (which forwards it with `followup_task`). A toast says when a message went through the parent.
