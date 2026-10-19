@@ -1,0 +1,1 @@
+- The annotate popup now stays fully inside the viewport (including its Queue/Cancel buttons) when it grows or opens near the bottom edge.

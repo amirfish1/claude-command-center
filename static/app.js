@@ -76996,6 +76996,10 @@
     let top = rect.y + rect.height + margin;
     const h = editor.offsetHeight || 220;
     if (top + h > window.innerHeight - margin) top = Math.max(margin, rect.y - h - margin);
+    // Flipping above the element can still overflow (element near the top,
+    // or the editor grew after the screenshot preview loaded): keep the whole
+    // editor, including its action buttons, inside the viewport.
+    top = Math.max(margin, Math.min(top, window.innerHeight - margin - h));
     editor.style.left = left + 'px';
     editor.style.top = top + 'px';
   }
@@ -77421,6 +77425,15 @@
     annotationState.overlay.appendChild(editor);
     annotationState.editor = editor;
     annPositionEditor(editor, annotationState.rect);
+    // Content grows after first paint (screenshot preview, hints, errors, the
+    // resizable note): re-clamp so the action buttons never fall off-screen.
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => {
+        if (!editor.isConnected) { ro.disconnect(); return; }
+        if (annotationState && annotationState.editor === editor) annPositionEditor(editor, annotationState.rect);
+      });
+      ro.observe(editor);
+    }
     annRenderPreEditorScreenshotPreview(editor);
     const noteEl = editor.querySelector('.ann-editor-note');
     // Cmd-V image paste in the note (CCC-89): same uploader as the composer
