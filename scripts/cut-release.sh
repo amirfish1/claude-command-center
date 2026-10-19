@@ -101,6 +101,14 @@ if [ -n "$DIRTY" ]; then
     exit 1
   fi
 fi
+# Optional machine-local preflight (e.g. confirm work on other hosts is committed
+# and pushed). Any non-zero exit aborts the release. Not shipped; lives in the
+# user's own config dir.
+RELEASE_PREFLIGHT="${CCC_RELEASE_PREFLIGHT:-$HOME/.claude/command-center/release-preflight.sh}"
+if [ -x "$RELEASE_PREFLIGHT" ]; then
+  step "     running $RELEASE_PREFLIGHT"
+  "$RELEASE_PREFLIGHT" || { echo "${RED}release preflight failed; refusing to cut a release${NC}" >&2; exit 1; }
+fi
 git rev-parse "v${VERSION}" >/dev/null 2>&1 && { echo "${RED}tag v${VERSION} already exists${NC}" >&2; exit 1; } || true
 # Sync with origin BEFORE bumping anything. Step 4 pushes main, and a rejected
 # push there leaves the release commit + tag local-only with no resume path

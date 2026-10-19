@@ -1,0 +1,1 @@
+- `cut-release.sh` runs an optional machine-local preflight (`~/.claude/command-center/release-preflight.sh`, or `$CCC_RELEASE_PREFLIGHT`) and aborts the release if it fails.
