@@ -110,7 +110,11 @@ _CODEX_INSTRUCTIONS = (
     "recent ticket context, ccc_queues for named queue state, ccc_models to "
     "resolve an explicit model name to its approved ID before triage selection, and "
     "ccc_triage_queue to propose a senior triage session. Anything that mutates "
-    "CCC must go through ccc_propose_action; you never execute changes yourself."
+    "CCC must go through ccc_propose_action; you never execute changes yourself. "
+    "Every tool result names its source and as-of time. Ticket needs-input "
+    "questions and blocker notes are recorded reports with an age, not verified "
+    "current health: say \"recorded N days ago\" and never state them as current "
+    "fact. Only pid-verified sessions and the queue health snapshot are current."
 )
 
 _APPROVAL_DENY_METHODS = frozenset({
@@ -333,6 +337,82 @@ def _fmt_tool_text(feed_or_data):
 
 def _tool_err(msg):
     return {"contentItems": [{"type": "inputText", "text": f"error: {msg}"}], "success": False}
+
+
+# Claude registry status -> the state labels the session list uses.
+_REGISTRY_STATE = {"busy": "working", "idle": "idle"}
+
+
+def _utc_stamp(epoch):
+    return datetime.fromtimestamp(float(epoch), timezone.utc).strftime("%H:%M:%SZ")
+
+
+def _age_text(seconds):
+    """Spoken-friendly age: 40s, 12m, 5h, 3d."""
+    try:
+        s = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return "unknown age"
+    if s < 90:
+        return f"{s}s"
+    if s < 5400:
+        return f"{round(s / 60)}m"
+    if s < 172800:
+        return f"{round(s / 3600)}h"
+    return f"{round(s / 86400)}d"
+
+
+def _asof(epoch, now=None):
+    """'02:24:40Z (12s ago)' for an epoch, or 'time unknown'."""
+    try:
+        epoch = float(epoch)
+    except (TypeError, ValueError):
+        return "time unknown"
+    if epoch <= 0:
+        return "time unknown"
+    now = time.time() if now is None else now
+    return f"{_utc_stamp(epoch)} ({_age_text(now - epoch)} ago)"
+
+
+def _iso_epoch(value):
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _split_needs_input(items):
+    """Split WatchTower ticket records by how strong the needs-input signal is.
+
+    explicit: status blocked/awaiting_answer, i.e. the ticket is parked on the human.
+    claimed: needs_input flag still set while a worker holds the ticket, i.e. a
+    question was recorded but the ticket is in flight and may already be answered.
+    """
+    explicit, claimed = [], []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ref = str(item.get("ref") or "").upper()
+        if not _TICKET_REF_RE.fullmatch(ref):
+            continue
+        status = str(item.get("status") or "").lower()
+        if status in ("blocked", "awaiting_answer"):
+            explicit.append(item)
+        elif item.get("needs_input") and status != "closed":
+            claimed.append(item)
+    return explicit, claimed
+
+
+def _ticket_age(item, now):
+    ts = _iso_epoch(item.get("blocked_at") or item.get("updated_at"))
+    return _age_text(now - ts) if ts else "unknown age"
+
+
+def _tickets_synced_at():
+    try:
+        return _core._ux_fixes_list_synced_at(None, None)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -708,20 +788,53 @@ class VoiceSession:
             limit = max(1, min(20, int(args.get("limit") or 10)))
         except (TypeError, ValueError):
             limit = 10
+        now = time.time()
         feed = _core.compute_attention_feed(recent_only=True, limit=limit) or {}
         items = feed.get("items") or []
-        if not items:
-            return "Nothing needs the user's attention right now."
-        out = [f"{len(items)} item(s) need attention:"]
-        for it in items:
-            repo = it.get("repo") or it.get("folder_label") or ""
-            q = (it.get("question_text") or "").strip().replace("\n", " ")[:180]
-            row = f"- [{it.get('kind')}] {it.get('where') or ''} {repo}".strip()
-            if it.get("session_id"):
-                row += f" session={it['session_id']}"
-            if q:
-                row += f" | {q}"
-            out.append(row)
+        out = []
+        if items:
+            out.append(f"{len(items)} live session(s) need attention (session feed, as of {_utc_stamp(now)}):")
+            for it in items:
+                repo = it.get("repo") or it.get("folder_label") or ""
+                q = (it.get("question_text") or "").strip().replace("\n", " ")[:180]
+                row = f"- [{it.get('kind')}] {it.get('where') or ''} {repo}".strip()
+                if it.get("session_id"):
+                    row += f" session={it['session_id']}"
+                if it.get("mtime"):
+                    row += f" last active {_age_text(now - float(it['mtime']))} ago"
+                if q:
+                    row += f" | {q}"
+                out.append(row)
+        else:
+            out.append(f"No live session is waiting on the user (session feed, as of {_utc_stamp(now)}).")
+        # The session feed never reads WatchTower, so ticket questions are a
+        # separate source: report them here instead of letting "nothing needs
+        # input" contradict ccc_queues.
+        try:
+            tickets = _core._ux_fixes_list_items_cached(None, None) or []
+        except Exception:
+            tickets = None
+        if tickets is None:
+            out.append("WatchTower ticket records unavailable, so queue needs-input state is unknown.")
+        else:
+            explicit, claimed = _split_needs_input(tickets)
+            synced = _tickets_synced_at()
+            src = f"WatchTower ticket records synced {_asof(synced, now)}" if synced else "WatchTower ticket records, sync time unknown"
+            if explicit or claimed:
+                out.append(f"Recorded needs-input tickets ({src}); these are recorded reports, "
+                           "not verified current:")
+                explicit.sort(key=lambda i: _iso_epoch(i.get("blocked_at") or i.get("updated_at")) or 0)
+                for it in explicit[:limit]:
+                    out.append(f"- {str(it.get('ref')).upper()} parked on the user for "
+                               f"{_ticket_age(it, now)}: {self._compact_text(it.get('block_question') or it.get('question'), 140) or 'question not recorded'}")
+                if len(explicit) > limit:
+                    out.append(f"- ... {len(explicit) - limit} more parked ticket(s); use ccc_queues")
+                if claimed:
+                    out.append(f"- {len(claimed)} more ticket(s) carry a needs-input flag while a worker "
+                               f"holds them (may be answered already): "
+                               + ", ".join(str(i.get('ref')).upper() for i in claimed[:8]))
+            else:
+                out.append(f"No tickets are recorded as needing input ({src}).")
         return "\n".join(out)[:4000]
 
     def _tool_session(self, args):
@@ -808,27 +921,78 @@ class VoiceSession:
         rows.sort(key=lambda r: (not r.get("is_live"), -(r.get("modified") or r.get("mtime") or 0)))
         return rows
 
+    @staticmethod
+    def _registry_sessions():
+        """{session_id: registry entry} for Claude processes verified alive by pid."""
+        try:
+            return dict(_core._load_session_registry() or {})
+        except Exception:
+            return {}
+
     def _tool_sessions(self, args):
         try:
             limit = max(1, min(30, int(args.get("limit") or 15)))
         except (TypeError, ValueError):
             limit = 15
         query = str(args.get("query") or "").strip()
+        live_only = bool(args.get("live_only", True))
+        now = time.time()
+        all_rows = self._archive_rows()
+        registry = self._registry_sessions()
         if query:
             rows = self._match_title(query)
-        elif args.get("live_only", True):
-            rows = [r for r in self._archive_rows() if r.get("is_live")]
+        elif live_only:
+            rows = [r for r in all_rows if r.get("is_live")]
         else:
-            rows = self._archive_rows()
+            rows = list(all_rows)
+        # The archive can lag a process by a cache window, so union in every
+        # session whose pid is verified alive right now.
+        if live_only and not query:
+            have = {r.get("session_id") for r in rows}
+            archived = {r.get("session_id"): r for r in all_rows}
+            for sid, meta in registry.items():
+                if sid in have:
+                    continue
+                if sid in archived:
+                    # Archive row exists but its cached liveness lags the process.
+                    rows.append(dict(archived[sid], is_live=True,
+                                     state=_REGISTRY_STATE.get(meta.get("status"), archived[sid].get("state"))))
+                    continue
+                try:
+                    updated = float(meta.get("updatedAt") or 0) / 1000.0
+                except (TypeError, ValueError):
+                    updated = 0
+                rows.append({"session_id": sid, "engine": "claude", "is_live": True,
+                             "title": meta.get("name") or "", "folder_label": os.path.basename(str(meta.get("cwd") or "")),
+                             "modified": updated,
+                             "state": _REGISTRY_STATE.get(meta.get("status"), meta.get("status"))})
         rows.sort(key=lambda r: -(r.get("modified") or r.get("mtime") or 0))
         if not rows:
-            return "No open sessions."
-        out = [f"{min(len(rows), limit)} of {len(rows)} session(s):"]
+            return f"No {'open ' if live_only else ''}sessions (checked {_utc_stamp(now)})."
+        by_engine = {}
+        for r in rows:
+            eng = r.get("engine") or "claude"
+            by_engine[eng] = by_engine.get(eng, 0) + 1
+        header = (f"{min(len(rows), limit)} of {len(rows)} session(s) as of {_utc_stamp(now)} "
+                  f"[{', '.join(f'{k}={v}' for k, v in sorted(by_engine.items()))}]; "
+                  f"{len(registry)} Claude process(es) verified alive by pid")
+        if len(rows) > limit:
+            header += f"; {len(rows) - limit} more not shown (raise limit)"
+        out = [header + ":"]
         for r in rows[:limit]:
-            out.append(
-                f"- {r.get('title') or r.get('folder_label') or ''} "
-                f"engine={r.get('engine') or 'claude'} session={r.get('session_id')}"
-            )
+            sid = r.get("session_id")
+            line = (f"- {r.get('title') or r.get('folder_label') or ''} "
+                    f"engine={r.get('engine') or 'claude'} session={sid}")
+            if r.get("state"):
+                line += f" state={r['state']}"
+            ts = r.get("modified") or r.get("mtime")
+            if ts:
+                line += f" last activity {_age_text(now - float(ts))} ago"
+            if sid in registry:
+                line += f" proof=process pid {registry[sid].get('pid')}"
+            elif r.get("is_live"):
+                line += " proof=engine/hook signal, no pid check"
+            out.append(line)
         return "\n".join(out)[:4000]
 
     def _tool_models(self, args):
@@ -893,7 +1057,15 @@ class VoiceSession:
             stale = isinstance(item, dict)
         if not isinstance(item, dict):
             return f"ticket {ref} not found"
+        now = time.time()
         out = [f"ticket {ref}" + (" (stale cached fallback)" if stale else "") + ":"]
+        if stale:
+            out.append(f"source: CCC ticket cache synced {_asof(_tickets_synced_at(), now)}; live read failed")
+        else:
+            out.append(f"source: live WatchTower read at {_utc_stamp(now)}")
+        updated = _iso_epoch(item.get("updated_at"))
+        if updated:
+            out.append(f"ticket last updated {_age_text(now - updated)} ago")
         title = self._compact_text(item.get("title"), 260)
         if title:
             out.append(f"title: {title}")
@@ -907,7 +1079,10 @@ class VoiceSession:
             question = self._compact_text(
                 item.get("block_question") or item.get("question")
                 or item.get("question_text") or item.get("needs_input_question"), 700)
-            out.append("needs input: " + (question or "question not recorded"))
+            blocked = _iso_epoch(item.get("blocked_at"))
+            when = (f" [recorded {_age_text(now - blocked)} ago, not verified still open]" if blocked
+                    else " [recorded, not verified still open]")
+            out.append("needs input: " + (question or "question not recorded") + when)
         comments = item.get("comments")
         if isinstance(comments, list):
             recent = []
@@ -954,7 +1129,16 @@ class VoiceSession:
             names = [requested]
         if not names:
             return "WatchTower queue data unavailable."
-        out = []
+        now = time.time()
+        health_ts = None
+        try:
+            health_ts = (_core._ux_fixes_health_snapshot or {}).get("ts")
+        except Exception:
+            pass
+        synced = _tickets_synced_at()
+        out = [f"Sources: queue health snapshot {_asof(health_ts, now)}; WatchTower ticket records "
+               f"synced {_asof(synced, now)}. Needs-input questions are recorded reports, "
+               "not verified current state; worker/stuck figures are the health snapshot."]
         for name in names[:20]:
             row = by_queue.get(name) or {}
             queue_items = [item for item in items if isinstance(item, dict)
@@ -962,18 +1146,29 @@ class VoiceSession:
             depth = row.get("depth")
             if depth is None:
                 depth = sum(1 for item in queue_items if item.get("status") != "closed")
+            explicit, claimed = _split_needs_input(queue_items)
             needs = [str(item.get("ref") or "").upper() for item in queue_items
                      if item.get("needs_input") or item.get("status") == "blocked"]
             needs = [ref for ref in needs if _TICKET_REF_RE.fullmatch(ref)]
             line = f"{name}: {int(depth or 0)} open"
             if row.get("workers") is not None:
                 line += f", {int(row.get('workers') or 0)} worker(s)"
+            if row.get("last_activity_seconds") is not None:
+                line += f", last activity {_age_text(row['last_activity_seconds'])} ago"
             if row.get("stuck"):
                 line += ", stuck"
             line += f"; {len(needs)} need input"
             if needs:
                 line += " (" + ", ".join(needs[:12]) + ")"
             out.append(line)
+            for it in sorted(explicit, key=lambda i: _iso_epoch(i.get("blocked_at") or i.get("updated_at")) or 0)[:6]:
+                kind = f" [{it['block_kind']}]" if it.get("block_kind") else ""
+                out.append(f"  - {str(it.get('ref')).upper()} {str(it.get('status')).lower()}{kind} for "
+                           f"{_ticket_age(it, now)} (recorded): "
+                           f"{self._compact_text(it.get('block_question') or it.get('question'), 140) or 'question not recorded'}")
+            if claimed:
+                out.append(f"  - {len(claimed)} flagged while a worker holds them (may be answered): "
+                           + ", ".join(str(i.get('ref')).upper() for i in claimed[:6]))
         return "\n".join(out)[:4000]
 
     def _tool_triage_queue(self, args):
@@ -1619,8 +1814,9 @@ def _tool_specs():
             "type": "function",
             "name": "ccc_attention",
             "description": (
-                "List what currently needs the user's attention on the CCC "
-                "board (sessions waiting on them, blockers). Read-only."
+                "List what currently needs the user's attention: live sessions "
+                "waiting on them AND WatchTower tickets recorded as needing "
+                "input (labeled recorded, with age). Read-only."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1642,7 +1838,9 @@ def _tool_specs():
             "name": "ccc_sessions",
             "description": (
                 "List open (live) CCC sessions across all engines with their "
-                "session_ids. Pass query to search by title words; live_only=false for recent history. Read-only."
+                "session_ids, state, last-activity age and liveness proof "
+                "(pid-verified or engine signal). Pass query to search by title "
+                "words; live_only=false for recent history. Read-only."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1665,7 +1863,8 @@ def _tool_specs():
         {
             "type": "function",
             "name": "ccc_queues",
-            "description": "WatchTower queue summaries, including cached needs-input refs. Pass queue for one named queue. Read-only.",
+            "description": "WatchTower queue summaries with source timestamps, needs-input refs and "
+            "how long each has been recorded as blocked. Pass queue for one named queue. Read-only.",
             "inputSchema": {"type": "object", "properties": {
                 "queue": {"type": "string", "description": "optional WatchTower queue name"},
             }},

@@ -10131,6 +10131,16 @@ def _archive_session_is_live_uncached(session_id):
                     return True
         except OSError:
             pass
+    if not is_non_claude_engine:
+        # Idle-but-open interactive sessions stop firing hooks, so their sidecar
+        # ages out of the window above while the process is still running (and
+        # carries no resume-arg for the engine scan). Claude's own pid registry,
+        # filtered to pids that are still `claude` processes, is the proof.
+        try:
+            if session_id in _load_session_registry():
+                return True
+        except Exception:
+            pass
     if session_id in _live_engine_session_ids():
         return True
     # Pool-model codex (Codex.app `codex app-server`) puts no session id on

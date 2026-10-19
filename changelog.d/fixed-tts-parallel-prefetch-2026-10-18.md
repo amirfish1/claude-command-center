@@ -1,0 +1,1 @@
+- Read-aloud now makes a message's clips three at a time instead of one by one, and a speaker stuck amber after switching sessions resumes and turns green.

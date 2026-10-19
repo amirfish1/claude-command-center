@@ -30867,6 +30867,20 @@ body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assis
    there is no way to tell when an earlier turn happened. */
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text.cc-final) .msg-ts { display: inline !important; }
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text.cc-final) .assistant-message-actions { display: inline-flex !important; }
+/* Compact rows have ~1px of padding, so the absolutely-positioned stamp and
+   speak/copy actions (top:2px) landed on top of the first line of prose.
+   Hover-capable devices reveal them only on hover/focus; touch devices (no
+   hover) get a reserved strip above the text instead. */
+@media (hover: hover) {
+  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) .msg-ts,
+  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) .assistant-message-actions { opacity: 0; }
+  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):hover .msg-ts,
+  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):hover .assistant-message-actions,
+  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):focus-within .assistant-message-actions { opacity: 0.85; }
+}
+@media (hover: none) {
+  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) { padding-top: 16px !important; }
+}
 /* The newest reply keeps its per-turn token summary and model line; the
    older turns stay clean. Merged chips ride on tool-call lines, so they stay
    hidden there. */
