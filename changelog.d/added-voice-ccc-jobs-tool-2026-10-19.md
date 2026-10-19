@@ -1,0 +1,1 @@
+Voice agent: new read-only `ccc_jobs` tool answers whether a scheduled job ran, succeeded, when it runs next, and why not. The Jobs feed (`/api/jobs`) now also covers user-level systemd timers and crontab entries (previously only system timers: 13 of 75 jobs), marks interval timers healthy by last-run recency instead of `stale`, and `ccc_session` reports pid-verified liveness.

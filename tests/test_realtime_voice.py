@@ -783,3 +783,74 @@ def test_ccc_sessions_registry_overrides_lagging_archive_liveness(monkeypatch):
     assert "1 of 1 session(s)" in out and "Idle but open" in out and "proof=process pid 7" in out
     assert "state=idle" in out and "state=ended" not in out
     assert rows[0]["is_live"] is False  # archive cache rows are not mutated
+
+
+def _job(name, status, **kw):
+    now = time.time()
+    iso = lambda d: datetime.fromtimestamp(now + d, timezone.utc).isoformat()
+    return dict({"id": f"hermes:{name}.service", "name": name, "scope": "user", "manager": "systemd",
+                 "schedule": "Daily 15:00", "status": status, "description": f"{name} job",
+                 "last_run_at": iso(-3600), "next_run_at": iso(39600), "exit_code": 0,
+                 "outcome": "", "events": [], "tickets": []}, **kw)
+
+
+def _stub_feed(monkeypatch, jobs, host=None):
+    from ccc_server import scheduled_jobs_feed as feed
+    hosts = {"hermes": dict({"status": "online", "collected_at": datetime.now(timezone.utc).isoformat(),
+                             "stale_data": False, "error": None}, **(host or {}))}
+    monkeypatch.setattr(feed, "get_jobs_feed", lambda wait_s=0, force=False:
+                        {"jobs": jobs, "hosts": hosts, "local_host": "hermes"})
+
+
+def test_ccc_jobs_explains_why_a_release_is_not_out(monkeypatch):
+    _stub_feed(monkeypatch, [
+        _job("bym-ship", "ok", outcome="PR #2371 held for a risky migration batch (needs Amir).",
+             tickets=[{"ref": "PR #2371", "url": "https://example.test/pull/2371"}]),
+        _job("bym-digest-send", "failed", exit_code=1, outcome="sqlite3.OperationalError"),
+        _job("other", "ok"),
+    ])
+    vs = object.__new__(rv.VoiceSession)
+    out = vs._tool_jobs({"query": "bym ship"})
+    assert "bym-ship" in out and "bym-digest-send" not in out
+    assert "held for a risky migration batch" in out
+    assert "on schedule: last ran 60m ago" in out and "collected" in out
+    assert "https://example.test/pull/2371" in out
+    bad = vs._tool_jobs({"problems_only": True})
+    assert "bym-digest-send" in bad and "FAILED with exit code 1" in bad and "bym-ship" not in bad
+    assert "No scheduled jobs matching 'nope'" in vs._tool_jobs({"query": "nope"})
+
+
+def test_ccc_jobs_reports_disabled_cron_and_stale_host(monkeypatch):
+    _stub_feed(monkeypatch, [
+        _job("off", "disabled", next_run_at=None),
+        _job("tab", "unknown", scope="cron", manager="cron"),
+        _job("dead", "stale", next_run_at=None),
+    ], host={"status": "offline", "stale_data": True, "error": "ssh timeout"})
+    vs = object.__new__(rv.VoiceSession)
+    out = vs._tool_jobs({"limit": 5})
+    assert "HOST OFFLINE" in out and "ssh timeout" in out
+    assert "timer is disabled" in out
+    assert "cron keeps no run history" in out
+    assert "no upcoming run is scheduled" in out
+
+
+def test_ccc_jobs_reports_loading_and_is_registered(monkeypatch):
+    from ccc_server import scheduled_jobs_feed as feed
+    monkeypatch.setattr(feed, "get_jobs_feed", lambda wait_s=0, force=False:
+                        {"jobs": [], "hosts": {"hermes": {"status": "loading"}}})
+    vs = object.__new__(rv.VoiceSession)
+    assert "still loading" in vs._tool_jobs({})
+    assert "ccc_jobs" in rv.TOOL_NAMES
+    assert "ccc_jobs" in [t["name"] for t in rv._tool_specs()]
+
+
+def test_ccc_session_reports_pid_verified_liveness(monkeypatch):
+    monkeypatch.setattr(server, "compute_session_detail",
+                        lambda sid: ({"ok": True, "title": "demo", "engine": "claude"}, 200))
+    monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: ([], True))
+    monkeypatch.setattr(server, "_load_session_registry",
+                        lambda: {"abc": {"pid": 42, "status": "idle"}})
+    vs = object.__new__(rv.VoiceSession)
+    out = vs._tool_session({"session_id": "abc"})
+    assert "process pid 42 verified alive" in out and "Claude reports idle" in out
+    assert "no running Claude process" in vs._tool_session({"session_id": "zzz"})
