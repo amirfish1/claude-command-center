@@ -1,0 +1,1 @@
+- Compact transcript view no longer draws the message timestamp and speak/copy icons on top of the first line of assistant text; they appear on hover (or in a reserved strip on touch devices).
