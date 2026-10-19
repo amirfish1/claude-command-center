@@ -1378,7 +1378,7 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     # assert CCC's scheduling, not the CI box's load: on a busy VM (load 30 on
     # 8 cores) the gate suppressed every spawn and 4 tests failed there only.
     # Tests of the gate itself override this with their own setattr.
-    monkeypatch.setattr(server, "machine_saturated", lambda: False)
+    monkeypatch.setattr(server, "_machine_load", lambda: (0.0, 8))
     # Short-TTL memos (corpus signature + per-session liveness) are module
     # globals; reset them so a leaked sig/liveness entry from a prior test can't
     # make a signature-gated assertion order-dependent.
@@ -1607,7 +1607,7 @@ def test_archive_refresh_spawn_gated_when_machine_saturated(
 
     spawned = []
     monkeypatch.setattr(server.threading, "Thread", _FakeThreadFactory(spawned))
-    monkeypatch.setattr(server, "machine_saturated", lambda: True)
+    monkeypatch.setattr(server, "_machine_load", lambda: (13.0, 8))  # >= 1.5/core
 
     rows, from_cache, _ver = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
 
@@ -1617,7 +1617,7 @@ def test_archive_refresh_spawn_gated_when_machine_saturated(
     with server._archive_serve_lock:
         assert _ALL_KEY not in server._archive_serve_refreshing
 
-    monkeypatch.setattr(server, "machine_saturated", lambda: False)
+    monkeypatch.setattr(server, "_machine_load", lambda: (11.0, 8))
     server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
     assert len(spawned) == 1
     assert spawned[0].target is server._archive_serve_refresh
@@ -1628,7 +1628,7 @@ def test_archive_refresh_load_blocked_fails_open(monkeypatch):
     def boom():
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(server, "machine_saturated", boom)
+    monkeypatch.setattr(server, "_machine_load", boom)
     assert server._archive_refresh_load_blocked(time.time()) is False
 
 

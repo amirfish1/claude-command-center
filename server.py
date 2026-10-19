@@ -15172,6 +15172,13 @@ def _archive_refresh_slot_available(key, now):
 # a saturated box doesn't also spam service.out.log on every poll.
 _ARCHIVE_REFRESH_LOAD_LOG_TS = [0.0]
 _ARCHIVE_REFRESH_LOAD_LOG_INTERVAL_S = 300.0
+# Gate earlier than the perf-ticket saturation line (2.0/core): a box idling at
+# 1.9/core flapped the gate and still spawned workers. Env-tunable.
+try:
+    _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU = float(
+        os.environ.get("CCC_ARCHIVE_REFRESH_GATE_LOAD_PER_CPU", "1.5"))
+except ValueError:
+    _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU = 1.5
 
 
 def _archive_refresh_load_blocked(now):
@@ -15179,7 +15186,8 @@ def _archive_refresh_load_blocked(now):
     machine. Any probe failure means "not blocked" — a broken load check must
     never freeze refresh spawning or the request path."""
     try:
-        if not machine_saturated():
+        load1, ncpu = _machine_load()
+        if float(load1) < _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU * float(ncpu):
             return False
     except Exception:
         return False
