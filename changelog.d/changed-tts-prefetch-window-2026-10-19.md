@@ -1,0 +1,1 @@
+- Read-aloud now pre-makes only the first ~40 seconds of a message, so the speaker turns green quickly instead of staying amber while whole messages generate.

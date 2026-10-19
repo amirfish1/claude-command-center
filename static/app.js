@@ -13105,7 +13105,11 @@
   // for the click. Stops when a read starts or a newer message takes over.
   const _ttsChainTokens = {};   // pane id -> latest chain token
   let _ttsChainQueue = Promise.resolve();
-  const _TTS_PREFETCH_CLIPS = 8;
+  // Only the start of a message is made ahead: the first clip plus two more
+  // (~40s of audio) is enough to start instantly and stay ahead of the clip
+  // being heard. Making whole messages for every pane on a busy host never
+  // finished and left every speaker amber. The rest is made while reading.
+  const _TTS_PREFETCH_CLIPS = 2;
   const _ttsChainRunning = new Set();   // head texts whose chain is queued or running
   function _ttsStartChain(clean, head, got, mk) {
     const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
