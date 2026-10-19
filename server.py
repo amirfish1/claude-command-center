@@ -42628,7 +42628,8 @@ def main():
         print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
     if _wt_messaging_enabled() and not _wt_cli_available():
         print("⚠️  CCC_MESSAGING_BACKEND=wt is set but `wt` is not on PATH — headless delivery falls back to native `claude --resume`. Install WatchTower or unset to silence.")
-    _check_duplicate_repo_instance()
+    _check_duplicate_repo_instance(
+        on_duplicate=lambda entry: _serve_duplicate_gate(server, entry, CommandCenterHandler))
     write_port_file(bind_host, port=port)
     _register_self(port, bind_host)
     # CCC as a Claude Code peer (slice 3): bind our own socket and publish a
