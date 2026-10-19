@@ -1,0 +1,1 @@
+- A second split pane's new-session composer now shows the model name instead of a blank dropdown.

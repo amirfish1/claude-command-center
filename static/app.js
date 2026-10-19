@@ -10557,6 +10557,30 @@
           const defaultModel = _defaultModelsByEngine[engine] || '';
           const options = modelOptionsForSpawnEngine(engine, defaultModel, true);
           activeModelSelect.style.display = (options.length === 0 && !defaultModel) ? 'none' : '';
+          // syncSpawnEngineDependentUi only fills the primary composer's
+          // select; a cloned split-pane bar kept whatever options it was
+          // cloned with (often none), so its model name was blank. Mirror the
+          // primary's options and pick, and route the pane's pick back to it
+          // since the spawn path reads the primary select.
+          const primaryModelSelect = document.getElementById('convInputModelSelect');
+          if (primaryModelSelect && activeModelSelect !== primaryModelSelect) {
+            const want = Array.from(primaryModelSelect.options).map(o => o.value + '\u0000' + o.textContent).join('\u0001');
+            const have = Array.from(activeModelSelect.options).map(o => o.value + '\u0000' + o.textContent).join('\u0001');
+            if (want !== have) {
+              activeModelSelect.innerHTML = '';
+              Array.from(primaryModelSelect.options).forEach(o => activeModelSelect.appendChild(o.cloneNode(true)));
+            }
+            if (activeModelSelect.value !== primaryModelSelect.value) activeModelSelect.value = primaryModelSelect.value;
+            const _selOpt = activeModelSelect.options[activeModelSelect.selectedIndex];
+            activeModelSelect.title = _selOpt ? (_selOpt.textContent || '') : '';
+            if (!activeModelSelect.dataset.mirrorBound) {
+              activeModelSelect.dataset.mirrorBound = '1';
+              activeModelSelect.addEventListener('change', () => {
+                primaryModelSelect.value = activeModelSelect.value;
+                primaryModelSelect.dispatchEvent(new Event('change'));
+              });
+            }
+          }
         }
       }
       if (activeEffortSelect) {
