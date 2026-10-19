@@ -23,7 +23,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 # Also accepts the flag via SSH_ORIGINAL_COMMAND, for a forced-command ssh key.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
-DRY=0; { [ "${1:-}" = "--dry-run" ] || [ "${SSH_ORIGINAL_COMMAND:-}" = "--dry-run" ]; } && DRY=1
+# A mode file lets release-trigger.sh pass --dry-run through launchd (consumed once).
+MODE_FILE="${CCC_RELEASE_MODE_FILE:-$HOME/.claude/command-center/release-daily.mode}"
+DRY=0
+{ [ "${1:-}" = "--dry-run" ] || [ "${SSH_ORIGINAL_COMMAND:-}" = "--dry-run" ] || [ "$(cat "$MODE_FILE" 2>/dev/null)" = "--dry-run" ]; } && DRY=1
+rm -f "$MODE_FILE"
 MIN="${CCC_RELEASE_MIN_ENTRIES:-3}"
 EXTRA_REPOS="${CCC_RELEASE_REPOS:-$HOME/Apps/watchtower}"
 if [ "$(uname -s)" = "Darwin" ]; then LOG_DIR="$HOME/Library/Logs/ccc-release"; else LOG_DIR="$HOME/.local/state/ccc-release"; fi
