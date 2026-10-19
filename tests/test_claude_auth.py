@@ -68,7 +68,10 @@ def test_text_fallback_only_for_short_messages():
 
 
 def test_endpoints_are_preview_gated(monkeypatch):
-    monkeypatch.delenv("CCC_FF_CLAUDE_REAUTH", raising=False)
+    # Saved developer flags must not turn this disabled-feature test into
+    # a real login attempt on the host.
+    monkeypatch.setenv("CCC_FF_CLAUDE_REAUTH", "0")
+    monkeypatch.setattr(ca, "claude_auth_start", lambda **kw: pytest.fail("started disabled login"))
     payload, status = ca.claude_auth_handle("start", {})
     assert status == 403 and payload["error"] == "feature_disabled"
     assert ca.claude_auth_handle("bogus", {"via_route": True})[1] == 404
