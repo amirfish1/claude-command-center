@@ -13134,7 +13134,12 @@
     try {
       for (let i = 0; i < rest.length; i++) {
         if (i >= _TTS_PREFETCH_WIDTH) await settle(i - _TTS_PREFETCH_WIDTH);
-        if (!live()) return;
+        if (!live()) {
+          // Paused by a read or the cooldown, not superseded: nothing else
+          // would restart this message, leaving its speaker amber for good.
+          if (token === _ttsChainTokens[paneId || '']) setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 20000);
+          return;
+        }
         const c = rest[i];
         let entry = _ttsHeadCache.get(c.text);
         if (!entry) {
