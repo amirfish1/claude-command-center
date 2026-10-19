@@ -37,6 +37,7 @@ def fts_env(tmp_path, monkeypatch):
     # ~/.cursor on this machine and leaks real session data into the test.
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(kimi_dir))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(gemini_dir))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(cursor_dir))
     # Isolate the S8b harvested-sandbox root too -- same leak risk as above.
     monkeypatch.setenv("CCC_HARVESTED_ROOT", str(harvested_dir))
