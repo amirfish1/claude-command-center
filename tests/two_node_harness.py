@@ -89,6 +89,9 @@ class CCCNode:
             # 300s by default; tests write transcripts and expect the next
             # poll cycle to see them, so keep the snapshot short-lived here.
             "CCC_ARCHIVE_SERVE_TTL_SEC": "1",
+            # Synthetic archives must refresh even when unrelated workloads
+            # saturate the test host. Load-gate behavior has its own tests.
+            "CCC_ARCHIVE_REFRESH_GATE_LOAD_PER_CPU": "1000000",
         }
         env.pop("CCC_SSH_HOST", None)  # never let dev env leak a remote redirect
         # server.py hard-requires `watchtower`. When it's only pip-installed

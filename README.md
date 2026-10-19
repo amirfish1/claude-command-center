@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 > “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
 > CCC user
 
-![CCC v5.37 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-37-hero.png)
+![CCC v5.39 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-39-hero.png)
 
 Other ways to install. With Homebrew:
 
@@ -237,11 +237,6 @@ vary; Kilo Code has no resume, and Cursor IDE sync is metadata-only.
 **GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** are read-only,
 as are Devin cloud sessions. [Full engine support matrix](docs/engine-support.md).
 
-## What you get
-
-[Explore features](docs/features.md): approvals, search, worktrees, settings,
-cost-aware continuations, voice, queues, and the optional board view.
-
 ## Why this exists
 
 CCC attaches to the work you already have instead of requiring you to launch
@@ -255,12 +250,10 @@ backends it can use. [Comparisons and scope](docs/features.md#how-it-compares).
 
 ## Recent
 
+v5.39: tap-back reactions, faster read-aloud, scheduled jobs in voice, and Codex sub-agent reply fixes.
+
 See [CHANGELOG.md](CHANGELOG.md) and [releases](https://github.com/amirfish1/claude-command-center/releases).
 Choose **Watch > Releases** on GitHub for update notifications.
-
-## Core concepts
-
-[Sessions, Flow objects, and the board](docs/features.md#organize-and-read-work).
 
 ## Codex conversations
 
@@ -271,8 +264,6 @@ connection limits, and desktop-owned tasks.
 
 [Provider keys and Vault](docs/byok-and-vault.md): profiles, supported routes,
 secret storage, and safe CLI use.
-
-### Vault: any other secret
 
 [Store and use non-provider secrets](docs/byok-and-vault.md#vault-any-other-secret).
 
@@ -297,10 +288,6 @@ agent needs a password, token, passphrase or one-time code.
 [CLI commands](docs/cli.md) · [Spawn, send, and ask APIs](docs/orchestration.md) ·
 [12-skill pack](skills/README.md). Usage integrations read `GET /api/usage/current`.
 
-### The `ccc` CLI
-
-[Check sessions, start work, and send replies from your terminal](docs/cli.md).
-
 ## Works with your skills
 
 [Skill integrations](docs/features.md#agents-working-together) ·
@@ -319,10 +306,6 @@ agent needs a password, token, passphrase or one-time code.
 [Environment variables, defaults, and persistent settings](docs/configuration.md).
 
 [Optional shared-clone Git guard for Claude Code](docs/shared-clone-guard.md).
-
-## Python stack diagnostics
-
-[Dump thread stacks without a restart](docs/configuration.md#python-stack-diagnostics).
 
 ## Roadmap
 

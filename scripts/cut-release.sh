@@ -150,6 +150,11 @@ if [ "$SKIP_DMG" = 0 ] && [ "$DRY_RUN" = 0 ]; then
     }
 fi
 
+# Run against the source version before bumping or consuming snippets. The
+# pre-push performance gate alone does not cover the full release surface.
+step "Verify source test suite before changing release state"
+run "python3 -m pytest -q --tb=short tests/"
+
 # ── 1. Changelog rollup ─────────────────────────────────────────────────────
 step "1/9  Roll up changelog.d → CHANGELOG.md [${VERSION}]"
 # Warn about snippets release.py will silently skip (bad category prefix).
@@ -187,14 +192,13 @@ if [ "$DRY_RUN" = 0 ]; then
     || { echo "${RED}version bump verification failed${NC}" >&2; exit 1; }
 fi
 
-# Landing page (ccc.amirfish.ai) needs no per-release edit: it links to the
-# version-stable GitHub redirect releases/latest/download/ccc.dmg. We just
-# publish a stable-named ccc.dmg copy in step 7 so that link always resolves.
+# The download link is version-stable. Version badges, release highlights,
+# and the seeded hero screenshot still need refreshing (docs/RELEASING.md).
 
 # ── 4. Commit + tag + push ──────────────────────────────────────────────────
 step "4/9  Commit, tag, push main + tag"
 run "git add CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d"
-run "git commit -m 'chore(release): v${VERSION}' -m 'Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>'"
+run "git commit --only CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d -m 'chore(release): v${VERSION}'"
 run "git tag -a v${VERSION} -m 'v${VERSION}'"
 run "git push origin main"
 run "git push origin v${VERSION}"

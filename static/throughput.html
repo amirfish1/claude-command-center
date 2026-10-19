@@ -5655,7 +5655,7 @@
           const fullName = typeof throughputSessionName === 'function' ? throughputSessionName({session_id: session.session_id, display_name: session.session_name, _window_details: {name: session.session_name}}) : session.session_name;
           const firstLine = String(fullName || '').replace(/\\n/g, '\n').split('\n')[0];
           const name = firstLine.length > 240 ? firstLine.slice(0, 237) + '…' : firstLine;
-          const share = totalTokens ? (100 * session.cache_adjusted_tokens / totalTokens).toFixed(1) + '%' : '—';
+          const share = totalTokens ? (100 * session.cache_adjusted_tokens / totalTokens).toFixed(1) + '%' : '-';
           const cost = session.unpriced_turns ? (session.cost_usd ? fmtUsd(session.cost_usd) + ' + unpriced' : 'n/a') : fmtUsd(session.cost_usd);
           return '<tr><td><a href="/?ccc_popout=conversation&amp;conv=' + encodeURIComponent(session.session_id) + '" target="_blank" rel="noopener">' + esc(name || 'Untitled session') + '</a><span class="top-sess-details">' + esc((session.models || []).join(', ')) + ' · ' + esc(session.session_id.slice(0, 13)) + '</span></td><td>' + (session.turns || 0) + '</td><td>' + fmtTok(session.raw_context_tokens) + '</td><td>' + fmtTok(session.cache_adjusted_tokens) + '</td><td>' + share + '</td><td>' + cost + '</td></tr>';
         }).join('');

@@ -1,0 +1,1 @@
+- Release cuts now run the full source test suite before changing versions or tags. Refresh the public release badges, seeded hero image, and license wording, and keep release checks independent of local agent credentials and consumed changelog snippets.

@@ -306,11 +306,24 @@ def test_unified_stream_owns_shared_external_watch_lifetime():
     assert "_dashboard_event_watch_exit()" in source
 
 
-def test_long_lived_event_stream_is_not_reported_as_a_slow_request():
+def test_long_lived_event_stream_is_not_reported_as_a_slow_request(monkeypatch, capsys):
+    from http.server import BaseHTTPRequestHandler
     import server
 
-    source = inspect.getsource(server.CommandCenterHandler.handle_one_request)
-    assert 'if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events")' in source
+    monkeypatch.setattr(BaseHTTPRequestHandler, "handle_one_request", lambda self: None)
+    monkeypatch.setattr(server, "SLOW_REQ_MS", 500)
+    handler = object.__new__(server.CommandCenterHandler)
+    handler.command = "GET"
+    for request_path, should_log in (
+        ("/api/events", False), ("/api/sessions/events?cursor=1", False),
+        ("/api/queue/events", False), ("/api/secrets/request", False),
+        ("/api/version", True),
+    ):
+        clock = iter((0.0, 2.0))
+        monkeypatch.setattr(server.time, "time", lambda: next(clock))
+        handler.path = request_path
+        handler.handle_one_request()
+        assert ("[SLOW]" in capsys.readouterr().out) is should_log, request_path
 
 
 def test_queue_signature_ignores_sqlite_sidecars_created_by_readers(monkeypatch, tmp_path):

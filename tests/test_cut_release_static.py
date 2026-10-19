@@ -54,7 +54,7 @@ def test_homebrew_publish_syncs_and_verifies_the_remote_formula():
     assert 'if [ "$DRY_RUN" = 0 ]; then\n      step "     syncing Homebrew tap"\n      git -C "${BREW_TAP}" pull --rebase origin main' in script
 
 
-def _run_release_with_formula_outcome(*, push_status, published_formula):
+def _run_release_with_formula_outcome(*, push_status, published_formula, test_status=0):
     with tempfile.TemporaryDirectory() as temp_dir:
         workspace = Path(temp_dir)
         repo = workspace / "repo"
@@ -104,7 +104,7 @@ def _run_release_with_formula_outcome(*, push_status, published_formula):
         )
         executable("gh", "#!/usr/bin/env bash\nexit 0\n")
         executable("curl", "#!/usr/bin/env bash\nprintf 'release fixture\\n'\n")
-        executable("python3", "#!/usr/bin/env bash\nexit 0\n")
+        executable("python3", '#!/usr/bin/env bash\nif [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then exit "$FAKE_TEST_STATUS"; fi\nexit 0\n')
 
         env = os.environ | {
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -112,6 +112,7 @@ def _run_release_with_formula_outcome(*, push_status, published_formula):
             "FAKE_BREW_TAP": str(tap),
             "FAKE_BREW_PUSH_STATUS": str(push_status),
             "FAKE_PUBLISHED_FORMULA": str(published),
+            "FAKE_TEST_STATUS": str(test_status),
         }
         return subprocess.run(
             [str(script), "9.9.9", "--skip-dmg"],
@@ -139,4 +140,15 @@ def test_remote_formula_mismatch_aborts_before_release_success_banner():
 
     assert result.returncode != 0
     assert "published Homebrew formula does not match v9.9.9" in result.stderr
+    assert "Done — v9.9.9 shipped" not in result.stdout
+
+
+def test_failing_suite_aborts_before_version_changelog_or_tag_changes():
+    result = _run_release_with_formula_outcome(
+        push_status=0, published_formula="", test_status=1)
+
+    assert result.returncode != 0
+    assert "Verify source test suite" in result.stdout
+    assert "1/9" not in result.stdout
+    assert "4/9" not in result.stdout
     assert "Done — v9.9.9 shipped" not in result.stdout

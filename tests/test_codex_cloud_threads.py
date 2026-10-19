@@ -285,6 +285,11 @@ class _ResetState(unittest.TestCase):
         cloud._THREAD_REFRESHING.clear()
 
     def start_server(self, rpc=None, **kw):
+        # The loopback backend must never depend on a developer's real login.
+        auth = mock.patch.object(
+            cloud, "_load_codex_auth", return_value=(FAKE_TOKEN, FAKE_ACCOUNT))
+        auth.start()
+        self.addCleanup(auth.stop)
         self._server = FakeCloudServer(rpc, **kw)
         self._server.start()
         os.environ["CCC_CODEX_CLOUD_WS_URL"] = self._server.url

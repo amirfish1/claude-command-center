@@ -305,7 +305,7 @@ def test_devin_steer_falls_back_to_queue_when_acp_declines():
          mock.patch.object(server, "_queue_devin_steer", return_value=True) as queue_steer, \
          mock.patch.object(server, "_note_pending_queued") as note_queued, \
          mock.patch.object(server, "resume_session_devin") as resume, \
-         mock.patch.object(server, "_control_plane_engine_call") as cp:
+         mock.patch.object(server, "_control_plane_engine_call", return_value=None) as cp:
         _enter_stack(stack)
         try:
             result = server._inject_text_into_session(sid, "steer text", mode="steer")
@@ -315,7 +315,11 @@ def test_devin_steer_falls_back_to_queue_when_acp_declines():
     assert result["ok"] is True
     assert result["via"] == "devin-resume-queued"
     resume.assert_not_called()
-    cp.assert_not_called()
+    # Background snapshot watchers may share this mock during the full suite.
+    # This dispatch must not send our session through the control plane.
+    assert not [call for call in cp.call_args_list
+                if len(call.args) > 2 and isinstance(call.args[2], dict)
+                and call.args[2].get("session_id") == sid]
     pump.assert_called_once_with(sid)
     queue_steer.assert_called_once_with(sid, "steer text")
     note_queued.assert_called_once()

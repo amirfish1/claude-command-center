@@ -105,9 +105,6 @@ def test_all_source_references_are_used_and_pinned():
     assert "/62310cf63a007991be9b24a2d03e82216b7664ed/" in definitions["ccc"]
 
 
-def test_guide_is_discoverable_and_changelog_is_one_bullet():
+def test_guide_is_discoverable():
     related = (ROOT / "docs" / "free-models.md").read_text().split("## Related", 1)[1]
     assert "[How CCC compares](compare.md)" in related
-    changelog = (ROOT / "changelog.d" / "added-how-it-compares-2026-10-06.md").read_text().strip()
-    assert changelog.startswith("- ")
-    assert len(changelog.splitlines()) == 1

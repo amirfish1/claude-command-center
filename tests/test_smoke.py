@@ -6839,7 +6839,16 @@ class TestServerImports(unittest.TestCase):
         compact_branch = compact_branch[:compact_branch.index("compact_session_context(")]
         self.assertIn("_write_stream_json_interrupt(spawn)", compact_branch)
         # The drain loop must use the age-capped gate, not the raw one.
-        self.assertIn("_tool_child_blocks_inject(spawn)", pi_py)
+        import ast
+        gates = [node for node in ast.walk(ast.parse(pi_py))
+                 if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute)
+                 and node.func.attr == "_tool_child_blocks_inject"]
+        self.assertTrue(any(
+            any(kw.arg == "require_open_turn"
+                and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                for kw in call.keywords)
+            for call in gates), "the drain loop must gate on an open tool turn")
 
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers
@@ -14422,6 +14431,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                  mock.patch.object(server, "find_session_cwd", return_value=str(self.repo)), \
                  mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
                  mock.patch.object(engines_mod, "_antigravity_live_resume_pid", return_value=None), \
+                 mock.patch.object(engines_mod, "_antigravity_terminal_holder_pid", return_value=None), \
+                 mock.patch.object(engines_mod.antigravity_ls, "send", return_value=None), \
                  mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
                  mock.patch.object(server, "_record_spawn_to_registry"):
                 result = server.resume_session_antigravity(sid, f"look at {image}")
