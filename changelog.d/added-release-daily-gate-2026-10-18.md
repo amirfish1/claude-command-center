@@ -1,0 +1,1 @@
+- `scripts/release-daily.sh`: once-a-day release gate; waives unless repos are clean+pushed and changelog.d has enough entries, else cuts the next release.
