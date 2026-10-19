@@ -70,5 +70,5 @@ if [ "$DRY" = 1 ]; then
 else
   ./scripts/cut-release.sh "$NEXT" >>"$LOG" 2>&1; rc=$?
 fi
-if [ "$rc" = 0 ]; then say "RELEASED: v$NEXT"; else say "FAILED: cut-release exit $rc (see $LOG)"; fi
+if [ "$rc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED): v$NEXT"; else say "FAILED: cut-release exit $rc (see $LOG)"; fi
 exit "$([ "$rc" = 0 ] && echo 0 || echo 1)"
