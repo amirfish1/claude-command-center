@@ -16887,12 +16887,14 @@
   const $cpCloseBtn = document.getElementById('cpCloseBtn');
   const $coordBtn = document.getElementById('coordBtn');
   const $coordClearBtn = document.getElementById('coordClearBtn');
+  const $coordTrashBtn = document.getElementById('coordTrashBtn');
   if ($coordBtn) $coordBtn.addEventListener('click', () => openCoordModal());
   if ($coordClearBtn) $coordClearBtn.addEventListener('click', () => {
     selectedListIds.clear();
     document.querySelectorAll('.conv-item.list-selected').forEach(el => el.classList.remove('list-selected'));
     updateCoordToolbar();
   });
+  if ($coordTrashBtn) $coordTrashBtn.addEventListener('click', () => bulkTrashSelectedConversations());
   const $coordModalCancel = document.getElementById('coordModalCancel');
   const $coordModalStart = document.getElementById('coordModalStart');
   const $coordModalBackdrop = document.getElementById('coordModalBackdrop');
@@ -27875,12 +27877,27 @@
   function updateCoordToolbar() {
     const toolbar = document.getElementById('coordToolbar');
     const countEl = document.getElementById('coordCount');
+    const trashBtn = document.getElementById('coordTrashBtn');
     if (!toolbar) return;
     if (selectedListIds.size >= 1) {
       toolbar.classList.add('visible');
       if (countEl) countEl.textContent = selectedListIds.size === 1 ? '1 session selected' : selectedListIds.size + ' sessions selected';
+      if (trashBtn) {
+        const trashableIds = new Set();
+        $convList.querySelectorAll('.conv-item.list-selected [data-role="trash"]').forEach(btn => {
+          const item = btn.closest('.conv-item[data-id]');
+          if (item && item.dataset.sessionId) trashableIds.add(item.dataset.sessionId);
+        });
+        if (trashableIds.size > 0) {
+          trashBtn.style.display = '';
+          trashBtn.textContent = 'Trash' + (trashableIds.size > 1 ? ' (' + trashableIds.size + ')' : '');
+        } else {
+          trashBtn.style.display = 'none';
+        }
+      }
     } else {
       toolbar.classList.remove('visible');
+      if (trashBtn) trashBtn.style.display = 'none';
     }
   }
 
@@ -27888,6 +27905,8 @@
     '[data-role="edit"]',
     '[data-role="pin"]',
     '[data-role="archive"]',
+    '[data-role="trash"]',
+    '[data-role="untrash"]',
     '[data-role="merge"]',
     '[data-role="wake-codex"]',
     '[data-role="start"]',
@@ -28119,6 +28138,175 @@
     }, { passive: true });
   }
   wireMobileListPullToRefresh();
+
+  function wireConversationListDragSelect() {
+    if (!$convList || $convList._dragSelectWired) return;
+    $convList._dragSelectWired = true;
+
+    const isActionTarget = (target) => {
+      if (!target || !target.closest) return false;
+      if (target.closest('.drag-handle')) return true;
+      if (target.closest(CONVERSATION_ROW_ACTION_SELECTOR)) return true;
+      if (target.closest('[data-role="title"]')) return true;
+      if (target.closest('.conv-folder-group-header')) return true;
+      return false;
+    };
+
+    const visibleRows = () => Array.from($convList.querySelectorAll('.conv-item[data-id]')).filter(r => r.offsetParent !== null && r.dataset.role !== 'archived-gc-row');
+    const indexOfRow = (row) => visibleRows().findIndex(r => r.dataset.id === row.dataset.id);
+
+    let state = null;
+
+    const restoreAnchorDraggable = () => {
+      if (!state || !state.anchor) return;
+      const prev = state.prevDraggable;
+      if (prev === null) state.anchor.removeAttribute('draggable');
+      else state.anchor.setAttribute('draggable', prev);
+    };
+
+    const endDragSelect = () => {
+      restoreAnchorDraggable();
+      if ($convList) $convList.classList.remove('is-drag-selecting');
+      state = null;
+    };
+
+    $convList.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      if (isTouchLikePointerEvent(ev)) return;
+      if (!ev.target) return;
+      const row = ev.target.closest && ev.target.closest('.conv-item[data-id]');
+      if (!row || row.dataset.role === 'archived-gc-row') return;
+      if (isActionTarget(ev.target)) return;
+      if (state) endDragSelect();
+      state = {
+        anchor: row,
+        pointerId: ev.pointerId,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        active: false,
+        didMove: false,
+        prevDraggable: row.getAttribute('draggable'),
+        baseSelection: new Set(selectedListIds),
+      };
+      try { row.setAttribute('draggable', 'false'); } catch (_) {}
+      // Capture only after a drag starts; capturing a simple click here
+      // retargets its click to the list and prevents opening the row.
+    }, { passive: true });
+
+    $convList.addEventListener('pointermove', (ev) => {
+      if (!state || ev.pointerId !== state.pointerId) return;
+      if (isTouchLikePointerEvent(ev)) return;
+      const dx = ev.clientX - state.startX;
+      const dy = ev.clientY - state.startY;
+      if (!state.active && Math.hypot(dx, dy) < 6) return;
+      if (!state.active) {
+        state.active = true;
+        state.didMove = true;
+        try { $convList.setPointerCapture(ev.pointerId); } catch (_) {}
+        $convList.classList.add('is-drag-selecting');
+      }
+      const target = document.elementFromPoint(ev.clientX, ev.clientY);
+      const current = target && target.closest && target.closest('.conv-item[data-id]');
+      if (!current) return;
+      const rows = visibleRows();
+      const a = indexOfRow(state.anchor);
+      const c = indexOfRow(current);
+      if (a < 0 || c < 0) return;
+      const start = Math.min(a, c);
+      const end = Math.max(a, c);
+      const rangeIds = new Set(rows.slice(start, end + 1).map(r => r.dataset.id).filter(Boolean));
+      if (ev.ctrlKey || ev.metaKey) {
+        selectedListIds = new Set(state.baseSelection);
+        rangeIds.forEach(id => selectedListIds.add(id));
+      } else {
+        selectedListIds.clear();
+        rangeIds.forEach(id => selectedListIds.add(id));
+      }
+      rows.forEach(r => r.classList.toggle('list-selected', selectedListIds.has(r.dataset.id)));
+      updateCoordToolbar();
+    });
+
+    const finish = (ev) => {
+      if (!state || ev.pointerId !== state.pointerId) return;
+      if (state.didMove) {
+        if (ev.cancelable) ev.preventDefault();
+        const until = Date.now() + 50;
+        const suppressClick = (ce) => {
+          if (Date.now() > until) return;
+          if (!ce.target.closest || !ce.target.closest('.conv-item[data-id]')) return;
+          if (isActionTarget(ce.target)) return;
+          ce.stopPropagation();
+          ce.preventDefault();
+        };
+        $convList.addEventListener('click', suppressClick, { capture: true });
+        setTimeout(() => $convList.removeEventListener('click', suppressClick, { capture: true }), 55);
+      }
+      endDragSelect();
+    };
+
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    $convList.addEventListener('lostpointercapture', endDragSelect);
+  }
+  wireConversationListDragSelect();
+
+  async function bulkTrashSelectedConversations() {
+    if (!$coordTrashBtn || $coordTrashBtn.disabled || selectedListIds.size < 1) return;
+    const targets = new Map();
+    $convList.querySelectorAll('.conv-item.list-selected').forEach(row => {
+      if (!row.querySelector('[data-role="trash"]')) return;
+      const sid = row.dataset.sessionId || row.dataset.id;
+      if (sid) targets.set(sid, row.dataset.id);
+    });
+    const n = targets.size;
+    if (!n || !confirm('Move ' + n + ' session' + (n === 1 ? '' : 's')
+        + ' to Trash? You can restore from Trash later.')) return;
+    const neighbor = Array.from($convList.querySelectorAll('.conv-item[data-id]'))
+      .find(row => row.offsetParent !== null && !selectedListIds.has(row.dataset.id)
+        && row.querySelector('[data-role="trash"]'));
+    const neighborId = neighbor && neighbor.dataset.id;
+    const changed = new Set();
+    const failures = [];
+    let succeeded = 0;
+    $coordTrashBtn.disabled = true;
+    try {
+      for (const [sid, convId] of targets) {
+        try {
+          // Reuse the normal trash route: it owns lifecycle persistence,
+          // descendant cascading, and dashboard invalidation.
+          const data = await ccPostJson('/api/conversations/'
+            + encodeURIComponent(convId) + '/trash', { session_id: sid, trashed: true });
+          if (!data.ok || !data.trashed) throw new Error(data.error || 'trash transition failed');
+          succeeded++;
+          changed.add(sid);
+          for (const child of data.cascaded || []) changed.add(child);
+        } catch (err) {
+          failures.push(err.message);
+        }
+      }
+      for (const rows of [conversationsData, archiveData, currentRepoBacklogData]) {
+        if (!Array.isArray(rows)) continue;
+        for (const row of rows) {
+          if (row && changed.has(row.session_id || row.id)) {
+            row.archived = true;
+            row.trashed = true;
+          }
+        }
+      }
+      changed.forEach(sid => setOptimisticOverride(sid, { archived: true, trashed: true }));
+      for (const [sid, convId] of targets) {
+        if (changed.has(sid)) selectedListIds.delete(convId);
+      }
+      if (changed.has(currentConversation) && neighborId) selectConversation(neighborId);
+      renderSidebar(filterConversations($convSearch.value), { force: true });
+      updateCoordToolbar();
+      const message = 'Moved ' + succeeded + ' of ' + n + ' selected sessions to Trash';
+      showOpToast(failures.length ? message + '; ' + failures.length
+        + ' failed (' + failures[0] + ')' : message, failures.length ? 'error' : undefined);
+    } finally {
+      $coordTrashBtn.disabled = false;
+    }
+  }
 
   function openCoordModal() {
     if (selectedListIds.size < 1) return;

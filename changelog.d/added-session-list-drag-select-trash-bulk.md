@@ -1,0 +1,1 @@
+- Drag across session-list rows to multi-select them, then trash all selected sessions at once from the toolbar.

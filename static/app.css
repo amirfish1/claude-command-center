@@ -17790,7 +17790,10 @@
 .coord-toolbar.visible { display:flex; }
 .coord-toolbar .coord-count { flex:1; }
 .coord-toolbar .coord-btn { padding:4px 10px; font-size:12px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer; }
+.coord-toolbar .coord-btn.coord-trash-btn { background:var(--red); }
+.coord-toolbar .coord-btn.coord-trash-btn:hover { background:color-mix(in srgb, var(--red) 85%, #fff); }
 .coord-toolbar .coord-clear-btn { padding:4px 8px; font-size:13px; background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:4px; cursor:pointer; line-height:1; }
+.log-list.is-drag-selecting { cursor:crosshair; user-select:none; }
 .coord-modal-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; align-items:center; justify-content:center; }
 .coord-modal-backdrop.visible { display:flex; }
 .coord-modal { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:20px; width:420px; max-width:calc(100vw - 32px); box-shadow:0 8px 32px rgba(0,0,0,0.5); display:flex; flex-direction:column; gap:14px; }
