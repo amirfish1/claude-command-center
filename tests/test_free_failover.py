@@ -206,13 +206,10 @@ class ContinueFreeTests(_FailoverBase):
         sid = "aaaaaaaa-1111-2222-3333-444444444444"
         self.server._save_usage_limit_resume_entry(
             sid, self._tracked_entry(sid))
-        env = mock.patch.dict(os.environ, {}, clear=False)
-        env.start()
-        self.addCleanup(env.stop)
-        for key in ("CCC_FREE_ROUTER_BASE_URL", "CCC_FREE_ROUTER_TOKEN",
-                    "CCC_FREE_ROUTER_MODEL"):
-            os.environ.pop(key, None)
-        res = self.server.free_failover_continue(sid)
+        # A developer may also configure the router on disk. Model its
+        # absence directly instead of depending on this machine's settings.
+        with mock.patch.object(self.server, "_free_spawn_env", return_value=None):
+            res = self.server.free_failover_continue(sid)
         self.assertFalse(res["ok"])
         self.assertEqual(res["code"], "free_not_ready")
 
