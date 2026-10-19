@@ -100,7 +100,9 @@ restart does not close worker-owned agent transports.
 The installer records the `PORT` and `CCC_*` environment values you set at
 installation time. Re-run it to change those values or pick up a change to the
 service definition, not for an ordinary update at the same checkout path.
-Remove the services with `./run.sh --uninstall-service`.
+Remove the services with `./run.sh --uninstall-service`. To remove everything
+(services, `ccc` link, checkout), run `scripts/uninstall.sh`; add `--purge-data`
+to also delete `~/.claude/command-center`.
 
 Logs are under `~/.claude/command-center/logs/`: dashboard logs are
 `service.out.log` and `service.err.log`; worker logs are `worker.out.log` and

@@ -193,6 +193,16 @@ def _get_gemini_dir() -> Path:
     return Path.home() / ".gemini" / "tmp"
 
 
+def _get_agy_roots() -> list[Path]:
+    """Antigravity (agy) brain dirs: the desktop app and the CLI each keep one
+    `<sid>/.system_generated/logs/transcript*.jsonl` per conversation."""
+    env = os.environ.get("CCC_AGY_BRAIN_ROOTS")
+    if env is not None:
+        return [Path(x) for x in env.split(os.pathsep) if x]
+    base = Path.home() / ".gemini"
+    return [base / "antigravity" / "brain", base / "antigravity-cli" / "brain"]
+
+
 def _get_cursor_dir() -> Path:
     env = os.environ.get("CCC_CURSOR_PROJECTS_ROOT")
     if env:
@@ -718,7 +728,66 @@ def parse_cursor(path: str) -> dict | None:
     return _finish(sid, "cursor", path, cwd, "", users, assists, tools, files, ts0, ts1)
 
 
+_AGY_USER_RE = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.S)
+
+
+def parse_agy(path: str) -> dict | None:
+    """Antigravity brain transcript (transcript_full.jsonl / transcript.jsonl).
+    One JSON step per line: USER_INPUT (prompt wrapped in <USER_REQUEST>),
+    PLANNER_RESPONSE / TEXT_RESPONSE (assistant text; PLANNER_RESPONSE also
+    carries tool_calls), RUN_COMMAND (output in content)."""
+    p = Path(path)
+    sid = p.parent.parent.parent.name
+    if not sid:
+        return None
+    users, assists, tools = [], [], []
+    files = set()
+    cwd = ""
+    ts0 = ts1 = None
+    with open(p, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            ts = _ts(ev.get("created_at"))
+            if ts:
+                ts0 = ts if ts0 is None else min(ts0, ts)
+                ts1 = ts if ts1 is None else max(ts1, ts)
+            typ = ev.get("type")
+            content = ev.get("content") if isinstance(ev.get("content"), str) else ""
+            if typ == "USER_INPUT":
+                m = _AGY_USER_RE.search(content)
+                txt = (m.group(1) if m else content).strip()
+                if txt and _is_real_prompt(txt):
+                    users.append(txt)
+            elif typ in ("PLANNER_RESPONSE", "TEXT_RESPONSE"):
+                if content.strip():
+                    assists.append(content.strip())
+                for call in ev.get("tool_calls") or []:
+                    args = call.get("args") if isinstance(call, dict) else None
+                    if not isinstance(args, dict):
+                        continue
+                    if not cwd and isinstance(args.get("Cwd"), str):
+                        cwd = args["Cwd"]
+                    cmd = args.get("CommandLine")
+                    if isinstance(cmd, str) and "git commit" in cmd:
+                        tools.append(cmd[:1500])
+                    fp = args.get("TargetFile") or args.get("AbsolutePath")
+                    if isinstance(fp, str) and call.get("name") in (
+                            "write_to_file", "replace_file_content", "multi_replace_file_content"):
+                        files.add(fp)
+            elif typ == "RUN_COMMAND" and content:
+                tools.append(content[:4000])
+    if not users and not assists:
+        return None
+    return _finish(sid, "agy", str(p), cwd, "", users, assists, tools, files, ts0, ts1)
+
+
 _PARSERS = {
+    "agy": parse_agy,
     "claude": parse_claude,
     "codex": parse_codex,
     "kimi": parse_kimi,
@@ -799,6 +868,22 @@ def _candidate_files(days: float | None = None) -> list[tuple[str, str, float, i
                     continue
                 if st.st_size > 0 and st.st_mtime >= cutoff:
                     out.append(("gemini", str(p), st.st_mtime, st.st_size))
+
+    # One listdir per brain root + 2 stats per conversation (never a
+    # recursive walk: chunks/ holds thousands of shards per long session).
+    for brain in _get_agy_roots():
+        if not brain.is_dir():
+            continue
+        for logs in brain.glob("*/.system_generated/logs"):
+            for name in ("transcript_full.jsonl", "transcript.jsonl"):
+                p = logs / name
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                if st.st_size > 0 and st.st_mtime >= cutoff:
+                    out.append(("agy", str(p), st.st_mtime, st.st_size))
+                    break
 
     cursor_dir = _get_cursor_dir()
     if cursor_dir.exists():
