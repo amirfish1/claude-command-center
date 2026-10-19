@@ -4,10 +4,10 @@
 # or over ssh from another host.
 #
 # It WAIVES (exit 0, nothing released) unless all of these hold:
-#   1. this repo and every repo in $CCC_RELEASE_REPOS pass
-#      scripts/repo-clean-check.sh: on main, no uncommitted/untracked files,
-#      nothing unpushed on any branch, no extra worktrees (cut-release also runs
-#      the optional machine-local preflight, which checks other hosts)
+#   1. this repo and every repo in $CCC_RELEASE_REPOS pass the BLOCK checks of
+#      scripts/repo-clean-check.sh (on main, no uncommitted/untracked files, no
+#      unpushed commits on main). Stale worktrees/branches only file a
+#      REPO-FIXER ticket. A second blocked day in a row reports FAILED (alert).
 #   2. changelog.d/ holds at least $CCC_RELEASE_MIN_ENTRIES entries (default 3),
 #      at least one of them "added-*" or "fixed-*"
 #   3. the last release tag is at least 24h old
@@ -42,11 +42,34 @@ LOCK="${TMPDIR:-/tmp}/ccc-release-daily.lock"
 mkdir "$LOCK" 2>/dev/null || waive "another release run holds $LOCK"
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
+STREAK_FILE="$LOG_DIR/waive-streak"
+WARNINGS=""
+# Housekeeping the gate does not block on goes to the REPO-FIXER queue (deduped
+# per repo per day) instead of stopping the release.
+file_repofixer() {  # $1=kind $2=repo $3=details
+  [ "$DRY" = 1 ] && { say "[dry-run] would file REPO-FIXER ticket: $1 in $(basename "$2")"; return 0; }
+  command -v wt >/dev/null 2>&1 || return 0
+  wt add -q REPO-FIXER --title "release gate: $1 in $(basename "$2")" --note "$3" \
+    --dedupe-key "release-gate-$1-$(basename "$2")-$(date +%Y-%m-%d)" >/dev/null 2>&1 || true
+}
+# Blocks on real risk (uncommitted work, unpushed main). Warnings only file a ticket.
 check_repo() {
-  local problems
-  problems="$("$REPO_ROOT/scripts/repo-clean-check.sh" "$1" 2>&1)" || waive "$1 is not fully landed:
-$problems
-   (find the owning sessions with the clean-all-repos skill; stale worktrees/branches go to REPO-FIXER)"
+  local out blocks warns
+  out="$("$REPO_ROOT/scripts/repo-clean-check.sh" "$1" 2>&1)"; local rc=$?
+  warns="$(printf '%s\n' "$out" | grep '^WARN ' || true)"
+  [ -z "$warns" ] || { WARNINGS="$WARNINGS$warns
+"; file_repofixer "stale worktrees/branches" "$1" "$warns"; }
+  if [ $rc -ne 0 ]; then
+    blocks="$(printf '%s\n' "$out" | grep '^BLOCK ' || true)"
+    file_repofixer "uncommitted or unpushed work blocking release" "$1" "$blocks
+Find the owning sessions with the clean-all-repos skill and get them to commit and push."
+    # Escalate instead of waiving forever: a second day running becomes a FAILED
+    # verdict, which the trigger turns into a WhatsApp ping.
+    local n=$(( $(cat "$STREAK_FILE" 2>/dev/null || echo 0) + 1 )); [ "$DRY" = 1 ] || echo "$n" > "$STREAK_FILE"
+    if [ "$n" -ge 2 ]; then say "FAILED: release blocked $n days running; $blocks"; exit 1; fi
+    waive "$1 has work that is not landed (REPO-FIXER ticket filed):
+$blocks"
+  fi
 }
 check_repo "$REPO_ROOT"
 for r in $EXTRA_REPOS; do check_repo "$r"; done
@@ -67,6 +90,8 @@ prev="${tag#v}"; prev="${prev:-0.0.0}"
 IFS=. read -r MA MI PA <<< "$prev"
 if printf '%s\n' "$entries" | grep -q '^added-'; then NEXT="$MA.$((MI+1)).0"; else NEXT="$MA.$MI.$((PA+1))"; fi
 
+rm -f "$STREAK_FILE"
+[ -z "$WARNINGS" ] || say "proceeding despite housekeeping warnings (REPO-FIXER ticket filed):\n$WARNINGS"
 say "ENOUGH: $n entries since $tag; cutting v$NEXT (dry-run=$DRY)"
 if [ "$DRY" = 1 ]; then
   ./scripts/cut-release.sh "$NEXT" --dry-run >>"$LOG" 2>&1; rc=$?

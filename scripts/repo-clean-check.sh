@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # repo-clean-check.sh — strict "is this repo fully landed?" check.
-# Prints one problem per line and exits 1 if any; prints nothing and exits 0
-# when the repo is clean. Read-only apart from `git fetch`.
+# Prints one BLOCK/WARN line per problem; exits 1 only if there is a BLOCK. Read-only apart from `git fetch`.
 #
-# Problems: not on main, uncommitted or untracked files, unpushed commits on
-# any local branch, any extra worktree, any local branch with commits that exist on no remote.
+# BLOCK (exit 1): not on main, uncommitted/untracked files, unpushed commits on main.
+# WARN (exit 0): extra worktrees, local branches with commits on no remote.
 #
 # Usage:   scripts/repo-clean-check.sh <repo-path>
 # Remote:  ssh host "sudo -u user -H bash -s -- <repo-path>" < scripts/repo-clean-check.sh
@@ -12,7 +11,10 @@ set -uo pipefail
 r="${1:?usage: repo-clean-check.sh <repo-path>}"
 g() { git -c safe.directory="$r" -C "$r" "$@"; }
 bad=0
-p() { echo "$r: $*"; bad=1; }
+# BLOCK = would lose or leave work out of a release (fails the check).
+# WARN  = housekeeping (stale worktrees, side branches); reported, never blocks.
+p() { echo "BLOCK $r: $*"; bad=1; }
+w() { echo "WARN $r: $*"; }
 g rev-parse --git-dir >/dev/null 2>&1 || { p "not a git repo"; exit 1; }
 g fetch --quiet origin 2>/dev/null || p "cannot fetch origin"
 [ "$(g branch --show-current)" = "main" ] || p "on '$(g branch --show-current)', not main"
@@ -21,10 +23,10 @@ dirty="$(g status --porcelain)"
 ahead="$(g rev-list --count @{u}..HEAD 2>/dev/null || echo '?')"
 [ "$ahead" = 0 ] || p "$ahead unpushed commit(s) on main"
 extra="$(g worktree list --porcelain | grep '^worktree ' | tail -n +2)"
-[ -z "$extra" ] || p "open worktree(s): $(echo "$extra" | sed 's/^worktree //' | tr '\n' ' ')"
+[ -z "$extra" ] || w "open worktree(s): $(echo "$extra" | sed 's/^worktree //' | tr '\n' ' ')"
 # Unpushed = reachable from the branch but from no remote ref. Branches already
 # pushed (even if squash-merged, so "not merged" by ancestry) are fine.
 unpushed="$(g for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do
   [ "$(g rev-list --count "$b" --not --remotes 2>/dev/null)" != 0 ] && echo "$b"; done)"
-[ -z "$unpushed" ] || p "local branch(es) with commits on no remote: $(echo "$unpushed" | tr '\n' ' ')"
+[ -z "$unpushed" ] || w "local branch(es) with commits on no remote: $(echo "$unpushed" | tr '\n' ' ')"
 exit $bad
