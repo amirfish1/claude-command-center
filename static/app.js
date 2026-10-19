@@ -13845,8 +13845,39 @@
       return '⚠ Session cwd is gone: ' + missing
         + ' - every send will fail until this directory is restored or the session is replaced.';
     }
+    if (data && data.code === 'repo_not_allowed') {
+      return 'repo_not_allowed' + (data.path ? ': ' + data.path : '') + ' is not a known repo.';
+    }
     if (data && (data.error || data.message)) return data.error || data.message;
     return 'HTTP ' + status;
+  }
+
+  // Toast action for a repo_not_allowed failure: let the user type/confirm a
+  // repo path and register it via /api/repo/add so the next send succeeds.
+  function repoNotAllowedToastAction(data) {
+    if (!data || data.code !== 'repo_not_allowed') return undefined;
+    return {
+      label: 'Add repo\u2026',
+      onClick: async () => {
+        const entered = window.prompt('Repo folder to allow:', data.path || '');
+        const target = (entered || '').trim();
+        if (!target) return;
+        try {
+          const res = await fetch('/api/repo/add', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path: target}),
+          });
+          const out = await res.json().catch(() => ({}));
+          if (!res.ok || !out.ok) {
+            showOpToast('Add repo failed: ' + escapeHtml(out.error || ('HTTP ' + res.status)), 'error');
+            return;
+          }
+          showOpToast('Added ' + escapeHtml(out.path || target) + ' \u2014 send your message again.');
+        } catch (err) {
+          showOpToast('Add repo failed: ' + escapeHtml(err.message || 'network error'), 'error');
+        }
+      },
+    };
   }
 
   async function sendEscToTerminal() {
@@ -73955,7 +73986,7 @@
           }
           restoreInputAfterSendFailure($cpInput, text);
           flashRed();
-          showOpToast('Send failed: ' + reason, 'error');
+          showOpToast('Send failed: ' + reason, 'error', repoNotAllowedToastAction(data));
         }
       } catch (err) {
         removePendingSendEcho(pendingSend);
