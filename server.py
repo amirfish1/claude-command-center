@@ -15172,6 +15172,13 @@ def _archive_refresh_slot_available(key, now):
 # a saturated box doesn't also spam service.out.log on every poll.
 _ARCHIVE_REFRESH_LOAD_LOG_TS = [0.0]
 _ARCHIVE_REFRESH_LOAD_LOG_INTERVAL_S = 300.0
+# Gate earlier than the perf-ticket saturation line (2.0/core): a box idling at
+# 1.9/core flapped the gate and still spawned workers. Env-tunable.
+try:
+    _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU = float(
+        os.environ.get("CCC_ARCHIVE_REFRESH_GATE_LOAD_PER_CPU", "1.5"))
+except ValueError:
+    _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU = 1.5
 
 
 def _archive_refresh_load_blocked(now):
@@ -15179,7 +15186,8 @@ def _archive_refresh_load_blocked(now):
     machine. Any probe failure means "not blocked" — a broken load check must
     never freeze refresh spawning or the request path."""
     try:
-        if not machine_saturated():
+        load1, ncpu = _machine_load()
+        if float(load1) < _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU * float(ncpu):
             return False
     except Exception:
         return False
@@ -42628,7 +42636,8 @@ def main():
         print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
     if _wt_messaging_enabled() and not _wt_cli_available():
         print("⚠️  CCC_MESSAGING_BACKEND=wt is set but `wt` is not on PATH — headless delivery falls back to native `claude --resume`. Install WatchTower or unset to silence.")
-    _check_duplicate_repo_instance()
+    _check_duplicate_repo_instance(
+        on_duplicate=lambda entry: _serve_duplicate_gate(server, entry, CommandCenterHandler))
     write_port_file(bind_host, port=port)
     _register_self(port, bind_host)
     # CCC as a Claude Code peer (slice 3): bind our own socket and publish a

@@ -85,7 +85,7 @@ _ALL_VOICES = set(VOICES_V1) | set(VOICES_V2)
 # Dynamic tools the backing Codex thread may call. Read-only by contract;
 # every mutation goes through ccc_propose_action -> assistant_actions.
 TOOL_NAMES = ("ccc_attention", "ccc_session", "ccc_sessions", "ccc_models", "ccc_ticket",
-              "ccc_queues", "ccc_triage_queue", "ccc_propose_action")
+              "ccc_queues", "ccc_jobs", "ccc_triage_queue", "ccc_propose_action")
 
 _TICKET_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}-\d{1,7}$")
 _QUEUE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -107,7 +107,9 @@ _CODEX_INSTRUCTIONS = (
     "You back a CCC voice session. Use only the ccc_* tools for board "
     "state; do not run shell commands or read files. Keep tool results "
     "compact. Use ccc_ticket to explain the recorded needs-input question and "
-    "recent ticket context, ccc_queues for named queue state, ccc_models to "
+    "recent ticket context, ccc_queues for named queue state, ccc_jobs for "
+    "scheduled jobs (systemd timers and cron: did it run, did it succeed, "
+    "when is it next, why not), ccc_models to "
     "resolve an explicit model name to its approved ID before triage selection, and "
     "ccc_triage_queue to propose a senior triage session. Anything that mutates "
     "CCC must go through ccc_propose_action; you never execute changes yourself. "
@@ -775,6 +777,8 @@ class VoiceSession:
                 return _fmt_tool_text(self._tool_ticket(args))
             if tool == "ccc_queues":
                 return _fmt_tool_text(self._tool_queues(args))
+            if tool == "ccc_jobs":
+                return _fmt_tool_text(self._tool_jobs(args))
             if tool == "ccc_triage_queue":
                 return _fmt_tool_text(self._tool_triage_queue(args))
             if tool == "ccc_propose_action":
@@ -865,6 +869,7 @@ class VoiceSession:
                 if row.get(key):
                     parts.append(f"{key}={row[key]}")
             parts.append("live" if row.get("is_live") else "not live")
+            parts.append(self._liveness_line(row.get("session_id") or sid, row.get("modified") or row.get("mtime")))
             if row.get("last_assistant_text"):
                 parts.append(f"last: {str(row['last_assistant_text'])[:300]}")
             return "\n".join(parts)[:3000]
@@ -877,6 +882,8 @@ class VoiceSession:
             parts.append(f"summary: {str(state['summary'])[:300]}")
         if state.get("next_step_user"):
             parts.append(f"awaits user: {str(state['next_step_user'])[:300]}")
+        row = self._archive_row(sid) or {}
+        parts.append(self._liveness_line(sid, row.get("modified") or row.get("mtime") or detail.get("modified")))
         if detail.get("last_assistant_text"):
             parts.append(f"last: {str(detail['last_assistant_text'])[:300]}")
         return "\n".join(parts)[:3000]
@@ -920,6 +927,24 @@ class VoiceSession:
                 if all(w in (r.get("title") or "").lower() for w in words)]
         rows.sort(key=lambda r: (not r.get("is_live"), -(r.get("modified") or r.get("mtime") or 0)))
         return rows
+
+    def _liveness_line(self, sid, modified=None):
+        """Proof line: pid-verified process, registry status, transcript activity age."""
+        now = time.time()
+        meta = self._registry_sessions().get(sid)
+        bits = []
+        if meta:
+            bits.append(f"process pid {meta.get('pid')} verified alive at {_utc_stamp(now)}"
+                        + (f", Claude reports {meta['status']}" if meta.get("status") else ""))
+        else:
+            bits.append("no running Claude process found for this id by pid check "
+                        f"at {_utc_stamp(now)} (other engines use their own signal)")
+        try:
+            if modified and float(modified) > 0:
+                bits.append(f"transcript last written {_asof(float(modified), now)}")
+        except (TypeError, ValueError):
+            pass
+        return "proof: " + "; ".join(bits)
 
     @staticmethod
     def _registry_sessions():
@@ -1169,6 +1194,100 @@ class VoiceSession:
             if claimed:
                 out.append(f"  - {len(claimed)} flagged while a worker holds them (may be answered): "
                            + ", ".join(str(i.get('ref')).upper() for i in claimed[:6]))
+        return "\n".join(out)[:4000]
+
+    _JOB_PROBLEM = frozenset({"failed", "stale"})
+
+    @staticmethod
+    def _job_verdict(job, now):
+        """One factual sentence on why a job is or is not out, from its own fields."""
+        status = job.get("status")
+        nxt = _iso_epoch(job.get("next_run_at"))
+        last = _iso_epoch(job.get("last_run_at"))
+        nxt_s = f"{_utc_stamp(nxt)} (in {_age_text(nxt - now)})" if nxt and nxt > now else None
+        if status == "disabled":
+            return "timer is disabled, so it will not run until someone enables it"
+        if status == "running":
+            return "running right now"
+        if status == "failed":
+            code = job.get("exit_code")
+            tail = f"; next attempt {nxt_s}" if nxt_s else ""
+            return f"last run FAILED{f' with exit code {code}' if code is not None else ''}{tail}"
+        if status == "stale":
+            ago = f"last ran {_age_text(now - last)} ago" if last else "no recorded run"
+            return f"no upcoming run is scheduled ({ago}); the timer may be stopped or exhausted"
+        if status == "unknown":
+            return ("cron keeps no run history, so whether the last run succeeded cannot be verified"
+                    + (f"; next fire {nxt_s}" if nxt_s else ""))
+        if nxt_s and last:
+            return f"on schedule: last ran {_age_text(now - last)} ago, next run {nxt_s}"
+        if nxt_s:
+            return f"scheduled, no run recorded yet; next run {nxt_s}"
+        return "healthy per systemd but no next run time is known"
+
+    def _tool_jobs(self, args):
+        """Scheduled jobs (systemd system+user timers and cron) with outcome and verdict."""
+        query = self._compact_text(args.get("query"), 80).lower()
+        problems_only = bool(args.get("problems_only"))
+        try:
+            limit = max(1, min(12, int(args.get("limit") or 6)))
+        except (TypeError, ValueError):
+            limit = 6
+        from ccc_server import scheduled_jobs_feed as feed
+        now = time.time()
+        payload = feed.get_jobs_feed(wait_s=22) or {}
+        host = (payload.get("hosts") or {}).get("hermes") or {}
+        if host.get("status") == "loading":
+            return "Scheduled-job data is still loading (first collection takes ~15s); ask again shortly."
+        if host.get("status") == "offline" and not payload.get("jobs"):
+            return f"Scheduled-job host is unreachable: {host.get('error') or 'unknown error'}"
+        jobs = [j for j in payload.get("jobs") or [] if isinstance(j, dict)]
+        collected = _iso_epoch(host.get("collected_at"))
+        src = f"job feed (systemd system+user timers and crontab on {payload.get('local_host') or 'host'}), collected {_asof(collected, now)}"
+        if host.get("stale_data"):
+            src += f"; HOST OFFLINE, this is old data: {host.get('error') or ''}"
+        words = query.split()
+        if words:
+            jobs = [j for j in jobs if all(w in " ".join(str(j.get(k) or "") for k in
+                                                       ("name", "description", "project", "schedule", "id")).lower()
+                                           for w in words)]
+        if problems_only:
+            jobs = [j for j in jobs if j.get("status") in self._JOB_PROBLEM]
+        counts = {}
+        for j in (payload.get("jobs") or []):
+            counts[j.get("status")] = counts.get(j.get("status"), 0) + 1
+        header = [f"Source: {src}.",
+                  "All jobs: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items(), key=lambda kv: str(kv[0])))]
+        if not jobs:
+            what = f"matching '{query}'" if query else "with problems"
+            return "\n".join(header + [f"No scheduled jobs {what}. Try a shorter query (the project or script name)."])[:4000]
+        order = {"failed": 0, "stale": 1, "running": 2, "unknown": 3, "ok": 4, "disabled": 5}
+        jobs.sort(key=lambda j: (order.get(j.get("status"), 9), j.get("name") or ""))
+        out = header + [f"{min(len(jobs), limit)} of {len(jobs)} job(s):"]
+        detailed = bool(words) or problems_only
+        for j in jobs[:limit]:
+            kind = j.get("scope") or j.get("manager") or "job"
+            out.append(f"- {j.get('name')} [{kind}] {j.get('schedule') or ''} status={j.get('status')}")
+            out.append(f"  verdict: {self._job_verdict(j, now)}")
+            if not detailed:
+                continue
+            if j.get("description"):
+                out.append("  what: " + self._compact_text(j["description"], 160))
+            last = _iso_epoch(j.get("last_run_at"))
+            if last:
+                dur = f", took {j['last_duration_s']}s" if j.get("last_duration_s") is not None else ""
+                out.append(f"  last run: {_asof(last, now)}{dur}, exit {j.get('exit_code')}")
+            if j.get("outcome"):
+                out.append("  last output: " + self._compact_text(j["outcome"], 220))
+            if j.get("tickets"):
+                out.append("  refs: " + ", ".join(
+                    (f"{t.get('ref')} {t.get('url') or ''}".strip() if isinstance(t, dict) else str(t))
+                    for t in j["tickets"][:4]))
+            for ev in (j.get("events") or [])[-3:]:
+                at = _iso_epoch(ev.get("at"))
+                out.append(f"  event {_age_text(now - at) if at else '?'} ago: " + self._compact_text(ev.get("text"), 160))
+        if len(jobs) > limit:
+            out.append(f"... {len(jobs) - limit} more; narrow with query or problems_only")
         return "\n".join(out)[:4000]
 
     def _tool_triage_queue(self, args):
@@ -1867,6 +1986,22 @@ def _tool_specs():
             "how long each has been recorded as blocked. Pass queue for one named queue. Read-only.",
             "inputSchema": {"type": "object", "properties": {
                 "queue": {"type": "string", "description": "optional WatchTower queue name"},
+            }},
+        },
+        {
+            "type": "function",
+            "name": "ccc_jobs",
+            "description": (
+                "Scheduled jobs: systemd timers (system and user) and cron. Pass "
+                "query (job, project or script words like 'bym digest' or 'ship') "
+                "to see whether it ran, whether it succeeded, last output, next run "
+                "and a verdict on why it has not run. problems_only lists failed or "
+                "stale jobs. Read-only."
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "job/project/script words"},
+                "problems_only": {"type": "boolean"},
+                "limit": {"type": "integer", "description": "max jobs, default 6"},
             }},
         },
         {
