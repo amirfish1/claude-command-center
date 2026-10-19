@@ -21,7 +21,9 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
+# Also accepts the flag via SSH_ORIGINAL_COMMAND, for a forced-command ssh key.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+DRY=0; { [ "${1:-}" = "--dry-run" ] || [ "${SSH_ORIGINAL_COMMAND:-}" = "--dry-run" ]; } && DRY=1
 MIN="${CCC_RELEASE_MIN_ENTRIES:-3}"
 EXTRA_REPOS="${CCC_RELEASE_REPOS:-$HOME/Apps/watchtower}"
 if [ "$(uname -s)" = "Darwin" ]; then LOG_DIR="$HOME/Library/Logs/ccc-release"; else LOG_DIR="$HOME/.local/state/ccc-release"; fi
