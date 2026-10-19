@@ -8393,7 +8393,9 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             "code": rebucket.get("error") or "session_jsonl_unavailable",
         }
     timestamp = time.strftime("%Y%m%dT%H%M%S")
-    log_filename = f"resume-{session_id[:8]}-{timestamp}.log"
+    # Rapid cold resumes can share a second (for example a router switch).
+    # Keep their output and stdin FIFO separate instead of truncating a turn.
+    log_filename = f"resume-{session_id[:8]}-{timestamp}-{uuid.uuid4().hex}.log"
     log_dir = _core.repo_log_dir(ctx["repo_path"])
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename

@@ -1,0 +1,1 @@
+- Preserve every Claude resume log and input pipe when multiple cold resumes start within the same second, including rapid router failover and switch-back.

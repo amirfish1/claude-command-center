@@ -273,6 +273,7 @@ class ContinueFreeTests(_FailoverBase):
 
         sid = "cccccccc-1111-2222-3333-555555555555"
         captured = {}
+        log_paths = []
         inherited = {
             "ANTHROPIC_API_KEY": "sk-ant-test-XXXX",
             "CLAUDE_CODE_OAUTH_TOKEN": "oauth-test-XXXX",
@@ -290,6 +291,10 @@ class ContinueFreeTests(_FailoverBase):
 
         def capture_spawn(*args, **kwargs):
             captured.update(kwargs["env"])
+            log = kwargs["stdout"]
+            log_paths.append(Path(log.name))
+            log.write(f"attempt {len(log_paths)}\n")
+            log.flush()
             raise OSError("stop at the process boundary")
 
         with mock.patch.object(self.server, "_claude_subagent_parent_session_id", return_value=None), \
@@ -305,10 +310,15 @@ class ContinueFreeTests(_FailoverBase):
              mock.patch.object(self.server, "_resume_ledger_append"), \
              mock.patch.object(self.server, "_question_relay_env", return_value=dict(inherited)), \
              mock.patch.object(self.server, "_make_stdin_fifo", return_value=(None, None)), \
+             mock.patch.object(engines.time, "strftime", return_value="20260101T000000"), \
              mock.patch.object(engines.subprocess, "Popen", side_effect=capture_spawn):
             result = self.server.resume_session_headless(sid, "continue", cwd=self.tmp_dir, extra_env=overlay)
+            retry = self.server.resume_session_headless(sid, "retry", cwd=self.tmp_dir, extra_env=overlay)
 
         self.assertFalse(result["ok"])
+        self.assertFalse(retry["ok"])
+        self.assertEqual(len(set(log_paths)), 2)
+        self.assertEqual([p.read_text() for p in log_paths], ["attempt 1\n", "attempt 2\n"])
         self.assertNotIn("ANTHROPIC_API_KEY", captured)
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", captured)
         self.assertNotIn("CLAUDE_CODE_SESSION_KEY", captured)
