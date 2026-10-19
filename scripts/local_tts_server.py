@@ -17,12 +17,18 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOME = os.path.expanduser(os.environ.get("CCC_LOCAL_TTS_DIR", os.path.join(os.path.expanduser("~"), ".ccc", "local-tts")))
 PORT = int(os.environ.get("CCC_LOCAL_TTS_PORT", "3019"))
 MAX_CHARS = 2000
+
+try:
+    os.nice(10)
+except OSError:
+    pass
 
 import soundfile as sf
 from kokoro_onnx import Kokoro
@@ -44,18 +50,22 @@ def model_path():
 
 
 def _load():
-    threads = os.environ.get("CCC_KOKORO_THREADS", "").strip()
-    if not threads:
+    threads = os.environ.get("CCC_KOKORO_THREADS", "").strip() or "2"
+    try:
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = max(1, int(threads))
+        opts.inter_op_num_threads = 1
+        opts.enable_cpu_mem_arena = False
+        sess = ort.InferenceSession(model_path(), opts, providers=["CPUExecutionProvider"])
+        return Kokoro.from_session(sess, os.path.join(HOME, "voices.bin"))
+    except Exception:
         return Kokoro(model_path(), os.path.join(HOME, "voices.bin"))
-    import onnxruntime as ort
-    opts = ort.SessionOptions()
-    opts.intra_op_num_threads = int(threads)
-    sess = ort.InferenceSession(model_path(), opts, providers=["CPUExecutionProvider"])
-    return Kokoro.from_session(sess, os.path.join(HOME, "voices.bin"))
 
 
 _kokoro = _load()
 _voices = set(_kokoro.get_voices())
+_SYNTH_LOCK = threading.Lock()
 try:
     import lameenc
 except ImportError:  # /speak still works; /stream answers 404 and CCC uses /speak
@@ -94,7 +104,8 @@ def split_for_stream(text):
 
 
 def _synth(text, voice):
-    return _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
+    with _SYNTH_LOCK:
+        return _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
 
 
 class Handler(BaseHTTPRequestHandler):

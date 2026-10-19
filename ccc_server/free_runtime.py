@@ -524,7 +524,8 @@ def _local_tts_start():
                 listener.bind(("127.0.0.1", 0))
                 _LOCAL_TTS_PORT = listener.getsockname()[1]
         env = dict(os.environ, CCC_LOCAL_TTS_DIR=str(_LOCAL_TTS_DIR),
-                   CCC_LOCAL_TTS_PORT=str(_LOCAL_TTS_PORT))
+                   CCC_LOCAL_TTS_PORT=str(_LOCAL_TTS_PORT),
+                   CCC_KOKORO_THREADS=os.environ.get("CCC_KOKORO_THREADS", "").strip() or "2")
         _LOCAL_TTS_PROCESS = subprocess.Popen(
             [str(_LOCAL_TTS_DIR / "venv" / "bin" / "python"), str(_LOCAL_TTS_SCRIPT)],
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -567,6 +568,14 @@ def local_tts_open(text, voice=""):
     text = str(text or "").strip()[:TTS_MAX_CHARS]
     if not text or not _local_tts_start():
         return None, ""
+    raw_voice = str(voice or "").strip()
+    if raw_voice.startswith(_KOKORO_LABEL):
+        raw_voice = raw_voice[len(_KOKORO_LABEL):]
+    if raw_voice not in KOKORO_VOICES:
+        cached_any = _clip_cache_get_any_voice(text)
+        if cached_any is not None:
+            cached_voice, cached_bytes = cached_any
+            return _CachedClip(cached_bytes), _KOKORO_LABEL + cached_voice
     voice = _kokoro_voice(voice)
     key = (text, voice)
     cached = _clip_cache_get(key)
@@ -585,6 +594,16 @@ def local_tts_open(text, voice=""):
 _CLIP_CACHE_MAX_BYTES = 48 * 1024 * 1024
 _CLIP_CACHE = {}   # (text, voice) -> mp3 bytes, oldest first
 _CLIP_CACHE_LOCK = threading.Lock()
+
+
+def _clip_cache_get_any_voice(text):
+    with _CLIP_CACHE_LOCK:
+        for key in reversed(list(_CLIP_CACHE)):
+            if key[0] == text:
+                data = _CLIP_CACHE.pop(key)
+                _CLIP_CACHE[key] = data
+                return key[1], data
+        return None
 
 
 def _clip_cache_get(key):

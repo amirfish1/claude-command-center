@@ -39780,8 +39780,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
         line_num = 0
+        file_offset = 0
         last_keepalive = time.time()
         last_mtime = -1.0
+        last_size = -1
         # No server-side timeout — SSE is designed for persistent connections,
         # and the 5s keepalive below is what keeps proxies/browsers happy.
         # Connection closes when the client disconnects (BrokenPipeError below)
@@ -39795,10 +39797,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # lines) then pegs CPU and disk continuously even while the
                 # session sits idle and nothing new is being written.
                 try:
-                    cur_mtime = os.stat(filepath).st_mtime
+                    st = os.stat(filepath)
+                    cur_mtime = st.st_mtime
+                    cur_size = st.st_size
                 except OSError:
                     cur_mtime = last_mtime
-                if cur_mtime == last_mtime:
+                    cur_size = last_size
+                if cur_mtime == last_mtime and cur_size == last_size:
                     now = time.time()
                     if now - last_keepalive >= 5:
                         self.wfile.write(b"event: keepalive\ndata: {}\n\n")
@@ -39807,14 +39812,37 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     time.sleep(0.3)
                     continue
                 last_mtime = cur_mtime
+                last_size = cur_size
+                if cur_size >= 0 and cur_size < file_offset:
+                    file_offset = 0
+                    line_num = 0
+                    codex_token_usage = None
                 try:
                     with open(filepath, "r") as f:
-                        for line in f:
+                        if file_offset > 0:
+                            try:
+                                f.seek(file_offset)
+                            except OSError:
+                                f.seek(0)
+                                line_num = 0
+                                codex_token_usage = None
+                        while True:
+                            pos_before = f.tell()
+                            line = f.readline()
+                            if not line:
+                                break
+                            stripped = line.strip()
+                            if not line.endswith("\n") and stripped:
+                                try:
+                                    json.loads(stripped)
+                                except json.JSONDecodeError:
+                                    f.seek(pos_before)
+                                    break
                             line_num_current = line_num + 1
                             if line_num_current <= after_line:
-                                if is_codex:
+                                if is_codex and '"token_count"' in stripped:
                                     try:
-                                        ev = json.loads(line.strip())
+                                        ev = json.loads(stripped)
                                     except json.JSONDecodeError:
                                         ev = None
                                     if ev:
@@ -39824,7 +39852,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 line_num = line_num_current
                                 continue
                             line_num = line_num_current
-                            stripped = line.strip()
                             if not stripped:
                                 continue
                             try:
@@ -39841,21 +39868,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 parsed = parser(ev, line_num)
                             if parsed:
                                 events.append(parsed)
+                        file_offset = f.tell()
                 except FileNotFoundError:
                     break
 
+                after_line = max(after_line, line_num)
                 if events and is_codex:
                     events = _merge_codex_compact_boundary_events(events)
                 if events:
                     payload = {"events": events, "last_line": line_num}
                     self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
                     self.wfile.flush()
-                    after_line = line_num
-
-                # Reset line_num for next read — we'll re-read from start and skip
-                # Actually, keep line_num as-is; on next iteration we re-scan from 0
-                # but skip up to after_line
-                line_num = 0
 
                 now = time.time()
                 if now - last_keepalive >= 5:

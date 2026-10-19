@@ -1828,19 +1828,24 @@ def _acp_tool_content_text(update):
     return text
 
 
+_ACP_DIFF_TEXT_MAX_CHARS = 65536
+
+
 def _acp_tool_content_diff(update):
     """First {type:'diff', path, oldText, newText} content block, if any.
 
     Edit/Write calls carry these (see docs/kimi-code-reference.md §Content
-    shapes); kept in full so the client can render the diff."""
+    shapes); kept in full up to _ACP_DIFF_TEXT_MAX_CHARS per side so the
+    client can render the diff without multi-MB whole-file payloads bloating
+    the session JSONL transcript."""
     for c in update.get("content") or []:
         if isinstance(c, dict) and c.get("type") == "diff":
             old = c.get("oldText")
             new = c.get("newText")
             return {
                 "path": str(c.get("path") or ""),
-                "oldText": old if isinstance(old, str) else "",
-                "newText": new if isinstance(new, str) else "",
+                "oldText": old[:_ACP_DIFF_TEXT_MAX_CHARS] if isinstance(old, str) else "",
+                "newText": new[:_ACP_DIFF_TEXT_MAX_CHARS] if isinstance(new, str) else "",
             }
     return None
 

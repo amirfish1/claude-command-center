@@ -13007,6 +13007,7 @@
     (window.__cccTtsLog = window.__cccTtsLog || []).push(line);
     if (window.__cccTtsLog.length > 40) window.__cccTtsLog.shift();
     try { console.info('[tts] ' + line); } catch (_) {}
+    if (verb === 'SKIP') return;
     try {
       fetch('/api/free-runtime/tts-log', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -13104,9 +13105,11 @@
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
     entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '').then((got) => {
       entry.ready = true; entry.got = got; entry.voice = got.voice;
-      _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
       _ttsMarkCache(mk, head.text, 'partial', 0.1);
-      _ttsStartChain(clean, head, got, mk);
+      Promise.resolve(got.done).then(() => {
+        _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
+        _ttsStartChain(clean, head, got, mk);
+      }).catch(() => {});
       return got;
     });
     entry.p.catch((status) => {
@@ -13129,27 +13132,25 @@
   // for the click. Stops when a read starts or a newer message takes over.
   const _ttsChainTokens = {};   // pane id -> latest chain token
   let _ttsChainQueue = Promise.resolve();
-  // Only the start of a message is made ahead: the first clip plus two more
-  // (~40s of audio) is enough to start instantly and stay ahead of the clip
-  // being heard. Making whole messages for every pane on a busy host never
-  // finished and left every speaker amber. The rest is made while reading.
-  const _TTS_PREFETCH_CLIPS = 2;
+  // Only the start of a message is made ahead: the first clip plus one more
+  // is enough to start instantly and stay ahead of the clip being heard without
+  // saturating CPU on unclicked background messages. The rest is made while reading.
+  const _TTS_PREFETCH_CLIPS = 1;
   const _ttsChainRunning = new Set();   // head texts whose chain is queued or running
   function _ttsStartChain(clean, head, got, mk) {
     const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
     _ttsChainRunning.add(head.text);
-    // One message's clips at a time; within it the clips are made in parallel.
+    // One message's clips at a time, serialized so background prefetch never
+    // saturates CPU cores.
     _ttsChainQueue = _ttsChainQueue
       .then(() => _ttsPrefetchRest(clean, head, got, token, mk))
       .catch(() => {})
       .then(() => { _ttsChainRunning.delete(head.text); });
   }
-  // One synth call does not use all cores, so a few clips run side by side
-  // (4 sentences: 45s one after another, 27s together on this host). Wider
-  // than this only slows the clip being heard first.
-  const _TTS_PREFETCH_WIDTH = 3;
+  const _TTS_PREFETCH_WIDTH = 1;
   async function _ttsPrefetchRest(clean, head, headGot, token, paneId) {
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
+    await headGot.done;
     const end = head.start + head.text.length;
     const rest = _chunkTtsText(clean.slice(end), 400, end).slice(0, _TTS_PREFETCH_CLIPS);
     const live = () => token === _ttsChainTokens[paneId || ''] && !_ttsActive && Date.now() >= _ttsNeuralCooldownUntil;
@@ -13179,7 +13180,6 @@
         }
         entries.push(entry);
       }
-      await headGot.done;
       for (let i = Math.max(0, rest.length - _TTS_PREFETCH_WIDTH); i < rest.length; i++) await settle(i);
     } catch (_) { return; }
     if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
@@ -13194,15 +13194,14 @@
     clearTimeout(_ttsPrefetchTimer);
     _ttsPrefetchTimer = setTimeout(() => {
       try {
-        if (_ttsActive || _ttsPaused) return;
-        // Every visible pane, active one first.
-        const act = activePaneId();
-        const ids = [act].concat(splitState.panes.map(p => p.id).filter(id => id !== act));
-        for (const paneId of ids) {
-          const data = paneId ? lastMessageTtsData(paneId) : null;
-          if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text, paneId);
-          else { _ttsMarkCache(paneId, null, null); _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId); }
-        }
+        if (_ttsActive || _ttsPaused || document.hidden) return;
+        // Prefetch only the focused pane; background split panes prefetch on
+        // focus or hover so multi-pane layouts don't multiply synthesis work.
+        const paneId = activePaneId();
+        if (!paneId) return;
+        const data = lastMessageTtsData(paneId);
+        if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text, paneId);
+        else { _ttsMarkCache(paneId, null, null); _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId); }
       } catch (_) {}
     }, 2500);
   }

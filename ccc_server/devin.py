@@ -3119,6 +3119,14 @@ def _devin_acp_result_rows(raw_id):
             for raw in handle:
                 if b'"result"' not in raw:
                     continue
+                prefix = raw.lstrip()[:32]
+                if prefix.startswith((
+                    b'{"type": "assistant"',
+                    b'{"type":"assistant"',
+                    b'{"type": "user"',
+                    b'{"type":"user"',
+                )):
+                    continue
                 try:
                     ev = json.loads(raw)
                 except ValueError:
