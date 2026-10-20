@@ -1,4 +1,5 @@
 .qtag-chip{display:inline;font:inherit;font-size:.9em;padding:1px 7px;margin:0 1px;border-radius:999px;border:1px solid #d9a441;background:rgba(217,164,65,.16);color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.qtag-chip-static{font-size:.9em;padding:1px 7px;border-radius:999px;border:1px solid #d9a441;background:rgba(217,164,65,.16)}
 .qtag-chip.qtag-answered{border-color:#6aa874;background:rgba(106,168,116,.16)}
 .qtag-chip.qtag-unknown{border-style:dashed}
 .qtag-flash{outline:2px solid #d9a441;outline-offset:2px}

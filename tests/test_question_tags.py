@@ -129,3 +129,23 @@ class OtherEnginesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IncrementalScanTest(unittest.TestCase):
+    def test_resume_offset_skips_old_lines_and_partial_tail(self):
+        import json, os, tempfile
+        def line(uuid, text):
+            return json.dumps({"type": "assistant", "uuid": uuid, "message": {"content": [{"type": "text", "text": text}]}}) + "\n"
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(line("a", "[Q1:x] one"))
+            f.write(line("b", "[Q2:y] two")[:-5])  # half-written tail
+        try:
+            ev, off = qt.scan_file_from(f.name, 0)
+            self.assertEqual([e["uuid"] for e in ev], ["a"])
+            with open(f.name, "a") as g:
+                g.write(line("b", "[Q2:y] two")[-5:])
+                g.write(line("c", "[Q3:z] three"))
+            ev2, _ = qt.scan_file_from(f.name, off)
+            self.assertEqual([e["uuid"] for e in ev2], ["b", "c"])
+        finally:
+            os.unlink(f.name)

@@ -83,6 +83,7 @@
       index.byN = {};
       index.list.forEach(function (q) { index.byN[q.n] = q; });
       index.scanning = !!d.scanning;
+      index.refreshing = !!d.refreshing;
       index.at = Date.now();
       paintChips();
       updatePill();
@@ -114,12 +115,22 @@
     return sheet;
   }
 
-  function showQuestion(n) {
+  // A tag from a message written seconds ago may not be indexed yet: the
+  // server rescans in the background, so retry a few times before giving up.
+  function lookup(n, attempt) {
+    load(true).then(function () {
+      if (index.byN[n] || attempt >= 4 || !(index.scanning || index.refreshing)) { showQuestion(n); return; }
+      showQuestion(n, true);
+      setTimeout(function () { if (!sheet.hidden && sheet.getAttribute('data-qwait') === String(n)) lookup(n, attempt + 1); }, 3000);
+    });
+  }
+
+  function showQuestion(n, waiting) {
     var q = index.byN[n];
     var s = ensureSheet();
     var body;
     if (!q) {
-      body = '<p class="qtag-empty">' + (index.scanning ? 'Still indexing transcripts, try again in a moment.' : 'No explanation found for Q' + n + '.') + '</p>';
+      body = '<p class="qtag-empty">' + (waiting ? 'Looking for Q' + n + '…' : 'No explanation found for Q' + n + ' yet.') + '</p>';
     } else {
       body = '<div class="qtag-meta">' + (q.answered ? '<span class="qtag-st qtag-st-done">answered</span>' : '<span class="qtag-st qtag-st-open">open</span>')
         + ' first asked ' + esc(fmtTs(q.first.ts)) + ' · ' + q.mentions.length + ' reminder' + (q.mentions.length === 1 ? '' : 's') + '</div>'
@@ -128,6 +139,7 @@
     }
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>' + (q ? esc(q.tag) : 'Q' + n) + '</strong>'
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>' + body + '</div>';
+    if (waiting) s.setAttribute('data-qwait', n); else s.removeAttribute('data-qwait');
     s.hidden = false;
   }
 
@@ -138,9 +150,9 @@
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>'
       + (open.length ? '<ul class="qtag-list">' + open.map(function (q) {
         var first = (q.first.text.split('\n').find(function (l) { return l.indexOf(q.tag) >= 0; }) || q.first.text).replace(/[#*`]/g, '').slice(0, 140);
-        return '<li><button type="button" class="qtag-row" data-qshow="' + q.n + '"><span class="qtag-chip">' + esc(q.tag) + '</span>'
+        return '<li><button type="button" class="qtag-row" data-qshow="' + q.n + '"><span class="qtag-chip-static">' + esc(q.tag) + '</span>'
           + '<span class="qtag-sub">' + esc(first) + '</span></button></li>';
-      }).join('') + '</ul>' : '<p class="qtag-empty">' + (index.scanning ? 'Still indexing transcripts…' : 'Nothing waiting on you.') + '</p>')
+      }).join('') + '</ul>' : '<p class="qtag-empty">' + (index.scanning ? 'Building the question index (first run only)…' : 'Nothing waiting on you.') + '</p>')
       + '</div>';
     s.hidden = false;
   }
@@ -179,11 +191,10 @@
     document.body.appendChild(pill);
 
     document.addEventListener('click', function (ev) {
-      var chip = ev.target.closest && ev.target.closest('.qtag-chip');
-      if (!chip || chip.closest('.qtag-sheet')) return;
+      var chip = ev.target.closest && ev.target.closest('.qtag-chip[data-qn]');
+      if (!chip) return;
       ev.preventDefault();
-      var n = +chip.getAttribute('data-qn');
-      load(true).then(function () { showQuestion(n); });
+      lookup(+chip.getAttribute('data-qn'), 0);
     });
 
     var pending = new Set(), queued = false;

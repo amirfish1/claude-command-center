@@ -50,6 +50,7 @@ _lock = threading.Lock()
 _files: dict[str, dict] = {}  # path -> {"m": mtime, "s": size, "ev": [...]}
 _loaded = False
 _scanning = False
+_ready = False  # a full index exists (loaded from disk or first scan done)
 _last_scan = 0.0
 _SCAN_MIN_GAP = 20.0
 
@@ -63,7 +64,7 @@ def _projects_root() -> Path:
 
 
 def _load_cache() -> None:
-    global _loaded
+    global _loaded, _ready
     if _loaded:
         return
     _loaded = True
@@ -71,6 +72,7 @@ def _load_cache() -> None:
         data = json.loads(_state_path().read_text())
         if isinstance(data, dict) and data.get("v") == 2:
             _files.update(data.get("files") or {})
+            _ready = bool(_files)
     except (OSError, ValueError):
         pass
 
@@ -118,17 +120,34 @@ def _event(role, text, uuid, ts, sid):
 
 def scan_file(path: str) -> list[dict]:
     """Tag events in one Claude transcript: assistant/user text that mentions a tag."""
+    return scan_file_from(path, 0)[0]
+
+
+def scan_file_from(path: str, offset: int) -> tuple[list[dict], int]:
+    """Like scan_file but resumes at byte `offset`; returns (events, next offset).
+    Only complete lines are consumed, so a half-written tail is re-read next time.
+    Live transcripts are append-only and huge: re-reading them whole on every
+    change is what made the index slow."""
     sid = Path(path).stem
     events = []
     try:
         with open(path, "rb") as f:
+            f.seek(offset)
             for raw in f:
+                partial = not raw.endswith(b"\n")
                 if not _TAG_BYTES.search(raw):
+                    if partial:
+                        break
+                    offset += len(raw)
                     continue
                 try:
                     obj = json.loads(raw)
                 except ValueError:
+                    if partial:
+                        break
+                    offset += len(raw)
                     continue
+                offset += len(raw)
                 role = obj.get("type")
                 if role not in ("assistant", "user") or obj.get("isSidechain"):
                     continue
@@ -137,8 +156,8 @@ def scan_file(path: str) -> list[dict]:
                 if e:
                     events.append(e)
     except OSError:
-        return []
-    return events
+        return [], offset
+    return events, offset
 
 
 def scan_codex_file(path: str) -> list[dict]:
@@ -309,7 +328,7 @@ def _stat(kind: str, path: str):
 def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
     """Re-scan changed transcripts. Returns False if a scan is already running
     or ran within `max_age` seconds."""
-    global _scanning, _last_scan
+    global _scanning, _last_scan, _ready
     with _lock:
         _load_cache()
         if _scanning or (not force and time.time() - _last_scan < max_age):
@@ -331,8 +350,14 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
                 scan = scan_hermes_db if kind == "hermes" else scan_devin_db
                 ev, cur = scan(path, (rec or {}).get("cur", 0))
                 _files[key] = {"m": m, "s": sz, "cur": cur, "ev": ((rec or {}).get("ev") or []) + ev}
+            elif kind == "claude":
+                # Resume from the saved offset when the file only grew; caches
+                # written before offsets existed (no "o") rescan from the top.
+                grew = bool(rec) and "o" in rec and sz >= rec["s"]
+                ev, off = scan_file_from(path, rec["o"] if grew else 0)
+                _files[key] = {"m": m, "s": sz, "o": off, "ev": (rec["ev"] if grew else []) + ev}
             else:
-                scan = {"claude": scan_file, "codex": scan_codex_file, "kimi": scan_kimi_file}[kind]
+                scan = {"codex": scan_codex_file, "kimi": scan_kimi_file}[kind]
                 _files[key] = {"m": m, "s": sz, "ev": scan(path)}
             dirty = True
         for key in [k for k in _files if k not in seen]:
@@ -344,6 +369,7 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
     finally:
         with _lock:
             _scanning = False
+            _ready = True
             _last_scan = time.time()
 
 
@@ -381,17 +407,19 @@ def build_index(files: dict | None = None) -> dict:
 
 
 def payload() -> dict:
-    """API payload. The cold scan runs in a background thread; `scanning`
-    tells the UI the list may still be filling in."""
+    """API payload. Never scans inside the request: a stale index kicks a
+    background refresh and is served as-is. `scanning` is true only until the
+    first full index exists (cold start); `refreshing` means a rescan is in
+    flight, so a tag the UI cannot resolve yet may appear shortly."""
     with _lock:
         _load_cache()
         stale = time.time() - _last_scan >= _SCAN_MIN_GAP and not _scanning
+        scanning_now = _scanning
     if stale:
-        if not _last_scan:
-            threading.Thread(target=refresh, daemon=True, name="qtags-scan").start()
-        else:
-            refresh()
+        threading.Thread(target=refresh, daemon=True, name="qtags-scan").start()
+        scanning_now = True
     out = build_index()
     out["ok"] = True
-    out["scanning"] = _scanning
+    out["scanning"] = not _ready
+    out["refreshing"] = scanning_now
     return out
