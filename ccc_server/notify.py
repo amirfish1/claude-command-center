@@ -280,6 +280,20 @@ def validate(data):
     return item, None
 
 
+def _log_outcome(outcome, item):
+    """One activity.log line per intake attempt (emitted, deduped, ...), so
+    notification cadence can be audited with timestamps: grep ' NOTIFY '."""
+    try:
+        from ccc_server.activity_log import _log_activity
+        _log_activity(
+            "NOTIFY", outcome,
+            f"kind={item.get('kind')} sid={(item.get('session_id') or '-')[:8]} "
+            f"title={item.get('title', '')[:60]!r}",
+        )
+    except Exception:
+        pass
+
+
 def post(data, publish=None, now=None):
     """Validate, rate-limit, dedupe, then emit. Returns the response dict."""
     now = time.time() if now is None else float(now)
@@ -287,6 +301,7 @@ def post(data, publish=None, now=None):
     if err:
         return {"ok": False, "error": err}, 400
     if not _rate_ok(now):
+        _log_outcome("ratelimit", item)
         return {"ok": False, "error": "too many notifications; try again shortly"}, 429
     sid = item.get("session_id")
     if sid and item["kind"] in ("needs_input", "task"):
@@ -294,14 +309,18 @@ def post(data, publish=None, now=None):
         # report the same turn end, and whichever lands first wins.
         window = _NEEDS_INPUT_COOLDOWN_S
         if not _cooldown_ok(sid, "needs_input", now, window):
+            _log_outcome("cooldown", item)
             return {"ok": True, "deduped": True, "id": ""}, 200
         _last_kind_emit[(sid, "task")] = now
     dup_id = _dedupe_hit(item, now)
     if dup_id:
+        _log_outcome("deduped", item)
         return {"ok": True, "deduped": True, "id": dup_id}, 200
     _emit(item, publish=publish, os_notify=_wants_os_banner(data.get("os")))
     if item.get("held"):
+        _log_outcome("held", item)
         return {"ok": True, "id": item["id"], "held": True}, 200
+    _log_outcome("emitted", item)
     return {"ok": True, "id": item["id"]}, 200
 
 

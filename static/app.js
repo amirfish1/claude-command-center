@@ -15,6 +15,10 @@
   window.cccOpenSession = function (sid) {
     try { if (sid) selectConversation(sid); } catch (_) {}
   };
+  // Session shown in the active pane; notify.js skips banners for it.
+  window.cccFrontSessionId = function () {
+    try { return splitState.panes[splitState.activeIndex].conversationId || ''; } catch (_) { return ''; }
+  };
   // macOS delivers the IME confirm-Enter/Escape to the page; Windows does not.
   // keyCode 229 covers Safari builds that clear isComposing before keydown.
   function isImeKey(ev) { return !!(ev && (ev.isComposing || ev.keyCode === 229)); }

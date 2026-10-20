@@ -72,7 +72,7 @@
     if (_stylesInjected) return;
     _stylesInjected = true;
     var css = ''
-      + '#cccNotifyStack{position:fixed;right:14px;bottom:14px;z-index:2147483000;'
+      + '#cccNotifyStack{position:fixed;right:14px;top:14px;z-index:2147483000;'
       + 'display:flex;flex-direction:column;gap:8px;max-width:min(360px,calc(100vw - 28px));'
       + 'font-family:var(--font-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);}'
       + '.ccc-toast{pointer-events:auto;display:flex;gap:10px;align-items:flex-start;'
@@ -82,7 +82,7 @@
       + 'cursor:default;position:relative;overflow:hidden;}'
       + '.ccc-toast.ccc-toast-in{animation:cccToastIn .22s ease-out;}'
       + '.ccc-toast.ccc-toast-out{opacity:0;transform:translateX(12px);transition:opacity .18s,transform .18s;}'
-      + '@keyframes cccToastIn{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}'
+      + '@keyframes cccToastIn{from{opacity:0;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:none}}'
       + '@media (prefers-reduced-motion:reduce){.ccc-toast.ccc-toast-in{animation:none}.ccc-toast.ccc-toast-out{transition:none}}'
       + '.ccc-toast-bar{flex:0 0 3px;align-self:stretch;border-radius:2px;background:var(--text-muted,#888);}'
       + '.ccc-toast-kind-task .ccc-toast-bar{background:#3fb950;}'
@@ -327,6 +327,15 @@
     return document.hidden || !document.hasFocus();
   }
 
+  // True when `sid` is the session the user is looking at right now: an
+  // active pane shows it and the page is visible and focused.
+  function _isFrontSession(sid) {
+    if (!sid || _pageCalm()) return false;
+    try {
+      return typeof window.cccFrontSessionId === 'function' && window.cccFrontSessionId() === sid;
+    } catch (_) { return false; }
+  }
+
   function _deliver(item) {
     if (!item || typeof item !== 'object') return false;
     if (!item.title) return false;
@@ -338,6 +347,13 @@
     if (age > limit) return false;
     if (!enabled()) return false;
     if (!_kindAllowed(kind)) return false;
+    if ((kind === 'needs_input' || kind === 'task') && _isFrontSession(item.session_id)) {
+      try {
+        fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msg: '[notify] suppressed (front session) kind=' + kind + ' sid=' + String(item.session_id).slice(0, 8) }) });
+      } catch (_) {}
+      return false;
+    }
     // Unapproved pop-ups stay silent (static/popups.js); the explicit
     // "Send test notification" button is not a pop-up.
     if (id.indexOf('ntf_test_') !== 0 &&
