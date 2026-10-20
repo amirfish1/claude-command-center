@@ -1,0 +1,1 @@
+- Queue board ALL view no longer clips the live-workers list behind an empty box; the band now fills the column and scrolls.
