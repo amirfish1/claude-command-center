@@ -14,12 +14,7 @@ if [ -n "${OPENAI_API_KEY:-}" ] && [ ! -f "$HOME/.codex/auth.json" ]; then
     && echo "[level-entrypoint] codex logged in with OPENAI_API_KEY" \
     || echo "[level-entrypoint] WARNING: codex login failed"
 fi
-# Gemini CLI uses GEMINI_API_KEY from env; preselect that auth type so it
-# never stops at the interactive auth picker.
-if [ -n "${GEMINI_API_KEY:-}" ] && [ ! -f "$HOME/.gemini/settings.json" ]; then
-  mkdir -p "$HOME/.gemini"
-  printf '%s\n' '{"security":{"auth":{"selectedType":"gemini-api-key"}}}' > "$HOME/.gemini/settings.json"
-fi
+# Gemini: OpenCode reads GOOGLE_GENERATIVE_AI_API_KEY from env; nothing to set up.
 
 # A git repo under ~/repos so the new-session folder defaults here (CCC scans
 # ~/repos for git repos) instead of falling back to /app, CCC's own code.
