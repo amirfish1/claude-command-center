@@ -19784,6 +19784,17 @@
     applyConvFontScale();
   });
 
+  // Status-rail A-/A+ (next to the background palette). The rail can be
+  // reparented per pane, so delegate instead of binding to one element.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('[data-role="rail-font-minus"], [data-role="rail-font-plus"]');
+    if (!btn) return;
+    const step = btn.dataset.role === 'rail-font-plus' ? 0.1 : -0.1;
+    convFontScale = Math.min(1.5, Math.max(0.7, +(convFontScale + step).toFixed(1)));
+    localStorage.setItem('ccc-conv-font-scale', String(convFontScale));
+    applyConvFontScale();
+  });
+
   // The Sessions/Issues tab bar was removed. switchTab() is kept as a
   // null-safe no-op so legacy call sites (e.g. fix-issue flow) don't crash;
   // behaviour is always the sessions view now.

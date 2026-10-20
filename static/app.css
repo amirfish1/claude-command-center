@@ -19403,6 +19403,8 @@ button.subagent-row.wf-agent:hover { border-color: rgba(139, 87, 215, 0.45); }
   gap: 12px;
   flex-wrap: wrap;
 }
+.status-rail .rail-font-stepper { display: flex; gap: 4px; }
+.status-rail .rail-font-stepper .font-size-btn { width: 28px; height: 24px; font-size: 12px; }
 .status-rail .conv-bg-palette {
   justify-self: end;
   justify-content: end;
