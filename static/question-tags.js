@@ -179,19 +179,55 @@
     s.hidden = false;
   }
 
+  function chipsFor(n) {
+    return Array.prototype.slice.call(document.querySelectorAll('.qtag-chip[data-qn="' + n + '"]'));
+  }
+
+  // The chip inside the very first message that carried the tag: matched by the
+  // event's own timestamp (the dashboard stamps rendered events with data-ts-epoch).
+  function firstReferenceChip(q) {
+    var want = Date.parse(q.first.ts);
+    var chips = chipsFor(q.n);
+    if (!isNaN(want)) {
+      for (var i = 0; i < chips.length; i++) {
+        var ev = chips[i].closest('[data-ts-epoch]');
+        if (ev && Math.abs(Number(ev.getAttribute('data-ts-epoch')) - want) <= 5000) return chips[i];
+      }
+    }
+    return null;
+  }
+
+  function flash(el) {
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('qtag-flash');
+    setTimeout(function () { el.classList.remove('qtag-flash'); }, 2500);
+  }
+
+  // Already in the session: keep pressing "Load earlier messages" until the
+  // first reference is rendered, then scroll to it. Falls back to the topmost
+  // chip when the history is exhausted without a timestamp match.
   function jumpTo(n) {
     var q = index.byN[n];
     if (!q) return;
     sheet.hidden = true;
-    if (typeof window.cccOpenSession === 'function') window.cccOpenSession(q.first.sid);
-    var tries = 0;
+    var front = typeof window.cccFrontSessionId === 'function' ? window.cccFrontSessionId() : '';
+    if (front !== q.first.sid && typeof window.cccOpenSession === 'function') window.cccOpenSession(q.first.sid);
+    var started = Date.now(), loads = 0, lastLoadAt = 0;
     (function seek() {
-      var el = document.querySelector('.qtag-chip[data-qn="' + n + '"]:not(.qtag-row .qtag-chip)');
-      if (el) {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        el.classList.add('qtag-flash');
-        setTimeout(function () { el.classList.remove('qtag-flash'); }, 2500);
-      } else if (++tries < 20) setTimeout(seek, 300);
+      var hit = firstReferenceChip(q);
+      if (hit) { flash(hit); return; }
+      var banner = document.querySelector('.conv-load-earlier');
+      var loading = banner && (banner.disabled || document.querySelector('.conv-loading-overlay'));
+      var timedOut = Date.now() - started > 90000 || loads >= 60;
+      if (banner && !loading && !timedOut && Date.now() - lastLoadAt > 400) {
+        loads++; lastLoadAt = Date.now();
+        banner.click();
+      } else if ((!banner && Date.now() - started > 2500) || timedOut) {
+        var all = chipsFor(n);
+        if (all.length) flash(all[0]);
+        return;
+      }
+      setTimeout(seek, 300);
     })();
   }
 
