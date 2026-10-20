@@ -19143,6 +19143,12 @@
       btn.classList.toggle('is-selected', sel);
       btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
     });
+    const voiceMobileOn = getVoiceMobileBtnPref();
+    document.querySelectorAll('#simpleVoiceMobileRow [data-simple-voice-mobile]').forEach(btn => {
+      const sel = (btn.getAttribute('data-simple-voice-mobile') === 'on') === voiceMobileOn;
+      btn.classList.toggle('is-selected', sel);
+      btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
+    });
   }
   function _wireSimpleScreens() {
     // Back buttons on every depth-3 screen (data-simple-back-to overrides the
@@ -19214,6 +19220,15 @@
         const on = chip.getAttribute('data-simple-memory-banner') === 'on';
         try { localStorage.setItem('ccc-simple-memory-banner', on ? 'on' : 'off'); } catch (_) {}
         _simpleSyncSettingsScreen();
+      });
+    }
+    const voiceMobileRow = document.getElementById('simpleVoiceMobileRow');
+    if (voiceMobileRow) {
+      voiceMobileRow.addEventListener('click', (ev) => {
+        const chip = ev.target.closest('[data-simple-voice-mobile]');
+        if (!chip) return;
+        const on = chip.getAttribute('data-simple-voice-mobile') === 'on';
+        setVoiceMobileBtnPref(on);
       });
     }
     const fwd = (id, targetId) => {
@@ -80312,6 +80327,8 @@
       if ($voiceIdleSeconds) $voiceIdleSeconds.value = c.idle_seconds || 120;
       if ($voiceSaveTranscripts) $voiceSaveTranscripts.checked = !!c.save_transcripts;
       if ($voiceAllowFallback) $voiceAllowFallback.checked = c.allow_api_fallback !== false;
+      const $voiceShowMobileBtn = document.getElementById('voiceShowMobileBtn');
+      if ($voiceShowMobileBtn) $voiceShowMobileBtn.checked = getVoiceMobileBtnPref();
     } catch (err) {
       voiceModalError('Could not load voice settings.');
     }
@@ -80323,6 +80340,10 @@
 
   async function saveVoiceConfig() {
     voiceModalError('');
+    const $voiceShowMobileBtn = document.getElementById('voiceShowMobileBtn');
+    if ($voiceShowMobileBtn) {
+      setVoiceMobileBtnPref(!!$voiceShowMobileBtn.checked);
+    }
     const patch = {
       voice: $voiceSelect ? $voiceSelect.value : undefined,
       profile: $voiceProfileSelect ? $voiceProfileSelect.value : undefined,
@@ -80330,6 +80351,7 @@
       idle_seconds: $voiceIdleSeconds ? parseInt($voiceIdleSeconds.value, 10) : undefined,
       save_transcripts: $voiceSaveTranscripts ? !!$voiceSaveTranscripts.checked : undefined,
       allow_api_fallback: $voiceAllowFallback ? !!$voiceAllowFallback.checked : undefined,
+      show_mobile_btn: $voiceShowMobileBtn ? !!$voiceShowMobileBtn.checked : undefined,
     };
     for (const k of Object.keys(patch)) if (patch[k] === undefined || Number.isNaN(patch[k])) delete patch[k];
     try {
@@ -84307,6 +84329,44 @@
   // CCC-781: default OFF — the multi-queue health list (queueHealthStrip) is
   // hidden and a compact single-queue status strip takes its place instead.
   function getQueueRhsListPref() { return localStorage.getItem('ccc-queue-rhs-list') === 'on'; }
+  const VOICE_MOBILE_BTN_STORAGE_KEY = 'ccc-voice-mobile-btn';
+  function getVoiceMobileBtnPref() {
+    try { return localStorage.getItem(VOICE_MOBILE_BTN_STORAGE_KEY) !== '0'; }
+    catch (_) { return true; }
+  }
+
+  function applyVoiceMobileBtn(show) {
+    document.body.classList.toggle('hide-voice-mobile-btn', !show);
+    const $btn = document.getElementById('voiceMobileBtn');
+    if ($btn) {
+      if (!show) {
+        $btn.setAttribute('aria-hidden', 'true');
+        $btn.setAttribute('tabindex', '-1');
+      } else {
+        $btn.removeAttribute('aria-hidden');
+        $btn.removeAttribute('tabindex');
+      }
+    }
+    const $toggle = document.getElementById('settingsVoiceMobileToggle');
+    if ($toggle) {
+      $toggle.classList.toggle('is-on', show);
+      $toggle.setAttribute('aria-checked', String(show));
+    }
+    const $cb = document.getElementById('voiceShowMobileBtn');
+    if ($cb) {
+      $cb.checked = show;
+    }
+    if (typeof _simpleSyncSettingsScreen === 'function') {
+      _simpleSyncSettingsScreen();
+    }
+  }
+
+  function setVoiceMobileBtnPref(show) {
+    try {
+      localStorage.setItem(VOICE_MOBILE_BTN_STORAGE_KEY, show ? '1' : '0');
+    } catch (_) {}
+    applyVoiceMobileBtn(show);
+  }
 
   function applyTheme(pref) {
     let resolved = pref;
@@ -84408,6 +84468,12 @@
       const on = getQueueRhsListPref();
       $queueRhsListToggle.classList.toggle('is-on', on);
       $queueRhsListToggle.setAttribute('aria-checked', String(on));
+    }
+    const $voiceMobileToggle = document.getElementById('settingsVoiceMobileToggle');
+    if ($voiceMobileToggle) {
+      const on = getVoiceMobileBtnPref();
+      $voiceMobileToggle.classList.toggle('is-on', on);
+      $voiceMobileToggle.setAttribute('aria-checked', String(on));
     }
     _syncUiModeBodyClass();
   }
@@ -85724,8 +85790,10 @@
     try {
       localStorage.removeItem('ccc-view-gh');
       localStorage.removeItem('ccc-hero-live-variant');
+      localStorage.removeItem(VOICE_MOBILE_BTN_STORAGE_KEY);
     } catch (_) {}
     applyViewGh(getViewGhPref());
+    applyVoiceMobileBtn(getVoiceMobileBtnPref());
     refreshAppearanceChecks();
   }
 
@@ -86218,6 +86286,14 @@
         showSettingsSavedPulse(uiModeToggle.closest('.settings-row'));
         return;
       }
+      const voiceMobileToggle = e.target.closest('[data-voice-mobile-toggle]');
+      if (voiceMobileToggle) {
+        const next = !getVoiceMobileBtnPref();
+        setVoiceMobileBtnPref(next);
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(voiceMobileToggle.closest('.settings-row'));
+        return;
+      }
       const ffToggle = e.target.closest('[data-ff-toggle]');
       if (ffToggle) {
         const name = ffToggle.getAttribute('data-ff-toggle');
@@ -86318,6 +86394,7 @@
   applyTheme(getThemePref());
   applyFont(getFontPref());
   applyViewGh(getViewGhPref());
+  applyVoiceMobileBtn(getVoiceMobileBtnPref());
 
   // ── ⌘K / ⌘P session search modal ──────────────────────────────
   const $cmdkModal = document.getElementById('cmdkModal');

@@ -12700,6 +12700,7 @@
     border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .voice-panel[hidden] { display: none; }
   .voice-mobile-btn { display: none; }
+  body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
   @media (max-width: 1200px) {
     .voice-mobile-btn {
       position: fixed; right: max(16px, env(safe-area-inset-right, 0px));
@@ -12716,7 +12717,8 @@
     }
     .voice-mobile-btn.live { background: #1a6330; }
     .voice-mobile-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
-    body.voice-panel-open .voice-mobile-btn { display: none; }
+    body.voice-panel-open .voice-mobile-btn,
+    body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
     .voice-panel {
       right: max(12px, env(safe-area-inset-right, 0px));
       bottom: calc(16px + env(safe-area-inset-bottom, 0px));
