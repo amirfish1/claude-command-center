@@ -50570,13 +50570,26 @@
       // own amber marker instead of a new backend status (closed/unresolved
       // is a property of the resolution, not a distinct queue state the
       // engine needs to reason about).
+      // A human `wt comment` after the block does not clear needs_input (only
+      // `wt answer` does), so the row would read "needs input" for a question
+      // the owner already replied to. Surface that as "replied".
+      const _uxqRepliedAfterBlock = it => {
+        const h = it && Array.isArray(it.history) ? it.history : [];
+        let blockAt = '';
+        for (let i = h.length - 1; i >= 0; i--) {
+          if (h[i] && h[i].event === 'block') { blockAt = String(h[i].at || ''); break; }
+        }
+        if (!blockAt) return false;
+        return h.some(e => e && e.event === 'comment' && e.kind === 'human' && String(e.at || '') > blockAt);
+      };
       const _uxqChips = (it, priorityBumpHtml = '') => {
         const c = [];
         if (it.needs_input && it.status !== 'closed') {
           if (it.block_kind === 'rationale') {
             c.push('<span class="fq-chip fq-gated" title="' + escapeAttr(it.block_question || 'pitch awaiting decision') + '">GATE</span>');
           } else {
-            c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr(it.block_question || 'needs human input') + '">needs input</span>');
+            const replied = _uxqRepliedAfterBlock(it);
+            c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr((replied ? 'Owner commented after this question; worker has not picked it up yet. ' : '') + (it.block_question || 'needs human input')) + '">' + (replied ? 'replied' : 'needs input') + '</span>');
           }
         }
         if (it.status === 'in_review') {
@@ -50670,7 +50683,7 @@
         const runTitle = queuedToRun
           ? 'Queued to run - click to cancel'
           : (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
-        const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
+        const statusTitle = blocked ? (_uxqRepliedAfterBlock(it) ? 'replied - awaiting worker' : 'needs input') : hasUnresolved ? 'closed - unresolved follow-up'
           : (stageTone && !queuedToRun) ? stageToneTitle
           : unverifiedClaim ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
           : staleClaim ? 'stale claim - no current live worker'
