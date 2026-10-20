@@ -1,0 +1,1 @@
+- Question-tag sheet shows the original explanation as readable rendered text and has an answer box that adds `[Q<n>] ...` to that session's composer without sending, so several answers can be stacked.

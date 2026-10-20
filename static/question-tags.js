@@ -108,6 +108,9 @@
       if (ev.target === sheet || ev.target.closest('.qtag-close')) { sheet.hidden = true; return; }
       var jump = ev.target.closest('[data-qjump]');
       if (jump) { jumpTo(+jump.getAttribute('data-qjump')); return; }
+      if (ev.target.closest('[data-qlist]')) { showPanel(); return; }
+      var add = ev.target.closest('[data-qadd]');
+      if (add) { addAnswer(+add.getAttribute('data-qadd')); return; }
       var open = ev.target.closest('[data-qshow]');
       if (open) showQuestion(+open.getAttribute('data-qshow'));
     });
@@ -132,15 +135,34 @@
     if (!q) {
       body = '<p class="qtag-empty">' + (waiting ? 'Looking for Q' + n + '…' : 'No explanation found for Q' + n + ' yet.') + '</p>';
     } else {
+      var md = typeof window.cccRenderMarkdown === 'function' ? window.cccRenderMarkdown(q.first.text) : null;
       body = '<div class="qtag-meta">' + (q.answered ? '<span class="qtag-st qtag-st-done">answered</span>' : '<span class="qtag-st qtag-st-open">open</span>')
         + ' first asked ' + esc(fmtTs(q.first.ts)) + ' · ' + q.mentions.length + ' reminder' + (q.mentions.length === 1 ? '' : 's') + '</div>'
-        + '<pre class="qtag-text">' + esc(q.first.text) + '</pre>'
-        + '<button type="button" class="qtag-btn" data-qjump="' + q.n + '">Jump to original message</button>';
+        + '<div class="qtag-text assistant-text-plain">' + (md || '<p style="white-space:pre-wrap">' + esc(q.first.text) + '</p>') + '</div>'
+        + '<label class="qtag-ans-label" for="qtagAns">Your answer</label>'
+        + '<textarea id="qtagAns" class="qtag-ans" rows="3" placeholder="Type your answer. It goes into the session\'s composer; nothing is sent."></textarea>'
+        + '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qadd="' + q.n + '">Add to composer</button>'
+        + '<button type="button" class="qtag-btn" data-qjump="' + q.n + '">Jump to original</button>'
+        + (openQuestions(index.list).length > 1 ? '<button type="button" class="qtag-btn" data-qlist="1">All open questions</button>' : '')
+        + '</div><div class="qtag-added" aria-live="polite"></div>';
     }
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>' + (q ? esc(q.tag) : 'Q' + n) + '</strong>'
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>' + body + '</div>';
     if (waiting) s.setAttribute('data-qwait', n); else s.removeAttribute('data-qwait');
     s.hidden = false;
+  }
+
+  function addAnswer(n) {
+    var q = index.byN[n], ta = document.getElementById('qtagAns'), note = sheet.querySelector('.qtag-added');
+    var txt = ta && ta.value.trim();
+    if (!q || !txt) { if (note) note.textContent = 'Type an answer first.'; return; }
+    if (note) note.textContent = 'Adding…';
+    // Tag the line so the agent (and the open/answered tracker) can tell which question it answers.
+    window.cccAppendToComposer(q.first.sid, '[Q' + n + '] ' + txt).then(function (ok) {
+      if (!note) return;
+      if (ok) { ta.value = ''; note.textContent = 'Added to the composer for that session (not sent). Add more answers, or close and send when ready.'; }
+      else note.textContent = 'Could not reach that session\'s composer. Open the session and try again.';
+    });
   }
 
   function showPanel() {

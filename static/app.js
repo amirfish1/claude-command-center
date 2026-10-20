@@ -15,6 +15,32 @@
   window.cccOpenSession = function (sid) {
     try { if (sid) selectConversation(sid); } catch (_) {}
   };
+  // Question-tags panel: put text into a session's composer WITHOUT sending, so
+  // the owner can stack several answers and submit on their own time. Opens the
+  // session first when it is not already in front.
+  window.cccAppendToComposer = function (sid, text) {
+    return new Promise((resolve) => {
+      let tries = 0;
+      const attempt = () => {
+        let input = null;
+        try {
+          if (window.cccFrontSessionId() === sid) input = composerInputForPane(activePaneId());
+        } catch (_) {}
+        if (input) {
+          const cur = input.value || '';
+          input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
+          moveInputCaretToEnd(input);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          try { rememberComposerDraftForPane(activePaneId()); } catch (_) {}
+          resolve(true);
+        } else if (++tries > 40) resolve(false);
+        else setTimeout(attempt, 150);
+      };
+      try { if (window.cccFrontSessionId() !== sid) selectConversation(sid); } catch (_) {}
+      attempt();
+    });
+  };
+  window.cccRenderMarkdown = function (t) { try { return renderMarkdown(t); } catch (_) { return null; } };
   // Session shown in the active pane; notify.js skips banners for it.
   window.cccFrontSessionId = function () {
     try { return splitState.panes[splitState.activeIndex].conversationId || ''; } catch (_) { return ''; }
