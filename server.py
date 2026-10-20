@@ -31209,13 +31209,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # instead of after the whole clip. Deepgram only when explicitly
                 # enabled; otherwise local Kokoro, which streams per sentence.
                 _voice_in = str(payload.get("voice") or "")
+                # "bg" = prepare-ahead; the local voice serves "fg" reads first.
+                _prio = "bg" if payload.get("prio") == "bg" else "fg"
                 _resp, _label = _free_runtime.deepgram_open(
                     payload.get("text"), _voice_in, "encoding=mp3")
                 if (_resp is None and _free_runtime.local_tts_installed()
                         and _voice_in not in _free_runtime.TTS_VOICES):
-                    _resp, _label = _free_runtime.local_tts_open(payload.get("text"), _voice_in)
+                    _resp, _label = _free_runtime.local_tts_open(payload.get("text"), _voice_in, _prio)
                 if _resp is not None:
                     _sent = 0
+                    _first_ms = -1
                     try:
                         self.send_response(200)
                         self.send_header("Content-Type", "audio/mpeg")
@@ -31232,14 +31235,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 _buf = _resp.read(4096)
                                 if not _buf:
                                     break
+                                if _first_ms < 0:
+                                    _first_ms = int((time.time() - _t0) * 1000)
                                 self.wfile.write(_buf)
                                 self.wfile.flush()
                                 _sent += len(_buf)
                     except Exception:
                         pass
-                    _log_activity("tts", "SPEAK", "chars=%d status=200 spoke=%s ms=%d bytes=%d stream=1" % (
+                    # first = ms until the first audio bytes (the wait before
+                    # sound); ms = until the whole clip was made.
+                    _log_activity("tts", "SPEAK", "chars=%d status=200 spoke=%s ms=%d first=%d bytes=%d stream=1 prio=%s" % (
                         len(str(payload.get("text") or "")), _label,
-                        int((time.time() - _t0) * 1000), _sent))
+                        int((time.time() - _t0) * 1000), _first_ms, _sent, _prio))
                     return
             status, audio, ctype, voice = _free_runtime.tts(payload.get("text"), str(payload.get("voice") or ""))
             _log_activity("tts", "SPEAK", "chars=%d status=%d spoke=%s ms=%d bytes=%d" % (
@@ -42705,6 +42712,11 @@ def main():
     # inline on the request thread (60s+ on a real corpus, MEMO-FIX-12);
     # warming here means that parse is already done, or well underway, by the
     # time any real request arrives. Cheap/no-op once already warm.
+    if not os.environ.get("CCC_EPHEMERAL"):
+        # Installed local voice: load it now and keep it up, so the first
+        # Speak doesn't wait ~30 s for the model.
+        threading.Thread(target=_free_runtime.local_tts_keepalive, daemon=True,
+                         name="local-tts-keepalive").start()
     if not os.environ.get("CCC_EPHEMERAL"):
         from ccc_server import session_fts as _session_fts_warm
         from ccc_server import ship_graph as _ship_graph_warm

@@ -459,9 +459,38 @@ def _local_tts_health():
         return {}
 
 
+# The local voice server's runtime contract (scripts/local_tts_server.py
+# SERVER_REV). An older process (nice 10, no fg/bg priority) is replaced.
+_LOCAL_TTS_REV = 2
+
+
+def _local_tts_current(health):
+    return (health.get("ok") is True and health.get("stream") is True
+            and int(health.get("rev") or 0) >= _LOCAL_TTS_REV)
+
+
 def _local_tts_up():
-    health = _local_tts_health()
-    return health.get("ok") is True and health.get("stream") is True
+    return _local_tts_current(_local_tts_health())
+
+
+def _local_tts_retire(health):
+    """Stop an outdated voice server so a current one can take its port."""
+    import signal
+    import subprocess
+    import time
+    pid = health.get("pid")
+    try:
+        if isinstance(pid, int) and pid > 1:
+            os.kill(pid, signal.SIGTERM)
+        else:  # rev 1 did not report its pid; match this checkout's script only
+            subprocess.run(["pkill", "-f", str(_LOCAL_TTS_SCRIPT)], timeout=5,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return
+    for _ in range(20):
+        if not _local_tts_health().get("ok"):
+            return
+        time.sleep(0.25)
 
 
 _LOCAL_TTS_PROCESS = None
@@ -511,33 +540,58 @@ def _local_tts_start():
             return True
         if not local_tts_installed():
             return False
+        health = _local_tts_health()
+        if health.get("ok") and health.get("stream"):
+            _local_tts_retire(health)   # an older process holds the port
         if _LOCAL_TTS_PROCESS is not None:
             if _LOCAL_TTS_PROCESS.poll() is None:
                 _LOCAL_TTS_PROCESS.terminate()
                 _LOCAL_TTS_PROCESS.wait(timeout=5)
             _LOCAL_TTS_PROCESS = None
         health = _local_tts_health()
-        if health.get("ok") and not health.get("stream"):
-            # An older, unowned Kokoro process may have loaded without lameenc.
-            # Leave it alone and use a fresh loopback port for the repaired voice.
+        if health.get("ok") and not _local_tts_current(health):
+            # An older, unowned Kokoro process may have loaded without lameenc,
+            # or survived retiring. Leave it alone and use a fresh loopback port.
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
                 _LOCAL_TTS_PORT = listener.getsockname()[1]
         env = dict(os.environ, CCC_LOCAL_TTS_DIR=str(_LOCAL_TTS_DIR),
                    CCC_LOCAL_TTS_PORT=str(_LOCAL_TTS_PORT),
-                   CCC_KOKORO_THREADS=os.environ.get("CCC_KOKORO_THREADS", "").strip() or "2")
-        _LOCAL_TTS_PROCESS = subprocess.Popen(
-            [str(_LOCAL_TTS_DIR / "venv" / "bin" / "python"), str(_LOCAL_TTS_SCRIPT)],
-            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
-        for _ in range(120):
-            if _LOCAL_TTS_PROCESS.poll() is not None:
-                return False
-            time.sleep(0.25)
-            if _local_tts_up():
-                _local_tts_save_port()
-                return True
+                   CCC_KOKORO_THREADS=os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4")
+        cmd = [str(_LOCAL_TTS_DIR / "venv" / "bin" / "python"), str(_LOCAL_TTS_SCRIPT)]
+        weight = _local_tts_weight_prefix()
+        # Weighted first; if systemd-run can't make the scope, run it plain.
+        for attempt in ([weight + cmd, cmd] if weight else [cmd]):
+            _LOCAL_TTS_PROCESS = subprocess.Popen(
+                attempt, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True)
+            for _ in range(120):
+                if _LOCAL_TTS_PROCESS.poll() is not None:
+                    break
+                time.sleep(0.25)
+                if _local_tts_up():
+                    _local_tts_save_port()
+                    return True
+            else:
+                return False   # still loading after 30 s; leave it be
         return False
+
+
+def _local_tts_weight_prefix():
+    """systemd-run args giving the voice its own high CPU weight, or [].
+
+    On a busy Linux host the agent work the dashboard spawns shares its cgroup,
+    so nice 0 still left Kokoro ~1 core: an 80-char clip took 20-30 s. Its own
+    scope at CPUWeight=1000 (default 100) cut that to ~8 s. Off with
+    CCC_KOKORO_CPU_WEIGHT=0.
+    """
+    import shutil
+    import sys
+    weight = os.environ.get("CCC_KOKORO_CPU_WEIGHT", "").strip() or "1000"
+    if (weight == "0" or not sys.platform.startswith("linux")
+            or not os.environ.get("XDG_RUNTIME_DIR") or not shutil.which("systemd-run")):
+        return []
+    return ["systemd-run", "--user", "--scope", "--quiet", "-p", "CPUWeight=" + weight]
 
 
 def _kokoro_voice(voice):
@@ -549,20 +603,21 @@ def _kokoro_voice(voice):
     return voice if voice in KOKORO_VOICES else random.choice(KOKORO_VOICES)
 
 
-def _local_tts_request(path, text, voice):
+def _local_tts_request(path, text, voice, prio="fg"):
     import urllib.request
     return urllib.request.Request(
         "http://127.0.0.1:%d%s" % (_LOCAL_TTS_PORT, path),
-        data=json.dumps({"text": text, "voice": voice}).encode(),
+        data=json.dumps({"text": text, "voice": voice, "prio": "bg" if prio == "bg" else "fg"}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
 
 
-def local_tts_open(text, voice=""):
+def local_tts_open(text, voice="", prio="fg"):
     """(open HTTP response, label) streaming Kokoro mp3, or (None, "") when unavailable.
 
     The local server makes the clip a sentence at a time and sends each one as
     soon as it is ready, so playback starts after the first sentence instead of
-    after the whole text.
+    after the whole text. prio "bg" (prepare-ahead) yields to "fg" (a read
+    being heard) at every sentence.
     """
     import urllib.request
     text = str(text or "").strip()[:TTS_MAX_CHARS]
@@ -582,7 +637,7 @@ def local_tts_open(text, voice=""):
     if cached is not None:
         return _CachedClip(cached), _KOKORO_LABEL + voice
     try:
-        resp = urllib.request.urlopen(_local_tts_request("/stream", text, voice), timeout=60)
+        resp = urllib.request.urlopen(_local_tts_request("/stream", text, voice, prio), timeout=60)
         return _TeeClip(resp, key), _KOKORO_LABEL + voice
     except Exception:  # older venv without lameenc answers 404: caller uses local_tts()
         return None, ""
@@ -591,9 +646,72 @@ def local_tts_open(text, voice=""):
 # Kokoro runs near realtime on a busy CPU (a 400-char clip takes ~20s), so a
 # clip read again (Speak pressed twice, re-read after a Stop) is kept in memory
 # and replayed instantly. Bounded by bytes; only fully-made clips are stored.
+# Clips are also written to disk (one file per clip, oldest-used evicted), so
+# a dashboard restart does not throw away audio already made.
 _CLIP_CACHE_MAX_BYTES = 48 * 1024 * 1024
+_CLIP_DISK_MAX_BYTES = 256 * 1024 * 1024
 _CLIP_CACHE = {}   # (text, voice) -> mp3 bytes, oldest first
 _CLIP_CACHE_LOCK = threading.Lock()
+
+
+def _clip_disk_dir():
+    # Per model precision: an fp32 and an int8 clip of the same text differ.
+    return _LOCAL_TTS_DIR / "cache" / local_tts_precision()
+
+
+def _clip_text_hash(text):
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def _clip_disk_path(key):
+    return _clip_disk_dir() / ("%s-%s.mp3" % (_clip_text_hash(key[0]), key[1]))
+
+
+def _clip_disk_read(path):
+    try:
+        data = path.read_bytes()
+        os.utime(path)   # mtime = last use, for eviction
+        return data or None
+    except OSError:
+        return None
+
+
+def _clip_disk_write(key, data):
+    folder = _clip_disk_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        target = _clip_disk_path(key)
+        temporary = target.with_suffix(".tmp%d" % threading.get_ident())
+        temporary.write_bytes(data)
+        temporary.replace(target)
+        files = []
+        for entry in os.scandir(folder):
+            if entry.name.endswith(".mp3"):
+                st = entry.stat()
+                files.append((st.st_mtime, st.st_size, entry.path))
+        total = sum(f[1] for f in files)
+        for _mtime, size, path in sorted(files):
+            if total <= _CLIP_DISK_MAX_BYTES:
+                break
+            try:
+                os.remove(path)
+                total -= size
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _clip_memory_put(key, data):
+    with _CLIP_CACHE_LOCK:
+        _CLIP_CACHE.pop(key, None)
+        _CLIP_CACHE[key] = data
+        total = sum(len(v) for v in _CLIP_CACHE.values())
+        for old in list(_CLIP_CACHE):
+            if total <= _CLIP_CACHE_MAX_BYTES or old == key:
+                break
+            total -= len(_CLIP_CACHE.pop(old))
 
 
 def _clip_cache_get_any_voice(text):
@@ -603,7 +721,21 @@ def _clip_cache_get_any_voice(text):
                 data = _CLIP_CACHE.pop(key)
                 _CLIP_CACHE[key] = data
                 return key[1], data
+    prefix = _clip_text_hash(text) + "-"
+    try:
+        hits = sorted((e.stat().st_mtime, e.name) for e in os.scandir(_clip_disk_dir())
+                      if e.name.startswith(prefix) and e.name.endswith(".mp3"))
+    except OSError:
         return None
+    for _mtime, name in reversed(hits):
+        voice = name[len(prefix):-len(".mp3")]
+        if voice not in KOKORO_VOICES:
+            continue
+        data = _clip_disk_read(_clip_disk_dir() / name)
+        if data:
+            _clip_memory_put((text, voice), data)
+            return voice, data
+    return None
 
 
 def _clip_cache_get(key):
@@ -611,20 +743,18 @@ def _clip_cache_get(key):
         data = _CLIP_CACHE.pop(key, None)
         if data is not None:
             _CLIP_CACHE[key] = data   # most recently used goes last
-        return data
+            return data
+    data = _clip_disk_read(_clip_disk_path(key))
+    if data:
+        _clip_memory_put(key, data)
+    return data
 
 
 def _clip_cache_put(key, data):
     if not data or len(data) > _CLIP_CACHE_MAX_BYTES:
         return
-    with _CLIP_CACHE_LOCK:
-        _CLIP_CACHE.pop(key, None)
-        _CLIP_CACHE[key] = data
-        total = sum(len(v) for v in _CLIP_CACHE.values())
-        for old in list(_CLIP_CACHE):
-            if total <= _CLIP_CACHE_MAX_BYTES or old == key:
-                break
-            total -= len(_CLIP_CACHE.pop(old))
+    _clip_disk_write(key, data)
+    _clip_memory_put(key, data)
 
 
 class _CachedClip:
@@ -670,6 +800,19 @@ class _TeeClip:
         finally:
             if self._done and exc[0] is None:
                 _clip_cache_put(self._key, b"".join(self._parts))
+
+
+def local_tts_keepalive(interval=60.0):
+    """Keep the installed local voice up: start it at boot, restart it after a
+    crash, so the first Speak never pays the ~30 s model load. Runs forever."""
+    import time
+    while True:
+        try:
+            if local_tts_installed():
+                _local_tts_start()
+        except Exception:
+            pass
+        time.sleep(interval)
 
 
 def local_tts(text, voice=""):

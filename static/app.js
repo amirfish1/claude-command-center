@@ -13107,7 +13107,7 @@
     const entry = { ready: false, got: null };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
-    entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '').then((got) => {
+    entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '', 'bg').then((got) => {
       entry.ready = true; entry.got = got; entry.voice = got.voice;
       _ttsMarkCache(mk, head.text, 'partial', 0.1);
       Promise.resolve(got.done).then(() => {
@@ -13177,7 +13177,7 @@
         let entry = _ttsHeadCache.get(c.text);
         if (!entry) {
           entry = { ready: false, got: null, voice: headGot.voice };
-          entry.p = _ttsFetchNeural(c.text, headGot.voice).then((got) => { entry.ready = true; entry.got = got; return got; });
+          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg').then((got) => { entry.ready = true; entry.got = got; return got; });
           entry.p.catch(() => { if (_ttsHeadCache.get(c.text) === entry) _ttsHeadCache.delete(c.text); });
           _ttsHeadCache.set(c.text, entry);
           _ttsEvictCache();
@@ -13254,14 +13254,15 @@
   }
   const _ttsCanStream = () => typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mpeg');
   // Resolves { url, voice } or rejects with the HTTP status (0 = network).
-  function _ttsFetchNeural(text, voice) {
+  // prio 'bg' = prepare-ahead: the local voice makes 'fg' (a read being heard) first.
+  function _ttsFetchNeural(text, voice, prio) {
     voice = voice || ttsVoiceForPane(activePaneId());
     let onDone;
     const done = new Promise((r) => { onDone = r; });
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: voice || '', stream: _ttsCanStream() }),
+      body: JSON.stringify({ text, voice: voice || '', stream: _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
@@ -13291,7 +13292,7 @@
         p = hit.p;
         _ttsHeadCache.delete(c.text);
       } else {
-        p = _ttsFetchNeural(c.text, state.geminiVoice);
+        p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg');
         p.catch(() => {});
       }
       state.prefetch[i] = p;
@@ -13347,8 +13348,21 @@
         _ttsNeural = null;
         _ttsUtterance = null;
         state.index += 1;
+        state.gapFrom = Date.now();
         _ttsSpeakNextChunk();
       };
+      // Where reads wait: time to first sound, gaps between clips, and stalls
+      // inside a clip (the stream ran dry), so slow reads can be measured.
+      let waitFrom = 0;
+      audio.addEventListener('playing', () => {
+        if (stale()) return;
+        const now = Date.now();
+        if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms'); state.t0 = 0; }
+        else if (state.gapFrom) { const g = now - state.gapFrom; if (g > 300) _ttsLog('GAP', g + 'ms before clip ' + idx + ' (' + chunk.text.length + ' chars)'); }
+        state.gapFrom = 0;
+        if (waitFrom) { _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
+      });
+      audio.addEventListener('waiting', () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); });
       audio.onerror = () => { URL.revokeObjectURL(got.url); fallBack(300000); };
       audio.play().catch(() => fallBack(0));
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
@@ -13644,6 +13658,7 @@
       index: 0,
       paneId: paneId || _ttsActivePaneId || activePaneId(),
       pauseOnStart: !!pauseOnStart,
+      t0: Date.now(),
     };
     _ttsSpeakNextChunk();
     return true;

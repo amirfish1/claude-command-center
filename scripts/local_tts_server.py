@@ -7,7 +7,11 @@ demand (ccc_server/free_runtime.py) and talks to it over 127.0.0.1 only.
 
     POST /speak  {"text": "...", "voice": "af_heart"}  ->  audio/wav
     POST /stream {"text": "...", "voice": "af_heart"}  ->  audio/mpeg, sentence by sentence
-    GET  /health                                        ->  {"ok": true, "model": ..., "stream": bool}
+    GET  /health                                        ->  {"ok": true, "model": ..., "stream": bool, "rev": int, ...}
+
+Requests carry "prio": "fg" (a read the user is listening to) or "bg"
+(prepare-ahead). Only one piece is made at a time, and a waiting fg request
+always goes before bg, so background work never slows the read being heard.
 
 /stream starts sending after the first sentence is made, so playback begins in a
 fraction of the full clip's time; it needs lameenc in the venv (404 without it).
@@ -25,10 +29,11 @@ HOME = os.path.expanduser(os.environ.get("CCC_LOCAL_TTS_DIR", os.path.join(os.pa
 PORT = int(os.environ.get("CCC_LOCAL_TTS_PORT", "3019"))
 MAX_CHARS = 2000
 
-try:
-    os.nice(10)
-except OSError:
-    pass
+# Bumped when the process's runtime contract changes (priority, threads), so
+# CCC replaces an older process left running from before an upgrade.
+SERVER_REV = 2
+# Normal priority: at nice 10 a loaded machine starved the voice for tens of
+# seconds. Background work is kept polite by the fg-first lock instead.
 
 import soundfile as sf
 from kokoro_onnx import Kokoro
@@ -65,7 +70,37 @@ def _load():
 
 _kokoro = _load()
 _voices = set(_kokoro.get_voices())
-_SYNTH_LOCK = threading.Lock()
+
+
+class _PriorityLock:
+    """One synthesis at a time; waiting fg requests always go before bg."""
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._busy = False
+        self._fg_waiting = 0
+
+    def acquire(self, fg):
+        with self._cond:
+            if fg:
+                self._fg_waiting += 1
+                try:
+                    while self._busy:
+                        self._cond.wait()
+                finally:
+                    self._fg_waiting -= 1
+            else:
+                while self._busy or self._fg_waiting:
+                    self._cond.wait()
+            self._busy = True
+
+    def release(self):
+        with self._cond:
+            self._busy = False
+            self._cond.notify_all()
+
+
+_SYNTH_LOCK = _PriorityLock()
 try:
     import lameenc
 except ImportError:  # /speak still works; /stream answers 404 and CCC uses /speak
@@ -103,9 +138,12 @@ def split_for_stream(text):
     return [p for p in pieces if p.strip()]
 
 
-def _synth(text, voice):
-    with _SYNTH_LOCK:
+def _synth(text, voice, fg=True):
+    _SYNTH_LOCK.acquire(fg)
+    try:
         return _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
+    finally:
+        _SYNTH_LOCK.release()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -122,7 +160,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._json(200, {"ok": True, "model": os.path.basename(model_path()), "stream": lameenc is not None})
+            self._json(200, {"ok": True, "model": os.path.basename(model_path()), "stream": lameenc is not None,
+                             "rev": SERVER_REV, "pid": os.getpid(), "nice": os.nice(0),
+                             "threads": int(os.environ.get("CCC_KOKORO_THREADS", "").strip() or "2")})
         else:
             self._json(404, {"ok": False})
 
@@ -131,6 +171,7 @@ class Handler(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(length)) if 0 < length <= 64 * 1024 else {}
         text = str(req.get("text") or "").strip()[:MAX_CHARS]
         voice = req.get("voice") if req.get("voice") in _voices else "af_heart"
+        self._fg = req.get("prio") != "bg"
         return text, voice
 
     def _stream(self):
@@ -155,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             for i, piece in enumerate(split_for_stream(text)):
-                samples, _rate = _synth(piece, voice)
+                samples, _rate = _synth(piece, voice, self._fg)
                 pcm = (samples.clip(-1.0, 1.0) * 32767).astype("<i2").tobytes()
                 self.wfile.write(bytes(enc.encode(pcm)))
                 self.wfile.flush()
@@ -177,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 self._json(400, {"ok": False})
                 return
-            samples, rate = _synth(text, voice)
+            samples, rate = _synth(text, voice, self._fg)
             buf = io.BytesIO()
             sf.write(buf, samples, rate, format="WAV", subtype="PCM_16")
         except Exception as exc:  # keep serving; the caller falls back

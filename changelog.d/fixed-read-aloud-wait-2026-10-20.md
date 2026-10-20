@@ -1,0 +1,1 @@
+- Read aloud starts sooner and stalls less on busy machines: the local voice now runs at normal priority with 4 threads (and its own high CPU weight on Linux), the read you are listening to is made before background prepare-ahead work, the voice is loaded at dashboard start and restarted if it crashes, and finished clips are kept on disk so a restart no longer throws them away.
