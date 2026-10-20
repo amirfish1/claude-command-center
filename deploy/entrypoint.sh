@@ -7,6 +7,20 @@ git config --global user.name  >/dev/null 2>&1 || git config --global user.name 
 git config --global user.email >/dev/null 2>&1 || git config --global user.email "ccc-prototype@level.agency"
 git config --global --add safe.directory '*' 2>/dev/null || true
 
+# Engine logins from env (keys come from the Dokploy env, never the image).
+# Codex reads ~/.codex/auth.json, so log it in once from OPENAI_API_KEY.
+if [ -n "${OPENAI_API_KEY:-}" ] && [ ! -f "$HOME/.codex/auth.json" ]; then
+  printenv OPENAI_API_KEY | codex login --with-api-key >/dev/null 2>&1 \
+    && echo "[level-entrypoint] codex logged in with OPENAI_API_KEY" \
+    || echo "[level-entrypoint] WARNING: codex login failed"
+fi
+# Gemini CLI uses GEMINI_API_KEY from env; preselect that auth type so it
+# never stops at the interactive auth picker.
+if [ -n "${GEMINI_API_KEY:-}" ] && [ ! -f "$HOME/.gemini/settings.json" ]; then
+  mkdir -p "$HOME/.gemini"
+  printf '%s\n' '{"security":{"auth":{"selectedType":"gemini-api-key"}}}' > "$HOME/.gemini/settings.json"
+fi
+
 # A git repo under ~/repos so the new-session folder defaults here (CCC scans
 # ~/repos for git repos) instead of falling back to /app, CCC's own code.
 if [ ! -d "$HOME/repos/sandbox/.git" ]; then

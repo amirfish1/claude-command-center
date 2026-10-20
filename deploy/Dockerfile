@@ -7,7 +7,8 @@
 # Adds what upstream's trial image lacks for a hosted prototype:
 #   - watchtower (CCC's queue engine — a hard import dependency despite the
 #     "zero dependencies" README badge), pinned to a commit
-#   - Node + the Claude Code CLI (pinned) + git, so CCC can spawn agents
+#   - Node + the Claude Code, Codex (OpenAI) and Gemini CLIs (pinned) + git,
+#     so CCC can spawn agents on all three engines
 #   - a non-root user (claude refuses some permission modes as root)
 #   - HOME=/data on a persistent volume (~/.claude sessions + cloned repos)
 #
@@ -21,6 +22,8 @@ FROM python:3.12-slim
 
 ARG WATCHTOWER_REF=e764a2240ab01d96024645a6c490c91024458bda
 ARG CLAUDE_CODE_VERSION=2.1.305
+ARG CODEX_VERSION=0.163.0
+ARG GEMINI_CLI_VERSION=0.65.0
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -44,6 +47,7 @@ COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+      "@openai/codex@${CODEX_VERSION}" "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
  && npm cache clean --force
 
 RUN pip install --no-cache-dir \
