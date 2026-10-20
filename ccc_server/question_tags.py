@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
-"""Index of owner-question tags `[Q<n>:<slug>]` across Claude transcripts.
+"""Index of owner-question tags `[Q<n>:<slug>]` across agent transcripts.
 
 Agents tag every question to the owner as `[Q33:gap-month]`; the FIRST
 assistant message carrying a tag holds the full explanation and later
@@ -15,6 +15,12 @@ Cost model: no model calls. A transcript is only parsed when it changed
 ((mtime, size) differs from the persisted cache) and only when a cheap bytes
 regex finds a tag in it; per-file results are cached on disk so the cold scan
 of every transcript happens once.
+
+Sources: Claude (~/.claude/projects), Codex (~/.codex/sessions rollouts), Kimi
+(~/.kimi-code wire.jsonl), plus the SQLite stores of Hermes (state.db and
+profile DBs) and Devin CLI (sessions.db). The DB stores are append-mostly and
+huge, so they are read incrementally from a persisted row cursor and only
+rows containing a tag marker are parsed.
 """
 
 from __future__ import annotations
@@ -22,9 +28,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 _TAG_BYTES = re.compile(rb"\[Q\d+[:\]]")
@@ -32,6 +40,11 @@ _TAG = re.compile(r"\[Q(\d+):([a-z0-9-]+)\]")
 _ANSWERED = re.compile(r"\[Q(\d+)\]\s*answered", re.IGNORECASE)
 _BARE = re.compile(r"\[Q(\d+)(?::[a-z0-9-]+)?\]")
 _TEXT_CAP = 12000
+# The global agent instructions (and their examples like [Q33:gap-month]) get
+# injected into transcripts as user context; never treat that as a real tag.
+_INJECTED = "Owner question tags (all engines)"
+_DB_CHUNK = 20000
+_DEVIN_COLD_ROWS = 100000
 
 _lock = threading.Lock()
 _files: dict[str, dict] = {}  # path -> {"m": mtime, "s": size, "ev": [...]}
@@ -56,7 +69,7 @@ def _load_cache() -> None:
     _loaded = True
     try:
         data = json.loads(_state_path().read_text())
-        if isinstance(data, dict) and data.get("v") == 1:
+        if isinstance(data, dict) and data.get("v") == 2:
             _files.update(data.get("files") or {})
     except (OSError, ValueError):
         pass
@@ -68,7 +81,7 @@ def _save_cache() -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".qtags-")
         with os.fdopen(fd, "w") as f:
-            json.dump({"v": 1, "files": _files}, f)
+            json.dump({"v": 2, "files": _files}, f)
         os.replace(tmp, p)
     except OSError:
         pass
@@ -84,8 +97,27 @@ def _blocks_text(content) -> str:
     return "\n".join(parts)
 
 
+def _iso(ts) -> str:
+    """Normalise epoch seconds/ms or an ISO string to a sortable ISO string."""
+    if isinstance(ts, (int, float)):
+        if ts > 1e11:
+            ts = ts / 1000.0
+        try:
+            return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        except (OverflowError, OSError, ValueError):
+            return ""
+    return ts or ""
+
+
+def _event(role, text, uuid, ts, sid):
+    """One tag event, or None when the text carries no tag / is injected rules."""
+    if not text or not _BARE.search(text) or _INJECTED in text:
+        return None
+    return {"role": role, "uuid": uuid or "", "ts": _iso(ts), "sid": sid, "text": text[:_TEXT_CAP]}
+
+
 def scan_file(path: str) -> list[dict]:
-    """Tag events in one transcript: assistant/user text that mentions a tag."""
+    """Tag events in one Claude transcript: assistant/user text that mentions a tag."""
     sid = Path(path).stem
     events = []
     try:
@@ -101,18 +133,177 @@ def scan_file(path: str) -> list[dict]:
                 if role not in ("assistant", "user") or obj.get("isSidechain"):
                     continue
                 text = _blocks_text((obj.get("message") or {}).get("content"))
-                if not _BARE.search(text):
-                    continue
-                events.append({
-                    "role": role,
-                    "uuid": obj.get("uuid") or "",
-                    "ts": obj.get("timestamp") or "",
-                    "sid": obj.get("sessionId") or sid,
-                    "text": text[:_TEXT_CAP],
-                })
+                e = _event(role, text, obj.get("uuid"), obj.get("timestamp"), obj.get("sessionId") or sid)
+                if e:
+                    events.append(e)
     except OSError:
         return []
     return events
+
+
+def scan_codex_file(path: str) -> list[dict]:
+    """Codex rollout: response_item messages (event_msg duplicates are skipped)."""
+    sid = Path(path).stem[-36:]
+    events = []
+    try:
+        with open(path, "rb") as f:
+            for raw in f:
+                if not _TAG_BYTES.search(raw):
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    continue
+                pl = obj.get("payload") or {}
+                if obj.get("type") != "response_item" or pl.get("type") != "message":
+                    continue
+                role = pl.get("role")
+                if role not in ("assistant", "user"):
+                    continue
+                parts = [b.get("text") for b in pl.get("content") or []
+                         if isinstance(b, dict) and isinstance(b.get("text"), str)]
+                e = _event(role, "\n".join(parts), pl.get("id"), obj.get("timestamp"), sid)
+                if e:
+                    events.append(e)
+    except OSError:
+        return []
+    return events
+
+
+def scan_kimi_file(path: str) -> list[dict]:
+    """Kimi wire.jsonl: user context messages and assistant message events."""
+    sid = Path(path).parents[2].name
+    events = []
+    try:
+        with open(path, "rb") as f:
+            for n, raw in enumerate(f):
+                if not _TAG_BYTES.search(raw):
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    continue
+                kind = obj.get("type")
+                msg = obj.get("message") or {}
+                if kind == "context.append_message":
+                    role = msg.get("role")
+                elif kind == "agent.message.appended":
+                    msg = msg.get("message") or {}
+                    role = msg.get("role")
+                else:
+                    continue
+                if role not in ("assistant", "user"):
+                    continue
+                parts = [b.get("text") for b in msg.get("content") or []
+                         if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+                t = obj.get("time")
+                e = _event(role, "\n".join(parts), msg.get("message_id") or f"{sid}:{n}", t, sid)
+                if e:
+                    events.append(e)
+    except OSError:
+        return []
+    return events
+
+
+def _db_rows(path: str, sql: str, args: tuple) -> list:
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        try:
+            return con.execute(sql, args).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+
+
+def scan_hermes_db(path: str, cursor: int = 0) -> tuple[list[dict], int]:
+    """New tagged messages (id > cursor) in a Hermes state.db -> (events, cursor)."""
+    top = _db_rows(path, "SELECT COALESCE(MAX(id),0) FROM messages", ())
+    if not top:
+        return [], cursor
+    hi = int(top[0][0])
+    events = []
+    for sid, role, content, ts, mid in _db_rows(
+        path,
+        "SELECT session_id, role, content, timestamp, id FROM messages "
+        "WHERE id > ? AND id <= ? AND role IN ('user','assistant') AND content LIKE '%[Q%'",
+        (cursor, hi),
+    ):
+        e = _event(role, content if isinstance(content, str) else "", f"h{mid}", ts, sid)
+        if e:
+            events.append(e)
+    return events, hi
+
+
+def scan_devin_db(path: str, cursor: int = 0) -> tuple[list[dict], int]:
+    """New tagged messages in a Devin CLI sessions.db. The first scan only
+    looks at the most recent _DEVIN_COLD_ROWS rows (the DB runs to GBs)."""
+    top = _db_rows(path, "SELECT COALESCE(MAX(row_id),0) FROM message_nodes", ())
+    if not top:
+        return [], cursor
+    hi = int(top[0][0])
+    if not cursor:
+        cursor = max(0, hi - _DEVIN_COLD_ROWS)
+    events = []
+    lo = cursor
+    while lo < hi:
+        up = min(hi, lo + _DB_CHUNK)
+        for sid, raw, ts, rid in _db_rows(
+            path,
+            "SELECT session_id, chat_message, created_at, row_id FROM message_nodes "
+            "WHERE row_id > ? AND row_id <= ? AND chat_message LIKE '%[Q%'",
+            (lo, up),
+        ):
+            try:
+                m = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            role = m.get("role")
+            if role == "user" and (m.get("metadata") or {}).get("is_user_input") != 1:
+                continue
+            if role not in ("assistant", "user"):
+                continue
+            c = m.get("content")
+            text = c if isinstance(c, str) else _blocks_text(c)
+            e = _event(role, text, m.get("message_id") or f"d{rid}", ts, sid)
+            if e:
+                events.append(e)
+        lo = up
+    return events, hi
+
+
+def _sources() -> list[tuple[str, str, str]]:
+    """(cache key, kind, path) for every transcript store that exists."""
+    home = Path(os.path.expanduser("~"))
+    out = []
+
+    def glob(root: Path, pattern: str, kind: str):
+        try:
+            for fp in root.glob(pattern):
+                out.append((f"{kind}:{fp}", kind, str(fp)))
+        except OSError:
+            pass
+
+    glob(_projects_root(), "*/*.jsonl", "claude")
+    glob(home / ".codex" / "sessions", "*/*/*/rollout-*.jsonl", "codex")
+    glob(home / ".kimi-code" / "sessions", "*/*/agents/*/wire.jsonl", "kimi")
+    for fp in [home / ".hermes" / "state.db", *sorted((home / ".hermes" / "profiles").glob("*/state.db"))]:
+        out.append((f"hermes:{fp}", "hermes", str(fp)))
+    for sub in ("cli", "cli-next"):
+        out.append((f"devin:{sub}", "devin", str(home / ".local" / "share" / "devin" / sub / "sessions.db")))
+    return out
+
+
+def _stat(kind: str, path: str):
+    """(mtime, size); SQLite stores fold in the -wal file, where writes land first."""
+    st = os.stat(path)
+    if kind in ("hermes", "devin"):
+        try:
+            w = os.stat(path + "-wal")
+            return max(st.st_mtime, w.st_mtime), st.st_size + w.st_size
+        except OSError:
+            pass
+    return st.st_mtime, st.st_size
 
 
 def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
@@ -127,28 +318,23 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
     try:
         seen = set()
         dirty = False
-        root = _projects_root()
-        try:
-            dirs = [d for d in root.iterdir() if d.is_dir()]
-        except OSError:
-            dirs = []
-        for d in dirs:
+        for key, kind, path in _sources():
+            seen.add(key)
             try:
-                entries = list(d.glob("*.jsonl"))
+                m, sz = _stat(kind, path)
             except OSError:
                 continue
-            for fp in entries:
-                key = str(fp)
-                seen.add(key)
-                try:
-                    st = fp.stat()
-                except OSError:
-                    continue
-                rec = _files.get(key)
-                if rec and rec["m"] == st.st_mtime and rec["s"] == st.st_size:
-                    continue
-                _files[key] = {"m": st.st_mtime, "s": st.st_size, "ev": scan_file(key)}
-                dirty = True
+            rec = _files.get(key)
+            if rec and rec["m"] == m and rec["s"] == sz:
+                continue
+            if kind in ("hermes", "devin"):
+                scan = scan_hermes_db if kind == "hermes" else scan_devin_db
+                ev, cur = scan(path, (rec or {}).get("cur", 0))
+                _files[key] = {"m": m, "s": sz, "cur": cur, "ev": ((rec or {}).get("ev") or []) + ev}
+            else:
+                scan = {"claude": scan_file, "codex": scan_codex_file, "kimi": scan_kimi_file}[kind]
+                _files[key] = {"m": m, "s": sz, "ev": scan(path)}
+            dirty = True
         for key in [k for k in _files if k not in seen]:
             del _files[key]
             dirty = True
