@@ -41,4 +41,6 @@ if [ "${CCC_AUTO_CONSENT:-1}" != "0" ]; then
 fi
 
 cd /app
-exec python3 server.py
+# Drop the inherited PWD=/app: OpenCode trusts $PWD over its real cwd, so every
+# OpenCode session CCC spawned ran in /app instead of the chosen repo.
+exec env -u PWD python3 server.py

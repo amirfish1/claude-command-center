@@ -62,7 +62,9 @@ RUN useradd --uid 1000 --create-home --home-dir /data ccc \
  && chown -R ccc:ccc /data
 
 WORKDIR /app
-COPY --chown=ccc:ccc . /app
+# Root-owned and read-only to the agent user, so a spawned agent cannot edit
+# CCC itself (CCC writes its state under $HOME, never /app).
+COPY . /app
 
 USER ccc
 EXPOSE 8090
