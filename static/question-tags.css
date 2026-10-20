@@ -1,0 +1,19 @@
+.qtag-chip{display:inline;font:inherit;font-size:.9em;padding:1px 7px;margin:0 1px;border-radius:999px;border:1px solid #d9a441;background:rgba(217,164,65,.16);color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.qtag-chip.qtag-answered{border-color:#6aa874;background:rgba(106,168,116,.16)}
+.qtag-chip.qtag-unknown{border-style:dashed}
+.qtag-flash{outline:2px solid #d9a441;outline-offset:2px}
+.qtag-pill{position:fixed;right:14px;bottom:84px;z-index:2147482000;padding:7px 12px;border-radius:999px;border:1px solid #d9a441;background:#2a2417;color:#f3d9a0;font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.qtag-pill[hidden],.qtag-sheet[hidden]{display:none}
+.qtag-sheet{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center}
+.qtag-card{width:min(640px,100%);max-height:80vh;overflow:auto;background:var(--bg,#1b1b1f);color:var(--fg,#e8e8ea);border:1px solid rgba(255,255,255,.14);border-radius:14px 14px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom));font:14px/1.45 system-ui,sans-serif}
+.qtag-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.qtag-close{background:none;border:0;color:inherit;font-size:26px;line-height:1;padding:4px 10px;cursor:pointer}
+.qtag-meta{opacity:.75;font-size:12px;margin-bottom:8px}
+.qtag-st{padding:1px 6px;border-radius:6px;font-weight:600}
+.qtag-st-open{background:rgba(217,164,65,.25)}.qtag-st-done{background:rgba(106,168,116,.25)}
+.qtag-text{white-space:pre-wrap;word-break:break-word;font:13px/1.5 inherit;margin:0 0 12px;max-height:50vh;overflow:auto}
+.qtag-btn{width:100%;min-height:44px;border-radius:10px;border:1px solid #d9a441;background:rgba(217,164,65,.16);color:inherit;font-weight:600;cursor:pointer}
+.qtag-list{list-style:none;margin:0;padding:0}
+.qtag-row{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:100%;min-height:44px;padding:10px 4px;background:none;border:0;border-bottom:1px solid rgba(255,255,255,.1);color:inherit;text-align:left;cursor:pointer}
+.qtag-sub{opacity:.75;font-size:12px}
+.qtag-empty{opacity:.7}

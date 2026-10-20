@@ -27634,6 +27634,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(usage_current_payload())
         elif path == "/api/headroom":
             self.send_json(_headroom.headroom_payload())
+        elif path == "/api/question-tags":
+            from ccc_server import question_tags as _question_tags
+            self.send_json(_question_tags.payload())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()
