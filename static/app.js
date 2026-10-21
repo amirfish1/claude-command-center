@@ -22253,6 +22253,37 @@
     });
   })();
 
+  // Phone chat-list helpers (see waHtml in _renderRow).
+  const _WA_ENGINE_GLYPH = {
+    claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
+    kimi: 'K', cursor: 'U', hermes: 'H', kilo: 'L', opencode: 'O', copilot: 'P',
+  };
+  function _waEngineKey(c) {
+    const e = String((c && (c.engine || c.source)) || '').toLowerCase();
+    return _WA_ENGINE_GLYPH[e] ? e : 'claude';
+  }
+  // Same cleanup as server _archive_list_preview, for rows that arrive with
+  // the full reply (per-repo /api/conversations) instead of the preview.
+  function _waPreviewText(text) {
+    if (!text) return '';
+    let t = String(text).slice(0, 2000).replace(/<session-state>[\s\S]*?(<\/session-state>|$)/g, ' ');
+    t = t.replace(/[`*_#>|]+|\[([^\]]*)\]\([^)]*\)/g, (m, g1) => g1 || ' ');
+    t = t.split(/\s+/).filter(Boolean).join(' ');
+    return t.length <= 140 ? t : t.slice(0, 139).trimEnd() + '\u2026';
+  }
+  // Chat-app time label: 14:05 today, Yesterday, weekday this week, else date.
+  function _waTimeLabel(ts) {
+    let n = Number(ts) || 0;
+    if (!n) return '';
+    if (n < 1e12) n *= 1000;
+    const d = new Date(n), now = new Date();
+    const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((day(now) - day(d)) / 86400000);
+    if (diffDays <= 0) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return d.toLocaleDateString([], { weekday: 'long' });
+    return d.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' });
+  }
   function relativeTime(ts) {
     // Compact format à la Omnara: just the number + unit, no "ago" word.
     // Saves ~30% of the row's right-side real estate which lets the time
@@ -34979,11 +35010,78 @@
   let _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
   let _sidebarRenderScope = '';
 
-  function _boundSidebarRowsForRender(rows, limit) {
+  const _NON_WORKER_SPAWNED_VIAS = new Set([
+    'ui',
+    'ui-automated',
+    'cli',
+    'api',
+    'terminal',
+    'subagent',
+    'resumed',
+    'resume',
+    'ccc-ask',
+    'none',
+    'null',
+    '-',
+    'unknown',
+    'not available',
+    'not-available',
+  ]);
+
+  const _WT_LAUNCH_PROMPT_RE = /^(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b|fix ticket \S+ on the \S+ watchtower queue\b|you are the planner for watchtower ticket |you are an independent (?:plan reviewer|verifier) for watchtower ticket |you are the independent post-fix assessor for the bug ticket )/;
+  // Coarse lane guess for the render budget only (the authoritative split is
+  // _allTabLaneFor inside renderConversationList, which also consults
+  // WatchTower ledgers). Used to rank rows, never to hide them.
+  function _sidebarBudgetNaturalLane(row) {
+    const marker = String(row.spawned_lane || '').trim();
+    if (marker === 'workers' || marker === 'other') return marker;
+    if (row.source === 'hermes' || row.engine === 'hermes') return 'workers';
+    const via = String(row.spawned_via || '').trim().toLowerCase();
+    if (via && !_NON_WORKER_SPAWNED_VIAS.has(via)) return 'workers';
+    if (row._worker_id) return 'workers';
+    const title = String(row.display_name || row.ai_title || row.title || row.name || '').trim();
+    if (title.startsWith('\u{1F9F5}')) return 'workers';
+    if (_WT_LAUNCH_PROMPT_RE.test(String(row.first_message || '').trim().toLowerCase())) return 'workers';
+    return 'coding';
+  }
+  function _sidebarBudgetLaneGuess(row, byId, seen = new Set()) {
+    if (!row) return 'coding';
+    const override = String(row.all_lane_override || '').trim();
+    if (override) return override;
+    const id = String(row.session_id || row.id || '').trim();
+    if (id) seen.add(id);
+    const parentId = String(row.parent_session_id || row.hermes_parent_session_id
+      || continuationParentId(row) || row.continued_from_session_id || '').trim();
+    const parent = byId && parentId && !seen.has(parentId) ? byId.get(parentId) : null;
+    return parent ? _sidebarBudgetLaneGuess(parent, byId, seen) : _sidebarBudgetNaturalLane(row);
+  }
+
+  function _boundSidebarRowsForRender(rows, limit, tab) {
     const source = Array.isArray(rows) ? rows : [];
     if (source.length <= limit) return { rows: source, omitted: 0 };
-    const buckets = { active: [], archived: [], backlog: [], merge: [] };
+    // Spend the budget on rows the view can actually show: the open tab's
+    // lane first, then in-window rows, newest first. Taking rows in server
+    // order filled the budget with worker/out-of-window rows the tab then
+    // hid (Coding showed 2 sessions with 3,800 "not rendered yet").
+    const cutoff = _archiveWindowCutoff();
+    const byId = new Map();
     source.forEach(row => {
+      const id = String((row && (row.session_id || row.id)) || '').trim();
+      if (id) byId.set(id, row);
+    });
+    const rankedEntries = source
+      .map(row => ({
+        row,
+        inLane: (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab) : true,
+        inWindow: _archiveWindowAllowsRow(row, cutoff),
+        ts: _archiveWindowRowTs(row),
+      }))
+      .sort((a, b) => (b.inLane - a.inLane) || (b.inWindow - a.inWindow) || (b.ts - a.ts));
+    const ranked = rankedEntries.map(entry => entry.row);
+    // Column quotas keep each kanban column represented, but only among rows
+    // this view shows; otherwise an empty column's quota went to hidden rows.
+    const buckets = { active: [], archived: [], backlog: [], merge: [] };
+    rankedEntries.filter(entry => entry.inLane && entry.inWindow).forEach(({ row }) => {
       const column = classifyKanbanColumn(row);
       const key = column === 'archived' ? 'archived'
         : (column === 'backlog' ? 'backlog' : (row && row.tail_pr_number ? 'merge' : 'active'));
@@ -34995,7 +35093,7 @@
     const selectedId = String(currentConversation || '');
     const selectedRow = source.find(row => String(row && (row.session_id || row.id) || '') === selectedId);
     if (selectedRow) selected.add(selectedRow);
-    for (const row of source) {
+    for (const row of ranked) {
       if (selected.size >= limit) break;
       selected.add(row);
     }
@@ -35021,7 +35119,9 @@
       _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
     }
     const _sidebarFullRows = convs;
-    const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit);
+    const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit, (() => {
+      try { return localStorage.getItem('ccc-sidebar-tab') || 'coding'; } catch (_) { return 'coding'; }
+    })());
     convs = _sidebarBounded.rows;
     const _sidebarRowsOmitted = _sidebarBounded.omitted;
     _applyOptimisticTouches(convs);
@@ -36668,7 +36768,39 @@
         }
       }
 
+      // Phone chat-list row (WhatsApp-style, CSS shows it only on phones and
+      // hides the rest of the row there): engine avatar, one-line name +
+      // last-activity time, two-line preview of the last reply, and a status
+      // mark (pulsing dot = working, ? = needs you). A cluster parent also gets
+      // a "↳ N" toggle that collapses/expands its child rows.
+      let waLaneHtml = '';
+      if (subagentClusterMeta && subagentClusterMeta.collapsible !== false) {
+        const _waN = Number(subagentClusterMeta.total || 0);
+        const _waOpen = !!subagentClusterMeta.expanded;
+        waLaneHtml = '<button type="button" class="wa-lanes" data-role="subagent-cluster-toggle"'
+          + ' data-subagent-parent-sid="' + escapeAttr(String(subagentClusterMeta.parentId || '')) + '"'
+          + ' aria-expanded="' + (_waOpen ? 'true' : 'false') + '"'
+          + ' title="' + escapeAttr((_waOpen ? 'Collapse ' : 'Expand ') + _waN + ' child sessions') + '">'
+          + '\u21b3 ' + _waN + ' <span class="conv-subagent-cluster-arrow" aria-hidden="true">' + (_waOpen ? '&#9662;' : '&#9656;') + '</span></button>';
+      }
+      const _waEngine = _waEngineKey(c);
+      // The avatar already says what kind of session this is; drop the
+      // decorative leading glyphs (🪄 ✏️ 🧵 ⤴ …) from the name.
+      const _waTitle = String(title || '').replace(/^(?:[\p{Extended_Pictographic}\uFE0F\u200d›⤴]\s*)+/u, '') || title;
+      const _waPreview = (_needsYouRow && c.question_text) ? String(c.question_text)
+        : (c.last_assistant_preview || _waPreviewText(c.last_assistant_text));
+      const _waStatus = _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
+        : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
+      const waHtml = '<div class="wa-row">'
+        + '<span class="wa-avatar orch-glyph orch-glyph-' + escapeAttr(_waEngine) + '" aria-hidden="true">' + (_WA_ENGINE_GLYPH[_waEngine] || 'C') + '</span>'
+        + '<div class="wa-body">'
+        +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
+        +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified)) + '</span></div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        + '</div>'
+        + '</div>';
       return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+        + waHtml
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
         + '<div class="conv-title-row">'
@@ -39034,7 +39166,6 @@
     // CCC-1241 it pins and ledgers their session_id, so the ledger check
     // catches them. This prompt match only covers sessions spawned before
     // that, or whose ledger entry predates a WT reset.
-    const _WT_LAUNCH_PROMPT_RE = /^(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b|fix ticket \S+ on the \S+ watchtower queue\b|you are the planner for watchtower ticket |you are an independent (?:plan reviewer|verifier) for watchtower ticket |you are the independent post-fix assessor for the bug ticket )/;
     const _looksLikeWtLaunchPrompt = (c) => {
       const first = String((c && c.first_message) || '').trim().toLowerCase();
       return !!first && _WT_LAUNCH_PROMPT_RE.test(first);
@@ -39056,23 +39187,6 @@
       const lane = String((c && c.spawned_lane) || '').trim();
       return lane === 'workers' || lane === 'other' ? lane : '';
     };
-    const _NON_WORKER_SPAWNED_VIAS = new Set([
-      'ui',
-      'ui-automated',
-      'cli',
-      'api',
-      'terminal',
-      'subagent',
-      'resumed',
-      'resume',
-      'ccc-ask',
-      'none',
-      'null',
-      '-',
-      'unknown',
-      'not available',
-      'not-available',
-    ]);
     const _isExternalSpawnRow = (c) => {
       if (!c) return false;
       const via = String(c.spawned_via || '').trim().toLowerCase();
@@ -72353,6 +72467,8 @@
         // every field it doesn't name).
         auto_titled: !!c.auto_titled,
         last_assistant_text: '',
+        // Phone chat-list preview line (server-derived, ≤140 chars).
+        last_assistant_preview: c.last_assistant_preview || '',
         // GOAL-1: carry the server-parsed end-of-turn self-report through the
         // archive-shaping allowlist so the row's outcome line (DID / next) can
         // render. Dropped here previously — which is why it only ever showed in

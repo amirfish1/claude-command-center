@@ -22,7 +22,7 @@ def test_render_list_uses_bounded_rows_and_offers_more_on_demand():
     end = SOURCE.index("function renderSidebar", start)
     source = SOURCE[start:end]
 
-    assert "_boundSidebarRowsForRender(convs, _sidebarRenderRowLimit)" in source
+    assert "_boundSidebarRowsForRender(convs, _sidebarRenderRowLimit" in source
     assert 'data-role="sidebar-show-more"' in source
     assert "_sidebarRenderRowLimit += SIDEBAR_RENDER_MORE_ROWS" in source
     assert "renderConversationList(_sidebarFullRows)" in source
@@ -45,3 +45,18 @@ def test_archive_and_queue_timers_are_stream_failure_fallbacks_only():
     assert "if (_dashboardEventStreamHealthy) return;" in sessions_tick
     assert "ARCHIVE_RECOVERY_INTERVAL_MS" in SOURCE
     assert "setInterval(_gated('archiveRecovery'" in SOURCE
+
+
+def test_render_budget_is_spent_on_the_open_tabs_lane_and_window():
+    # Taking rows in server order filled the 240-row budget with worker and
+    # out-of-window rows the Coding tab then hid (2 sessions shown, 3,800
+    # "not rendered yet").
+    start = SOURCE.index("function _boundSidebarRowsForRender")
+    end = SOURCE.index("function renderConversationList", start)
+    source = SOURCE[start:end]
+
+    assert "_sidebarBudgetLaneGuess(row, byId) === tab" in source
+    assert "_archiveWindowAllowsRow(row, cutoff)" in source
+    assert "(b.inLane - a.inLane) || (b.inWindow - a.inWindow) || (b.ts - a.ts)" in source
+    assert "entry.inLane && entry.inWindow" in source
+    assert "_WT_LAUNCH_PROMPT_RE.test(" in SOURCE[SOURCE.index("function _sidebarBudgetNaturalLane"):start]
