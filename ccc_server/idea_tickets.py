@@ -370,6 +370,8 @@ def on_turn_end(session_id, *, continued_from="", parent="", text=""):
     sid = str(session_id or "").strip()
     if not sid or not _enabled():
         return {"queued": False, "reason": "disabled"}
+    if sid.startswith("agent-"):
+        return {"queued": False, "reason": "subagent"}
     if sid in load_state()["sessions"]:
         return {"queued": False, "reason": "known"}
     with _lock:

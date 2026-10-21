@@ -17562,9 +17562,25 @@
         tab = 'coding';
       }
       activeNavKey = _coreApp === 'queues' ? 'q2'
-        : (tab === 'workers' ? 'workers' : tab === 'queues' ? 'queues' : tab === 'jobs' ? 'jobs' : 'coding');
+        : (tab === 'workers' ? 'workers' : tab === 'queues' ? 'queues' : tab === 'jobs' ? 'jobs'
+          : tab === 'smallbugs' ? 'smallbugs' : 'coding');
     }
     if (!isSimpleMode() && document.body.classList.contains('mobile-ask-open')) activeNavKey = 'ask';
+    // Idea tickets: the phone has no top tab bar, so with the flag on the
+    // Coding button becomes Ideas and a Bugs button opens Small bugs.
+    const _ideasNav = ideaTicketsOn();
+    nav.querySelectorAll('[data-ff-only="idea_tickets"]').forEach(btn => {
+      btn.style.display = _ideasNav ? '' : 'none';
+    });
+    const _codingNavBtn = nav.querySelector('[data-mobile-nav="coding"]');
+    if (_codingNavBtn) {
+      const label = _ideasNav ? 'Ideas' : 'Coding';
+      const lab = _codingNavBtn.querySelector('.mobile-nav-label');
+      const icon = _codingNavBtn.querySelector('.mobile-nav-icon');
+      if (lab && lab.textContent !== label) lab.textContent = label;
+      if (icon) icon.textContent = _ideasNav ? '\u{1F4A1}' : '</>';
+      _codingNavBtn.setAttribute('aria-label', label);
+    }
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
@@ -17601,9 +17617,9 @@
         return;
       }
       _setMobileAskOpen(false);
-      if (dest === 'coding' || dest === 'workers' || dest === 'queues' || dest === 'jobs') {
+      if (dest === 'coding' || dest === 'workers' || dest === 'queues' || dest === 'jobs' || dest === 'smallbugs') {
         if (typeof cccSwitchCoreApp === 'function') cccSwitchCoreApp('sessions');
-        _activateSidebarTabFromMobileNav(dest);
+        _activateSidebarTabFromMobileNav(dest === 'coding' && ideaTicketsOn() ? 'ideas' : dest);
         if (typeof isMobile === 'function' && isMobile() && typeof mobileShowMain === 'function') {
           mobileShowMain(false);
         }
