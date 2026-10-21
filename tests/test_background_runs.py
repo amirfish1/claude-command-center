@@ -35,3 +35,12 @@ def test_groups_temp_dir_runs_by_spawner_and_ignores_real_projects(tmp_path):
     assert by["unknown"]["runs"] == 1
     assert p["totals"]["runs"] == 3
     assert by["evalx"]["cost_usd"] > 0
+
+
+def test_payload_reports_cpu_pressure(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "getloadavg", lambda: (9.0, 4.0, 2.0))
+    monkeypatch.setattr(os, "cpu_count", lambda: 4)
+    p = background_runs.background_runs_payload(now=1_800_000_000.0, projects_root=tmp_path, markers={}, use_cache=False)
+    assert p["cpu"]["cores"] == 4
+    assert p["cpu"]["load_per_core"] == 2.25
+    assert p["cpu"]["level"] == "saturated"

@@ -101,10 +101,39 @@ def _log_new_alerts(alerts):
     _ALERTED.update(now_keys)
 
 
+def cpu_pressure():
+    """Cheap host CPU pressure: load per core plus Linux PSI when available.
+
+    Returns {} when nothing is readable. ``level`` is ok/busy/saturated from
+    load-per-core (>=1 busy, >=2 saturated); PSI avg10 is reported verbatim.
+    """
+    out = {}
+    try:
+        load = os.getloadavg()
+        cores = os.cpu_count() or 1
+        per_core = load[0] / cores
+        out.update(load1=round(load[0], 2), load5=round(load[1], 2), load15=round(load[2], 2),
+                   cores=cores, load_per_core=round(per_core, 2),
+                   level="saturated" if per_core >= 2 else "busy" if per_core >= 1 else "ok")
+    except (OSError, AttributeError):
+        return out
+    try:
+        with open("/proc/pressure/cpu") as fh:
+            for line in fh:
+                parts = line.split()
+                if parts and parts[0] == "some":
+                    vals = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+                    out["psi_some_avg10"] = float(vals.get("avg10", 0))
+                    out["psi_some_avg60"] = float(vals.get("avg60", 0))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def background_runs_payload(now=None, projects_root=None, markers=None, use_cache=True):
     now = time.time() if now is None else now
     if use_cache and _CACHE["payload"] is not None and now - _CACHE["ts"] < _CACHE_TTL:
-        return _CACHE["payload"]
+        return dict(_CACHE["payload"], cpu=cpu_pressure())
     root = projects_root or _core.PROJECTS_ROOT
     markers = _core._load_spawn_markers() if markers is None else markers
     groups = {}
@@ -152,4 +181,4 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
     _log_new_alerts(payload["alerts"])
     if use_cache:
         _CACHE.update(ts=now, payload=payload)
-    return payload
+    return dict(payload, cpu=cpu_pressure())

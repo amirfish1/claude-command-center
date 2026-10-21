@@ -6329,6 +6329,7 @@
     // A session that just went from live → ended needs its outcome banner
     // recomputed even when no new transcript events arrived.
     try { updateSessionOutcomeBanner(getConvViewForPane(activePaneId()) || $conversationsView); } catch (_) {}
+    try { updateSilentInvestigateBar(getConvViewForPane(activePaneId()) || $conversationsView); } catch (_) {}
     } finally {
       if (_liveStatusFetchingKey === _statusKey) _liveStatusFetchingKey = '';
     }
@@ -44030,6 +44031,88 @@
     view.appendChild(banner);
   }
 
+  // "No response" affordance: a live session whose transcript has been silent
+  // for SILENT_INVESTIGATE_MS gets an Investigate button right in the view. It
+  // spawns a fresh session (server default engine/model) that is asked what is
+  // going on with this one, and opens it as a second pane to the right.
+  const SILENT_INVESTIGATE_MS = 30000;
+  function updateSilentInvestigateBar(view) {
+    if (!view) return;
+    const existing = view.querySelector(':scope > .conv-silent-bar');
+    const clear = () => { if (existing && existing.isConnected) existing.remove(); };
+    const sid = (currentSession && currentSession.id) ? String(currentSession.id) : '';
+    const ls = liveStatus || {};
+    const working = !!(ls.live || ls.sidecarInFlight || ls.headlessPresent);
+    if (!sid || !working || ls.questionWaiting || ls.needsApproval || ls.forSessionId !== sid) { clear(); return; }
+    let freshest = 0;
+    const stamped = view.querySelectorAll('[data-ts-epoch]');
+    for (let i = 0; i < stamped.length; i++) {
+      const ep = Number(stamped[i].dataset.tsEpoch);
+      if (ep > freshest) freshest = ep;
+    }
+    const silentMs = freshest ? Date.now() - freshest : 0;
+    if (!freshest || silentMs < SILENT_INVESTIGATE_MS) { clear(); return; }
+    const label = 'No response for ' + _optimisticAgeLabel(silentMs);
+    if (existing && existing.isConnected) {
+      const txt = existing.querySelector('.cob-body strong');
+      if (txt) txt.textContent = label;
+      if (view.lastElementChild !== existing) view.appendChild(existing);
+      return;
+    }
+    const bar = document.createElement('div');
+    bar.className = 'conv-outcome-banner conv-outcome-incomplete conv-silent-bar';
+    bar.setAttribute('role', 'status');
+    bar.innerHTML =
+      '<span class="cob-icon" aria-hidden="true">&#9203;</span>'
+      + '<span class="cob-body"><strong>' + escapeHtml(label) + '</strong>'
+      + '<span class="cob-detail">The session is still running but has written nothing recently.</span></span>'
+      + '<button type="button" class="cob-wake-btn" data-role="silent-investigate"'
+      + ' title="Start a new session that investigates this one, side by side">Investigate</button>';
+    bar.querySelector('[data-role="silent-investigate"]').addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      investigateSilentSession(sid, ev.currentTarget);
+    });
+    view.appendChild(bar);
+  }
+
+  async function investigateSilentSession(sid, btn) {
+    if (btn) btn.disabled = true;
+    const row = (typeof conversationsData !== 'undefined' && conversationsData.find(x => x && (x.session_id === sid || x.id === sid))) || {};
+    const cwd = f2ResolveSpawnCwd({ row, session: currentSession || {} });
+    const short = sid.slice(0, 8);
+    const name = 'Investigate ' + short;
+    const prompt = 'What\'s going on with session ' + sid + '? It is marked live but has produced no output '
+      + 'for over 30 seconds. Check its state (GET /api/session/' + sid + '/inject-receipt, the tail of its '
+      + 'transcript, the CCC activity.log, and whether its process is alive or the host is starved of CPU) and '
+      + 'report what is wrong. Do not kill it or change anything without saying so first.';
+    const tempPid = 'tmp-inv-' + Date.now();
+    try {
+      insertPendingSpawnCard(tempPid, name, false, null, { first_message: prompt, repo_path: cwd || '', cwd: cwd || '', parent_session_id: sid });
+      const body = { prompt, name, parent_session_id: sid };
+      if (cwd) { body.cwd = cwd; body.repo_path = cwd; }
+      const res = await fetch('/api/sessions/spawn', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      const spawnId = data.spawn_id || data.pid;
+      if (spawnId) adoptPendingSpawnPid(tempPid, spawnId, data.log, data.session_id);
+      const placeholderId = 'spawning-' + (spawnId || tempPid);
+      if (splitState.orientation && splitState.panes.length >= 2) {
+        showOpToast('Investigator started - split is full, find it in the sidebar', 'ok');
+      } else {
+        await openConversationInPane(placeholderId, null, 'vertical', { skipSameConvGuard: true });
+      }
+      setTimeout(refreshConversationList, 800);
+      chasePendingSpawn(spawnId || tempPid, { sessionId: data && data.session_id });
+    } catch (e) {
+      _removePendingSpawnCard(tempPid);
+      showOpToast('Could not start investigator: ' + ((e && e.message) || 'error'), 'error');
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function scrollConversationToEnd(view, behavior) {
     if (!view) return;
     const top = Math.max(0, view.scrollHeight - view.clientHeight);
@@ -69306,16 +69389,25 @@
   function renderBgRuns(p) {
     if (!$bgRunsBtn || !p || !p.ok) return;
     const t = p.totals || {};
+    const cpu = p.cpu || {};
+    const cpuHot = cpu.level === 'busy' || cpu.level === 'saturated';
     const hot = (p.alerts || []).length > 0;
-    if (!t.runs_last_day) { $bgRunsBtn.style.display = 'none'; $bgRunsPanel.hidden = true; return; }
-    $bgRunsBtn.textContent = `${hot ? '⚠ ' : ''}⚙ ${t.runs_last_hour || 0}/h background`;
+    if (!t.runs_last_day && !cpuHot) { $bgRunsBtn.style.display = 'none'; $bgRunsPanel.hidden = true; return; }
+    const cpuChip = cpuHot ? ` · CPU ${cpu.load_per_core}×` : '';
+    $bgRunsBtn.textContent = `${hot || cpu.level === 'saturated' ? '⚠ ' : ''}⚙ ${t.runs_last_hour || 0}/h background${cpuChip}`;
     $bgRunsBtn.style.display = '';
     const alerting = new Set((p.alerts || []).map(a => a.spawner + '|' + a.kind));
-    $bgRunsPanel.innerHTML = (p.groups || []).filter(g => g.runs_last_day).map(g => {
+    let html = '<div class="bg-runs-help">Headless <code>claude -p</code> runs started by scripts, evals and harnesses (not your sessions), grouped by who spawned them. Red rows are spawning unusually often.</div>';
+    if (cpu.cores) {
+      const psi = cpu.psi_some_avg10 != null ? ` · stalled on CPU ${cpu.psi_some_avg10}% (10s)` : '';
+      html += `<div class="bg-runs-row${cpu.level === 'saturated' ? ' is-alert' : ''}"><span>CPU load · ${escapeHtml(cpu.level)}</span><span class="bg-runs-meta">${cpu.load1} / ${cpu.load5} / ${cpu.load15} on ${cpu.cores} cores (${cpu.load_per_core}× per core)${psi}</span></div>`;
+    }
+    html += (p.groups || []).filter(g => g.runs_last_day).map(g => {
       const name = escapeHtml(g.spawner + (g.kind ? ' · ' + g.kind : ''));
       const cls = alerting.has(g.spawner + '|' + g.kind) ? ' is-alert' : '';
       return `<div class="bg-runs-row${cls}"><span>${name}</span><span class="bg-runs-meta">${g.runs_last_hour}/h · ${g.runs_last_day}/d · ${formatTokens(g.tokens_last_day)} tok · ~$${(g.cost_usd_last_day || 0).toFixed(2)}</span></div>`;
     }).join('');
+    $bgRunsPanel.innerHTML = html;
   }
   async function pollBgRuns() {
     try {

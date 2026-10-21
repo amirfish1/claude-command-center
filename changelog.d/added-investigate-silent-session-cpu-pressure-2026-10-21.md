@@ -1,0 +1,2 @@
+- A live session that has written nothing for 30s now shows an **Investigate** button that starts a new session asking what is wrong with it and opens it in a split pane to the right.
+- The bottom-left background-runs pill now explains itself and shows CPU load (per-core load and Linux PSI), turning on when the host is busy.
