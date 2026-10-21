@@ -46704,8 +46704,12 @@
                        : _wtLogRowHtml(it.entry, now);
       let insertedGap = false;
       if (prevMs !== null && r.utcMs - prevMs >= 3 * 60 * 1000) {
+        // Long gaps read as days/hours ("4d15h gap"), not "6665m gap".
         const gapMin = Math.round((r.utcMs - prevMs) / 60000);
-        pendingSeps += '<div class="wl-sep"><span class="wl-sep-label">' + gapMin + 'm gap</span></div>';
+        const gapLabel = gapMin < 60 ? gapMin + 'm'
+          : gapMin < 1440 ? Math.floor(gapMin / 60) + 'h' + (gapMin % 60 ? (gapMin % 60) + 'm' : '')
+          : Math.floor(gapMin / 1440) + 'd' + (Math.floor(gapMin / 60) % 24 ? (Math.floor(gapMin / 60) % 24) + 'h' : '');
+        pendingSeps += '<div class="wl-sep"><span class="wl-sep-label">' + gapLabel + ' gap</span></div>';
         insertedGap = true;
       }
       // Divider whenever the issue item changes, so the stream reads as grouped
