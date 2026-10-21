@@ -323,6 +323,15 @@
     return true;
   }
 
+  // Phones: "ready for your input" cards stack over the UI and need a manual
+  // dismiss each time. The footer "? N" pill already counts those sessions,
+  // so on a phone the in-page card is skipped (system banners still fire
+  // when the page is in the background).
+  function _phoneViewport() {
+    try { return window.matchMedia('(max-width: 700px)').matches; }
+    catch (_) { return false; }
+  }
+
   function _pageCalm() {
     return document.hidden || !document.hasFocus();
   }
@@ -366,7 +375,11 @@
     }
     // The toast is the persistent, clickable record — always render it too
     // for actionable kinds so a glance at the dashboard shows what fired.
-    if (channel === 'toast' || kind === 'needs_input' || kind === 'milestone' || kind === 'digest') {
+    var phoneQuiet = (kind === 'needs_input' || kind === 'task') && _phoneViewport()
+      && id.indexOf('ntf_test_') !== 0;
+    if (phoneQuiet) {
+      // fall through: no card
+    } else if (channel === 'toast' || kind === 'needs_input' || kind === 'milestone' || kind === 'digest') {
       var stack = document.getElementById('cccNotifyStack');
       if (stack && stack.children.length >= MAX_TOASTS) _toastQueue.push(item);
       else toast(item);
