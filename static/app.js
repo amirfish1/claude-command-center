@@ -36588,13 +36588,20 @@
       const _ideaRef = ideaTicketsOn() && c.idea_ticket && c.idea_ticket.ref;
       const _ideaToQueue = c.idea_ticket && c.idea_ticket.queue === 'SMALL-BUGS' ? 'IDEAS' : 'SMALL-BUGS';
       const _ideaToLabel = _ideaToQueue === 'IDEAS' ? 'Ideas' : 'Small bugs';
+      // A session with no ticket (it predates the flag, or didn't start in
+      // the UI) gets both choices; picking one files its ticket there.
+      const _ideaFileBtns = (!_ideaRef && ideaTicketsOn() && !isBacklogRow && !isGithubPrRow
+        && !c.archived && !c.trashed && (lifecycleContext === 'all-main' || lifecycleContext === 'active'))
+        ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="IDEAS" title="File in Ideas" aria-label="File in Ideas">&#128161;</button>'
+          + '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="SMALL-BUGS" title="File in Small bugs" aria-label="File in Small bugs">&#128027;</button>'
+        : '';
       const moveLaneBtn = _ideaRef
         ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="' + _ideaToQueue + '" title="Move to ' + _ideaToLabel + '" aria-label="Move to ' + _ideaToLabel + '">' + (_ideaToQueue === 'IDEAS' ? '&#128161;' : '&#128027;') + '</button>'
-        : (lifecycleContext === 'all-main' && !isBacklogRow && !isGithubPrRow)
+        : _ideaFileBtns + ((lifecycleContext === 'all-main' && !isBacklogRow && !isGithubPrRow)
         ? (currentLane === 'workers'
           ? '<button class="conv-lane-btn is-workers" data-role="move-lane" data-lane="coding" title="Move to Coding tab" aria-label="Move to Coding tab">&#128188;</button>'
           : '<button class="conv-lane-btn" data-role="move-lane" data-lane="workers" title="Move to Workers tab" aria-label="Move to Workers tab">&#128188;</button>')
-        : '';
+        : '');
       if (isBacklogRow) {
         const _issueAttr = escapeAttr(c.issue_number || '');
         const _titleAttr = escapeAttr(c.display_name || c.ai_title || c.first_message || '');
@@ -42273,11 +42280,13 @@
           [conversationsData, archiveData].forEach(rows => (rows || []).forEach(row => {
             if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
               row.idea_ticket = Object.assign({}, row.idea_ticket, { ref: data.ref, queue: data.queue });
+            } else if (row && !fromRef && (row.session_id === sessionId || row.id === sessionId)) {
+              row.idea_ticket = { ref: data.ref, queue: data.queue, sessions: 1, closed: false };
             }
           }));
           _convListRenderSig = null;
           renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
-          showOpToast('Moved to ' + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
+          showOpToast((fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
         } catch (err) {
           btn.disabled = false;
           showOpToast('Move failed (' + err.message + ')', 'error');

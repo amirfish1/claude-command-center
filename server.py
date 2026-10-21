@@ -36799,6 +36799,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if result.get("ok"):
                 _restamp_archive_serve_cache_after_mutation()
             self.send_json(result, 200 if result.get("ok") else 400)
+        elif path == "/api/idea-tickets/backfill":
+            # Experimental idea tickets: one-off backfill for sessions that
+            # predate the flag. Body: {session_ids: [...]}, oldest first so
+            # continuations join their origin's ticket. Runs on a thread.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not _feature_flag("idea_tickets"):
+                self.send_json({"ok": False, "error": "idea_tickets flag is off"}, 400)
+                return
+            ids = payload.get("session_ids")
+            if not isinstance(ids, list):
+                self.send_json({"ok": False, "error": "session_ids must be a list"}, 400)
+                return
+            self.send_json(_idea_tickets.backfill(ids[:200]))
         elif path == "/api/conversations/all-lane" or re.match(r"^/api/conversations/[^/]+/all-lane$", path):
             conv_id = "" if path == "/api/conversations/all-lane" else urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))

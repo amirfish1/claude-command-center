@@ -151,6 +151,29 @@ class IdeaTicketsTest(unittest.TestCase):
         it.note_ui_spawn("cli1", "cli")
         self.assertNotIn("cli1", it.load_state()["pending"])
 
+    def test_ticketless_session_files_from_row_menu(self):
+        self.registry["old"] = {"spawned_via": "terminal", "cwd": "/tmp"}
+        self.transcripts["old"] = {"text": "The list flickers"}
+        self.assertTrue(it.attach_or_file("old")["skipped"])  # recorded skip
+        res = it.move_ticket("old", "SMALL-BUGS")
+        self.assertEqual((res["ref"], res["queue"]), ("SMALL-BUGS-1", "SMALL-BUGS"))
+        self.assertEqual(it.idea_ticket_rows_map()["old"]["ref"], "SMALL-BUGS-1")
+
+    def test_backfill_files_oldest_first_and_continuations_join(self):
+        it.classify = lambda text: "idea"
+        self.registry["a"] = {"spawned_via": "terminal"}
+        self.transcripts["a"] = {"text": "Build the thing"}
+        self.transcripts["b"] = {"text": "You continue", "continued_from": "a"}
+        self.transcripts["c"] = {"text": "Other work"}
+        self.assertTrue(it.attach_or_file("c")["skipped"])
+        res = it.backfill(["a", "b", "c", "agent-x", "a"])
+        self.assertEqual(res["queued"], 3)
+        self.assertEqual(it.ticket_for_session("b")["sessions"], ["a", "b"])
+        self.assertEqual(it.ticket_for_session("c")["ref"], "IDEAS-2")
+        self.assertEqual(len([c for c in self.calls if c[0] == "take"]), 2)
+        self.assertEqual(it.load_state()["pending"], {})
+        self.assertEqual(it.backfill(["a", "b", "c"])["queued"], 0)  # idempotent
+
     def test_sweep_files_replied_pending_and_children_only(self):
         self._ui_session("c1")  # pending, replied
         self._ui_session("c2")  # pending, no reply yet

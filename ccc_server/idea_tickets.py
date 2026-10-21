@@ -20,8 +20,10 @@ State lives in ``~/.claude/command-center/idea-tickets.json``::
      "pending":  {sid: {"at"}}}
 
 Only sessions recorded in ``pending`` at UI spawn time (``note_ui_spawn``,
-called from the one place every spawn route tags its origin) can get a NEW
-ticket, so turning the flag on never backfills tickets for old sessions.
+called from the one place every spawn route tags its origin) get a NEW ticket
+on their own, so turning the flag on never floods the queues. Older sessions
+get one when the user files it from the row menu (``file_ticket``) or through
+an explicit, bounded ``backfill``.
 
 Rows read it through ``idea_ticket_rows_map()`` (one mtime-cached file read
 per list build, a dict lookup per row). Every ``wt`` call runs on a daemon
@@ -431,7 +433,11 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
 
     text = (_first_user_text(jsonl) if jsonl else "") or str(text_hint or "")
     label = (classify_fn or classify)(text)
-    queue = QUEUES.get(label, "IDEAS")
+    return _file_new(sid, QUEUES.get(label, "IDEAS"), text, cwd, label=label)
+
+
+def _file_new(sid, queue, text, cwd, *, label=""):
+    """File a fresh ticket for ``sid`` in ``queue`` and record it."""
     _ensure_queue(queue)
     rc, out = _wt([
         "take", "-q", queue, "--worker", sid,
@@ -451,8 +457,56 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
         d["pending"].pop(sid, None)
     _mutate(_record)
     _restamp_rows()
-    _core._log_activity("idea", "IDEA_TICKET", f"{sid} -> {ref} ({label})")
+    _core._log_activity("idea", "IDEA_TICKET", f"{sid} -> {ref} ({label or queue})")
     return {"ok": True, "ref": ref, "queue": queue}
+
+
+def file_ticket(sid, queue):
+    """Row-menu entry point for a session with no ticket (started before the
+    flag, or outside the UI): file one in the queue the user picked."""
+    jsonl = None
+    try:
+        jsonl = _core._find_session_jsonl(sid)
+    except Exception:
+        jsonl = None
+    _via, _parent, cwd = _spawn_meta(sid)
+    text = _first_user_text(jsonl) if jsonl else ""
+    _mutate(lambda d: d["sessions"].pop(sid, None))  # drop a recorded skip
+    return _file_new(sid, queue, text, cwd)
+
+
+def backfill(session_ids):
+    """One-off backfill for sessions that predate the flag. Files (or, for a
+    continuation or child of an already-ticketed session, attaches) each one
+    in order on a single thread, so pass them oldest first and lineage joins
+    the origin's ticket instead of opening a new one."""
+    data = load_state()
+    todo = []
+    for raw in session_ids or []:
+        sid = str(raw or "").strip()
+        entry = data["sessions"].get(sid)
+        if (not sid or sid.startswith("agent-") or sid in todo
+                or (isinstance(entry, dict) and entry.get("ref"))):
+            continue
+        todo.append(sid)
+    if not todo or not _enabled():
+        return {"ok": True, "queued": 0}
+
+    def _mark(d):
+        for sid in todo:
+            d["sessions"].pop(sid, None)
+            d["pending"].setdefault(sid, {"at": int(time.time()), "backfill": True})
+    _mutate(_mark)
+
+    def _run():
+        for sid in todo:
+            with _lock:
+                if sid in _inflight:
+                    continue
+                _inflight.add(sid)
+            _attach_or_file_safe(sid)
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "queued": len(todo)}
 
 
 def _restamp_rows():
@@ -520,7 +574,7 @@ def move_ticket(session_id, queue):
         return {"ok": False, "error": "queue must be IDEAS or SMALL-BUGS"}
     ticket = ticket_for_session(sid)
     if not ticket:
-        return {"ok": False, "error": "session has no idea ticket"}
+        return file_ticket(sid, queue) if sid else {"ok": False, "error": "no session"}
     old = ticket["ref"]
     if ticket["queue"] == queue:
         return {"ok": True, "ref": old, "queue": queue}
