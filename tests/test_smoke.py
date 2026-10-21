@@ -5068,10 +5068,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;", app_css)
         self.assertIn("height: var(--app-vh, 100vh);", app_css)
         self.assertIn("@media (pointer: coarse), (max-width: 1200px)", app_css)
-        self.assertIn(
-            "#convInput,\n  #cpInput {\n    font-size: 16px !important;",
-            app_css,
-        )
+        self.assertIn("#cpInput {\n    font-size: 16px !important;", app_css)
+        # The phone composer runs under 16px; iOS focus zoom is stopped by
+        # maximum-scale=1, which index.html adds on iOS only.
+        self.assertIn("#convInput {\n    font-size: 14px !important;", app_css)
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        self.assertIn("m.content += ', maximum-scale=1'", index_html)
 
     def test_mobile_original_ask_uses_toolbar_disclosure(self):
         """Phones show one compact original-ask row in the stable toolbar

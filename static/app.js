@@ -14274,6 +14274,9 @@
   // independently instead of sharing one flag.
   function _autosizeTextareaLike(el, barEl) {
     if (!el || el.tagName !== 'TEXTAREA') return;
+    // iMessage-style composer on phones: CSS shows the mic in Send's slot
+    // until the first character is typed (.has-text on the bar).
+    if (barEl) barEl.classList.toggle('has-text', !!el.value);
     // Deferred to the next animation frame. The 'auto' write + scrollHeight
     // read is a forced synchronous reflow; doing it inline on every keystroke
     // re-lays-out the whole (large) page mid-keystroke — cheap in Blink, but
@@ -17735,6 +17738,13 @@
       btn.setAttribute('aria-expanded', 'false');
     });
     menu.addEventListener('click', (ev) => {
+      // Compact/Normal sits in this menu on phones; its own document-level
+      // delegate switches the view, this just closes the menu after.
+      if (ev.target.closest('.conv-view-seg [data-conv-view]')) {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+        return;
+      }
       const item = ev.target.closest('[data-simple-action]');
       if (!item) return;
       menu.hidden = true;

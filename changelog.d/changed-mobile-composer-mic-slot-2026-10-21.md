@@ -1,0 +1,1 @@
+- Phones: Compact/Normal moved into the ⋮ menu (⋮ now sits beside the session name), the composer text is smaller, and an empty composer shows the mic in Send's place until you type, like iMessage.

@@ -10,6 +10,18 @@
      `visualViewport` in app.js instead. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <script>
+  // iOS zooms the page when a focused input's font is under 16px; capping
+  // maximum-scale stops that auto-zoom (iOS still allows pinch-zoom), so the
+  // composer can use a smaller font on phones.
+  (function () {
+    var ua = navigator.userAgent || '';
+    var ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (!ios) return;
+    var m = document.querySelector('meta[name="viewport"]');
+    if (m && !/maximum-scale/.test(m.content)) m.content += ', maximum-scale=1';
+  })();
+</script>
+<script>
 // Diagnostics: the Mac app is a WKWebView with no devtools, so page JS errors
 // are invisible there. Mirror them to /api/client-log (same endpoint app.js
 // uses for perf warnings) so they land in service.out.log. Registered before
@@ -1128,12 +1140,13 @@
            in app.js. The rename/move/change-model/technical-details rows are
            Simple-only actions (rendered conditionally by isSimpleMode() at
            render time, not by a parallel copy of this menu). -->
-      <!-- Narrow-viewport copy of the rail's transcript view control (the
-           status rail is hidden on phones). Synced by _syncConvViewSegs. -->
-      <span class="conv-view-seg mobile-view-seg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true">Normal</button></span>
       <div class="mobile-actions-wrap">
         <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Task actions"><span aria-hidden="true">&#8942;</span></button>
         <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
+          <!-- Narrow-viewport copy of the rail's transcript view control (the
+               status rail is hidden on phones). Synced by _syncConvViewSegs;
+               clicks go through its document-level delegate. -->
+          <span class="conv-view-seg mobile-view-seg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true">Normal</button></span>
           <button type="button" class="mobile-actions-item" data-simple-action="stop" role="menuitem"><span aria-hidden="true">&#9724;&nbsp;</span>Stop this task</button>
           <button type="button" class="mobile-actions-item" data-simple-action="codex-handover" id="mobileCodexHandoverItem" role="menuitem" hidden><span aria-hidden="true">&#8599;&nbsp;</span>Hand over to Codex Desktop</button>
           <button type="button" class="mobile-actions-item" data-simple-action="annotate" role="menuitem"><span aria-hidden="true">&#9873;&nbsp;</span>Annotate</button>
