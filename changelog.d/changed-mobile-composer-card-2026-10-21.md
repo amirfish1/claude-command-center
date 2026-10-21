@@ -1,0 +1,1 @@
+- Phones: the composer is a soft rounded card with sans-serif text, a round + menu button and a round Send/mic button; the waiting-questions pill moves under the header in a conversation so it no longer covers the composer.
