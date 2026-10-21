@@ -31473,3 +31473,13 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .sidebar .conv-worker-history { font-size: 14px; }
   .sidebar .conv-worker-history > summary { min-height: 40px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 }
+
+/* Touch composer: Esc lives in the ⋯ menu, Steer is gone (on a phone you
+   send, and steer with the next message), and the attachment preview strip
+   is dropped so the text box keeps its room; the attachment path stays in
+   the message text. */
+@media (pointer: coarse) {
+  .conv-input-bar #convEscBtn,
+  .conv-input-bar .steer-btn,
+  .conv-input-bar .paste-thumb-strip { display: none !important; }
+}

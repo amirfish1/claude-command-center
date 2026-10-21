@@ -14086,6 +14086,12 @@
       ev.preventDefault();
       ev.stopPropagation();
       const opening = menu.style.display === 'none';
+      if (opening) {
+        // Touch keeps Esc in this menu (CSS hides the composer button); offer
+        // it whenever the Esc button itself would be live.
+        const escItem = menu.querySelector('[data-act="esc"]');
+        if (escItem) escItem.hidden = !($convEscBtn && $convEscBtn.style.display !== 'none' && !$convEscBtn.disabled);
+      }
       menu.style.display = opening ? 'block' : 'none';
       btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
     });
@@ -14093,7 +14099,8 @@
       const item = ev.target.closest && ev.target.closest('[data-act]');
       if (!item) return;
       hide();
-      if (item.dataset.act === 'attach') { const i = document.getElementById('convAttachInput'); if (i) i.click(); }
+      if (item.dataset.act === 'esc') sendEscToTerminal();
+      else if (item.dataset.act === 'attach') { const i = document.getElementById('convAttachInput'); if (i) i.click(); }
       else if (item.dataset.act === 'continue') { const c = document.querySelector('#convSendMenu .continue-new-btn'); if (c) c.click(); }
     });
     document.addEventListener('click', (ev) => {
@@ -14293,6 +14300,12 @@
         : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
       el.style.height = Math.min(el.scrollHeight, max) + 'px';
+      // A long paste can leave the caret below the capped box (iOS does not
+      // re-scroll after the height changes). Typing/pasting at the end is the
+      // common case: pin the scroll to the bottom so the caret stays visible.
+      if (document.activeElement === el && el.selectionEnd === el.value.length) {
+        el.scrollTop = el.scrollHeight;
+      }
     });
   }
   function _autosizeConvInput() {

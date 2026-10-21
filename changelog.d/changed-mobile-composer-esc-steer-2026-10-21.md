@@ -1,0 +1,1 @@
+- Phones: Esc moved into the composer's ⋯ menu, the Steer button and the attachment preview strip are hidden, and the composer keeps the caret in view after a long paste.
