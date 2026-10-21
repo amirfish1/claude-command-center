@@ -2587,7 +2587,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="project-tree-header"', app_js)
         self.assertIn("const _currentSessionsScrollHtml = (_currentSessionsBodyHtml)", app_js)
         self.assertIn('data-role="current-sessions-scroll"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;", app_js)
         scroll_html_start = app_js.index("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)")
         scroll_html_end = app_js.index("const _objectsSplitHandleHtml", scroll_html_start)
         self.assertNotIn("Project tree</div>", app_js[scroll_html_start:scroll_html_end])
@@ -2624,7 +2624,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function applyCurrentSessionsPanelHeight()", app_js)
         self.assertIn("const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)", app_js)
         self.assertIn('data-role="objects-splitter"', app_js)
-        self.assertIn("_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;", app_js)
+        self.assertIn("_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;", app_js)
         self.assertIn("function beginObjectsSplitterResize(ev)", app_js)
         self.assertIn("ev.target.closest('[data-role=\"objects-splitter\"]')", app_js)
         self.assertIn("list.style.setProperty('--current-sessions-panel-h', nextHeight + 'px');", app_js)
@@ -2664,8 +2664,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("return _renderRow(enriched, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
         self.assertIn("return _twFallbackRow(w);", app_js)
         self.assertIn("_twQueueHeaderHtml(q, workers.length)", app_js)
-        self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
-        self.assertIn("+ _evergreenAgentsBody + '</div>'", app_js)
+        self.assertIn("const _evergreenAgentsHtml = '';", app_js)
         self.assertIn('class="conv-evergreen-queue-header', app_js)
         # An unattended auto-drain queue is waiting for a worker, rather than
         # genuinely stuck. The sidebar must match the Queue health strip's
@@ -2686,7 +2685,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="evergreen-agents-header"', app_js)
         self.assertIn('data-role="evergreen-agents-scroll"', app_js)
         self.assertIn(
-            "_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;",
+            "_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;",
             app_js,
         )
 

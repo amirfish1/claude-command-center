@@ -38053,9 +38053,9 @@
           + pastRows
           + '</div>';
       }).join('');
-      const _evergreenAgentsHtml = _evergreenAgentsBody
-        ? '<div class="conv-project-tree conv-evergreen-agents-tree">' + _evergreenAgentsBody + '</div>'
-        : '';
+      // The Triggered Workers sidebar section is retired (CCC-117): the Workers
+      // tab covers it. Worker sessions stay excluded from Current sessions above.
+      const _evergreenAgentsHtml = '';
       // Warm the queue-health + worker caches in the background; re-renders once
       // when either snapshot changes so headers/rows fill in after first paint.
       _ensureEvergreenQueuesFresh();
@@ -38528,7 +38528,7 @@
       const _evergreenSplitHandleHtml = _evergreenAgentsScrollHtml
         ? '<div class="conv-evergreen-agents-splitter" data-role="evergreen-agents-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Triggered Workers"></div>'
         : '';
-      _activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml + _evergreenSplitHandleHtml + _evergreenAgentsHeaderHtml + _evergreenAgentsScrollHtml;
+      _activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;
     } else if (_shouldGroupByFolder) {
       // Group cards by folder; preserve folder order by the most
       // recent card in each group (freshest folder appears first).
