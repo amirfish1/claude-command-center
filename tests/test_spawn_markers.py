@@ -208,6 +208,7 @@ def test_spawn_markers_are_decoded_once_per_file_version(monkeypatch, tmp_path):
     target.write_text(json.dumps({"lane": "workers"}))
     st = target.stat()
     os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))
+    server._SPAWN_MARKER_MEMO["ts"] = 0.0  # in-place rewrites lag by the memo TTL
     third = server._load_spawn_markers()
     assert third["bbbb"] == {"lane": "workers"}
     assert len(decoded) == 3
@@ -215,3 +216,29 @@ def test_spawn_markers_are_decoded_once_per_file_version(monkeypatch, tmp_path):
     (marker_dir / "aaaa.json").unlink()
     assert "aaaa" not in server._load_spawn_markers()
     assert len(decoded) == 3
+
+
+def test_spawn_marker_index_survives_restart(tmp_path, monkeypatch):
+    """A cold process must not re-read every marker file: decoded markers are
+    persisted by (mtime_ns, size) and reloaded on first use."""
+    marker_dir = tmp_path / "spawn-markers"
+    marker_dir.mkdir()
+    monkeypatch.setattr(server, "SPAWN_MARKERS_DIR", marker_dir)
+    monkeypatch.setattr(server, "_SPAWN_MARKER_FILE_CACHE", {})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_LOADED", set())
+    monkeypatch.setattr(server, "_SPAWN_MARKER_MEMO", {"ts": 0.0, "dir": None, "out": {}})
+    (marker_dir / "aaaa.json").write_text(json.dumps({"spawned_via": "wt", "lane": "workers"}))
+    first = server._load_spawn_markers()
+    assert (tmp_path / "spawn-markers-index.json").is_file()
+
+    # "Restart": drop every in-memory structure, keep the disk index.
+    server._SPAWN_MARKER_FILE_CACHE.clear()
+    server._SPAWN_MARKER_INDEX_LOADED.clear()
+    server._SPAWN_MARKER_MEMO.update(ts=0.0, dir=None, out={})
+    decoded = []
+    monkeypatch.setattr(
+        server, "_decode_spawn_marker_file",
+        lambda path: decoded.append(path.name),
+    )
+    assert server._load_spawn_markers() == first
+    assert decoded == []

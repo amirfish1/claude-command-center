@@ -5163,8 +5163,79 @@ def _decode_spawn_marker_file(path):
     return marker
 
 
+_SPAWN_MARKER_MEMO = {"ts": 0.0, "dir": None, "out": {}}
+_SPAWN_MARKER_MEMO_TTL_S = 2.0
+_SPAWN_MARKER_MEMO_LOCK = threading.Lock()
+_SPAWN_MARKER_INDEX_LOADED = set()
+
+
+def _spawn_marker_index_path():
+    return SPAWN_MARKERS_DIR.with_name(SPAWN_MARKERS_DIR.name + "-index.json")
+
+
+def _load_spawn_marker_index():
+    """Seed the (mtime_ns, size) decode cache from disk, once per process.
+
+    A cold process used to open and decode every marker file (thousands, tens
+    of MB); under GIL contention each read hands the GIL away, so the first
+    sidebar list after any restart took 15s+ just here."""
+    marker_dir = str(SPAWN_MARKERS_DIR)
+    if marker_dir in _SPAWN_MARKER_INDEX_LOADED:
+        return
+    _SPAWN_MARKER_INDEX_LOADED.add(marker_dir)
+    try:
+        data = json.loads(_spawn_marker_index_path().read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or data.get("v") != 1:
+        return
+    for path, row in (data.get("files") or {}).items():
+        try:
+            version = (int(row[0]), int(row[1]))
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        marker = row[2] if len(row) > 2 and isinstance(row[2], dict) else None
+        _SPAWN_MARKER_FILE_CACHE.setdefault(path, (version, marker))
+
+
+def _save_spawn_marker_index():
+    snapshot = {
+        "v": 1,
+        "files": {
+            path: [version[0], version[1], marker]
+            for path, (version, marker) in list(_SPAWN_MARKER_FILE_CACHE.items())
+        },
+    }
+    path = _spawn_marker_index_path()
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(snapshot))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _load_spawn_markers():
-    """Return typed metadata from SPAWN_MARKERS_DIR/<sid>.json files."""
+    """Return typed metadata from SPAWN_MARKERS_DIR/<sid>.json files.
+
+    Revalidating means a stat per marker file, so the result is memoized for a
+    few seconds (callers poll continuously) and decoded markers persist to a
+    disk index so a restart does not re-read every file."""
+    now = time.monotonic()
+    try:
+        # Directory mtime moves on every create/delete/rename-over, so new
+        # markers invalidate the memo at once; only an in-place rewrite of an
+        # existing file can lag, by at most the TTL.
+        marker_dir = (str(SPAWN_MARKERS_DIR), SPAWN_MARKERS_DIR.stat().st_mtime_ns)
+    except OSError:
+        marker_dir = (str(SPAWN_MARKERS_DIR), None)
+    with _SPAWN_MARKER_MEMO_LOCK:
+        if (
+            _SPAWN_MARKER_MEMO["dir"] == marker_dir
+            and now - _SPAWN_MARKER_MEMO["ts"] < _SPAWN_MARKER_MEMO_TTL_S
+        ):
+            return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+    _load_spawn_marker_index()
     out = {}
     try:
         with os.scandir(SPAWN_MARKERS_DIR) as it:
@@ -5172,6 +5243,7 @@ def _load_spawn_markers():
     except OSError:
         return out
     seen = set()
+    decoded = 0
     for entry in entries:
         name = entry.name
         if not name.endswith(".json"):
@@ -5191,12 +5263,17 @@ def _load_spawn_markers():
         if hit is None or hit[0] != version:
             hit = (version, _decode_spawn_marker_file(Path(entry.path)))
             _SPAWN_MARKER_FILE_CACHE[entry.path] = hit
+            decoded += 1
         if hit[1]:
             out[sid] = dict(hit[1])
-    if len(_SPAWN_MARKER_FILE_CACHE) != len(seen):
-        for stale in [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]:
-            _SPAWN_MARKER_FILE_CACHE.pop(stale, None)
-    return out
+    stale = [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]
+    for k in stale:
+        _SPAWN_MARKER_FILE_CACHE.pop(k, None)
+    with _SPAWN_MARKER_MEMO_LOCK:
+        _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out)
+    if decoded or stale:
+        _save_spawn_marker_index()
+    return {sid: dict(m) for sid, m in out.items()}
 
 
 def _apply_spawn_markers(rows, markers=None):
