@@ -1,0 +1,1 @@
+- Conversation pane: the rules of a skill an agent invokes (the text Claude Code injects after "Launching skill: X") now render as a collapsed Skill card instead of being dropped, so "the rules shown above" actually are.

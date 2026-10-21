@@ -945,6 +945,61 @@
     border-top: 1px solid var(--border);
     padding-top: 8px;
   }
+  /* A loaded skill's rules (isMeta user row surfaced by the server with
+     ev.skill). Same collapsed-card treatment as the Devin handoff. */
+  .skill-loaded-card {
+    border: 1px solid rgba(163, 113, 247, 0.35);
+    border-left: 3px solid #a371f7;
+    border-radius: 6px;
+    background: rgba(163, 113, 247, 0.06);
+    padding: 6px 10px;
+  }
+  .skill-loaded-card summary {
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    list-style: none;
+    min-width: 0;
+  }
+  .skill-loaded-card summary::-webkit-details-marker { display: none; }
+  .skill-loaded-card .skill-loaded-label {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #a371f7;
+  }
+  .skill-loaded-card .skill-loaded-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    font-family: var(--mono, monospace);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .skill-loaded-card .skill-loaded-body {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--text);
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+  .conversations-view .event.user_text.skill-loaded-event,
+  .conv-pane.has-conv-bg[data-conv-bg] .conversations-view .event.user_text.skill-loaded-event {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    max-width: none !important;
+    width: auto !important;
+    background: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 6px !important;
+    clip-path: none !important;
+  }
   /* The handoff arrives as a user_text event but it isn't the operator's
      bubble — flatten the chat styling and let the card carry the look.
      Stitch's user_text override is !important at (0,6,0), so the

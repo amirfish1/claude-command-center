@@ -15730,6 +15730,22 @@
       + '</details>';
   }
 
+  // A loaded skill's rules arrive as an isMeta user row that the server
+  // surfaces with ev.skill = <name>. It is not something the operator typed,
+  // so render it as a collapsed card: the summary proves the skill loaded and
+  // names it; the full rule text is one click away (same shape as the Devin
+  // handoff card).
+  function renderSkillLoadedCard(ev) {
+    const name = String((ev && ev.skill) || 'skill').trim();
+    return '<details class="skill-loaded-card">'
+      + '<summary>'
+      +   '<span class="skill-loaded-label">\u25b8 Skill loaded</span>'
+      +   '<span class="skill-loaded-title">' + escapeHtml(name) + '</span>'
+      + '</summary>'
+      + '<div class="skill-loaded-body">' + renderMarkdown(String(ev.text || '')) + '</div>'
+      + '</details>';
+  }
+
   function parseTaskNotificationBlock(text) {
     const src = String(text || '').trim();
     if (!/^<task-notification\b/i.test(src) || !/<\/task-notification>\s*$/i.test(src)) return null;
@@ -44269,7 +44285,7 @@
   // Peer (cross-session) messages are also excluded: the user didn't type
   // them, and they often arrive in bursts a few rows apart, which made
   // "Previous" hop a few rows instead of to the user's own prior message.
-  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event):not(.peer-message):not([data-live-key])';
+  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event):not(.peer-message):not(.skill-loaded-event):not([data-live-key])';
   function _convReadingTop(view) {
     return view.getBoundingClientRect().top;
   }
@@ -63856,7 +63872,7 @@
         // appear before the rollout JSONL or queue state confirms delivery,
         // then disappear when the live snapshot clears. Only a durable
         // transcript event may acknowledge and remove the injected echo.
-        const _authoritativeUserEvent = !ev.peer && !ev.pending && !ev.provisional;
+        const _authoritativeUserEvent = !ev.peer && !ev.skill && !ev.pending && !ev.provisional;
         const sendEventEpoch = ev.ts ? Date.parse(ev.ts) : NaN;
         const canAcknowledgeSend = pending => !Number.isFinite(sendEventEpoch)
           || !Number(pending && pending.ts)
@@ -63978,9 +63994,10 @@
         }
         const bridgeSenderHtml = whatsappBridgeSenderHtml(ev) + peerSenderHtml(ev);
         if (ev.peer) div.classList.add('peer-message');
+        if (ev.skill) div.classList.add('skill-loaded-event');
         const notification = parseTaskNotificationBlock(cleanedText);
         if (notification) div.classList.add('task-notification-event');
-        if (!notification && !ev.peer && cleanedText) syncPaneLastUserMessage(paneId, cleanedText);
+        if (!notification && !ev.peer && !ev.skill && cleanedText) syncPaneLastUserMessage(paneId, cleanedText);
         // Collapse /compact-resume blocks into a styled card — they're
         // multi-page walls of text that drown the actual conversation.
         // The card shows just the intro line + a click-to-expand toggle;
@@ -64011,6 +64028,8 @@
         let textHtml;
         if (notification) {
           textHtml = renderTaskNotificationBlock(notification, cleanedText, true);
+        } else if (ev.skill) {
+          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + renderSkillLoadedCard(ev) + '</div>';
         } else if (ev.handoff) {
           div.classList.add('devin-handoff-event');
           textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + renderDevinHandoffCard(ev) + '</div>';
@@ -64054,7 +64073,7 @@
             + ' not a hook. Send a message to pick it back up.</span>'
             + '</div>';
         } else {
-        div.innerHTML = '<span class="label">' + (ev.peer ? 'Peer' : 'User') + '</span>'
+        div.innerHTML = '<span class="label">' + (ev.peer ? 'Peer' : (ev.skill ? 'Skill' : 'User')) + '</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
           + tsSpan(ev.ts)
           + ambientContextHtml(ev.ambient_context)

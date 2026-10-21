@@ -25880,6 +25880,33 @@ def _extract_attachment_text(val):
     return ""
 
 
+_SKILL_BODY_PREFIX = "Base directory for this skill: "
+
+
+def _skill_body_event(ev, line_num, ts):
+    """Return a user_text event for a Claude Code skill body, else None.
+
+    Claude Code records the content of an invoked skill as an isMeta user
+    row whose first line is ``Base directory for this skill: <dir>``. Every
+    other isMeta user row (local-command caveats, hook output) stays hidden.
+    """
+    msg = _safe_parse_message(ev.get("message", {}))
+    text = (_extract_text_from_content(msg.get("content", "")) or "").strip()
+    if not text.startswith(_SKILL_BODY_PREFIX):
+        return None
+    first_line = text.split("\n", 1)[0]
+    base_dir = first_line[len(_SKILL_BODY_PREFIX):].strip().rstrip("/")
+    name = base_dir.rsplit("/", 1)[-1] if base_dir else ""
+    return {
+        "line": line_num,
+        "ts": ts,
+        "type": "user_text",
+        "text": text,
+        "images": [],
+        "skill": name or "skill",
+    }
+
+
 def _parse_conversation_event(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
@@ -26042,7 +26069,12 @@ def _parse_conversation_event(ev, line_num):
                 "peer": _peer_block_from_origin(origin),
             }
         if ev.get("isMeta"):
-            return None
+            # A loaded skill's body (the rules the Skill tool pulled in) is
+            # written as an isMeta user row. The model read it and acted on
+            # it, so hiding it leaves the operator seeing only "Launching
+            # skill: X" and then the agent "citing rules shown above" that
+            # never rendered. Surface it as a collapsed Skill card.
+            return _skill_body_event(ev, line_num, ts)
         msg = _safe_parse_message(ev.get("message", {}))
         content = msg.get("content", "")
         text = _strip_mode3_instruction(_extract_text_from_content(content))
