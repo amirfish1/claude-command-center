@@ -19656,9 +19656,14 @@
   function _swipeActionButtonForRow(row) {
     const tab = _currentSidebarTabForSwipe();
     if (tab === 'coding' || tab === 'workers') {
+      // An archived row's swipe restores it to Active (its only phone path
+      // back); swiping it would otherwise trash it.
+      const restore = row.querySelector('.conv-archive-btn.is-restore');
+      if (restore) return restore;
       // Workers-tab rows intentionally have no trash affordance (worker sessions
       // are queue-owned), so a swipe there only does something on rows that
-      // actually expose a trash button — e.g. the Trash subsection of Coding.
+      // actually expose a trash button — e.g. the Trash subsection of Coding,
+      // where the button is "Untrash to Archived".
       return row.querySelector('.conv-trash-btn');
     }
     if (tab === 'inprogress') {

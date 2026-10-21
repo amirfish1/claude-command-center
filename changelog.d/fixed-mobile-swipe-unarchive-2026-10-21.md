@@ -1,0 +1,1 @@
+- Phones: swiping right on an archived session now moves it back to Active instead of trashing it.
