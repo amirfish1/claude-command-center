@@ -1,0 +1,1 @@
+- Phones: the session list's small controls (header icons, New/Ticket/Search, the Now/1d/7d/All window, section menus, lane and ticket chips, Trash, Show more) are now thumb-sized.

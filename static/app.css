@@ -31399,3 +31399,77 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     font-size: 18px;
   }
 }
+
+/* ── Phone session list: thumb-sized controls ──────────────────────────────
+   Header icons, the New/Ticket/Search row, the Now/1d/7d/All window, the
+   section menus, and the in-row chips (lanes, ticket refs, context %) were
+   16-30px tall. Standalone controls get a 44px target; in-row chips get 36px
+   so a row doesn't balloon. */
+@media (max-width: 1200px) {
+  .sidebar .sh-share-btn,
+  .sidebar .sh-discord-btn,
+  .sidebar .sidebar-footer-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .sidebar .sh-share-btn svg,
+  .sidebar .sh-discord-btn svg { width: 22px; height: 22px; }
+  .sidebar #sidebarNewBtn,
+  .sidebar #sidebarNewTicketBtn,
+  .sidebar #convSearch,
+  .sidebar #sidebarMoreBtn {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .sidebar #sidebarMoreBtn { min-width: 44px; font-size: 22px; }
+  .sidebar .conv-grouping-toggle .grouping-opt {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    min-width: 44px;
+    padding: 0 10px;
+    font-size: 15px;
+  }
+  .sidebar .conv-archived-engine-trigger,
+  .sidebar .conv-archived-overflow-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 40px;
+    font-size: 18px;
+  }
+  .sidebar .conv-archived-engine-trigger svg { width: 20px; height: 20px; }
+  #convList .conv-trash-header { min-height: 48px; font-size: 14px; }
+  .sidebar .conv-window-btn {
+    min-height: 44px;
+    padding: 0 20px;
+    font-size: 16px;
+    border-radius: 22px;
+  }
+  .sidebar .sidebar-footer-pill { min-height: 40px; }
+  .sidebar .ccc-sav-ticker { min-height: 36px; padding: 0 12px; font-size: 14px; }
+}
+/* A phone header can't fit the app name next to the bigger icons; it only
+   ever showed as "Claud…" anyway. The logo stays. */
+@media (max-width: 600px) {
+  .sidebar .sh-title-link { display: none; }
+}
+@media (max-width: 1200px) {
+  /* In-row chips. Size only: no display override, so chips the phone layout
+     hides (context %, summary toggle) stay hidden. */
+  .sidebar .conv-orch-lanes-chip,
+  .sidebar .conv-subagent-collapse-btn,
+  .sidebar .conv-worker-ticket {
+    min-height: 36px;
+    padding-left: 10px;
+    padding-right: 10px;
+    font-size: 14px;
+  }
+  .sidebar .conv-worker-history { font-size: 14px; }
+  .sidebar .conv-worker-history > summary { min-height: 40px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+}
