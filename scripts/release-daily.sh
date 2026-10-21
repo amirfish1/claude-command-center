@@ -18,6 +18,7 @@
 #                           (default: $HOME/Apps/watchtower)
 #        CCC_RELEASE_MIN_ENTRIES  default 3
 # Exit:  0 released or waived, 1 release attempt failed.
+#        CCC_RELEASE_CUT_FLAGS    extra cut-release.sh flags (default: --skip-dmg off macOS)
 # Log:   ~/Library/Logs/ccc-release/ (macOS) or ~/.local/state/ccc-release/
 set -uo pipefail
 
@@ -38,6 +39,10 @@ LOG="$LOG_DIR/$(date +%Y-%m-%d).log"
 say() { echo "$(date '+%H:%M:%S') $*" | tee -a "$LOG"; }
 waive() { say "WAIVED: $*"; exit 0; }
 
+# Hosts that cannot sign/notarize (Linux) cut a source+brew release without a DMG;
+# the next run on a signing Mac does not backfill it, so run cut-release.sh there.
+CUT_FLAGS="${CCC_RELEASE_CUT_FLAGS:-}"
+if [ -z "${CCC_RELEASE_CUT_FLAGS+x}" ] && [ "$(uname -s)" != "Darwin" ]; then CUT_FLAGS="--skip-dmg"; fi
 LOCK="${TMPDIR:-/tmp}/ccc-release-daily.lock"
 mkdir "$LOCK" 2>/dev/null || waive "another release run holds $LOCK"
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
@@ -94,9 +99,9 @@ rm -f "$STREAK_FILE"
 [ -z "$WARNINGS" ] || say "proceeding despite housekeeping warnings (REPO-FIXER ticket filed):\n$WARNINGS"
 say "ENOUGH: $n entries since $tag; cutting v$NEXT (dry-run=$DRY)"
 if [ "$DRY" = 1 ]; then
-  ./scripts/cut-release.sh "$NEXT" --dry-run >>"$LOG" 2>&1; rc=$?
+  ./scripts/cut-release.sh "$NEXT" $CUT_FLAGS --dry-run >>"$LOG" 2>&1; rc=$?
 else
-  ./scripts/cut-release.sh "$NEXT" >>"$LOG" 2>&1; rc=$?
+  ./scripts/cut-release.sh "$NEXT" $CUT_FLAGS >>"$LOG" 2>&1; rc=$?
 fi
 if [ "$rc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED): v$NEXT"; else say "FAILED: cut-release exit $rc (see $LOG)"; fi
 [ "$rc" = 0 ] || exit 1
