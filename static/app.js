@@ -19856,6 +19856,73 @@
     });
   })();
   const $sidebarMoreBtn = document.getElementById('sidebarMoreBtn');
+  // Phones: the sidebar ⋮ is trimmed to questions + reload + the session
+  // list's view filters; the app/system items move into Settings, which the
+  // CCC icon opens. Desktop keeps the full menu (group chats and history
+  // have no other entry point there).
+  const _phoneMenusMQ = window.matchMedia('(max-width: 1200px)');
+  (function _phoneSidebarMenus() {
+    if (!_phoneMenusMQ.matches) return;
+    const strip = document.getElementById('settingsAboutStrip');
+    const menu = document.getElementById('sidebarMoreMenu');
+    if (strip && menu) {
+      const restart = menu.querySelector('[data-proxy="cccServerStatusChip"]');
+      const moving = [restart, document.getElementById('cccWhatsNewLink'), document.getElementById('cccCheckUpdatesLink'),
+        menu.querySelector('a[href*="discord"]'), menu.querySelector('.sh-more-info')].filter(Boolean);
+      moving.forEach((n) => strip.appendChild(n));
+      strip.hidden = !moving.length;
+      // The moved Restart item is a proxy; forward it like the menu does.
+      strip.addEventListener('click', (ev) => {
+        const item = ev.target.closest('[data-proxy]');
+        if (!item) return;
+        ev.preventDefault();
+        const target = document.getElementById(item.getAttribute('data-proxy'));
+        if (target) target.click();
+      });
+    }
+    const icon = document.querySelector('.sidebar .sh-app-icon');
+    if (icon) {
+      icon.setAttribute('role', 'button');
+      icon.setAttribute('aria-label', 'Settings');
+      icon.tabIndex = 0;
+      icon.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const btn = document.getElementById('settingsBtn');
+        if (btn) btn.click();
+      });
+    }
+  })();
+  // Mirror the session list's ⋮ view-options into the sidebar ⋮ (phones).
+  // The originals' handlers are delegated on #convList, so clicks on the
+  // copy are forwarded to the same-position original, then the copy is
+  // refreshed from the re-rendered list.
+  function _syncSidebarMoreFilters() {
+    const box = document.getElementById('sidebarMoreFilters');
+    if (!box) return;
+    const src = _phoneMenusMQ.matches && document.querySelector('#convList .conv-archived-overflow-menu');
+    box.innerHTML = src ? src.innerHTML : '';
+    box.hidden = !src;
+  }
+  (function _wireSidebarMoreFilters() {
+    const box = document.getElementById('sidebarMoreFilters');
+    if (!box) return;
+    box.addEventListener('click', (ev) => {
+      const src = document.querySelector('#convList .conv-archived-overflow-menu');
+      if (!src) return;
+      const path = [];
+      for (let n = ev.target; n && n !== box; n = n.parentElement) {
+        path.unshift(Array.prototype.indexOf.call(n.parentElement.children, n));
+      }
+      let orig = src;
+      for (const i of path) { orig = orig && orig.children[i]; }
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (orig) orig.click();
+      setTimeout(_syncSidebarMoreFilters, 150);
+      setTimeout(_syncSidebarMoreFilters, 600);
+    });
+  })();
   const $sidebarMoreMenu = document.getElementById('sidebarMoreMenu');
   if ($sidebarMoreBtn && $sidebarMoreMenu) {
     const closeSidebarMore = () => {
@@ -19865,6 +19932,7 @@
     $sidebarMoreBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       const open = $sidebarMoreMenu.hidden;
+      if (open) _syncSidebarMoreFilters();
       $sidebarMoreMenu.hidden = !open;
       $sidebarMoreBtn.setAttribute('aria-expanded', String(open));
     });
@@ -19886,7 +19954,10 @@
     });
     document.addEventListener('click', (ev) => {
       if ($sidebarMoreMenu.hidden) return;
-      if (!ev.target.closest('.sh-more-wrap')) closeSidebarMore();
+      // Clicks forwarded from #sidebarMoreFilters land on the list's own
+      // (hidden) menu; they are not a click outside.
+      if (ev.target.closest('.sh-more-wrap, .conv-archived-overflow-menu')) return;
+      closeSidebarMore();
     });
     document.addEventListener('keydown', (ev) => {
       if (isImeKey(ev)) return;
@@ -40391,8 +40462,8 @@
     // 1d / 7d / All time-window toggle for the Archived view. Mirrors the In
     // Progress window toggle: read data-window, persist, re-render. Filtering
     // happens in renderArchiveList against ARCHIVE_WINDOW_KEY.
-    const $archivedWindowToggle = $convList.querySelector('[data-role="archived-window-toggle"]');
-    if ($archivedWindowToggle) {
+    // Every copy (toolbar + the phone ⋮ menu copy) gets the handler.
+    $convList.querySelectorAll('[data-role="archived-window-toggle"]').forEach(($archivedWindowToggle) => {
       $archivedWindowToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const opt = ev.target.closest('[data-window]');
@@ -40401,7 +40472,7 @@
         if (value !== '8h' && value !== '1d' && value !== '7d' && value !== 'all') return;
         _refreshArchiveWindow(value);
       });
-    }
+    });
     // CCC-851: dragging a session onto the top-level Coding or Workers tab
     // header moves it into that lane (mirrors the old nested Coding/Workers/
     // Messages/Group-chats filter bar's drop targets, now gone).

@@ -31993,3 +31993,91 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   .wa-engine { display: inline-flex; opacity: 0.7; }
   .wa-engine svg, .wa-engine .conv-session-svg { width: 12px; height: 12px; }
 }
+
+/* ── Phone: one ⋮ for the session list ─────────────────────────────────────
+   The sidebar ⋮ holds Open questions, the mirrored view filters
+   (#sidebarMoreFilters) and Reload page; the list's own ⋮ row goes away.
+   App/system items live in a strip at the top of Settings. */
+.sh-more-filters { display: grid; gap: 8px; padding: 4px 2px 8px; }
+.sh-more-filters[hidden] { display: none; }
+.settings-about-strip[hidden] { display: none; }
+@media (max-width: 1200px) {
+  #sidebarMoreMenu .sh-more-desktop-only,
+  #sidebarMoreMenu .sh-more-divider { display: none !important; }
+  #convList .conv-archived-tools:not(:has(.conv-archived-tools-left)) { display: none !important; }
+  #sidebarMoreMenu { min-width: 300px; max-width: calc(100vw - 16px); }
+  #sidebarMoreMenu .sh-more-item { min-height: 48px; font-size: 16px; }
+  .sh-more-filters .is-phone-menu-only { display: inline-flex !important; }
+  .sh-more-filters > * { max-width: 100%; }
+  .sh-more-filters .conv-grouping-toggle { display: flex; width: 100%; }
+  .sh-more-filters .conv-grouping-toggle .grouping-opt {
+    flex: 1 1 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    padding: 0 6px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .sh-more-filters .conv-archived-engine-filter.is-menu-row { position: static; display: flex; }
+  .sh-more-filters .conv-archived-engine-filter.is-menu-row .conv-archived-engine-options {
+    position: static;
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: none;
+    display: flex;
+    width: 100%;
+  }
+  .sh-more-filters .conv-archived-engine-btn { flex: 1 1 0; height: 40px; padding: 9px; }
+  .sh-more-filters .conv-archived-engine-btn svg,
+  .sh-more-filters .conv-archived-engine-btn .conv-session-svg { width: 20px; height: 20px; }
+  .sh-more-filters .conv-other-machines-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    text-align: left;
+  }
+  .sh-more-filters .conv-other-machines-opt .conv-check {
+    display: inline-flex;
+    width: 18px;
+    justify-content: center;
+    color: var(--green, #3fb950);
+    font-weight: 700;
+  }
+  .sidebar .sh-app-icon { cursor: pointer; }
+  /* Settings: the moved app/system items as a row of big pills. */
+  .settings-about-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-about-strip > .sh-more-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    background: var(--surface-2, var(--surface));
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    text-decoration: none;
+    width: auto;
+  }
+  .settings-about-strip > .sh-more-info { flex: 1 1 100%; font-size: 13px; color: var(--text-muted); padding: 2px 4px 0; }
+}

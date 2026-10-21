@@ -862,11 +862,15 @@
           <button type="button" id="sidebarMoreBtn" data-qtag-badge class="sh-btn sh-more-btn" data-tour="watchtower" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
           <div class="sh-more-menu" id="sidebarMoreMenu" role="menu" aria-label="More actions" hidden>
             <button type="button" class="sh-more-item" role="menuitem" data-proxy="qtagPill" data-qtag-menu hidden>Open questions</button>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="historyBtn">Search history…</button>
-            <div class="sh-more-divider" role="separator"></div>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarGroupChatLiveBtn">Group chat live view</button>
-            <div class="sh-more-divider" role="separator"></div>
+            <!-- Phones: a live mirror of the session list's ⋮ (grouping, density,
+                 time window, engines, other machines), filled on open by
+                 app.js; clicks forward to the originals. -->
+            <div class="sh-more-filters" id="sidebarMoreFilters" hidden></div>
+            <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="historyBtn">Search history…</button>
+            <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
+            <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
+            <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarGroupChatLiveBtn">Group chat live view</button>
+            <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
             <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarRefreshBtn">Reload page</button>
             <!-- Opens #sysModal, which is the restart UI (Dashboard / Worker /
                  WatchTower rows plus "Restart all") and also the detail behind
@@ -2524,6 +2528,9 @@
         <span class="settings-esc-hint">esc to close</span>
         <button type="button" class="settings-modal-close" id="settingsModalClose" title="Close" aria-label="Close settings">&times;</button>
       </div>
+      <!-- Phones: Restart servers / What's new / Check for updates / Discord /
+           Last updated are moved here from the sidebar ⋮ menu by app.js. -->
+      <div class="settings-about-strip" id="settingsAboutStrip" hidden></div>
       <div class="settings-modal-body">
         <div class="settings-rail" id="settingsRail" role="tablist" aria-label="Settings sections">
           <button type="button" class="settings-rail-item is-active" id="settingsRailTab-appearance" data-section-target="appearance" role="tab" aria-selected="true" aria-controls="appearancePopover">

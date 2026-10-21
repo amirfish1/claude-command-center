@@ -1,0 +1,1 @@
+- The time-window toggle copy in the session list's ⋮ menu now works (only the toolbar copy had a click handler).
