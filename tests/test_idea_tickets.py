@@ -174,6 +174,19 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.load_state()["pending"], {})
         self.assertEqual(it.backfill(["a", "b", "c"])["queued"], 0)  # idempotent
 
+    def test_late_filer_never_overwrites_a_filed_ticket(self):
+        # Two processes sweep the same pending session: the archive-refresh
+        # subprocess files it, then the server's thread arrives late.
+        self._ui_session("s1")
+        self.assertEqual(it.attach_or_file("s1", classify_fn=lambda t: "idea")["ref"], "IDEAS-1")
+        self.assertTrue(it.attach_or_file("s1")["skipped"])  # no longer pending
+        self.assertEqual(it.ticket_for_session("s1")["ref"], "IDEAS-1")
+        # A live claim from another filer blocks a second ticket.
+        self._ui_session("s2")
+        it._mutate(lambda d: d["sessions"].__setitem__("s2", {"filing": 1, "at": int(it.time.time())}))
+        self.assertTrue(it.attach_or_file("s2", classify_fn=lambda t: "idea")["known"])
+        self.assertEqual(len([c for c in self.calls if c[0] == "take"]), 1)
+
     def test_sweep_files_replied_pending_and_children_only(self):
         self._ui_session("c1")  # pending, replied
         self._ui_session("c2")  # pending, no reply yet

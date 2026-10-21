@@ -39,7 +39,13 @@ import subprocess
 import threading
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # Windows: in-process lock only
+    fcntl = None
 
 from ccc_server import core as _core
 
@@ -57,6 +63,9 @@ _lock = threading.Lock()
 _inflight = set()
 _queues_ready = set()
 _state_cache = {"key": None, "data": None}
+_flock_depth = threading.local()
+# A claim older than this belongs to a filer that died mid-`wt take`.
+CLAIM_STALE_S = 300
 
 _FILED_RE = re.compile(r"^FILED:\s+(\S+)", re.M)
 _EDITED_RE = re.compile(r"^EDITED:\s+(\S+)", re.M)
@@ -113,13 +122,56 @@ def _save_state(data):
     _state_cache["key"] = None
 
 
+@contextmanager
+def _file_lock():
+    """Cross-process lock on the state file. The list build also runs in the
+    archive-refresh subprocess, which sweeps the same pending sessions, so an
+    in-process lock alone lets two processes overwrite each other's writes."""
+    depth = getattr(_flock_depth, "n", 0)
+    if fcntl is None or depth:
+        _flock_depth.n = depth + 1
+        try:
+            yield
+        finally:
+            _flock_depth.n = depth
+        return
+    path = _state_path().with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        _flock_depth.n = 1
+        try:
+            yield
+        finally:
+            _flock_depth.n = 0
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def _mutate(fn):
-    """Apply ``fn(state)`` under the lock and persist. Returns fn's result."""
-    with _lock:
+    """Apply ``fn(state)`` under both locks and persist. Returns fn's result."""
+    with _file_lock(), _lock:
+        _state_cache["key"] = None  # another process may have written
         data = json.loads(json.dumps(load_state()))
         result = fn(data)
         _save_state(data)
         return result
+
+
+def _claim(sid, *, over_skip=False):
+    """Atomically reserve ``sid`` for filing. False when another thread or
+    process already filed or is filing it."""
+    def _try(d):
+        entry = d["sessions"].get(sid)
+        if isinstance(entry, dict):
+            if entry.get("ref"):
+                return False
+            if entry.get("filing") and time.time() - int(entry.get("at") or 0) < CLAIM_STALE_S:
+                return False
+            if entry.get("skip") and not over_skip:
+                return False
+        d["sessions"][sid] = {"filing": os.getpid(), "at": int(time.time())}
+        return True
+    return _mutate(_try)
 
 
 def ticket_for_session(sid):
@@ -425,19 +477,26 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
         if origin_ticket:
             return _attach(sid, origin_ticket["ref"], kind, origin)
     if sid not in state["pending"]:
-        _mutate(lambda d: d["sessions"].__setitem__(
-            sid, {"skip": f"not a UI spawn (spawned_via={via or 'unknown'})", "at": int(time.time())}))
+        def _skip(d):
+            # Never overwrite a ticket another process filed meanwhile.
+            if sid not in d["sessions"] and sid not in d["pending"]:
+                d["sessions"][sid] = {
+                    "skip": f"not a UI spawn (spawned_via={via or 'unknown'})",
+                    "at": int(time.time())}
+        _mutate(_skip)
         return {"ok": True, "skipped": True}
     if sid in state["sessions"]:
         return {"ok": True, "known": True}
 
     text = (_first_user_text(jsonl) if jsonl else "") or str(text_hint or "")
+    if not _claim(sid):
+        return {"ok": True, "known": True}
     label = (classify_fn or classify)(text)
     return _file_new(sid, QUEUES.get(label, "IDEAS"), text, cwd, label=label)
 
 
 def _file_new(sid, queue, text, cwd, *, label=""):
-    """File a fresh ticket for ``sid`` in ``queue`` and record it."""
+    """File a fresh ticket for ``sid`` (already claimed) in ``queue``."""
     _ensure_queue(queue)
     rc, out = _wt([
         "take", "-q", queue, "--worker", sid,
@@ -447,6 +506,10 @@ def _file_new(sid, queue, text, cwd, *, label=""):
     ], cwd=cwd)
     m = _FILED_RE.search(out or "")
     if rc != 0 or not m:
+        def _release(d):
+            if (d["sessions"].get(sid) or {}).get("filing"):
+                d["sessions"].pop(sid, None)
+        _mutate(_release)
         _core._log_activity("idea", "IDEA_TICKET_FAIL", f"{sid} rc={rc}")
         return {"ok": False, "error": "wt take failed"}
     ref = m.group(1)
@@ -471,7 +534,10 @@ def file_ticket(sid, queue):
         jsonl = None
     _via, _parent, cwd = _spawn_meta(sid)
     text = _first_user_text(jsonl) if jsonl else ""
-    _mutate(lambda d: d["sessions"].pop(sid, None))  # drop a recorded skip
+    if not _claim(sid, over_skip=True):
+        ticket = ticket_for_session(sid)
+        return ({"ok": True, "ref": ticket["ref"], "queue": ticket["queue"]} if ticket
+                else {"ok": False, "error": "ticket is being filed"})
     return _file_new(sid, queue, text, cwd)
 
 
@@ -494,8 +560,10 @@ def backfill(session_ids):
 
     def _mark(d):
         for sid in todo:
-            d["sessions"].pop(sid, None)
-            d["pending"].setdefault(sid, {"at": int(time.time()), "backfill": True})
+            if (d["sessions"].get(sid) or {}).get("skip"):
+                d["sessions"].pop(sid, None)
+            if sid not in d["sessions"]:
+                d["pending"].setdefault(sid, {"at": int(time.time()), "backfill": True})
     _mutate(_mark)
 
     def _run():
@@ -519,6 +587,8 @@ def _restamp_rows():
 
 def _attach(sid, ref, kind, origin):
     def _record(d):
+        if (d["sessions"].get(sid) or {}).get("ref"):
+            return  # another process got there first
         ticket = d["tickets"].setdefault(ref, {"queue": "", "sessions": [], "closed": False})
         if sid not in ticket["sessions"]:
             ticket["sessions"].append(sid)
