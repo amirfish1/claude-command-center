@@ -175,6 +175,14 @@ _PREVIEW_FLAGS = {
                 "\"Failed to authenticate\" / \"Not logged in\", and run the "
                 "Claude Code login on that node (local or paired peer) from the browser.",
     },
+    "idea_tickets": {
+        "default": False,
+        "label": "Idea tickets",
+        "desc": "Give every session you start from the UI a WatchTower ticket "
+                "(Jev labels it an idea or a small bug), log continuations and "
+                "child sessions on it, and replace the Active/Coding tabs with "
+                "Ideas and Small bugs, one row per ticket.",
+    },
     "phone_access": {
         "default": False,
         "label": "Phone access",
@@ -1846,7 +1854,19 @@ def _set_conversation_archived(sid, desired=None, *, source="manual"):
         if not want_archived:
             _core._clear_trashed_on_unarchive(sid)
         _core._save_archived_conversations(archived)
+        if changed:
+            _idea_tickets_on_archive(sid, want_archived)
         return want_archived, changed
+
+
+def _idea_tickets_on_archive(sid, archived):
+    # Experimental idea tickets: archiving a ticket's latest session closes
+    # the ticket (no-op unless the idea_tickets flag is on).
+    try:
+        from ccc_server import idea_tickets
+        idea_tickets.on_archive(sid, archived)
+    except Exception:
+        pass
 
 
 def _set_conversations_archived(session_ids, want_archived):
@@ -1881,6 +1901,10 @@ def _set_conversations_archived(session_ids, want_archived):
                 _clear_trashed_on_unarchive_many(to_remove)
             _core._save_archived_conversations(new_list)
             _core._save_archive_grace()
+            for sid in to_add:
+                _idea_tickets_on_archive(sid, True)
+            for sid in to_remove:
+                _idea_tickets_on_archive(sid, False)
         return changed, unchanged, to_add, to_remove
 
 

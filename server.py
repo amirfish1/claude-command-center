@@ -126,6 +126,7 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
 from ccc_server import approval_evidence as _approval_evidence
 # Namespace import (not adopted): the $0 spawn runtime's helpers stay behind
@@ -16564,6 +16565,12 @@ def _rehydrate_archive_cached_rows(rows):
         spawn_registry_by_sid = _spawn_registry_entries_by_session()
     except Exception:
         spawn_registry_by_sid = {}
+    # Experimental idea tickets: one mtime-cached file read for the whole
+    # list ({} when the flag is off), a dict lookup per row.
+    try:
+        idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        idea_tickets_by_sid = {}
     # One read for the whole list, never per row (same rule as the registry).
     try:
         spawn_markers = _load_spawn_markers()
@@ -16734,6 +16741,11 @@ def _rehydrate_archive_cached_rows(rows):
                     row.get("jsonl_path")
                 )
             row["continued_from_session_id"] = continued_from
+            idea_ticket = idea_tickets_by_sid.get(sid)
+            if idea_ticket:
+                row["idea_ticket"] = idea_ticket
+            else:
+                row.pop("idea_ticket", None)
 
             row_ts = row.get("mtime") or row.get("modified") or 0
             if _is_claude_task_agent_row(row):
@@ -36623,6 +36635,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if length > 0:
                 self.rfile.read(length)
             try:
+                # Experimental idea tickets ride the same once-per-turn event;
+                # returns at once and does its wt work on a thread.
+                try:
+                    _idea_tickets.on_turn_end(sid)
+                except Exception:
+                    pass
                 self.send_json(request_auto_title(sid))
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -36707,6 +36725,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[^/]+/idea-ticket$", path):
+            # Experimental idea tickets: move a session's ticket between the
+            # IDEAS and SMALL-BUGS queues (sidebar row menu). Body: {queue}.
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = (payload.get("session_id") or conv_id or "").strip()
+            if not _feature_flag("idea_tickets"):
+                self.send_json({"ok": False, "error": "idea_tickets flag is off"}, 400)
+                return
+            result = _idea_tickets.move_ticket(sid, payload.get("queue"))
+            if result.get("ok"):
+                _restamp_archive_serve_cache_after_mutation()
+            self.send_json(result, 200 if result.get("ok") else 400)
         elif path == "/api/conversations/all-lane" or re.match(r"^/api/conversations/[^/]+/all-lane$", path):
             conv_id = "" if path == "/api/conversations/all-lane" else urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))

@@ -1,0 +1,173 @@
+"""Experimental idea tickets (ccc_server/idea_tickets.py).
+
+Pure-module tests against a fake ``_core`` and a recorded ``_wt``: filing a
+ticket for a UI-started session, inheriting it for continuations and child
+sessions, skipping non-UI spawns, closing on archive of the latest session,
+moving between queues, the flag gate on row stamping, and Jev's fallback.
+No server.py, no real ``wt``.
+"""
+
+import importlib
+import io
+import json
+import pathlib
+import tempfile
+import types
+import unittest
+
+it = importlib.import_module("ccc_server.idea_tickets")
+
+
+class _Sync:
+    """Run would-be daemon threads inline so assertions see their effects."""
+
+    def __init__(self, target, args=(), daemon=None):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
+class IdeaTicketsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.tmp.name)
+        (root / "markers").mkdir()
+        self.flag = True
+        self.registry = {}
+        self.transcripts = {}
+        self.calls = []
+        self.next_ref = 1
+        self._orig = (it._core, it._wt, it.threading.Thread)
+        it._state_cache.update({"key": None, "data": None})
+        it._queues_ready.clear()
+        it._inflight.clear()
+
+        def first_user_text(path):
+            return self.transcripts.get(path, {}).get("text", "")
+
+        self.core = types.SimpleNamespace(
+            COMMAND_CENTER_STATE_DIR=root,
+            SPAWN_MARKERS_DIR=root / "markers",
+            _feature_flag=lambda name: self.flag and name == "idea_tickets",
+            _spawn_registry_entry_for_session=lambda sid: self.registry.get(sid),
+            _find_session_jsonl=lambda sid: sid if sid in self.transcripts else None,
+            _continued_from_session_id_from_transcript=(
+                lambda path: self.transcripts.get(path, {}).get("continued_from", "")),
+            _extract_user_prompt_text=lambda ev: ev.get("text", ""),
+            _log_activity=lambda *a: None,
+            _restamp_archive_serve_cache_after_mutation=lambda: None,
+        )
+        it._core = self.core
+        it._wt = self._fake_wt
+        it.threading.Thread = _Sync
+        it._first_user_text = first_user_text
+
+    def tearDown(self):
+        it._core, it._wt, it.threading.Thread = self._orig
+        importlib.reload(it)
+        self.tmp.cleanup()
+
+    def _fake_wt(self, args, cwd=None, timeout=30):
+        self.calls.append(list(args))
+        if args[0] == "take":
+            queue = args[args.index("-q") + 1]
+            ref = f"{queue}-{self.next_ref}"
+            self.next_ref += 1
+            return 0, f"FILED: {ref}  title\nCLAIMED: {ref} -> x\n"
+        if args[0] == "edit":
+            queue = args[args.index("--queue") + 1]
+            return 0, f"EDITED: {queue}-99 (moved)  title\n"
+        return 0, ""
+
+    def _ui_session(self, sid, text="Add a dark mode toggle"):
+        self.registry[sid] = {"spawned_via": "ui", "cwd": "/tmp"}
+        self.transcripts[sid] = {"text": text}
+
+    def test_ui_session_gets_ticket_in_classified_queue(self):
+        self._ui_session("s1", "The save button crashes")
+        res = it.attach_or_file("s1", classify_fn=lambda text: "small_bug")
+        self.assertEqual(res["ref"], "SMALL-BUGS-1")
+        take = [c for c in self.calls if c[0] == "take"][0]
+        self.assertEqual(take[take.index("--worker") + 1], "s1")
+        self.assertEqual(take[take.index("--type") + 1], "bug")
+        self.assertIn(["drain", "off", "SMALL-BUGS"], self.calls)
+        row = it.idea_ticket_rows_map()["s1"]
+        self.assertEqual((row["ref"], row["queue"], row["sessions"]), ("SMALL-BUGS-1", "SMALL-BUGS", 1))
+
+    def test_continuation_and_child_inherit_and_log(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        self.transcripts["s2"] = {"text": "You are continuing", "continued_from": "s1"}
+        self.registry["s2"] = {"spawned_via": "ui"}
+        self.assertEqual(it.attach_or_file("s2")["kind"], "continued")
+        self.registry["s3"] = {"spawned_via": "cli", "parent_session_id": "s2"}
+        self.transcripts["s3"] = {"text": "helper"}
+        self.assertEqual(it.attach_or_file("s3")["kind"], "child")
+        self.assertEqual(it.ticket_for_session("s3")["sessions"], ["s1", "s2", "s3"])
+        comments = [c for c in self.calls if c[0] == "comment"]
+        self.assertEqual(len(comments), 2)
+        self.assertEqual(len([c for c in self.calls if c[0] == "take"]), 1)
+
+    def test_non_ui_spawn_is_skipped(self):
+        self.registry["w1"] = {"spawned_via": "cli"}
+        self.transcripts["w1"] = {"text": "worker"}
+        self.assertTrue(it.attach_or_file("w1")["skipped"])
+        self.assertNotIn("w1", it.idea_ticket_rows_map())
+        self.assertFalse([c for c in self.calls if c[0] == "take"])
+        # Known sessions never re-run the lookup on later turns.
+        self.assertEqual(it.on_turn_end("w1")["reason"], "known")
+
+    def test_archive_latest_closes_earlier_only_logs_unarchive_reopens(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        self.transcripts["s2"] = {"text": "cont", "continued_from": "s1"}
+        it.attach_or_file("s2")
+        it.on_archive("s1", True)
+        self.assertFalse([c for c in self.calls if c[0] == "close"])
+        it.on_archive("s2", True)
+        self.assertTrue([c for c in self.calls if c[0] == "close"])
+        self.assertTrue(it.ticket_for_session("s2")["closed"])
+        it.on_archive("s2", False)
+        self.assertTrue([c for c in self.calls if c[0] == "reopen"])
+        self.assertFalse(it.ticket_for_session("s2")["closed"])
+
+    def test_move_rewrites_ref_for_every_session(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        self.transcripts["s2"] = {"text": "cont", "continued_from": "s1"}
+        it.attach_or_file("s2")
+        res = it.move_ticket("s2", "small-bugs")
+        self.assertEqual((res["ref"], res["queue"]), ("SMALL-BUGS-99", "SMALL-BUGS"))
+        self.assertEqual(it.ticket_for_session("s1")["ref"], "SMALL-BUGS-99")
+        self.assertFalse(it.move_ticket("s1", "WATCH")["ok"])
+
+    def test_flag_off_disables_everything(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        self.flag = False
+        self.assertEqual(it.idea_ticket_rows_map(), {})
+        self.assertEqual(it.on_turn_end("s9")["reason"], "disabled")
+        self.calls.clear()
+        it.on_archive("s1", True)
+        self.assertEqual(self.calls, [])
+
+    def test_classify_falls_back_to_idea(self):
+        self.assertEqual(it.classify("crash on save", key=""), "idea")
+
+        def boom(req, timeout=None):
+            raise OSError("down")
+        self.assertEqual(it.classify("crash on save", key="sk-ant-test-XXXX", opener=boom), "idea")
+
+        def answer(choice):
+            def opener(req, timeout=None):
+                body = json.loads(req.data)
+                self.assertIn("kind", body["questions"])
+                return io.BytesIO(json.dumps({"answers": {"kind": {"choice": choice}}}).encode())
+            return opener
+        self.assertEqual(it.classify("crash", key="sk-ant-test-XXXX", opener=answer("small_bug")), "small_bug")
+        self.assertEqual(it.classify("crash", key="sk-ant-test-XXXX", opener=answer("bogus")), "idea")
+
+
+if __name__ == "__main__":
+    unittest.main()

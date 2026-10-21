@@ -30855,6 +30855,17 @@ body.has-mobile-bottom-nav .jobs-add-actions button { min-height: 40px; padding:
 .ccc-worker-origin.is-linked { cursor: pointer; }
 .ccc-worker-origin.is-linked:hover { background: rgba(210,153,34,0.30); }
 
+/* Experimental idea tickets: the row's IDEAS-N / SMALL-BUGS-N chip. */
+.ccc-idea-ticket {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  padding: 1px 7px; margin-right: 6px; border-radius: 999px;
+  border: 1px solid rgba(88,166,255,0.5);
+  background: rgba(88,166,255,0.12);
+  color: var(--accent, #58a6ff);
+  font-size: 11px; font-weight: 600; white-space: nowrap; cursor: pointer;
+}
+.ccc-idea-ticket:hover { background: rgba(88,166,255,0.26); }
+
 /* Ordered model routing controls in Settings > Engines. */
 .model-routing-card { display: block; padding: 16px 14px; }
 .model-routing-card .eng-card-head { margin-bottom: 12px; }

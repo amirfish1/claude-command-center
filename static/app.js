@@ -8941,6 +8941,20 @@
   // stamps row.worker_origin from WatchTower's durable origin ledger, so the
   // badge survives spawner exit, worker pruning, title changes and restarts.
   // Clickable to the spawning session when it is known.
+  // Experimental idea tickets: the row's ticket ref (click opens the ticket
+  // and its session log). With several sessions on one ticket the chip says
+  // so, since the Ideas / Small bugs tabs show only the latest one.
+  function ideaTicketChipHtml(row) {
+    const t = row && row.idea_ticket;
+    if (!t || !t.ref || !ideaTicketsOn()) return '';
+    const n = Number(t.sessions || 0);
+    const label = t.ref + (n > 1 ? ' \u00b7 ' + n + ' sessions' : '');
+    return '<span class="ccc-idea-ticket" role="button" tabindex="0" data-role="idea-ticket"'
+      + ' data-idea-ref="' + escapeAttr(t.ref) + '"'
+      + ' title="' + escapeAttr('Ticket ' + t.ref + (n > 1 ? ' (' + n + ' sessions)' : '') + ' - click to open') + '">'
+      + escapeHtml(label) + '</span>';
+  }
+
   function workerOriginBadgeHtml(row) {
     const o = row && row.worker_origin;
     if (!o || !o.label) return '';
@@ -17539,7 +17553,7 @@
     } else {
       // Phone Advanced has no Active/Other. If the stored tab is one of
       // those, land on Coding so the hidden top bar cannot strand us.
-      if (_coreApp !== 'queues' && tab !== 'coding' && tab !== 'workers' && tab !== 'queues' && tab !== 'jobs') {
+      if (_coreApp !== 'queues' && tab !== 'coding' && tab !== 'workers' && tab !== 'queues' && tab !== 'jobs' && tab !== 'ideas' && tab !== 'smallbugs') {
         try { localStorage.setItem('ccc-sidebar-tab', 'coding'); } catch (_) {}
         if (document.querySelector('[data-role="conv-tab-bar"]')) {
           _activateSidebarTabFromMobileNav('coding');
@@ -19675,7 +19689,7 @@
   function _currentSidebarTabForSwipe() {
     try {
       const t = localStorage.getItem('ccc-sidebar-tab');
-      return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers' || t === 'jobs') ? t : 'coding';
+      return normalizeSidebarTabKey(t);
     } catch (_) { return 'coding'; }
   }
   function _swipeActionButtonForRow(row) {
@@ -28294,6 +28308,8 @@
     '[data-role="nya-collapse"]',
     '[data-role="subagent-cluster-toggle"]',
     '[data-role="move-lane"]',
+    '[data-role="move-idea"]',
+    '[data-role="idea-ticket"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
   ].join(',');
@@ -35300,7 +35316,7 @@
     const _sidebarTab = (() => {
       try {
         const t = localStorage.getItem('ccc-sidebar-tab');
-        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers' || t === 'jobs') ? t : 'coding';
+        return normalizeSidebarTabKey(t);
       } catch (_) { return 'coding'; }
     })();
     const _activeDraftInputBefore = document.activeElement;
@@ -36528,7 +36544,12 @@
       // equivalent; toggles all_lane_override via the same /api/conversations/
       // all-lane endpoint the drag path already uses.
       const currentLane = String(c.all_lane_override || '').trim();
-      const moveLaneBtn = (lifecycleContext === 'all-main' && !isBacklogRow && !isGithubPrRow)
+      const _ideaRef = ideaTicketsOn() && c.idea_ticket && c.idea_ticket.ref;
+      const _ideaToQueue = c.idea_ticket && c.idea_ticket.queue === 'SMALL-BUGS' ? 'IDEAS' : 'SMALL-BUGS';
+      const _ideaToLabel = _ideaToQueue === 'IDEAS' ? 'Ideas' : 'Small bugs';
+      const moveLaneBtn = _ideaRef
+        ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="' + _ideaToQueue + '" title="Move to ' + _ideaToLabel + '" aria-label="Move to ' + _ideaToLabel + '">' + (_ideaToQueue === 'IDEAS' ? '&#128161;' : '&#128027;') + '</button>'
+        : (lifecycleContext === 'all-main' && !isBacklogRow && !isGithubPrRow)
         ? (currentLane === 'workers'
           ? '<button class="conv-lane-btn is-workers" data-role="move-lane" data-lane="coding" title="Move to Coding tab" aria-label="Move to Coding tab">&#128188;</button>'
           : '<button class="conv-lane-btn" data-role="move-lane" data-lane="workers" title="Move to Workers tab" aria-label="Move to Workers tab">&#128188;</button>')
@@ -36984,6 +37005,7 @@
             + sessionStuckWarningHtml(c)
             + (window.cccClaudeReauth ? window.cccClaudeReauth.rowChipHtml(c) : '')
             + workerOriginBadgeHtml(c)
+            + ideaTicketChipHtml(c)
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             // .conv-meta-col is display:contents everywhere except the Workers
             // table layout, where it becomes the row's single meta CELL. Grid
@@ -39374,7 +39396,18 @@
       if (_isHermesMessageRow(c)) return 'messages';
       return 'coding';
     };
+    // Experimental idea tickets: a ticketed row's lane is its ticket's queue
+    // (continuations and children inherit the ticket server-side). Ticketless
+    // Coding rows go to Other while the flag is on.
+    const _ideaTicketsOn = ideaTicketsOn();
+    const _ideaTicketLane = (c) => {
+      const t = _ideaTicketsOn && c && c.idea_ticket;
+      if (!t || !t.ref) return '';
+      return t.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
+    };
     const _allTabLaneFor = (c, seen = new Set()) => {
+      const ticketLane = _ideaTicketLane(c);
+      if (ticketLane) return ticketLane;
       const override = _allTabLaneOverride(c);
       if (override) return override;
       const id = _allTabSessionId(c);
@@ -39389,12 +39422,37 @@
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
     const _allTabOtherConvs = _allTabConvs.filter(c => {
       const lane = _allTabLaneFor(c);
-      return lane === 'messages' || lane === 'other';
+      return lane === 'messages' || lane === 'other' || (_ideaTicketsOn && lane === 'coding');
     });
+    // One row per ticket: the ticket's most recent session stands for it
+    // (live sessions first), with the ticket's session count on its chip.
+    const _ideaTicketRows = (lane) => {
+      const best = new Map();
+      _allTabConvs.forEach(c => {
+        if (_allTabLaneFor(c) !== lane) return;
+        const ref = c.idea_ticket && c.idea_ticket.ref;
+        if (!ref || c.archived || c.trashed || c.idea_ticket.closed) return;
+        const prev = best.get(ref);
+        const rank = (r) => [r && r.is_live ? 1 : 0, Number((r && (r.mtime || r.modified)) || 0)];
+        if (!prev) { best.set(ref, c); return; }
+        const [pl, pm] = rank(prev);
+        const [cl, cm] = rank(c);
+        if (cl > pl || (cl === pl && cm > pm)) best.set(ref, c);
+      });
+      return Array.from(best.values()).sort((x, y) => {
+        const lx = x.is_live ? 1 : 0;
+        const ly = y.is_live ? 1 : 0;
+        if (lx !== ly) return ly - lx;
+        return Number(y.mtime || y.modified || 0) - Number(x.mtime || x.modified || 0);
+      });
+    };
+    const _allTabIdeaConvs = _ideaTicketsOn ? _ideaTicketRows('ideas') : [];
+    const _allTabSmallBugConvs = _ideaTicketsOn ? _ideaTicketRows('smallbugs') : [];
     // CCC-778: the top-level Coding/Workers tabs (shown instead of Issues/
     // Queues when "Show issues and queues as separate tabs" is off) are just
     // the All tab pre-filtered to that lane.
-    const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers' : null;
+    const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers'
+      : (_ideaTicketsOn && (_sidebarTab === 'ideas' || _sidebarTab === 'smallbugs')) ? _sidebarTab : null;
     // CCC-851: Coding and Workers sessions now live exclusively under their
     // own top-level tabs, so the old "All" tab (renamed "Other") no longer
     // needs a nested Coding/Workers/Messages/Group-chats filter -- it always
@@ -39402,6 +39460,8 @@
     const _allTabView = _topLevelLaneOverride || 'other';
     const _allTabMainConvs = _allTabView === 'workers'
       ? _allTabWorkerConvs
+      : _allTabView === 'ideas' ? _allTabIdeaConvs
+      : _allTabView === 'smallbugs' ? _allTabSmallBugConvs
       : (_allTabView === 'coding' ? _allTabCodingConvs : _allTabOtherConvs);
     const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);
     // Uniform-column hoist (Workers). Engine glyph and $-tier are the two
@@ -40055,9 +40115,18 @@
     // CCC-851: "Other" (née All) holds only the leftover lanes -- Hermes
     // messages + group chats -- since Coding/Workers sessions now live
     // exclusively under their own top-level tabs. Hidden entirely when empty.
-    const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length;
+    const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length
+      + (_ideaTicketsOn ? _allTabCodingConvs.length : 0);
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
-    const _tabDefs = getSeparateTabsPref()
+    const _tabDefs = _ideaTicketsOn
+      ? [
+        ['ideas', 'Ideas', _allTabIdeaConvs.length],
+        ['smallbugs', 'Small bugs', _allTabSmallBugConvs.length],
+        ['workers', 'Workers', _allTabWorkerConvs.length],
+        ['jobs', 'Jobs', _jobsTabCount()],
+        ...(_otherTabCount > 0 ? [_otherTabDef] : []),
+      ]
+      : getSeparateTabsPref()
       ? [
         ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
         ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
@@ -40097,7 +40166,7 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : _sidebarTab === 'jobs' ? '<div class="jobs-host" id="sidebarJobsHost"></div>'
-      : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
+      : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers' || _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       // _readyToMergeHtml is built at its declaration below the In-progress
       // assembly, so it has to be concatenated here rather than inside
       // _inProgressHtml. The CSS already expects it as a #convList child
@@ -42133,7 +42202,48 @@
     // Workers tab-bar button (see assignAllLaneFromDrop below) — same
     // /api/conversations/all-lane endpoint, just from a per-row button so
     // the capability doesn't require discovering the drag target.
-    $convList.querySelectorAll('.conv-lane-btn').forEach(btn => {
+    $convList.querySelectorAll('[data-role="idea-ticket"]').forEach(chip => {
+      const open = (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const ref = chip.getAttribute('data-idea-ref');
+        if (ref && typeof _uxqOpenItemDetail === 'function') _uxqOpenItemDetail(ref);
+      };
+      chip.addEventListener('click', open);
+      chip.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') open(ev); });
+    });
+    $convList.querySelectorAll('[data-role="move-idea"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const item = btn.closest('.conv-item');
+        const sessionId = item && item.dataset.sessionId;
+        const queue = btn.getAttribute('data-queue') === 'IDEAS' ? 'IDEAS' : 'SMALL-BUGS';
+        if (!sessionId) return;
+        btn.disabled = true;
+        try {
+          const data = await ccPostJson('/api/conversations/' + encodeURIComponent(sessionId) + '/idea-ticket', {
+            session_id: sessionId, queue,
+          });
+          if (!data.ok) throw new Error(data.error || 'move failed');
+          const oldRef = (((conversationsData || []).concat(archiveData || []))
+            .find(r => r && (r.session_id === sessionId || r.id === sessionId)) || {}).idea_ticket;
+          const fromRef = oldRef && oldRef.ref;
+          [conversationsData, archiveData].forEach(rows => (rows || []).forEach(row => {
+            if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
+              row.idea_ticket = Object.assign({}, row.idea_ticket, { ref: data.ref, queue: data.queue });
+            }
+          }));
+          _convListRenderSig = null;
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+          showOpToast('Moved to ' + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
+        } catch (err) {
+          btn.disabled = false;
+          showOpToast('Move failed (' + err.message + ')', 'error');
+        }
+      });
+    });
+    $convList.querySelectorAll('.conv-lane-btn:not(.conv-idea-move-btn)').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         ev.preventDefault();
@@ -86478,6 +86588,18 @@
   // ff(name) is the frontend gate. Reads resolved state stashed at boot by
   // the /api/features fetch in index.html (default {} = all off until it
   // lands). `?ff=name` force-on is already folded into __CCC_FLAGS__ there.
+  // Experimental idea tickets: with the flag on, Ideas / Small bugs replace
+  // the Active and Coding tabs, so a stored inprogress/coding tab lands on
+  // Ideas; with it off, a stored ideas/smallbugs tab falls back to Coding.
+  function ideaTicketsOn() {
+    return ff('idea_tickets');
+  }
+  function normalizeSidebarTabKey(t) {
+    if (ideaTicketsOn()) {
+      return (t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'ideas';
+    }
+    return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers' || t === 'jobs') ? t : 'coding';
+  }
   function ff(name) {
     try { return !!(window.__CCC_FLAGS__ || {})[name]; } catch (_) { return false; }
   }
