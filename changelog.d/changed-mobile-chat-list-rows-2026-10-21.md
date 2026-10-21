@@ -1,0 +1,1 @@
+- Phones: the session list uses WhatsApp-style rows: engine avatar, one-line name and time, a two-line preview of the last reply, a pulsing dot while working and a ? when it needs you; child sessions show as indented rows that collapse from the parent's ↳ N.

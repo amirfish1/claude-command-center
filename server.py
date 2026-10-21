@@ -15486,8 +15486,29 @@ def _archive_list_window_allows_row(row, cutoff):
     return bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff
 
 
+_PREVIEW_STATE_RE = re.compile(r"<session-state>.*?(</session-state>|$)", re.S)
+_PREVIEW_MD_RE = re.compile(r"[`*_#>|]+|\[([^\]]*)\]\([^)]*\)")
+
+
+def _archive_list_preview(text, limit=140):
+    """One-line chat-list preview of an assistant reply: drops the trailing
+    <session-state> block, markdown punctuation and link targets, collapses
+    whitespace, and caps the length. Pure string work on the in-memory row."""
+    if not text:
+        return ""
+    t = _PREVIEW_STATE_RE.sub(" ", str(text)[:2000])
+    t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
+    t = " ".join(t.split())
+    return t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"
+
+
 def _archive_list_project_row(row):
     out = {key: copy.deepcopy(row[key]) for key in _ARCHIVE_LIST_FIELDS if key in row}
+    # Chat-list preview line (phone sidebar). The full reply text is too big
+    # to ship for every row; a short derived preview is not.
+    preview = _archive_list_preview(row.get("last_assistant_text"))
+    if preview:
+        out["last_assistant_preview"] = preview
     # CCC-863: cheap in-memory lookup (no file I/O) -- surfaces the live
     # countdown for a session parked on a usage-limit auto-resume.
     sid = row.get("session_id") or row.get("id")

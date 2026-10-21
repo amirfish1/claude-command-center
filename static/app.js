@@ -36788,7 +36788,9 @@
       // decorative leading glyphs (🪄 ✏️ 🧵 ⤴ …) from the name.
       const _waTitle = String(title || '').replace(/^(?:[\p{Extended_Pictographic}\uFE0F\u200d›⤴]\s*)+/u, '') || title;
       const _waPreview = (_needsYouRow && c.question_text) ? String(c.question_text)
-        : (c.last_assistant_preview || _waPreviewText(c.last_assistant_text));
+        : (c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
+          || _waPreviewText(c.session_state && c.session_state.did)
+          || _waPreviewText(cleanFirst));
       const _waStatus = _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'

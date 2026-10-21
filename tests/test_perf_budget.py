@@ -195,9 +195,11 @@ def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
     payload = server._archive_list_payload([row], window="1d", now=now)
 
     projected = payload["conversations"]
-    assert projected == [
-        {key: row[key] for key in server._ARCHIVE_LIST_FIELDS if key in row}
-    ]
+    assert projected == [dict(
+        {key: row[key] for key in server._ARCHIVE_LIST_FIELDS if key in row},
+        # The full reply never ships; only a capped one-line preview does.
+        last_assistant_preview=server._archive_list_preview(transcript),
+    )]
     assert payload["window"] == "1d"
     assert payload["count"] == 1
     assert payload["total_count"] == 1
@@ -371,6 +373,7 @@ def test_archive_list_http_route_projects_cached_rows(monkeypatch):
     assert body["conversations"] == [{
         "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
         "archived": True, "trashed": True, "all_lane_override": "messages",
+        "last_assistant_preview": "not returned",
     }]
 
 
