@@ -86525,6 +86525,7 @@
     let _chatFindLastBuiltQuery = '';
     let _chatFindInputTimer = null;
     let _chatFindBuildGeneration = 0;
+    let _chatFindRoot = null;
     const CHAT_FIND_FULL_LOAD_MAX_LINES = 2000;
 
     function chatFindGetRoot() {
@@ -86561,6 +86562,8 @@
     }
 
     function chatFindCollectRanges(root, query) {
+      _chatFindRoot = root;
+      chatFindWatch(root);
       const ranges = [];
       if (!root || !query) return ranges;
       const needle = query.toLowerCase();
@@ -86609,6 +86612,55 @@
       await fetchConversationEvents(paneId);
     }
 
+    // Ranges are live: when a re-render removes a matched text node, the
+    // browser moves the range onto the parent and collapses it. It stays
+    // connected but holds no text, so check the content, not just isConnected.
+    function chatFindRangesStale(root) {
+      if (_chatFindRoot !== root) return true;
+      const needle = _chatFindLastBuiltQuery.toLowerCase();
+      return _chatFindRanges.some(r =>
+        r.collapsed
+        || r.startContainer.nodeType !== Node.TEXT_NODE
+        || !r.startContainer.isConnected
+        || r.toString().toLowerCase() !== needle);
+    }
+
+    // While the find bar is open, re-collect after the transcript re-renders
+    // so highlights survive live polling. Repaints without scrolling, so it
+    // never yanks the view away from where the user is reading.
+    let _chatFindObserver = null;
+    let _chatFindObservedRoot = null;
+    let _chatFindMutationTimer = null;
+    function chatFindWatch(root) {
+      if (!root || typeof MutationObserver === 'undefined') return;
+      if (_chatFindObserver && _chatFindObservedRoot === root) return;
+      chatFindUnwatch();
+      _chatFindObservedRoot = root;
+      _chatFindObserver = new MutationObserver(() => {
+        if (_chatFindMutationTimer) return;
+        _chatFindMutationTimer = setTimeout(() => {
+          _chatFindMutationTimer = null;
+          const query = $chatFindInput.value;
+          if (!query || query !== _chatFindLastBuiltQuery) return;
+          const cur = chatFindGetRoot();
+          if (!cur || !chatFindRangesStale(cur)) return;
+          const keep = _chatFindMatchIndex;
+          _chatFindRanges = chatFindCollectRanges(cur, query);
+          _chatFindMatchIndex = Math.min(keep, Math.max(0, _chatFindRanges.length - 1));
+          chatFindPaint({ scroll: false });
+          chatFindUpdateCount();
+        }, 250);
+      });
+      _chatFindObserver.observe(root, { childList: true, subtree: true, characterData: true });
+    }
+    function chatFindUnwatch() {
+      if (_chatFindObserver) _chatFindObserver.disconnect();
+      _chatFindObserver = null;
+      _chatFindObservedRoot = null;
+      if (_chatFindMutationTimer) clearTimeout(_chatFindMutationTimer);
+      _chatFindMutationTimer = null;
+    }
+
     function chatFindScrollToRange(range) {
       if (!range) return;
       let el = range.startContainer;
@@ -86616,7 +86668,7 @@
       if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'auto' });
     }
 
-    function chatFindPaint() {
+    function chatFindPaint(opts) {
       try {
         if (window.CSS && CSS.highlights) {
           if (CSS.highlights.has('chat-find')) CSS.highlights.delete('chat-find');
@@ -86632,7 +86684,7 @@
           CSS.highlights.set('chat-find-active', new Highlight(_chatFindRanges[idx]));
         } catch (_) {}
       }
-      chatFindScrollToRange(_chatFindRanges[idx]);
+      if (!opts || opts.scroll !== false) chatFindScrollToRange(_chatFindRanges[idx]);
     }
 
     // DOM + CSS Highlight search — never calls window.find(), so WebKit
@@ -86651,6 +86703,15 @@
       }
       const root = chatFindGetRoot();
       if (!root) return;
+
+      if (!opts.rebuild && query === _chatFindLastBuiltQuery && chatFindRangesStale(root)) {
+        // A live re-render replaced the matched text nodes. Re-collect so the
+        // step lands on real on-screen text instead of a detached node (the
+        // counter used to advance while nothing highlighted or scrolled).
+        const keep = _chatFindMatchIndex;
+        _chatFindRanges = chatFindCollectRanges(root, query);
+        _chatFindMatchIndex = Math.min(keep, Math.max(0, _chatFindRanges.length - 1));
+      }
 
       if (opts.rebuild || query !== _chatFindLastBuiltQuery) {
         _chatFindRanges = chatFindCollectRanges(root, query);
@@ -86673,6 +86734,7 @@
       _chatFindInputTimer = null;
       _chatFindBuildGeneration++;
       if ($chatFindModal) $chatFindModal.style.display = 'none';
+      chatFindUnwatch();
       chatFindClear();
       _flushDeferredSidebarRenderIfAny();
       if (typeof _flushComposerDeferredUpdates === 'function' && !_isComposerFocused()) {

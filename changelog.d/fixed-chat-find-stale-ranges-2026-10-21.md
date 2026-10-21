@@ -1,0 +1,1 @@
+- Cmd+F find in a conversation now highlights and scrolls to matches after the transcript re-renders, instead of only advancing the counter.
