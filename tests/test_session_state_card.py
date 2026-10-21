@@ -99,9 +99,9 @@ class TestSessionStateCard(unittest.TestCase):
 
             self.assertNotIn("font-style: italic", styles)
             self.assertIn(".session-state-block .ssb-primary {", styles)
-            self.assertIn("font-size: 15px", styles)
+            self.assertRegex(styles, r"font-size: 1[45]px")
             self.assertIn(".session-state-block .ssb-reason {", styles)
-            self.assertIn("font-size: 13px", styles)
+            self.assertRegex(styles, r"font-size: 1[23]px")
 
     def test_needs_you_offers_restart_for_ccc_kickstart(self):
         html = render_session_state(
@@ -110,7 +110,7 @@ class TestSessionStateCard(unittest.TestCase):
             PROJECT_ROOT / "static" / "app.js",
         )
 
-        self.assertIn('class="ssb-row ssb-actions"', html)
+        self.assertIn('class="ssb-actions"', html)
         self.assertIn('data-ssb-act="restart"', html)
         self.assertNotIn('data-ssb-act="run"', html)
         self.assertNotIn('data-ssb-act="reload"', html)

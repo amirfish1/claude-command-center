@@ -1893,18 +1893,18 @@
   /* <session-state> block — a compact decision aid. The action (or completed
      work when no action remains) is dominant; the rationale stays secondary. */
   .session-state-block {
-    margin: 12px 0;
-    padding: 12px 16px;
+    margin: 6px 0;
+    padding: 6px 10px;
     background: rgba(255, 255, 255, 0.03);
     border-left: 3px solid #64748b;
     color: var(--text-muted);
-    font-size: 14px;
-    line-height: 1.45;
+    font-size: 13px;
+    line-height: 1.35;
     opacity: 0.9;
   }
   .session-state-block .ssb-row { margin: 0; }
   .session-state-block .ssb-key {
-    display: inline-block; min-width: 76px; margin-right: 10px;
+    display: inline-block; margin-right: 6px;
     color: var(--text-muted);
     font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.05em;
@@ -1912,21 +1912,21 @@
   }
   .session-state-block .ssb-primary {
     color: var(--text);
-    font-size: 15px;
+    font-size: 14px;
   }
   .session-state-block .ssb-next .ssb-key { color: #f59e0b; opacity: 0.9; }
   .session-state-block .ssb-done .ssb-key { color: #10b981; opacity: 0.9; }
   .session-state-block .ssb-reason {
-    margin-top: 6px;
-    font-size: 13px;
+    margin-top: 2px;
+    font-size: 12px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
   .session-state-block .ssb-actions {
-    display: flex; flex-wrap: wrap; gap: 6px;
-    margin-top: 8px; padding-left: 86px;
+    display: inline-flex; flex-wrap: wrap; gap: 4px; vertical-align: baseline;
   }
   .session-state-block .ssb-action {
     display: inline-flex; align-items: center;
-    padding: 3px 10px; border-radius: 5px;
+    padding: 0 8px; border-radius: 5px;
     border: 1px solid rgba(245, 158, 11, 0.45);
     background: rgba(245, 158, 11, 0.08);
     color: var(--text); font: inherit; font-size: 12px;
@@ -1937,19 +1937,6 @@
   .session-state-block .ssb-action:disabled { opacity: 0.5; cursor: default; }
   .session-state-block .ssb-act-copy { border-color: var(--border); background: transparent; }
   .session-state-block .ssb-act-say { border-color: rgba(245, 158, 11, 0.8); background: rgba(245, 158, 11, 0.16); font-weight: 600; }
-  /* Narrow screens: the fixed label column and button indent ate ~40% of the
-     width, wrapping the text into tall rows. Let labels flow inline and keep
-     the rationale to two lines (full text on tap via title). */
-  @media (max-width: 700px) {
-    .session-state-block { margin: 6px 0; padding: 8px 10px; font-size: 13px; line-height: 1.35; }
-    .session-state-block .ssb-key { min-width: 0; margin-right: 6px; font-size: 10px; }
-    .session-state-block .ssb-primary { font-size: 14px; }
-    .session-state-block .ssb-reason {
-      margin-top: 3px; font-size: 12px;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-    }
-    .session-state-block .ssb-actions { margin-top: 5px; padding-left: 0; }
-  }
   .md-table {
     border-collapse: collapse; margin: 8px 0; font-size: 13px;
     border: 1px solid var(--border); border-radius: 4px; overflow: hidden;

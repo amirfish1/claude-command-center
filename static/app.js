@@ -14940,9 +14940,8 @@
     const nextStep = fields.NEXT_STEP_USER || '';
     const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(nextStep);
     if (hasUserAction) {
-      rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + renderInline(nextStep) + '</div>');
       const actions = needsYouActionsHtml(nextStep);
-      if (actions) rows.push('<div class="ssb-row ssb-actions">' + actions + '</div>');
+      rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + renderInline(nextStep) + (actions ? ' <span class="ssb-actions">' + actions + '</span>' : '') + '</div>');
     } else if (fields.DID) {
       rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">Done</span>' + escapeHtml(fields.DID) + '</div>');
     }
