@@ -1,0 +1,1 @@
+- Phones: each session row gets its own avatar: a character from its project's theme (robots and space for CCC, fitness for BYM, plants for growth, funny animals for the rest) on a per-session gradient, with a corner badge for the kind of work (🐞 bug, 💡 idea, ✨ feature, 🔍 investigation, 🚀 release). The engine shows as a small mark by the time.

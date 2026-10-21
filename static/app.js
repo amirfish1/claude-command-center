@@ -22292,6 +22292,74 @@
     const e = String((c && (c.engine || c.source)) || '').toLowerCase();
     return _WA_ENGINE_GLYPH[e] ? e : 'claude';
   }
+  // Session avatars: every session gets its own character + gradient, drawn
+  // deterministically from its id out of its project's themed pool, so the
+  // list reads at a glance (which project, which session) and neighbours
+  // rarely match. A corner badge says what kind of work it is.
+  const _WA_POOLS = {
+    // Claude Command Center: robots, space, gadgets.
+    ccc: ['🤖', '🚀', '🛸', '🛰️', '👾', '🦾', '🧠', '🕹️', '🔭', '🪐', '🧑‍🚀', '👽', '🛰', '📡', '🔋', '🧲',
+      '🦿', '🎛️', '🧪', '💾', '🖲️', '🌌', '☄️', '🌠', '🐙', '🦑', '🤹', '🧙', '🦉', '🐲'],
+    // BYM / pilates studios: movement and wellness, with some silly ones.
+    bym: ['🧘', '🧘‍♀️', '🤸', '🤸‍♀️', '🏋️', '🏋️‍♀️', '🚴', '🚴‍♀️', '🤾', '🏊', '🏄', '🧗', '⛹️‍♀️', '🦩', '🦘',
+      '🐒', '🐆', '🦒', '🐇', '💪', '🥑', '🍌', '🥤', '🧃', '🍉', '🫐', '🎽', '👟', '🩰', '🐬'],
+    // bym-growth: plants and things that grow.
+    growth: ['🌱', '🌿', '🌻', '🌷', '🌵', '🌳', '🍄', '🐝', '🐛', '🦋', '🌾', '🍀', '🪴', '🌺', '🍓', '🥕',
+      '🐌', '🐞', '🌽', '🍋', '🪻', '🌼', '🫛', '🐿️', '🦔'],
+    // Everything else: a zoo of funny animals.
+    misc: ['🦥', '🦦', '🦆', '🐸', '🦔', '🐧', '🦄', '🦖', '🐳', '🦊', '🐼', '🐨', '🐢', '🦀', '🦜', '🐻',
+      '🐯', '🦁', '🐮', '🐷', '🐹', '🐰', '🦝', '🦭', '🦫', '🐡', '🦈', '🐊', '🦓', '🦙', '🐐', '🦚', '🐓', '🦡'],
+  };
+  const _WA_GRADIENTS = {
+    ccc: [['#5b8cff', '#9b6bff'], ['#3ec9ff', '#4c6fff'], ['#7f5cff', '#ff6ec7'], ['#00c6a7', '#1e6bff'],
+      ['#4b5dff', '#00d2ff'], ['#8e7dff', '#3ad1e8'], ['#2f80ed', '#56ccf2'], ['#6a5acd', '#00bfa6']],
+    bym: [['#ff8a65', '#ff4f8b'], ['#ffb347', '#ff6f61'], ['#f857a6', '#ff5858'], ['#ff9a8b', '#ff6a88'],
+      ['#f6d365', '#fda085'], ['#fa709a', '#fee140'], ['#ff7eb3', '#ff758c'], ['#fbab7e', '#f7ce68']],
+    growth: [['#43e97b', '#38f9d7'], ['#a8e063', '#56ab2f'], ['#96e6a1', '#3cba92'], ['#d4fc79', '#5fc95b'],
+      ['#0ba360', '#3cba92'], ['#c1f07a', '#26a96c']],
+    misc: [['#a18cd1', '#fbc2eb'], ['#84fab0', '#8fd3f4'], ['#fccb90', '#d57eeb'], ['#e0c3fc', '#8ec5fc'],
+      ['#f093fb', '#f5576c'], ['#4facfe', '#00f2fe'], ['#fdcbf1', '#e6dee9'], ['#ffecd2', '#fcb69f'],
+      ['#a1c4fd', '#c2e9fb'], ['#d299c2', '#fef9d7'], ['#89f7fe', '#66a6ff'], ['#fddb92', '#d1fdff']],
+  };
+  function _waHash(str) {
+    let h = 2166136261 >>> 0;
+    const t = String(str || '');
+    for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return h >>> 0;
+  }
+  function _waProjectKey(c, title) {
+    // The folder says where it ran; the name often says what it's about
+    // (a BYM task run from the CCC checkout), so both count, BYM/growth first.
+    const where = (String((c && (c.folder_label || c.folder_label_chip || c.slug || c.session_cwd || c.folder_path)) || '')
+      + ' ' + String(title || '')).toLowerCase();
+    if (/growth/.test(where)) return 'growth';
+    if (/\bbym\b|finie|bookyourmat|pilates|fitness|becky/.test(where)) return 'bym';
+    if (/command-center|claude-command|\bccc\b/.test(where)) return 'ccc';
+    return 'misc';
+  }
+  // Kind of work, guessed from the name and first message.
+  function _waKind(c, title) {
+    const t = (String(title || '') + ' ' + String((c && c.first_message) || '').slice(0, 300)).toLowerCase();
+    if (/\b(fix|bug|broken|crash|error|fails?|failing|regression|stuck|hang|wrong)\b/.test(t)) return { k: 'bug', e: '🐞', label: 'Bug fix' };
+    if (/\b(release|deploy|ship|publish|rollout|roll out|launch)\b/.test(t)) return { k: 'ship', e: '🚀', label: 'Release / deploy' };
+    if (/\b(why|investigate|investigation|debug|diagnos|look into|check|audit|research|analy[sz]e)\b/.test(t)) return { k: 'look', e: '🔍', label: 'Investigation' };
+    if (/\b(idea|ideas|brainstorm|what if|should we|design|explore|concept|plan|proposal|think)\b/.test(t)) return { k: 'idea', e: '💡', label: 'Idea / design' };
+    if (/\b(add|build|implement|create|new|feature|support|improve|make)\b/.test(t)) return { k: 'feat', e: '✨', label: 'Feature' };
+    return null;
+  }
+  function _waAvatarHtml(c, title) {
+    const proj = _waProjectKey(c, title);
+    const h = _waHash((c && (c.session_id || c.id)) || title);
+    const pool = _WA_POOLS[proj];
+    const grads = _WA_GRADIENTS[proj];
+    const face = pool[h % pool.length];
+    const g = grads[Math.floor(h / pool.length) % grads.length];
+    const kind = _waKind(c, title);
+    return '<span class="wa-avatar wa-av" aria-hidden="true" style="background:linear-gradient(135deg,' + g[0] + ',' + g[1] + ')">'
+      + '<span class="wa-face">' + face + '</span>'
+      + (kind ? '<span class="wa-kind" title="' + escapeAttr(kind.label) + '">' + kind.e + '</span>' : '')
+      + '</span>';
+  }
   // Same cleanup as server _archive_list_preview, for rows that arrive with
   // the full reply (per-repo /api/conversations) instead of the preview.
   function _waPreviewText(text) {
@@ -36824,10 +36892,11 @@
       const _waStatus = _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'
-        + '<span class="wa-avatar orch-glyph orch-glyph-' + escapeAttr(_waEngine) + '" aria-hidden="true">' + (_WA_ENGINE_GLYPH[_waEngine] || 'C') + '</span>'
+        + _waAvatarHtml(c, _waTitle)
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
-        +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified)) + '</span></div>'
+        +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
+        +     '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span></span></div>'
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
         + '</div>';
