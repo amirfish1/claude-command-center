@@ -1,0 +1,1 @@
+- Sidebar no longer goes empty for minutes after a restart on hosts with a large Devin CLI `sessions.db`; the Devin freshness query uses the covering index again.

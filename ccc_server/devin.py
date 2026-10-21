@@ -1352,15 +1352,22 @@ def _devin_cli_session_versions(con, raw_ids):
     last_activity_at can lag the newest message row (observed: 1 of 42
     sessions had message rows newer than it), so the caller takes
     max(last_activity_at, max_created_at) instead of trusting the column
-    alone (CCC-992: a row read "3h" for a session active 46 min ago)."""
+    alone (CCC-992: a row read "3h" for a session active 46 min ago).
+
+    created_at is NOT in idx_message_nodes_session, so a plain
+    MAX(created_at) in the GROUP BY drops the covering index and reads every
+    message blob (50-260s on a 4 GB DB, parking every sidebar list). Take it
+    from the newest row instead: one rowid lookup per session."""
     if not raw_ids or con is None:
         return {}
     out = {}
     placeholders = ",".join("?" * len(raw_ids))
     try:
         for row in con.execute(
-            "SELECT session_id, MAX(row_id), COUNT(*), MAX(created_at) "
-            "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id".format(
+            "SELECT v.session_id, v.max_row, v.n, m.created_at FROM ("
+            "SELECT session_id, MAX(row_id) AS max_row, COUNT(*) AS n "
+            "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id"
+            ") v JOIN message_nodes m ON m.row_id = v.max_row".format(
                 placeholders
             ),
             raw_ids,
