@@ -307,6 +307,11 @@ class _SessionGraph:
         with self._lock:
             return self._parent_of.get(str(child or "").strip())
 
+    def parent_snapshot(self):
+        """One-lock copy of the child -> parent map, for bulk row projection."""
+        with self._lock:
+            return dict(self._parent_of)
+
     def children_of(self, parent):
         """Return a list of child session_ids for ``parent``."""
         with self._lock:

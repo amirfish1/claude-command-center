@@ -298,7 +298,7 @@ def _disable_session_auto_resume(session_id):
     }
 
 
-def usage_limit_resume_at_for_session(session_id):
+def usage_limit_resume_at_for_session(session_id, resumes=None):
     """Cheap in-memory lookup for the row-serialization path: the epoch a
     stopped session will auto-resume at, or None if it isn't tracked, is
     already fired, or the time has passed (stale defensive cutoff so a
@@ -313,7 +313,13 @@ def usage_limit_resume_at_for_session(session_id):
     sid = str(session_id or "")
     if sid.startswith("session_"):
         sid = sid[len("session_"):]
-    entry = _core._load_usage_limit_resumes().get(sid)
+    # Bulk callers (the archive list projects thousands of rows per poll)
+    # pass one pre-loaded `resumes` dict: _load_usage_limit_resumes() does a
+    # stat() + lock per call, and under GIL contention each of those hands
+    # the GIL away, which turned a 7d list into a 20s request after restart.
+    if resumes is None:
+        resumes = _core._load_usage_limit_resumes()
+    entry = resumes.get(sid)
     if not entry or entry.get("fired") or entry.get("dismissed"):
         return None
     resume_at = entry.get("resume_at")

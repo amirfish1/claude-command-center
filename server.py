@@ -15509,7 +15509,10 @@ def _archive_list_preview(text, limit=140):
     return t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"
 
 
-def _archive_list_project_row(row):
+def _archive_list_project_row(row, *, resumes=None, parents=None):
+    """Project one row for the sidebar list. Bulk callers pass `resumes` /
+    `parents` snapshots so the per-row work is dict lookups, not a stat() or
+    lock acquisition each (those cost a GIL hand-off apiece)."""
     out = {key: copy.deepcopy(row[key]) for key in _ARCHIVE_LIST_FIELDS if key in row}
     # Chat-list preview line (phone sidebar). The full reply text is too big
     # to ship for every row; a short derived preview is not.
@@ -15523,10 +15526,13 @@ def _archive_list_project_row(row):
         # The archive snapshot can predate family discovery. Parentage is
         # cheap live graph state and must not depend on opening the reader.
         if not out.get("parent_session_id"):
-            parent = _session_graph.parent_of(sid)
+            parent = (
+                parents.get(str(sid).strip()) if parents is not None
+                else _session_graph.parent_of(sid)
+            )
             if parent:
                 out["parent_session_id"] = parent
-        resume_at = usage_limit_resume_at_for_session(sid)
+        resume_at = usage_limit_resume_at_for_session(sid, resumes=resumes)
         if resume_at:
             out["usage_limit_resume_at"] = resume_at
     return out
@@ -15534,8 +15540,11 @@ def _archive_list_project_row(row):
 
 def _archive_list_project_rows(rows, *, window="all", now=None):
     cutoff = _archive_list_window_cutoff(window, now=now)
+    resumes = _load_usage_limit_resumes()
+    parents = _session_graph.parent_snapshot()
     projected = [
-        _archive_list_project_row(row) for row in (rows or [])
+        _archive_list_project_row(row, resumes=resumes, parents=parents)
+        for row in (rows or [])
         if isinstance(row, dict) and _archive_list_window_allows_row(row, cutoff)
     ]
     # Experimental idea tickets: the list serves a persisted snapshot, so the

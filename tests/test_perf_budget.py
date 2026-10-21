@@ -265,16 +265,16 @@ def test_archive_list_sidebar_payload_budget_at_corpus_scale(monkeypatch):
     calls = []
     project = server._archive_list_project_row
 
-    def counted(row):
+    def counted(row, **kw):
         calls.append(row["id"])
-        return project(row)
+        return project(row, **kw)
 
     def forbidden(*args, **kwargs):
         raise AssertionError("sidebar projection performed transcript or process work")
 
     monkeypatch.setattr(server, "_archive_list_project_row", counted)
     monkeypatch.setattr(server._session_graph, "parent_of", lambda sid: None)
-    monkeypatch.setattr(server, "usage_limit_resume_at_for_session", lambda sid: None)
+    monkeypatch.setattr(server, "usage_limit_resume_at_for_session", lambda sid, **kw: None)
     monkeypatch.setattr(server, "find_all_conversations", forbidden)
     monkeypatch.setattr(server, "_tail_read_lines", forbidden)
     monkeypatch.setattr(subprocess, "run", forbidden)
@@ -4820,3 +4820,17 @@ def test_fleet_failover_get_reuses_watcher_state(monkeypatch):
         fleet = server.free_failover_fleet()
         assert len(fleet["groups"]) == 3
         assert sum(g["limited_count"] for g in fleet["groups"]) == 21
+
+
+def test_archive_list_projection_loads_per_row_stores_once(monkeypatch):
+    """The 7d sidebar list ran a stat()+lock (usage-limit store) and a lock
+    (session graph) per row; under GIL contention after a restart that was a
+    20s request. Bulk projection must read each store once per call."""
+    import server
+    loads, parents = [], []
+    monkeypatch.setattr(server, "_load_usage_limit_resumes", lambda: loads.append(1) or {})
+    monkeypatch.setattr(server._session_graph, "parent_of", lambda sid: parents.append(sid))
+    rows = [{"id": f"s{i}", "session_id": f"s{i}", "mtime": 1} for i in range(500)]
+    server._archive_list_project_rows(rows, window="all")
+    assert len(loads) == 1
+    assert parents == []
