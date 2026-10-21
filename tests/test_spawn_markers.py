@@ -1,4 +1,5 @@
 import json
+import os
 
 import server
 
@@ -226,6 +227,7 @@ def test_spawn_marker_index_survives_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "SPAWN_MARKERS_DIR", marker_dir)
     monkeypatch.setattr(server, "_SPAWN_MARKER_FILE_CACHE", {})
     monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_LOADED", set())
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_DIR_MTIME", {})
     monkeypatch.setattr(server, "_SPAWN_MARKER_MEMO", {"ts": 0.0, "dir": None, "out": {}})
     (marker_dir / "aaaa.json").write_text(json.dumps({"spawned_via": "wt", "lane": "workers"}))
     first = server._load_spawn_markers()
@@ -234,11 +236,16 @@ def test_spawn_marker_index_survives_restart(tmp_path, monkeypatch):
     # "Restart": drop every in-memory structure, keep the disk index.
     server._SPAWN_MARKER_FILE_CACHE.clear()
     server._SPAWN_MARKER_INDEX_LOADED.clear()
+    server._SPAWN_MARKER_INDEX_DIR_MTIME.clear()
     server._SPAWN_MARKER_MEMO.update(ts=0.0, dir=None, out={})
     decoded = []
     monkeypatch.setattr(
         server, "_decode_spawn_marker_file",
         lambda path: decoded.append(path.name),
     )
+    def no_scan(*a, **k):
+        raise AssertionError("cold start with an unchanged dir must not scan per file")
+
+    monkeypatch.setattr(server.os, "scandir", no_scan)
     assert server._load_spawn_markers() == first
     assert decoded == []

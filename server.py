@@ -5167,6 +5167,8 @@ _SPAWN_MARKER_MEMO = {"ts": 0.0, "dir": None, "out": {}}
 _SPAWN_MARKER_MEMO_TTL_S = 2.0
 _SPAWN_MARKER_MEMO_LOCK = threading.Lock()
 _SPAWN_MARKER_INDEX_LOADED = set()
+_SPAWN_MARKER_INDEX_DIR_MTIME = {}
+_SPAWN_MARKER_REVALIDATING = threading.Event()
 
 
 def _spawn_marker_index_path():
@@ -5189,6 +5191,7 @@ def _load_spawn_marker_index():
         return
     if not isinstance(data, dict) or data.get("v") != 1:
         return
+    _SPAWN_MARKER_INDEX_DIR_MTIME[marker_dir] = data.get("dir_mtime_ns")
     for path, row in (data.get("files") or {}).items():
         try:
             version = (int(row[0]), int(row[1]))
@@ -5198,9 +5201,10 @@ def _load_spawn_marker_index():
         _SPAWN_MARKER_FILE_CACHE.setdefault(path, (version, marker))
 
 
-def _save_spawn_marker_index():
+def _save_spawn_marker_index(dir_mtime_ns=None):
     snapshot = {
         "v": 1,
+        "dir_mtime_ns": dir_mtime_ns,
         "files": {
             path: [version[0], version[1], marker]
             for path, (version, marker) in list(_SPAWN_MARKER_FILE_CACHE.items())
@@ -5236,6 +5240,40 @@ def _load_spawn_markers():
         ):
             return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
     _load_spawn_marker_index()
+    with _SPAWN_MARKER_MEMO_LOCK:
+        cold = _SPAWN_MARKER_MEMO["dir"] is None
+    if (
+        cold
+        and marker_dir[1] is not None
+        and _SPAWN_MARKER_INDEX_DIR_MTIME.get(marker_dir[0]) == marker_dir[1]
+        and _SPAWN_MARKER_FILE_CACHE
+    ):
+        # Cold process, directory unchanged since the index was written: serve
+        # the persisted map now (zero per-file syscalls) and let a background
+        # thread re-stat the files. A stat per marker is a GIL hand-off each,
+        # which is what made the first post-restart list take 15s+.
+        out = {
+            Path(path).name[: -len(".json")].strip(): dict(marker)
+            for path, (_version, marker) in list(_SPAWN_MARKER_FILE_CACHE.items())
+            if marker and path.endswith(".json")
+        }
+        with _SPAWN_MARKER_MEMO_LOCK:
+            _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out)
+        if not _SPAWN_MARKER_REVALIDATING.is_set():
+            _SPAWN_MARKER_REVALIDATING.set()
+
+            def _revalidate():
+                try:
+                    time.sleep(_SPAWN_MARKER_MEMO_TTL_S)
+                    with _SPAWN_MARKER_MEMO_LOCK:
+                        _SPAWN_MARKER_INDEX_DIR_MTIME.pop(marker_dir[0], None)
+                        _SPAWN_MARKER_MEMO["ts"] = 0.0
+                    _load_spawn_markers()
+                finally:
+                    _SPAWN_MARKER_REVALIDATING.clear()
+
+            threading.Thread(target=_revalidate, daemon=True).start()
+        return {sid: dict(m) for sid, m in out.items()}
     out = {}
     try:
         with os.scandir(SPAWN_MARKERS_DIR) as it:
@@ -5271,8 +5309,9 @@ def _load_spawn_markers():
         _SPAWN_MARKER_FILE_CACHE.pop(k, None)
     with _SPAWN_MARKER_MEMO_LOCK:
         _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out)
-    if decoded or stale:
-        _save_spawn_marker_index()
+    if decoded or stale or _SPAWN_MARKER_INDEX_DIR_MTIME.get(marker_dir[0]) != marker_dir[1]:
+        _save_spawn_marker_index(marker_dir[1])
+        _SPAWN_MARKER_INDEX_DIR_MTIME[marker_dir[0]] = marker_dir[1]
     return {sid: dict(m) for sid, m in out.items()}
 
 
