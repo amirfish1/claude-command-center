@@ -12726,10 +12726,24 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .voice-panel[hidden] { display: none; }
+  .voice-mobile-btn { display: none; }
   @media (max-width: 1200px) {
+    .voice-mobile-btn {
+      position: fixed; right: max(16px, env(safe-area-inset-right, 0px));
+      bottom: calc(160px + env(safe-area-inset-bottom, 0px)); z-index: 9400;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      min-height: 56px; padding: 0 18px; border-radius: 999px;
+      background: #238636; border: 1px solid #2ea043; color: #fff;
+      font: 700 14px var(--font-sans, sans-serif); cursor: pointer;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+      touch-action: none; user-select: none;
+    }
     body.has-mobile-bottom-nav .voice-panel {
       bottom: calc(80px + env(safe-area-inset-bottom, 0px));
     }
+    .voice-mobile-btn.live { background: #1a6330; }
+    .voice-mobile-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+    body.voice-panel-open .voice-mobile-btn { display: none; }
     .voice-panel {
       right: max(12px, env(safe-area-inset-right, 0px));
       bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -12738,6 +12752,8 @@
     }
     body .voice-panel-btn { width: 44px; height: 44px; }
   }
+  /* Settings → Layout → "Floating call button" off: hide it unless a call is live. */
+  body.voice-call-btn-off .voice-mobile-btn:not(.live) { display: none; }
   .voice-panel-head { display: flex; align-items: center; gap: 8px;
     padding: 10px 12px; border-bottom: 1px solid var(--border); }
   .voice-state-pill { font-size: 11px; font-weight: 600; letter-spacing: 0.3px;

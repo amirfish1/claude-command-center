@@ -79809,6 +79809,7 @@
   // transcript/state events over SSE. Mutations arrive as pending-action
   // cards (assistant_actions) the user confirms by click.
   const $voiceModeBtn = document.getElementById('voiceModeBtn');
+  const $voiceMobileBtn = document.getElementById('voiceMobileBtn');
   const $voiceLiveDot = document.getElementById('voiceLiveDot');
   const $voicePanel = document.getElementById('voicePanel');
   const $voiceStatePill = document.getElementById('voiceStatePill');
@@ -79881,6 +79882,11 @@
         : 'Talk to CCC - voice mode powered by Codex realtime';
     }
     if ($voiceLiveDot) $voiceLiveDot.hidden = !live;
+    if ($voiceMobileBtn) {
+      $voiceMobileBtn.classList.toggle('live', live);
+      $voiceMobileBtn.setAttribute('aria-label', live ? 'Return to voice call' : 'Call voice assistant');
+      document.getElementById('voiceMobileLabel').textContent = live ? 'IN CALL' : 'CALL';
+    }
     if ($voiceTalkBtn) {
       const label = document.getElementById('voiceTalkLabel');
       if (label) label.textContent = live ? 'END CALL' : 'CALL';
@@ -80349,12 +80355,48 @@
   function voiceOpenPanel() {
     if ($voicePanel) $voicePanel.hidden = false;
     document.body.classList.add('voice-panel-open');
+    if ($voiceMobileBtn) $voiceMobileBtn.setAttribute('aria-expanded', 'true');
   }
   function voiceHidePanel() {
     // Panel hides, session keeps running — the topbar dot + status poll keep
     // state live; the stream keeps the session heartbeating.
     if ($voicePanel) $voicePanel.hidden = true;
     document.body.classList.remove('voice-panel-open');
+    if ($voiceMobileBtn) $voiceMobileBtn.setAttribute('aria-expanded', 'false');
+    voiceRestoreButtonPosition();
+  }
+
+  // Store a relative position so a phone rotation keeps the launcher reachable.
+  const VOICE_BUTTON_POSITION_KEY = 'ccc-voice-button-position';
+  let voiceButtonPosition = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(VOICE_BUTTON_POSITION_KEY) || 'null');
+    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) voiceButtonPosition = saved;
+  } catch (_) {}
+
+  function voiceButtonBounds() {
+    const rect = $voiceMobileBtn.getBoundingClientRect();
+    const nav = document.querySelector('.mobile-bottom-nav');
+    const navRect = nav && nav.getBoundingClientRect();
+    const bottom = navRect && navRect.height ? navRect.top : window.innerHeight;
+    return {x: Math.max(12, window.innerWidth - rect.width - 12),
+      y: Math.max(12, bottom - rect.height - 12)};
+  }
+
+  function voiceMoveButton(x, y) {
+    const bounds = voiceButtonBounds();
+    const left = Math.max(12, Math.min(bounds.x, x));
+    const top = Math.max(12, Math.min(bounds.y, y));
+    Object.assign($voiceMobileBtn.style, {left: left + 'px', top: top + 'px', right: 'auto', bottom: 'auto'});
+    return {x: bounds.x > 12 ? (left - 12) / (bounds.x - 12) : 0,
+      y: bounds.y > 12 ? (top - 12) / (bounds.y - 12) : 0};
+  }
+
+  function voiceRestoreButtonPosition() {
+    if (!$voiceMobileBtn || !voiceButtonPosition || !$voiceMobileBtn.getClientRects().length) return;
+    const bounds = voiceButtonBounds();
+    voiceMoveButton(12 + voiceButtonPosition.x * (bounds.x - 12),
+      12 + voiceButtonPosition.y * (bounds.y - 12));
   }
 
   async function voicePollStatus() {
@@ -80487,6 +80529,59 @@
   // -- wiring ------------------------------------------------------------
 
   if ($voiceModeBtn) $voiceModeBtn.addEventListener('click', voiceOpenPanel);
+  if ($voiceMobileBtn) {
+    let drag = null;
+    let suppressClick = false;
+    $voiceMobileBtn.addEventListener('pointerdown', (ev) => {
+      if (!ev.isPrimary || ev.button !== 0) return;
+      const rect = $voiceMobileBtn.getBoundingClientRect();
+      drag = {id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: rect.left, top: rect.top, moved: false};
+      suppressClick = false;
+      $voiceMobileBtn.setPointerCapture(ev.pointerId);
+    });
+    $voiceMobileBtn.addEventListener('pointermove', (ev) => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      const dx = ev.clientX - drag.x;
+      const dy = ev.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 8) return;
+      drag.moved = true;
+      voiceButtonPosition = voiceMoveButton(drag.left + dx, drag.top + dy);
+    });
+    const finishDrag = (ev) => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      suppressClick = drag.moved;
+      if (drag.moved) {
+        try { localStorage.setItem(VOICE_BUTTON_POSITION_KEY, JSON.stringify(voiceButtonPosition)); } catch (_) {}
+      }
+      drag = null;
+    };
+    $voiceMobileBtn.addEventListener('pointerup', finishDrag);
+    $voiceMobileBtn.addEventListener('pointercancel', finishDrag);
+    $voiceMobileBtn.addEventListener('click', (ev) => {
+      if (suppressClick && ev.detail !== 0) { suppressClick = false; return; }
+      voiceOpenPanel();
+      if (!Voice.sessionId && !['connecting', 'stopping'].includes(Voice.state)) voiceStart();
+    });
+    window.addEventListener('resize', voiceRestoreButtonPosition);
+    voiceRestoreButtonPosition();
+  }
+  // Settings → Layout toggle for the floating CALL button (default off).
+  const $voiceCallBtnToggle = document.getElementById('settingsVoiceCallBtnToggle');
+  function voiceApplyCallButtonPref() {
+    let on = false;
+    try { on = localStorage.getItem('ccc-voice-call-button') === '1'; } catch (_) {}
+    document.body.classList.toggle('voice-call-btn-off', !on);
+    if ($voiceCallBtnToggle) {
+      $voiceCallBtnToggle.classList.toggle('is-on', on);
+      $voiceCallBtnToggle.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  }
+  if ($voiceCallBtnToggle) $voiceCallBtnToggle.addEventListener('click', () => {
+    const on = $voiceCallBtnToggle.getAttribute('aria-checked') !== 'true';
+    try { localStorage.setItem('ccc-voice-call-button', on ? '1' : '0'); } catch (_) {}
+    voiceApplyCallButtonPref();
+  });
+  voiceApplyCallButtonPref();
   if ($voicePanelHideBtn) $voicePanelHideBtn.addEventListener('click', voiceHidePanel);
   if ($voicePanelStopBtn) $voicePanelStopBtn.addEventListener('click', () => voiceStop('user'));
   if ($voiceTalkBtn) $voiceTalkBtn.addEventListener('click', () => {

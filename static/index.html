@@ -144,7 +144,7 @@
 </script>
 <link rel="stylesheet" href="/static/credential-broker.css">
 </head>
-<body>
+<body class="voice-call-btn-off">
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
        Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
        Advanced (data-nav-chrome="advanced") is Coding / Workers / Queues / Ask.
@@ -2644,6 +2644,18 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="voice call button floating phone talk assistant">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Floating call button</div>
+                <div class="settings-row-desc">Off by default. Turn on to show the floating CALL button for starting a voice call; an active call still shows it.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsVoiceCallBtnToggle" role="switch" aria-checked="false" aria-label="Floating call button">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
             <div class="settings-row" data-keywords="voice speak tts read aloud deepgram kokoro">
               <div class="settings-row-main">
                 <div class="settings-row-label">Default Speak voice</div>
@@ -3637,6 +3649,10 @@
   <!-- Voice panel: the live voice session's floating card. Transcript is a
        local render of the SSE stream (user + assistant); pending actions are
        the same cards the Ask tab uses, confirmed by click only. -->
+  <button type="button" id="voiceMobileBtn" class="voice-mobile-btn" title="Call voice assistant; drag to move" aria-label="Call voice assistant" aria-controls="voicePanel" aria-expanded="false">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.57 2.79.69A2 2 0 0 1 22 16.92Z"></path></svg>
+    <span id="voiceMobileLabel">CALL</span>
+  </button>
   <div id="voicePanel" class="voice-panel" role="dialog" aria-label="Voice session" hidden>
     <div class="voice-panel-head">
       <span id="voiceStatePill" class="voice-state-pill">idle</span>
