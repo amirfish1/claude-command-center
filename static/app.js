@@ -80446,6 +80446,23 @@
     window.addEventListener('resize', voiceRestoreButtonPosition);
     voiceRestoreButtonPosition();
   }
+  // Settings → Layout toggle for the floating CALL button (default on).
+  const $voiceCallBtnToggle = document.getElementById('settingsVoiceCallBtnToggle');
+  function voiceApplyCallButtonPref() {
+    let on = true;
+    try { on = localStorage.getItem('ccc-voice-call-button') !== '0'; } catch (_) {}
+    document.body.classList.toggle('voice-call-btn-off', !on);
+    if ($voiceCallBtnToggle) {
+      $voiceCallBtnToggle.classList.toggle('is-on', on);
+      $voiceCallBtnToggle.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  }
+  if ($voiceCallBtnToggle) $voiceCallBtnToggle.addEventListener('click', () => {
+    const on = $voiceCallBtnToggle.getAttribute('aria-checked') !== 'true';
+    try { localStorage.setItem('ccc-voice-call-button', on ? '1' : '0'); } catch (_) {}
+    voiceApplyCallButtonPref();
+  });
+  voiceApplyCallButtonPref();
   if ($voicePanelHideBtn) $voicePanelHideBtn.addEventListener('click', voiceHidePanel);
   if ($voicePanelStopBtn) $voicePanelStopBtn.addEventListener('click', () => voiceStop('user'));
   if ($voiceTalkBtn) $voiceTalkBtn.addEventListener('click', () => {

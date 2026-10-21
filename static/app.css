@@ -12725,6 +12725,8 @@
     }
     body .voice-panel-btn { width: 44px; height: 44px; }
   }
+  /* Settings → Layout → "Floating call button" off: hide it unless a call is live. */
+  body.voice-call-btn-off .voice-mobile-btn:not(.live) { display: none; }
   .voice-panel-head { display: flex; align-items: center; gap: 8px;
     padding: 10px 12px; border-bottom: 1px solid var(--border); }
   .voice-state-pill { font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
