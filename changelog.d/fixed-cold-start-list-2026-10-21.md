@@ -1,0 +1,1 @@
+- Sidebar loads in seconds, not tens of seconds, right after a server restart: the list no longer re-reads thousands of spawn-marker files or re-stats the usage-limit store once per row.
