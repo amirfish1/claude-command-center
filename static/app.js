@@ -12997,6 +12997,10 @@
       _ttsDirectBtn.classList.remove('speaking', 'paused');
     }
     _ttsDirectBtn = state ? btn : null;
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(f => {
+      f.classList.toggle('speaking', state === 'speaking');
+      f.classList.toggle('paused', state === 'paused');
+    });
     if (btn) {
       btn.classList.toggle('speaking', state === 'speaking' || state === 'paused');
       btn.classList.toggle('paused', state === 'paused');
@@ -43815,6 +43819,13 @@
       nextBtn.setAttribute('aria-hidden', showNext ? 'false' : 'true');
       nextBtn.tabIndex = showNext ? 0 : -1;
     }
+    const speakBtn = view._convSpeakButton;
+    if (speakBtn) {
+      const showSpeak = !!_visibleSpeakButton(view);
+      speakBtn.classList.toggle('visible', showSpeak);
+      speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
+      speakBtn.tabIndex = showSpeak ? 0 : -1;
+    }
     // "Sessions" shows only while the merged view actually holds more than
     // one session — i.e. at least one continuation seam marker is rendered.
     const segBtn = view._convSegmentButton;
@@ -44232,6 +44243,21 @@
     return true;
   }
 
+  // The per-turn speaker button of the assistant turn that occupies most of
+  // the pane right now (earliest wins ties), or null.
+  function _visibleSpeakButton(view) {
+    if (!view) return null;
+    const vr = view.getBoundingClientRect();
+    let best = null, bestVis = 0;
+    view.querySelectorAll('[data-read-assistant-message], [data-read-agent-answer]').forEach(btn => {
+      const ev = btn.closest('.event.assistant, .event.result, .kimi-answer-meta, .ask-turn-a') || btn;
+      const r = ev.getBoundingClientRect();
+      const vis = Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top);
+      if (vis > bestVis + 1) { best = btn; bestVis = vis; }
+    });
+    return best;
+  }
+
   function attachConversationEndAffordance(view) {
     if (!view || view._convEndAffordanceAttached) return;
     const host = view.closest('.conv-pane') || view.closest('.conv-panel');
@@ -44307,6 +44333,28 @@
       updateConversationEndAffordance(v);
     });
     view._convNextButton = nextBtn;
+    // Floating speaker: reads whichever assistant turn is most visible in the
+    // pane, so the tiny per-turn speaker icons aren't the only way to start a
+    // read. Clicking it again on the same turn pauses/resumes (same as the
+    // per-turn button, which it delegates to).
+    let speakBtn = host.querySelector(':scope > .conv-scroll-speak-btn');
+    if (!speakBtn) {
+      speakBtn = document.createElement('button');
+      speakBtn.type = 'button';
+      speakBtn.className = 'conv-scroll-speak-btn';
+      speakBtn.title = 'Read the message on screen aloud';
+      speakBtn.setAttribute('aria-label', 'Read the message on screen aloud');
+      speakBtn.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"></path><path class="spk-wave" d="M15.5 8.5a5 5 0 0 1 0 7"></path><path class="spk-wave" d="M18.5 5.5a9 9 0 0 1 0 13"></path></svg>';
+      host.appendChild(speakBtn);
+    }
+    speakBtn._convTargetView = view;
+    speakBtn.addEventListener('click', () => {
+      const v = speakBtn._convTargetView || view;
+      const target = _visibleSpeakButton(v);
+      if (!target) { showOpToast('No assistant message on screen to read', 'error'); return; }
+      target.click();
+    });
+    view._convSpeakButton = speakBtn;
     // "Sessions" steps through continuation seam markers (.conv-session-
     // boundary) in a merged continuation chain. Each click lands on the END
     // of the next-earlier session (its seam scrolled to the bottom edge, so

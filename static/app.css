@@ -3401,6 +3401,33 @@
     line-height: 1;
   }
 
+  /* Big floating "read aloud" button: reads the assistant turn on screen. */
+  .conv-scroll-speak-btn {
+    position: absolute;
+    left: 14px;
+    bottom: 190px;
+    z-index: 12;
+    width: 56px;
+    height: 56px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+    color: var(--text);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(6px);
+    transition: opacity 0.14s ease, transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+  }
+  .conv-scroll-speak-btn.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
+  .conv-scroll-speak-btn:hover { border-color: var(--accent); background: var(--surface-2); }
+  .conv-scroll-speak-btn.speaking { border-color: var(--accent); color: var(--accent); }
+  .conv-scroll-speak-btn.speaking.paused { opacity: 0.8; }
+
   /* Seam marker between two CCC continuation segments in the merged
      conversation view: messages above came from the earlier session,
      messages below are the session that continued from it. */
