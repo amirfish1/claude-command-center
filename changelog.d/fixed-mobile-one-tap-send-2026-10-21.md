@@ -1,0 +1,1 @@
+- Tapping Send on a phone with the keyboard open sends on the first tap instead of only dismissing the keyboard.

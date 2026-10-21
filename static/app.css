@@ -3404,7 +3404,7 @@
   /* Big floating "read aloud" button: reads the assistant turn on screen. */
   .conv-scroll-speak-btn {
     position: absolute;
-    left: 14px;
+    right: 20px;
     bottom: 190px;
     z-index: 12;
     width: 56px;
@@ -31276,3 +31276,115 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 .event.assistant:hover > .tapback-bar, .tapback-bar:has(button.on) { opacity: 1; }
 .tapback-bar button { background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 0 5px; font-size: 13px; cursor: pointer; filter: grayscale(1); opacity: .6; }
 .tapback-bar button:hover, .tapback-bar button.on { filter: none; opacity: 1; border-color: var(--border, #444); }
+
+/* ── Phone conversation chrome (Advanced mode) ─────────────────────────────
+   Row 1 of #convToolbar is only Back + the session's name (#mobileConvTitle,
+   the same title as its sidebar row). The original-ask disclosure, the
+   breadcrumb chips (session id, process pill) and the status text are gone;
+   Compact/Normal and the ⋮ menu wrap to a second row of full-size buttons.
+   Everything tappable is at least 44px. Simple mode keeps its own header
+   (simple.css), so every rule here is scoped to body:not(.ccc-simple-mode). */
+.mobile-conv-title { display: none; }
+@media (max-width: 1200px) {
+  body:not(.ccc-simple-mode) #convToolbar {
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 8px;
+    padding: 6px 10px 8px;
+  }
+  body:not(.ccc-simple-mode) #convToolbar #mobileOriginalAsk,
+  body:not(.ccc-simple-mode) #convToolbar #cccBreadcrumb,
+  body:not(.ccc-simple-mode) #convToolbar #convStatus {
+    display: none !important;
+  }
+  body:not(.ccc-simple-mode) #convToolbar #mobileBackBtn {
+    order: -100;
+    flex: 0 0 48px;
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    min-height: 48px;
+    padding: 0;
+    justify-content: center;
+    font-size: 26px;
+    color: var(--text);
+    border-radius: 10px;
+  }
+  /* Usually-empty wrappers: keep them after the row-2 buttons so they don't
+     push Compact/Normal in from the left edge. */
+  body:not(.ccc-simple-mode) #convToolbar > #cccTopbar,
+  body:not(.ccc-simple-mode) #convToolbar > .mobile-more-wrap { order: 101; margin-left: -8px !important; }
+  body:not(.ccc-simple-mode) #convToolbar .mobile-conv-title:not([hidden]) {
+    order: -99;
+    display: block;
+    /* Fill the rest of row 1 so every other control wraps below it. */
+    flex: 1 1 calc(100% - 56px);
+    min-width: 0;
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1.25;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  body:not(.ccc-simple-mode) #convToolbar .mobile-view-seg {
+    order: 99;
+    flex: 1 1 auto;
+    margin-left: 0;
+    height: 44px;
+    border-radius: 10px;
+  }
+  body:not(.ccc-simple-mode) #convToolbar .mobile-view-seg > button {
+    flex: 1 1 0;
+    font-size: 15px;
+    padding: 0 14px;
+  }
+  body:not(.ccc-simple-mode) #convToolbar .mobile-actions-wrap { order: 100; margin-left: 0; }
+  body:not(.ccc-simple-mode) #convToolbar button.mobile-actions-btn {
+    min-width: 56px;
+    min-height: 44px;
+    justify-content: center;
+    font-size: 20px;
+    border-radius: 10px;
+  }
+  button.mobile-actions-item { font-size: 16px; min-height: 52px; }
+
+  /* Composer: one size for every control, and no Speak button (the floating
+     speaker over the transcript reads the on-screen turn). */
+  .conv-input-bar #convTtsBtn { display: none !important; }
+  .conv-input-bar .conv-input-row-bottom > button,
+  .conv-input-bar .conv-actions-btn,
+  .conv-input-bar .conv-input-buttons > button {
+    min-width: 48px;
+    min-height: 48px;
+  }
+  .conv-input-bar .conv-input-buttons .send-btn {
+    width: 52px;
+    height: 52px;
+  }
+  .conv-input-bar .conv-input-row-bottom svg { width: 22px; height: 22px; }
+  .conv-input-bar .expand-btn { min-width: 40px; min-height: 40px; }
+
+  /* Floating transcript controls: thumb-sized. */
+  .conv-scroll-end-btn,
+  .conv-scroll-last-btn,
+  .conv-scroll-next-btn,
+  .conv-scroll-segment-btn {
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 22px;
+  }
+  .conv-scroll-end-btn span,
+  .conv-scroll-last-btn span,
+  .conv-scroll-next-btn span,
+  .conv-scroll-segment-btn span { font-size: 15px; }
+
+  /* Per-turn speak/copy icons were 18px. */
+  .conversations-view .event.assistant .assistant-message-action {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+}

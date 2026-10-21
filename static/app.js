@@ -14033,6 +14033,36 @@
     }, true);
     btn.addEventListener('contextmenu', (ev) => { if (isTouchPrimary()) ev.preventDefault(); });
   })();
+  // Touch: one tap on Send while the keyboard is up. The tap's focus change
+  // blurs the composer, the keyboard drops and the bar reflows under the
+  // finger, and iOS then cancels the click, so the user had to tap twice.
+  // Fire the click on touchend instead and preventDefault so focus (and the
+  // keyboard) stays put. The long-press capture handler above still swallows
+  // the click after a long-press.
+  (function _initOneTapComposerSend() {
+    const SEL = '.send-btn, .submit-plus-btn, .send-queue-btn, .steer-btn';
+    let start = null;
+    document.addEventListener('touchstart', (ev) => {
+      start = null;
+      if (ev.touches.length !== 1) return;
+      const btn = ev.target.closest && ev.target.closest(SEL);
+      const bar = btn && btn.closest('.conv-input-bar');
+      const active = document.activeElement;
+      if (!bar || !active || active.tagName !== 'TEXTAREA' || !bar.contains(active)) return;
+      const t = ev.touches[0];
+      start = { btn, x: t.clientX, y: t.clientY };
+    }, { passive: true, capture: true });
+    document.addEventListener('touchend', (ev) => {
+      const s = start;
+      start = null;
+      if (!s || !s.btn.isConnected || s.btn.disabled) return;
+      const t = ev.changedTouches && ev.changedTouches[0];
+      if (!t || Math.abs(t.clientX - s.x) > 12 || Math.abs(t.clientY - s.y) > 12) return;
+      ev.preventDefault();  // no synthetic mousedown/click, so no blur
+      s.btn.click();
+    }, { passive: false, capture: true });
+    document.addEventListener('touchcancel', () => { start = null; }, { passive: true, capture: true });
+  })();
   // Touch: tapping the context pill offers to compact (with a confirm), in
   // place of a Compact button in the composer.
   document.addEventListener('click', (ev) => {
@@ -43497,6 +43527,24 @@
         whereBtn.removeAttribute('data-where-sid');
       }
     }
+    // Phone toolbar title (#mobileConvTitle): the active session's name,
+    // resolved through the same chain as its sidebar row so the two match.
+    if (targetPaneId === activePaneId()) {
+      const mobileTitleEl = document.getElementById('mobileConvTitle');
+      if (mobileTitleEl) {
+        const rid = row && (row.id || row.session_id);
+        const full = (rid && Array.isArray(conversationsData)
+          && conversationsData.find(x => x && (x.id === rid || x.session_id === rid))) || row;
+        let name = '';
+        try {
+          if (full && (full.display_name || full.ai_title || full.first_message)) name = rowRawTitle(full).rawTitle;
+        } catch (_) {}
+        name = String(name || title || '').trim();
+        mobileTitleEl.textContent = name;
+        mobileTitleEl.title = name;
+        mobileTitleEl.hidden = !name;
+      }
+    }
     // Mirror the active pane's breadcrumb into the global toolbar slot
     // (#cccBreadcrumb). In single-pane mode the in-pane header is CSS-
     // hidden so the sticky "original ask" rises to that slot — the
@@ -43745,24 +43793,35 @@
     btn.style.bottom = endBottom + 'px';
     btn.style.right = right + 'px';
     // Stack Next (when visible) and Last/Previous above the End button so
-    // they never overlap; a hidden Next doesn't reserve a slot.
-    let above = endBottom + 42;
+    // they never overlap; a hidden Next doesn't reserve a slot. The slot
+    // follows the rendered pill height (taller tap targets on phones).
+    const step = (btn.offsetHeight || 32) + 10;
+    let above = endBottom + step;
     const nextBtn = view._convNextButton;
     if (nextBtn) {
       nextBtn.style.right = right + 'px';
       nextBtn.style.bottom = above + 'px';
-      if (nextBtn.classList.contains('visible')) above += 42;
+      if (nextBtn.classList.contains('visible')) above += step;
     }
     const lastBtn = view._convLastButton;
     if (lastBtn) {
       lastBtn.style.right = right + 'px';
       lastBtn.style.bottom = above + 'px';
-      if (lastBtn.classList.contains('visible')) above += 42;
+      if (lastBtn.classList.contains('visible')) above += step;
     }
     const segBtn = view._convSegmentButton;
     if (segBtn) {
       segBtn.style.right = right + 'px';
       segBtn.style.bottom = above + 'px';
+      if (segBtn.classList.contains('visible')) above += step;
+    }
+    // The floating speaker tops the same right-hand column, so every floating
+    // control covers one narrow strip instead of a second one on the left.
+    const speakBtn = view._convSpeakButton;
+    if (speakBtn) {
+      speakBtn.style.right = right + 'px';
+      speakBtn.style.left = 'auto';
+      speakBtn.style.bottom = (above + 4) + 'px';
     }
   }
 

@@ -1,0 +1,1 @@
+- Phone conversation header now shows just Back and the session's name (the same title as its sidebar row); Compact/Normal and the ⋮ menu move to a second row, and header, composer and floating buttons are all thumb-sized.

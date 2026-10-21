@@ -978,6 +978,10 @@
            app.js. In the Simple depth-2 view the rest of this toolbar is
            hidden by CSS, so this span + the back button ARE the header. -->
       <span class="simple-conv-title" id="simpleConvTitle"></span>
+      <!-- Phone-width only: the open session's name, matching its sidebar
+           row (set in updatePaneHeader). Owns the first toolbar row with
+           the back button; every other control wraps below it. -->
+      <span class="mobile-conv-title" id="mobileConvTitle" hidden></span>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
               aria-expanded="false" title="Show the full original ask" hidden>
         <span class="mobile-original-ask__label">Original ask</span>
