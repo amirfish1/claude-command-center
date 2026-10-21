@@ -35241,6 +35241,13 @@
     return parent ? _sidebarBudgetLaneGuess(parent, byId, seen) : _sidebarBudgetNaturalLane(row);
   }
 
+  // Idea tickets: spend the render budget on rows whose ticket is in the
+  // open tab's queue, so an older ticketed session isn't crowded out.
+  function _sidebarBudgetIdeaLane(row, tab) {
+    const t = row && row.idea_ticket;
+    if (!t || !t.ref || t.closed) return false;
+    return (t.queue === 'SMALL-BUGS') === (tab === 'smallbugs');
+  }
   function _boundSidebarRowsForRender(rows, limit, tab) {
     const source = Array.isArray(rows) ? rows : [];
     if (source.length <= limit) return { rows: source, omitted: 0 };
@@ -35257,7 +35264,9 @@
     const rankedEntries = source
       .map(row => ({
         row,
-        inLane: (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab) : true,
+        inLane: (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab)
+          : (tab === 'ideas' || tab === 'smallbugs') ? _sidebarBudgetIdeaLane(row, tab)
+          : true,
         inWindow: _archiveWindowAllowsRow(row, cutoff),
         ts: _archiveWindowRowTs(row),
       }))
@@ -40174,7 +40183,7 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && _sidebarTab !== 'jobs')
+    const _showMoreRowsHtml = (_sidebarRowsOmitted && _sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs')
       ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
         + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
         + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
@@ -72927,6 +72936,8 @@
         // Same allowlist trap as goal/parent_session_id above: silently
         // dropped (and the rail chip never renders) if not named here.
         spawned_via: c.spawned_via || '',
+        // Experimental idea tickets: the row's IDEAS-N / SMALL-BUGS-N ticket.
+        idea_ticket: c.idea_ticket || null,
         // $0 spawn runtime ("free") — the $0 chip on rows/rail reads this.
         runtime: c.runtime || '',
         hermes_parent_session_id: c.hermes_parent_session_id || c.parent_session_id || '',

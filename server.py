@@ -5370,6 +5370,12 @@ def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_regis
 def _tag_spawned_via_in_registry(pid=None, session_id=None, via=""):
     """Persist spawned_via onto the spawn registry entry by PID and/or session_id."""
     clean_via = str(via or "").strip()
+    # Experimental idea tickets: every spawn route tags its origin here, so
+    # this is the one place a UI-started session (any engine) is noted.
+    try:
+        _idea_tickets.note_ui_spawn(session_id, clean_via)
+    except Exception:
+        pass
     if not clean_via or (pid is None and not session_id):
         return
     def _mutator(entries):
@@ -15436,7 +15442,7 @@ _ARCHIVE_LIST_FIELDS = (
     "pending_tool_ts", "stale_tool_call", "stale_tool_age_s",
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
-    "goal_status", "parent_session_id", "continued_from_session_id",
+    "goal_status", "parent_session_id", "continued_from_session_id", "idea_ticket",
     "hermes_parent_session_id", "spawned_via", "spawn_caller", "runtime",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
@@ -15528,10 +15534,28 @@ def _archive_list_project_row(row):
 
 def _archive_list_project_rows(rows, *, window="all", now=None):
     cutoff = _archive_list_window_cutoff(window, now=now)
-    return [
+    projected = [
         _archive_list_project_row(row) for row in (rows or [])
         if isinstance(row, dict) and _archive_list_window_allows_row(row, cutoff)
     ]
+    # Experimental idea tickets: the list serves a persisted snapshot, so the
+    # ticket is stamped here from one mtime-cached read ({} when flag is off).
+    try:
+        idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        idea_tickets_by_sid = {}
+    # Engines without a Stop hook (Codex etc.) get their ticket step here,
+    # gated to pending UI spawns and children of ticketed sessions.
+    try:
+        _idea_tickets.sweep_rows(projected)
+    except Exception:
+        pass
+    if idea_tickets_by_sid:
+        for out in projected:
+            ticket = idea_tickets_by_sid.get(out.get("session_id") or out.get("id"))
+            if ticket:
+                out["idea_ticket"] = dict(ticket)
+    return projected
 
 
 def _archive_list_rows_cached(cache_options, *, window="all", now=None):

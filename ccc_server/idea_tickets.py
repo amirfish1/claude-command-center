@@ -16,7 +16,12 @@ its first reply, so the work has a handle that outlives any one session.
 State lives in ``~/.claude/command-center/idea-tickets.json``::
 
     {"sessions": {sid: {"ref", "kind", "from", "at"} | {"skip": reason}},
-     "tickets":  {ref: {"queue", "sessions": [sid, ...], "closed": bool}}}
+     "tickets":  {ref: {"queue", "sessions": [sid, ...], "closed": bool}},
+     "pending":  {sid: {"at"}}}
+
+Only sessions recorded in ``pending`` at UI spawn time (``note_ui_spawn``,
+called from the one place every spawn route tags its origin) can get a NEW
+ticket, so turning the flag on never backfills tickets for old sessions.
 
 Rows read it through ``idea_ticket_rows_map()`` (one mtime-cached file read
 per list build, a dict lookup per row). Every ``wt`` call runs on a daemon
@@ -70,7 +75,7 @@ def _state_path():
 
 
 def _empty_state():
-    return {"sessions": {}, "tickets": {}}
+    return {"sessions": {}, "tickets": {}, "pending": {}}
 
 
 def load_state():
@@ -91,6 +96,7 @@ def load_state():
         data = _empty_state()
     data.setdefault("sessions", {})
     data.setdefault("tickets", {})
+    data.setdefault("pending", {})
     _state_cache["key"] = key
     _state_cache["data"] = data
     return data
@@ -297,8 +303,70 @@ def _title_from(text):
 
 # ── lifecycle ──────────────────────────────────────────────────────────────
 
-def on_turn_end(session_id):
-    """Stop-hook entry point. Returns at once; the work runs on a thread."""
+def note_ui_spawn(session_id, via):
+    """Spawn-time entry point: remember a session the user started from the
+    UI, so its first reply can file a ticket. Any engine."""
+    sid = str(session_id or "").strip()
+    if not sid or str(via or "") != "ui" or not _enabled():
+        return
+    if sid in load_state()["pending"]:
+        return
+    _mutate(lambda d: d["pending"].__setitem__(sid, {"at": int(time.time())}))
+
+
+SWEEP_MAX_PER_CALL = 5
+
+
+def sweep_rows(rows):
+    """List-build entry point for engines without a Stop hook (Codex etc.):
+    queue the ticket step for candidate rows that already have a reply.
+
+    Candidacy is a dict lookup per row: a pending UI spawn, or a session whose
+    continuation origin or parent already has a ticket. Known sessions are
+    skipped, and at most SWEEP_MAX_PER_CALL threads start per call.
+    """
+    if not _enabled():
+        return 0
+    data = load_state()
+    known, pending = data["sessions"], data["pending"]
+
+    def _ticketed(sid):
+        entry = known.get(sid) if sid else None
+        return isinstance(entry, dict) and bool(entry.get("ref"))
+
+    started = 0
+    for row in rows or []:
+        sid = str(row.get("session_id") or row.get("id") or "")
+        if not sid or sid in known or sid in _inflight:
+            continue
+        # Task-tool subagents ("agent-…") are helpers inside a session, not
+        # sessions of their own; they don't join the ticket's log.
+        if sid.startswith("agent-"):
+            continue
+        if not (sid in pending
+                or _ticketed(row.get("continued_from_session_id"))
+                or _ticketed(row.get("parent_session_id"))):
+            continue
+        # "Has replied": Claude rows carry a reply preview; Codex rows only
+        # record that the last event was a turn result.
+        if not (row.get("last_assistant_preview") or row.get("last_assistant_text")
+                or row.get("last_event_type") == "result"):
+            continue
+        queued = on_turn_end(
+            sid,
+            continued_from=str(row.get("continued_from_session_id") or ""),
+            parent=str(row.get("parent_session_id") or ""),
+            text=str(row.get("first_message") or ""),
+        )
+        if queued.get("queued"):
+            started += 1
+            if started >= SWEEP_MAX_PER_CALL:
+                break
+    return started
+
+def on_turn_end(session_id, *, continued_from="", parent="", text=""):
+    """Stop-hook entry point. Returns at once; the work runs on a thread.
+    ``continued_from`` / ``parent`` are lineage hints from a list row."""
     sid = str(session_id or "").strip()
     if not sid or not _enabled():
         return {"queued": False, "reason": "disabled"}
@@ -308,13 +376,16 @@ def on_turn_end(session_id):
         if sid in _inflight:
             return {"queued": False, "reason": "inflight"}
         _inflight.add(sid)
-    threading.Thread(target=_attach_or_file_safe, args=(sid,), daemon=True).start()
+    threading.Thread(
+        target=_attach_or_file_safe, args=(sid, continued_from, parent, text), daemon=True,
+    ).start()
     return {"queued": True}
 
 
-def _attach_or_file_safe(sid):
+def _attach_or_file_safe(sid, continued_from="", parent="", text=""):
     try:
-        attach_or_file(sid)
+        attach_or_file(sid, continued_from_hint=continued_from, parent_hint=parent,
+                       text_hint=text)
     except Exception as exc:
         try:
             _core._log_activity("idea", "IDEA_TICKET_ERR", f"{sid} {exc}")
@@ -325,7 +396,8 @@ def _attach_or_file_safe(sid):
             _inflight.discard(sid)
 
 
-def attach_or_file(sid, *, classify_fn=None):
+def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint="",
+                   text_hint=""):
     """Give ``sid`` its ticket: inherit from a continuation origin or parent,
     file a new one for a UI-started session, or record a skip."""
     jsonl = None
@@ -340,20 +412,22 @@ def attach_or_file(sid, *, classify_fn=None):
         except Exception:
             continued_from = ""
     via, parent, cwd = _spawn_meta(sid)
+    continued_from = continued_from or str(continued_from_hint or "")
+    parent = parent or str(parent_hint or "")
 
     state = load_state()
     for origin, kind in ((continued_from, "continued"), (parent, "child")):
         origin_ticket = ticket_for_session(origin) if origin else None
         if origin_ticket:
             return _attach(sid, origin_ticket["ref"], kind, origin)
-    if via != "ui":
+    if sid not in state["pending"]:
         _mutate(lambda d: d["sessions"].__setitem__(
-            sid, {"skip": f"spawned_via={via or 'unknown'}", "at": int(time.time())}))
+            sid, {"skip": f"not a UI spawn (spawned_via={via or 'unknown'})", "at": int(time.time())}))
         return {"ok": True, "skipped": True}
     if sid in state["sessions"]:
         return {"ok": True, "known": True}
 
-    text = _first_user_text(jsonl) if jsonl else ""
+    text = (_first_user_text(jsonl) if jsonl else "") or str(text_hint or "")
     label = (classify_fn or classify)(text)
     queue = QUEUES.get(label, "IDEAS")
     _ensure_queue(queue)
@@ -372,6 +446,7 @@ def attach_or_file(sid, *, classify_fn=None):
     def _record(d):
         d["tickets"][ref] = {"queue": queue, "sessions": [sid], "closed": False}
         d["sessions"][sid] = {"ref": ref, "kind": "started", "at": int(time.time())}
+        d["pending"].pop(sid, None)
     _mutate(_record)
     _restamp_rows()
     _core._log_activity("idea", "IDEA_TICKET", f"{sid} -> {ref} ({label})")
@@ -392,6 +467,7 @@ def _attach(sid, ref, kind, origin):
         if sid not in ticket["sessions"]:
             ticket["sessions"].append(sid)
         d["sessions"][sid] = {"ref": ref, "kind": kind, "from": origin, "at": int(time.time())}
+        d["pending"].pop(sid, None)
     _mutate(_record)
     _restamp_rows()
     note = (f"Continued in session {sid} (from {origin})." if kind == "continued"

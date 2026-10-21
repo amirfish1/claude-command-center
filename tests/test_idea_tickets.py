@@ -83,6 +83,7 @@ class IdeaTicketsTest(unittest.TestCase):
     def _ui_session(self, sid, text="Add a dark mode toggle"):
         self.registry[sid] = {"spawned_via": "ui", "cwd": "/tmp"}
         self.transcripts[sid] = {"text": text}
+        it.note_ui_spawn(sid, "ui")
 
     def test_ui_session_gets_ticket_in_classified_queue(self):
         self._ui_session("s1", "The save button crashes")
@@ -141,6 +142,38 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual((res["ref"], res["queue"]), ("SMALL-BUGS-99", "SMALL-BUGS"))
         self.assertEqual(it.ticket_for_session("s1")["ref"], "SMALL-BUGS-99")
         self.assertFalse(it.move_ticket("s1", "WATCH")["ok"])
+
+    def test_old_ui_session_is_not_backfilled(self):
+        # spawned_via=ui in the registry, but spawned before the flag noted it.
+        self.registry["old"] = {"spawned_via": "ui"}
+        self.transcripts["old"] = {"text": "old work"}
+        self.assertTrue(it.attach_or_file("old")["skipped"])
+        it.note_ui_spawn("cli1", "cli")
+        self.assertNotIn("cli1", it.load_state()["pending"])
+
+    def test_sweep_files_replied_pending_and_children_only(self):
+        self._ui_session("c1")  # pending, replied
+        self._ui_session("c2")  # pending, no reply yet
+        rows = [
+            {"session_id": "c1", "last_assistant_preview": "OK"},
+            {"session_id": "c2", "last_event_type": "user"},
+            {"session_id": "x9", "last_assistant_preview": "hi"},  # not a candidate
+        ]
+        self.assertEqual(it.sweep_rows(rows), 1)
+        self.assertEqual(it.ticket_for_session("c1")["ref"], "IDEAS-1")
+        self.assertNotIn("x9", it.load_state()["sessions"])
+        self.assertIn("c2", it.load_state()["pending"])
+        self.transcripts["k1"] = {"text": "child"}
+        rows = [{"session_id": "k1", "parent_session_id": "c1", "last_assistant_preview": "done"}]
+        self.assertEqual(it.sweep_rows(rows), 1)
+        self.assertEqual(it.ticket_for_session("k1")["sessions"], ["c1", "k1"])
+        self.assertEqual(it.sweep_rows(rows), 0)  # known now
+        # Codex rows: no preview, but a finished turn ends on a result event.
+        it.note_ui_spawn("cx1", "ui")
+        rows = [{"session_id": "cx1", "last_event_type": "result", "first_message": "Fix the crash"}]
+        self.assertEqual(it.sweep_rows(rows), 1)
+        take = [c for c in self.calls if c[0] == "take"][-1]
+        self.assertEqual(take[take.index("--title") + 1], "Fix the crash")
 
     def test_flag_off_disables_everything(self):
         self._ui_session("s1")
