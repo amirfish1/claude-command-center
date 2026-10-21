@@ -31530,3 +31530,34 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .conv-input-context.is-new-session .spawn-cwd-chip.active,
   .conv-model-picker-strip.is-new-session .orch-tier-chip.is-selected { order: -1; }
 }
+
+/* ── Phone list header: no row of its own ─────────────────────────────────
+   Share, Discord and the savings ticker are gone on phones; the CCC icon
+   moves onto the "Usage left" heading line (headroom bars flatten into the
+   header grid via display:contents) so the usage chips keep the full width.
+   Alerts (update pill etc.) still get their own full-width line. */
+@media (max-width: 600px) {
+  .sidebar .sidebar-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 4px;
+  }
+  .sidebar .sidebar-header > * { grid-column: 1 / -1; }
+  .sidebar .sh-share-btn,
+  .sidebar .sh-discord-btn,
+  .sidebar .ccc-sav-ticker { display: none !important; }
+  .sidebar .sidebar-header > .sidebar-header-brand {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+  }
+  .sidebar .sidebar-header-brand .sh-title-row { min-height: 0; padding: 0; gap: 0; }
+  .sidebar .sidebar-header-brand .sh-app-icon { width: 26px; height: 26px; }
+  .sidebar .sidebar-header > #headroomBars { display: contents; }
+  .sidebar #headroomBars > .hb-heading { grid-column: 2; grid-row: 1; margin: 0; }
+  .sidebar #headroomBars > :not(.hb-heading) { grid-column: 1 / -1; }
+}

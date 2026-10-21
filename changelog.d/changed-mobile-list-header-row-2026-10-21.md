@@ -1,0 +1,1 @@
+- Phones: the session list's top row (share, Discord, savings ticker) is gone; the CCC icon now sits on the Usage left line.
