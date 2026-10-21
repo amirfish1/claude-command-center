@@ -17763,7 +17763,10 @@
       menu.hidden = true;
       btn.setAttribute('aria-expanded', 'false');
       const action = item.getAttribute('data-simple-action');
-      if (action === 'stop') {
+      if (action === 'questions') {
+        const pill = document.getElementById('qtagPill');
+        if (pill) pill.click();
+      } else if (action === 'stop') {
         _simpleStopTask();
       } else if (action === 'font-minus') {
         const btn = document.getElementById('fontMinus');
@@ -19795,6 +19798,33 @@
   // CCC-761: "..." reveals the secondary header/session-panel rows
   // (refresh/history/board/chips, New Group chat/live/manage) that are
   // collapsed by default so "New session" isn't crowded on every visit.
+  // Phone split New session button: the caret opens a one-item menu that
+  // forwards to the (CSS-hidden) + Ticket button. position:fixed from the
+  // caret's rect so no ancestor overflow clips it.
+  (function _wireNewSessionCaret() {
+    const caret = document.getElementById('sidebarNewCaret');
+    const menu = document.getElementById('sidebarNewCaretMenu');
+    if (!caret || !menu) return;
+    const close = () => { menu.hidden = true; caret.setAttribute('aria-expanded', 'false'); };
+    caret.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (!menu.hidden) { close(); return; }
+      const r = caret.getBoundingClientRect();
+      menu.style.top = Math.round(r.bottom + 4) + 'px';
+      menu.style.left = Math.round(Math.max(8, r.right - 200)) + 'px';
+      menu.hidden = false;
+      caret.setAttribute('aria-expanded', 'true');
+    });
+    menu.addEventListener('click', (ev) => {
+      const item = ev.target.closest('[data-proxy]');
+      close();
+      const target = item && document.getElementById(item.getAttribute('data-proxy'));
+      if (target) target.click();
+    });
+    document.addEventListener('click', (ev) => {
+      if (!menu.hidden && !ev.target.closest('.new-session-caret-wrap')) close();
+    });
+  })();
   const $sidebarMoreBtn = document.getElementById('sidebarMoreBtn');
   const $sidebarMoreMenu = document.getElementById('sidebarMoreMenu');
   if ($sidebarMoreBtn && $sidebarMoreMenu) {
@@ -44107,16 +44137,26 @@
   // for SILENT_INVESTIGATE_MS gets an Investigate button right in the view. It
   // spawns a fresh session (server default engine/model) that is asked what is
   // going on with this one, and opens it as a second pane to the right.
-  const SILENT_INVESTIGATE_MS = 30000;
+  // 3 minutes: a model thinking hard or a slow first token routinely goes
+  // quiet for a minute or more; 30s flagged healthy sessions.
+  const SILENT_INVESTIGATE_MS = 180000;
   function updateSilentInvestigateBar(view) {
     if (!view) return;
     const existing = view.querySelector(':scope > .conv-silent-bar');
     const clear = () => { if (existing && existing.isConnected) existing.remove(); };
     const sid = (currentSession && currentSession.id) ? String(currentSession.id) : '';
     const ls = liveStatus || {};
-    const working = !!(ls.live || ls.sidecarInFlight || ls.headlessPresent);
-    if (!sid || !working || ls.questionWaiting || ls.needsApproval || ls.forSessionId !== sid) { clear(); return; }
-    let freshest = 0;
+    // Only a turn that is actually in progress can be "not responding". A
+    // live process or idle headless child between turns is just done
+    // (headlessPresent alone used to trip this on every finished session).
+    const turnActive = ls.sidecarStatus === 'active' || ls.codexState === 'working' || ls.status === 'running';
+    if (!sid || !turnActive || ls.questionWaiting || ls.needsApproval || ls.forSessionId !== sid) { clear(); return; }
+    // A tool call in flight (a long build, test run, sleep) writes nothing
+    // until it returns; that is work, not silence, unless the server has
+    // flagged the call as stale.
+    if (ls.sidecarInFlight && !ls.staleToolCall) { clear(); return; }
+    const toMs = (t) => { const n = Number(t) || 0; return n > 1e12 ? n : n * 1000; };
+    let freshest = Math.max(toMs(ls.sidecarTs), toMs(ls.transcriptMtime));
     const stamped = view.querySelectorAll('[data-ts-epoch]');
     for (let i = 0; i < stamped.length; i++) {
       const ep = Number(stamped[i].dataset.tsEpoch);
@@ -44154,8 +44194,8 @@
     const cwd = f2ResolveSpawnCwd({ row, session: currentSession || {} });
     const short = sid.slice(0, 8);
     const name = 'Investigate ' + short;
-    const prompt = 'What\'s going on with session ' + sid + '? It is marked live but has produced no output '
-      + 'for over 30 seconds. Check its state (GET /api/session/' + sid + '/inject-receipt, the tail of its '
+    const prompt = 'What\'s going on with session ' + sid + '? It is mid-turn but has produced no output '
+      + 'for over 3 minutes. Check its state (GET /api/session/' + sid + '/inject-receipt, the tail of its '
       + 'transcript, the CCC activity.log, and whether its process is alive or the host is starved of CPU) and '
       + 'report what is wrong. Do not kill it or change anything without saying so first.';
     const tempPid = 'tmp-inv-' + Date.now();
@@ -56996,6 +57036,15 @@
     return 'Cache-read input tokens are discounted to ' + (weight * 100) + '% of a fresh input token before summing with output.\n'
       + fresh.toLocaleString() + ' fresh in + ' + cachedWeighted.toLocaleString() + ' (' + cached.toLocaleString() + ' cached × ' + (weight * 100) + '%) + ' + out.toLocaleString() + ' out = ' + grand.toLocaleString();
   }
+  // Cache-adjusted turn total as a bare number appended to the raw
+  // in/cached/out chip row; the tooltip carries the label and the math.
+  function _cacheAdjustedInlineHtml(tokensIn, tokensOut, cached, model) {
+    const n = _cacheAdjustedTurnTokens(tokensIn, tokensOut, cached, model);
+    return '<span class="cache-adjusted-num" title="'
+      + escapeAttr('Cached-adjusted tokens this turn\n' + _cacheAdjustedTurnTitle(tokensIn, tokensOut, cached, model))
+      + '"> | ' + n.toLocaleString() + '</span>';
+  }
+
 
   // A running, cross-turn log of cache misses (CCC-750): a chip on screen
   // only shows the one turn, not whether it followed close on the heels of
@@ -63558,12 +63607,9 @@
                   + '\nCached input:    ' + _kimiChipCached.toLocaleString() + ' tokens'
                   + '\nOutput:   ' + (Number(ev.tokens_out) || 0).toLocaleString() + ' tokens';
                 metaEl.innerHTML += '<span class="event-token-chips is-merged" title="'
-                  + escapeAttr(_kimiChipTitle) + '">' + escapeHtml(_kimiChipText) + '</span>';
+                  + escapeAttr(_kimiChipTitle) + '">' + escapeHtml(_kimiChipText)
+                  + _cacheAdjustedInlineHtml(ev.tokens_in, ev.tokens_out, _kimiChipCached, ev.model) + '</span>';
               }
-              const _kimiCacheAdjusted = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, _kimiChipCached, ev.model);
-              metaEl.innerHTML += '<span class="event-token-chips cache-adjusted is-merged" title="'
-                + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, _kimiChipCached, ev.model))
-                + '">Cached-adjusted tokens this turn: ' + _kimiCacheAdjusted.toLocaleString() + '</span>';
             }
             kimiBlockEls.push(metaEl);
           }
@@ -63812,29 +63858,29 @@
         if (renderedSomething && (ev.tokens_in || ev.tokens_out || ev.tokens_thinking || ev.tokens_cached)) {
           const chipCached = Number(ev.tokens_cached || (ev.token_usage && (ev.token_usage.cache_read_input_tokens || ev.token_usage.cached_input_tokens)) || 0);
           const chipText = _formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking, chipCached);
+          // The cache-adjusted total rides at the end of the same row as just
+          // its number (title explains it) instead of a second, louder line.
+          const adjHtml = (Number(ev.tokens_in) || Number(ev.tokens_out))
+            ? _cacheAdjustedInlineHtml(ev.tokens_in, ev.tokens_out, chipCached, ev.model) : '';
           if (chipText) {
             const chipTitle = 'Input:    ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' tokens'
               + '\nCached input:    ' + chipCached.toLocaleString() + ' tokens'
               + '\nOutput:   ' + (Number(ev.tokens_out) || 0).toLocaleString() + ' tokens'
               + '\nThinking: ' + (Number(ev.tokens_thinking) || 0).toLocaleString() + ' tokens';
             if (lastToolPartIdx >= 0) {
-              const mergedChip = '<span class="event-token-chips is-merged" title="' + escapeAttr(chipTitle) + '">' + escapeHtml(chipText) + '</span>';
+              const mergedChip = '<span class="event-token-chips is-merged" title="' + escapeAttr(chipTitle) + '">' + escapeHtml(chipText) + adjHtml + '</span>';
               blockParts[lastToolPartIdx] = blockParts[lastToolPartIdx].replace(/<\/div>\s*$/, mergedChip + '</div>');
             } else {
-              blockParts.push('<div class="event-token-chips" title="' + escapeAttr(chipTitle) + '">' + escapeHtml(chipText) + '</div>');
+              blockParts.push('<div class="event-token-chips" title="' + escapeAttr(chipTitle) + '">' + escapeHtml(chipText) + adjHtml + '</div>');
             }
+          } else if (adjHtml) {
+            blockParts.push('<div class="event-token-chips">' + adjHtml + '</div>');
           }
           const cacheMiss = _cacheMissCallout(ev.tokens_in, chipCached);
           if (cacheMiss) {
             blockParts.push('<div class="event-token-chips cache-miss" title="' + escapeAttr(
               'Cache read covered ' + chipCached.toLocaleString() + ' of ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' input tokens.'
             ) + '">' + escapeHtml(cacheMiss) + '</div>');
-          }
-          if (Number(ev.tokens_in) || Number(ev.tokens_out)) {
-            const cacheAdjustedTurn = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, chipCached, ev.model);
-            blockParts.push('<div class="event-token-chips cache-adjusted" title="'
-              + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, chipCached, ev.model))
-              + '">Cached-adjusted tokens this turn: ' + cacheAdjustedTurn.toLocaleString() + '</div>');
           }
           _recordCacheMissLog(renderedConversationId, ev, ev.tokens_in, chipCached);
         }

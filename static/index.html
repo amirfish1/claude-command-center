@@ -838,6 +838,15 @@
     <div class="new-session-panel">
       <div class="new-session-primary-row">
         <button class="new-session-btn" id="sidebarNewBtn" data-tour="new-session" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
+        <!-- Phones: + Ticket folds into this caret on the New session button
+             (CSS hides the standalone Ticket button and shows the caret).
+             The menu item forwards to #sidebarNewTicketBtn. -->
+        <span class="new-session-caret-wrap">
+          <button type="button" class="new-session-caret" id="sidebarNewCaret" title="More ways to start" aria-label="More ways to start" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
+          <div class="new-session-caret-menu" id="sidebarNewCaretMenu" role="menu" hidden>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarNewTicketBtn">New ticket</button>
+          </div>
+        </span>
         <button class="new-session-btn new-session-btn-secondary" id="sidebarNewTicketBtn" title="File a ticket into any queue" aria-label="New ticket"><span class="plus" aria-hidden="true">+</span> Ticket</button>
         <div class="search-wrap">
           <input type="text" id="convSearch" class="conv-search-input" data-tour="search" placeholder="Search..." autocomplete="off" list="convSearchHistoryList">
@@ -850,8 +859,9 @@
              so every existing id and click handler stays untouched; each item
              here forwards to one of them via data-proxy. -->
         <div class="sh-more-wrap">
-          <button type="button" id="sidebarMoreBtn" class="sh-btn sh-more-btn" data-tour="watchtower" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
+          <button type="button" id="sidebarMoreBtn" data-qtag-badge class="sh-btn sh-more-btn" data-tour="watchtower" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
           <div class="sh-more-menu" id="sidebarMoreMenu" role="menu" aria-label="More actions" hidden>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="qtagPill" data-qtag-menu hidden>Open questions</button>
             <button type="button" class="sh-more-item" role="menuitem" data-proxy="historyBtn">Search history…</button>
             <div class="sh-more-divider" role="separator"></div>
             <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
@@ -1141,12 +1151,13 @@
            Simple-only actions (rendered conditionally by isSimpleMode() at
            render time, not by a parallel copy of this menu). -->
       <div class="mobile-actions-wrap">
-        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Task actions"><span aria-hidden="true">&#8942;</span></button>
+        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" data-qtag-badge aria-haspopup="menu" aria-expanded="false" aria-label="Task actions"><span aria-hidden="true">&#8942;</span></button>
         <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
           <!-- Narrow-viewport copy of the rail's transcript view control (the
                status rail is hidden on phones). Synced by _syncConvViewSegs;
                clicks go through its document-level delegate. -->
           <span class="conv-view-seg mobile-view-seg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true">Normal</button></span>
+          <button type="button" class="mobile-actions-item" data-simple-action="questions" role="menuitem" data-qtag-menu hidden>Open questions</button>
           <button type="button" class="mobile-actions-item" data-simple-action="stop" role="menuitem"><span aria-hidden="true">&#9724;&nbsp;</span>Stop this task</button>
           <button type="button" class="mobile-actions-item" data-simple-action="codex-handover" id="mobileCodexHandoverItem" role="menuitem" hidden><span aria-hidden="true">&#8599;&nbsp;</span>Hand over to Codex Desktop</button>
           <button type="button" class="mobile-actions-item" data-simple-action="annotate" role="menuitem"><span aria-hidden="true">&#9873;&nbsp;</span>Annotate</button>

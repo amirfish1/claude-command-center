@@ -31619,12 +31619,56 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   html body .conv-split .conv-pane .conv-input-bar .send-btn svg { width: 22px; height: 22px; }
   html body .conv-split .conv-pane .conv-input-bar .expand-btn { top: 8px; right: 8px; }
 }
-/* The "? N" waiting-questions pill is fixed 84px above the bottom, which
-   is the bottom nav on the list but the composer (and its expand arrow) in
-   an open conversation. There it moves just under the header instead. */
+/* Cache-adjusted turn total: just the number, at the end of the raw
+   in/cached/out chip row (label + math in its tooltip). */
+.event-token-chips .cache-adjusted-num { color: #79c0ff; font-weight: 700; }
+
+/* Phone: "+ Ticket" folds into a ▾ on the New session button; the "? N"
+   question pill folds into the ⋮ menus, which show its count as a badge. */
+.new-session-caret-wrap { display: none; }
+.new-session-caret-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+.new-session-caret-menu[hidden] { display: none; }
+.new-session-caret-menu .sh-more-item { display: block; width: 100%; min-height: 48px; font-size: 16px; text-align: left; }
 @media (max-width: 1200px) {
-  body.mobile-show-main .qtag-pill {
-    bottom: auto;
-    top: calc(var(--app-vv-top, 0px) + env(safe-area-inset-top, 0px) + 72px);
+  .sidebar #sidebarNewTicketBtn { display: none !important; }
+  .sidebar .new-session-caret-wrap { display: inline-flex; margin-left: -9px; }
+  .sidebar #sidebarNewBtn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .sidebar .new-session-caret {
+    min-width: 40px;
+    min-height: 44px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--orange, #d29922) 55%, transparent);
+    border-left-color: color-mix(in srgb, var(--orange, #d29922) 25%, transparent);
+    border-radius: 0 8px 8px 0;
+    background: color-mix(in srgb, var(--orange, #d29922) 12%, transparent);
+    color: var(--orange, #d29922);
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .qtag-pill { display: none !important; }
+  [data-qtag-badge] { position: relative; }
+  [data-qtag-badge]:not([data-qtag-count=""])[data-qtag-count]::after {
+    content: attr(data-qtag-count);
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: #d9a441;
+    color: #1b1408;
+    font: 700 11px/18px system-ui, sans-serif;
+    text-align: center;
+    pointer-events: none;
   }
 }

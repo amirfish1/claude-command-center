@@ -1,0 +1,2 @@
+- Phones: + Ticket folds into a ▾ on the New session button, and the ? questions pill moves into the ⋮ menus (with a count badge on ⋮).
+- The cache-adjusted turn total is now just a number at the end of the in/cached/out token row.

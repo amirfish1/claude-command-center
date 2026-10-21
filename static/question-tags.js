@@ -236,7 +236,15 @@
     var n = openQuestions(index.list).length;
     pill.hidden = n === 0;
     pill.textContent = '? ' + n;
-    pill.title = n + ' open question' + (n === 1 ? '' : 's');
+    pill.title = n + ' open question' + (n === 1 ? '' : 's');    // Menu copies (phones fold the pill into the ⋮ menus) and the count
+    // badge on those menus' buttons.
+    document.querySelectorAll('[data-qtag-menu]').forEach(function (el) {
+      el.hidden = n === 0;
+      el.textContent = 'Open questions (' + n + ')';
+    });
+    document.querySelectorAll('[data-qtag-badge]').forEach(function (el) {
+      el.setAttribute('data-qtag-count', n ? String(n) : '');
+    });
   }
 
   function boot() {
@@ -244,6 +252,7 @@
     pill = document.createElement('button');
     pill.type = 'button';
     pill.className = 'qtag-pill';
+    pill.id = 'qtagPill';
     pill.hidden = true;
     pill.addEventListener('click', function () { load(true).then(showPanel); });
     document.body.appendChild(pill);
