@@ -31080,6 +31080,32 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
    mic, ⚡, Send) is grouped at the right. `display: contents` flattens the
    button cluster so they all share the one row. */
 @media (max-width: 1200px) {
+  /* Even minimized, typing gets its own row. Playback controls can fill a
+     phone's entire width; sharing their row collapses the input to a sliver. */
+  .conv-input-bar.visible.is-composer-minimized {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .conv-input-bar.is-composer-minimized > .conv-input-row-top,
+  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
+    flex-wrap: wrap;
+  }
+  .conv-input-bar.is-composer-minimized > .expand-btn {
+    position: absolute;
+  }
+  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
+    min-height: 44px;
+    max-height: 44px !important;
+    padding-right: 36px;
+  }
+  .conv-input-bar .conv-input-row-top textarea {
+    min-width: 0;
+    width: 100%;
+  }
   .conv-input-bar .conv-input-row-bottom {
     flex-wrap: wrap; align-items: center; gap: 8px 6px;
   }
