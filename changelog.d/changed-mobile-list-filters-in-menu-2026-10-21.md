@@ -1,0 +1,1 @@
+- Phones: the time window (Now/1d/7d/All), the engine filter and a new Show other machines toggle moved into the session list's ⋮ menu.

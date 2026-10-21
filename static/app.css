@@ -31896,3 +31896,56 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
   #convList .conv-subagent-collapse-footer { display: none !important; }
 }
+
+/* ── Phone list toolbar: time window, engine filter and Other machines live
+   in the ⋮ menu. The menu copies carry .is-phone-menu-only (hidden on
+   desktop); on phones the toolbar originals are hidden instead. */
+.is-phone-menu-only { display: none !important; }
+body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
+@media (max-width: 1200px) {
+  #convList .conv-archived-overflow-menu .is-phone-menu-only { display: inline-flex !important; }
+  #convList .conv-archived-tools-right > [data-role="archived-window-toggle"],
+  #convList .conv-archived-tools-right > [data-role="archived-engine-filter"] { display: none !important; }
+  #convList .conv-archived-overflow { display: inline-flex; align-items: center; }
+  /* With the window/engine pills gone the ⋮ is the toolbar: pin it right so
+     its right-anchored menu opens on screen. */
+  #convList .conv-archived-tools-right { margin-left: auto !important; justify-content: flex-end !important; }
+  #convList .conv-archived-overflow-menu { min-width: 240px; padding: 8px; gap: 10px; }
+  /* Engine buttons: an always-open row inside the menu, not a hover popup. */
+  #convList .conv-archived-engine-filter.is-menu-row { position: static; }
+  #convList .conv-archived-engine-filter.is-menu-row .conv-archived-engine-options {
+    position: static;
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: none;
+  }
+  #convList .conv-archived-engine-filter.is-menu-row .conv-archived-engine-btn {
+    width: 40px;
+    height: 40px;
+    padding: 9px;
+  }
+  #convList .conv-archived-engine-filter.is-menu-row .conv-archived-engine-btn svg,
+  #convList .conv-archived-engine-filter.is-menu-row .conv-archived-engine-btn .conv-session-svg { width: 20px; height: 20px; }
+  #convList .conv-other-machines-opt {
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    text-align: left;
+    cursor: pointer;
+  }
+  #convList .conv-other-machines-opt .conv-check {
+    display: inline-flex;
+    width: 18px;
+    justify-content: center;
+    color: var(--green, #3fb950);
+    font-weight: 700;
+  }
+}

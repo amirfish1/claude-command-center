@@ -16752,6 +16752,31 @@
   // The sidebar list is rebuilt wholesale on archive refreshes. Delegate this
   // control from the stable list container so a redraw cannot leave the model
   // filter's newly-rendered buttons without their click behavior.
+  // "Show other machines" (phone ⋮ menu): hides the federated Other
+  // machines section entirely. Default on; body class drives the CSS.
+  const SHOW_OTHER_MACHINES_KEY = 'ccc-show-other-machines';
+  function _showOtherMachines() {
+    try { return localStorage.getItem(SHOW_OTHER_MACHINES_KEY) !== '0'; } catch (_) { return true; }
+  }
+  function _syncOtherMachinesClass() {
+    document.body.classList.toggle('ccc-hide-other-machines', !_showOtherMachines());
+  }
+  _syncOtherMachinesClass();
+  document.addEventListener('click', (ev) => {
+    const opt = ev.target.closest && ev.target.closest('[data-other-machines-toggle]');
+    if (!opt) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const next = !_showOtherMachines();
+    try { localStorage.setItem(SHOW_OTHER_MACHINES_KEY, next ? '1' : '0'); } catch (_) {}
+    _syncOtherMachinesClass();
+    document.querySelectorAll('[data-other-machines-toggle]').forEach((b) => {
+      b.classList.toggle('is-active', next);
+      b.setAttribute('aria-checked', next ? 'true' : 'false');
+      const c = b.querySelector('.conv-check');
+      if (c) c.innerHTML = next ? '&#10003;' : '';
+    });
+  });
   function _setArchiveEngineFilterOpen(wrap, open) {
     wrap?.closest('.conv-archived-tools-right')?.classList.toggle('has-engine-filter-open', !!open);
   }
@@ -39837,8 +39862,28 @@
       // high-frequency actions — duplicate them into a ⋮ overflow menu that
       // CSS swaps in below the sidebar's narrow breakpoint (the delegated
       // click handlers match on data-* attrs, so the menu copies work as-is).
+      // Phones also fold the time window, the engine filter (as an always-open
+      // row of engine buttons, no hover popup) and the Other machines toggle
+      // into this menu; .is-phone-menu-only hides these copies elsewhere.
+      const _arcEngineMenuRow = '<span class="conv-archived-engine-filter is-menu-row is-phone-menu-only" role="group" aria-label="Filter by engine">'
+          + '<span class="conv-archived-engine-options">'
+            + _arcEngineButton('claude', 'Claude', getEngineSvg('claude'))
+            + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
+            + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
+            + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
+            + _arcEngineButton('antigravity', 'Antigravity', getEngineSvg('antigravity'))
+            + _arcEngineButton('grok', 'Grok', getEngineSvg('grok'))
+          + '</span>'
+        + '</span>';
+      const _arcOtherMachinesOpt = '<button type="button" class="conv-other-machines-opt is-phone-menu-only'
+          + (_showOtherMachines() ? ' is-active' : '') + '" data-other-machines-toggle="1"'
+          + ' role="menuitemcheckbox" aria-checked="' + (_showOtherMachines() ? 'true' : 'false') + '">'
+          + '<span class="conv-check" aria-hidden="true">' + (_showOtherMachines() ? '&#10003;' : '') + '</span>Show other machines</button>';
       const _arcDisplayControls = _arcGroupingToggle
-        + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle);
+        + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle)
+        + _arcWindowToggle.replace('class="conv-grouping-toggle conv-window-toggle"', 'class="conv-grouping-toggle conv-window-toggle is-phone-menu-only"')
+        + _arcEngineMenuRow
+        + _arcOtherMachinesOpt;
       const _arcOverflow = _arcDisplayControls
         ? '<details class="conv-archived-overflow" data-role="archived-overflow">'
           + '<summary class="conv-archived-overflow-trigger" aria-label="Grouping and density options" title="Grouping and density options">&#8942;</summary>'
