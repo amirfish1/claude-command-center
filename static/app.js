@@ -42128,6 +42128,28 @@
         btn.disabled = true;
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
+        // Archiving hides the row at once (same as trash); the server call
+        // below confirms it and the catch restores the row on failure.
+        const priorRow = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
+          || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
+        const priorArchivedState = priorRow ? !!priorRow.archived : false;
+        const patchArchivedNow = (rows, val) => {
+          if (!Array.isArray(rows)) return;
+          for (const row of rows) {
+            if (row && (row.id === convId || (row.session_id || row.id) === sessionId)) row.archived = val;
+          }
+        };
+        if (nextArchived) {
+          item.style.display = 'none';
+          patchArchivedNow(conversationsData, true);
+          patchArchivedNow(archiveData, true);
+          patchArchivedNow(currentRepoBacklogData, true);
+          setOptimisticOverride(sessionId, { archived: true });
+          if (nextSelectId) selectConversation(nextSelectId);
+          requestAnimationFrame(() => {
+            renderSidebar(filterConversations($convSearch.value), { force: true });
+          });
+        }
         try {
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
             || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
@@ -42166,6 +42188,14 @@
           }
           if (!data.archived) showOpToast('Restored to Active');
         } catch (err) {
+          if (nextArchived) {
+            patchArchivedNow(conversationsData, priorArchivedState);
+            patchArchivedNow(archiveData, priorArchivedState);
+            patchArchivedNow(currentRepoBacklogData, priorArchivedState);
+            _optimisticOverrides.delete(sessionId);
+            item.style.display = '';
+            renderSidebar(filterConversations($convSearch.value), { force: true });
+          }
           btn.disabled = false;
           btn.classList.remove('is-pending');
           btn.removeAttribute('aria-busy');
@@ -42182,6 +42212,7 @@
         const sessionId = item && item.dataset.sessionId;
         if (!convId || !sessionId) return;
         const wantTrashed = btn.dataset.role === 'trash';
+        if (wantTrashed && !confirm('Move this session to Trash? You can restore it from Trash later.')) return;
         const nextSelectId = wantTrashed && currentConversation === convId
           ? _visibleConversationNeighborId(convId, item)
           : null;
