@@ -31483,3 +31483,50 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .conv-input-bar .steer-btn,
   .conv-input-bar .paste-thumb-strip { display: none !important; }
 }
+
+/* ── Phone new-session screen: just pick a folder, pick a model, type ─────
+   The hero copy, model price/compare table, fresh-folder form, typing help,
+   stale LAST WRITTEN line and floating scroll buttons are desktop chrome.
+   Folder and model become one swipeable row of chips each; the folder path
+   input, worktree toggle, group labels and the Free pill are dropped. */
+@media (max-width: 1200px) {
+  .conv-pane.has-new-session-context .ns-stage,
+  .conv-pane.has-new-session-context .conv-last-written,
+  .conv-pane.has-new-session-context .conv-scroll-end-btn,
+  .conv-pane.has-new-session-context .conv-scroll-last-btn,
+  .conv-pane.has-new-session-context .conv-scroll-next-btn,
+  .conv-pane.has-new-session-context .conv-scroll-speak-btn,
+  .conv-pane.has-new-session-context .conv-scroll-segment-btn,
+  .conv-input-context.is-new-session .spawn-cwd-row,
+  .conv-input-context.is-new-session .spawn-worktree-row,
+  .conv-input-context.is-new-session .spawn-cwd-chip-group-label,
+  .conv-model-picker-strip.is-new-session .conv-model-picker-label,
+  .conv-model-picker-strip.is-new-session .ccc-free-pill {
+    display: none !important;
+  }
+  .conv-input-context.is-new-session .spawn-cwd-quick-chips,
+  .conv-model-picker-strip.is-new-session .conv-model-picker-chips {
+    display: flex;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 8px;
+    padding: 2px 0;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .conv-input-context.is-new-session .spawn-cwd-quick-chips::-webkit-scrollbar,
+  .conv-model-picker-strip.is-new-session .conv-model-picker-chips::-webkit-scrollbar { display: none; }
+  .conv-input-context.is-new-session .spawn-cwd-chip,
+  .conv-model-picker-strip.is-new-session .orch-tier-chip {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 15px;
+    white-space: nowrap;
+  }
+  .conv-model-picker-strip.is-new-session .conv-model-picker-inner { display: block; }
+  /* The current pick leads its row so it is never scrolled out of sight. */
+  .conv-input-context.is-new-session .spawn-cwd-chip.active,
+  .conv-model-picker-strip.is-new-session .orch-tier-chip.is-selected { order: -1; }
+}
