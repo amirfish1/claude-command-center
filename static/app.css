@@ -31672,3 +31672,88 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     pointer-events: none;
   }
 }
+
+/* Floating speaker while being dragged: no slide transition lag. */
+.conv-scroll-speak-btn.is-dragging { transition: none !important; opacity: 0.85; }
+
+/* ── Phone composer, iMessage layout ───────────────────────────────────────
+   The + sits outside the card on the left; the card is only the text, with
+   expand + Send/mic tucked into its bottom-right corner, so every line of the
+   card is text. The textarea grows with what you type up to ~30% of the
+   visible height (expand mode keeps its own size). Overrides the card block
+   above: same selector weight, later in the file. */
+@media (pointer: coarse) {
+  html body .conv-split .conv-pane .conv-input-bar.visible {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 8px;
+    row-gap: 6px;
+    align-items: end;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    padding: 4px 8px 8px !important;
+  }
+  html body .conv-split .conv-pane .conv-input-bar.visible:focus-within { border: 0 !important; }
+  html body .conv-split .conv-pane .conv-input-bar > .conv-input-row-top {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 9px 84px 9px 14px;
+    background: color-mix(in srgb, var(--text, #e5e2e3) 8%, var(--bg, #0a0a0b));
+    border: 1px solid color-mix(in srgb, var(--text, #e5e2e3) 14%, transparent);
+    border-radius: 22px;
+  }
+  html body .conv-split .conv-pane .conv-input-bar.visible:focus-within > .conv-input-row-top {
+    border-color: color-mix(in srgb, var(--text, #e5e2e3) 26%, transparent);
+  }
+  html body .conv-split .conv-pane #convInput { padding: 0 !important; min-height: 22px !important; }
+  html body .conv-split .conv-pane .conv-input-bar:not([data-composer-mode="expand"]) #convInput {
+    max-height: calc(var(--app-vh, 100vh) * 0.3) !important;
+  }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom { display: contents; }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > *,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > * {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > .conv-actions-group {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: end;
+    margin: 0;
+  }
+  /* Send lives in .conv-send-group (with its hidden caret/menu); place the
+     group, and the bare mic, in the card's bottom-right corner. */
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .conv-send-group,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    align-self: end;
+    z-index: 2;
+    margin: 0 4px 4px 0;
+  }
+  html body .conv-split .conv-pane .conv-input-bar:not(.has-text) .conv-input-buttons > .conv-send-group { display: none; }
+  html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+  }
+  html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn svg,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn svg { width: 20px; height: 20px; }
+  html body .conv-split .conv-pane .conv-input-bar > .expand-btn {
+    top: auto;
+    bottom: 14px;
+    right: 52px;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+  }
+}

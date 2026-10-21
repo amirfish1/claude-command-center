@@ -43872,10 +43872,91 @@
     // control covers one narrow strip instead of a second one on the left.
     const speakBtn = view._convSpeakButton;
     if (speakBtn) {
-      speakBtn.style.right = right + 'px';
-      speakBtn.style.left = 'auto';
-      speakBtn.style.bottom = (above + 4) + 'px';
+      const saved = _speakBtnSavedPos();
+      if (saved) {
+        // Dragged somewhere by the user: keep it there (stored as fractions
+        // of the pane so it survives rotation/resizes), clamped on screen.
+        const w = speakBtn.offsetWidth || 56, h = speakBtn.offsetHeight || 56;
+        const left = Math.min(Math.max(0, saved.x * hostRect.width), Math.max(0, hostRect.width - w));
+        const top = Math.min(Math.max(0, saved.y * hostRect.height), Math.max(0, hostRect.height - h));
+        speakBtn.style.left = Math.round(left) + 'px';
+        speakBtn.style.top = Math.round(top) + 'px';
+        speakBtn.style.right = 'auto';
+        speakBtn.style.bottom = 'auto';
+      } else {
+        speakBtn.style.right = right + 'px';
+        speakBtn.style.left = 'auto';
+        speakBtn.style.top = 'auto';
+        speakBtn.style.bottom = (above + 4) + 'px';
+      }
     }
+  }
+
+  // Floating speaker drag position, shared by every pane (localStorage).
+  const SPEAK_BTN_POS_KEY = 'ccc-speak-btn-pos';
+  function _speakBtnSavedPos() {
+    try {
+      const v = JSON.parse(localStorage.getItem(SPEAK_BTN_POS_KEY) || 'null');
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) return v;
+    } catch (_) {}
+    return null;
+  }
+  // Press and drag moves the floating speaker; a plain tap still reads.
+  function _makeSpeakBtnDraggable(btn, host) {
+    if (!btn || btn._dragBound) return;
+    btn._dragBound = true;
+    btn.style.touchAction = 'none';
+    let drag = null;
+    btn.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== undefined && ev.button !== 0) return;
+      const hr = host.getBoundingClientRect(), r = btn.getBoundingClientRect();
+      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: r.left - hr.left, top: r.top - hr.top, moved: false };
+    });
+    btn.addEventListener('pointermove', (ev) => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+      if (!drag.moved) {
+        if (Math.hypot(dx, dy) < 8) return;
+        drag.moved = true;
+        try { btn.setPointerCapture(ev.pointerId); } catch (_) {}
+        btn.classList.add('is-dragging');
+      }
+      ev.preventDefault();
+      const hr = host.getBoundingClientRect();
+      const left = Math.min(Math.max(0, drag.left + dx), hr.width - btn.offsetWidth);
+      const top = Math.min(Math.max(0, drag.top + dy), hr.height - btn.offsetHeight);
+      btn.style.left = Math.round(left) + 'px';
+      btn.style.top = Math.round(top) + 'px';
+      btn.style.right = 'auto';
+      btn.style.bottom = 'auto';
+    });
+    const end = (ev) => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      if (drag.moved) {
+        const hr = host.getBoundingClientRect();
+        try {
+          localStorage.setItem(SPEAK_BTN_POS_KEY, JSON.stringify({
+            x: (parseFloat(btn.style.left) || 0) / (hr.width || 1),
+            y: (parseFloat(btn.style.top) || 0) / (hr.height || 1),
+          }));
+        } catch (_) {}
+        // Swallow only a click fired by this same gesture (mouse drags emit
+        // one; touch drags don't), so the next real tap still reads.
+        btn._suppressClick = true;
+        setTimeout(() => { btn._suppressClick = false; }, 350);
+        btn.classList.remove('is-dragging');
+      }
+      drag = null;
+    };
+    btn.addEventListener('pointerup', end);
+    btn.addEventListener('pointercancel', end);
+    // The click that follows a drag must not start a read.
+    btn.addEventListener('click', (ev) => {
+      if (!btn._suppressClick) return;
+      btn._suppressClick = false;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }, true);
   }
 
   function updateConversationEndAffordance(view) {
@@ -44470,6 +44551,7 @@
       host.appendChild(speakBtn);
     }
     speakBtn._convTargetView = view;
+    _makeSpeakBtnDraggable(speakBtn, host);
     speakBtn.addEventListener('click', () => {
       const v = speakBtn._convTargetView || view;
       const target = _visibleSpeakButton(v);
