@@ -1167,6 +1167,12 @@
           <span class="conv-view-seg mobile-view-seg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true">Normal</button></span>
           <button type="button" class="mobile-actions-item" data-simple-action="questions" role="menuitem" data-qtag-menu hidden>Open questions</button>
           <button type="button" class="mobile-actions-item" data-simple-action="stop" role="menuitem"><span aria-hidden="true">&#9724;&nbsp;</span>Stop this task</button>
+          <!-- Lifecycle/queue moves for the OPEN session; each shows only when
+               it applies (_syncSessionMenuItems in app.js). -->
+          <button type="button" class="mobile-actions-item" data-simple-action="unarchive" role="menuitem" hidden><span aria-hidden="true">&#8617;&nbsp;</span>Unarchive</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="untrash" role="menuitem" hidden><span aria-hidden="true">&#8617;&nbsp;</span>Untrash</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="idea-IDEAS" role="menuitem" hidden><span aria-hidden="true">&#128161;&nbsp;</span>Move to Ideas</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="idea-SMALL-BUGS" role="menuitem" hidden><span aria-hidden="true">&#128027;&nbsp;</span>Move to Small bugs</button>
           <button type="button" class="mobile-actions-item" data-simple-action="codex-handover" id="mobileCodexHandoverItem" role="menuitem" hidden><span aria-hidden="true">&#8599;&nbsp;</span>Hand over to Codex Desktop</button>
           <button type="button" class="mobile-actions-item" data-simple-action="annotate" role="menuitem"><span aria-hidden="true">&#9873;&nbsp;</span>Annotate</button>
           <button type="button" class="mobile-actions-item" data-simple-action="reload-app" role="menuitem" title="Reload CCC to pick up a new version (a Home Screen app has no browser reload)"><span aria-hidden="true">&#8635;&nbsp;</span>Reload app</button>

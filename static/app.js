@@ -17796,6 +17796,93 @@
       doClick();
     }
   }
+  // File or move a session's idea ticket (IDEAS / SMALL-BUGS); the server
+  // files a new ticket when the session has none. Shared by the sidebar row
+  // buttons and the open-session Actions menu. Resolves true on success.
+  async function moveSessionIdeaTicket(sessionId, queue) {
+    try {
+      const data = await ccPostJson('/api/conversations/' + encodeURIComponent(sessionId) + '/idea-ticket', {
+        session_id: sessionId, queue,
+      });
+      if (!data.ok) throw new Error(data.error || 'move failed');
+      const oldRef = (((conversationsData || []).concat(archiveData || []))
+        .find(r => r && (r.session_id === sessionId || r.id === sessionId)) || {}).idea_ticket;
+      const fromRef = oldRef && oldRef.ref;
+      [conversationsData, archiveData].forEach(rows => (rows || []).forEach(row => {
+        if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
+          row.idea_ticket = Object.assign({}, row.idea_ticket, { ref: data.ref, queue: data.queue });
+        } else if (row && !fromRef && (row.session_id === sessionId || row.id === sessionId)) {
+          row.idea_ticket = { ref: data.ref, queue: data.queue, sessions: 1, closed: false };
+        }
+      }));
+      _convListRenderSig = null;
+      renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+      showOpToast((fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
+      return true;
+    } catch (err) {
+      showOpToast('Move failed (' + err.message + ')', 'error');
+      return false;
+    }
+  }
+
+  // The row for the conversation open in the main pane (loaded or archived).
+  function _openConversationRow() {
+    if (!currentConversation) return null;
+    const match = r => r && (r.id === currentConversation || r.session_id === currentConversation);
+    return (conversationsData || []).find(match)
+      || (Array.isArray(archiveData) ? archiveData.find(match) : null);
+  }
+
+  // Unarchive / untrash the open session. Same endpoints and row patching as
+  // the sidebar's archive/trash buttons, without needing the row in the DOM
+  // (archived rows often aren't rendered).
+  async function _setOpenSessionLifecycle(kind) {
+    const row = _openConversationRow();
+    if (!row) { showOpToast('No open task', 'error'); return; }
+    const convId = row.id;
+    const sessionId = row.session_id || row.id;
+    try {
+      const data = kind === 'untrash'
+        ? await ccPostJson('/api/conversations/' + encodeURIComponent(convId) + '/trash', {
+          session_id: sessionId, repo_path: rowRepoPath(row) || '', trashed: false,
+        })
+        : await ccPostJson('/api/conversations/' + encodeURIComponent(convId) + '/archive',
+          archivePayloadForRow(row, sessionId, false));
+      if (!data.ok) throw new Error(data.error || (kind + ' failed'));
+      const patch = kind === 'untrash'
+        ? { archived: !!data.archived, trashed: false }
+        : { archived: !!data.archived, ...(!data.archived ? { trashed: false } : {}) };
+      [conversationsData, archiveData, currentRepoBacklogData].forEach(rows => {
+        if (!Array.isArray(rows)) return;
+        for (const r of rows) {
+          if (r && (r.id === convId || (r.session_id || r.id) === sessionId)) Object.assign(r, patch);
+        }
+      });
+      setOptimisticOverride(sessionId, patch);
+      renderSidebar(filterConversations($convSearch.value), { force: true });
+      showOpToast(kind === 'untrash' ? 'Untrashed to Archived' : 'Restored to Active');
+    } catch (err) {
+      showOpToast((kind === 'untrash' ? 'Untrash' : 'Unarchive') + ' failed (' + err.message + ')', 'error');
+    }
+  }
+
+  // Show only the lifecycle/queue items that apply to the open session.
+  function _syncSessionMenuItems(menu) {
+    const row = _openConversationRow();
+    const show = (action, on) => {
+      const el = menu.querySelector('[data-simple-action="' + action + '"]');
+      if (el) el.hidden = !on;
+    };
+    const isSession = !!row && !String(row.id || '').startsWith('backlog-issue-')
+      && !String(row.id || '').startsWith('xrepo-issue-');
+    show('unarchive', isSession && !!row.archived && !row.trashed);
+    show('untrash', isSession && !!row.trashed);
+    const ideaQueue = row && row.idea_ticket && row.idea_ticket.queue;
+    const ideasOn = isSession && ideaTicketsOn();
+    show('idea-IDEAS', ideasOn && ideaQueue !== 'IDEAS');
+    show('idea-SMALL-BUGS', ideasOn && ideaQueue !== 'SMALL-BUGS');
+  }
+
   function _wireSimpleActionsMenu() {
     const btn = document.getElementById('convSimpleActionsBtn');
     const menu = document.getElementById('convSimpleActionsMenu');
@@ -17811,6 +17898,7 @@
         const r = btn.getBoundingClientRect();
         menu.style.top = `${Math.round(r.bottom + 4)}px`;
         menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+        _syncSessionMenuItems(menu);
       }
       menu.hidden = open;
       btn.setAttribute('aria-expanded', open ? 'false' : 'true');
@@ -17860,6 +17948,12 @@
         if (handoverBtn) handoverBtn.click();
       } else if (action === 'reload-app') {
         location.reload();
+      } else if (action === 'unarchive' || action === 'untrash') {
+        _setOpenSessionLifecycle(action);
+      } else if (action === 'idea-IDEAS' || action === 'idea-SMALL-BUGS') {
+        const row = _openConversationRow();
+        const sid = row && (row.session_id || row.id);
+        if (sid) moveSessionIdeaTicket(sid, action.slice(5));
       } else if (action === 'annotate') {
         const annBtn = document.getElementById('annotationStartBtn');
         if (annBtn) annBtn.click();
@@ -42269,28 +42363,7 @@
         const queue = btn.getAttribute('data-queue') === 'IDEAS' ? 'IDEAS' : 'SMALL-BUGS';
         if (!sessionId) return;
         btn.disabled = true;
-        try {
-          const data = await ccPostJson('/api/conversations/' + encodeURIComponent(sessionId) + '/idea-ticket', {
-            session_id: sessionId, queue,
-          });
-          if (!data.ok) throw new Error(data.error || 'move failed');
-          const oldRef = (((conversationsData || []).concat(archiveData || []))
-            .find(r => r && (r.session_id === sessionId || r.id === sessionId)) || {}).idea_ticket;
-          const fromRef = oldRef && oldRef.ref;
-          [conversationsData, archiveData].forEach(rows => (rows || []).forEach(row => {
-            if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
-              row.idea_ticket = Object.assign({}, row.idea_ticket, { ref: data.ref, queue: data.queue });
-            } else if (row && !fromRef && (row.session_id === sessionId || row.id === sessionId)) {
-              row.idea_ticket = { ref: data.ref, queue: data.queue, sessions: 1, closed: false };
-            }
-          }));
-          _convListRenderSig = null;
-          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
-          showOpToast((fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
-        } catch (err) {
-          btn.disabled = false;
-          showOpToast('Move failed (' + err.message + ')', 'error');
-        }
+        if (!(await moveSessionIdeaTicket(sessionId, queue))) btn.disabled = false;
       });
     });
     $convList.querySelectorAll('.conv-lane-btn:not(.conv-idea-move-btn)').forEach(btn => {
