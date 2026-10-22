@@ -8468,6 +8468,14 @@
       _liveStripLastKeyTs = Date.now();
     }
   }, true);
+  function anchorCodexStateBadge($view) {
+    if (!$view) return;
+    const badges = $view.querySelectorAll(':scope > .conv-codex-state');
+    const badge = badges[0];
+    // A transcript refresh can preserve an older status alongside a new one.
+    for (let i = 1; i < badges.length; i++) badges[i].remove();
+    if (badge && badge !== $view.lastElementChild) $view.appendChild(badge);
+  }
   // Two independent tail-anchor mechanisms share $view: the live-tool
   // status card (this function, ~1s poll) and the streaming text bubble
   // (per-SSE-chunk, see ensureStreamingBubble). Each one wants to be
@@ -8480,12 +8488,14 @@
   // node — only move it when genuinely new committed content (a JSONL
   // row) landed after it.
   function _reanchorToTailUnlessOnlyTransientBetween($view, el) {
+    anchorCodexStateBadge($view);
     if (!el || el.parentNode !== $view || el === $view.lastElementChild) return;
     for (let n = el.nextElementSibling; n; n = n.nextElementSibling) {
       if (!n.classList || !(n.classList.contains('stream-bubble')
         || n.classList.contains('conv-live-tool-inline')
-        || n.classList.contains('conv-live-tool-strip'))) {
-        $view.appendChild(el);
+        || n.classList.contains('conv-live-tool-strip')
+        || n.classList.contains('conv-codex-state'))) {
+        $view.insertBefore(el, $view.querySelector(':scope > .conv-codex-state'));
         return;
       }
     }
@@ -8911,7 +8921,7 @@
     // badge from the session you just switched AWAY from mounts in the new view.
     const st = liveStatusMatchesOpenConv() ? liveStatus.codexState : null;  // only set for codex sessions (server-gated)
     let badge = $view.querySelector('.conv-codex-state');
-    if (!st) { if (badge) badge.remove(); return; }
+    if (!st) { $view.querySelectorAll('.conv-codex-state').forEach(n => n.remove()); return; }
     const LABELS = { working: 'Working', idle: 'Idle', stuck: 'Stuck', offline: 'Offline' };
     const TITLES = {
       working: 'Codex is working',
@@ -8993,7 +9003,8 @@
     const grabBackHtml = canGrabBack
       ? '<button type="button" class="ccs-grab-back" title="Reclaim this thread into CCC control - reapply approvalPolicy:never, deny any pending approval, and interrupt the external turn">Grab back</button>'
       : '';
-    badge.className = 'conv-codex-state state-' + st + steady + writerCls + (wakeable ? ' is-wakeable' : '');
+    const badgeClass = 'conv-codex-state state-' + st + steady + writerCls + (wakeable ? ' is-wakeable' : '');
+    if (badge.className !== badgeClass) badge.className = badgeClass;
     if (wakeable) {
       badge.setAttribute('role', 'button');
       badge.setAttribute('tabindex', '0');
@@ -9003,9 +9014,10 @@
       badge.removeAttribute('tabindex');
       badge.removeAttribute('aria-label');
     }
-    badge.title = wakeable
+    const badgeTitle = wakeable
       ? ((reason || TITLES[st] || '') + ' - click to nudge GPT')
       : (writerTitle || reason || TITLES[st] || '');
+    if (badge.title !== badgeTitle) badge.title = badgeTitle;
     // WIP timer: while the turn is running show "Working · 12s" — the epoch
     // lives in data-working-since so the shared 1s ticker keeps it counting
     // between status polls.
@@ -9016,12 +9028,19 @@
         + escapeHtml(_optimisticAgeLabel(Date.now() - _wipSince * 1000))
         + '</span>'
       : '';
-    badge.innerHTML = '<span class="ccs-dot"></span><span class="ccs-label">' + escapeHtml(label) + '</span>'
-      + wipAgeHtml
-      + (reason ? '<span class="ccs-reason">' + escapeHtml(reason) + '</span>' : '')
-      + attachedSuffix
-      + grabBackHtml
-      + (wakeable ? '<span class="ccs-wake" aria-hidden="true" title="Nudge GPT">↻</span>' : '');
+    // Age text has its own ticker. Retain the status nodes between polls
+    // so animations, focus, and compact transcript layout remain stable.
+    const renderKey = JSON.stringify([st, writer, reason, attachedSuffix, canGrabBack, _wipSince]);
+    if (badge.dataset.renderKey !== renderKey) {
+      badge.innerHTML = '<span class="ccs-dot"></span><span class="ccs-label">' + escapeHtml(label) + '</span>'
+        + wipAgeHtml
+        + (reason ? '<span class="ccs-reason">' + escapeHtml(reason) + '</span>' : '')
+        + attachedSuffix
+        + grabBackHtml
+        + (wakeable ? '<span class="ccs-wake" aria-hidden="true" title="Nudge GPT">↻</span>' : '');
+      badge.dataset.renderKey = renderKey;
+    }
+    anchorCodexStateBadge($view);
   }
 
   const $convSessionId = document.getElementById('convSessionId');
@@ -63418,7 +63437,7 @@
       for (let i = $view.children.length - 1; i >= 0; i--) {
         const n = $view.children[i];
         if (!n || !n.classList) break;
-        if (n.classList.contains('stream-bubble')) continue;
+        if (n.matches('.stream-bubble, .conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
         if (n.classList.contains('kimi-turn')) turn = n;
         break;
       }
@@ -63438,6 +63457,7 @@
     }
     for (const el of _kimiTurnCoveredBlocks(turn, blockEls)) turn.appendChild(el);
     _kimiRegroupTools(turn);
+    anchorCodexStateBadge($view);
     return turn;
   }
 
@@ -79951,6 +79971,7 @@
     // -> array of { el, kind: 'tool'|'think'|'passive'|'break', calls }
     const units = [];
     for (const el of view.children) {
+      if (el.matches('.conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
       const cl = el.classList;
       if (cl.contains('tool-call-group')) {
         units.push({ el, kind: 'tool', calls: Math.max(1, el.querySelectorAll('.tool-call').length) });

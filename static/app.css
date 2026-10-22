@@ -11238,10 +11238,8 @@
   .flow-chip.idle    { color: var(--text-2); }
   .flow-chip.offline { background: rgba(220, 80, 80, 0.15); color: #e06c6c; border-color: rgba(220, 80, 80, 0.45); }
   .conv-codex-state {
-    /* Pinned WIP pill: stays stuck to the bottom-right of the conversation
-       viewport while scrolling, so the session's Working/Idle/Stuck state is
-       always visible instead of buried at the end of the scroll. */
-    position: sticky; bottom: 10px; z-index: 6;
+    /* Overall status follows the latest message in normal transcript flow. */
+    position: relative; margin-top: 10px; margin-bottom: 10px;
     display: flex; width: fit-content; margin-left: auto; margin-right: 12px;
     align-items: center; gap: 6px;
     font-size: 11px; line-height: 1; padding: 4px 10px;
@@ -11250,8 +11248,9 @@
     box-shadow: 0 2px 10px rgba(0,0,0,0.4);
   }
   .conv-codex-state .ccs-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .conv-codex-state.state-working { color: #f2cc60; animation: ccc-flow-chip-pulse 1.6s ease-in-out infinite; }
-  .conv-codex-state.state-working.steady { animation: none; }
+  .conv-codex-state.state-working { color: #f2cc60; }
+  .conv-codex-state.state-working .ccs-dot { animation: ccc-flow-chip-pulse 1.6s ease-in-out infinite; }
+  .conv-codex-state.state-working.steady .ccs-dot { animation: none; }
   .conv-codex-state.state-stuck   { color: #e0a83c; }
   /* Stuck pill carries the "why" reason on its own wrapped line so the badge
      answers "do we know why it was stuck?" without a hover. */

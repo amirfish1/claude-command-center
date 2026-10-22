@@ -23,6 +23,8 @@ test('merged turns fold tools and reasoning across lifecycle markers, preserving
           <div class="kimi-thinking">Reasoning about the layout</div>
           <div class="kimi-tool" id="single"><div class="kimi-tool-head" onclick="this.parentElement.classList.toggle('open')">Bash</div><div class="kimi-tool-peek">Raw output</div><div class="kimi-tool-body">Full output</div></div>
         </div>
+        <div class="conv-codex-state state-working">Working</div>
+        <div class="conv-live-tool-inline">Tool activity</div>
         <div class="event system codex-subagent">Sub-agent finished</div>
         <div class="kimi-turn">
           <div class="kimi-tool-group collapsed"><div class="kimi-tool-group-head">2 tool calls</div><div class="kimi-tool-group-body"><div class="kimi-tool"></div><div class="kimi-tool"></div></div></div>
