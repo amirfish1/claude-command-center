@@ -1,0 +1,1 @@
+- Homebrew install docs now use `brew install amirfish1/ccc/ccc`, so newer Homebrew no longer refuses with "untrusted tap".

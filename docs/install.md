@@ -56,10 +56,15 @@ irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scrip
 Installs into the Cellar, puts `ccc` on `PATH`, and uses a brew-managed Python.
 
 ```bash
-brew tap amirfish1/ccc
-brew install ccc
+brew install amirfish1/ccc/ccc
 ccc
 ```
+
+The fully qualified name matters: newer Homebrew refuses to load formulae
+from third-party taps by short name ("Refusing to load formula ... from
+untrusted tap"). Installing `amirfish1/ccc/ccc` trusts just that formula.
+If you already tapped and hit that error, run
+`brew trust --formula amirfish1/ccc/ccc`, then `brew install ccc` again.
 
 For a background service, use `brew services start ccc`. Update with
 `brew upgrade ccc`.
