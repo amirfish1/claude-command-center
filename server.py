@@ -3160,6 +3160,10 @@ def _apply_watchtower_worker_display_names(rows):
         status = str(it.get("status") or "")
         if status not in ("in_progress", "in_review", "closed"):
             continue
+        # Idea tickets are claimed by the session they describe; that session
+        # is not a worker and keeps its own title.
+        if str(it.get("project") or "") in _idea_tickets.QUEUE_TYPES:
+            continue
         sid = str(it.get("claimed_session_id") or "").strip()
         if not sid:
             sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")

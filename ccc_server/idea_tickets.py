@@ -416,7 +416,61 @@ def sweep_rows(rows):
             started += 1
             if started >= SWEEP_MAX_PER_CALL:
                 break
+    _sweep_titles(rows, data)
     return started
+
+
+def _row_title(row):
+    """The session's own short title, or "" when it only has a raw opener."""
+    name = str(row.get("display_name") or row.get("ai_title") or "").strip()
+    if not name or name.startswith("\U0001f9f5"):
+        return ""
+    if not (row.get("auto_titled") or row.get("name_overridden") or row.get("ai_title")):
+        return ""
+    first = str(row.get("first_message") or "").strip()
+    if first and first.startswith(name.rstrip(".").rstrip()):
+        return ""
+    return name[:80]
+
+
+def _sweep_titles(rows, data):
+    """Give a ticket its session's title once one exists: the opener's first
+    line ("Can we fix this ...") is a poor handle. A dict lookup per row; at
+    most SWEEP_MAX_PER_CALL ``wt edit`` threads per call."""
+    sessions, tickets = data["sessions"], data["tickets"]
+    started = 0
+    for row in rows or []:
+        sid = str(row.get("session_id") or row.get("id") or "")
+        entry = sessions.get(sid) if sid else None
+        ref = entry.get("ref") if isinstance(entry, dict) else None
+        ticket = tickets.get(ref) if ref else None
+        if not ticket or ticket.get("closed") or ticket.get("title_src") == "session":
+            continue
+        title = _row_title(row)
+        if not title or title == ticket.get("title") or ("title", ref) in _inflight:
+            continue
+        with _lock:
+            _inflight.add(("title", ref))
+        threading.Thread(target=_retitle, args=(ref, title), daemon=True).start()
+        started += 1
+        if started >= SWEEP_MAX_PER_CALL:
+            break
+
+
+def _retitle(ref, title):
+    try:
+        rc, _ = _wt(["edit", ref, "--title", title])
+        if rc == 0:
+            def _record(d):
+                t = d["tickets"].get(ref)
+                if t is not None:
+                    t["title"], t["title_src"] = title, "session"
+            _mutate(_record)
+    except Exception as exc:
+        _core._log_activity("idea", "IDEA_TICKET_ERR", f"retitle {ref} {exc}")
+    finally:
+        with _lock:
+            _inflight.discard(("title", ref))
 
 def on_turn_end(session_id, *, continued_from="", parent="", text=""):
     """Stop-hook entry point. Returns at once; the work runs on a thread.
@@ -515,7 +569,8 @@ def _file_new(sid, queue, text, cwd, *, label=""):
     ref = m.group(1)
 
     def _record(d):
-        d["tickets"][ref] = {"queue": queue, "sessions": [sid], "closed": False}
+        d["tickets"][ref] = {"queue": queue, "sessions": [sid], "closed": False,
+                             "title": _title_from(text)}
         d["sessions"][sid] = {"ref": ref, "kind": "started", "at": int(time.time())}
         d["pending"].pop(sid, None)
     _mutate(_record)

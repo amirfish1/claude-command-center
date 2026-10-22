@@ -75,7 +75,7 @@ class IdeaTicketsTest(unittest.TestCase):
             ref = f"{queue}-{self.next_ref}"
             self.next_ref += 1
             return 0, f"FILED: {ref}  title\nCLAIMED: {ref} -> x\n"
-        if args[0] == "edit":
+        if args[0] == "edit" and "--queue" in args:
             queue = args[args.index("--queue") + 1]
             return 0, f"EDITED: {queue}-99 (moved)  title\n"
         return 0, ""
@@ -186,6 +186,19 @@ class IdeaTicketsTest(unittest.TestCase):
         it._mutate(lambda d: d["sessions"].__setitem__("s2", {"filing": 1, "at": int(it.time.time())}))
         self.assertTrue(it.attach_or_file("s2", classify_fn=lambda t: "idea")["known"])
         self.assertEqual(len([c for c in self.calls if c[0] == "take"]), 1)
+
+    def test_sweep_retitles_ticket_from_session_title(self):
+        self._ui_session("s1", "Can we fix this heads up: the VM cannot auto-update")
+        ref = it.attach_or_file("s1", classify_fn=lambda t: "idea")["ref"]
+        rows = [{"session_id": "s1", "display_name": "\U0001f9f5 IDEAS#1: Can we fix",
+                 "auto_titled": True, "first_message": "Can we fix this"}]
+        it.sweep_rows(rows)
+        self.assertFalse([c for c in self.calls if c[0] == "edit"])  # WT badge name
+        rows[0]["display_name"] = "bym-growth auto-update stall"
+        it.sweep_rows(rows)
+        self.assertIn(["edit", ref, "--title", "bym-growth auto-update stall"], self.calls)
+        it.sweep_rows(rows)
+        self.assertEqual(len([c for c in self.calls if c[0] == "edit"]), 1)
 
     def test_sweep_files_replied_pending_and_children_only(self):
         self._ui_session("c1")  # pending, replied
