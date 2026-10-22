@@ -1,0 +1,1 @@
+- Tracked sessions table (prototype): a "Table" toggle in the sidebar toolbar opens a gridded table over the main pane listing pinned sessions (or In-progress ones when nothing is pinned) with ticket ref, name, status pill and each session's next step from its end-of-turn summary. Clicking a row opens that session; the table refreshes with the sidebar.

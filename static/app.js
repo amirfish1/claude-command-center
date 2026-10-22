@@ -2994,6 +2994,203 @@
     try { return localStorage.getItem(IP_NYA_DETAILS_KEY) === '1'; }
     catch (_) { return false; }
   }
+
+  // ── Tracked sessions table (prototype) ─────────────────────────────
+  // The sidebar row is too cramped to read each tracked session's
+  // end-of-turn self-report, so this lays the same rows out as a gridded
+  // table over the main pane: # (ticket ref) | Name | Status | Next step.
+  // It is fed by renderConversationList on every normal sidebar render (no
+  // fetches, no extra scans): pinned rows when the user has pinned any,
+  // otherwise the session rows the sidebar currently shows (its active
+  // list). Status reuses existing row signals.
+  const TRACKED_TABLE_OPEN_KEY = 'ccc-tracked-table-open';
+  const TRACKED_TABLE_SCOPE_KEY = 'ccc-tracked-table-scope';
+  const TRACKED_TABLE_MAX_ROWS = 60;
+  let _trackedTableHtmlSig = '';
+  let _trackedTableLastRows = null;   // { all } from the last sidebar render
+  function trackedTableOpen() {
+    try { return localStorage.getItem(TRACKED_TABLE_OPEN_KEY) === '1'; }
+    catch (_) { return false; }
+  }
+  function _trackedTableToggleHtml() {
+    const on = trackedTableOpen();
+    return '<span class="conv-grouping-toggle conv-tracked-table-toggle" data-role="tracked-table-toggle"'
+      + ' title="Show tracked sessions as a table in the main pane (ticket, name, status, next step)">'
+      + '<span class="grouping-opt' + (on ? ' is-active' : '') + '" data-tracked-table-toggle="1">Table</span>'
+      + '</span>';
+  }
+  function _trackedRowStatus(c) {
+    const _ss = c.session_state || {};
+    if (c.stale_tool_call || sessionStuckAge(c) > 0) return { key: 'stuck', label: 'stuck' };
+    if (c.needs_approval || (c.state === 'waiting' && !c.archived && !c.verified)
+        || (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')))
+        || isRecentOpenAskRow(c)) {
+      return { key: 'needs-you', label: 'needs you' };
+    }
+    const working = !!c.pending_spawn || (c.is_live && (
+      c.state === 'working' || c.codex_state === 'working'
+      || c.sidecar_status === 'active' || c.sidecar_in_flight))
+      || (typeof sessionIsOptimisticallySending === 'function'
+        && (!c.state || c.state === 'interactive')
+        && sessionIsOptimisticallySending(c.session_id || c.id));
+    if (working && c.last_event_type !== 'result') return { key: 'working', label: 'working' };
+    if (c.verified) return { key: 'verified', label: 'verified' };
+    if (c.tail_pr_number && String(c.pr_state || '').toUpperCase() === 'OPEN') return { key: 'pr', label: 'PR #' + c.tail_pr_number };
+    const col = classifyKanbanColumn(c);
+    if (col === 'review') return { key: 'committed', label: 'committed' };
+    if (col === 'testing') return { key: 'testing', label: 'testing' };
+    if (_ss.did || c.last_event_type === 'result' || c.state === 'idle' || c.state === 'ended') return { key: 'done', label: 'done' };
+    return { key: 'idle', label: 'idle' };
+  }
+  function _trackedRowNextStep(c) {
+    const _ss = c.session_state || {};
+    const next = String(_ss.next_step_user || '').trim();
+    if (next && !/^(none|nothing)\b[.!]?$/i.test(next)) return { text: next, isDone: false };
+    const did = String(_ss.did || '').trim();
+    if (did) return { text: 'Done: ' + did, isDone: true };
+    return { text: '', isDone: false };
+  }
+  // Called from renderConversationList with its full (unbounded) row list.
+  // Cheap when closed: stores one array ref and returns. When open, the table
+  // rebuilds after the sidebar's DOM write (microtask), so "In progress"
+  // reads exactly the session rows the sidebar is showing right now.
+  let _trackedTableRenderQueued = false;
+  function updateTrackedTable(allRows) {
+    _trackedTableLastRows = { all: allRows || [] };
+    if (_trackedTableRenderQueued) return;
+    if (!trackedTableOpen() && !document.body.classList.contains('tracked-table-open')) return;
+    _trackedTableRenderQueued = true;
+    Promise.resolve().then(() => { _trackedTableRenderQueued = false; renderTrackedTable(); });
+  }
+  function _trackedEligible(c) {
+    return !!(c && !c.archived && !c.trashed
+      && c.source !== 'backlog' && c.source !== 'github_pr' && c.backlog_type !== 'github');
+  }
+  function _trackedTableSources(allRows) {
+    const pinned = [];
+    const byId = new Map();
+    for (const c of allRows) {
+      if (!_trackedEligible(c)) continue;
+      byId.set(String(c.id || c.session_id || ''), c);
+      if (c.pinned) pinned.push(c);
+    }
+    const active = [];
+    const seen = new Set();
+    const list = document.getElementById('convList');
+    if (list) {
+      list.querySelectorAll('.conv-item[data-id]').forEach(el => {
+        const id = el.dataset.id;
+        if (!id || seen.has(id) || el.dataset.role === 'archived-gc-row') return;
+        const c = byId.get(id);
+        if (!c) return;
+        seen.add(id);
+        active.push(c);
+      });
+    }
+    return { pinned, active };
+  }
+  function _trackedTableHost() {
+    let el = document.getElementById('trackedTablePane');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'trackedTablePane';
+      el.className = 'tracked-table-pane';
+      el.hidden = true;
+      document.body.appendChild(el);
+      el.addEventListener('click', (ev) => {
+        const scopeBtn = ev.target.closest('[data-tracked-scope]');
+        if (scopeBtn) {
+          try { localStorage.setItem(TRACKED_TABLE_SCOPE_KEY, scopeBtn.getAttribute('data-tracked-scope')); } catch (_) {}
+          renderTrackedTable();
+          return;
+        }
+        if (ev.target.closest('[data-role="tracked-table-close"]')) {
+          setTrackedTableOpen(false);
+          return;
+        }
+        const tr = ev.target.closest('tr[data-id]');
+        if (!tr) return;
+        const id = tr.getAttribute('data-id');
+        setTrackedTableOpen(false);
+        // Same entry point a sidebar row click uses; skip re-selecting the
+        // row already shown (selectConversation restarts its streams).
+        if (paneByPaneId(activePaneId())?.conversationId !== id) selectConversation(id);
+      });
+      window.addEventListener('resize', () => { if (trackedTableOpen()) _positionTrackedTable(); });
+    }
+    return el;
+  }
+  // Fixed overlay sized to the main pane below its toolbar, so the pane's
+  // own layout (and every absolutely-positioned child) is left untouched.
+  function _positionTrackedTable() {
+    const el = document.getElementById('trackedTablePane');
+    const main = document.querySelector('.main');
+    if (!el || !main) return;
+    const r = main.getBoundingClientRect();
+    const tb = document.getElementById('convToolbar');
+    const tbBottom = tb && tb.offsetParent ? tb.getBoundingClientRect().bottom : r.top;
+    const top = Math.max(r.top, Math.min(r.bottom, tbBottom));
+    el.style.left = r.left + 'px';
+    el.style.top = top + 'px';
+    el.style.width = r.width + 'px';
+    el.style.height = Math.max(0, r.bottom - top) + 'px';
+  }
+  function setTrackedTableOpen(on) {
+    try { localStorage.setItem(TRACKED_TABLE_OPEN_KEY, on ? '1' : '0'); } catch (_) {}
+    document.querySelectorAll('[data-tracked-table-toggle]').forEach(o => o.classList.toggle('is-active', !!on));
+    renderTrackedTable();
+  }
+  function renderTrackedTable() {
+    const open = trackedTableOpen();
+    const existing = document.getElementById('trackedTablePane');
+    if (!open) {
+      if (existing) existing.hidden = true;
+      document.body.classList.remove('tracked-table-open');
+      return;
+    }
+    const el = _trackedTableHost();
+    const src = _trackedTableSources((_trackedTableLastRows && _trackedTableLastRows.all) || []);
+    let scope = '';
+    try { scope = localStorage.getItem(TRACKED_TABLE_SCOPE_KEY) || ''; } catch (_) {}
+    if (scope !== 'pinned' && scope !== 'active') scope = src.pinned.length ? 'pinned' : 'active';
+    const rows = (scope === 'pinned' ? src.pinned : src.active).slice(0, TRACKED_TABLE_MAX_ROWS);
+    const curId = paneByPaneId(activePaneId())?.conversationId || '';
+    const body = rows.map((c, i) => {
+      const id = c.id || c.session_id || '';
+      const ref = c.idea_ticket && c.idea_ticket.ref ? String(c.idea_ticket.ref) : '';
+      const title = sidebarRowDisplayTitle(rowRawTitle(c).rawTitle) || '(untitled)';
+      const st = _trackedRowStatus(c);
+      const next = _trackedRowNextStep(c);
+      return '<tr data-id="' + escapeAttr(id) + '"' + (id === curId ? ' class="is-current"' : '') + '>'
+        + '<td class="tt-ref">' + (ref ? '<span class="ccc-idea-ticket">' + escapeHtml(ref) + '</span>' : '<span class="tt-num">' + (i + 1) + '</span>') + '</td>'
+        + '<td class="tt-name" title="' + escapeAttr(title) + '">' + escapeHtml(title) + '</td>'
+        + '<td class="tt-status"><span class="tt-pill is-' + st.key + '">' + escapeHtml(st.label) + '</span></td>'
+        + '<td class="tt-next' + (next.isDone ? ' is-done' : '') + '">' + (next.text ? escapeHtml(next.text) : '<span class="tt-empty">-</span>') + '</td>'
+        + '</tr>';
+    }).join('');
+    const scopeBtn = (key, label, n) => '<span class="grouping-opt' + (scope === key ? ' is-active' : '') + '" data-tracked-scope="' + key + '">' + label + ' (' + n + ')</span>';
+    const html = '<div class="tt-head">'
+        + '<span class="tt-title">Tracked sessions</span>'
+        + '<span class="conv-grouping-toggle tt-scope">' + scopeBtn('pinned', 'Pinned', src.pinned.length) + scopeBtn('active', 'In sidebar', src.active.length) + '</span>'
+        + '<button type="button" class="tt-close" data-role="tracked-table-close" title="Close table" aria-label="Close table">&times;</button>'
+      + '</div>'
+      + (rows.length
+        ? '<div class="tt-scroll"><table class="tracked-table"><thead><tr>'
+          + '<th class="tt-ref">#</th><th class="tt-name">Name</th><th class="tt-status">Status</th><th class="tt-next">Next step</th>'
+          + '</tr></thead><tbody>' + body + '</tbody></table></div>'
+        : '<div class="tt-empty-state">' + (scope === 'pinned' ? 'No pinned sessions. Pin a row (&#128204;) to track it here.' : 'No sessions in the sidebar list.') + '</div>');
+    if (html !== _trackedTableHtmlSig) {
+      const scroller = el.querySelector('.tt-scroll');
+      const keep = scroller ? scroller.scrollTop : 0;
+      el.innerHTML = html;
+      _trackedTableHtmlSig = html;
+      const s2 = el.querySelector('.tt-scroll');
+      if (s2 && keep) s2.scrollTop = keep;
+    }
+    el.hidden = false;
+    document.body.classList.add('tracked-table-open');
+    _positionTrackedTable();
+  }
   function compactRowsOn() {
     const lane = sessionDensityLane();
     if (lane) return sessionDensity(lane) !== 'detailed';
@@ -28681,6 +28878,9 @@
     // the active reader and restarts its streams.
     // On a phone the pane can hold that row behind the list (boot restore
     // loads it without sliding over), so the tap still brings the chat up.
+    // The tracked-sessions table covers the conversation pane; opening a row
+    // from the sidebar must reveal it, so close the table first.
+    if (trackedTableOpen()) setTrackedTableOpen(false);
     if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) {
       mobileShowForCurrentMode();
       return true;
@@ -35945,6 +36145,8 @@
       if (_dupKey) _seenSessionKeys.set(_dupKey, _sessionConvs.length);
       _sessionConvs.push(c);
     }
+    // Tracked sessions table: refreshes on this same render cycle.
+    updateTrackedTable(_sidebarFullRows);
     // Pull the two ACTION states out of the In-progress bucket into their own
     // top sections (see _needsYouConvs / _openAskConvs declarations). Walk
     // backwards so splice() indices stay valid; this preserves the In-progress
@@ -39437,7 +39639,7 @@
       const _ipDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
           + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
         + '</span>';
-      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + _ipDetailsToggle + '</span>';
+      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + _ipDetailsToggle + _trackedTableToggleHtml() + '</span>';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
         : '';
@@ -40521,7 +40723,7 @@
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
-            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _arcOverflow + '</span>'
+            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _trackedTableToggleHtml() + _arcOverflow + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
@@ -41982,6 +42184,16 @@
         }
       });
     });
+    if (!$convList._trackedTableWired) {
+      $convList._trackedTableWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const opt = ev.target.closest('[data-tracked-table-toggle]');
+        if (!opt) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        setTrackedTableOpen(!trackedTableOpen());
+      }, true);
+    }
     const $nyaDetailsToggle = $convList.querySelector('[data-role="nya-details-toggle"]');
     if ($nyaDetailsToggle) {
       $nyaDetailsToggle.addEventListener('click', (ev) => {

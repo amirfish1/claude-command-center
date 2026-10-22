@@ -32362,3 +32362,81 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   }
   .settings-about-strip > .sh-more-info { flex: 1 1 100%; font-size: 13px; color: var(--text-muted); padding: 2px 4px 0; }
 }
+
+/* Tracked sessions table (prototype): gridded overlay over the main pane,
+   positioned in JS to the .main rect below its toolbar. */
+.tracked-table-pane {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  border-top: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.tracked-table-pane[hidden] { display: none; }
+.tracked-table-pane .tt-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.tracked-table-pane .tt-title { font-size: 14px; font-weight: 600; }
+.tracked-table-pane .tt-scope { margin-left: 0; }
+.tracked-table-pane .tt-close {
+  margin-left: auto; background: none; border: 0; color: var(--text-muted);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.tracked-table-pane .tt-close:hover { color: var(--text); }
+.tracked-table-pane .tt-scroll { flex: 1; overflow: auto; padding: 12px 16px 24px; }
+.tracked-table-pane .tt-empty-state { padding: 24px 16px; color: var(--text-muted); font-size: 13px; }
+.tracked-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.tracked-table th,
+.tracked-table td {
+  border: 1px solid var(--border);
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.tracked-table thead th {
+  position: sticky; top: 0;
+  background: var(--surface);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.tracked-table th.tt-ref { width: 92px; }
+.tracked-table th.tt-name { width: 32%; }
+.tracked-table th.tt-status { width: 104px; }
+.tracked-table tbody tr { cursor: pointer; }
+.tracked-table tbody tr:hover td { background: var(--surface-2); }
+.tracked-table tbody tr.is-current td { background: rgba(88,166,255,0.08); }
+.tracked-table td.tt-ref { white-space: nowrap; }
+.tracked-table td.tt-ref .tt-num { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.tracked-table td.tt-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.tracked-table td.tt-next { white-space: pre-wrap; word-break: break-word; }
+.tracked-table td.tt-next.is-done { color: var(--text-muted); }
+.tracked-table .tt-empty { color: var(--text-muted); }
+.tracked-table .tt-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid currentColor;
+  color: var(--text-muted);
+}
+.tracked-table .tt-pill.is-working { color: var(--accent); }
+.tracked-table .tt-pill.is-needs-you { color: var(--orange); }
+.tracked-table .tt-pill.is-stuck { color: var(--red); }
+.tracked-table .tt-pill.is-done,
+.tracked-table .tt-pill.is-verified { color: var(--green); }
+.tracked-table .tt-pill.is-committed,
+.tracked-table .tt-pill.is-pr,
+.tracked-table .tt-pill.is-testing { color: var(--purple); }
