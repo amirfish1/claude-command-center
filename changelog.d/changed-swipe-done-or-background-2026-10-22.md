@@ -1,0 +1,1 @@
+- Phone swipes on Active rows now mean two different things. Swipe right is **Done**: the session is archived and stops, but if it's mid-turn it finishes that turn first. Swipe left is **Background**: the row leaves Active while the session keeps working, and it comes back on its own when the turn ends or the session asks you something.

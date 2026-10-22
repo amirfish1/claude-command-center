@@ -96,6 +96,15 @@ class IdeaTicketsTest(unittest.TestCase):
         row = it.idea_ticket_rows_map()["s1"]
         self.assertEqual((row["ref"], row["queue"], row["sessions"]), ("SMALL-BUGS-1", "SMALL-BUGS", 1))
 
+    def test_pending_ui_spawn_rows_as_ideas_until_filed(self):
+        self._ui_session("s1")
+        row = it.idea_ticket_rows_map()["s1"]
+        self.assertEqual((row["ref"], row["queue"], row["pending"]), ("", "IDEAS", True))
+        it.attach_or_file("s1", classify_fn=lambda t: "small_bug")
+        row = it.idea_ticket_rows_map()["s1"]
+        self.assertEqual(row["ref"], "SMALL-BUGS-1")
+        self.assertNotIn("pending", row)
+
     def test_continuation_and_child_inherit_and_log(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")

@@ -290,6 +290,12 @@ open_when_ready() {
   ) &
 }
 
+service_supported() {
+  [ "$(uname -s 2>/dev/null)" = "Darwin" ] && return 0
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user show-environment >/dev/null 2>&1
+}
+
 ask_install_service() {
   # Default to YES on interactive terminals: most users want CCC to keep
   # running after they close this Terminal window, and the alternative
@@ -298,6 +304,13 @@ ask_install_service() {
   # without a TTY) stay in foreground — auto-installing services without
   # the user watching would be surprising.
   if [ ! -t 1 ] || [ ! -c /dev/tty ]; then
+    return 1
+  fi
+  # Containers, plain SSH logins and WSL often have systemd but no user
+  # bus, so `systemctl --user` fails and the install would die after a
+  # "yes". Don't offer the service where it can't work.
+  if ! service_supported; then
+    note "no background service support here (no systemd user session)"
     return 1
   fi
 
@@ -349,12 +362,16 @@ launch_server() {
     note "setting CCC up as a background service"
     open_when_ready "$url"
     cd "$INSTALL_DIR"
-    ./run.sh --install-service
-    printf '\n'
-    ok "CCC is installed and running in the background"
-    note "$open_hint"
-    note "dashboard: $DASHBOARD_URL"
-    exit 0
+    if ./run.sh --install-service; then
+      printf '\n'
+      ok "CCC is installed and running in the background"
+      note "$open_hint"
+      note "dashboard: $DASHBOARD_URL"
+      exit 0
+    fi
+    note "the background service did not start; starting CCC in this window instead"
+    note "keep this window open; stop CCC with Ctrl+C"
+    exec ./run.sh
   else
     note "starting CCC in this window on port $PORT"
     note "keep this window open; stop CCC with Ctrl+C"

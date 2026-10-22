@@ -2972,6 +2972,8 @@
   function _archiveWindowAllowsRow(row, cutoff = _archiveWindowCutoff()) {
     if (!cutoff) return true;
     if (row && (row.pinned || row.source === 'hermes' || row.engine === 'hermes')) return true;
+    // An open idea ticket is the work item; its session stays listed however old.
+    if (row && row.idea_ticket && !row.idea_ticket.closed) return true;
     return _archiveWindowRowTs(row) >= cutoff;
   }
   const OPEN_ASK_RECENT_S = 48 * 3600;
@@ -16628,26 +16630,110 @@
   });
 
   let _imgLightbox = null;
+  let _lightboxHistoryPushed = false;
+  function _ensureMediaLightbox() {
+    if (_imgLightbox) return _imgLightbox;
+    _imgLightbox = document.createElement('div');
+    _imgLightbox.className = 'img-lightbox';
+    _imgLightbox.innerHTML =
+      '<div class="img-lightbox-bar">'
+      + '<button type="button" class="img-lightbox-back" data-lightbox-close aria-label="Back to main view">\u2190 Back</button>'
+      + '<span class="img-lightbox-title"></span>'
+      + '<a class="img-lightbox-download" download aria-label="Download file">Download</a>'
+      + '<button type="button" class="img-lightbox-close" data-lightbox-close aria-label="Close">\u2715</button>'
+      + '</div>'
+      + '<div class="img-lightbox-stage"><img alt=""></div>';
+    _imgLightbox.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-lightbox-close]')) {
+        ev.preventDefault();
+        closeMediaLightbox();
+        return;
+      }
+      if (ev.target.closest('.img-lightbox-bar, .img-lightbox-video, .img-lightbox-frame')) {
+        return;
+      }
+      closeMediaLightbox();
+    });
+    document.body.appendChild(_imgLightbox);
+    return _imgLightbox;
+  }
+  function closeMediaLightbox(opts) {
+    if (!_imgLightbox || !_imgLightbox.classList.contains('open')) return;
+    _imgLightbox.classList.remove('open');
+    const vid = _imgLightbox.querySelector('video');
+    if (vid) {
+      try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch (_) {}
+    }
+    const frame = _imgLightbox.querySelector('iframe');
+    if (frame) {
+      try { frame.src = 'about:blank'; } catch (_) {}
+    }
+    if (_lightboxHistoryPushed) {
+      _lightboxHistoryPushed = false;
+      if (!(opts && opts.fromPopState)) {
+        try { history.back(); } catch (_) {}
+      }
+    }
+  }
+  function openMediaLightbox(src, opts) {
+    if (!src) return;
+    const kind = (opts && opts.kind) || 'image';
+    const title = (opts && opts.title) || '';
+    const lb = _ensureMediaLightbox();
+    const $title = lb.querySelector('.img-lightbox-title');
+    const $dl = lb.querySelector('.img-lightbox-download');
+    const $stage = lb.querySelector('.img-lightbox-stage');
+    if ($title) $title.textContent = title;
+    if ($dl) {
+      $dl.href = src;
+      if (title) $dl.setAttribute('download', title);
+      else $dl.setAttribute('download', '');
+    }
+    if (kind === 'video') {
+      $stage.innerHTML = '<video class="img-lightbox-video" controls autoplay playsinline></video>';
+      $stage.querySelector('video').src = src;
+    } else if (kind === 'frame') {
+      $stage.innerHTML = '<iframe class="img-lightbox-frame" title="' + escapeAttr(title || 'Preview') + '"></iframe>';
+      $stage.querySelector('iframe').src = src;
+    } else {
+      $stage.innerHTML = '<img alt="' + escapeAttr(title) + '">';
+      $stage.querySelector('img').src = src;
+    }
+    const wasOpen = lb.classList.contains('open');
+    lb.classList.add('open');
+    if (!wasOpen && !_lightboxHistoryPushed) {
+      try {
+        history.pushState({ ...(history.state || {}), cccMediaLightbox: true }, '');
+        _lightboxHistoryPushed = true;
+      } catch (_) {}
+    }
+  }
+  window.openMediaLightbox = openMediaLightbox;
+  window.closeMediaLightbox = closeMediaLightbox;
+  window.addEventListener('popstate', () => {
+    if (_imgLightbox && _imgLightbox.classList.contains('open')) {
+      _lightboxHistoryPushed = false;
+      closeMediaLightbox({ fromPopState: true });
+    }
+  });
   document.addEventListener('click', (ev) => {
+    const shotLink = ev.target.closest('a.uxq-td-img-wrap, .ann-ux-preview-shot a');
+    if (shotLink && shotLink.getAttribute('href')) {
+      ev.preventDefault();
+      openMediaLightbox(shotLink.href, { kind: 'image', title: 'screenshot.png' });
+      return;
+    }
     const img = ev.target.closest('img.msg-image');
     if (img) {
       ev.preventDefault();
-      if (!_imgLightbox) {
-        _imgLightbox = document.createElement('div');
-        _imgLightbox.className = 'img-lightbox';
-        _imgLightbox.innerHTML = '<img alt="">';
-        _imgLightbox.addEventListener('click', () => _imgLightbox.classList.remove('open'));
-        document.body.appendChild(_imgLightbox);
-      }
-      _imgLightbox.querySelector('img').src = img.src;
-      _imgLightbox.classList.add('open');
+      openMediaLightbox(img.src, { kind: 'image', title: img.alt || 'image.png' });
       return;
     }
   });
   document.addEventListener('keydown', (ev) => {
     if (isImeKey(ev)) return;
     if (ev.key === 'Escape' && _imgLightbox && _imgLightbox.classList.contains('open')) {
-      _imgLightbox.classList.remove('open');
+      closeMediaLightbox();
     }
   });
 
@@ -16685,9 +16771,39 @@
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:png|jpe?g|gif|webp|svg|pdf)$/i.test(clean);
   }
+  function _isPdfPath(p) {
+    const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
+    return /\.pdf$/i.test(clean);
+  }
   function _isHtmlDocPath(p) {
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:html|htm)$/i.test(clean);
+  }
+  function openFilePathInMediaLightbox(filePath, label, ctx) {
+    const isCccPasted = /\/\.claude\/(?:command-center\/)?pasted-images\/paste-/.test(filePath);
+    let href;
+    if (isCccPasted) {
+      const sid = (ctx && ctx.id) || sessionIdByConv[currentConversation] || (currentSession && currentSession.id) || '';
+      href = '/api/pasted-image?path=' + encodeURIComponent(filePath) + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
+    } else {
+      const url = new URL('/api/media', window.location.origin);
+      url.searchParams.set('path', filePath);
+      const sid = (ctx && ctx.id)
+        || (typeof sessionIdByConv !== 'undefined' && currentConversation && sessionIdByConv[currentConversation])
+        || (typeof currentConversation === 'string' ? currentConversation : '');
+      if (sid) url.searchParams.set('session_id', sid);
+      if (ctx && ctx.cwd) url.searchParams.set('cwd', ctx.cwd);
+      const repoPath = (ctx && (ctx.repoPath || ctx.repo_path)) || (typeof activeConvRepoPath === 'function' && activeConvRepoPath()) || '';
+      if (repoPath) url.searchParams.set('repo_path', repoPath);
+      href = url.href;
+    }
+    const kind = _isVideoPath(filePath)
+      ? 'video'
+      : (_isHtmlDocPath(filePath) || _isPdfPath(filePath))
+        ? 'frame'
+        : 'image';
+    const cleanName = label || String(filePath).split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '').split('/').pop() || filePath;
+    openMediaLightbox(href, { kind, title: cleanName });
   }
   // CCC-63: a bare `01-gate.png` link carries no directory, but the message
   // usually named one just above ("screenshots are in `~/x/shots/`"). Resolve
@@ -16742,24 +16858,12 @@
       return;
     }
     if (_isVideoPath(p) || _isHtmlDocPath(p) || _isImageOrPdfPath(p)) {
-      // Video/HTML/image/PDF links on mobile/Tailnet should stream from the CCC server
-      // so the remote browser can play/render them. /api/open would try to
-      // open the file locally on the host machine, which does nothing useful
-      // for a viewer connected from elsewhere (CCC-30).
+      // Open video/HTML/image/PDF links in the in-page media lightbox (with a
+      // ← Back toolbar and history state) instead of navigating a same-origin
+      // <a target="_blank"> to /api/media, which replaces the standalone PWA
+      // view on mobile with a raw file and no way back to the main view.
       const ctx = _pathLinkSessionContext(a);
-      const url = new URL('/api/media', window.location.origin);
-      url.searchParams.set('path', (_bareMediaBaseDir(a, p) || '') + p);
-      if (ctx && ctx.id) url.searchParams.set('session_id', ctx.id);
-      if (ctx && ctx.cwd) url.searchParams.set('cwd', ctx.cwd);
-      if (ctx && (ctx.repoPath || ctx.repo_path)) url.searchParams.set('repo_path', ctx.repoPath || ctx.repo_path);
-      const tmp = document.createElement('a');
-      tmp.href = url.href;
-      tmp.target = '_blank';
-      tmp.rel = 'noopener noreferrer';
-      tmp.style.display = 'none';
-      document.body.appendChild(tmp);
-      tmp.click();
-      document.body.removeChild(tmp);
+      openFilePathInMediaLightbox((_bareMediaBaseDir(a, p) || '') + p, '', ctx);
       return;
     }
     a.style.opacity = '0.5';
@@ -17643,6 +17747,8 @@
       if (icon) icon.textContent = _ideasNav ? '\u{1F4A1}' : '</>';
       _codingNavBtn.setAttribute('aria-label', label);
     }
+    const _menuBtn = nav.querySelector('[data-mobile-nav-menu]');
+    if (_menuBtn) _menuBtn.classList.toggle('is-active', activeNavKey === 'jobs' || activeNavKey === 'queues' || activeNavKey === 'ask');
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
@@ -17653,9 +17759,24 @@
   function _wireMobileBottomNav() {
     const nav = document.getElementById('mobileBottomNav');
     if (!nav) return;
+    const menu = nav.querySelector('.mobile-nav-menu');
+    const menuBtn = nav.querySelector('[data-mobile-nav-menu]');
+    const setMenuOpen = (open) => {
+      if (!menu || !menuBtn) return;
+      menu.hidden = !open;
+      menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    document.addEventListener('click', (ev) => {
+      if (menu && !menu.hidden && !nav.contains(ev.target)) setMenuOpen(false);
+    });
     nav.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-mobile-nav-menu]')) {
+        setMenuOpen(!!(menu && menu.hidden));
+        return;
+      }
       const btn = ev.target.closest('[data-mobile-nav]');
       if (!btn) return;
+      setMenuOpen(false);
       const dest = btn.getAttribute('data-mobile-nav');
       // Simple mode: every bottom-nav destination is a SIMPLE screen (the
       // grandma test — nothing within 3 taps of home may be advanced UI).
@@ -19855,7 +19976,10 @@
   }
 
   // Mobile swipe-right on conversation-list rows: in the Coding tab it triggers
-  // the row's Trash action; in the Active tab it triggers the Archive action.
+  // the row's Trash action; in the Active tab it triggers the Archive action
+  // ("Done": the session stops, after its current turn if it is mid-turn).
+  // Swipe-left in the Active tab is "Background": the row leaves Active but
+  // the session keeps working, and comes back when it next needs the user.
   // Wired once per #convList render because the list's innerHTML is replaced,
   // but the container itself persists.
   function _currentSidebarTabForSwipe() {
@@ -19882,14 +20006,33 @@
     }
     return null;
   }
+  // Left swipe: only an Active-tab session row with a plain Archive button
+  // (not an issue row, not a restore) can be backgrounded.
+  function _swipeBackgroundButtonForRow(row) {
+    if (_currentSidebarTabForSwipe() !== 'inprogress') return null;
+    const btn = row.querySelector('.conv-archive-btn[data-archived="true"]');
+    if (!btn || btn.classList.contains('is-close') || btn.classList.contains('is-restore')) return null;
+    return btn;
+  }
+  function _swipeLabelForRow(row, dir) {
+    if (dir < 0) return 'Background';
+    const btn = _swipeActionButtonForRow(row);
+    if (btn && btn.matches('.conv-archive-btn[data-archived="true"]:not(.is-close)')) return 'Done';
+    return (btn && btn.getAttribute('aria-label')) || 'Move to Trash';
+  }
   function wireConvListRowSwipe($list) {
     if (!$list || $list.dataset.convSwipeWired === '1' || !isTouchPrimary()) return;
     $list.dataset.convSwipeWired = '1';
     const THRESH = 80;
     const RATIO = 1.5;
-    let sx = 0, sy = 0, active = false, committed = false, decided = false, currentRow = null;
+    let sx = 0, sy = 0, active = false, committed = false, decided = false, currentRow = null, dir = 0;
+    const clearRowSwipe = (row) => {
+      row.classList.remove('is-swipe-committed', 'is-swipe-left');
+      row.style.removeProperty('--conv-row-swipe-offset');
+      delete row.dataset.swipeActionLabel;
+    };
     $list.addEventListener('touchstart', (e) => {
-      active = false; committed = false; decided = false; currentRow = null;
+      active = false; committed = false; decided = false; currentRow = null; dir = 0;
       if (e.touches.length !== 1) return;
       const t = e.target;
       // Let buttons, inputs, links, and scrollable children handle their own gestures.
@@ -19897,7 +20040,8 @@
       const row = t.closest('.conv-item');
       if (!row) return;
       const btn = _swipeActionButtonForRow(row);
-      if (!btn || btn.disabled) return;
+      const bgBtn = _swipeBackgroundButtonForRow(row);
+      if ((!btn || btn.disabled) && (!bgBtn || bgBtn.disabled)) return;
       sx = e.touches[0].clientX; sy = e.touches[0].clientY;
       active = true; currentRow = row;
     }, { passive: true });
@@ -19908,7 +20052,9 @@
       if (!decided) {
         if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
         decided = true;
-        committed = dx > 0 && Math.abs(dx) > Math.abs(dy) * RATIO;
+        dir = dx > 0 ? 1 : -1;
+        const dirBtn = dir > 0 ? _swipeActionButtonForRow(currentRow) : _swipeBackgroundButtonForRow(currentRow);
+        committed = !!dirBtn && !dirBtn.disabled && Math.abs(dx) > Math.abs(dy) * RATIO;
         if (!committed) { active = false; currentRow = null; return; }
         // The pointer-tap listener is intentionally separate so list scrolling
         // stays cheap.  Cancel its pending tap here as soon as this gesture is
@@ -19916,42 +20062,45 @@
         // touchend and open the row we just acted on.
         cancelMobileConversationRowTap();
         noteMobileConversationRowSwipe(currentRow);
-        const swipeAction = _swipeActionButtonForRow(currentRow);
-        currentRow.dataset.swipeActionLabel = (swipeAction && swipeAction.getAttribute('aria-label')) || 'Move to Trash';
+        currentRow.dataset.swipeActionLabel = _swipeLabelForRow(currentRow, dir);
         currentRow.classList.add('is-swipe-committed');
+        currentRow.classList.toggle('is-swipe-left', dir < 0);
       }
       if (committed) {
-        currentRow.style.setProperty('--conv-row-swipe-offset', Math.min(Math.max(dx, 0), THRESH) + 'px');
+        const offset = dir > 0 ? Math.min(Math.max(dx, 0), THRESH) : Math.max(Math.min(dx, 0), -THRESH);
+        currentRow.style.setProperty('--conv-row-swipe-offset', offset + 'px');
         if (e.cancelable) e.preventDefault();
       }
     }, { passive: false });
     const end = (e) => {
       if (!active || !committed || !currentRow) return;
       const t = (e.changedTouches && e.changedTouches[0]) || null;
-      if (!t) { active = false; committed = false; decided = false; currentRow = null; return; }
+      if (!t) { clearRowSwipe(currentRow); active = false; committed = false; decided = false; currentRow = null; return; }
       const dx = t.clientX - sx;
       const dy = t.clientY - sy;
-      if (dx >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
+      if (dx * dir >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
         if (e.cancelable) e.preventDefault();
-        const btn = _swipeActionButtonForRow(currentRow);
+        const btn = dir > 0 ? _swipeActionButtonForRow(currentRow) : _swipeBackgroundButtonForRow(currentRow);
         if (btn && !btn.disabled) {
           btn.classList.add('is-swiped');
           const swipedRow = currentRow;
           setTimeout(() => {
             if (btn) btn.classList.remove('is-swiped');
-            if (swipedRow) {
-              swipedRow.classList.remove('is-swipe-committed');
-              swipedRow.style.removeProperty('--conv-row-swipe-offset');
-              delete swipedRow.dataset.swipeActionLabel;
-            }
+            if (swipedRow) clearRowSwipe(swipedRow);
           }, 300);
+          if (dir < 0) btn.dataset.keepRunning = '1';
           btn.click();
+        } else {
+          clearRowSwipe(currentRow);
         }
+      } else {
+        clearRowSwipe(currentRow);
       }
       active = false; committed = false; decided = false; currentRow = null;
     };
     $list.addEventListener('touchend', end, { passive: false });
     $list.addEventListener('touchcancel', () => {
+      if (currentRow) clearRowSwipe(currentRow);
       active = false; committed = false; decided = false; currentRow = null;
     }, { passive: true });
   }
@@ -22549,72 +22698,47 @@
     const e = String((c && (c.engine || c.source)) || '').toLowerCase();
     return _WA_ENGINE_GLYPH[e] ? e : 'claude';
   }
-  // Session avatars: every session gets its own character + gradient, drawn
-  // deterministically from its id out of its project's themed pool, so the
-  // list reads at a glance (which project, which session) and neighbours
-  // rarely match. A corner badge says what kind of work it is.
-  const _WA_POOLS = {
-    // Claude Command Center: robots, space, gadgets.
-    ccc: ['🤖', '🚀', '🛸', '🛰️', '👾', '🦾', '🧠', '🕹️', '🔭', '🪐', '🧑‍🚀', '👽', '🛰', '📡', '🔋', '🧲',
-      '🦿', '🎛️', '🧪', '💾', '🖲️', '🌌', '☄️', '🌠', '🐙', '🦑', '🤹', '🧙', '🦉', '🐲'],
-    // BYM / pilates studios: movement and wellness, with some silly ones.
-    bym: ['🧘', '🧘‍♀️', '🤸', '🤸‍♀️', '🏋️', '🏋️‍♀️', '🚴', '🚴‍♀️', '🤾', '🏊', '🏄', '🧗', '⛹️‍♀️', '🦩', '🦘',
-      '🐒', '🐆', '🦒', '🐇', '💪', '🥑', '🍌', '🥤', '🧃', '🍉', '🫐', '🎽', '👟', '🩰', '🐬'],
-    // bym-growth: plants and things that grow.
-    growth: ['🌱', '🌿', '🌻', '🌷', '🌵', '🌳', '🍄', '🐝', '🐛', '🦋', '🌾', '🍀', '🪴', '🌺', '🍓', '🥕',
-      '🐌', '🐞', '🌽', '🍋', '🪻', '🌼', '🫛', '🐿️', '🦔'],
-    // Everything else: a zoo of funny animals.
-    misc: ['🦥', '🦦', '🦆', '🐸', '🦔', '🐧', '🦄', '🦖', '🐳', '🦊', '🐼', '🐨', '🐢', '🦀', '🦜', '🐻',
-      '🐯', '🦁', '🐮', '🐷', '🐹', '🐰', '🦝', '🦭', '🦫', '🐡', '🦈', '🐊', '🦓', '🦙', '🐐', '🦚', '🐓', '🦡'],
-  };
-  const _WA_GRADIENTS = {
-    ccc: [['#5b8cff', '#9b6bff'], ['#3ec9ff', '#4c6fff'], ['#7f5cff', '#ff6ec7'], ['#00c6a7', '#1e6bff'],
-      ['#4b5dff', '#00d2ff'], ['#8e7dff', '#3ad1e8'], ['#2f80ed', '#56ccf2'], ['#6a5acd', '#00bfa6']],
-    bym: [['#ff8a65', '#ff4f8b'], ['#ffb347', '#ff6f61'], ['#f857a6', '#ff5858'], ['#ff9a8b', '#ff6a88'],
-      ['#f6d365', '#fda085'], ['#fa709a', '#fee140'], ['#ff7eb3', '#ff758c'], ['#fbab7e', '#f7ce68']],
-    growth: [['#43e97b', '#38f9d7'], ['#a8e063', '#56ab2f'], ['#96e6a1', '#3cba92'], ['#d4fc79', '#5fc95b'],
-      ['#0ba360', '#3cba92'], ['#c1f07a', '#26a96c']],
-    misc: [['#a18cd1', '#fbc2eb'], ['#84fab0', '#8fd3f4'], ['#fccb90', '#d57eeb'], ['#e0c3fc', '#8ec5fc'],
-      ['#f093fb', '#f5576c'], ['#4facfe', '#00f2fe'], ['#fdcbf1', '#e6dee9'], ['#ffecd2', '#fcb69f'],
-      ['#a1c4fd', '#c2e9fb'], ['#d299c2', '#fef9d7'], ['#89f7fe', '#66a6ff'], ['#fddb92', '#d1fdff']],
-  };
-  function _waHash(str) {
-    let h = 2166136261 >>> 0;
-    const t = String(str || '');
-    for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-    return h >>> 0;
-  }
-  function _waProjectKey(c, title) {
-    // The folder says where it ran; the name often says what it's about
-    // (a BYM task run from the CCC checkout), so both count, BYM/growth first.
-    const where = (String((c && (c.folder_label || c.folder_label_chip || c.slug || c.session_cwd || c.folder_path)) || '')
-      + ' ' + String(title || '')).toLowerCase();
-    if (/growth/.test(where)) return 'growth';
-    if (/\bbym\b|finie|bookyourmat|pilates|fitness|becky/.test(where)) return 'bym';
-    if (/command-center|claude-command|\bccc\b/.test(where)) return 'ccc';
-    return 'misc';
-  }
-  // Kind of work, guessed from the name and first message.
-  function _waKind(c, title) {
-    const t = (String(title || '') + ' ' + String((c && c.first_message) || '').slice(0, 300)).toLowerCase();
-    if (/\b(fix|bug|broken|crash|error|fails?|failing|regression|stuck|hang|wrong)\b/.test(t)) return { k: 'bug', e: '🐞', label: 'Bug fix' };
-    if (/\b(release|deploy|ship|publish|rollout|roll out|launch)\b/.test(t)) return { k: 'ship', e: '🚀', label: 'Release / deploy' };
-    if (/\b(why|investigate|investigation|debug|diagnos|look into|check|audit|research|analy[sz]e)\b/.test(t)) return { k: 'look', e: '🔍', label: 'Investigation' };
-    if (/\b(idea|ideas|brainstorm|what if|should we|design|explore|concept|plan|proposal|think)\b/.test(t)) return { k: 'idea', e: '💡', label: 'Idea / design' };
-    if (/\b(add|build|implement|create|new|feature|support|improve|make)\b/.test(t)) return { k: 'feat', e: '✨', label: 'Feature' };
+  // Session avatars are context, not identity: five topic categories, each
+  // one emoji on one color, so a screen holds at most six looks. The title
+  // is tried before the first message so a renamed session follows its
+  // name; the first category that matches wins, most specific first.
+  const _WA_CATEGORIES = [
+    { e: '💰', label: 'Money', bg: ['#3fae6a', '#24804a'],
+      re: /\b(pric\w*|stripe|payments?|billing|bill|invoices?|charge|refund|reimburs\w*|fsa|payroll|cost|spend|tokens?|usage|budget|quota|revenue|\$\d+)/ },
+    { e: '📊', label: 'Data & evals', bg: ['#2fa7b8', '#1f7c8c'],
+      re: /\b(evals?|replay|benchmark|grad(e|ing)|scorecard|analytics|metrics?|report|dashboard|investigat\w*|research|audit|analy[sz]\w*)\b/ },
+    { e: '📣', label: 'Customers & growth', bg: ['#e0894a', '#b9652c'],
+      re: /\b(lead|leads|outreach|marketing|seo|growth|campaign|customers?|clients?|studios?|email|gmail|inbox|sms|twilio|whatsapp|calendar|booking|bookings|classes|onboarding)\b/ },
+    { e: '🎨', label: 'Product & UI', bg: ['#8a6be0', '#6649b8'],
+      re: /\b(ui|ux|sidebar|tabs?|avatars?|layout|css|button|screen|page|view|mobile|phone|iphone|ios|voice|tts|design|feature|menu|rows?)\b/ },
+    { e: '🛠️', label: 'Build & ops', bg: ['#5a7dbf', '#3d5c99'],
+      re: /\b(ci|pytest|tests?|flaky|release|deploy\w*|ship|publish|git|github|commit|push|merge|branch|pr|worktree|server|restart|vm|infra|ssh|ops|cron|perf|slow|cpu|memory|database|db|supabase|sql|migration|queues?|tickets?|wt|watchtower|workers?|agents?|claude|codex|model|prompt|auth|login|security|bug|fix|crash)\b/ },
+  ];
+  const _WA_CATEGORY_DEFAULT = { e: '💭', label: 'General', bg: ['#6b7280', '#4b5260'] };
+  function _waCategoryIn(text) {
+    const t = String(text || '').toLowerCase();
+    if (!t) return null;
+    for (const cat of _WA_CATEGORIES) if (cat.re.test(t)) return cat;
     return null;
   }
+  // Rendered once per row per sidebar pass, so memoize on what it reads.
+  const _waCategoryCache = new Map();
+  function _waCategory(c, title) {
+    const first = String((c && c.first_message) || '').slice(0, 300);
+    const key = title + '\u0000' + first;
+    let hit = _waCategoryCache.get(key);
+    if (!hit) {
+      hit = _waCategoryIn(title) || _waCategoryIn(first) || _WA_CATEGORY_DEFAULT;
+      if (_waCategoryCache.size > 5000) _waCategoryCache.clear();
+      _waCategoryCache.set(key, hit);
+    }
+    return hit;
+  }
   function _waAvatarHtml(c, title) {
-    const proj = _waProjectKey(c, title);
-    const h = _waHash((c && (c.session_id || c.id)) || title);
-    const pool = _WA_POOLS[proj];
-    const grads = _WA_GRADIENTS[proj];
-    const face = pool[h % pool.length];
-    const g = grads[Math.floor(h / pool.length) % grads.length];
-    const kind = _waKind(c, title);
-    return '<span class="wa-avatar wa-av" aria-hidden="true" style="background:linear-gradient(135deg,' + g[0] + ',' + g[1] + ')">'
-      + '<span class="wa-face">' + face + '</span>'
-      + (kind ? '<span class="wa-kind" title="' + escapeAttr(kind.label) + '">' + kind.e + '</span>' : '')
+    const cat = _waCategory(c, title);
+    const repo = String((c && c.folder_label) || '');
+    return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + cat.label) + '" style="background:linear-gradient(135deg,' + cat.bg[0] + ',' + cat.bg[1] + ')">'
+      + '<span class="wa-face">' + cat.e + '</span>'
       + '</span>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with
@@ -22626,7 +22750,8 @@
     t = t.split(/\s+/).filter(Boolean).join(' ');
     return t.length <= 140 ? t : t.slice(0, 139).trimEnd() + '\u2026';
   }
-  // Chat-app time label: 14:05 today, Yesterday, weekday this week, else date.
+  // Compact chat-list time, so the title keeps the width: 11:42 today,
+  // Mon this week, 10/19 before that.
   // CCC-119: toLocale*String(_, options) builds a fresh Intl formatter on every
   // call (~0.3ms each, once per rendered row per render); reuse three.
   let _waTimeFmts = null;
@@ -22637,15 +22762,14 @@
     const d = new Date(n), now = new Date();
     const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const diffDays = Math.round((day(now) - day(d)) / 86400000);
-    if (diffDays === 1) return 'Yesterday';
     if (!_waTimeFmts) {
       _waTimeFmts = {
         time: new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }),
-        weekday: new Intl.DateTimeFormat([], { weekday: 'long' }),
-        date: new Intl.DateTimeFormat([], { month: 'numeric', day: 'numeric', year: '2-digit' }),
+        weekday: new Intl.DateTimeFormat([], { weekday: 'short' }),
+        date: new Intl.DateTimeFormat([], { month: 'numeric', day: 'numeric' }),
       };
     }
-    if (diffDays <= 0) return _waTimeFmts.time.format(d);
+    if (diffDays <= 0) return _waTimeFmts.time.format(d).replace(/\s*[AP]\.?M\.?$/i, '');
     if (diffDays < 7) return _waTimeFmts.weekday.format(d);
     return _waTimeFmts.date.format(d);
   }
@@ -28532,7 +28656,12 @@
     // A normal click on the row already shown in this pane has nothing to
     // select. In particular, do not re-run selectConversation(): it resets
     // the active reader and restarts its streams.
-    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) return true;
+    // On a phone the pane can hold that row behind the list (boot restore
+    // loads it without sliding over), so the tap still brings the chat up.
+    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) {
+      mobileShowForCurrentMode();
+      return true;
+    }
     if (selectedListIds.size > 0) {
       clearSelectedConversationRows();
     }
@@ -32289,7 +32418,16 @@
       else if (f.category === 'pdfs' || f.category === 'html') inner = '<iframe src="' + escapeAttr(url) + '"></iframe>';
       else inner = '<div class="ffv-nopreview">No inline preview for this file type.</div>';
       $view.innerHTML = '<div class="ffv-pv-head"><span>' + escapeHtml(f.name) + '</span>'
-        + '<a class="ffv-btn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in new tab</a></div>' + inner;
+        + '<a class="ffv-btn" href="' + escapeAttr(url) + '" data-ffv-fullscreen="' + escapeAttr(f.category || '') + '" data-ffv-name="' + escapeAttr(f.name) + '">Full screen</a></div>' + inner;
+      const $fs = $view.querySelector('[data-ffv-fullscreen]');
+      if ($fs) {
+        $fs.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          const cat = $fs.getAttribute('data-ffv-fullscreen');
+          const kind = cat === 'videos' ? 'video' : (cat === 'pdfs' || cat === 'html') ? 'frame' : 'image';
+          openMediaLightbox(url, { kind, title: f.name });
+        });
+      }
       $list.querySelectorAll('.ffv-row').forEach(r => r.classList.toggle('sel', r.getAttribute('data-path') === f.path));
       if (f.category === 'markdown') {
         fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status))).then(t => {
@@ -37194,8 +37332,10 @@
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
-        +     '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span></span></div>'
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        // Claude is the norm; the engine mark only flags the exceptions.
+        +     (_waEngine === 'claude' ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
+        // Idea-ticket rows lead the preview with their IDEAS-N chip (tap opens it).
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + ideaTicketChipHtml(c) + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
         + '</div>';
       return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
@@ -39610,6 +39750,9 @@
     const _ideaTicketsOn = ideaTicketsOn();
     const _ideaTicketLane = (c) => {
       const t = _ideaTicketsOn && c && c.idea_ticket;
+      // A UI spawn still waiting for its first reply sits in Ideas until
+      // its ticket is filed, instead of disappearing into Other.
+      if (t && t.pending) return 'ideas';
       if (!t || !t.ref) return '';
       return t.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
     };
@@ -39638,7 +39781,7 @@
       const best = new Map();
       _allTabConvs.forEach(c => {
         if (_allTabLaneFor(c) !== lane) return;
-        const ref = c.idea_ticket && c.idea_ticket.ref;
+        const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
         if (!ref || c.archived || c.trashed || c.idea_ticket.closed) return;
         const prev = best.get(ref);
         const rank = (r) => [r && r.is_live ? 1 : 0, Number((r && (r.mtime || r.modified)) || 0)];
@@ -42490,6 +42633,9 @@
         const convId = item.dataset.id;
         const sessionId = item.dataset.sessionId;
         const nextArchived = btn.dataset.archived === 'true';
+        // Set for one click by the phone's left "Background" swipe.
+        const keepRunning = nextArchived && btn.dataset.keepRunning === '1';
+        delete btn.dataset.keepRunning;
         // Capture visual order before the selected row disappears. This works
         // across folder/group wrappers instead of assuming direct siblings.
         const nextSelectId = nextArchived && currentConversation === convId
@@ -42524,8 +42670,9 @@
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
             || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
           const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
-          const data = await ccPostJson('/api/conversations/' + convId + '/archive',
-            archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived));
+          const archivePayload = archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived);
+          if (keepRunning) archivePayload.keep_running = true;
+          const data = await ccPostJson('/api/conversations/' + convId + '/archive', archivePayload);
           if (!data.ok) {
             const ghError = data.github && data.github.stderr;
             throw new Error(data.error || ghError || 'archive failed');
@@ -53542,6 +53689,10 @@
           }
           return;
         }
+        if (_isVideoPath(row.target) || _isHtmlDocPath(row.target) || _isImageOrPdfPath(row.target)) {
+          openFilePathInMediaLightbox(row.target, row.label, currentSession);
+          return;
+        }
 
         try {
           const sid = sessionIdByConv[currentConversation] || (currentSession && currentSession.id) || '';
@@ -53615,6 +53766,10 @@
       div.appendChild(labelEl);
       div.addEventListener('click', async (e) => {
         if (e.target.classList.contains('ffc-row-target')) return; // don't double-trigger on path-copy
+        if (_isVideoPath(row.target) || _isHtmlDocPath(row.target) || _isImageOrPdfPath(row.target)) {
+          openFilePathInMediaLightbox(row.target, row.label, currentSession);
+          return;
+        }
         try {
           const r = await fetch('/api/reveal-file', {
             method: 'POST',
@@ -73372,7 +73527,14 @@
       && !(savedLastView && savedLastView.type === 'gc');
     if (savedConversationExists) {
       renderArchiveList(savedConversationId, { force: true, skipRestore: true });
-      await selectConversation(savedConversationId, savedPane.id);
+      // This is a boot restore too: on a phone it must load the pane behind
+      // the list, not slide the chat over it (see _qfBootRestoreDepth).
+      _qfBootRestoreDepth++;
+      try {
+        await selectConversation(savedConversationId, savedPane.id);
+      } finally {
+        _qfBootRestoreDepth--;
+      }
       // selectConversation has painted the prefetched transcript. Yield to a
       // new browser task before the synchronous full-list render so that paint
       // reaches the screen instead of being trapped behind archive shaping.

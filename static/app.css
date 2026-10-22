@@ -1572,9 +1572,96 @@
      since it's secondary to the tool line. */
   .tool-inline-image { margin: 2px 0 8px 22px; }
   .tool-inline-image .msg-image { max-width: min(360px, 100%); max-height: 260px; margin: 0; }
-  .img-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
+  .img-lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 11, 16, 0.94);
+    display: none;
+    flex-direction: column;
+    z-index: 9999;
+    cursor: zoom-out;
+  }
   .img-lightbox.open { display: flex; }
-  .img-lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 6px; box-shadow: 0 4px 30px rgba(0,0,0,0.5); }
+  .img-lightbox-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+    background: rgba(13, 17, 23, 0.92);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    cursor: default;
+    flex-shrink: 0;
+  }
+  .img-lightbox-back,
+  .img-lightbox-download,
+  .img-lightbox-close {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.1);
+    color: #f0f6fc;
+    font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 9px 14px;
+    min-height: 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .img-lightbox-back:hover,
+  .img-lightbox-download:hover,
+  .img-lightbox-close:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
+  .img-lightbox-title {
+    flex: 1;
+    min-width: 0;
+    color: #c9d1d9;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+  .img-lightbox-stage {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .img-lightbox img {
+    max-width: 95vw;
+    max-height: calc(100dvh - 84px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    border-radius: 6px;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    object-fit: contain;
+  }
+  .img-lightbox-video {
+    max-width: 95vw;
+    max-height: calc(100dvh - 84px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    border-radius: 8px;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    background: #000;
+    cursor: default;
+  }
+  .img-lightbox-frame {
+    width: min(96vw, 1200px);
+    height: calc(100dvh - 84px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    cursor: default;
+  }
 
   .event.result {
     background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan);
@@ -17061,6 +17148,16 @@
       line-height: 1.1;
       text-align: center;
     }
+    /* Left swipe = "Background": the session keeps running, so grey, not red. */
+    .conv-item.is-swipe-committed.is-swipe-left {
+      background-color: color-mix(in srgb, var(--text-muted, #888) 14%, var(--surface-2)) !important;
+      box-shadow: 80px 0 0 var(--text-muted, #888);
+    }
+    .conv-item.is-swipe-committed.is-swipe-left::before {
+      right: auto;
+      left: calc(100% + 8px);
+      background: var(--text-muted, #888);
+    }
     .compact-rows .conv-item {
       padding-top: 8px !important;
       padding-bottom: 8px !important;
@@ -28173,6 +28270,28 @@ body.has-mobile-bottom-nav .mobile-nav-label { font-size: 10.5px; font-weight: 6
 body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"] { display: none; }
 body.has-mobile-bottom-nav.ccc-simple-mode .mobile-nav-btn[data-nav-chrome="advanced"] { display: none; }
 body.has-mobile-bottom-nav .mobile-nav-label { white-space: nowrap; }
+/* ☰ menu: Jobs / Queues / Ask pop up above the bar's right edge. */
+body.has-mobile-bottom-nav .mobile-nav-menu {
+  position: absolute;
+  right: 8px; bottom: calc(100% + 6px);
+  display: flex; flex-direction: column;
+  min-width: 180px; padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+body.has-mobile-bottom-nav .mobile-nav-menu[hidden],
+body.has-mobile-bottom-nav.ccc-simple-mode .mobile-nav-menu { display: none; }
+body.has-mobile-bottom-nav .mobile-nav-menu .mobile-nav-btn {
+  flex: 0 0 auto;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 12px;
+}
+body.has-mobile-bottom-nav .mobile-nav-menu .mobile-nav-label { font-size: 15px; }
 /* Phone Advanced: Coding/Workers/Queues/q2 live in the bottom bar, so the
    in-list Active/Coding/Workers tab bar is redundant and eats vertical space. */
 body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList > .conv-tab-bar {
@@ -31828,6 +31947,24 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     min-width: 32px;
     min-height: 32px;
   }
+  /* Cold-session gate ("Large and stale" rail + Continue new pill): the rail
+     needs its own full-width row, or auto-placement drops it into the narrow
+     `auto` column, widens that column to the rail's text and shoves the card
+     off-screen. The card moves to the last row so the absolutely placed
+     expand arrow still lands in its corner. */
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .f2c-rail {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-width: 0;
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .conv-input-row-top,
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-row-bottom > .conv-actions-group,
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .conv-send-group,
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .mic-btn {
+    grid-row: 3;
+  }
 }
 
 /* ── Phone session list: chat-app rows ─────────────────────────────────────
@@ -31866,25 +32003,34 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     font-size: 18px;
     font-weight: 700;
   }
+  /* Titles are sentences, so they get up to two lines. The text block is a
+     fixed 3 lines tall: a one-line title leaves the preview two lines, a
+     two-line title leaves it one (the clip falls on a line boundary). */
   .wa-body {
     flex: 1 1 auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    height: 78px;
+    box-sizing: border-box;
     padding: 8px 14px 8px 0;
     border-bottom: 1px solid color-mix(in srgb, var(--text, #e6edf3) 10%, transparent);
   }
-  .wa-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .wa-line1 { display: flex; align-items: flex-start; gap: 8px; min-width: 0; flex: 0 0 auto; }
   .wa-title {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
     font-size: 16px;
     line-height: 21px;
     font-weight: 600;
     color: var(--text);
   }
-  .wa-time { flex: 0 0 auto; font-size: 13px; color: var(--text-muted); white-space: nowrap; }
+  .wa-time { flex: 0 0 auto; font-size: 12px; line-height: 21px; color: var(--text-muted); white-space: nowrap; }
   .wa-lanes {
     flex: 0 0 auto;
     align-self: center;
@@ -31901,8 +32047,9 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    height: 36px;
-    margin-top: 2px;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
   }
   .wa-preview {
     flex: 1 1 auto;
@@ -31928,12 +32075,12 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   @keyframes wa-pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
   .wa-badge {
     flex: 0 0 auto;
-    min-width: 22px;
-    height: 22px;
-    border-radius: 11px;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
     background: #d9a441;
     color: #1b1408;
-    font: 700 13px/22px system-ui, sans-serif;
+    font: 700 12px/18px system-ui, sans-serif;
     text-align: center;
   }
   /* Child sessions: indented, smaller avatar, a thread line on the left.
@@ -32062,6 +32209,8 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   #convList .conv-subagent-cluster-body .wa-face { font-size: 20px; }
   #convList .conv-subagent-cluster-body .wa-kind { width: 17px; height: 17px; font-size: 10px; }
   .wa-time { display: inline-flex; align-items: center; gap: 5px; }
+  /* Fits the one preview line left under a two-line title. */
+  .wa-preview .ccc-idea-ticket { padding: 0 6px; line-height: 15px; vertical-align: 1px; }
   .wa-engine { display: inline-flex; opacity: 0.7; }
   .wa-engine svg, .wa-engine .conv-session-svg { width: 12px; height: 12px; }
 }

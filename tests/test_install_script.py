@@ -160,6 +160,25 @@ class TestInstallScript(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("macOS or Linux", result.stderr)
 
+    def test_service_needs_a_systemd_user_bus_on_linux(self):
+        # A container or bare SSH login has systemctl but no user bus; a
+        # "yes" there used to end the install with "Failed to connect to bus".
+        for bus_status, expected in ((0, 0), (1, 1)):
+            with self.subTest(bus_status=bus_status):
+                result = _run_install_script_function(
+                    "service_supported",
+                    prelude=('uname() { printf "Linux"; }\n'
+                             f'systemctl() {{ return {bus_status}; }}'),
+                )
+                self.assertEqual(result.returncode, expected)
+
+    def test_service_is_always_offered_on_macos(self):
+        result = _run_install_script_function(
+            "service_supported",
+            prelude='uname() { printf "Darwin"; }',
+        )
+        self.assertEqual(result.returncode, 0)
+
 
     def _clt_gate(self, xcode_select_status):
         return _run_install_script_function(

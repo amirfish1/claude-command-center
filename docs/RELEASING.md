@@ -84,7 +84,7 @@ Post directly, don't just hand text to the maintainer:
   Threads that worked: r/ClaudeAI, r/codex, r/LocalLLaMA for the
   multi-engine angle.
 
-`cut-release.sh` orchestrates the whole sequence below, fails loud on the first error, auto-computes the Homebrew sha256, and verifies at the end. **Always `--dry-run` first.** Prereqs are the same as the manual steps (Developer ID cert, `ccc-notary` notarytool profile, Sparkle EdDSA key in login keychain, `gh` logged in, Homebrew tap at `~/Apps/homebrew-ccc` or `$CCC_BREW_TAP`).
+`cut-release.sh` orchestrates the whole sequence below, fails loud on the first error, auto-computes the Homebrew sha256, and verifies at the end. **Always `--dry-run` first.** Prereqs are the same as the manual steps (Developer ID cert, `ccc-notary` notarytool profile, Sparkle EdDSA key in login keychain, `gh` logged in, Homebrew tap at `~/Apps/homebrew-tap` (or the older `~/Apps/homebrew-ccc` checkout) or `$CCC_BREW_TAP`).
 
 The manual steps below are the fallback / reference for what the wrapper does.
 

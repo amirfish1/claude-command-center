@@ -1,0 +1,1 @@
+After a machine restart (an update, a crash, a preempted cloud VM), a card lists the Claude sessions the restart cut off mid-turn, with Open, Resume and Dismiss. Resume tells the session what it was doing when the machine went down.

@@ -228,6 +228,23 @@ def test_archive_list_window_filters_old_rows_but_keeps_pinned_and_hermes():
     assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="all", now=now)] == ["recent", "week-old", "old", "pinned-old", "hermes-old"]
 
 
+def test_archive_list_window_keeps_open_idea_ticket_rows(monkeypatch):
+    now = 2_000_000.0
+    monkeypatch.setattr(server._idea_tickets, "idea_ticket_rows_map", lambda: {
+        "idea-old": {"ref": "IDEAS-1", "queue": "IDEAS", "sessions": 1, "closed": False},
+        "closed-old": {"ref": "IDEAS-2", "queue": "IDEAS", "sessions": 1, "closed": True},
+    })
+    monkeypatch.setattr(server._idea_tickets, "sweep_rows", lambda rows: None)
+    rows = [
+        {"session_id": "recent", "engine": "claude", "mtime": now - 60},
+        {"session_id": "idea-old", "engine": "claude", "mtime": now - 8 * 86400},
+        {"session_id": "closed-old", "engine": "claude", "mtime": now - 8 * 86400},
+    ]
+    out = server._archive_list_project_rows(rows, window="1d", now=now)
+    assert [row["session_id"] for row in out] == ["recent", "idea-old"]
+    assert out[1]["idea_ticket"]["ref"] == "IDEAS-1"
+
+
 def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
     calls = []
 
@@ -4834,3 +4851,38 @@ def test_archive_list_projection_loads_per_row_stores_once(monkeypatch):
     server._archive_list_project_rows(rows, window="all")
     assert len(loads) == 1
     assert parents == []
+
+
+def test_restart_recovery_reads_only_window_tails_once_per_boot(monkeypatch, tmp_path):
+    """Restart recovery stats every transcript once per boot, opens only the
+    ones that went quiet in the window before a shutdown, and serves every
+    later request (same boot) from the persisted result."""
+    import json as _json
+    from ccc_server import restart_recovery as rr
+
+    boot = 1_800_000_000.0
+    down = boot - 3600
+    proj = tmp_path / "projects" / "-w"
+    proj.mkdir(parents=True)
+    rec = _json.dumps({"type": "user", "message": {"content": "go"}}) + "\n"
+    for i in range(200):
+        p = proj / ("old-%03d.jsonl" % i)
+        p.write_text(rec)
+        old = down - 30 * 86400
+        os.utime(p, (old, old))
+    near = proj / "near.jsonl"
+    near.write_text(rec)
+    os.utime(near, (down - 60, down - 60))
+
+    opened = []
+    real_tail = rr._read_tail
+    monkeypatch.setattr(rr, "_read_tail", lambda path, size: opened.append(path) or real_tail(path, size))
+    monkeypatch.setattr(rr, "_MEMO", None)
+    kw = dict(projects_root=tmp_path / "projects", state_file=tmp_path / "rr.json",
+              boot=boot, now=boot + 60, shutdowns=[down])
+    assert [s["session_id"] for s in rr.state(**kw)["sessions"]] == ["near"]
+    assert len(opened) == 1
+    monkeypatch.setattr(rr, "_MEMO", None)
+    rr.state(**kw)
+    rr.state(**kw)
+    assert len(opened) == 1

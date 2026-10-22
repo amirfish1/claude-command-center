@@ -1,0 +1,1 @@
+- Phone session avatars now carry context: one fixed background color per repo, a topic emoji shared by every session on that topic (tests, deploy, payments, voice…), and a corner badge that follows the idea ticket's queue.

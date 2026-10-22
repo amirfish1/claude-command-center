@@ -15662,17 +15662,25 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     cutoff = _archive_list_window_cutoff(window, now=now)
     resumes = _load_usage_limit_resumes()
     parents = _session_graph.parent_snapshot()
-    projected = [
-        _archive_list_project_row(row, resumes=resumes, parents=parents)
-        for row in (rows or [])
-        if isinstance(row, dict) and _archive_list_window_allows_row(row, cutoff)
-    ]
     # Experimental idea tickets: the list serves a persisted snapshot, so the
     # ticket is stamped here from one mtime-cached read ({} when flag is off).
     try:
         idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
     except Exception:
         idea_tickets_by_sid = {}
+
+    def _open_idea(row):
+        t = idea_tickets_by_sid.get(row.get("session_id") or row.get("id"))
+        return bool(t) and not t.get("closed")
+
+    # An open idea ticket outlives the window: the Ideas tab lists tickets,
+    # not recent sessions (bounded by the number of open tickets).
+    projected = [
+        _archive_list_project_row(row, resumes=resumes, parents=parents)
+        for row in (rows or [])
+        if isinstance(row, dict)
+        and (_archive_list_window_allows_row(row, cutoff) or _open_idea(row))
+    ]
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
     try:
@@ -27339,6 +27347,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/leftover/proposals":
             from ccc_server import leftover
             leftover.handle_api_get(self, parsed)
+        elif path == "/api/restart-recovery":
+            # Sessions a machine restart cut off mid-turn (scanned once per boot).
+            from ccc_server import restart_recovery
+            restart_recovery.handle_api_get(self)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
@@ -31491,6 +31503,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # was already enforced at the top of do_POST.
             from ccc_server import free_router
             if free_router.handle_api_post(self, path):
+                return
+        if path.startswith("/api/restart-recovery/"):
+            # Dismiss / resume-prompt for sessions a restart cut off mid-turn.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import restart_recovery
+            if restart_recovery.handle_api_post(self, path):
                 return
         if path == "/api/leftover/approve":
             # Leftover Mode: one click queues a proposed WatchTower ticket.
@@ -37030,6 +37048,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # legacy one-click UI behavior. An in-UI agent should always pass the
             # explicit desired state so re-runs don't un-archive.
             desired = payload.get("archived")
+            # keep_running: the phone's "Background" swipe -- hide the row but
+            # leave the session working; it returns to Active when it next
+            # needs the user. Without it, archiving still means "done", but a
+            # session mid-turn is only stopped once that turn ends.
+            keep_running = payload.get("keep_running") is True
+            from ccc_server import archive_deferred as _archive_deferred
+            has_process = bool(sid) and not sid.startswith("backlog-") and not sid.startswith("pkood-")
+            busy_now = (
+                has_process and desired is not False and not keep_running
+                and _archive_deferred.is_busy(sid)
+            )
+            deferred = None
             try:
                 # Keep retirement ordered with the state transition. If Move
                 # to Active races this request, it must run after the kill so
@@ -37043,17 +37073,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # (which would pin the row to "In progress" and undo the move).
                     kill_result = None
                     if now_archived:
-                        try:
-                            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
-                        except (OSError, FileNotFoundError):
-                            pass
+                        # A backgrounded session keeps its marker: a pending
+                        # permission is exactly what should bring it back.
+                        if not keep_running:
+                            try:
+                                (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+                            except (OSError, FileNotFoundError):
+                                pass
                         # Free the headless agent. Resume via Jump rebuilds full
                         # context from the on-disk JSONL — keeping the process
                         # alive past the user's "done" gesture only accumulates
                         # MCP children. Backlog rows have no process; pkood is
                         # uninstalled.
-                        if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
+                        if has_process and keep_running:
+                            deferred = "background"
+                        elif has_process and busy_now:
+                            deferred = "stop"
+                        elif has_process:
                             kill_result = _kill_session_by_id(sid)
+                    if deferred:
+                        _archive_deferred.record(sid, deferred)
+                    else:
+                        _archive_deferred.clear(sid)
                 # If this card represents a GitHub issue (id `issue-N`),
                 # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
@@ -37081,7 +37122,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "conversation.patch", "conversation", sid,
                     {"archived": now_archived, "trashed": False},
                 )
-                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
+                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result, "deferred": deferred})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/trash$", path):
@@ -42994,6 +43035,14 @@ def main():
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
     # sessions and forgotten cron agents that the archive-time kill misses.
     threading.Thread(target=_idle_reaper_loop, daemon=True).start()
+    # Restart recovery: a minute heartbeat whose last touch before a reboot
+    # records when the machine went down, so sessions cut off mid-turn can
+    # be told apart from ones that died earlier on their own.
+    from ccc_server import restart_recovery as _restart_recovery_boot
+    _restart_recovery_boot.start_heartbeat()
+    # Resume waiting on any backgrounded / stop-after-turn archives.
+    from ccc_server import archive_deferred as _archive_deferred_boot
+    _archive_deferred_boot.ensure_running()
     # Next.js and Claude/Agy detached background scanner
     threading.Thread(target=_system_processes_scanner_loop, daemon=True, name="ccc-system-processes-scanner").start()
     # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new
