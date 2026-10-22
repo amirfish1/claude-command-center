@@ -37269,20 +37269,32 @@
       // Lead with the session's own next step when it names one: the row's
       // chips already say the work is done, so "what now" is the useful line.
       // DID stays in the tooltip, and becomes the line when there is no step.
-      if (!isBacklogRow && !isGithubPrRow && _ss && (_ss.did || _ss.next_step_user)) {
-        const _did = (_ss.did || '').trim();
-        const _next = (_ss.next_step_user || '').trim();
+      // Mid-turn the latest message has no summary block yet, so _ss is
+      // empty; fall back to that message's opening (LATEST) so the row
+      // never goes blank while the session works.
+      const _latest = (!isBacklogRow && !isGithubPrRow)
+        ? String(c.last_assistant_text || c.last_assistant_preview || '').replace(/<session-state>[\s\S]*$/, '')
+          .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280)
+        : '';
+      if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest)) {
+        const _did = ((_ss && _ss.did) || '').trim();
+        const _next = ((_ss && _ss.next_step_user) || '').trim();
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
+        // A working row's summary is from the previous turn; prefer what it
+        // is saying now.
+        const _useLatest = !!_latest && (_isWorkingRow || (!_hasNext && !_did));
+        const _stepText = _useLatest ? _latest : (_hasNext ? _next : '');
         const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
-          + (_hasNext ? 'Next step: ' + _next : '');
+          + (_hasNext ? 'Next step: ' + _next : '')
+          + (_useLatest ? ((_did || _hasNext) ? '\n' : '') + 'Latest: ' + _latest : '');
         // Status | Next step as two divided cells, so a stack of rows reads
         // like a table. Status comes from the row's existing live signals.
         const _outStatus = _needsYouRow ? ['needs-you', 'Needs you']
           : (_isWorkingRow ? ['working', 'Working'] : ['done', 'Done']);
-        outcomeHtml = _hasNext
+        outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-status is-' + _outStatus[0] + '">' + _outStatus[1] + '</span>'
-            + '<span class="conv-outcome-step">' + escapeHtml(_next) + '</span>'
+            + '<span class="conv-outcome-step' + (_useLatest ? ' is-latest' : '') + '">' + escapeHtml(_stepText) + '</span>'
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'

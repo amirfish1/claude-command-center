@@ -1,0 +1,1 @@
+- A sidebar row with no next step (for example while a session is mid-turn) now shows the start of its latest message, labelled LATEST, instead of going blank.

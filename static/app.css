@@ -8239,6 +8239,14 @@
     line-height: 1.35;
     vertical-align: 1px;
   }
+  /* No next step yet (mid-turn, or no summary block): the latest message. */
+  .conv-item .conv-outcome-step.is-latest { color: var(--text-muted); }
+  .conv-item .conv-outcome-step.is-latest::before {
+    content: "LATEST";
+    border-color: rgba(139,148,158,0.4);
+    background: rgba(139,148,158,0.12);
+    color: var(--text-muted);
+  }
   /* Inline next step: sits right of the title; the badges and time after
      .conv-row-break drop to a second line. Only where the brief is visible
      (the existing .conv-outcome rules hide it everywhere else). */
