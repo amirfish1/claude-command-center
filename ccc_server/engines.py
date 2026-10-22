@@ -1148,7 +1148,7 @@ _ANTIGRAVITY_DB_TOOL_NAME_RE = re.compile(
 )
 # Only the tail matters for the pre-transcript live view; a long-running
 # session accumulates hundreds of steps, and this fallback stops being used
-# the moment the brain transcript exists.
+# once the brain transcript contains output.
 _ANTIGRAVITY_DB_LIVE_STEP_CAP = 60
 
 
@@ -2275,6 +2275,7 @@ def _parse_antigravity_conversation(session_id, after_line=0):
     path = _core._antigravity_transcript_path(session_id)
     events = []
     line_num = 0
+    has_output = False
     if not path:
         return _parse_antigravity_cli_log_conversation(session_id, after_line=after_line)
     # One RPC call per parse — the trajectory carries per-step token usage
@@ -2288,8 +2289,6 @@ def _parse_antigravity_conversation(session_id, after_line=0):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 line_num += 1
-                if line_num <= after_line:
-                    continue
                 line = line.strip()
                 if not line:
                     continue
@@ -2297,12 +2296,52 @@ def _parse_antigravity_conversation(session_id, after_line=0):
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if ev.get("type") not in (
+                    "USER_INPUT", "CONVERSATION_HISTORY", "SYSTEM_MESSAGE",
+                    "EPHEMERAL_MESSAGE", "CHECKPOINT",
+                ):
+                    has_output = True
+                if line_num <= after_line:
+                    continue
                 parsed = _core._parse_antigravity_event(ev, line_num, usage_map=usage_map)
                 if parsed:
                     events.append(parsed)
     except OSError:
         pass
+    # A seeded brain transcript can contain only the starting prompt even
+    # after the CLI has failed. Keep its real prompt, then show live steps
+    # and diagnostics from the same fallback used before a transcript exists.
+    if not has_output:
+        fallback = _parse_antigravity_cli_log_conversation(session_id)
+        for event in fallback["events"]:
+            if event.get("type") == "user_text":
+                continue
+            event = dict(event, line=event["line"] + line_num)
+            if event["line"] > after_line:
+                events.append(event)
+        line_num += fallback["last_line"]
     return {"events": events, "last_line": line_num}
+
+
+def _antigravity_reader_cache_key(session_id):
+    """Include CLI progress/errors even when the seeded transcript is static."""
+    transcript = _core._antigravity_transcript_path(session_id)
+    meta = _antigravity_cli_log_meta_for_session(session_id)
+    log_path = meta.get("log_path")
+    db_path = _antigravity_db_path(session_id)
+    sources = [transcript, log_path, db_path]
+    if log_path and str(log_path).endswith(".agy.log"):
+        sources.append(str(log_path)[:-8])
+    if db_path:
+        sources.append(str(db_path) + "-wal")
+    stamps = []
+    for source in sources:
+        try:
+            st = Path(source).stat() if source else None
+            stamps.append((st.st_mtime_ns, st.st_size) if st else (0, 0))
+        except OSError:
+            stamps.append((0, 0))
+    return (max((s[0] for s in stamps), default=0), tuple(stamps))
 
 
 def _antigravity_usage_to_int(val):

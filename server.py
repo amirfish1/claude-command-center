@@ -23767,16 +23767,20 @@ _CONV_PATH_CACHE_LOCK = threading.Lock()
 
 
 def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
-    """Return a (mtime_ns, size) tuple for the JSONL backing this
-    conversation, or (0, 0) if we can't resolve it. Used as a cache key;
-    nanosecond precision + size catches the case where a new event lands
+    """Return a source-stat cache key for this conversation, or (0, 0)
+    if we can't resolve it. Usually a (mtime_ns, size) tuple;
+    multi-source readers include the stats of their supplemental files.
+    Nanosecond precision + size catches the case where a new event lands
     in the same second as a cache write (st_mtime float has 1s resolution
     on macOS/Linux, which let pre-baked response bytes from before the
     final event be served back, dropping the trailing message). The (sid
     → path) cache is preserved across calls; only the stat is re-run.
     """
     try:
-        if _detect_session_engine(conversation_id) == "codex":
+        engine = _detect_session_engine(conversation_id)
+        if engine == "antigravity":
+            return _antigravity_reader_cache_key(conversation_id)
+        if engine == "codex":
             resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
             st = Path(resolved).stat()
             return (st.st_mtime_ns, st.st_size)
