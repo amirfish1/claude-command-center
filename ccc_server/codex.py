@@ -9181,6 +9181,7 @@ def _codex_rollout_path_from_row(row):
         p = Path(os.path.expanduser(raw))
         if p.is_file():
             return p
+        return None
     tid = row.get("id") or ""
     if tid and _core.CODEX_SESSIONS_ROOT.is_dir():
         try:
@@ -11716,6 +11717,14 @@ def build_codex_stuck_summary(now=None, force=False):
         sid = row.get("id") or ""
         if not sid:
             continue
+        try:
+            up = float(row.get("updated_at") or row.get("created_at") or 0)
+            if up > 100000000000:
+                up /= 1000.0
+            if up and max(0.0, now - up) > (recent_window + 300):
+                continue
+        except (TypeError, ValueError):
+            pass
         path = _core._codex_rollout_path_from_row(row)
         if not path:
             continue
