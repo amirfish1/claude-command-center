@@ -6888,6 +6888,19 @@
     if (existing && existing.timer) clearTimeout(existing.timer);
     const timer = setTimeout(() => clearSessionSending(sid), _SENDING_TIMEOUT_MS);
     _sendingSessions.set(sid, { ts: Date.now(), timer });
+    // The row's preview text is still the previous turn's until the list
+    // refreshes; remember it so the sidebar brief can tell it is stale.
+    const _prevRow = (Array.isArray(archiveData) ? archiveData : []).find(c => _sessionRowMatches(c, sid))
+      || (Array.isArray(conversationsData) ? conversationsData : []).find(c => _sessionRowMatches(c, sid));
+    _preSendPreview.set(sid, { ts: Date.now(), text: _prevRow ? String(_prevRow.last_assistant_text || _prevRow.last_assistant_preview || '') : '' });
+    // One early list refresh so the reply's opening line lands in seconds,
+    // not at the next periodic sweep. Coalesced across rapid sends.
+    if (!_earlySendRefreshTimer && typeof refreshConversationList === 'function') {
+      _earlySendRefreshTimer = setTimeout(() => {
+        _earlySendRefreshTimer = null;
+        try { refreshConversationList(); } catch (_) {}
+      }, 8000);
+    }
     touchSessionOptimistically(sid);
     // Force the sidebar to repaint even though focus is in the conv
     // input textarea — this is the user's own send event, not a poller
@@ -6905,6 +6918,15 @@
     if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined' && $convSearch) {
       renderSidebar(filterConversations($convSearch.value), { force: true });
     }
+  }
+  // sid -> {ts, text}: the row's preview at send time (stale once working).
+  const _preSendPreview = new Map();
+  let _earlySendRefreshTimer = null;
+  function preSendPreviewFor(sid) {
+    const e = sid && _preSendPreview.get(sid);
+    if (!e) return null;
+    if ((Date.now() - e.ts) > _SENDING_TIMEOUT_MS) { _preSendPreview.delete(sid); return null; }
+    return e.text;
   }
   function sessionIsOptimisticallySending(sid) {
     if (!sid) return false;
@@ -37270,37 +37292,52 @@
       // chips already say the work is done, so "what now" is the useful line.
       // DID stays in the tooltip, and becomes the line when there is no step.
       // Mid-turn the latest message has no summary block yet, so _ss is
-      // empty; fall back to that message's opening (LATEST) so the row
-      // never goes blank while the session works.
+      // empty; fall back to that message's opening so the row never goes
+      // blank while the session works.
+      const _latestRaw = String(c.last_assistant_text || c.last_assistant_preview || '');
       const _latest = (!isBacklogRow && !isGithubPrRow)
-        ? String(c.last_assistant_text || c.last_assistant_preview || '').replace(/<session-state>[\s\S]*$/, '')
+        ? _latestRaw.replace(/<session-state>[\s\S]*$/, '')
           .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280)
         : '';
-      if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest)) {
+      const _outSid = c.session_id || c.id || '';
+      const _outSending = !!_outSid && sessionIsOptimisticallySending(_outSid);
+      // Text captured at send time is the previous turn's, not this one's.
+      const _preSend = preSendPreviewFor(_outSid);
+      const _latestStale = _preSend !== null && _latestRaw === _preSend;
+      const _outWorking = _outSending || _isWorkingRow;
+      if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking)) {
         const _did = ((_ss && _ss.did) || '').trim();
         const _next = ((_ss && _ss.next_step_user) || '').trim();
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
-        // A working row's summary is from the previous turn; prefer what it
-        // is saying now.
-        const _useLatest = !!_latest && (_isWorkingRow || (!_hasNext && !_did));
-        const _stepText = _useLatest ? _latest : (_hasNext ? _next : '');
+        // One label carries the state (no separate status column):
+        // WORKING + what it is saying now, NEEDS YOU / NEXT STEP + the
+        // session's own next step, else LATEST + its last message.
+        let _label, _kind, _stepText;
+        if (_outWorking) {
+          _label = 'Working'; _kind = 'working';
+          _stepText = _outSending ? 'Sent, waiting for the first reply…'
+            : ((_latest && !_latestStale) ? _latest : 'Working…');
+        } else if (_hasNext) {
+          _label = _needsYouRow ? 'Needs you' : 'Next step';
+          _kind = _needsYouRow ? 'needs-you' : 'next';
+          _stepText = _next;
+        } else if (_latest && !_did) {
+          _label = 'Latest'; _kind = 'latest'; _stepText = _latest;
+        } else {
+          _stepText = '';
+        }
         const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
           + (_hasNext ? 'Next step: ' + _next : '')
-          + (_useLatest ? ((_did || _hasNext) ? '\n' : '') + 'Latest: ' + _latest : '');
-        // Status | Next step as two divided cells, so a stack of rows reads
-        // like a table. Status comes from the row's existing live signals.
-        const _outStatus = _needsYouRow ? ['needs-you', 'Needs you']
-          : (_isWorkingRow ? ['working', 'Working'] : ['done', 'Done']);
+          + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Latest: ' + _latest : '');
         outcomeHtml = _stepText
-          ? '<div class="conv-outcome is-next-step is-inline" title="' + escapeAttr(_outTip) + '">'
-            + '<span class="conv-outcome-status is-' + _outStatus[0] + '">' + _outStatus[1] + '</span>'
-            + '<span class="conv-outcome-step' + (_useLatest ? ' is-latest' : '') + '">' + escapeHtml(_stepText) + '</span>'
+          ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + '" title="' + escapeAttr(_outTip) + '">'
+            + '<span class="conv-outcome-step" data-label="' + escapeAttr(_label) + '">' + escapeHtml(_stepText) + '</span>'
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
             + '</div>';
       }
-      const _outcomeInline = outcomeHtml.indexOf(' is-inline"') !== -1;
+      const _outcomeInline = outcomeHtml.indexOf(' is-inline ') !== -1;
       const _ideaStack = _outcomeInline && !!_ideaRowRef;
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
