@@ -1,0 +1,1 @@
+- The session sidebar with the All window re-renders less often and does less work per render, so it uses noticeably less CPU while open.

@@ -273,3 +273,22 @@ def test_reader_only_popouts_skip_dashboard_stream_heartbeat_and_subagent_status
     pills = _function("function _popoutProcPills()", "if (CONV_POPOUT_MODE) { try { _popoutProcPills(); }")
     assert "if (String(CONV_POPOUT_TARGET).includes(':agent-')) return;" in pills
     assert "if (document.hidden) return;" in pills
+
+
+def test_window_all_sidebar_render_avoids_per_row_formatter_and_repo_rebuilds():
+    # CCC-120: with window=all the sidebar render sees ~11k rows per pass.
+    # Number#toLocaleString() built an Intl formatter per row (context-badge
+    # tooltip), and rowBelongsToKnownRepo rebuilt the known-repo list per row.
+    assert "ctxPct.displayTokens.toLocaleString()" not in SOURCE
+    assert "_fmtInt(ctxPct.displayTokens)" in SOURCE
+    known = _function("function _sidebarKnownRepoPaths()", "function rowBelongsToKnownRepo(")
+    assert "cache.repos === repos" in known
+
+
+def test_evergreen_queue_sig_ignores_ticking_past_worker_seconds():
+    # CCC-120: ended_ago_seconds changes on every fetch, so a sig over the raw
+    # value forced a full sidebar re-render on every evergreen poll. Key on the
+    # rendered age label instead.
+    fresh = _function("async function _ensureEvergreenQueuesFresh()", "function _wtLogVerbClass(")
+    assert "pw.ended_ago_seconds])" not in fresh
+    assert "_uxqFmtAge(" in fresh

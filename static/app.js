@@ -3320,11 +3320,18 @@
     return absolute || row.repo_path || row.spawn_cwd || row.session_cwd || row.cwd || row.folder_path || '';
   }
 
+  // Called once per row (11k rows per sidebar pass with window=all), so the
+  // normalized list is cached on the repo list's identity (CCC-120).
+  let _sidebarKnownRepoPathsCache = { repos: null, len: -1, paths: [] };
   function _sidebarKnownRepoPaths() {
     const repos = (repoListState && Array.isArray(repoListState.repos)) ? repoListState.repos : [];
-    return repos
+    const cache = _sidebarKnownRepoPathsCache;
+    if (cache.repos === repos && cache.len === repos.length) return cache.paths;
+    const paths = repos
       .map(r => String((r && r.path) || '').replace(/\/+$/, ''))
       .filter(Boolean);
+    _sidebarKnownRepoPathsCache = { repos, len: repos.length, paths };
+    return paths;
   }
 
   function rowBelongsToKnownRepo(row) {
@@ -14502,6 +14509,11 @@
     if (isImeKey(e)) return;
     if (e.key === 'Escape') closeLaunchChoiceMenus();
   });
+
+  // Number#toLocaleString() builds a fresh Intl formatter per call; one row's
+  // context tooltip paid ~0.3ms for it, 75% of _renderRow (CCC-120).
+  const _INT_FMT = new Intl.NumberFormat();
+  function _fmtInt(n) { return _INT_FMT.format(n); }
 
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
@@ -36845,7 +36857,7 @@
         const pctLabel = ctxPct.pct + '%';
         const showCost = _rowBadgeShowsCost() && costKnown;
         const badgeLabel = showCost ? costLabel : pctLabel;
-        const tip = (costKnown ? costLabel + ' estimated subscription cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
+        const tip = (costKnown ? costLabel + ' estimated subscription cost · ' : '') + ctxPct.source + ' ' + _fmtInt(ctxPct.displayTokens) + ' / ' + _fmtInt(ctxPct.limit) + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // data-pct stays the context %, not the label — the /compact confirm
         // dialog and the warn/danger threshold classing both key off it.
@@ -47417,7 +47429,10 @@
       const sig = JSON.stringify([
         queues.map(q => [q.queue, q.depth, q.workers, q.auto_drain, q.state]),
         workers.map(w => [w.worker_id, w.queue, w.session_id, w.alive]),
-        pastWorkers.map(pw => [pw.worker_id, pw.queue, pw.ended_ago_seconds]),
+        // The rendered age label, not raw seconds: those tick on every fetch,
+        // so the sig never matched and each poll forced a full 11k-row
+        // sidebar re-render with window=all (CCC-120).
+        pastWorkers.map(pw => [pw.worker_id, pw.queue, _uxqFmtAge(Number(pw && pw.ended_ago_seconds) || 0)]),
       ]);
       if (sig !== _evergreenQueuesSig || gotNewCards) {
         _evergreenQueuesSig = sig;
