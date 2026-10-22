@@ -86,8 +86,11 @@ test('the successor is the effective parent of the session it continued from', (
   assert.equal(ctx.eff('successor-sess-01', 'origin-session-01'), '');
 });
 
-test('the ⤴ from: chip stays visible on unselected rows, hovered or not', () => {
-  assert.match(css, /\.conv-item:not\(\.active\) \.conv-hover-meta-row:has\(\.conv-session-origin-chip\.is-successor\) \{/);
+test('continuations show no ⤴ from: chip; the "N earlier" chain badge opens the previous leg', () => {
+  assert.equal(css.includes('.conv-session-origin-chip.is-successor'), false);
+  assert.match(app, /if \(contId\) return '';/);
+  assert.match(app, /class="conv-chain-badge" role="button" tabindex="0" data-parent-sid="/);
+  assert.match(app, /'\.conv-chain-badge\[data-parent-sid\]'/);
 });
 
 test('hovering an unselected row adds no meta overlay (the row is one click target)', () => {

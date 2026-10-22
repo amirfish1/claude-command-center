@@ -1945,9 +1945,6 @@
   .conv-sticky-header .conv-sticky-header__popout:hover {
     color: var(--text); border-color: var(--text-muted);
   }
-  .conv-sticky-header .conv-sticky-header__where:hover {
-    color: var(--text); border-color: var(--text-muted);
-  }
 
   /* RTL support — `unicode-bidi: plaintext` lets each block (paragraph,
      blockquote, code block) detect its own direction from its first
@@ -2948,21 +2945,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* "Where are we?" (MEMORY-2) -- the desktop-visible counterpart of the
-     sidebar row's .conv-where-btn / the mobile sticky header's copy. */
-  .conv-pane-where-btn {
-    flex: 0 0 auto;
-    background: transparent;
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 4px;
-    color: var(--text-muted, #999);
-    cursor: pointer;
-    font-size: 11px;
-    line-height: 1.2;
-    padding: 2px 6px;
-    white-space: nowrap;
-  }
-  .conv-pane-where-btn:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
   .conv-pane-popout {
     flex: 0 0 auto;
     width: 28px;
@@ -6886,20 +6868,6 @@
     margin: 0;
   }
   .conv-brief-chevron:hover { color: var(--text, #e6edf3); }
-  /* "Where are we?" trigger button (MEMO-FIX-where). */
-  .conv-where-btn {
-    appearance: none;
-    background: transparent;
-    border: 1px solid var(--border, #30363d);
-    border-radius: 4px;
-    color: var(--text-dim, #8b949e);
-    cursor: pointer;
-    font-size: 10px;
-    line-height: 1.4;
-    padding: 1px 5px;
-    margin: 0 0 0 4px;
-  }
-  .conv-where-btn:hover { color: var(--text, #e6edf3); border-color: var(--text-dim, #8b949e); }
   /* Hover extras wrapper. display:contents by default → transparent in every
      list/mode, so layout is identical to before everywhere except where we
      explicitly show it in the current-sessions panel above. */
@@ -7548,11 +7516,6 @@
     background: rgba(188,140,255,0.10);
     color: var(--purple, #bc8cff);
   }
-  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-successor {
-    border-color: rgba(88,166,255,0.35);
-    background: rgba(88,166,255,0.12);
-    color: var(--accent, #58a6ff);
-  }
   /* Clickable only when a resolvable parent id was wired up (data-parent-sid) —
      an origin chip with no known parent (CCC/user/unknown) stays inert. */
   .conv-item .conv-hover-meta-row .conv-session-origin-chip[data-parent-sid] {
@@ -7666,15 +7629,6 @@
   .conv-item.active .conv-hover-meta-row .conv-folder-chip,
   .conv-item.active .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
   .conv-item.active .conv-hover-meta-row .conv-meta-inline .sep { display: inline-flex; }
-  /* The ⤴ from: chip is the only way back to a folded origin session (the
-     origin has no row of its own), so it stays visible at rest; the rest of
-     the meta row waits for select. */
-  .conv-item:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor) {
-    display: flex;
-  }
-  .conv-item:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor) > :not(.conv-session-origin-chip.is-successor) {
-    display: none;
-  }
   /* Current-sessions rows already surface the full meta row by default; the
      generic one-line hover treatment above would shrink them back to a single
      line and cause a visible height flicker. Keep them in normal two-line flow
@@ -7905,12 +7859,13 @@
      reachable. The hover kebab/trash overlay now sits over the title, so it
      gets a solid backing. */
   @container sidebar (max-width: 400px) {
-    .conv-item .conv-main-row > .conv-pct-badge,
-    .conv-item .conv-row-end > .conv-rel {
+    /* Inline next-step rows put these on their own second line, so they fit. */
+    .conv-item .conv-main-row:not(.has-inline-step) > .conv-pct-badge,
+    .conv-item .conv-main-row:not(.has-inline-step) > .conv-row-end > .conv-rel {
       display: none;
     }
-    .conv-item .conv-row-end,
-    .conv-item.is-archived-row .conv-row-end {
+    .conv-item .conv-main-row:not(.has-inline-step) > .conv-row-end,
+    .conv-item.is-archived-row .conv-main-row:not(.has-inline-step) > .conv-row-end {
       min-width: 0;
     }
     .conv-item .conv-row-hover-slot {
@@ -8251,6 +8206,15 @@
   :is(.conv-item:not(.compact-rows *, #convList.workers-dense *, .conv-current-sessions-scroll:not(.is-search-results) *),
       .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open) .conv-main-row.has-inline-step > .conv-row-break {
     display: block; flex-basis: 100%; height: 0;
+  }
+  /* Context % reads with the time, at the right end of the badge line. */
+  :is(.conv-item:not(.compact-rows *, #convList.workers-dense *, .conv-current-sessions-scroll:not(.is-search-results) *),
+      .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open) .conv-main-row.has-inline-step > .conv-pct-badge {
+    margin-left: auto;
+  }
+  :is(.conv-item:not(.compact-rows *, #convList.workers-dense *, .conv-current-sessions-scroll:not(.is-search-results) *),
+      .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open) .conv-main-row.has-inline-step > .conv-pct-badge + .conv-row-end {
+    margin-left: 6px;
   }
   .conv-item .conv-outcome-next {
     display: -webkit-box;
@@ -30391,44 +30355,9 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   white-space: nowrap;
   flex: 0 0 auto;
 }
+.conv-chain-badge[data-parent-sid] { cursor: pointer; }
+.conv-chain-badge[data-parent-sid]:hover { color: var(--text); border-color: var(--text-muted); }
 
-/* "Where are we?" overlay body (MEMO-FIX-where): server-rendered safe HTML
-   from ccc_server/where_answer.py, shown inside the #cccWhereOverlay panel. */
-.where-status {
-  margin-bottom: 12px;
-  line-height: 1.5;
-}
-.where-checklist {
-  list-style: none;
-  margin: 0 0 14px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.where-action-item {
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-inset, rgba(255, 255, 255, 0.03));
-}
-.where-action-item a { color: var(--accent, #58a6ff); }
-.where-no-actions {
-  opacity: 0.7;
-  margin: 0 0 14px;
-}
-.where-continue-btn {
-  appearance: none;
-  border: 1px solid var(--accent, #58a6ff);
-  background: transparent;
-  color: var(--accent, #58a6ff);
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.where-continue-btn:hover { background: var(--accent, #58a6ff); color: var(--bg, #0d1117); }
-.where-continue-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* display:contents everywhere else, so the wrapper is invisible to the flex
    layouts every other list uses. */

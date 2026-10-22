@@ -666,92 +666,6 @@
       close();
     });
   }
-  // "Where are we?" (MEMO-FIX-where): one session's whole lineage chain,
-  // summarized by a cached headless Sonnet call (ccc_server/where_answer.py)
-  // into a plain-language status, a human action-item checklist, and an
-  // optional "Continue" button. Overlay pattern mirrors _showAnomalyPrompt.
-  function _showWhereOverlay(sid) {
-    if (document.getElementById('cccWhereOverlay')) return;
-    const ov = document.createElement('div');
-    ov.id = 'cccWhereOverlay';
-    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;';
-    ov.innerHTML = '<div class="where-panel" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px 20px;max-width:560px;width:calc(100% - 40px);max-height:80vh;overflow:auto;box-shadow:0 8px 32px rgba(0,0,0,.5);color:var(--text);font-size:13px">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
-      '<div style="font-size:15px;font-weight:600">Where are we?</div>' +
-      '<button type="button" class="sh-btn" data-act="close">Close</button></div>' +
-      '<div class="where-body">Thinking&hellip; this can take up to a couple minutes the first time.</div></div>';
-    document.body.appendChild(ov);
-    const close = function () { ov.remove(); };
-    ov.addEventListener('click', function (ev) { if (ev.target === ov) close(); });
-    ov.querySelector('[data-act="close"]').addEventListener('click', close);
-    const body = ov.querySelector('.where-body');
-    fetch('/api/memory/where/' + encodeURIComponent(sid), { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (payload) {
-        if (!ov.isConnected) return;
-        if (!payload || !payload.found) {
-          body.textContent = 'No session found for ' + sid + '.';
-          return;
-        }
-        if (payload.error) {
-          body.textContent = 'Could not generate an answer: ' + payload.error;
-          return;
-        }
-        body.innerHTML = payload.html || 'No answer.';
-      })
-      .catch(function (err) {
-        if (!ov.isConnected) return;
-        body.textContent = 'Request failed: ' + (err && err.message ? err.message : err);
-      });
-  }
-  // "Where are we?" button (MEMORY-2): delegated on document, not $convList,
-  // so it fires for every surface the button can appear on -- a sidebar
-  // row's hover meta line, the open session's sticky header, and the
-  // session overflow menu -- without each one needing its own wiring.
-  if (!document.body._whereBtnWired) {
-    document.body._whereBtnWired = true;
-    document.body.addEventListener('click', function (ev) {
-      const btn = ev.target.closest && ev.target.closest('[data-role="where-btn"]');
-      if (!btn) return;
-      ev.stopPropagation();
-      ev.preventDefault();
-      const sid = btn.getAttribute('data-where-sid') || '';
-      if (!sid) return;
-      _showWhereOverlay(sid);
-    });
-  }
-  // Delegated on document since the where-overlay lives outside $convList.
-  if (!document.body._whereContinueWired) {
-    document.body._whereContinueWired = true;
-    document.body.addEventListener('click', function (ev) {
-      const btn = ev.target.closest && ev.target.closest('.where-continue-btn');
-      if (!btn) return;
-      ev.stopPropagation();
-      ev.preventDefault();
-      let payload;
-      try {
-        payload = JSON.parse(btn.getAttribute('data-spawn-payload') || '{}');
-      } catch (e) {
-        return;
-      }
-      btn.disabled = true;
-      btn.textContent = 'Starting…';
-      fetch('/api/sessions/spawn', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-        .then(function (res) {
-          if (!res.ok) throw new Error((res.d && (res.d.error || res.d.message)) || 'spawn failed');
-          btn.textContent = 'Started';
-          if (typeof showOpToast === 'function') showOpToast('New session started', 'info');
-        })
-        .catch(function (err) {
-          btn.disabled = false;
-          btn.textContent = 'Continue';
-          if (typeof showOpToast === 'function') showOpToast('Could not start session: ' + (err && err.message ? err.message : err), 'error');
-        });
-    });
-  }
   function _startAnomalyPoll() {
     const tick = _gated('cccAnomalies', function () {
       return fetch('/api/system/anomalies', { cache: 'no-store' })
@@ -5942,23 +5856,8 @@
       html += '<div class="com-divider"></div>';
       html += '<button type="button" class="com-item" data-handoff-continue>'
         + '<span>Continue on…</span></button>';
-      // "Where are we?" (MEMORY-2): reuses the same delegated
-      // [data-role="where-btn"] click handling as the sidebar row button
-      // and the sticky header button -- no separate wiring needed here.
-      html += '<button type="button" class="com-item" data-role="where-btn" data-where-sid="' + escapeHtml(sid) + '">'
-        + '<span>Where are we?</span></button>';
     }
     $convOverflowMenu.innerHTML = html;
-    const $whereBtn = $convOverflowMenu.querySelector('[data-role="where-btn"]');
-    if ($whereBtn) {
-      // Own listener (not the generic document-level [data-role="where-btn"]
-      // delegate) so opening the overlay also closes this menu.
-      $whereBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        _closeConvOverflow();
-        _showWhereOverlay($whereBtn.getAttribute('data-where-sid') || '');
-      });
-    }
     const $handoffContinueBtn = $convOverflowMenu.querySelector('[data-handoff-continue]');
     if ($handoffContinueBtn) {
       $handoffContinueBtn.addEventListener('click', (e) => {
@@ -28841,6 +28740,7 @@
     '[data-role="idea-ticket"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
+    '.conv-chain-badge[data-parent-sid]',
     '.qtag-chip',
   ].join(',');
   let _mobileRowTap = null;
@@ -36309,34 +36209,33 @@
     const _continuationChainBadgeHtml = (c) => {
       const legs = _continuationLegCount(c);
       if (legs < 2) return '';
-      return '<span class="conv-chain-badge" title="' + escapeAttr(
-          'This row is the head of a ' + legs + '-leg continuation chain; the earlier legs fold into it.')
-        + '">\u21b1 ' + legs + ' legs</span>';
+      // Also the way back to the folded legs: click opens the previous one.
+      const prevId = continuationParentId(c);
+      return '<span class="conv-chain-badge" role="button" tabindex="0" data-parent-sid="' + escapeAttr(prevId) + '" title="' + escapeAttr(
+          'Continued from ' + (legs - 1) + ' earlier session' + (legs === 2 ? '' : 's')
+          + ' (each picked up where the last left off). Click to open the previous one.')
+        + '">\u21b1 ' + (legs - 1) + ' earlier</span>';
     };
     // suppressSpawnChip: rows already nested inside their parent's cluster
     // (opts.currentChildDepth > 0) don't need the ↳ chip — the parent row is
     // right above them and the chip only buys a second meta line on
-    // hover/select. The ⤴ from: continuation chip stays: it names a leg the
-    // list doesn't show.
+    // hover/select. Continuations get no chip: the "N earlier" chain badge
+    // names them and opens the previous leg.
     const _sessionProvenanceChipHtml = (c, suppressSpawnChip) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
       // continuationParentId also reads the first_message origin marker, so a
       // successor whose server field is empty still labels as a successor
       // instead of as a spawned lane of the session it replaced.
       const contId = continuationParentId(c);
-      const parentId = contId || _sessionProvenanceParentId(c);
+      const parentId = _sessionProvenanceParentId(c);
       let label = '';
       let title = '';
       let className = '';
       let chipAttrs = '';
-      if (contId) {
-        // Successor relationship: this session is an evolution/successor of an earlier ancestor session
-        const ancestorTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(contId), contId);
-        label = '\u2934 from: ' + ancestorTitle;
-        title = 'Successor of ' + ancestorTitle + ' (' + contId + ') \u2014 click to open ancestor';
-        className = ' is-successor';
-        chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(contId) + '"';
-      } else if (parentId) {
+      // A continuation's chain already shows as the "N legs" badge; the
+      // "⤴ from:" chip repeated it on the meta line.
+      if (contId) return '';
+      if (parentId) {
         if (suppressSpawnChip) return '';
         // Child subagent relationship: spawned by an orchestrator. When the
         // recorded parent folded into a continuation successor, the child
@@ -37052,10 +36951,9 @@
             signals += '<span class="conv-signal ' + noteCls + '" title="' + escapeHtml(note.title || note.label) + '">' + escapeHtml(note.label) + '</span>';
           }
         }
-      } else if (_showGitStateSignals && c.has_push) {
-        signals += '<span class="conv-signal pushed">pushed</span>';
-      } else if (_showGitStateSignals && c.has_commit) {
-        signals += '<span class="conv-signal committed">committed</span>';
+      // No bare pushed/committed chip: has_push/has_commit lag the repo
+      // (they never clear once set), and git progress belongs in the
+      // status, not as a separate badge.
       } else if (_showGitStateSignals && hasReadOnlyWork(c)) {
         signals += '<span class="conv-signal read-only" title="Agent completed read-only work without file edits">read-only</span>';
       } else if (_showGitStateSignals && hasNoEdits(c)) {
@@ -37181,8 +37079,8 @@
       // (the ancestors themselves fold into it, see _continuationFoldMaps).
       const _orchChildCount = subagentClusterMeta ? 0 : _sessionLaneCountWithAncestors(c);
       const orchChildBadgeHtml = _orchChildCount > 0
-        ? '<span class="conv-orch-badge" title="Spawned ' + _orchChildCount + ' child session' + (_orchChildCount === 1 ? '' : 's') + '">'
-          + _orchChildCount + (_orchChildCount === 1 ? ' lane' : ' lanes') + '</span>'
+        ? '<span class="conv-orch-badge" title="This session started ' + _orchChildCount + ' other session' + (_orchChildCount === 1 ? '' : 's') + ' to work in parallel">'
+          + '\u21b3 ' + _orchChildCount + ' spawned</span>'
         : '';
 
       // Pin indicator — shown when the row's repo bucket has been
@@ -37370,33 +37268,16 @@
           + ' title="Show / hide brief" aria-expanded="' + (_briefOpen ? 'true' : 'false') + '">'
           + (_briefOpen ? '&#9662;' : '&#9656;') + '</button>'
         : '';
-      // "Where are we?" (MEMO-FIX-where): normally gated the same as the
-      // brief chevron -- a row only earns this button once it has a
-      // captured session-state summary worth turning into a full status +
-      // human checklist. Search/history hits (MEMORY-2) are the one
-      // exception: a matched session found via search is exactly the case
-      // where a user wants "where did this end up," and those rows
-      // (especially the synthetic history-only ones, see
-      // _decorateWithHistoryMatches) never carry session_state at all, so
-      // _hasBrief alone would hide the button from search results entirely.
-      const _isSearchHit = !!(c._historyMatch || c._repoSearchMatch);
-      const _whereBtnHtml = _briefSid && (_hasBrief || _isSearchHit)
-        ? '<button type="button" class="conv-where-btn" data-role="where-btn"'
-          + ' data-where-sid="' + escapeHtml(_briefSid) + '"'
-          + ' title="Where are we? Plain-language status, action items, and a continue prompt">Where?</button>'
-        : '';
       // $0 chip for sessions running on CCC's free router — sits with the
       // other provenance chips on the hover meta row.
       const _runtimeFreeChipHtml = (c.runtime === 'free')
         ? '<span class="meta-runtime-free" title="This session runs on CCC’s free router - it costs $0.">$0</span>'
         : '';
-      // Meta row: always shown when there are chips, a brief chevron, or
-      // (MEMORY-2) a search-hit Where? button with nothing else to anchor it.
-      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief || _isSearchHit);
+      // Meta row: shown when there are chips or a brief chevron.
+      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);
       const hoverMetaRowHtml = _hasMetaContent
         ? '<div class="conv-hover-meta-row">'
           + _briefChevronHtml
-          + _whereBtnHtml
           + _hmObjectChip
           + _hmFolderChip
           + sessionProvenanceChipHtml
@@ -37438,7 +37319,9 @@
       // same reasoning as the stale_tool_call/needs_approval gates above) —
       // showing the dot on a row the user will never find in Active reads as
       // a UI lie, so suppress it there too.
-      const _needsYouRow = (c.state === 'waiting') && !c.archived && !c.verified;
+      // Live state first: the row's own state lags, so a session that resumed
+      // work kept its yellow needs-you dot until the next list refresh.
+      const _needsYouRow = ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
       const needsYouHtml = _needsYouRow
         ? '<span class="conv-needs-you" title="Needs you - the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
@@ -37514,7 +37397,14 @@
       const _latestStale = (_preSend !== null && _latestRaw === _preSend) || c.last_event_type === 'user';
       // The server's four-state label covers the think gaps between tools,
       // where no live tool pill shows but the turn is still running.
-      const _outWorking = _outSending || _isWorkingRow || c.state === 'working';
+      // The row's own state can lag the 5s live poll (and a reply that ended
+      // in a question leaves it 'waiting'), so trust the live overlay too.
+      const _lv = _applyLiveOverlayToRow(c);
+      const _liveAge = _lv.sidecar_ts ? Date.now() / 1000 - _lv.sidecar_ts : 9999;
+      const _liveFresh = !!(_lv.is_live && _lv.sidecar_status === 'active' && _lv.sidecar_tool
+        && _liveAge < (_lv.sidecar_in_flight ? 300 : 60));
+      const _outWorking = _outSending || _isWorkingRow || c.state === 'working'
+        || _lv.state === 'working' || (_liveFresh && !!_lv.sidecar_in_flight);
       if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking)) {
         const _did = ((_ss && _ss.did) || '').trim();
         const _next = ((_ss && _ss.next_step_user) || '').trim();
@@ -37528,11 +37418,7 @@
           // Turns are mostly tool calls with text only at the end, so the
           // live tool (polled every few seconds) is the freshest signal;
           // fall back to this turn's text, then a bare "Working…".
-          // Not every sidebar row has the live poll merged in; read it here.
-          const _lv = _applyLiveOverlayToRow(c);
-          const _liveAge = _lv.sidecar_ts ? Date.now() / 1000 - _lv.sidecar_ts : 9999;
-          const _liveTool = (_lv.is_live && _lv.sidecar_status === 'active' && _lv.sidecar_tool
-            && _liveAge < (_lv.sidecar_in_flight ? 300 : 60))
+          const _liveTool = _liveFresh
             ? liveActivityToolLabel(_lv.sidecar_tool)
               + (_lv.sidecar_file ? ': ' + shortenLiveActivityDetail(_lv.sidecar_file, _lv.sidecar_tool, 160) : '')
             : '';
@@ -42269,10 +42155,6 @@
         if (row) row.classList.toggle('is-brief-open', nowOpen);
       });
     }
-    // "Where are we?" (MEMO-FIX-where / MEMORY-2): click handling for
-    // [data-role="where-btn"] is a single document-level delegated listener
-    // (see the boot-time wiring near _showWhereOverlay's definition) so it
-    // covers every surface the button appears on, not just $convList rows.
     // Compact subagent clusters are collapsed by default. Toggle the selected
     // cluster in place so polling and user interaction do not move scroll.
     if (!$convList._subagentClusterToggleWired) {
@@ -42402,7 +42284,7 @@
     if (!$convList._originChipWired) {
       $convList._originChipWired = true;
       $convList.addEventListener('click', (ev) => {
-        const chip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-parent-sid], .ccc-worker-origin[data-parent-sid]');
+        const chip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-parent-sid], .conv-chain-badge[data-parent-sid], .ccc-worker-origin[data-parent-sid]');
         if (!chip) return;
         ev.stopPropagation();
         ev.preventDefault();
@@ -44655,21 +44537,6 @@
     pane.classList.toggle('has-pane-title', !!(category || title));
     const header = pane.querySelector('[data-role="pane-header"]');
     if (header) header.title = [category, title].filter(Boolean).join(' - ');
-    // "Where are we?" (MEMORY-2): this in-pane header, not the mobile-only
-    // sticky header, is what's actually visible on desktop (>=1201px wide --
-    // see the .conv-sticky-header media query). Click handling is the same
-    // document-level [data-role="where-btn"] delegate used everywhere else.
-    const whereBtn = pane.querySelector('[data-role="where-btn"].conv-pane-where-btn');
-    if (whereBtn) {
-      const whereSid = (row && (row.session_id || row.id)) || '';
-      if (whereSid) {
-        whereBtn.hidden = false;
-        whereBtn.setAttribute('data-where-sid', whereSid);
-      } else {
-        whereBtn.hidden = true;
-        whereBtn.removeAttribute('data-where-sid');
-      }
-    }
     // Phone toolbar title (#mobileConvTitle): the active session's name,
     // resolved through the same chain as its sidebar row so the two match.
     if (targetPaneId === activePaneId()) {
@@ -64015,20 +63882,7 @@
               + '</svg>'
               + '<span>Pop out</span>'
             + '</button>';
-          // "Where are we?" (MEMORY-2): this sticky header is the narrow-
-          // viewport counterpart of the in-pane titlebar's own Where? button
-          // (updatePaneHeader) -- the media query at .conv-sticky-header
-          // hides one and shows the other purely by width, so both need the
-          // button for full coverage. Slots into whichever offset
-          // issueBtn/resolveBtn leave free -- they always appear together,
-          // so there are only two layouts to avoid colliding with.
-          const whereBtn = conv.session_id
-            ? '<button type="button" class="tools-toggle conv-sticky-header__where" data-role="where-btn"'
-              + ' data-where-sid="' + escapeHtml(conv.session_id) + '"'
-              + ' style="right:' + (issueNum ? 360 : 120) + 'px;"'
-              + ' title="Where are we? Plain-language status, action items, and a continue prompt">Where?</button>'
-            : '';
-          sticky.innerHTML = resolveBtn + issueBtn + whereBtn
+          sticky.innerHTML = resolveBtn + issueBtn
             + stickyPopoutBtn
             + '<button type="button" class="conv-sticky-header__close" data-csh-close title="Hide this panel completely">×</button>'
             + '<div class="csh-row">'

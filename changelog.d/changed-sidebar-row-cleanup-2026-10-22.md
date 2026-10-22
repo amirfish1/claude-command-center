@@ -1,0 +1,2 @@
+- Sidebar rows are cleaner: the "Where?" button (row, pane header, overflow menu and mobile header) and the "⤴ from:" chip are gone, there is no separate "pushed"/"committed" chip, and on rows with an inline next step the context % sits beside the time. "N legs" now reads "↱ N earlier" and opens the previous session in the chain; "N lanes" now reads "↳ N spawned".
+- Working rows flip to WORKING (and drop the yellow needs-you dot) from the live 5s poll, instead of waiting for the next list refresh.
