@@ -62,6 +62,9 @@ def _load():
         opts.intra_op_num_threads = max(1, int(threads))
         opts.inter_op_num_threads = 1
         opts.enable_cpu_mem_arena = False
+        # ORT's intra-op pool busy-spins between ops by default; on a shared
+        # box that kept ~3 cores pegged for minutes per read. Sleep instead.
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         sess = ort.InferenceSession(model_path(), opts, providers=["CPUExecutionProvider"])
         return Kokoro.from_session(sess, os.path.join(HOME, "voices.bin"))
     except Exception:
