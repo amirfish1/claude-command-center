@@ -37038,6 +37038,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # legacy one-click UI behavior. An in-UI agent should always pass the
             # explicit desired state so re-runs don't un-archive.
             desired = payload.get("archived")
+            # keep_running: the phone's "Background" swipe -- hide the row but
+            # leave the session working; it returns to Active when it next
+            # needs the user. Without it, archiving still means "done", but a
+            # session mid-turn is only stopped once that turn ends.
+            keep_running = payload.get("keep_running") is True
+            from ccc_server import archive_deferred as _archive_deferred
+            has_process = bool(sid) and not sid.startswith("backlog-") and not sid.startswith("pkood-")
+            busy_now = (
+                has_process and desired is not False and not keep_running
+                and _archive_deferred.is_busy(sid)
+            )
+            deferred = None
             try:
                 # Keep retirement ordered with the state transition. If Move
                 # to Active races this request, it must run after the kill so
@@ -37051,17 +37063,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # (which would pin the row to "In progress" and undo the move).
                     kill_result = None
                     if now_archived:
-                        try:
-                            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
-                        except (OSError, FileNotFoundError):
-                            pass
+                        # A backgrounded session keeps its marker: a pending
+                        # permission is exactly what should bring it back.
+                        if not keep_running:
+                            try:
+                                (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+                            except (OSError, FileNotFoundError):
+                                pass
                         # Free the headless agent. Resume via Jump rebuilds full
                         # context from the on-disk JSONL — keeping the process
                         # alive past the user's "done" gesture only accumulates
                         # MCP children. Backlog rows have no process; pkood is
                         # uninstalled.
-                        if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
+                        if has_process and keep_running:
+                            deferred = "background"
+                        elif has_process and busy_now:
+                            deferred = "stop"
+                        elif has_process:
                             kill_result = _kill_session_by_id(sid)
+                    if deferred:
+                        _archive_deferred.record(sid, deferred)
+                    else:
+                        _archive_deferred.clear(sid)
                 # If this card represents a GitHub issue (id `issue-N`),
                 # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
@@ -37089,7 +37112,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "conversation.patch", "conversation", sid,
                     {"archived": now_archived, "trashed": False},
                 )
-                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
+                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result, "deferred": deferred})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/trash$", path):
@@ -43002,6 +43025,9 @@ def main():
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
     # sessions and forgotten cron agents that the archive-time kill misses.
     threading.Thread(target=_idle_reaper_loop, daemon=True).start()
+    # Resume waiting on any backgrounded / stop-after-turn archives.
+    from ccc_server import archive_deferred as _archive_deferred_boot
+    _archive_deferred_boot.ensure_running()
     # Next.js and Claude/Agy detached background scanner
     threading.Thread(target=_system_processes_scanner_loop, daemon=True, name="ccc-system-processes-scanner").start()
     # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new

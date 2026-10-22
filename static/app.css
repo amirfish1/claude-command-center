@@ -17061,6 +17061,16 @@
       line-height: 1.1;
       text-align: center;
     }
+    /* Left swipe = "Background": the session keeps running, so grey, not red. */
+    .conv-item.is-swipe-committed.is-swipe-left {
+      background-color: color-mix(in srgb, var(--text-muted, #888) 14%, var(--surface-2)) !important;
+      box-shadow: 80px 0 0 var(--text-muted, #888);
+    }
+    .conv-item.is-swipe-committed.is-swipe-left::before {
+      right: auto;
+      left: calc(100% + 8px);
+      background: var(--text-muted, #888);
+    }
     .compact-rows .conv-item {
       padding-top: 8px !important;
       padding-bottom: 8px !important;

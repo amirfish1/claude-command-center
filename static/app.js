@@ -19874,7 +19874,10 @@
   }
 
   // Mobile swipe-right on conversation-list rows: in the Coding tab it triggers
-  // the row's Trash action; in the Active tab it triggers the Archive action.
+  // the row's Trash action; in the Active tab it triggers the Archive action
+  // ("Done": the session stops, after its current turn if it is mid-turn).
+  // Swipe-left in the Active tab is "Background": the row leaves Active but
+  // the session keeps working, and comes back when it next needs the user.
   // Wired once per #convList render because the list's innerHTML is replaced,
   // but the container itself persists.
   function _currentSidebarTabForSwipe() {
@@ -19901,14 +19904,33 @@
     }
     return null;
   }
+  // Left swipe: only an Active-tab session row with a plain Archive button
+  // (not an issue row, not a restore) can be backgrounded.
+  function _swipeBackgroundButtonForRow(row) {
+    if (_currentSidebarTabForSwipe() !== 'inprogress') return null;
+    const btn = row.querySelector('.conv-archive-btn[data-archived="true"]');
+    if (!btn || btn.classList.contains('is-close') || btn.classList.contains('is-restore')) return null;
+    return btn;
+  }
+  function _swipeLabelForRow(row, dir) {
+    if (dir < 0) return 'Background';
+    const btn = _swipeActionButtonForRow(row);
+    if (btn && btn.matches('.conv-archive-btn[data-archived="true"]:not(.is-close)')) return 'Done';
+    return (btn && btn.getAttribute('aria-label')) || 'Move to Trash';
+  }
   function wireConvListRowSwipe($list) {
     if (!$list || $list.dataset.convSwipeWired === '1' || !isTouchPrimary()) return;
     $list.dataset.convSwipeWired = '1';
     const THRESH = 80;
     const RATIO = 1.5;
-    let sx = 0, sy = 0, active = false, committed = false, decided = false, currentRow = null;
+    let sx = 0, sy = 0, active = false, committed = false, decided = false, currentRow = null, dir = 0;
+    const clearRowSwipe = (row) => {
+      row.classList.remove('is-swipe-committed', 'is-swipe-left');
+      row.style.removeProperty('--conv-row-swipe-offset');
+      delete row.dataset.swipeActionLabel;
+    };
     $list.addEventListener('touchstart', (e) => {
-      active = false; committed = false; decided = false; currentRow = null;
+      active = false; committed = false; decided = false; currentRow = null; dir = 0;
       if (e.touches.length !== 1) return;
       const t = e.target;
       // Let buttons, inputs, links, and scrollable children handle their own gestures.
@@ -19916,7 +19938,8 @@
       const row = t.closest('.conv-item');
       if (!row) return;
       const btn = _swipeActionButtonForRow(row);
-      if (!btn || btn.disabled) return;
+      const bgBtn = _swipeBackgroundButtonForRow(row);
+      if ((!btn || btn.disabled) && (!bgBtn || bgBtn.disabled)) return;
       sx = e.touches[0].clientX; sy = e.touches[0].clientY;
       active = true; currentRow = row;
     }, { passive: true });
@@ -19927,7 +19950,9 @@
       if (!decided) {
         if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
         decided = true;
-        committed = dx > 0 && Math.abs(dx) > Math.abs(dy) * RATIO;
+        dir = dx > 0 ? 1 : -1;
+        const dirBtn = dir > 0 ? _swipeActionButtonForRow(currentRow) : _swipeBackgroundButtonForRow(currentRow);
+        committed = !!dirBtn && !dirBtn.disabled && Math.abs(dx) > Math.abs(dy) * RATIO;
         if (!committed) { active = false; currentRow = null; return; }
         // The pointer-tap listener is intentionally separate so list scrolling
         // stays cheap.  Cancel its pending tap here as soon as this gesture is
@@ -19935,42 +19960,45 @@
         // touchend and open the row we just acted on.
         cancelMobileConversationRowTap();
         noteMobileConversationRowSwipe(currentRow);
-        const swipeAction = _swipeActionButtonForRow(currentRow);
-        currentRow.dataset.swipeActionLabel = (swipeAction && swipeAction.getAttribute('aria-label')) || 'Move to Trash';
+        currentRow.dataset.swipeActionLabel = _swipeLabelForRow(currentRow, dir);
         currentRow.classList.add('is-swipe-committed');
+        currentRow.classList.toggle('is-swipe-left', dir < 0);
       }
       if (committed) {
-        currentRow.style.setProperty('--conv-row-swipe-offset', Math.min(Math.max(dx, 0), THRESH) + 'px');
+        const offset = dir > 0 ? Math.min(Math.max(dx, 0), THRESH) : Math.max(Math.min(dx, 0), -THRESH);
+        currentRow.style.setProperty('--conv-row-swipe-offset', offset + 'px');
         if (e.cancelable) e.preventDefault();
       }
     }, { passive: false });
     const end = (e) => {
       if (!active || !committed || !currentRow) return;
       const t = (e.changedTouches && e.changedTouches[0]) || null;
-      if (!t) { active = false; committed = false; decided = false; currentRow = null; return; }
+      if (!t) { clearRowSwipe(currentRow); active = false; committed = false; decided = false; currentRow = null; return; }
       const dx = t.clientX - sx;
       const dy = t.clientY - sy;
-      if (dx >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
+      if (dx * dir >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
         if (e.cancelable) e.preventDefault();
-        const btn = _swipeActionButtonForRow(currentRow);
+        const btn = dir > 0 ? _swipeActionButtonForRow(currentRow) : _swipeBackgroundButtonForRow(currentRow);
         if (btn && !btn.disabled) {
           btn.classList.add('is-swiped');
           const swipedRow = currentRow;
           setTimeout(() => {
             if (btn) btn.classList.remove('is-swiped');
-            if (swipedRow) {
-              swipedRow.classList.remove('is-swipe-committed');
-              swipedRow.style.removeProperty('--conv-row-swipe-offset');
-              delete swipedRow.dataset.swipeActionLabel;
-            }
+            if (swipedRow) clearRowSwipe(swipedRow);
           }, 300);
+          if (dir < 0) btn.dataset.keepRunning = '1';
           btn.click();
+        } else {
+          clearRowSwipe(currentRow);
         }
+      } else {
+        clearRowSwipe(currentRow);
       }
       active = false; committed = false; decided = false; currentRow = null;
     };
     $list.addEventListener('touchend', end, { passive: false });
     $list.addEventListener('touchcancel', () => {
+      if (currentRow) clearRowSwipe(currentRow);
       active = false; committed = false; decided = false; currentRow = null;
     }, { passive: true });
   }
@@ -42494,6 +42522,9 @@
         const convId = item.dataset.id;
         const sessionId = item.dataset.sessionId;
         const nextArchived = btn.dataset.archived === 'true';
+        // Set for one click by the phone's left "Background" swipe.
+        const keepRunning = nextArchived && btn.dataset.keepRunning === '1';
+        delete btn.dataset.keepRunning;
         // Capture visual order before the selected row disappears. This works
         // across folder/group wrappers instead of assuming direct siblings.
         const nextSelectId = nextArchived && currentConversation === convId
@@ -42528,8 +42559,9 @@
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
             || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
           const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
-          const data = await ccPostJson('/api/conversations/' + convId + '/archive',
-            archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived));
+          const archivePayload = archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived);
+          if (keepRunning) archivePayload.keep_running = true;
+          const data = await ccPostJson('/api/conversations/' + convId + '/archive', archivePayload);
           if (!data.ok) {
             const ghError = data.github && data.github.stderr;
             throw new Error(data.error || ghError || 'archive failed');
