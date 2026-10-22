@@ -17645,6 +17645,8 @@
       if (icon) icon.textContent = _ideasNav ? '\u{1F4A1}' : '</>';
       _codingNavBtn.setAttribute('aria-label', label);
     }
+    const _menuBtn = nav.querySelector('[data-mobile-nav-menu]');
+    if (_menuBtn) _menuBtn.classList.toggle('is-active', activeNavKey === 'jobs' || activeNavKey === 'queues' || activeNavKey === 'ask');
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
@@ -17655,9 +17657,24 @@
   function _wireMobileBottomNav() {
     const nav = document.getElementById('mobileBottomNav');
     if (!nav) return;
+    const menu = nav.querySelector('.mobile-nav-menu');
+    const menuBtn = nav.querySelector('[data-mobile-nav-menu]');
+    const setMenuOpen = (open) => {
+      if (!menu || !menuBtn) return;
+      menu.hidden = !open;
+      menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    document.addEventListener('click', (ev) => {
+      if (menu && !menu.hidden && !nav.contains(ev.target)) setMenuOpen(false);
+    });
     nav.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-mobile-nav-menu]')) {
+        setMenuOpen(!!(menu && menu.hidden));
+        return;
+      }
       const btn = ev.target.closest('[data-mobile-nav]');
       if (!btn) return;
+      setMenuOpen(false);
       const dest = btn.getAttribute('data-mobile-nav');
       // Simple mode: every bottom-nav destination is a SIMPLE screen (the
       // grandma test — nothing within 3 taps of home may be advanced UI).
@@ -22551,93 +22568,47 @@
     const e = String((c && (c.engine || c.source)) || '').toLowerCase();
     return _WA_ENGINE_GLYPH[e] ? e : 'claude';
   }
-  // Session avatars are context, not identity: the background is the repo
-  // (one fixed color per repo path, so a repo always looks the same), the
-  // face is the topic (shared by every session about it), and the corner
-  // badge is the kind of work (the idea ticket's queue when it has one).
-  function _waHash(str) {
-    let h = 2166136261 >>> 0;
-    const t = String(str || '');
-    for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-    return h >>> 0;
-  }
-  const _waRepoBgCache = new Map();
-  function _waRepoBackground(c) {
-    const repo = String((c && (c.folder_path || c.session_cwd || c.slug || c.folder_label)) || '').replace(/\/+$/, '');
-    let bg = _waRepoBgCache.get(repo);
-    if (!bg) {
-      const hue = _waHash(repo) % 360;
-      bg = 'linear-gradient(135deg,hsl(' + hue + ',65%,58%),hsl(' + ((hue + 25) % 360) + ',65%,44%))';
-      _waRepoBgCache.set(repo, bg);
-    }
-    return bg;
-  }
-  // First match wins, specific before generic. The title is tried before the
-  // first message so a renamed session follows its name.
-  const _WA_TOPICS = [
-    [/\b(ci|pytest|tests?|flaky|pre-push|smoke)\b/, '🧪', 'Tests / CI'],
-    [/\b(release|deploy|deployed|ship|shipped|publish|rollout|vercel|homebrew|dmg|sparkle)\b/, '🚀', 'Release / deploy'],
-    [/\b(security|vulnerab\w*|xss|csrf|injection|secret)\b/, '🔒', 'Security'],
-    [/\b(auth|login|log in|sign in|signin|oauth|password|credentials?|api key)\b/, '🔑', 'Sign-in / credentials'],
-    [/\b(stripe|payments?|billing|invoices?|charge|refund|reimburs\w*|fsa|payroll)\b/, '💳', 'Payments'],
-    [/\b(cost|spend|tokens?|usage|budget|pricing|quota)\b/, '💰', 'Cost / usage'],
-    [/\b(slow|perf|performance|latency|cpu|memory|ram|freez\w*|lag)\b/, '⚡', 'Performance'],
-    [/\b(voice|tts|speech|audio|mic|microphone|dictation)\b/, '🎙️', 'Voice'],
-    [/\b(email|gmail|inbox|resend|newsletter)\b/, '✉️', 'Email'],
-    [/\b(sms|twilio|whatsapp|text message|imessage)\b/, '💬', 'Messaging'],
-    [/\b(calendar|schedul\w*|booking|bookings|class|classes|appointment)\b/, '📅', 'Scheduling'],
-    [/\b(evals?|replay|benchmark|grad(e|ing)|scorecard)\b/, '📊', 'Evals'],
-    [/\b(lead|leads|outreach|marketing|seo|growth|campaign)\b/, '📣', 'Growth / outreach'],
-    [/\b(mobile|phone|iphone|ios|android)\b/, '📱', 'Mobile'],
-    [/\b(queue|queues|ticket|tickets|watchtower|wt|worker|workers|drain)\b/, '📋', 'Queues / tickets'],
-    [/\b(supabase|database|db|sql|migration|schema)\b/, '🗄️', 'Database'],
-    [/\b(git|commit|push|merge|branch|rebase|pr|worktree)\b/, '🔀', 'Git'],
-    [/\b(server|restart|vm|infra|ssh|ops|cron|launchd|systemd)\b/, '🛠️', 'Infra / ops'],
-    [/\b(ui|sidebar|tab|tabs|avatar|layout|css|button|screen|page|view)\b/, '🎨', 'UI'],
-    [/\b(docs?|readme|changelog|spec|writeup)\b/, '📝', 'Docs'],
-    [/\b(claude|codex|model|prompt|llm|agent|agents|session|sessions)\b/, '🤖', 'Agents'],
-    [/\b(idea|ideas|brainstorm|what if|design|concept|proposal)\b/, '💡', 'Ideas / design'],
+  // Session avatars are context, not identity: five topic categories, each
+  // one emoji on one color, so a screen holds at most six looks. The title
+  // is tried before the first message so a renamed session follows its
+  // name; the first category that matches wins, most specific first.
+  const _WA_CATEGORIES = [
+    { e: '💰', label: 'Money', bg: ['#3fae6a', '#24804a'],
+      re: /\b(pric\w*|stripe|payments?|billing|bill|invoices?|charge|refund|reimburs\w*|fsa|payroll|cost|spend|tokens?|usage|budget|quota|revenue|\$\d+)/ },
+    { e: '📊', label: 'Data & evals', bg: ['#2fa7b8', '#1f7c8c'],
+      re: /\b(evals?|replay|benchmark|grad(e|ing)|scorecard|analytics|metrics?|report|dashboard|investigat\w*|research|audit|analy[sz]\w*)\b/ },
+    { e: '📣', label: 'Customers & growth', bg: ['#e0894a', '#b9652c'],
+      re: /\b(lead|leads|outreach|marketing|seo|growth|campaign|customers?|clients?|studios?|email|gmail|inbox|sms|twilio|whatsapp|calendar|booking|bookings|classes|onboarding)\b/ },
+    { e: '🎨', label: 'Product & UI', bg: ['#8a6be0', '#6649b8'],
+      re: /\b(ui|ux|sidebar|tabs?|avatars?|layout|css|button|screen|page|view|mobile|phone|iphone|ios|voice|tts|design|feature|menu|rows?)\b/ },
+    { e: '🛠️', label: 'Build & ops', bg: ['#5a7dbf', '#3d5c99'],
+      re: /\b(ci|pytest|tests?|flaky|release|deploy\w*|ship|publish|git|github|commit|push|merge|branch|pr|worktree|server|restart|vm|infra|ssh|ops|cron|perf|slow|cpu|memory|database|db|supabase|sql|migration|queues?|tickets?|wt|watchtower|workers?|agents?|claude|codex|model|prompt|auth|login|security|bug|fix|crash)\b/ },
   ];
-  const _WA_TOPIC_DEFAULT = ['💭', 'General'];
-  function _waTopicIn(text) {
+  const _WA_CATEGORY_DEFAULT = { e: '💭', label: 'General', bg: ['#6b7280', '#4b5260'] };
+  function _waCategoryIn(text) {
     const t = String(text || '').toLowerCase();
     if (!t) return null;
-    for (const [re, e, label] of _WA_TOPICS) if (re.test(t)) return [e, label];
+    for (const cat of _WA_CATEGORIES) if (cat.re.test(t)) return cat;
     return null;
   }
   // Rendered once per row per sidebar pass, so memoize on what it reads.
-  const _waTopicCache = new Map();
-  function _waTopic(c, title) {
+  const _waCategoryCache = new Map();
+  function _waCategory(c, title) {
     const first = String((c && c.first_message) || '').slice(0, 300);
     const key = title + '\u0000' + first;
-    let hit = _waTopicCache.get(key);
+    let hit = _waCategoryCache.get(key);
     if (!hit) {
-      hit = _waTopicIn(title) || _waTopicIn(first) || _WA_TOPIC_DEFAULT;
-      if (_waTopicCache.size > 5000) _waTopicCache.clear();
-      _waTopicCache.set(key, hit);
+      hit = _waCategoryIn(title) || _waCategoryIn(first) || _WA_CATEGORY_DEFAULT;
+      if (_waCategoryCache.size > 5000) _waCategoryCache.clear();
+      _waCategoryCache.set(key, hit);
     }
     return hit;
   }
-  // Kind of work: the idea ticket's queue when there is one, else a guess
-  // from the name and first message.
-  function _waKind(c, title) {
-    const q = c && c.idea_ticket && ideaTicketsOn() ? c.idea_ticket.queue : '';
-    if (q === 'SMALL-BUGS') return { k: 'bug', e: '🐞', label: 'Small bug' };
-    if (q === 'IDEAS') return { k: 'idea', e: '💡', label: 'Idea' };
-    const t = (String(title || '') + ' ' + String((c && c.first_message) || '').slice(0, 300)).toLowerCase();
-    if (/\b(fix|bug|broken|crash|error|fails?|failing|regression|stuck|hang|wrong)\b/.test(t)) return { k: 'bug', e: '🐞', label: 'Bug fix' };
-    if (/\b(why|investigate|investigation|debug|diagnos|look into|check|audit|research|analy[sz]e)\b/.test(t)) return { k: 'look', e: '🔍', label: 'Investigation' };
-    if (/\b(idea|ideas|brainstorm|what if|should we|design|explore|concept|plan|proposal|think)\b/.test(t)) return { k: 'idea', e: '💡', label: 'Idea / design' };
-    if (/\b(add|build|implement|create|new|feature|support|improve|make)\b/.test(t)) return { k: 'feat', e: '✨', label: 'Feature' };
-    return null;
-  }
   function _waAvatarHtml(c, title) {
-    const [face, topic] = _waTopic(c, title);
-    const kind = _waKind(c, title);
+    const cat = _waCategory(c, title);
     const repo = String((c && c.folder_label) || '');
-    return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + topic) + '" style="background:' + _waRepoBackground(c) + '">'
-      + '<span class="wa-face">' + face + '</span>'
-      + (kind ? '<span class="wa-kind" title="' + escapeAttr(kind.label) + '">' + kind.e + '</span>' : '')
+    return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + cat.label) + '" style="background:linear-gradient(135deg,' + cat.bg[0] + ',' + cat.bg[1] + ')">'
+      + '<span class="wa-face">' + cat.e + '</span>'
       + '</span>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with

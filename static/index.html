@@ -159,7 +159,8 @@
 <body class="voice-call-btn-off">
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
        Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
-       Advanced (data-nav-chrome="advanced") is Coding / Workers / Queues / Ask.
+       Advanced (data-nav-chrome="advanced") is ☰ (Jobs / Queues / Ask) /
+       Coding / Workers.
        Hidden everywhere else via inline style. -->
   <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
     <button type="button" class="mobile-nav-btn" data-mobile-nav="home" data-nav-chrome="simple" aria-current="page" aria-label="Home">
@@ -178,6 +179,11 @@
       <span class="mobile-nav-icon" aria-hidden="true">&#8943;</span>
       <span class="mobile-nav-label mobile-sr-only">Settings</span>
     </button>
+    <!-- Advanced: ☰ at bottom left opens the less-used destinations. -->
+    <button type="button" class="mobile-nav-btn mobile-nav-menu-btn" data-mobile-nav-menu data-nav-chrome="advanced" aria-label="More" aria-haspopup="menu" aria-expanded="false">
+      <span class="mobile-nav-icon" aria-hidden="true">&#9776;</span>
+      <span class="mobile-nav-label">More</span>
+    </button>
     <button type="button" class="mobile-nav-btn" data-mobile-nav="coding" data-nav-chrome="advanced" aria-label="Coding">
       <span class="mobile-nav-icon" aria-hidden="true">&lt;/&gt;</span>
       <span class="mobile-nav-label">Coding</span>
@@ -190,18 +196,20 @@
       <span class="mobile-nav-icon" aria-hidden="true">&#9881;</span>
       <span class="mobile-nav-label">Workers</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="jobs" data-nav-chrome="advanced" aria-label="Jobs">
+    <div class="mobile-nav-menu" role="menu" hidden>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="jobs" data-nav-chrome="advanced" role="menuitem" aria-label="Jobs">
       <span class="mobile-nav-icon" aria-hidden="true">&#9201;</span>
       <span class="mobile-nav-label">Jobs</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="queues" data-nav-chrome="advanced" aria-label="Queues">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="queues" data-nav-chrome="advanced" role="menuitem" aria-label="Queues">
       <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
       <span class="mobile-nav-label">Queues</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="ask" data-nav-chrome="advanced" aria-label="Ask">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="ask" data-nav-chrome="advanced" role="menuitem" aria-label="Ask">
       <span class="mobile-nav-icon" aria-hidden="true">✦</span>
       <span class="mobile-nav-label">Ask</span>
     </button>
+    </div>
   </nav>
   <!-- Core-app frame: Queues (q2) overlays the dashboard without unloading
        the session list. src is set on first open. Hidden until then.
