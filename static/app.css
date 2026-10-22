@@ -8673,62 +8673,74 @@
     .is-working .session-activity-dot { animation: none; }
   }
   .conv-session-icon.claude,
-  .conv-pane-cat-icon.claude {
+  .conv-pane-cat-icon.claude,
+  .conv-avatar-model.claude {
     color: #f09a78;
     --icon-shadow-color: rgba(240, 154, 120, 0.45);
   }
   .conv-session-icon.codex,
-  .conv-pane-cat-icon.codex {
+  .conv-pane-cat-icon.codex,
+  .conv-avatar-model.codex {
     color: #3dd68c;
     --icon-shadow-color: rgba(61, 214, 140, 0.45);
   }
   .conv-session-icon.gemini,
-  .conv-pane-cat-icon.gemini {
+  .conv-pane-cat-icon.gemini,
+  .conv-avatar-model.gemini {
     color: #c084fc;
     --icon-shadow-color: rgba(192, 132, 252, 0.45);
   }
   .conv-session-icon.cursor,
-  .conv-pane-cat-icon.cursor {
+  .conv-pane-cat-icon.cursor,
+  .conv-avatar-model.cursor {
     color: #f08a6b;
     --icon-shadow-color: rgba(226, 104, 64, 0.45);
   }
   .conv-session-icon.antigravity,
-  .conv-pane-cat-icon.antigravity {
+  .conv-pane-cat-icon.antigravity,
+  .conv-avatar-model.antigravity {
     color: #f2cc60;
     --icon-shadow-color: rgba(242, 204, 96, 0.42);
   }
   .conv-session-icon.hermes,
-  .conv-pane-cat-icon.hermes {
+  .conv-pane-cat-icon.hermes,
+  .conv-avatar-model.hermes {
     color: #2dd4bf;
     --icon-shadow-color: rgba(45, 212, 191, 0.42);
   }
   .conv-session-icon.kimi,
-  .conv-pane-cat-icon.kimi {
+  .conv-pane-cat-icon.kimi,
+  .conv-avatar-model.kimi {
     color: #7dd3fc;
     --icon-shadow-color: rgba(125, 211, 252, 0.42);
   }
   .conv-session-icon.copilot,
-  .conv-pane-cat-icon.copilot {
+  .conv-pane-cat-icon.copilot,
+  .conv-avatar-model.copilot {
     color: #56d364;
     --icon-shadow-color: rgba(86, 211, 100, 0.42);
   }
   .conv-session-icon.grok,
-  .conv-pane-cat-icon.grok {
+  .conv-pane-cat-icon.grok,
+  .conv-avatar-model.grok {
     color: #f472b6;
     --icon-shadow-color: rgba(244, 114, 182, 0.42);
   }
   .conv-session-icon.copilotchat,
-  .conv-pane-cat-icon.copilotchat {
+  .conv-pane-cat-icon.copilotchat,
+  .conv-avatar-model.copilotchat {
     color: #818cf8;
     --icon-shadow-color: rgba(129, 140, 248, 0.42);
   }
   .conv-session-icon.devin,
-  .conv-pane-cat-icon.devin {
+  .conv-pane-cat-icon.devin,
+  .conv-avatar-model.devin {
     color: #8b5cf6;
     --icon-shadow-color: rgba(139, 92, 246, 0.42);
   }
   .conv-session-icon.opencode,
-  .conv-pane-cat-icon.opencode {
+  .conv-pane-cat-icon.opencode,
+  .conv-avatar-model.opencode {
     color: #fb923c;
     --icon-shadow-color: rgba(251, 146, 60, 0.42);
   }
@@ -30374,10 +30386,12 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   font: inherit;
 }
 .conv-item:has(.conv-main-row > .conv-idea-avatar) {
-  --conv-content-left: calc(var(--conv-icon-left) + 62px);
-  min-height: 64px;
+  --conv-content-left: calc(var(--conv-icon-left) + 80px);
+  min-height: 70px;
 }
 .conv-item .conv-session-icon.conv-idea-avatar {
+  top: 6px;
+  transform: none;
   display: inline-flex;
   width: 42px;
   height: 42px;
@@ -30392,23 +30406,27 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-avatar-number { font: 700 18px/1 system-ui, sans-serif; }
 .conv-avatar-model {
   position: absolute;
-  bottom: -7px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: -12px;
+  right: -28px;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  max-width: 62px;
+  gap: 4px;
+  max-width: 78px;
+  box-sizing: border-box;
   padding: 2px 4px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, currentColor 45%, var(--border));
   border-radius: 5px;
-  background: var(--bg);
+  background: color-mix(in srgb, currentColor 12%, var(--bg));
   color: var(--text);
   font: 9px/1.2 system-ui, sans-serif;
   white-space: nowrap;
 }
-.conv-avatar-model svg { width: 10px; height: 10px; flex: 0 0 10px; }
-.conv-avatar-model > span { overflow: hidden; text-overflow: ellipsis; }
+.conv-avatar-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.conv-avatar-cost { flex: 0 0 auto; font-weight: 700; }
+@media (max-width: 1200px) {
+  #convList .conv-item > .wa-row:has(.conv-idea-avatar) { gap: 30px; }
+  .wa-av.conv-idea-avatar { align-self: flex-start; margin-top: 8px; }
+}
 .conv-idea-avatar:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .conv-family-details { flex: 0 0 auto; min-width: 0; font-size: 11px; color: var(--text-muted); }
 .conv-family-details > summary { cursor: pointer; white-space: nowrap; padding: 3px 5px; border: 1px solid var(--border); border-radius: 4px; }

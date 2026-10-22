@@ -1,0 +1,1 @@
+- Idea avatars sit higher with an engine-colored badge at the lower right showing only the model name and cost tier.
