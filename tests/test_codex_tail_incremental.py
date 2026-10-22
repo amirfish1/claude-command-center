@@ -77,6 +77,7 @@ def test_current_message_format_supplies_sidebar_metadata(tmp_path):
                                              "text": text}]}})
     p.write_text(_session_meta()
                  + message("user", "# AGENTS.md instructions for /example/project\nLocal rules")
+                 + message("user", "# AGENTS.md instructions\nLocal rules")
                  + message("user", "<environment_context>Local context</environment_context>")
                  + message("user", "Check sidebar metadata"))
     meta = server._extract_codex_tail_meta(p)

@@ -11184,7 +11184,7 @@ def _extract_codex_tail_meta(path):
                         if isinstance(part, dict) and isinstance(part.get("text"), str)
                     ).strip()
                     if role == "user":
-                        if text.startswith(("# AGENTS.md instructions for ", "<environment_context>")):
+                        if text.startswith(("# AGENTS.md instructions", "<environment_context>")):
                             continue
                         text = _core._strip_ccc_session_state_instruction(text).strip()
                         if text:
