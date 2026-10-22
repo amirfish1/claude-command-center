@@ -149,3 +149,23 @@ test('effective-parent lookups index origin markers once per snapshot, not once 
   // One index build (n reads) plus at most one self-row read per call.
   assert.ok(reads <= n + 4 * n + 3 * 2, `first_message read ${reads} times for ${n} rows across 4 passes`);
 });
+
+test('continued topics strip stacked legacy labels and inherit plain parent titles', () => {
+  const ctx = { LEADING_PATH_OR_URL_RE: /(?!)/, LEADING_CCC_PASTED_IMAGE_PATH_RE: /(?!)/ };
+  vm.createContext(ctx);
+  vm.runInContext(
+    extractFunction('stripLeadingPathOrUrl')
+      + extractFunction('capitalizeSessionTitleStart')
+      + extractFunction('sidebarRowDisplayTitle')
+      + extractFunction('continuationFallbackTitle')
+      + '; this.display = sidebarRowDisplayTitle; this.fallback = continuationFallbackTitle;',
+    ctx,
+  );
+  assert.equal(ctx.display('⤴︎ Cont’d: ⤴ Add letters to options'), 'Add letters to options');
+  assert.equal(ctx.display("↪ Continue cont'd: Topic"), 'Topic');
+  assert.equal(ctx.display('Continue improving search'), 'Improving search');
+  assert.equal(ctx.display('Working with continued fractions'), 'Working with continued fractions');
+  assert.equal(ctx.fallback('⤴ Cont’d: Topic', 'parent-session'), 'Topic');
+  assert.equal(ctx.fallback('', 'parent-session'), 'parent-s');
+  assert.equal(app.includes("title = '⤴︎ ' + title"), false);
+});

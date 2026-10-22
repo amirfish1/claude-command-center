@@ -2717,7 +2717,7 @@
       // ANY emoji in its range (🧵 included), and the replace beheads the emoji
       // leaving a lone low surrogate that later kills the spawn with
       // "surrogates not allowed" (OPS-935).
-      .replace(/^\s*[✨🪄›]\s*/u, '')
+      .replace(/^(?:\s*(?:[✨🪄›⤴↱↪↗↑][\uFE0E\uFE0F]?\s*|cont[’']d\s*:\s*|continued\s*:\s*|continue\s+))+/iu, '')
       .replace(/-/g, ' ');
     return capitalizeSessionTitleStart(cleanedTitle);
   }
@@ -4096,7 +4096,7 @@
   function continuationFallbackTitle(parentTitle, parentId) {
     const parent = String(parentTitle || '').trim();
     const fallback = String(parentId || '').trim().slice(0, 8) || 'earlier session';
-    return 'cont\u2019d: ' + (parent || fallback);
+    return parent ? sidebarRowDisplayTitle(parent) : fallback;
   }
   // The sidebar's title-priority chain, lifted out of _renderRow so a
   // continuation leg can resolve its parent's title through the exact same
@@ -36473,19 +36473,15 @@
       // surrogate (OPS-935).
       if (workersLaneActive()) title = title.replace(/^🧵\s*/u, '');
       // Continuation rows (F2 "Continue in a new session" / auto-resume):
-      // the ⤴ badge says "this carries on an earlier session", so legacy
-      // spawn names that still carry a literal "Continue " prefix get it
-      // stripped — the word is noise next to the glyph.
+      // Show the topic directly; continuation history lives in Earlier.
+      // Legacy spawn names may still contain continuation prefixes.
       const _continuationParentId = continuationParentId(c);
-      let _continuationFallbackTitle = false;
       if (_continuationParentId) {
-        title = title.replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '');
         // When CCC's own auto-resume preamble survived auto-titling, the row is
         // named after the handoff instead of the work. The leg's honest name is
         // whatever its parent was doing, so borrow the parent's title (resolved
-        // through the same chain) and let the ⤴ badge carry the "continues"
-        // meaning. If the parent is boilerplate too, leave the title alone
-        // rather than walk the chain — one hop is enough in practice.
+        // through the same chain). If the parent is boilerplate too, leave
+        // the title alone rather than walk the chain.
         if (isContinuationBoilerplateTitle(title)) {
           const _parentRow = _continuationRowForSid(_continuationParentId);
           const _parentTitle = _parentRow
@@ -36495,7 +36491,6 @@
             _parentTitle && !isContinuationBoilerplateTitle(_parentTitle) ? _parentTitle : '',
             _continuationParentId,
           );
-          _continuationFallbackTitle = true;
         }
       }
       // AI-generated titles (Claude/Codex/Antigravity) show with no glyph now
@@ -36509,7 +36504,6 @@
       // you actually scan for machine-named rows, and hiding it there would
       // make the marker invisible in the view that needs it most.
       else if (c.auto_titled && !titleSource) title = '🪄 ' + title;
-      if (_continuationParentId && !_continuationFallbackTitle) title = '⤴︎ ' + title;
       // Auto-titling only fires from the session's Stop hook (after the
       // first assistant turn ends) — a still-live session showing its raw
       // first message hasn't reached that point yet, not stuck. Flagged via
