@@ -30365,6 +30365,59 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
    layouts every other list uses. */
 .conv-meta-col { display: contents; }
 
+/* Idea identity stays in the avatar on both desktop and phone rows. */
+.conv-idea-avatar {
+  border: 0;
+  color: #fff;
+  background: linear-gradient(135deg, hsl(var(--avatar-hue), 52%, 48%), hsl(var(--avatar-hue), 54%, 30%));
+  cursor: pointer;
+  font: inherit;
+}
+.conv-item:has(.conv-main-row > .conv-idea-avatar) {
+  --conv-content-left: calc(var(--conv-icon-left) + 62px);
+  min-height: 64px;
+}
+.conv-item .conv-session-icon.conv-idea-avatar {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  opacity: 1;
+  z-index: 3;
+}
+.conv-avatar-number { font: 700 18px/1 system-ui, sans-serif; }
+.conv-avatar-model {
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 62px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: 9px/1.2 system-ui, sans-serif;
+  white-space: nowrap;
+}
+.conv-avatar-model svg { width: 10px; height: 10px; flex: 0 0 10px; }
+.conv-avatar-model > span { overflow: hidden; text-overflow: ellipsis; }
+.conv-idea-avatar:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.conv-family-details { flex: 0 0 auto; min-width: 0; font-size: 11px; color: var(--text-muted); }
+.conv-family-details > summary { cursor: pointer; white-space: nowrap; padding: 3px 5px; border: 1px solid var(--border); border-radius: 4px; }
+.conv-family-details[open] { flex-basis: 100%; }
+.conv-main-row:has(.conv-family-details[open]) { flex-wrap: wrap; }
+.conv-family-list { display: grid; gap: 3px; max-height: 180px; overflow: auto; margin: 4px 0; }
+.conv-family-link { text-align: start; white-space: normal; padding: 5px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); cursor: pointer; font: inherit; }
+.conv-family-link:hover { border-color: var(--accent); }
+
 /* Uniform-column hoist. When every worker in view shares an engine and/or a
    cost tier, that per-row glyph is pure repetition: the strip above the list
    states the shared value once and these rules reclaim the column it used to

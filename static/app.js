@@ -22882,11 +22882,30 @@
     return hit;
   }
   function _waAvatarHtml(c, title) {
+    const ideaAvatar = _ideaAvatarHtml(c, true);
+    if (ideaAvatar) return ideaAvatar;
     const cat = _waCategory(c, title);
     const repo = String((c && c.folder_label) || '');
     return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + cat.label) + '" style="background:linear-gradient(135deg,' + cat.bg[0] + ',' + cat.bg[1] + ')">'
       + '<span class="wa-face">' + cat.e + '</span>'
       + '</span>';
+  }
+  function _ideaAvatarHtml(c, mobile = false) {
+    const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
+    const match = ref && ref.match(/^IDEAS-(\d+)$/);
+    if (!match) return '';
+    const repo = String(c.folder_label || c.folder_label_chip || c.folder_path || c.session_cwd || '');
+    const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
+    const model = formatModelNameForBadge(sessionIconEngine(c), c.model || '');
+    const presentation = sessionIconPresentation(c, false);
+    return '<button type="button" class="conv-idea-avatar' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
+      + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
+      + ' style="--avatar-hue:' + (hue | 0) + '"'
+      + ' title="' + escapeAttr(ref + (repo ? ' · ' + repo : '') + ' · ' + presentation.title) + '"'
+      + ' aria-label="Open idea ' + escapeAttr(match[1]) + '">'
+      + '<span class="conv-avatar-number">' + escapeHtml(match[1]) + '</span>'
+      + '<span class="conv-avatar-model" title="' + escapeAttr(presentation.title) + '">'
+      + getEngineSvg(presentation.engine) + '<span>' + escapeHtml(model) + '</span></span></button>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with
   // the full reply (per-repo /api/conversations) instead of the preview.
@@ -28766,6 +28785,8 @@
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
     '.conv-chain-badge[data-parent-sid]',
+    '.conv-family-details',
+    '.conv-family-link[data-parent-sid]',
     '.qtag-chip',
   ].join(',');
   let _mobileRowTap = null;
@@ -36182,70 +36203,48 @@
     const _sessionProvenanceParentId = (row) => String(
       (row && (row.parent_session_id || row.hermes_parent_session_id || row.hermes_continued_from)) || ''
     ).trim();
-    // Reverse index of the chip above: how many rows point AT this session as
-    // their parent. Lets a root/orchestrator row carry its own "N lanes"
-    // badge instead of that story only being visible by opening each child
-    // and reading its "Spawned by" chip. Built from whatever rows are loaded
+    // Index child sessions once so each row can list its own lanes and those
+    // of its continuation ancestors without rescanning every session.
+    // Built from whatever rows are loaded
     // in this render (active + archived), so an orchestrator with children
     // outside the current archive window will undercount until that window
     // is widened — same limitation the chip above already has.
-    const _sessionChildCountById = new Map();
+    const _sessionChildrenById = new Map();
     _sessionProvenanceById.forEach((row) => {
       const pid = _sessionProvenanceParentId(row);
       // A continuation is the same conversation carried on, not a lane the
       // origin spawned — otherwise every continued session shows "1 lane".
       if (!pid || continuationParentId(row) === pid) return;
-      _sessionChildCountById.set(pid, (_sessionChildCountById.get(pid) || 0) + 1);
+      if (!_sessionChildrenById.has(pid)) _sessionChildrenById.set(pid, []);
+      _sessionChildrenById.get(pid).push(row);
     });
-    // Lanes spawned by this session plus by the sessions it was continued
-    // from: the chain reads as one unit, so its head carries the whole count.
-    const _sessionLaneCountWithAncestors = (c) => {
-      let total = 0;
-      let cur = c;
-      const seen = new Set();
-      while (cur) {
-        const id = String((cur.session_id || cur.id) || '').trim();
-        if (!id || seen.has(id)) break;
-        seen.add(id);
-        total += _sessionChildCountById.get(id) || 0;
-        const pid = continuationParentId(cur);
-        cur = pid ? _sessionProvenanceById.get(pid) : null;
+    const _openSessionFamilies = new Set([...$convList.querySelectorAll('.conv-family-details[open]')]
+      .map(el => el.getAttribute('data-family-key')));
+    const _sessionFamilyDetailsHtml = (label, rows, key) => rows.length
+      ? '<details class="conv-family-details" data-family-key="' + escapeAttr(key) + '"'
+        + (_openSessionFamilies.has(key) ? ' open' : '') + '><summary>' + escapeHtml(label) + '</summary>'
+        + '<div class="conv-family-list">' + rows.map(row => {
+          const sid = row.session_id || row.id;
+          return '<button type="button" class="conv-family-link" data-parent-sid="' + escapeAttr(sid) + '">'
+            + escapeHtml(_sessionProvenanceTitle(row, sid)) + '</button>';
+        }).join('') + '</div></details>'
+      : '';
+    const _sessionEarlierRows = (c) => {
+      const rows = [], seen = new Set([String(c.session_id || c.id)]);
+      let pid = continuationParentId(c);
+      while (pid && !seen.has(pid)) {
+        seen.add(pid);
+        const row = _sessionProvenanceById.get(pid) || { id: pid };
+        rows.push(row);
+        pid = continuationParentId(row);
       }
-      return total;
-    };
-    // How many sessions this continuation chain is made of. A chain renders as
-    // ONE row (the successor folds its origin in), so without this the row says
-    // nothing about the four earlier legs standing behind it -- the ⤴ from:
-    // chip only ever names the immediate predecessor.
-    const _continuationLegCount = (c) => {
-      let legs = 0;
-      let cur = c;
-      const seen = new Set();
-      while (cur) {
-        const id = String((cur.session_id || cur.id) || '').trim();
-        if (!id || seen.has(id)) break;
-        seen.add(id);
-        legs++;
-        const pid = continuationParentId(cur);
-        cur = pid ? _sessionProvenanceById.get(pid) : null;
-      }
-      return legs;
-    };
-    const _continuationChainBadgeHtml = (c) => {
-      const legs = _continuationLegCount(c);
-      if (legs < 2) return '';
-      // Also the way back to the folded legs: click opens the previous one.
-      const prevId = continuationParentId(c);
-      return '<span class="conv-chain-badge" role="button" tabindex="0" data-parent-sid="' + escapeAttr(prevId) + '" title="' + escapeAttr(
-          'Continued from ' + (legs - 1) + ' earlier session' + (legs === 2 ? '' : 's')
-          + ' (each picked up where the last left off). Click to open the previous one.')
-        + '">\u21b1 ' + (legs - 1) + ' earlier</span>';
+      return rows;
     };
     // suppressSpawnChip: rows already nested inside their parent's cluster
     // (opts.currentChildDepth > 0) don't need the ↳ chip — the parent row is
     // right above them and the chip only buys a second meta line on
     // hover/select. Continuations get no chip: the "N earlier" chain badge
-    // names them and opens the previous leg.
+    // lists the earlier sessions and opens the chosen one.
     const _sessionProvenanceChipHtml = (c, suppressSpawnChip) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
       // continuationParentId also reads the first_message origin marker, so a
@@ -36257,7 +36256,7 @@
       let title = '';
       let className = '';
       let chipAttrs = '';
-      // A continuation's chain already shows as the "N legs" badge; the
+      // A continuation's chain already shows in the Earlier list; the
       // "⤴ from:" chip repeated it on the meta line.
       if (contId) return '';
       if (parentId) {
@@ -36624,11 +36623,12 @@
             + '</svg>';
       }
 
-      const sessionIconHtml = iconType
+      const ideaAvatarHtml = _ideaAvatarHtml(c);
+      const sessionIconHtml = ideaAvatarHtml || (iconType
         ? '<span class="conv-session-icon ' + iconType + ' is-not-working" title="' + escapeAttr(iconTitle) + '" aria-hidden="true">'
             + svgMarkup
             + '</span>'
-        : sessionEngineIconHtml(c, { context: 'sidebar' });
+        : sessionEngineIconHtml(c, { context: 'sidebar' }));
       // Row time should reflect ANY activity on the session: user UI
       // action (`last_interacted`), CCC inject (touched optimistically
       // via markSessionSending), or agent JSONL writes (`modified` =
@@ -37102,11 +37102,11 @@
       // plus active/attention state, so both would be redundant.
       // The chain head carries the lanes its continuation ancestors spawned
       // (the ancestors themselves fold into it, see _continuationFoldMaps).
-      const _orchChildCount = subagentClusterMeta ? 0 : _sessionLaneCountWithAncestors(c);
-      const orchChildBadgeHtml = _orchChildCount > 0
-        ? '<span class="conv-orch-badge" title="This session started ' + _orchChildCount + ' other session' + (_orchChildCount === 1 ? '' : 's') + ' to work in parallel">'
-          + '\u21b3 ' + _orchChildCount + ' spawned</span>'
-        : '';
+      const _earlierRows = _sessionEarlierRows(c);
+      const _familyIds = new Set([String(c.session_id || c.id), ..._earlierRows.map(row => String(row.session_id || row.id))]);
+      const _childRows = subagentClusterMeta ? [] : [..._familyIds].flatMap(id => _sessionChildrenById.get(id) || []);
+      const orchChildBadgeHtml = _sessionFamilyDetailsHtml('\u21b3 ' + _childRows.length + (_childRows.length === 1 ? ' lane' : ' lanes'), _childRows, c.id + ':lanes');
+      const earlierDetailsHtml = _sessionFamilyDetailsHtml('\u21b1 ' + _earlierRows.length + ' earlier', _earlierRows, c.id + ':earlier');
 
       // Pin indicator — shown when the row's repo bucket has been
       // overridden by the user. Click unpins via /api/repo/pin.
@@ -37277,8 +37277,8 @@
       const _hmObj = flowObjectForConversation(c);
       const _hmObjTitle = _hmObj ? String(_hmObj.title || '').trim() : '';
       const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;
-      const _hmFolderChip = (folderChipHtml && _hmObjTitle && c.folder_label_chip
-        && _hmObjTitle.toLowerCase() === String(c.folder_label_chip).toLowerCase())
+      const _hmFolderChip = (ideaAvatarHtml || (folderChipHtml && _hmObjTitle && c.folder_label_chip
+        && _hmObjTitle.toLowerCase() === String(c.folder_label_chip).toLowerCase()))
         ? '' : folderChipHtml;
       // Brief disclosure chevron — only for rows that have a did brief.
       // _briefExpandedRows is loaded once per render from localStorage.
@@ -37494,7 +37494,7 @@
         const _mStatus = deriveMobileRowStatus(c, _isAgentRunning, _isWaitingForUser, _hasStaleToolCall, _knownActivityTool);
         mobileStatusHtml = mobileCardStatusLineHtml(_mStatus);
         const _detailInner = rowMetaHtml + hoverMetaRowHtml
-          + historyBadgeHtml + historyChainBadgeHtml + repoBadgeHtml + orchChildBadgeHtml + pctBadgeHtml + qcBadgeHtml
+          + historyBadgeHtml + historyChainBadgeHtml + repoBadgeHtml + earlierDetailsHtml + subagentClusterDisclosureHtml + orchChildBadgeHtml + pctBadgeHtml + qcBadgeHtml
           + (opts.evergreenAgent ? '' : evergreenGoalHtml)
           + (goalIconOnly ? goalIconHtml : '');
         if (_detailInner) {
@@ -37534,9 +37534,9 @@
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
         // Claude is the norm; the engine mark only flags the exceptions.
-        +     (_waEngine === 'claude' ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
-        // Idea-ticket rows lead the preview with their IDEAS-N chip (tap opens it).
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + ideaTicketChipHtml(c) + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
+        // Numbered idea avatars already open the ticket.
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
         + '</div>';
       return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
@@ -37569,7 +37569,7 @@
             // occupy a column together; display:contents makes that wrapper
             // invisible to every other view's flex layout.
             + '<span class="conv-meta-col">'
-            + _continuationChainBadgeHtml(c)
+            + earlierDetailsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
             + (goalIconOnly && !_ideaRowRef ? goalIconHtml : '')
@@ -42306,7 +42306,7 @@
     if (!$convList._originChipWired) {
       $convList._originChipWired = true;
       $convList.addEventListener('click', (ev) => {
-        const chip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-parent-sid], .conv-chain-badge[data-parent-sid], .ccc-worker-origin[data-parent-sid]');
+        const chip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-parent-sid], .conv-chain-badge[data-parent-sid], .conv-family-link[data-parent-sid], .ccc-worker-origin[data-parent-sid]');
         if (!chip) return;
         ev.stopPropagation();
         ev.preventDefault();
@@ -71930,7 +71930,7 @@
   function _ideaRowLine(c) {
     const ref = c.idea_ticket.ref;
     const others = _uxFixesWorkerTicketsForRow(c).some(t => t && t.ref !== ref);
-    return '<div class="conv-idea-line">' + ideaTicketChipHtml(c) + '</div>'
+    return (_ideaAvatarHtml(c) ? '' : '<div class="conv-idea-line">' + ideaTicketChipHtml(c) + '</div>')
       + (others ? _uxFixesWorkerHistoryHtml(c) : '');
   }
 

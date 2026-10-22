@@ -86,11 +86,11 @@ test('the successor is the effective parent of the session it continued from', (
   assert.equal(ctx.eff('successor-sess-01', 'origin-session-01'), '');
 });
 
-test('continuations show no ⤴ from: chip; the "N earlier" chain badge opens the previous leg', () => {
+test('continuations replace the from chip with an expandable earlier-session list', () => {
   assert.equal(css.includes('.conv-session-origin-chip.is-successor'), false);
   assert.match(app, /if \(contId\) return '';/);
-  assert.match(app, /class="conv-chain-badge" role="button" tabindex="0" data-parent-sid="/);
-  assert.match(app, /'\.conv-chain-badge\[data-parent-sid\]'/);
+  assert.equal(app.includes('const earlierDetailsHtml = _sessionFamilyDetailsHtml('), true);
+  assert.equal(app.includes("'.conv-family-link[data-parent-sid]'"), true);
 });
 
 test('hovering an unselected row adds no meta overlay (the row is one click target)', () => {
@@ -105,7 +105,7 @@ test('the selected-row title no longer carries ⤴ from: chips', () => {
 
 test('a continuation is not counted as a lane of its origin; the head carries the chain lanes', () => {
   assert.match(app, /if \(!pid \|\| continuationParentId\(row\) === pid\) return;/);
-  assert.match(app, /subagentClusterMeta \? 0 : _sessionLaneCountWithAncestors\(c\)/);
+  assert.equal(app.includes('subagentClusterMeta ? [] : [..._familyIds].flatMap(id => _sessionChildrenById.get(id) || [])'), true);
 });
 
 test('effective-parent lookups index origin markers once per snapshot, not once per row', () => {
