@@ -37274,8 +37274,13 @@
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
         const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
           + (_hasNext ? 'Next step: ' + _next : '');
+        // Status | Next step as two divided cells, so a stack of rows reads
+        // like a table. Status comes from the row's existing live signals.
+        const _outStatus = _needsYouRow ? ['needs-you', 'Needs you']
+          : (_isWorkingRow ? ['working', 'Working'] : ['done', 'Done']);
         outcomeHtml = _hasNext
           ? '<div class="conv-outcome is-next-step" title="' + escapeAttr(_outTip) + '">'
+            + '<span class="conv-outcome-status is-' + _outStatus[0] + '">' + _outStatus[1] + '</span>'
             + '<span class="conv-outcome-step">' + escapeHtml(_next) + '</span>'
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'

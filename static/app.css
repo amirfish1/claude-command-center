@@ -8197,8 +8197,23 @@
   .conv-item .conv-outcome.is-next-step {
     border-left-color: rgba(245,158,11,0.5);
     background: rgba(245,158,11,0.07);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    padding: 0;
   }
+  .conv-item .conv-outcome-status {
+    padding: 8px 10px;
+    border-right: 1px solid rgba(139,148,158,0.3);
+    align-self: stretch;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; white-space: nowrap;
+  }
+  .conv-item .conv-outcome-status.is-done { color: var(--green, #3fb950); }
+  .conv-item .conv-outcome-status.is-working { color: var(--accent); }
+  .conv-item .conv-outcome-status.is-needs-you { color: var(--red); }
   .conv-item .conv-outcome-step {
+    margin: 8px 10px;
     color: var(--text); opacity: 0.96;
     display: -webkit-box;
     -webkit-line-clamp: 3;
