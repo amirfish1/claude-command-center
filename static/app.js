@@ -28618,6 +28618,7 @@
     '[data-role="idea-ticket"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
+    '.qtag-chip',
   ].join(',');
   let _mobileRowTap = null;
   let _lastMobileRowOpenId = '';
@@ -37279,7 +37280,7 @@
         const _outStatus = _needsYouRow ? ['needs-you', 'Needs you']
           : (_isWorkingRow ? ['working', 'Working'] : ['done', 'Done']);
         outcomeHtml = _hasNext
-          ? '<div class="conv-outcome is-next-step" title="' + escapeAttr(_outTip) + '">'
+          ? '<div class="conv-outcome is-next-step is-inline" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-status is-' + _outStatus[0] + '">' + _outStatus[1] + '</span>'
             + '<span class="conv-outcome-step">' + escapeHtml(_next) + '</span>'
             + '</div>'
@@ -37287,6 +37288,7 @@
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
             + '</div>';
       }
+      const _outcomeInline = outcomeHtml.indexOf(' is-inline"') !== -1;
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
           + (_summaryState.did ? '<div><strong>Did:</strong> ' + escapeHtml(_summaryState.did) + '</div>' : '')
@@ -37358,7 +37360,7 @@
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
         + '<div class="conv-title-row">'
-            + '<div class="conv-main-row">'
+            + '<div class="conv-main-row' + (_outcomeInline ? ' has-inline-step' : '') + '">'
             + sessionIconHtml
             + _nyaChevronHtml
             + needsYouHtml
@@ -37370,6 +37372,9 @@
             // ticket chip moves to the line below (see _ideaRowLine).
             + (_ideaRowRef ? '' : ideaTicketChipHtml(c))
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            // A next step takes the space right of the title; CSS wraps the
+            // badges after the break onto a second line whenever it shows.
+            + (_outcomeInline ? outcomeHtml + '<span class="conv-row-break" aria-hidden="true"></span>' : '')
             // .conv-meta-col is display:contents everywhere except the Workers
             // table layout, where it becomes the row's single meta CELL. Grid
             // only lays out its own children, so the badges need one wrapper to
@@ -37424,7 +37429,7 @@
         + '<div class="conv-hover-extras">'
         +   hoverMetaRowHtml
         +   ask
-        +   outcomeHtml
+        +   (_outcomeInline ? '' : outcomeHtml)
         +   summaryDetailHtml
         +   historySnippetHtml
         + '</div>'

@@ -17,7 +17,7 @@
   'use strict';
 
   var TAG_RE = /\[Q(\d+):([a-z0-9-]+)\]/g;
-  var TARGETS = '.assistant-text, .user-msg';
+  var TARGETS = '.assistant-text, .user-msg, .conv-outcome-step';
   var POLL_MS = 60000;
   var index = { byN: {}, list: [], scanning: false, at: 0 };
 
@@ -262,7 +262,7 @@
       if (!chip) return;
       ev.preventDefault();
       lookup(+chip.getAttribute('data-qn'), 0);
-    });
+    }, true); // capture: sidebar rows stop click propagation before it bubbles here
 
     var pending = new Set(), queued = false;
     var mo = new MutationObserver(function (muts) {

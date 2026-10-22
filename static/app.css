@@ -8239,6 +8239,27 @@
     line-height: 1.35;
     vertical-align: 1px;
   }
+  /* Inline next step: sits right of the title; the badges and time after
+     .conv-row-break drop to a second line. Only where the brief is visible
+     (the existing .conv-outcome rules hide it everywhere else). */
+  .conv-item .conv-row-break { display: none; }
+  .conv-item .conv-outcome.is-inline { flex: 1 1 0; min-width: 0; margin: 0; }
+  :is(.conv-item:not(.compact-rows *, #convList.workers-dense *, .conv-current-sessions-scroll:not(.is-search-results) *),
+      .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open) .conv-main-row.has-inline-step {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 6px;
+  }
+  :is(.conv-item:not(.compact-rows *, #convList.workers-dense *, .conv-current-sessions-scroll:not(.is-search-results) *),
+      .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open) .conv-main-row.has-inline-step > .conv-title {
+    flex: 0 1 38%;
+  }
+  :is(.conv-item:not(.compact-rows *, #convList.workers-dense *, .conv-current-sessions-scroll:not(.is-search-results) *),
+      .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open) .conv-main-row.has-inline-step > .conv-row-break {
+    display: block; flex-basis: 100%; height: 0;
+  }
+  /* The panel's brief-open rule forces display:block; keep the cells. */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.is-brief-open .conv-outcome.is-next-step { display: grid; }
   .conv-item .conv-outcome-next {
     display: -webkit-box;
     -webkit-line-clamp: 2;
