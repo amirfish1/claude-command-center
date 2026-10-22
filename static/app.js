@@ -37304,22 +37304,25 @@
       // Text captured at send time is the previous turn's, not this one's.
       const _preSend = preSendPreviewFor(_outSid);
       const _latestStale = _preSend !== null && _latestRaw === _preSend;
-      const _outWorking = _outSending || _isWorkingRow;
+      // The server's four-state label covers the think gaps between tools,
+      // where no live tool pill shows but the turn is still running.
+      const _outWorking = _outSending || _isWorkingRow || c.state === 'working';
       if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking)) {
         const _did = ((_ss && _ss.did) || '').trim();
         const _next = ((_ss && _ss.next_step_user) || '').trim();
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
         // One label carries the state (no separate status column):
-        // WORKING + what it is saying now, NEEDS YOU / NEXT STEP + the
-        // session's own next step, else LATEST + its last message.
+        // WORKING + what it is saying now, NEXT STEP + the session's own
+        // next step, else LATEST + its last message.
         let _label, _kind, _stepText;
         if (_outWorking) {
           _label = 'Working'; _kind = 'working';
           _stepText = _outSending ? 'Sent, waiting for the first reply…'
             : ((_latest && !_latestStale) ? _latest : 'Working…');
         } else if (_hasNext) {
-          _label = _needsYouRow ? 'Needs you' : 'Next step';
-          _kind = _needsYouRow ? 'needs-you' : 'next';
+          // A next step is always "yours"; one green label, no separate
+          // NEEDS YOU variant.
+          _label = 'Next step'; _kind = 'next';
           _stepText = _next;
         } else if (_latest && !_did) {
           _label = 'Latest'; _kind = 'latest'; _stepText = _latest;
