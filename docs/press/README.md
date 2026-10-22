@@ -28,7 +28,7 @@ totals only: no prompts, code, file paths or project names.
    ```bash
    curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash
    ```
-   Or `brew install amirfish1/ccc/ccc`, or the
+   Or `brew install amirfish1/tap/ccc`, or the
    [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest).
 2. **Open** http://localhost:8090. Every Claude Code and Codex session already
    on the machine shows up on one board. No account, no cloud.

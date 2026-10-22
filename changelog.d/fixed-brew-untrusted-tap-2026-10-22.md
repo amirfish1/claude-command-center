@@ -1,1 +1,1 @@
-- Homebrew install docs now use `brew install amirfish1/ccc/ccc`, so newer Homebrew no longer refuses with "untrusted tap".
+- Homebrew install is now `brew install amirfish1/tap/ccc`: the tap was renamed, and the fully qualified name keeps newer Homebrew from refusing an "untrusted tap".

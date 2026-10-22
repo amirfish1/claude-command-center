@@ -187,7 +187,7 @@ Most changes ship the moment you `git push origin main`. Only `.app`-shell chang
 | `scripts/macapp/main.swift`, `scripts/build-dmg.sh`, `scripts/release-dmg.sh`, `scripts/macapp/vendor/Sparkle.framework` (the .app shell or DMG build flow) | **DMG users get it ONLY via Sparkle auto-update**, which only fires when you ship a new versioned DMG with an EdDSA signature in the appcast. | Bump version → `./scripts/release-dmg.sh X.Y.Z` → `gh release create vX.Y.Z` with the DMG attached → commit + push `docs/appcast.xml`. See `docs/RELEASING.md` for the full sequence. |
 | `infra/telemetry-worker/` (Cloudflare Worker) | The Worker is independent of `main`. Pushing the repo does NOT deploy it. | `cd infra/telemetry-worker && npx wrangler deploy`. |
 | `infra/card-worker/` (Cloudflare Worker) | Independent of `main`; pushing does NOT deploy it. Hosts the share card page (Workers KV `CARDS`). | `cd infra/card-worker && npx wrangler deploy`. |
-| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-ccc`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
+| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-tap`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
 | `changelog.d/*`, `tests/`, `README.md`, `CLAUDE.md`, `AGENTS.md`, `pyproject.toml`/`server.py` version bumps | On push to main | Just `git push origin main`. Bumping versions touches a release cycle — see `docs/RELEASING.md`. |
 
 **Quick rule of thumb:**

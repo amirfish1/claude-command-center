@@ -19,7 +19,8 @@
 #
 # Prereqs (see docs/RELEASING.md): Developer ID cert, notarytool profile
 # 'ccc-notary', Sparkle EdDSA key in login keychain, gh logged in, and the
-# Homebrew tap checked out at $BREW_TAP (default ~/Apps/homebrew-ccc).
+# Homebrew tap checked out at $BREW_TAP (default ~/Apps/homebrew-tap, or the
+# older ~/Apps/homebrew-ccc checkout if that is what exists).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,7 +33,10 @@ SKIP_DMG=0
 SKIP_BREW=0
 ALLOW_DIRTY=0
 RELEASE_SITE="${CCC_RELEASE_SITE:-https://ccc.amirfish.ai}"
-BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-ccc}"
+BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-tap}"
+if [ -z "${CCC_BREW_TAP:-}" ] && [ ! -d "$BREW_TAP" ] && [ -d "$HOME/Apps/homebrew-ccc" ]; then
+  BREW_TAP="$HOME/Apps/homebrew-ccc"
+fi
 BREW_FORMULA_UPDATED=0
 BREW_FORMULA_SHA=""
 

@@ -19,7 +19,7 @@ Pick whichever fits how you work:
 
 - **Homebrew** — if you're already a brew person:
   ```bash
-  brew install amirfish1/ccc/ccc
+  brew install amirfish1/tap/ccc
   ```
   Update later with `brew upgrade ccc`.
 

@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 用 Homebrew 安装：
 
 ```bash
-brew install amirfish1/ccc/ccc
+brew install amirfish1/tap/ccc
 ccc
 ```
 
