@@ -39983,27 +39983,24 @@
       const lane = _allTabLaneFor(c);
       return lane === 'messages' || lane === 'other' || (_ideaTicketsOn && lane === 'coding');
     });
-    // One row per ticket: the ticket's most recent session stands for it
-    // (live sessions first), with the ticket's session count on its chip.
+    // One row per ticket, represented by its most recent session. Liveness
+    // arrives separately from archive rows: using it to pick a representative
+    // swaps the whole card on status polls. Keep identity/order on recency,
+    // with a session-id tie-break so input/bucket order cannot flip the row.
     const _ideaTicketRows = (lane) => {
       const best = new Map();
+      const byRecency = (x, y) => (
+        Number(y.mtime || y.modified || 0) - Number(x.mtime || x.modified || 0)
+        || _allTabSessionId(x).localeCompare(_allTabSessionId(y))
+      );
       _allTabConvs.forEach(c => {
         if (_allTabLaneFor(c) !== lane) return;
         const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
         if (!ref || c.archived || c.trashed || c.idea_ticket.closed) return;
         const prev = best.get(ref);
-        const rank = (r) => [r && r.is_live ? 1 : 0, Number((r && (r.mtime || r.modified)) || 0)];
-        if (!prev) { best.set(ref, c); return; }
-        const [pl, pm] = rank(prev);
-        const [cl, cm] = rank(c);
-        if (cl > pl || (cl === pl && cm > pm)) best.set(ref, c);
+        if (!prev || byRecency(c, prev) < 0) best.set(ref, c);
       });
-      return Array.from(best.values()).sort((x, y) => {
-        const lx = x.is_live ? 1 : 0;
-        const ly = y.is_live ? 1 : 0;
-        if (lx !== ly) return ly - lx;
-        return Number(y.mtime || y.modified || 0) - Number(x.mtime || x.modified || 0);
-      });
+      return Array.from(best.values()).sort(byRecency);
     };
     const _allTabIdeaConvs = _ideaTicketsOn ? _ideaTicketRows('ideas') : [];
     const _allTabSmallBugConvs = _ideaTicketsOn ? _ideaTicketRows('smallbugs') : [];
