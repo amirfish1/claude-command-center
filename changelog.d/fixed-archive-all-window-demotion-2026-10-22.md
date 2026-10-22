@@ -1,0 +1,1 @@
+- Opening the dashboard with the archive window set to All no longer gets silently switched back to 7 days and loaded twice when the first load is slow.

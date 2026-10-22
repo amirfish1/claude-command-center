@@ -238,6 +238,18 @@ def test_boot_skips_the_second_full_render_when_recovery_already_painted_the_row
     assert "_lastArchiveRenderFilter" in covers
 
 
+def test_stuck_recovery_waits_for_an_inflight_fetch_instead_of_demoting_to_7d():
+    # CCC-118: the loading-status poll's first tick runs recovery while a
+    # 4k-row 'all' payload is still parsing. Recovery demoted the saved window
+    # to 7d and fired a second list request + full re-render on every 'all'
+    # boot. It must wait on the in-flight fetch for the current window first.
+    recovery = _function("function _recoverArchiveRenderIfStuck()", "function _scheduleArchiveStaleRetry()")
+    assert recovery.index("_archiveListFetchInflight(currentWin)") < recovery.index("localStorage.setItem(ARCHIVE_WINDOW_KEY, '7d')")
+    helper = _function("function _archiveListFetchInflight(", "function _recoverArchiveRenderIfStuck()")
+    assert "_archiveBootstrapFetchPromise" in helper
+    assert "_archiveAllInflight" in helper
+
+
 def test_index_html_requests_features_once_at_boot():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 

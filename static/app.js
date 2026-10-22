@@ -72378,6 +72378,15 @@
     return !!(rec && rec.data === archiveData && rec.query === q
       && _convListRenderSig && _lastArchiveRenderFilter === q);
   }
+  // In-flight list fetch for `win` (the unconsumed boot prefetch or a deduped
+  // loadArchiveAll request), or null when nothing is loading that window.
+  function _archiveListFetchInflight(win) {
+    if (!_archiveBootstrapConsumed && _archiveBootstrapWindow === win) return _archiveBootstrapFetchPromise;
+    for (const [url, p] of _archiveAllInflight) {
+      if (new URLSearchParams(url.split('?')[1] || '').get('window') === win) return p;
+    }
+    return null;
+  }
   function _recoverArchiveRenderIfStuck() {
     if (!_archiveListStillShowsLoader()) {
       _archiveStuckRetryCount = 0;
@@ -72401,6 +72410,18 @@
       + ' hidden=' + document.hidden);
     if (_archiveStuckRenderRecoveryPromise) return _archiveStuckRenderRecoveryPromise;
     const currentWin = _archiveWindow();
+    // The loader is still up because the first fetch for this window has not
+    // landed yet (a 4k-row 'all' payload takes seconds to parse under load),
+    // not because it is wedged. Wait on that fetch: demoting to 7d here fired
+    // a second list request + full re-render on every 'all' boot (CCC-118).
+    const inflightWin = _archiveListFetchInflight(currentWin);
+    if (inflightWin) {
+      _archiveStuckRenderRecoveryPromise = inflightWin.catch(() => null).finally(() => {
+        _archiveStuckRenderRecoveryPromise = null;
+        if (_archiveListStillShowsLoader()) _scheduleArchiveStuckRetry();
+      });
+      return _archiveStuckRenderRecoveryPromise;
+    }
     const targetWin = (currentWin === 'all') ? '7d' : currentWin;
     if (currentWin === 'all') {
       try { localStorage.setItem(ARCHIVE_WINDOW_KEY, '7d'); } catch (_) {}
