@@ -4886,3 +4886,34 @@ def test_restart_recovery_reads_only_window_tails_once_per_boot(monkeypatch, tmp
     rr.state(**kw)
     rr.state(**kw)
     assert len(opened) == 1
+
+
+def test_dead_session_check_reads_only_on_a_transition(monkeypatch, tmp_path):
+    """The dead-session toast looks at a transcript only when a session leaves
+    "working", never per session per tick, and writes state only on change."""
+    from ccc_server import notify, popups
+    from ccc_server import session_death as sd
+
+    monkeypatch.setattr(sd, "STATE_FILE", tmp_path / "death.json")
+    monkeypatch.setattr(sd, "STOPS_FILE", tmp_path / "stops.json")
+    monkeypatch.setattr(notify, "STATE_FILE", tmp_path / "notify-state.json")
+    monkeypatch.setattr(notify, "LOG_FILE", tmp_path / "notify-log.json")
+    monkeypatch.setattr(popups, "APPROVED", frozenset())
+    looked, saves = [], []
+    monkeypatch.setattr(sd, "_find_path", lambda sid: looked.append(sid))
+    real_save = sd._save
+    monkeypatch.setattr(sd, "_save", lambda: saves.append(1) or real_save())
+    notify.reset_for_tests()
+    sd.reset_for_tests()
+    try:
+        cur = {f"s{i}": {"state": "working" if i % 2 else "idle"} for i in range(1000)}
+        notify.observe_session_states(None, cur, publish=lambda item: None)
+        for _ in range(20):
+            notify.observe_session_states(cur, cur, publish=lambda item: None)
+        assert looked == []
+        assert len(saves) == 1
+        after = dict(cur, s1={"state": "idle"})
+        notify.observe_session_states(cur, after, publish=lambda item: None)
+        assert looked == ["s1"]
+    finally:
+        notify.reset_for_tests()

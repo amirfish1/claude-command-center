@@ -7235,6 +7235,10 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
     if not isinstance(entry, dict):
         return
     pid = entry.get("pid")
+    if terminate:
+        # A deliberate stop, so its open turn must not be toasted as a death.
+        from ccc_server import session_death
+        session_death.note_stop(entry.get("resumed_sid") or entry.get("session_id"), reason)
     # Diagnostic: record whether the child was still alive at retire time so we
     # can distinguish "we killed a live process" from "cleaned up a dead one".
     alive = None

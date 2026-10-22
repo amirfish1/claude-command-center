@@ -39,12 +39,14 @@ from datetime import datetime
 from pathlib import Path
 
 from ccc_server import core as _core
+from ccc_server import session_death as _session_death
 from ccc_server import test_isolation_active
 from ccc_server.paths import COMMAND_CENTER_STATE_DIR, _SYS_OSASCRIPT
 
 
 KINDS = frozenset(
-    ("info", "success", "task", "needs_input", "milestone", "digest", "error")
+    ("info", "success", "task", "needs_input", "milestone", "digest", "error",
+     "session_died")
 )
 
 if test_isolation_active():
@@ -523,6 +525,20 @@ def observe_session_states(previous, current, publish=None, now=None):
     def _state_of(entry):
         return str((entry or {}).get("state") or "")
 
+    def _died(sid, state):
+        try:
+            return _session_death.consider(sid, state, now=now_epoch)
+        except Exception:
+            return False
+
+    if previous is None:
+        # Dashboard (re)connect: catch sessions that died while nobody watched.
+        try:
+            for sid, state in _session_death.missed_while_away(current):
+                _died(sid, state)
+        except Exception:
+            pass
+
     for sid, cur in current.items():
         before = prev.get(sid)
         cur_state = _state_of(cur)
@@ -564,6 +580,8 @@ def observe_session_states(previous, current, publish=None, now=None):
             emitted.append(_emit(item, publish=publish))
             continue
         if was_busy and cur_state in ("idle", "ended"):
+            if _died(sid, cur_state):
+                continue
             if work_s < _MIN_WORK_S:
                 continue
             if not _cooldown_ok(sid, "task", now_epoch, _TASK_COOLDOWN_S):
@@ -595,6 +613,8 @@ def observe_session_states(previous, current, publish=None, now=None):
             continue
         work_s = now_mono - _work_started.get(sid, now_mono)
         _work_started.pop(sid, None)
+        if _died(sid, "gone"):
+            continue
         if work_s < _MIN_WORK_S:
             continue
         if not _cooldown_ok(sid, "task", now_epoch, _TASK_COOLDOWN_S):
@@ -614,7 +634,35 @@ def observe_session_states(previous, current, publish=None, now=None):
         if _dedupe_hit(item, now_epoch):
             continue
         emitted.append(_emit(item, publish=publish))
+    emitted.extend(_emit_session_deaths(current, now_epoch, publish))
     return emitted
+
+
+def _emit_session_deaths(current, now_epoch, publish=None):
+    """Toast sessions whose death outlived the grace period (notify-only)."""
+    try:
+        _session_death.track_working(current)
+        incidents = _session_death.due(current, now=now_epoch)
+    except Exception:
+        return []
+    out = []
+    for inc in incidents:
+        sid = inc["session_id"]
+        name = _display_name(sid, _session_identity(sid))
+        suffix, body = _session_death.describe(inc)
+        item = {
+            "id": "ntf_" + uuid.uuid4().hex[:16],
+            "kind": "session_died",
+            "title": f"{name} {suffix}",
+            "body": body,
+            "url": f"/?session={sid}",
+            "session_id": sid,
+            "ts": now_epoch,
+        }
+        if _dedupe_hit(item, now_epoch):
+            continue
+        out.append(_emit(item, publish=publish))
+    return out
 
 
 # ── scheduled items: daily digest + savings milestones ───────────────────
@@ -852,3 +900,4 @@ def reset_for_tests():
         _rate_bucket.clear()
         _work_started.clear()
         _last_kind_emit.clear()
+    _session_death.reset_for_tests()

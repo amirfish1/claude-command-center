@@ -34,6 +34,7 @@
   var AGE_LIMITS = {
     task: 10 * 60 * 1000,
     needs_input: 10 * 60 * 1000,
+    session_died: 12 * 3600 * 1000,
     milestone: 12 * 3600 * 1000,
     digest: 12 * 3600 * 1000,
     info: 30 * 60 * 1000,
@@ -91,6 +92,7 @@
       + '.ccc-toast-kind-milestone .ccc-toast-bar{background:linear-gradient(180deg,#a371f7,#58a6ff);}'
       + '.ccc-toast-kind-digest .ccc-toast-bar{background:#58a6ff;}'
       + '.ccc-toast-kind-error .ccc-toast-bar{background:#f85149;}'
+      + '.ccc-toast-kind-session_died .ccc-toast-bar{background:#f85149;}'
       + '.ccc-toast-body{flex:1 1 auto;min-width:0;}'
       + '.ccc-toast-title{font-weight:600;font-size:12.5px;line-height:1.35;margin:0 0 2px;}'
       + '.ccc-toast-text{font-size:12px;line-height:1.4;color:var(--text-secondary,#a6adbb);margin:0;'
@@ -129,7 +131,7 @@
 
   var _KIND_ICON = {
     task: '✓', success: '✓', needs_input: '?', milestone: '★',
-    digest: '☰', error: '!', info: 'i', leftover: '$',
+    digest: '☰', error: '!', info: 'i', leftover: '$', session_died: '!',
   };
 
   function _openItem(item) {
@@ -203,19 +205,21 @@
     });
 
     var life = null;
+    // A dead session stays up until dismissed: nothing else will tell you.
+    var sticky = kind === 'session_died';
     var ttl = (kind === 'digest' || kind === 'milestone') ? 14000 : 9000;
     var remaining = ttl;
     var armAt = Date.now();
     function arm() {
       armAt = Date.now();
       if (life) life.remove();
-      if (_reducedMotion()) return;
+      if (sticky || _reducedMotion()) return;
       life = document.createElement('div');
       life.className = 'ccc-toast-life';
       life.style.animationDuration = remaining + 'ms';
       t.appendChild(life);
     }
-    var timer = setTimeout(function tick() { _dismiss(t); }, ttl);
+    var timer = sticky ? null : setTimeout(function tick() { _dismiss(t); }, ttl);
     function _dismiss(el) {
       if (!el.parentNode) return;
       clearTimeout(timer);
@@ -224,11 +228,13 @@
       _drainQueue();
     }
     t.addEventListener('mouseenter', function () {
+      if (sticky) return;
       remaining = Math.max(500, remaining - (Date.now() - armAt));
       clearTimeout(timer);
       if (life) life.style.animationPlayState = 'paused';
     });
     t.addEventListener('mouseleave', function () {
+      if (sticky) return;
       timer = setTimeout(function () { _dismiss(t); }, remaining);
       if (life) life.style.animationPlayState = 'running';
     });
@@ -379,7 +385,8 @@
       && id.indexOf('ntf_test_') !== 0;
     if (phoneQuiet) {
       // fall through: no card
-    } else if (channel === 'toast' || kind === 'needs_input' || kind === 'milestone' || kind === 'digest') {
+    } else if (channel === 'toast' || kind === 'needs_input' || kind === 'session_died'
+        || kind === 'milestone' || kind === 'digest') {
       var stack = document.getElementById('cccNotifyStack');
       if (stack && stack.children.length >= MAX_TOASTS) _toastQueue.push(item);
       else toast(item);

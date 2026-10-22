@@ -29,6 +29,7 @@
     'leftover-offer',
     'leftover-notification',
     'restart-interrupted',
+    'notify-session-died',
   ];
 
   // Approved pop-ups. Nothing else shows until Amir approves it.
@@ -36,11 +37,13 @@
     'moment-zero', // approved 2026-10-06
     'notify-task', // approved 2026-10-16: clickable session-finished/needs-you banners
     'restart-interrupted', // approved 2026-10-22: sessions a machine restart cut off mid-turn
+    'notify-session-died', // approved 2026-10-22: a session died mid-turn, nobody was told
   ];
 
   var NOTIFY_KIND_IDS = {
     task: 'notify-task',
     needs_input: 'notify-task',
+    session_died: 'notify-session-died',
     digest: 'notify-digest',
     milestone: 'notify-milestone',
     leftover: 'leftover-notification',

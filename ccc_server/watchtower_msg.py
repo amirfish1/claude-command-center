@@ -2737,6 +2737,8 @@ def _interrupt_session(session_id):
     """
     if not session_id:
         return {"ok": False, "error": "missing session_id"}
+    from ccc_server import session_death
+    session_death.note_stop(session_id, "interrupt")
     cwd = _core.find_session_cwd(session_id)
     status = _core.session_live_status(session_id, cwd)
     if _core._is_codex_session(session_id):
