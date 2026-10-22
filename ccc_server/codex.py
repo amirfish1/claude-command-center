@@ -46,7 +46,7 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 9
+_CODEX_META_VERSION = 10
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
 _CODEX_THREAD_VISIBILITY_RANK = {
@@ -11184,6 +11184,8 @@ def _extract_codex_tail_meta(path):
                         if isinstance(part, dict) and isinstance(part.get("text"), str)
                     ).strip()
                     if role == "user":
+                        if text.startswith(("# AGENTS.md instructions for ", "<environment_context>")):
+                            continue
                         text = _core._strip_ccc_session_state_instruction(text).strip()
                         if text:
                             meta["first_message"] = meta["first_message"] or text

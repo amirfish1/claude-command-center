@@ -75,7 +75,10 @@ def test_current_message_format_supplies_sidebar_metadata(tmp_path):
                     "payload": {"type": "message", "role": role, "phase": phase,
                                 "content": [{"type": "output_text" if role == "assistant" else "input_text",
                                              "text": text}]}})
-    p.write_text(_session_meta() + message("user", "Check sidebar metadata"))
+    p.write_text(_session_meta()
+                 + message("user", "# AGENTS.md instructions for /example/project\nLocal rules")
+                 + message("user", "<environment_context>Local context</environment_context>")
+                 + message("user", "Check sidebar metadata"))
     meta = server._extract_codex_tail_meta(p)
     assert meta["first_message"] == "Check sidebar metadata"
     assert meta["last_prompt"] == "Check sidebar metadata"
