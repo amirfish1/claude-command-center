@@ -228,6 +228,23 @@ def test_archive_list_window_filters_old_rows_but_keeps_pinned_and_hermes():
     assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="all", now=now)] == ["recent", "week-old", "old", "pinned-old", "hermes-old"]
 
 
+def test_archive_list_window_keeps_open_idea_ticket_rows(monkeypatch):
+    now = 2_000_000.0
+    monkeypatch.setattr(server._idea_tickets, "idea_ticket_rows_map", lambda: {
+        "idea-old": {"ref": "IDEAS-1", "queue": "IDEAS", "sessions": 1, "closed": False},
+        "closed-old": {"ref": "IDEAS-2", "queue": "IDEAS", "sessions": 1, "closed": True},
+    })
+    monkeypatch.setattr(server._idea_tickets, "sweep_rows", lambda rows: None)
+    rows = [
+        {"session_id": "recent", "engine": "claude", "mtime": now - 60},
+        {"session_id": "idea-old", "engine": "claude", "mtime": now - 8 * 86400},
+        {"session_id": "closed-old", "engine": "claude", "mtime": now - 8 * 86400},
+    ]
+    out = server._archive_list_project_rows(rows, window="1d", now=now)
+    assert [row["session_id"] for row in out] == ["recent", "idea-old"]
+    assert out[1]["idea_ticket"]["ref"] == "IDEAS-1"
+
+
 def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
     calls = []
 

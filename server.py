@@ -15662,17 +15662,25 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     cutoff = _archive_list_window_cutoff(window, now=now)
     resumes = _load_usage_limit_resumes()
     parents = _session_graph.parent_snapshot()
-    projected = [
-        _archive_list_project_row(row, resumes=resumes, parents=parents)
-        for row in (rows or [])
-        if isinstance(row, dict) and _archive_list_window_allows_row(row, cutoff)
-    ]
     # Experimental idea tickets: the list serves a persisted snapshot, so the
     # ticket is stamped here from one mtime-cached read ({} when flag is off).
     try:
         idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
     except Exception:
         idea_tickets_by_sid = {}
+
+    def _open_idea(row):
+        t = idea_tickets_by_sid.get(row.get("session_id") or row.get("id"))
+        return bool(t) and not t.get("closed")
+
+    # An open idea ticket outlives the window: the Ideas tab lists tickets,
+    # not recent sessions (bounded by the number of open tickets).
+    projected = [
+        _archive_list_project_row(row, resumes=resumes, parents=parents)
+        for row in (rows or [])
+        if isinstance(row, dict)
+        and (_archive_list_window_allows_row(row, cutoff) or _open_idea(row))
+    ]
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
     try:

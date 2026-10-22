@@ -2972,6 +2972,8 @@
   function _archiveWindowAllowsRow(row, cutoff = _archiveWindowCutoff()) {
     if (!cutoff) return true;
     if (row && (row.pinned || row.source === 'hermes' || row.engine === 'hermes')) return true;
+    // An open idea ticket is the work item; its session stays listed however old.
+    if (row && row.idea_ticket && !row.idea_ticket.closed) return true;
     return _archiveWindowRowTs(row) >= cutoff;
   }
   const OPEN_ASK_RECENT_S = 48 * 3600;
@@ -28532,7 +28534,12 @@
     // A normal click on the row already shown in this pane has nothing to
     // select. In particular, do not re-run selectConversation(): it resets
     // the active reader and restarts its streams.
-    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) return true;
+    // On a phone the pane can hold that row behind the list (boot restore
+    // loads it without sliding over), so the tap still brings the chat up.
+    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) {
+      mobileShowForCurrentMode();
+      return true;
+    }
     if (selectedListIds.size > 0) {
       clearSelectedConversationRows();
     }
@@ -37195,7 +37202,8 @@
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
         +     '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span></span></div>'
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        // Idea-ticket rows lead the preview with their IDEAS-N chip (tap opens it).
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + ideaTicketChipHtml(c) + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
         + '</div>';
       return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
@@ -39610,6 +39618,9 @@
     const _ideaTicketsOn = ideaTicketsOn();
     const _ideaTicketLane = (c) => {
       const t = _ideaTicketsOn && c && c.idea_ticket;
+      // A UI spawn still waiting for its first reply sits in Ideas until
+      // its ticket is filed, instead of disappearing into Other.
+      if (t && t.pending) return 'ideas';
       if (!t || !t.ref) return '';
       return t.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
     };
@@ -39638,7 +39649,7 @@
       const best = new Map();
       _allTabConvs.forEach(c => {
         if (_allTabLaneFor(c) !== lane) return;
-        const ref = c.idea_ticket && c.idea_ticket.ref;
+        const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
         if (!ref || c.archived || c.trashed || c.idea_ticket.closed) return;
         const prev = best.get(ref);
         const rank = (r) => [r && r.is_live ? 1 : 0, Number((r && (r.mtime || r.modified)) || 0)];

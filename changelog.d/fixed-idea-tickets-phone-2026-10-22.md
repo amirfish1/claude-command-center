@@ -1,0 +1,1 @@
+- Idea tickets: the phone row shows its IDEAS-N / SMALL-BUGS-N chip, a session with an open idea ticket stays listed however old it is, a newly started session sits in Ideas until its ticket is filed, and tapping the row already loaded behind the phone list now opens it.

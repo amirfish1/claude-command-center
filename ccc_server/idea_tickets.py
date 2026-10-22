@@ -207,6 +207,12 @@ def idea_ticket_rows_map():
             "sessions": len(ticket.get("sessions") or []),
             "closed": bool(ticket.get("closed")),
         }
+    # UI spawns still waiting for their first reply: no ticket yet, but the
+    # row belongs in Ideas now rather than in Other.
+    for sid in (data.get("pending") or {}):
+        if sid not in out:
+            out[sid] = {"ref": "", "queue": "IDEAS", "sessions": 1,
+                        "closed": False, "pending": True}
     return out
 
 
