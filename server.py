@@ -16782,6 +16782,13 @@ def _rehydrate_archive_cached_rows(rows):
         if not isinstance(raw, dict):
             continue
         row = dict(raw)
+        # Bound the preview text here too, not only at row-build time: several
+        # emitters (live-listing builder, persisted/incremental row stores,
+        # non-Claude engines) ship the raw tail_meta value, so cached rows can
+        # carry multi-KB bodies the UI truncates to ~140 chars anyway.
+        row["last_assistant_text"] = _archive_bound_assistant_text(
+            row.get("last_assistant_text")
+        )
         sid = row.get("session_id") or row.get("id")
         if row.get("engine") == "codex" and str(sid or "") in deleted_codex:
             continue
