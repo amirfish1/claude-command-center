@@ -46,7 +46,7 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 8
+_CODEX_META_VERSION = 9
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
 _CODEX_THREAD_VISIBILITY_RANK = {
@@ -3516,6 +3516,10 @@ def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=Tr
     if method in ("thread/start", "thread/resume"):
         params = dict(params)
         params["config"] = {**(params.get("config") or {}), **_codex_context_config()}
+        reminder = _core._CCC_SESSION_STATE_SYSTEM_PROMPT
+        instructions = params.get("developerInstructions") or ""
+        if reminder not in instructions:
+            params["developerInstructions"] = (instructions + "\n\n" + reminder).strip()
     from ccc_server.codex_capabilities import codex_method_is_mutating
     mutating = codex_method_is_mutating(method)
     routed = _core._control_plane_engine_call(
@@ -11152,6 +11156,7 @@ def _extract_codex_tail_meta(path):
                     elif ptype == "task_complete":
                         text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
                         if text:
+                            meta["last_assistant_text"] = text
                             meta.update(_extract_codex_summary_signals(text, pr_url_re))
                         meta["last_event_type"] = "result"
                         meta["pending_tool"] = None
@@ -11167,7 +11172,40 @@ def _extract_codex_tail_meta(path):
                     continue
                 if ev_type != "response_item":
                     continue
-                if ptype in ("function_call", "custom_tool_call"):
+                if ptype == "message":
+                    # Current Codex rollouts persist messages directly rather
+                    # than emitting the older user_message/agent_message events.
+                    role = payload.get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    text = "\n".join(
+                        part.get("text", "")
+                        for part in (payload.get("content") or [])
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    ).strip()
+                    if role == "user":
+                        text = _core._strip_ccc_session_state_instruction(text).strip()
+                        if text:
+                            meta["first_message"] = meta["first_message"] or text
+                            meta["last_prompt"] = text
+                        meta["last_event_type"] = "user"
+                        meta["pending_tool"] = None
+                        meta["pending_file"] = None
+                        meta["pending_tool_ts"] = 0
+                        meta["needs_approval"] = False
+                        meta["needs_approval_message"] = ""
+                        meta["pending_approval_call_id"] = ""
+                        pending_calls.clear()
+                        if ts_epoch:
+                            meta["last_user_ts"] = ts_epoch
+                    else:
+                        if text:
+                            meta["last_assistant_text"] = text
+                            meta.update(_extract_codex_summary_signals(text, pr_url_re))
+                        meta["last_event_type"] = "assistant"
+                    if ts_epoch:
+                        meta["last_meaningful_ts"] = ts_epoch
+                elif ptype in ("function_call", "custom_tool_call"):
                     name = payload.get("name") or ""
                     is_custom_tool = ptype == "custom_tool_call"
                     raw_input = payload.get("input") if isinstance(payload.get("input"), str) else ""

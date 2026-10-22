@@ -68,6 +68,42 @@ SCRIPT = [
 ]
 
 
+def test_current_message_format_supplies_sidebar_metadata(tmp_path):
+    p = tmp_path / "messages.jsonl"
+    def message(role, text, phase=None):
+        return _ev({"type": "response_item", "timestamp": "2026-06-02T10:00:01Z",
+                    "payload": {"type": "message", "role": role, "phase": phase,
+                                "content": [{"type": "output_text" if role == "assistant" else "input_text",
+                                             "text": text}]}})
+    p.write_text(_session_meta() + message("user", "Check sidebar metadata"))
+    meta = server._extract_codex_tail_meta(p)
+    assert meta["first_message"] == "Check sidebar metadata"
+    assert meta["last_prompt"] == "Check sidebar metadata"
+    assert meta["last_user_ts"] > 0
+    assert meta["last_event_type"] == "user"
+    with p.open("a") as f:
+        f.write(message("assistant", "Checking the parser", "commentary"))
+    assert server._extract_codex_tail_meta(p)["last_assistant_text"] == "Checking the parser"
+    final = ("Fixed.\n<session-state>\nDID: Fixed sidebar metadata\n"
+             "INSIGHT: Message events changed\nNEXT_STEP_USER: Reload the dashboard\n</session-state>")
+    with p.open("a") as f:
+        f.write(message("assistant", final, "final_answer"))
+        f.write(_ev({"type": "event_msg", "payload": {"type": "task_complete"}}))
+    meta = server._extract_codex_tail_meta(p)
+    assert meta["last_event_type"] == "result"
+    assert server._parse_session_state(meta["last_assistant_text"])["next_step_user"] == "Reload the dashboard"
+    with p.open("a") as f:
+        f.write(message("developer", "Internal instructions"))
+    assert server._extract_codex_tail_meta(p)["last_event_type"] == "result"
+
+
+def test_task_complete_can_supply_final_reply(tmp_path):
+    p = tmp_path / "completed.jsonl"
+    p.write_text(_agent("Still checking") + _ev({"type": "event_msg", "payload": {
+        "type": "task_complete", "last_agent_message": "Final result"}}))
+    assert server._extract_codex_tail_meta(p)["last_assistant_text"] == "Final result"
+
+
 @pytest.fixture(autouse=True)
 def _clear_caches():
     with server._conv_meta_cache_lock:

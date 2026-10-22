@@ -14543,7 +14543,8 @@ def find_all_conversations(
 # permanently reusing their stale (cost-less) dict.
 # v9: Codex subagent rows (guardian auto-reviews) now carry parent_session_id
 # from the rollout's session_meta; cached v8 rows would stay parent-less.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 9
+# v10: Rebuild Codex rows to recover replies from response_item messages.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 10
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
