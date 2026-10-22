@@ -32,7 +32,7 @@ class TestSystemdUnits(unittest.TestCase):
 
         self.assertIn("User=hermes", content)
         self.assertIn("Group=hermes", content)
-        self.assertIn("MemoryMax=4G", content)
+        self.assertIn("MemoryMax=32G", content)
         self.assertIn("KillMode=process", content)
         self.assertIn("ccc_worker.py", content)
 

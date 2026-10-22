@@ -25,9 +25,9 @@ RestartSec=2s
 KillMode=process
 
 # --- Blast-radius containment ---
-MemoryHigh=3G
-MemoryMax=4G
-MemorySwapMax=512M
+MemoryHigh=24G
+MemoryMax=32G
+MemorySwapMax=0
 
 LimitNOFILE=4096
 
