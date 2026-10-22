@@ -1666,11 +1666,79 @@
       setTimeout(_report, 1500);
     })();
   }
+  // ── Perf pane (above the footer) ──────────────────────────────────────
+  // Two-column diagnostic strip: every /api/conversations/list read (left)
+  // and every conversation open click→render time (right). Pure observer —
+  // logging goes through window.__cccPerfRow so instrumented call sites stay
+  // decoupled from whether the pane exists yet.
+  const _perfPaneLog = { list: [], open: [] };
+  function _perfPaneRow(kind, entry, replay) {
+    const buf = _perfPaneLog[kind];
+    if (!buf) return;
+    if (!replay) {
+      buf.push(entry);
+      if (buf.length > 20) buf.shift();
+    }
+    const col = document.getElementById(kind === 'list' ? 'cccPerfListCol' : 'cccPerfOpenCol');
+    if (!col) return;
+    while (col.children.length >= 20) col.removeChild(col.firstChild);
+    const row = document.createElement('div');
+    const d = new Date(entry.at || Date.now());
+    const hh = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+      + ':' + String(d.getSeconds()).padStart(2, '0');
+    row.textContent = hh + ' ' + entry.text;
+    row.title = entry.title || '';
+    row.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    col.appendChild(row);
+  }
+  window.__cccPerfRow = _perfPaneRow;
+  function _initPerfSection() {
+    const footer = document.querySelector('.sidebar-footer');
+    if (!footer || !footer.parentNode) { setTimeout(_initPerfSection, 400); return; }
+    if (document.getElementById('cccPerfSection')) return;
+    const sec = document.createElement('div');
+    sec.id = 'cccPerfSection';
+    sec.style.cssText = 'flex:0 0 auto;border-top:1px solid var(--border-color,#30363d);' +
+      'font:600 10px/1.4 ui-monospace,Menlo,monospace;color:var(--text-secondary,#9aa);';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 10px;cursor:pointer;user-select:none;';
+    head.innerHTML = '<span>perf</span>' +
+      '<span style="flex:1 1 50%;text-align:center;opacity:.8">list reads</span>' +
+      '<span style="flex:1 1 50%;text-align:center;opacity:.8">session opens</span>';
+    const body = document.createElement('div');
+    body.style.cssText = 'display:flex;max-height:110px;overflow:hidden;padding:0 10px 5px;font-weight:500;';
+    const mkCol = function (id) {
+      const c = document.createElement('div');
+      c.id = id;
+      c.style.cssText = 'flex:1 1 50%;min-width:0;overflow-y:auto;';
+      return c;
+    };
+    const listCol = mkCol('cccPerfListCol');
+    const openCol = mkCol('cccPerfOpenCol');
+    openCol.style.borderLeft = '1px solid var(--border-color,#30363d)';
+    openCol.style.paddingLeft = '8px';
+    body.appendChild(listCol);
+    body.appendChild(openCol);
+    sec.appendChild(head);
+    sec.appendChild(body);
+    let open = localStorage.getItem('ccc-perf-open') !== '0';
+    body.style.display = open ? '' : 'none';
+    head.addEventListener('click', function () {
+      open = !open;
+      body.style.display = open ? '' : 'none';
+      localStorage.setItem('ccc-perf-open', open ? '1' : '0');
+    });
+    footer.parentNode.insertBefore(sec, footer);
+    // Replay anything logged before the pane mounted.
+    _perfPaneLog.list.forEach(function (e) { _perfPaneRow('list', e, true); });
+    _perfPaneLog.open.forEach(function (e) { _perfPaneRow('open', e, true); });
+  }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); });
+    document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); _initPerfSection(); });
   } else {
     _initPollerStrip();
     _initFrameMonitor();
+    _initPerfSection();
   }
 
   // Back to the foreground → refresh the paused background pollers once rather
@@ -22907,7 +22975,9 @@
     if (!match) return '';
     const repo = String(c.folder_label || c.folder_label_chip || c.folder_path || c.session_cwd || '');
     const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
-    const model = formatModelNameForBadge(sessionIconEngine(c), c.model || '');
+    const model = c.model ? formatModelNameForBadge(sessionIconEngine(c), c.model)
+      .replace(/^(?:claude|gpt|gemini)[\s-]+/i, '')
+      .replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '') : 'Default';
     const presentation = sessionIconPresentation(c, false);
     return '<button type="button" class="conv-idea-avatar' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
       + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
@@ -22915,8 +22985,11 @@
       + ' title="' + escapeAttr(ref + (repo ? ' · ' + repo : '') + ' · ' + presentation.title) + '"'
       + ' aria-label="Open idea ' + escapeAttr(match[1]) + '">'
       + '<span class="conv-avatar-number">' + escapeHtml(match[1]) + '</span>'
-      + '<span class="conv-avatar-model" title="' + escapeAttr(presentation.title) + '">'
-      + getEngineSvg(presentation.engine) + '<span>' + escapeHtml(model) + '</span></span></button>';
+      + '<span class="conv-avatar-model ' + presentation.engine + '" title="' + escapeAttr(presentation.title) + '">'
+      + '<span class="conv-avatar-model-name">' + escapeHtml(model) + '</span>'
+      + (WORKERS_TIER_DOLLARS[presentation.tier]
+        ? '<span class="conv-avatar-cost">' + '$'.repeat(WORKERS_TIER_DOLLARS[presentation.tier]) + '</span>' : '')
+      + '</span></button>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with
   // the full reply (per-repo /api/conversations) instead of the preview.
@@ -56069,6 +56142,16 @@
                   hidden_ms: Math.round(_perfWall - _perfActive),
                 },
               });
+              if (typeof window.__cccPerfRow === 'function') {
+                window.__cccPerfRow('open', {
+                  at: Date.now(),
+                  text: Math.round(_perfWall) + 'ms ' + String(id).slice(0, 8),
+                  title: 'click→render ' + Math.round(_perfWall) + 'ms wall, '
+                    + Math.round(_perfActive) + 'ms active'
+                    + (_perfPrefetchHit ? ' (prefetch hit)' : '')
+                    + ' — ' + id,
+                });
+              }
             } catch (_) {}
             _perfConvOpen = null;
           }
@@ -72544,6 +72627,20 @@
     const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
     const pending = _archiveAllInflight.get(url);
     if (pending) return pending;
+    const _perfT0 = performance.now();
+    const _perfListLog = function (bytes, status, extra) {
+      try {
+        if (typeof window.__cccPerfRow !== 'function') return;
+        const ms = Math.round(performance.now() - _perfT0);
+        const size = bytes ? (bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB'
+          : Math.round(bytes / 1024) + 'KB') : (status === 304 ? '304' : '?');
+        window.__cccPerfRow('list', {
+          at: Date.now(),
+          text: ms + 'ms ' + size + (extra ? ' ' + extra : ''),
+          title: url + ' → ' + status,
+        });
+      } catch (_) {}
+    };
     const p = (async () => {
       try {
         const prevEtag = _archiveAllEtag.get(url);
@@ -72573,6 +72670,7 @@
         // caller re-renders, but the flicker guard skips the rebuild since the
         // structural signature is unchanged.
         if (r.status === 304) {
+          _perfListLog(0, 304);
           const cached = _archiveAllData.get(url);
           if (!Array.isArray(cached)) {
             _clientLog('[ARCHIVE-DIAG] conversations/list 304 with no cached body');
@@ -72586,11 +72684,15 @@
           return cached.slice();
         }
         if (!r.ok) {
+          _perfListLog(0, r.status, 'err');
           _clientLog('[ARCHIVE-DIAG] conversations/list not-ok: HTTP ' + r.status + ' ' + url.split('?')[1]);
           return null;
         }
         const etag = r.headers.get('ETag');
+        const _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
         const d = await r.json();
+        _perfListLog(_perfLen, r.status, d && Array.isArray(d.conversations)
+          ? d.conversations.length + 'rows' : '');
         if (d && d.cached && d.stale && d.refreshing) {
           _scheduleArchiveStaleRetry();
         }
@@ -72608,6 +72710,7 @@
         if (!opts.includePrs) _scheduleArchiveSidebarCache(convs, params.get('window'));
         return convs;
       } catch (e) {
+        _perfListLog(0, 'threw');
         _clientLog('[ARCHIVE-DIAG] conversations/list threw: ' + ((e && e.name) || '?') + ' ' + String((e && e.message) || '').slice(0, 120));
         return null;
       }
