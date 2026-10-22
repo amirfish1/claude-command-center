@@ -1732,7 +1732,12 @@
   }
   document.addEventListener('visibilitychange', _resumeForegroundPollers);
   window.addEventListener('focus', _resumeForegroundPollers);
-  window.addEventListener('pageshow', _resumeForegroundPollers);
+  window.addEventListener('pageshow', (event) => {
+    // Initial navigation already loads the archive in setArchiveMode. Joining
+    // that fetch here schedules a second full sidebar render after boot.
+    // A back/forward-cache restore does need to catch up on missed activity.
+    if (event.persisted) _resumeForegroundPollers();
+  });
   window.cccPollers = {
     names: ['liveStatus','liveToolStrip','gcReader','pkoodTail','codexLog','worktreesBadge','hiStatus','issues','archiveProgress','gcActive','peer','sessionsList','vercelDeploy','localhost'],
     off(n) { window.__pollersOff[n] = true; return this.list(); },
