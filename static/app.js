@@ -22580,6 +22580,9 @@
     return t.length <= 140 ? t : t.slice(0, 139).trimEnd() + '\u2026';
   }
   // Chat-app time label: 14:05 today, Yesterday, weekday this week, else date.
+  // CCC-119: toLocale*String(_, options) builds a fresh Intl formatter on every
+  // call (~0.3ms each, once per rendered row per render); reuse three.
+  let _waTimeFmts = null;
   function _waTimeLabel(ts) {
     let n = Number(ts) || 0;
     if (!n) return '';
@@ -22587,10 +22590,17 @@
     const d = new Date(n), now = new Date();
     const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const diffDays = Math.round((day(now) - day(d)) / 86400000);
-    if (diffDays <= 0) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     if (diffDays === 1) return 'Yesterday';
-    if (diffDays < 7) return d.toLocaleDateString([], { weekday: 'long' });
-    return d.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' });
+    if (!_waTimeFmts) {
+      _waTimeFmts = {
+        time: new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }),
+        weekday: new Intl.DateTimeFormat([], { weekday: 'long' }),
+        date: new Intl.DateTimeFormat([], { month: 'numeric', day: 'numeric', year: '2-digit' }),
+      };
+    }
+    if (diffDays <= 0) return _waTimeFmts.time.format(d);
+    if (diffDays < 7) return _waTimeFmts.weekday.format(d);
+    return _waTimeFmts.date.format(d);
   }
   function relativeTime(ts) {
     // Compact format à la Omnara: just the number + unit, no "ago" word.
@@ -72939,7 +72949,26 @@
         });
       }
       const folderOrphan = (c.folder_path === c.slug);
-      return Object.assign(_contextFieldsFromRow(c), {
+      // CCC-119: one static object literal, no Object.assign. Assigning ~130
+      // fields onto the 13-key _contextFieldsFromRow() object (or adding those
+      // keys to the literal afterwards) grew each row one property at a time
+      // into V8 dictionary mode: several times slower to build AND for every
+      // later sort/render read, x4.1k rows per window=all render. The context
+      // fields are therefore inlined here; keep them in sync with
+      // _contextFieldsFromRow (engine is set further down and wins, as before).
+      return {
+        latest_input_tokens: c.latest_input_tokens || 0,
+        lifetime_tokens: c.lifetime_tokens || 0,
+        live_context_tokens: c.live_context_tokens || 0,
+        live_context_limit: c.live_context_limit || 0,
+        live_context_percent: c.live_context_percent || 0,
+        context_limit: c.context_limit || 0,
+        quality_score: c.quality_score,
+        quality_grade: c.quality_grade || '',
+        quality_summary: c.quality_summary || '',
+        quality_timestamp: c.quality_timestamp || '',
+        cost_usd: c.cost_usd != null ? c.cost_usd : null,
+        cost_breakdown_usd: c.cost_breakdown_usd || null,
         // Claude Task-tool subagent rows carry a distinct composite id
         // ("<parent>:agent-<id>") so a click opens the nested transcript
         // through the same resolver the family lane uses; every other row
@@ -73103,7 +73132,7 @@
         hermes_lineage_session_ids: Array.isArray(c.hermes_lineage_session_ids) ? c.hermes_lineage_session_ids : [],
         hermes_lineage_count: c.hermes_lineage_count || 0,
         hermes_is_parent: !!c.hermes_is_parent,
-      });
+      };
     }).map(_applyLiveOverlayToRow);
 
     // History-augmentation: badge + snippet for archive entries that the
