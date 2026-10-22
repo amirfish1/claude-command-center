@@ -1,0 +1,1 @@
+- Phone: reloading the page from the conversation list now keeps you on the list instead of opening the last conversation.

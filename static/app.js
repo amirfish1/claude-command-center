@@ -73376,7 +73376,14 @@
       && !(savedLastView && savedLastView.type === 'gc');
     if (savedConversationExists) {
       renderArchiveList(savedConversationId, { force: true, skipRestore: true });
-      await selectConversation(savedConversationId, savedPane.id);
+      // This is a boot restore too: on a phone it must load the pane behind
+      // the list, not slide the chat over it (see _qfBootRestoreDepth).
+      _qfBootRestoreDepth++;
+      try {
+        await selectConversation(savedConversationId, savedPane.id);
+      } finally {
+        _qfBootRestoreDepth--;
+      }
       // selectConversation has painted the prefetched transcript. Yield to a
       // new browser task before the synchronous full-list render so that paint
       // reaches the screen instead of being trapped behind archive shaping.
