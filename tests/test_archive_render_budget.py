@@ -60,3 +60,20 @@ def test_render_budget_is_spent_on_the_open_tabs_lane_and_window():
     assert "(b.inLane - a.inLane) || (b.inWindow - a.inWindow) || (b.ts - a.ts)" in source
     assert "entry.inLane && entry.inWindow" in source
     assert "_WT_LAUNCH_PROMPT_RE.test(" in SOURCE[SOURCE.index("function _sidebarBudgetNaturalLane"):start]
+
+
+def _fn_body(name):
+    start = SOURCE.index("  function " + name + "(")
+    end = SOURCE.index("\n  }\n", start)
+    return SOURCE[start:end]
+
+
+def test_per_row_render_helpers_do_not_allocate_per_call():
+    # CCC-121: these run per row (11k+ with window=all) on every sidebar
+    # render. A throwaway <div> per escapeHtml call, a default `new Set()` per
+    # lane guess, and arrays + spread per window timestamp were the top
+    # self-time in the forced-render profile.
+    assert "createElement" not in _fn_body("escapeHtml")
+    assert "new Set()" not in SOURCE[SOURCE.index("  function _sidebarBudgetLaneGuess("):].split("{", 1)[0]
+    ts_body = _fn_body("_archiveWindowRowTs")
+    assert "...timestamps" not in ts_body and ".map(" not in ts_body

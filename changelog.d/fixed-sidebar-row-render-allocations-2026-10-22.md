@@ -1,0 +1,1 @@
+- Sidebar renders with the archive window set to "all" are faster again: HTML escaping no longer creates a DOM element per call, and the row-ranking pass stops allocating per row.

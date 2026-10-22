@@ -2949,21 +2949,25 @@
     const secs = win === '7d' ? 7 * 24 * 3600 : (win === '1d' ? 24 * 3600 : (win === '8h' ? 8 * 3600 : null));
     return secs ? Math.floor(Date.now() / 1000) - secs : null;
   }
+  function _archiveWindowTsSec(raw) {
+    const ts = Number(raw);
+    if (!Number.isFinite(ts) || ts <= 0) return 0;
+    return ts > 100000000000 ? Math.floor(ts / 1000) : ts;
+  }
   function _archiveWindowRowTs(row) {
     if (!row) return 0;
     // Keep the shared Active/All window aligned with Current Sessions: an
     // interaction can be newer than the transcript's file modification time.
     // Normalize each candidate before comparing so mixed millisecond/second
     // values cannot make an older millisecond timestamp win.
-    const timestamps = [
-      row.modified, row.mtime, row.last_interacted, row.last_activity,
-      row.last_mtime, row.archived_at, row.closed_at, row.started_at,
-    ].map((raw) => {
-      const ts = Number(raw);
-      if (!Number.isFinite(ts) || ts <= 0) return 0;
-      return ts > 100000000000 ? Math.floor(ts / 1000) : ts;
-    });
-    return Math.max(...timestamps);
+    // CCC-121: fixed-arity Math.max, no per-call arrays or spread; this runs
+    // per row (11k+) on every window=all render.
+    return Math.max(
+      _archiveWindowTsSec(row.modified), _archiveWindowTsSec(row.mtime),
+      _archiveWindowTsSec(row.last_interacted), _archiveWindowTsSec(row.last_activity),
+      _archiveWindowTsSec(row.last_mtime), _archiveWindowTsSec(row.archived_at),
+      _archiveWindowTsSec(row.closed_at), _archiveWindowTsSec(row.started_at),
+    );
   }
   function _archiveWindowAllowsRow(row, cutoff = _archiveWindowCutoff()) {
     if (!cutoff) return true;
@@ -14521,10 +14525,21 @@
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
+  // CCC-121: string replace, not a throwaway <div> per call. Every built sidebar
+  // row calls this dozens of times, so createElement + textContent + innerHTML
+  // serialization was the top self-time in window=all renders. Output matches
+  // the old DOM round-trip exactly: null/undefined -> '', and text-node
+  // serialization escapes only & < > and U+00A0 (quotes stay; see escapeAttr).
+  // Self-contained (no module consts) so it is safe to call from anywhere and
+  // tests can extract it by source range.
   function escapeHtml(s) {
-    const div = document.createElement('div');
-    div.textContent = s;
-    return div.innerHTML;
+    if (s == null) return '';
+    const t = String(s);
+    if (!/[&<>\u00a0]/.test(t)) return t;
+    return t.replace(/[&<>\u00a0]/g, _escapeHtmlChar);
+  }
+  function _escapeHtmlChar(ch) {
+    return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&nbsp;';
   }
 
   function escapeAttr(s) {
@@ -35376,16 +35391,23 @@
     if (_WT_LAUNCH_PROMPT_RE.test(String(row.first_message || '').trim().toLowerCase())) return 'workers';
     return 'coding';
   }
-  function _sidebarBudgetLaneGuess(row, byId, seen = new Set()) {
+  function _sidebarBudgetLaneGuess(row, byId, seen) {
     if (!row) return 'coding';
     const override = String(row.all_lane_override || '').trim();
     if (override) return override;
     const id = String(row.session_id || row.id || '').trim();
-    if (id) seen.add(id);
     const parentId = String(row.parent_session_id || row.hermes_parent_session_id
       || continuationParentId(row) || row.continued_from_session_id || '').trim();
-    const parent = byId && parentId && !seen.has(parentId) ? byId.get(parentId) : null;
-    return parent ? _sidebarBudgetLaneGuess(parent, byId, seen) : _sidebarBudgetNaturalLane(row);
+    // CCC-121: the cycle guard is only needed once we follow a parent, so
+    // the common parentless row no longer allocates a Set per call.
+    if (!parentId || !byId || parentId === id || (seen && seen.has(parentId))) {
+      return _sidebarBudgetNaturalLane(row);
+    }
+    const parent = byId.get(parentId);
+    if (!parent) return _sidebarBudgetNaturalLane(row);
+    if (!seen) seen = new Set();
+    if (id) seen.add(id);
+    return _sidebarBudgetLaneGuess(parent, byId, seen);
   }
 
   // Idea tickets: spend the render budget on rows whose ticket is in the
