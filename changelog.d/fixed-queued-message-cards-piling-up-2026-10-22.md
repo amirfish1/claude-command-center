@@ -1,0 +1,1 @@
+- Fixed the queued-message tray piling up hundreds of identical cards for one parked Codex input: queue-overlay events carry no transcript dedupe key, so each re-render appended another row for the same durable entry. Queued sends now dedupe by text (matching the server queue's own rule) both at render time and inside the queued-steer tray.

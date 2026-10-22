@@ -60812,6 +60812,24 @@
       inputBar.parentNode.insertBefore(tray, inputBar);
     }
     const trayRows = [...tray.querySelectorAll('.event.user_text'), ...candidates];
+    // The durable queue dedupes queued inputs by text, so two server-queue
+    // rows with the same words can only ever describe ONE parked entry —
+    // never show both. Rendered queue events carry no jsonl line / live_key,
+    // so every re-poll appends a fresh element for the same entry; without
+    // this collapse an echo/steer race that leaves an extra node behind makes
+    // the tray visibly pile up with identical cards.
+    const seenServerQueuedText = new Set();
+    for (let i = trayRows.length - 1; i >= 0; i--) {
+      const el = trayRows[i];
+      if (el.dataset.queuedSteerServer !== 'true') continue;
+      const key = queuedRowText(el) || '';
+      if (seenServerQueuedText.has(key)) {
+        el.remove();
+        trayRows.splice(i, 1);
+        continue;
+      }
+      seenServerQueuedText.add(key);
+    }
     const queuedSource = queuedSteerSource(
       (paneState && paneState.currentSession && paneState.currentSession.source)
         || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[conversationId])
@@ -63790,6 +63808,21 @@
       } else if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
         if ($view.querySelector('.event[data-jsonl-line="' + escLine + '"]')) continue;
+      } else if (ev.pending && ev.type === 'user_text') {
+        // Queue-overlay rows carry neither line nor live_key, so the keyed
+        // dedupe above cannot see them — the SAME parked queue entry would
+        // append a duplicate row on every poll. Dedupe by normalized text
+        // against both the transcript and the queued-steer tray (the server
+        // queue itself dedupes by text, so identical words are one entry).
+        const _queuedText = _normSend(ev.text);
+        const _queuedScope = $view.closest('.conv-pane');
+        const _queuedDup = [_queuedScope && _queuedScope.querySelector('.queued-steer-tray'), $view]
+          .some(scope => scope && [...scope.querySelectorAll('.event.user_text[data-queued-steer-server]')]
+            .some(el => {
+              const msg = el.querySelector('.user-msg');
+              return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent) === _queuedText;
+            }));
+        if (_queuedDup) continue;
       }
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
