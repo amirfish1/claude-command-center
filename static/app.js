@@ -36090,6 +36090,7 @@
       else if (!c.display_name && !c.ai_title && !c.first_message) titleClass = 'untitled';
       if (titlePending) titleClass += (titleClass ? ' ' : '') + 'title-pending';
       const uxFixesQueueProgressHtml = _uxFixesQueueProgressHtml(c);
+      const _ideaRowRef = ideaTicketsOn() && c.idea_ticket && c.idea_ticket.ref;
       // Prefer the last assistant "outcome" (summary) over the original ask —
       // mirrors the kanban card behavior so list view shows what the session did.
       let askHtml = '';
@@ -37146,7 +37147,9 @@
             + sessionStuckWarningHtml(c)
             + (window.cccClaudeReauth ? window.cccClaudeReauth.rowChipHtml(c) : '')
             + workerOriginBadgeHtml(c)
-            + ideaTicketChipHtml(c)
+            // Idea-ticket rows give the title the whole first line; the
+            // ticket chip moves to the line below (see _ideaRowLine).
+            + (_ideaRowRef ? '' : ideaTicketChipHtml(c))
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             // .conv-meta-col is display:contents everywhere except the Workers
             // table layout, where it becomes the row's single meta CELL. Grid
@@ -37157,9 +37160,9 @@
             + _continuationChainBadgeHtml(c)
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
-            + (goalIconOnly ? goalIconHtml : '')
+            + (goalIconOnly && !_ideaRowRef ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
-            + (opts.evergreenAgent ? '' : uxFixesQueueProgressHtml)
+            + ((opts.evergreenAgent || _ideaRowRef) ? '' : uxFixesQueueProgressHtml)
             + (opts.evergreenAgent ? '' : evergreenStateHtml)
             + historyBadgeHtml
             + historyChainBadgeHtml
@@ -37193,7 +37196,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
-        + _uxFixesWorkerHistoryHtml(c)
+        + (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c))
         + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
@@ -71496,6 +71499,15 @@
     }
     const identity = String(c._worker_id || c.session_id || c.id || '').split('-').pop().slice(0, 8);
     return '🧵 ' + generated[1].trim() + ' worker' + (identity ? ' · ' + identity : '');
+  }
+
+  // Second line of an idea-ticket row: its ticket chip, plus the recorded-
+  // ticket history only when it holds more than the idea ticket itself.
+  function _ideaRowLine(c) {
+    const ref = c.idea_ticket.ref;
+    const others = _uxFixesWorkerTicketsForRow(c).some(t => t && t.ref !== ref);
+    return '<div class="conv-idea-line">' + ideaTicketChipHtml(c) + '</div>'
+      + (others ? _uxFixesWorkerHistoryHtml(c) : '');
   }
 
   const _uxFixesHistoryExpanded = new Set();

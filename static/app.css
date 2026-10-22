@@ -30920,6 +30920,12 @@ body.has-mobile-bottom-nav .jobs-add-actions button { min-height: 40px; padding:
   font-size: 11px; font-weight: 600; white-space: nowrap; cursor: pointer;
 }
 .ccc-idea-ticket:hover { background: rgba(88,166,255,0.26); }
+.conv-idea-line {
+  margin: 2px 0 1px 26px;
+  min-width: 0;
+  line-height: 1.5;
+}
+.conv-idea-line .ccc-idea-ticket { margin: 0; }
 
 /* Ordered model routing controls in Settings > Engines. */
 .model-routing-card { display: block; padding: 16px 14px; }
