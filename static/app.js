@@ -87624,6 +87624,15 @@
       }
       handleSettingsArrowNav(e);
     });
+    // The handler above only sees keys while focus is inside the modal.
+    // Clicking plain text in Settings (or the backdrop) drops focus to
+    // <body>, and Esc then did nothing. Close from the document as well;
+    // keys from inside the modal already stopped propagation above.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || isImeKey(e)) return;
+      if ($settingsModal.hidden || $settingsModal.contains(e.target)) return;
+      closeSettingsModal();
+    });
   }
   // Initial state — already applied synchronously, but refresh checks
   // and re-apply (no-op) for clarity.

@@ -1,0 +1,1 @@
+- Esc now closes Settings even after clicking plain text inside it (focus had fallen out of the dialog).
