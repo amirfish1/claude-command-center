@@ -37505,7 +37505,9 @@
       const _outSending = !!_outSid && sessionIsOptimisticallySending(_outSid);
       // Text captured at send time is the previous turn's, not this one's.
       const _preSend = preSendPreviewFor(_outSid);
-      const _latestStale = _preSend !== null && _latestRaw === _preSend;
+      // A user event after the last reply also means the text is the
+      // previous turn's (covers sends from other tabs or the CLI).
+      const _latestStale = (_preSend !== null && _latestRaw === _preSend) || c.last_event_type === 'user';
       // The server's four-state label covers the think gaps between tools,
       // where no live tool pill shows but the turn is still running.
       const _outWorking = _outSending || _isWorkingRow || c.state === 'working';
@@ -37519,8 +37521,20 @@
         let _label, _kind, _stepText;
         if (_outWorking) {
           _label = 'Working'; _kind = 'working';
-          _stepText = _outSending ? 'Sent, waiting for the first reply…'
-            : ((_latest && !_latestStale) ? _latest : 'Working…');
+          // Turns are mostly tool calls with text only at the end, so the
+          // live tool (polled every few seconds) is the freshest signal;
+          // fall back to this turn's text, then a bare "Working…".
+          // Not every sidebar row has the live poll merged in; read it here.
+          const _lv = _applyLiveOverlayToRow(c);
+          const _liveAge = _lv.sidecar_ts ? Date.now() / 1000 - _lv.sidecar_ts : 9999;
+          const _liveTool = (_lv.is_live && _lv.sidecar_status === 'active' && _lv.sidecar_tool
+            && _liveAge < (_lv.sidecar_in_flight ? 300 : 60))
+            ? liveActivityToolLabel(_lv.sidecar_tool)
+              + (_lv.sidecar_file ? ': ' + shortenLiveActivityDetail(_lv.sidecar_file, _lv.sidecar_tool, 160) : '')
+            : '';
+          const _turnText = (_latest && !_latestStale) ? _latest : '';
+          _stepText = _liveTool || _turnText
+            || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
         } else if (_hasNext) {
           // A next step is always "yours"; one green label, no separate
           // NEEDS YOU variant.
