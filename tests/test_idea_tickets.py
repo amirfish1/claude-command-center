@@ -233,6 +233,18 @@ class IdeaTicketsTest(unittest.TestCase):
         take = [c for c in self.calls if c[0] == "add"][-1]
         self.assertEqual(take[take.index("--title") + 1], "Fix the crash")
 
+    def test_sweep_continuation_inherits_before_first_reply(self):
+        self._ui_session("origin")
+        ref = it.attach_or_file("origin", classify_fn=lambda t: "idea")["ref"]
+        rows = [{"session_id": "continuation", "engine": "antigravity",
+                 "continued_from_session_id": "origin", "last_event_type": "user"}]
+        self.assertEqual(it.sweep_rows(rows), 1)
+        ticket = it.ticket_for_session("continuation")
+        self.assertEqual(ticket["ref"], ref)
+        self.assertEqual(ticket["sessions"], ["origin", "continuation"])
+        self.assertEqual(it.sweep_rows(rows), 0)
+        self.assertEqual(len([c for c in self.calls if c[0] == "add"]), 1)
+
     def test_flag_off_disables_everything(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")

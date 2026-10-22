@@ -379,7 +379,8 @@ SWEEP_MAX_PER_CALL = 5
 
 def sweep_rows(rows):
     """List-build entry point for engines without a Stop hook (Codex etc.):
-    queue the ticket step for candidate rows that already have a reply.
+    queue ticket creation after a reply, or inherit a continuation's ticket
+    as soon as its origin is known.
 
     Candidacy is a dict lookup per row: a pending UI spawn, or a session whose
     continuation origin or parent already has a ticket. Known sessions are
@@ -403,13 +404,14 @@ def sweep_rows(rows):
         # sessions of their own; they don't join the ticket's log.
         if sid.startswith("agent-"):
             continue
+        continuing = _ticketed(row.get("continued_from_session_id"))
         if not (sid in pending
-                or _ticketed(row.get("continued_from_session_id"))
+                or continuing
                 or _ticketed(row.get("parent_session_id"))):
             continue
         # "Has replied": Claude rows carry a reply preview; Codex rows only
         # record that the last event was a turn result.
-        if not (row.get("last_assistant_preview") or row.get("last_assistant_text")
+        if not (continuing or row.get("last_assistant_preview") or row.get("last_assistant_text")
                 or row.get("last_event_type") == "result"):
             continue
         queued = on_turn_end(
