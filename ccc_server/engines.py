@@ -8467,7 +8467,15 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             log_fh.flush()
         except OSError:
             pass
-    child_env = _core._question_relay_env()
+    # A cold resume is a new process, so it must carry the autocompact window
+    # too -- otherwise it silently falls back to Claude Code's own default.
+    # Use the current Settings value (the user-facing key, passed explicitly:
+    # this runs in the worker, whose role default is the WatchTower one), so
+    # changing Settings and restarting a session applies the new threshold.
+    resume_auto_compact_k = _core._validate_auto_compact_k(
+        (_core._load_spawn_defaults() or {}).get("auto_compact_k", 250)
+    )
+    child_env = _core._spawn_env(auto_compact_k=resume_auto_compact_k)
     if paid_preset:
         _domestic_providers.apply_env(child_env, paid_preset["env"])
     if runtime:
@@ -8529,6 +8537,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         "repo_path": ctx["repo_path"],
         "runtime": runtime,
         "model": preset_model if paid_preset else "",
+        "auto_compact_k": resume_auto_compact_k,
     }
     ok = _core._write_stream_json_user_message(entry, text, timeout=30)
     if not ok:
