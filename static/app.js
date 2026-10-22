@@ -79942,9 +79942,9 @@
   // Compact view: everything between two text messages (tool calls,
   // thinking) folds into one "N tool calls · M thoughts" line; the
   // narration stays. Claude sessions render tool calls as sibling
-  // .tool-call-group rows; Devin/Codex/ACP sessions put .tool-call and
-  // .thinking-block straight inside the .event.assistant next to the
-  // text, so units are collected at both levels. Runs are re-marked after
+  // .tool-call-group rows; other renderers nest tool/thinking blocks in
+  // .event.assistant or merged .kimi-turn containers. Collect their blocks
+  // in transcript order, ignoring metadata. Runs are re-marked after
   // every DOM change while compact is on; the marks are inert outside
   // body.conv-compact. Tap the line to unfold, tap the head to fold.
   function _ccUnitsOf(view) {
@@ -79954,8 +79954,23 @@
       const cl = el.classList;
       if (cl.contains('tool-call-group')) {
         units.push({ el, kind: 'tool', calls: Math.max(1, el.querySelectorAll('.tool-call').length) });
-      } else if (el.matches('details.spawn-stats')) {
+      } else if (el.matches('details.spawn-stats, .codex-subagent')) {
         units.push({ el, kind: 'passive' });
+      } else if (cl.contains('kimi-turn')) {
+        // Codex/Kimi merge events into turns. Walk their visible blocks;
+        // hidden reconciliation markers and answer chrome are transparent.
+        for (const c of el.children) {
+          if (c.matches('.kimi-marker, .kimi-answer-meta')) continue;
+          if (c.matches('.acp-needs-approval, :has(.acp-needs-approval)')) {
+            units.push({ el: c, kind: 'break' });
+          } else if (c.matches('.kimi-tool-group, .kimi-tool')) {
+            units.push({ el: c, kind: 'tool', calls: Math.max(1, c.querySelectorAll('.kimi-tool').length) });
+          } else if (c.matches('.kimi-thinking')) {
+            units.push({ el: c, kind: 'think' });
+          } else {
+            units.push({ el: c, kind: 'break' });
+          }
+        }
       } else if (cl.contains('event') && cl.contains('assistant')) {
         let found = false;
         for (const c of el.children) {
@@ -80031,8 +80046,9 @@
     const flush = () => {
       const active = run.filter(u => u.kind !== 'passive');
       // A chip costs no row, so with a preceding text even one step folds;
-      // a standalone head line only pays off for two or more.
-      if (active.length >= 2 || (active.length && prevText)) {
+      // Legacy standalone rows fold at two steps; merged tools/thinking
+      // also fold alone so output previews never dominate compact mode.
+      if (active.length >= 2 || (active.length && prevText) || active[0]?.el.matches('.kimi-tool, .kimi-tool-group, .kimi-thinking')) {
         const head = active[0].el;
         const calls = active.reduce((n, u) => n + (u.calls || 0), 0);
         const thoughts = active.filter(u => u.kind === 'think').length;
@@ -80151,6 +80167,10 @@
     const head = chip ? null : t.closest('.cc-run-head');
     if (!chip && !head) return;
     if (head && head.classList.contains('tool-call-group') && !t.closest('.tool-call-group-header')) return;
+    // Once revealed, let the tool/think controls handle their own clicks.
+    // A chip or the standalone head's fold label still closes the run.
+    if (head?.matches('.kimi-tool, .kimi-tool-group, .kimi-thinking')
+        && head.classList.contains('cc-run-open') && t !== head) return;
     const view = (chip || head).closest('.conversations-view');
     if (!view) return;
     ev.stopImmediatePropagation();

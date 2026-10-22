@@ -31256,7 +31256,8 @@ body.conv-compact .conversations-view .cc-orch-chip::before { content: attr(data
    tracking, so it reads as plain prose. User messages keep their theme
    bubble on purpose (user ask). `:not(#cc-compact)` adds ID-level specificity
    so this beats the conv-bg themes (stitch tops out at 0,9,0 !important). */
-body.conv-compact:not(#cc-compact) .conversations-view .event.assistant .assistant-text {
+body.conv-compact:not(#cc-compact) .conversations-view .event.assistant .assistant-text,
+body.conv-compact:not(#cc-compact) .conversations-view .kimi-turn .assistant-text {
   background: none !important; border: 0 !important; border-radius: 0 !important;
   box-shadow: none !important; padding: 1px 2px !important; margin: 0 0 10px !important;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif !important;
@@ -31266,11 +31267,47 @@ body.conv-compact:not(#cc-compact) .conversations-view .event.assistant .assista
 
 /* Each turn's final summary keeps the card look Normal view has (stitch
    surface + accent rule), so it stands out from the toned-down narration. */
-body.conv-compact:not(#cc-compact) .conversations-view .event.assistant .assistant-text.cc-final {
+body.conv-compact:not(#cc-compact) .conversations-view .event.assistant .assistant-text.cc-final,
+body.conv-compact:not(#cc-compact) .conversations-view .kimi-turn .assistant-text.cc-final {
   background: var(--conv-surface-2, rgba(255,255,255,0.05)) !important;
   border-left: 2px solid var(--conv-accent, var(--accent, #58a6ff)) !important;
   border-radius: 0 4px 4px 0 !important;
   padding: 10px 14px !important; margin: 4px 0 12px !important;
+}
+
+/* Merged Codex/Kimi turns use the same compact rhythm as other engines.
+   Their normal layout adds gaps and output previews to every block. */
+body.conv-compact.conv-compact .conversations-view .kimi-turn {
+  margin: 0 !important; padding: 1px 0 !important;
+}
+body.conv-compact.conv-compact .conversations-view .kimi-turn > * + * { margin-top: 0 !important; }
+body.conv-compact.conv-compact .conversations-view .kimi-turn .assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip)) {
+  display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; cursor: pointer;
+}
+body.conv-compact.conv-compact .conversations-view .kimi-tool-peek { display: none !important; }
+body.conv-compact.conv-compact .conversations-view .kimi-tool-group:has(.acp-needs-approval) > .kimi-tool-group-body { display: block !important; }
+body.conv-compact.conv-compact .conversations-view :is(.kimi-tool, .kimi-tool-group, .kimi-thinking).cc-run-head.cc-run-open:not(.cc-run-chipped)::before {
+  content: "\25BE  fold " attr(data-cc-run-label); display: block;
+  padding: 2px 6px; font-size: 12px; color: var(--text-muted); cursor: pointer;
+}
+/* Keep copy/speak/time available without spending a row per narration.
+   The metadata node stays in place for live/saved-event reconciliation. */
+body.conv-compact.conv-compact .conversations-view .kimi-answer-meta {
+  position: relative; height: 0; min-height: 0; margin: 0 !important;
+  padding: 0; overflow: visible; justify-content: flex-end; gap: 6px;
+  top: -18px; opacity: 0; pointer-events: none;
+}
+body.conv-compact.conv-compact .conversations-view .kimi-answer-meta .line-num { display: none !important; }
+body.conv-compact.conv-compact .conversations-view .assistant-text:hover + .kimi-answer-meta,
+body.conv-compact.conv-compact .conversations-view .kimi-answer-meta:hover,
+body.conv-compact.conv-compact .conversations-view .kimi-answer-meta:focus-within {
+  opacity: 0.85; pointer-events: auto; background: var(--bg);
+}
+@media (hover: none) {
+  body.conv-compact.conv-compact .conversations-view .kimi-answer-meta {
+    height: 18px; top: 0; opacity: 0.7; pointer-events: auto;
+  }
 }
 
 /* Transcript view segmented control: Compact | Normal | Verbose, all
