@@ -31866,25 +31866,34 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     font-size: 18px;
     font-weight: 700;
   }
+  /* Titles are sentences, so they get up to two lines. The text block is a
+     fixed 3 lines tall: a one-line title leaves the preview two lines, a
+     two-line title leaves it one (the clip falls on a line boundary). */
   .wa-body {
     flex: 1 1 auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    height: 78px;
+    box-sizing: border-box;
     padding: 8px 14px 8px 0;
     border-bottom: 1px solid color-mix(in srgb, var(--text, #e6edf3) 10%, transparent);
   }
-  .wa-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .wa-line1 { display: flex; align-items: flex-start; gap: 8px; min-width: 0; flex: 0 0 auto; }
   .wa-title {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
     font-size: 16px;
     line-height: 21px;
     font-weight: 600;
     color: var(--text);
   }
-  .wa-time { flex: 0 0 auto; font-size: 13px; color: var(--text-muted); white-space: nowrap; }
+  .wa-time { flex: 0 0 auto; font-size: 12px; line-height: 21px; color: var(--text-muted); white-space: nowrap; }
   .wa-lanes {
     flex: 0 0 auto;
     align-self: center;
@@ -31901,8 +31910,9 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    height: 36px;
-    margin-top: 2px;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
   }
   .wa-preview {
     flex: 1 1 auto;
@@ -31928,12 +31938,12 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   @keyframes wa-pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
   .wa-badge {
     flex: 0 0 auto;
-    min-width: 22px;
-    height: 22px;
-    border-radius: 11px;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
     background: #d9a441;
     color: #1b1408;
-    font: 700 13px/22px system-ui, sans-serif;
+    font: 700 12px/18px system-ui, sans-serif;
     text-align: center;
   }
   /* Child sessions: indented, smaller avatar, a thread line on the left.
@@ -32062,6 +32072,8 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   #convList .conv-subagent-cluster-body .wa-face { font-size: 20px; }
   #convList .conv-subagent-cluster-body .wa-kind { width: 17px; height: 17px; font-size: 10px; }
   .wa-time { display: inline-flex; align-items: center; gap: 5px; }
+  /* Fits the one preview line left under a two-line title. */
+  .wa-preview .ccc-idea-ticket { padding: 0 6px; line-height: 15px; vertical-align: 1px; }
   .wa-engine { display: inline-flex; opacity: 0.7; }
   .wa-engine svg, .wa-engine .conv-session-svg { width: 12px; height: 12px; }
 }

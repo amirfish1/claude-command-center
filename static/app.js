@@ -22649,7 +22649,8 @@
     t = t.split(/\s+/).filter(Boolean).join(' ');
     return t.length <= 140 ? t : t.slice(0, 139).trimEnd() + '\u2026';
   }
-  // Chat-app time label: 14:05 today, Yesterday, weekday this week, else date.
+  // Compact chat-list time, so the title keeps the width: 11:42 today,
+  // Mon this week, 10/19 before that.
   // CCC-119: toLocale*String(_, options) builds a fresh Intl formatter on every
   // call (~0.3ms each, once per rendered row per render); reuse three.
   let _waTimeFmts = null;
@@ -22660,15 +22661,14 @@
     const d = new Date(n), now = new Date();
     const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const diffDays = Math.round((day(now) - day(d)) / 86400000);
-    if (diffDays === 1) return 'Yesterday';
     if (!_waTimeFmts) {
       _waTimeFmts = {
         time: new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }),
-        weekday: new Intl.DateTimeFormat([], { weekday: 'long' }),
-        date: new Intl.DateTimeFormat([], { month: 'numeric', day: 'numeric', year: '2-digit' }),
+        weekday: new Intl.DateTimeFormat([], { weekday: 'short' }),
+        date: new Intl.DateTimeFormat([], { month: 'numeric', day: 'numeric' }),
       };
     }
-    if (diffDays <= 0) return _waTimeFmts.time.format(d);
+    if (diffDays <= 0) return _waTimeFmts.time.format(d).replace(/\s*[AP]\.?M\.?$/i, '');
     if (diffDays < 7) return _waTimeFmts.weekday.format(d);
     return _waTimeFmts.date.format(d);
   }
@@ -37222,7 +37222,8 @@
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
-        +     '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span></span></div>'
+        // Claude is the norm; the engine mark only flags the exceptions.
+        +     (_waEngine === 'claude' ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Idea-ticket rows lead the preview with their IDEAS-N chip (tap opens it).
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + ideaTicketChipHtml(c) + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
