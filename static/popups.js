@@ -28,12 +28,14 @@
     'fleet-limit',
     'leftover-offer',
     'leftover-notification',
+    'restart-interrupted',
   ];
 
   // Approved pop-ups. Nothing else shows until Amir approves it.
   var APPROVED = [
     'moment-zero', // approved 2026-10-06
     'notify-task', // approved 2026-10-16: clickable session-finished/needs-you banners
+    'restart-interrupted', // approved 2026-10-22: sessions a machine restart cut off mid-turn
   ];
 
   var NOTIFY_KIND_IDS = {

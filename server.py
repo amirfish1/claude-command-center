@@ -27347,6 +27347,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/leftover/proposals":
             from ccc_server import leftover
             leftover.handle_api_get(self, parsed)
+        elif path == "/api/restart-recovery":
+            # Sessions a machine restart cut off mid-turn (scanned once per boot).
+            from ccc_server import restart_recovery
+            restart_recovery.handle_api_get(self)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
@@ -31499,6 +31503,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # was already enforced at the top of do_POST.
             from ccc_server import free_router
             if free_router.handle_api_post(self, path):
+                return
+        if path.startswith("/api/restart-recovery/"):
+            # Dismiss / resume-prompt for sessions a restart cut off mid-turn.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import restart_recovery
+            if restart_recovery.handle_api_post(self, path):
                 return
         if path == "/api/leftover/approve":
             # Leftover Mode: one click queues a proposed WatchTower ticket.
@@ -43025,6 +43035,11 @@ def main():
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
     # sessions and forgotten cron agents that the archive-time kill misses.
     threading.Thread(target=_idle_reaper_loop, daemon=True).start()
+    # Restart recovery: a minute heartbeat whose last touch before a reboot
+    # records when the machine went down, so sessions cut off mid-turn can
+    # be told apart from ones that died earlier on their own.
+    from ccc_server import restart_recovery as _restart_recovery_boot
+    _restart_recovery_boot.start_heartbeat()
     # Resume waiting on any backgrounded / stop-after-turn archives.
     from ccc_server import archive_deferred as _archive_deferred_boot
     _archive_deferred_boot.ensure_running()
