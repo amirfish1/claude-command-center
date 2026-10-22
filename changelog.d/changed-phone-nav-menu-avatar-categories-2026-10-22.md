@@ -1,2 +1,2 @@
-- Phone bottom bar: Jobs, Queues and Ask moved into a ☰ More menu at the bottom left.
+- Phone bottom bar: Jobs, Queues and Ask moved into a ☰ More menu at the bottom right.
 - Phone session avatars use five topic categories (Money, Data & evals, Customers & growth, Product & UI, Build & ops), each one emoji on one color.
