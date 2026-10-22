@@ -130,10 +130,51 @@ def cpu_pressure():
     return out
 
 
+def memory_pressure():
+    """Cheap host memory pressure from /proc/meminfo plus memory PSI (Linux).
+
+    Returns {} when /proc is unavailable (macOS). ``level`` is ok/busy/saturated
+    from used% (>=80 busy, >=90 saturated) or PSI some avg10 (>=10 / >=25).
+    """
+    out = {}
+    try:
+        info = {}
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                k, _, rest = line.partition(":")
+                if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                    info[k] = int(rest.split()[0])
+        total, avail = info["MemTotal"], info["MemAvailable"]
+        used_pct = round(100.0 * (total - avail) / total, 1) if total else 0.0
+        out.update(total_mb=total // 1024, available_mb=avail // 1024, used_pct=used_pct)
+        if info.get("SwapTotal"):
+            out["swap_used_pct"] = round(100.0 * (info["SwapTotal"] - info.get("SwapFree", 0)) / info["SwapTotal"], 1)
+    except (OSError, ValueError, KeyError, IndexError):
+        return {}
+    psi = 0.0
+    try:
+        with open("/proc/pressure/memory") as fh:
+            for line in fh:
+                parts = line.split()
+                if parts and parts[0] == "some":
+                    vals = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+                    psi = float(vals.get("avg10", 0))
+                    out["psi_some_avg10"] = psi
+    except (OSError, ValueError):
+        pass
+    out["level"] = ("saturated" if used_pct >= 90 or psi >= 25
+                    else "busy" if used_pct >= 80 or psi >= 10 else "ok")
+    return out
+
+
+def _with_pressure(payload):
+    return dict(payload, cpu=cpu_pressure(), memory=memory_pressure())
+
+
 def background_runs_payload(now=None, projects_root=None, markers=None, use_cache=True):
     now = time.time() if now is None else now
     if use_cache and _CACHE["payload"] is not None and now - _CACHE["ts"] < _CACHE_TTL:
-        return dict(_CACHE["payload"], cpu=cpu_pressure())
+        return _with_pressure(_CACHE["payload"])
     root = projects_root or _core.PROJECTS_ROOT
     markers = _core._load_spawn_markers() if markers is None else markers
     groups = {}
@@ -181,4 +222,4 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
     _log_new_alerts(payload["alerts"])
     if use_cache:
         _CACHE.update(ts=now, payload=payload)
-    return dict(payload, cpu=cpu_pressure())
+    return _with_pressure(payload)

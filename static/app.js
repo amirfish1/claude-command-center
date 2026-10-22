@@ -70731,22 +70731,40 @@
     if (!$bgRunsBtn || !p || !p.ok) return;
     const t = p.totals || {};
     const cpu = p.cpu || {};
-    const cpuHot = cpu.level === 'busy' || cpu.level === 'saturated';
+    const mem = p.memory || {};
     const hot = (p.alerts || []).length > 0;
-    if (!t.runs_last_day && !cpuHot) { $bgRunsBtn.style.display = 'none'; $bgRunsPanel.hidden = true; return; }
-    const cpuChip = cpuHot ? ` · CPU ${cpu.load_per_core}×` : '';
-    $bgRunsBtn.textContent = `${hot || cpu.level === 'saturated' ? '⚠ ' : ''}⚙ ${t.runs_last_hour || 0}/h background${cpuChip}`;
+    // Host CPU/mem pressure is always shown (not only when busy) so a calm
+    // host reads as calm instead of the chip silently vanishing.
+    if (!t.runs_last_day && !cpu.cores && mem.used_pct == null) { $bgRunsBtn.style.display = 'none'; $bgRunsPanel.hidden = true; return; }
+    // Pressure leads (the pill is narrow and truncates at the end).
+    const chips = [];
+    if (cpu.cores) chips.push(`CPU ${Number(cpu.load_per_core).toFixed(1)}×`);
+    if (mem.used_pct != null) chips.push(`mem ${Math.round(mem.used_pct)}%`);
+    chips.push(`⚙ ${t.runs_last_hour || 0}/h`);
+    const saturated = cpu.level === 'saturated' || mem.level === 'saturated';
+    $bgRunsBtn.textContent = `${hot || saturated ? '⚠ ' : ''}${chips.join(' · ')}`;
+    $bgRunsBtn.title = 'Host pressure (CPU load per core, memory used) and background runs per hour (headless claude -p). Click for details.';
+    $bgRunsBtn.classList.toggle('is-pressure-busy', !saturated && (cpu.level === 'busy' || mem.level === 'busy'));
+    $bgRunsBtn.classList.toggle('is-pressure-saturated', saturated);
     $bgRunsBtn.style.display = '';
     const alerting = new Set((p.alerts || []).map(a => a.spawner + '|' + a.kind));
+    // formatTokens lives in another closure; a ReferenceError here used to
+    // leave the panel empty whenever a spawner group existed.
+    const fmtTok = n => { n = n || 0; return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n); };
     let html = '<div class="bg-runs-help">Headless <code>claude -p</code> runs started by scripts, evals and harnesses (not your sessions), grouped by who spawned them. Red rows are spawning unusually often.</div>';
     if (cpu.cores) {
-      const psi = cpu.psi_some_avg10 != null ? ` · stalled on CPU ${cpu.psi_some_avg10}% (10s)` : '';
-      html += `<div class="bg-runs-row${cpu.level === 'saturated' ? ' is-alert' : ''}"><span>CPU load · ${escapeHtml(cpu.level)}</span><span class="bg-runs-meta">${cpu.load1} / ${cpu.load5} / ${cpu.load15} on ${cpu.cores} cores (${cpu.load_per_core}× per core)${psi}</span></div>`;
+      const psi = cpu.psi_some_avg10 != null ? ` · stalled ${cpu.psi_some_avg10}%` : '';
+      html += `<div class="bg-runs-row${cpu.level === 'saturated' ? ' is-alert' : ''}"><span>CPU · ${escapeHtml(cpu.level)}</span><span class="bg-runs-meta" title="load 1/5/15 min ${cpu.load1} / ${cpu.load5} / ${cpu.load15}; stalled = share of the last 10s tasks waited on CPU (PSI)">${cpu.load_per_core}×/core · ${cpu.cores} cores${psi}</span></div>`;
+    }
+    if (mem.used_pct != null) {
+      const mpsi = mem.psi_some_avg10 != null ? ` · stalled ${mem.psi_some_avg10}%` : '';
+      const swap = mem.swap_used_pct != null ? ` · swap ${mem.swap_used_pct}%` : '';
+      html += `<div class="bg-runs-row${mem.level === 'saturated' ? ' is-alert' : ''}"><span>Memory · ${escapeHtml(mem.level || '?')}</span><span class="bg-runs-meta" title="stalled = share of the last 10s tasks waited on memory (PSI)">${Math.round(mem.used_pct)}% of ${(mem.total_mb / 1024).toFixed(0)} GB${swap}${mpsi}</span></div>`;
     }
     html += (p.groups || []).filter(g => g.runs_last_day).map(g => {
       const name = escapeHtml(g.spawner + (g.kind ? ' · ' + g.kind : ''));
       const cls = alerting.has(g.spawner + '|' + g.kind) ? ' is-alert' : '';
-      return `<div class="bg-runs-row${cls}"><span>${name}</span><span class="bg-runs-meta">${g.runs_last_hour}/h · ${g.runs_last_day}/d · ${formatTokens(g.tokens_last_day)} tok · ~$${(g.cost_usd_last_day || 0).toFixed(2)}</span></div>`;
+      return `<div class="bg-runs-row${cls}"><span>${name}</span><span class="bg-runs-meta">${g.runs_last_hour}/h · ${g.runs_last_day}/d · ${fmtTok(g.tokens_last_day)} tok · ~$${(g.cost_usd_last_day || 0).toFixed(2)}</span></div>`;
     }).join('');
     $bgRunsPanel.innerHTML = html;
   }

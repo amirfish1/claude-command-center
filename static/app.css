@@ -17408,6 +17408,8 @@
   .bg-runs-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
   .bg-runs-help { opacity: .75; font-size: 11px; line-height: 1.4; padding: 0 0 6px; max-width: 320px; }
   .bg-runs-row.is-alert { color: var(--danger, #e5534b); font-weight: 600; }
+  #bgRunsBtn.is-pressure-busy { color: var(--warning, #d29922); }
+  #bgRunsBtn.is-pressure-saturated { color: var(--danger, #e5534b); }
   .bg-runs-meta { opacity: .7; white-space: nowrap; }
   .conv-bg-palette {
     display: grid;

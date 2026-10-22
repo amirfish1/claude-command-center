@@ -44,3 +44,22 @@ def test_payload_reports_cpu_pressure(tmp_path, monkeypatch):
     assert p["cpu"]["cores"] == 4
     assert p["cpu"]["load_per_core"] == 2.25
     assert p["cpu"]["level"] == "saturated"
+
+
+def test_payload_reports_memory_pressure(tmp_path, monkeypatch):
+    real_open = open
+    meminfo = "MemTotal: 1000000 kB\nMemAvailable: 50000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"
+
+    def fake_open(path, *a, **kw):
+        if path == "/proc/meminfo":
+            import io
+            return io.StringIO(meminfo)
+        if path == "/proc/pressure/memory":
+            raise OSError("no psi")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    p = background_runs.background_runs_payload(now=1_800_000_000.0, projects_root=tmp_path, markers={}, use_cache=False)
+    assert p["memory"]["used_pct"] == 95.0
+    assert p["memory"]["level"] == "saturated"
+    assert "swap_used_pct" not in p["memory"]

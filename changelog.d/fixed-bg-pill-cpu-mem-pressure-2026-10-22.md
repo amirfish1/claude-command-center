@@ -1,0 +1,1 @@
+- The bottom-left background pill now always shows host CPU load per core and memory used (it used to hide CPU unless the host was busy and never showed memory), turns amber/red under pressure, and its details panel no longer opens empty.
