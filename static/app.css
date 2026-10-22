@@ -8192,6 +8192,38 @@
     line-height: 1.35;
     vertical-align: 1px;
   }
+  /* Next-step variant: the session named an action, so lead with it (amber,
+     matching the transcript's session-state card) instead of DONE. */
+  .conv-item .conv-outcome.is-next-step {
+    border-left-color: rgba(245,158,11,0.5);
+    background: rgba(245,158,11,0.07);
+  }
+  .conv-item .conv-outcome-step {
+    color: var(--text); opacity: 0.96;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+  .conv-item .conv-outcome-step::before {
+    content: "NEXT STEP";
+    display: inline-flex;
+    align-items: center;
+    margin-right: 6px;
+    padding: 0 4px;
+    border-radius: 3px;
+    border: 1px solid rgba(245,158,11,0.4);
+    background: rgba(245,158,11,0.12);
+    color: #f59e0b;
+    opacity: 0.9;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.35;
+    vertical-align: 1px;
+  }
   .conv-item .conv-outcome-next {
     display: -webkit-box;
     -webkit-line-clamp: 2;

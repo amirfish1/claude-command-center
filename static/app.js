@@ -37265,12 +37265,22 @@
       // this to DID only so the brief reads cleanly in one focused block.
       let outcomeHtml = '';
       const _ss = c.session_state || null;
-      if (!isBacklogRow && !isGithubPrRow && _ss && _ss.did) {
+      // Lead with the session's own next step when it names one: the row's
+      // chips already say the work is done, so "what now" is the useful line.
+      // DID stays in the tooltip, and becomes the line when there is no step.
+      if (!isBacklogRow && !isGithubPrRow && _ss && (_ss.did || _ss.next_step_user)) {
         const _did = (_ss.did || '').trim();
-        const _outTip = 'Did: ' + _did;
-        outcomeHtml = '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
-          + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
-          + '</div>';
+        const _next = (_ss.next_step_user || '').trim();
+        const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
+        const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
+          + (_hasNext ? 'Next step: ' + _next : '');
+        outcomeHtml = _hasNext
+          ? '<div class="conv-outcome is-next-step" title="' + escapeAttr(_outTip) + '">'
+            + '<span class="conv-outcome-step">' + escapeHtml(_next) + '</span>'
+            + '</div>'
+          : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
+            + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
+            + '</div>';
       }
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'

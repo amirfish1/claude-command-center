@@ -1,0 +1,1 @@
+- Sidebar session briefs now lead with the session's own **Next step** (amber) instead of the DONE line when it names an action; the DONE line still shows when there is nothing to do, and both are in the tooltip.
