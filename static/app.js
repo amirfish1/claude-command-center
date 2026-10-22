@@ -1681,7 +1681,7 @@
     }
     const col = document.getElementById(kind === 'list' ? 'cccPerfListCol' : 'cccPerfOpenCol');
     if (!col) return;
-    while (col.children.length >= 20) col.removeChild(col.firstChild);
+    while (col.children.length >= 20) col.removeChild(col.lastChild);
     const row = document.createElement('div');
     const d = new Date(entry.at || Date.now());
     const hh = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
@@ -1689,7 +1689,7 @@
     row.textContent = hh + ' ' + entry.text;
     row.title = entry.title || '';
     row.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    col.appendChild(row);
+    col.insertBefore(row, col.firstChild);
   }
   window.__cccPerfRow = _perfPaneRow;
   function _initPerfSection() {
@@ -46892,6 +46892,15 @@
     // superseded by a later one before its render lands is simply dropped —
     // no event fires for the abandoned one.
     try { _perfConvOpen = { id: id, paneId: paneId, t0: performance.now() }; } catch (_) {}
+    try {
+      if (id && typeof window.__cccPerfRow === 'function') {
+        window.__cccPerfRow('open', {
+          at: Date.now(),
+          text: '→ ' + String(id).slice(0, 8) + ' opening…',
+          title: 'click at ' + new Date().toLocaleTimeString() + ' — ' + id,
+        });
+      }
+    } catch (_) {}
     const pane = paneByPaneId(paneId);
     if (!pane) return;
     window.dispatchEvent(new CustomEvent('ccc:conversation-selected', { detail: {
@@ -56167,7 +56176,7 @@
               if (typeof window.__cccPerfRow === 'function') {
                 window.__cccPerfRow('open', {
                   at: Date.now(),
-                  text: Math.round(_perfWall) + 'ms ' + String(id).slice(0, 8),
+                  text: '✓ ' + Math.round(_perfWall) + 'ms ' + String(id).slice(0, 8),
                   title: 'click→render ' + Math.round(_perfWall) + 'ms wall, '
                     + Math.round(_perfActive) + 'ms active'
                     + (_perfPrefetchHit ? ' (prefetch hit)' : '')
