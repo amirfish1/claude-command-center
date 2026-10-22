@@ -1,0 +1,1 @@
+- Fixed sidebar session rows so the trash and menu buttons appear on hover of any row again, not just the selected one. Title chrome (id overlay, pencil, drag grip) still waits for selection, so rows keep their clean click target.
