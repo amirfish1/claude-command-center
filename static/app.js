@@ -37537,7 +37537,10 @@
       const _liveAge = _lv.sidecar_ts ? Date.now() / 1000 - _lv.sidecar_ts : 9999;
       const _liveFresh = !!(_lv.is_live && _lv.sidecar_status === 'active' && _lv.sidecar_tool
         && _liveAge < (_lv.sidecar_in_flight ? 300 : 60));
-      const _outWorking = _outSending || _isWorkingRow || c.state === 'working'
+      // Codex's turn state bridges gaps between tools. The generic state
+      // can read idle during those gaps while the WIP timer keeps running.
+      const _outWorking = _outSending || _isWorkingRow || _codexStateWorking
+        || _lv.codex_state === 'working' || c.state === 'working'
         || _lv.state === 'working' || (_liveFresh && !!_lv.sidecar_in_flight);
       if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking)) {
         const _did = ((_ss && _ss.did) || '').trim();
