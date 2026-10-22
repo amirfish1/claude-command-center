@@ -1,0 +1,1 @@
+- Fixed delivered send echoes lingering under the real transcript bubble when the persisted message text differs from the sent text (e.g. devin-cli inlines pasted-image paths mid-message); a durable user event now also sweeps the oldest unmatched echo row.

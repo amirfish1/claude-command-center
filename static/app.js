@@ -8671,7 +8671,11 @@
     // an idle session with an open terminal is `live` too, and used to show
     // a permanent "Generating…" (CCC-81). sidecar_status flips off at turn
     // end; the age cap covers a stale sidecar that never got cleared.
-    const isGenerating = (liveStatus.live || codexStateWorking) && !tool
+    // A completed sidecar can keep its tool name until the next status
+    // poll. That stale name must not hide Thinking during an active turn.
+    const hasActiveSidecarTool = liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
+      && (ageSec < 300 || isQuestion) && !_headlessQuestion;
+    const isGenerating = (liveStatus.live || codexStateWorking) && !hasActiveSidecarTool && !_headlessQuestion
       && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking
         || (_webuiBusy && !(_streamingBubble && _streamingBubble.parentNode === $view)));
     const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');
@@ -8684,9 +8688,7 @@
     const _approvalRequestId = _approvalItemForCard && _approvalItemForCard.request_id;
     const _approvalCardShowing = !!(_approvalRequestId && _codexRequestCardShowing($view, _approvalRequestId));
     const shouldShow = (needsApproval && !_approvalCardShowing)
-      || (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
-      && (ageSec < 300 || isQuestion) && !_headlessQuestion)
-      || isGenerating;
+      || hasActiveSidecarTool || isGenerating;
     if (!shouldShow) {
       if (inline) inline.remove();
       updateLiveStripOffset($view, null);
@@ -8845,11 +8847,12 @@
       // Webui panes get the kimi-web moon-phases waiting spinner (honest
       // busy signal — no fake per-token streaming); other engines keep the
       // generic pulse.
-      inline.innerHTML = (_webuiPane && !_activeItem.label ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
+      const generatingHtml = (_webuiPane && !_activeItem.label ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
         + '<span class="cl-tool">' + ((_activeItem.label || _kimiPendingTool) ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
         + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
         + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '')
         + _wakeBtnHtml;
+      if (inline.innerHTML !== generatingHtml) inline.innerHTML = generatingHtml;
       inline.title = _activeItem.label
         ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' - ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
         : (_kimiPendingTool
@@ -63330,6 +63333,7 @@
       const isText = el.classList.contains('assistant-text');
       const isThinking = el.classList.contains('kimi-thinking');
       if (isText || isThinking) {
+        el._kimiSourceHtml = el.innerHTML;
         const sel = isText ? '.assistant-text' : '.kimi-thinking';
         const inc = _kimiNormBlockText(el.textContent);
         if (!inc) continue;
@@ -63338,7 +63342,10 @@
           // A replay of one streamed item owns this block even if markdown
           // rendering changed its visible prefix since the previous snapshot.
           if (el.dataset.liveKey && ex.dataset.liveKey === el.dataset.liveKey) {
-            if (ex.innerHTML !== el.innerHTML) ex.innerHTML = el.innerHTML;
+            // Compact mode adds fold chips inside the rendered text. Compare
+            // the source markup so a repeated snapshot preserves those chips.
+            if ((ex._kimiSourceHtml ?? ex.innerHTML) !== el.innerHTML) ex.innerHTML = el.innerHTML;
+            ex._kimiSourceHtml = el.innerHTML;
             absorbed = true;
             break;
           }
@@ -63464,8 +63471,11 @@
     if (marker.dataset.codexItemId) {
       for (const el of blockEls) el.dataset.codexItemId = marker.dataset.codexItemId;
     }
-    for (const el of _kimiTurnCoveredBlocks(turn, blockEls)) turn.appendChild(el);
-    _kimiRegroupTools(turn);
+    const newBlocks = _kimiTurnCoveredBlocks(turn, blockEls);
+    for (const el of newBlocks) turn.appendChild(el);
+    // Replaying an unchanged live snapshot must not dismantle tool groups:
+    // their compact fold state and expanded controls belong to the reader.
+    if (newBlocks.length) _kimiRegroupTools(turn);
     anchorCodexStateBadge($view);
     return turn;
   }
@@ -64566,16 +64576,36 @@
         // nothing is lost. Skip synthetic continuation events so they never
         // consume a genuine pending echo.
         const _isContinuation = /^This session is being continued from a previous conversation\b/.test(ev.text || '');
-        if (_authoritativeUserEvent && !_reconciledExact && !_isContinuation
-            && _pendingSends.length && canAcknowledgeSend(_pendingSends[0])) {
-          const oldest = _pendingSends.shift();
-          if (oldest) {
-            _reconciledExact = true;
-            if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
-            if (oldest.timer) clearTimeout(oldest.timer);
-            if (oldest.sid) clearSessionSending(oldest.sid);
-            const pane = paneByPaneId(paneId);
-            if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
+        if (_authoritativeUserEvent && !_reconciledExact && !_isContinuation) {
+          if (_pendingSends.length && canAcknowledgeSend(_pendingSends[0])) {
+            const oldest = _pendingSends.shift();
+            if (oldest) {
+              _reconciledExact = true;
+              if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
+              if (oldest.timer) clearTimeout(oldest.timer);
+              if (oldest.sid) clearSessionSending(oldest.sid);
+              const pane = paneByPaneId(paneId);
+              if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
+            }
+          }
+          // Orphan sweep: the durable event still acknowledges ONE delivery
+          // even when the echo's array entry is already gone (pane re-render,
+          // conv switch) or its raw text drifted from the persisted wording —
+          // e.g. devin-cli stores pasted-image paths inline mid-message while
+          // the echo kept them appended, so the exact match above never fires
+          // and a "✓ Delivered" card would sit under its own transcript bubble
+          // forever. Remove the oldest surviving echo row in that case.
+          if (!_reconciledExact) {
+            const _orphans = echoScope.querySelectorAll(
+              '.event.user_text.pending, .event.user_text.send-queued,'
+              + ' .event.user_text.send-delivered, .event.user_text.not-acknowledged');
+            for (const _o of _orphans) {
+              const _oEntry = _o._pendingRef && _o._pendingRef.entry;
+              if (!canAcknowledgeSend(_oEntry || { ts: _o.dataset.tsEpoch })) continue;
+              if (_o.parentNode) _o.parentNode.removeChild(_o);
+              _reconciledExact = true;
+              break;
+            }
           }
         }
         // The render-tail and tray sweeps see this same durable row next.
@@ -65491,9 +65521,8 @@
     // Same story for the spawn-log streaming bubble — keep it pinned to
     // the tail so it doesn't end up sandwiched between older JSONL events
     // and newer ones.
-    if (_streamingBubble && _streamingBubble.parentNode === $view
-        && _streamingBubble !== $view.lastElementChild) {
-      $view.appendChild(_streamingBubble);
+    if (_streamingBubble && _streamingBubble.parentNode === $view) {
+      _reanchorToTailUnlessOnlyTransientBetween($view, _streamingBubble);
     }
     // The app-server live overlay is agent-output-only. Queue/input lifecycle
     // belongs to the durable transcript and pending-input APIs; running these
@@ -65564,6 +65593,11 @@
     // Re-evaluate the end-of-session outcome banner now that the latest
     // events are painted (covers error tool-results and mid-action stops).
     updateSessionOutcomeBanner($view);
+    // Fold before measuring or scrolling the transcript. Deferring this to
+    // the mutation observer measures expanded tools, then shrinks the view
+    // on the next frame and visibly jumps the reader during live updates.
+    if (document.body.classList.contains('conv-compact')) _ccMarkRuns($view);
+    anchorCodexStateBadge($view);
     // When a compact-resume event just landed, scroll the boundary
     // INTO VIEW (top of the resume card) instead of the very bottom.
     // The collapsed card sits at the top of the user's gaze; the
