@@ -1572,9 +1572,96 @@
      since it's secondary to the tool line. */
   .tool-inline-image { margin: 2px 0 8px 22px; }
   .tool-inline-image .msg-image { max-width: min(360px, 100%); max-height: 260px; margin: 0; }
-  .img-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
+  .img-lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 11, 16, 0.94);
+    display: none;
+    flex-direction: column;
+    z-index: 9999;
+    cursor: zoom-out;
+  }
   .img-lightbox.open { display: flex; }
-  .img-lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 6px; box-shadow: 0 4px 30px rgba(0,0,0,0.5); }
+  .img-lightbox-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+    background: rgba(13, 17, 23, 0.92);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    cursor: default;
+    flex-shrink: 0;
+  }
+  .img-lightbox-back,
+  .img-lightbox-download,
+  .img-lightbox-close {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.1);
+    color: #f0f6fc;
+    font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 9px 14px;
+    min-height: 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .img-lightbox-back:hover,
+  .img-lightbox-download:hover,
+  .img-lightbox-close:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
+  .img-lightbox-title {
+    flex: 1;
+    min-width: 0;
+    color: #c9d1d9;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+  .img-lightbox-stage {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .img-lightbox img {
+    max-width: 95vw;
+    max-height: calc(100dvh - 84px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    border-radius: 6px;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    object-fit: contain;
+  }
+  .img-lightbox-video {
+    max-width: 95vw;
+    max-height: calc(100dvh - 84px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    border-radius: 8px;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    background: #000;
+    cursor: default;
+  }
+  .img-lightbox-frame {
+    width: min(96vw, 1200px);
+    height: calc(100dvh - 84px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    cursor: default;
+  }
 
   .event.result {
     background: rgba(57, 210, 192, 0.08); border-left-color: var(--cyan);

@@ -16630,26 +16630,110 @@
   });
 
   let _imgLightbox = null;
+  let _lightboxHistoryPushed = false;
+  function _ensureMediaLightbox() {
+    if (_imgLightbox) return _imgLightbox;
+    _imgLightbox = document.createElement('div');
+    _imgLightbox.className = 'img-lightbox';
+    _imgLightbox.innerHTML =
+      '<div class="img-lightbox-bar">'
+      + '<button type="button" class="img-lightbox-back" data-lightbox-close aria-label="Back to main view">\u2190 Back</button>'
+      + '<span class="img-lightbox-title"></span>'
+      + '<a class="img-lightbox-download" download aria-label="Download file">Download</a>'
+      + '<button type="button" class="img-lightbox-close" data-lightbox-close aria-label="Close">\u2715</button>'
+      + '</div>'
+      + '<div class="img-lightbox-stage"><img alt=""></div>';
+    _imgLightbox.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-lightbox-close]')) {
+        ev.preventDefault();
+        closeMediaLightbox();
+        return;
+      }
+      if (ev.target.closest('.img-lightbox-bar, .img-lightbox-video, .img-lightbox-frame')) {
+        return;
+      }
+      closeMediaLightbox();
+    });
+    document.body.appendChild(_imgLightbox);
+    return _imgLightbox;
+  }
+  function closeMediaLightbox(opts) {
+    if (!_imgLightbox || !_imgLightbox.classList.contains('open')) return;
+    _imgLightbox.classList.remove('open');
+    const vid = _imgLightbox.querySelector('video');
+    if (vid) {
+      try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch (_) {}
+    }
+    const frame = _imgLightbox.querySelector('iframe');
+    if (frame) {
+      try { frame.src = 'about:blank'; } catch (_) {}
+    }
+    if (_lightboxHistoryPushed) {
+      _lightboxHistoryPushed = false;
+      if (!(opts && opts.fromPopState)) {
+        try { history.back(); } catch (_) {}
+      }
+    }
+  }
+  function openMediaLightbox(src, opts) {
+    if (!src) return;
+    const kind = (opts && opts.kind) || 'image';
+    const title = (opts && opts.title) || '';
+    const lb = _ensureMediaLightbox();
+    const $title = lb.querySelector('.img-lightbox-title');
+    const $dl = lb.querySelector('.img-lightbox-download');
+    const $stage = lb.querySelector('.img-lightbox-stage');
+    if ($title) $title.textContent = title;
+    if ($dl) {
+      $dl.href = src;
+      if (title) $dl.setAttribute('download', title);
+      else $dl.setAttribute('download', '');
+    }
+    if (kind === 'video') {
+      $stage.innerHTML = '<video class="img-lightbox-video" controls autoplay playsinline></video>';
+      $stage.querySelector('video').src = src;
+    } else if (kind === 'frame') {
+      $stage.innerHTML = '<iframe class="img-lightbox-frame" title="' + escapeAttr(title || 'Preview') + '"></iframe>';
+      $stage.querySelector('iframe').src = src;
+    } else {
+      $stage.innerHTML = '<img alt="' + escapeAttr(title) + '">';
+      $stage.querySelector('img').src = src;
+    }
+    const wasOpen = lb.classList.contains('open');
+    lb.classList.add('open');
+    if (!wasOpen && !_lightboxHistoryPushed) {
+      try {
+        history.pushState({ ...(history.state || {}), cccMediaLightbox: true }, '');
+        _lightboxHistoryPushed = true;
+      } catch (_) {}
+    }
+  }
+  window.openMediaLightbox = openMediaLightbox;
+  window.closeMediaLightbox = closeMediaLightbox;
+  window.addEventListener('popstate', () => {
+    if (_imgLightbox && _imgLightbox.classList.contains('open')) {
+      _lightboxHistoryPushed = false;
+      closeMediaLightbox({ fromPopState: true });
+    }
+  });
   document.addEventListener('click', (ev) => {
+    const shotLink = ev.target.closest('a.uxq-td-img-wrap, .ann-ux-preview-shot a');
+    if (shotLink && shotLink.getAttribute('href')) {
+      ev.preventDefault();
+      openMediaLightbox(shotLink.href, { kind: 'image', title: 'screenshot.png' });
+      return;
+    }
     const img = ev.target.closest('img.msg-image');
     if (img) {
       ev.preventDefault();
-      if (!_imgLightbox) {
-        _imgLightbox = document.createElement('div');
-        _imgLightbox.className = 'img-lightbox';
-        _imgLightbox.innerHTML = '<img alt="">';
-        _imgLightbox.addEventListener('click', () => _imgLightbox.classList.remove('open'));
-        document.body.appendChild(_imgLightbox);
-      }
-      _imgLightbox.querySelector('img').src = img.src;
-      _imgLightbox.classList.add('open');
+      openMediaLightbox(img.src, { kind: 'image', title: img.alt || 'image.png' });
       return;
     }
   });
   document.addEventListener('keydown', (ev) => {
     if (isImeKey(ev)) return;
     if (ev.key === 'Escape' && _imgLightbox && _imgLightbox.classList.contains('open')) {
-      _imgLightbox.classList.remove('open');
+      closeMediaLightbox();
     }
   });
 
@@ -16687,9 +16771,39 @@
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:png|jpe?g|gif|webp|svg|pdf)$/i.test(clean);
   }
+  function _isPdfPath(p) {
+    const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
+    return /\.pdf$/i.test(clean);
+  }
   function _isHtmlDocPath(p) {
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:html|htm)$/i.test(clean);
+  }
+  function openFilePathInMediaLightbox(filePath, label, ctx) {
+    const isCccPasted = /\/\.claude\/(?:command-center\/)?pasted-images\/paste-/.test(filePath);
+    let href;
+    if (isCccPasted) {
+      const sid = (ctx && ctx.id) || sessionIdByConv[currentConversation] || (currentSession && currentSession.id) || '';
+      href = '/api/pasted-image?path=' + encodeURIComponent(filePath) + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
+    } else {
+      const url = new URL('/api/media', window.location.origin);
+      url.searchParams.set('path', filePath);
+      const sid = (ctx && ctx.id)
+        || (typeof sessionIdByConv !== 'undefined' && currentConversation && sessionIdByConv[currentConversation])
+        || (typeof currentConversation === 'string' ? currentConversation : '');
+      if (sid) url.searchParams.set('session_id', sid);
+      if (ctx && ctx.cwd) url.searchParams.set('cwd', ctx.cwd);
+      const repoPath = (ctx && (ctx.repoPath || ctx.repo_path)) || (typeof activeConvRepoPath === 'function' && activeConvRepoPath()) || '';
+      if (repoPath) url.searchParams.set('repo_path', repoPath);
+      href = url.href;
+    }
+    const kind = _isVideoPath(filePath)
+      ? 'video'
+      : (_isHtmlDocPath(filePath) || _isPdfPath(filePath))
+        ? 'frame'
+        : 'image';
+    const cleanName = label || String(filePath).split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '').split('/').pop() || filePath;
+    openMediaLightbox(href, { kind, title: cleanName });
   }
   // CCC-63: a bare `01-gate.png` link carries no directory, but the message
   // usually named one just above ("screenshots are in `~/x/shots/`"). Resolve
@@ -16744,24 +16858,12 @@
       return;
     }
     if (_isVideoPath(p) || _isHtmlDocPath(p) || _isImageOrPdfPath(p)) {
-      // Video/HTML/image/PDF links on mobile/Tailnet should stream from the CCC server
-      // so the remote browser can play/render them. /api/open would try to
-      // open the file locally on the host machine, which does nothing useful
-      // for a viewer connected from elsewhere (CCC-30).
+      // Open video/HTML/image/PDF links in the in-page media lightbox (with a
+      // ← Back toolbar and history state) instead of navigating a same-origin
+      // <a target="_blank"> to /api/media, which replaces the standalone PWA
+      // view on mobile with a raw file and no way back to the main view.
       const ctx = _pathLinkSessionContext(a);
-      const url = new URL('/api/media', window.location.origin);
-      url.searchParams.set('path', (_bareMediaBaseDir(a, p) || '') + p);
-      if (ctx && ctx.id) url.searchParams.set('session_id', ctx.id);
-      if (ctx && ctx.cwd) url.searchParams.set('cwd', ctx.cwd);
-      if (ctx && (ctx.repoPath || ctx.repo_path)) url.searchParams.set('repo_path', ctx.repoPath || ctx.repo_path);
-      const tmp = document.createElement('a');
-      tmp.href = url.href;
-      tmp.target = '_blank';
-      tmp.rel = 'noopener noreferrer';
-      tmp.style.display = 'none';
-      document.body.appendChild(tmp);
-      tmp.click();
-      document.body.removeChild(tmp);
+      openFilePathInMediaLightbox((_bareMediaBaseDir(a, p) || '') + p, '', ctx);
       return;
     }
     a.style.opacity = '0.5';
@@ -32316,7 +32418,16 @@
       else if (f.category === 'pdfs' || f.category === 'html') inner = '<iframe src="' + escapeAttr(url) + '"></iframe>';
       else inner = '<div class="ffv-nopreview">No inline preview for this file type.</div>';
       $view.innerHTML = '<div class="ffv-pv-head"><span>' + escapeHtml(f.name) + '</span>'
-        + '<a class="ffv-btn" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">Open in new tab</a></div>' + inner;
+        + '<a class="ffv-btn" href="' + escapeAttr(url) + '" data-ffv-fullscreen="' + escapeAttr(f.category || '') + '" data-ffv-name="' + escapeAttr(f.name) + '">Full screen</a></div>' + inner;
+      const $fs = $view.querySelector('[data-ffv-fullscreen]');
+      if ($fs) {
+        $fs.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          const cat = $fs.getAttribute('data-ffv-fullscreen');
+          const kind = cat === 'videos' ? 'video' : (cat === 'pdfs' || cat === 'html') ? 'frame' : 'image';
+          openMediaLightbox(url, { kind, title: f.name });
+        });
+      }
       $list.querySelectorAll('.ffv-row').forEach(r => r.classList.toggle('sel', r.getAttribute('data-path') === f.path));
       if (f.category === 'markdown') {
         fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status))).then(t => {
@@ -53578,6 +53689,10 @@
           }
           return;
         }
+        if (_isVideoPath(row.target) || _isHtmlDocPath(row.target) || _isImageOrPdfPath(row.target)) {
+          openFilePathInMediaLightbox(row.target, row.label, currentSession);
+          return;
+        }
 
         try {
           const sid = sessionIdByConv[currentConversation] || (currentSession && currentSession.id) || '';
@@ -53651,6 +53766,10 @@
       div.appendChild(labelEl);
       div.addEventListener('click', async (e) => {
         if (e.target.classList.contains('ffc-row-target')) return; // don't double-trigger on path-copy
+        if (_isVideoPath(row.target) || _isHtmlDocPath(row.target) || _isImageOrPdfPath(row.target)) {
+          openFilePathInMediaLightbox(row.target, row.label, currentSession);
+          return;
+        }
         try {
           const r = await fetch('/api/reveal-file', {
             method: 'POST',
