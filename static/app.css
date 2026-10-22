@@ -31828,6 +31828,24 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     min-width: 32px;
     min-height: 32px;
   }
+  /* Cold-session gate ("Large and stale" rail + Continue new pill): the rail
+     needs its own full-width row, or auto-placement drops it into the narrow
+     `auto` column, widens that column to the rail's text and shoves the card
+     off-screen. The card moves to the last row so the absolutely placed
+     expand arrow still lands in its corner. */
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .f2c-rail {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-width: 0;
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .conv-input-row-top,
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-row-bottom > .conv-actions-group,
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .conv-send-group,
+  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .mic-btn {
+    grid-row: 3;
+  }
 }
 
 /* ── Phone session list: chat-app rows ─────────────────────────────────────
