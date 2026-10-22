@@ -1,0 +1,1 @@
+- `ccc secret request` now saves to the Vault and returns only the entry name by default; `--return-key` (alias `--stdout`) pipes the value as before.

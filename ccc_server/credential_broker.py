@@ -51,7 +51,7 @@ class VaultStore:
 
     @staticmethod
     def _entry(name, kind):
-        entry = (name + "." + kind).lower()
+        entry = (name if kind == "password" else name + "." + kind).lower()
         if len(entry) > 64:
             entry = "cb-" + hashlib.sha256((name + "\0" + kind).encode()).hexdigest()[:40]
         return entry
@@ -60,6 +60,9 @@ class VaultStore:
     def _vault():
         from ccc_server import vault
         return vault
+
+    def entry_name(self, name, kind):
+        return self._entry(name, kind)
 
     def read(self, name, kind):
         vault = self._vault()
@@ -146,6 +149,11 @@ class Broker:
         kind = data.get("kind", "password")
         if kind not in KINDS:
             raise BrokerError("Unknown credential kind")
+        store_only = data.get("store_only", False)
+        if type(store_only) is not bool:
+            raise BrokerError("store_only must be true or false")
+        if store_only and kind == "otp":
+            raise BrokerError("One-time codes cannot be stored; request them with a returned value")
         reason = data.get("reason")
         session_id = data.get("session_id", "")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
@@ -159,12 +167,12 @@ class Broker:
             self._purge()
             if len(self.requests) >= MAX_REQUESTS:
                 raise BrokerError("Too many pending credential requests", 429)
-            value = self.store.read(name, kind) if kind != "otp" else None
+            value = self.store.read(name, kind) if kind != "otp" and not store_only else None
             request_id = secrets.token_urlsafe(24)
             token = secrets.token_urlsafe(32)
             self.requests[request_id] = {
                 "id": request_id, "name": name, "kind": kind, "reason": reason,
-                "session_id": session_id, "expires_at": time.time() + timeout,
+                "session_id": session_id, "store_only": store_only, "expires_at": time.time() + timeout,
                 "deadline": self.clock() + timeout,
                 "token_hash": hashlib.sha256(token.encode()).digest(),
                 "status": "ready" if value is not None else "pending", "value": value,
@@ -180,7 +188,7 @@ class Broker:
     def pending(self):
         with self.lock:
             self._purge()
-            keys = ("id", "name", "kind", "reason", "session_id", "expires_at")
+            keys = ("id", "name", "kind", "reason", "session_id", "store_only", "expires_at")
             return [{k: r[k] for k in keys} for r in self.requests.values() if r["status"] == "pending"]
 
     def _row(self, request_id):
@@ -201,6 +209,11 @@ class Broker:
             if type(data.get("remember", False)) is not bool:
                 raise BrokerError("Remember must be true or false")
             value = valid_value(data.get("value"))
+            if row["store_only"]:
+                self.store.write(row["name"], row["kind"], value)
+                row["value"] = None  # never retained in memory; the agent gets only the entry name
+                row["status"] = "stored"
+                return
             if data.get("remember"):
                 if row["kind"] == "otp":
                     raise BrokerError("One-time codes cannot be remembered")
@@ -221,6 +234,8 @@ class Broker:
             result = {"status": row["status"]}
             if row["status"] == "ready":
                 result["value"] = row["value"]
+            if row["status"] == "stored":
+                result["entry"] = self.store.entry_name(row["name"], row["kind"])
             if row["status"] != "pending":
                 del self.requests[row["id"]]
             return result
