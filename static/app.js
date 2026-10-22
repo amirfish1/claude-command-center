@@ -37301,6 +37301,7 @@
             + '</div>';
       }
       const _outcomeInline = outcomeHtml.indexOf(' is-inline"') !== -1;
+      const _ideaStack = _outcomeInline && !!_ideaRowRef;
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
           + (_summaryState.did ? '<div><strong>Did:</strong> ' + escapeHtml(_summaryState.did) + '</div>' : '')
@@ -37383,7 +37384,11 @@
             // Idea-ticket rows give the title the whole first line; the
             // ticket chip moves to the line below (see _ideaRowLine).
             + (_ideaRowRef ? '' : ideaTicketChipHtml(c))
+            // With an inline next step, an idea row's ticket chip stacks under
+            // the title in the left column instead of on a line below the row.
+            + (_ideaStack ? '<div class="conv-title-stack">' : '')
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            + (_ideaStack ? _ideaRowLine(c) + '</div>' : '')
             // A next step takes the space right of the title; CSS wraps the
             // badges after the break onto a second line whenever it shows.
             + (_outcomeInline ? outcomeHtml + '<span class="conv-row-break" aria-hidden="true"></span>' : '')
@@ -37432,7 +37437,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
-        + (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c))
+        + (_ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c)))
         + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,

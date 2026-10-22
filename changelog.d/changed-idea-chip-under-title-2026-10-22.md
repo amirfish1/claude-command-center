@@ -1,0 +1,1 @@
+- When a session's next step sits beside its title, its IDEAS ticket chip now stacks right under the title in the same row.
