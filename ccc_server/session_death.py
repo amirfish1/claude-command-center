@@ -51,6 +51,8 @@ PENDING_MAX_AGE_S = 3600.0
 
 _LIMIT = re.compile(r"rate.?limit|usage.?limit|quota|usage_limit_exceeded|reached[^.]*limit|"
                     r"too many requests|429", re.I)
+_FINAL_TOOLS = {"StructuredOutput"}
+_OWNED_PROMPTS = ("[WATCHTOWER]",)
 _INTERRUPT_MARKERS = ("[Request interrupted by user", "The user doesn't want to proceed")
 
 _LOCK = threading.Lock()
@@ -102,7 +104,20 @@ def classify(records):
     step = _rr.open_turn(records)
     if step is None:
         return None
+    if step["kind"] == "awaiting_model" and _last_tool(records) in _FINAL_TOOLS:
+        return None  # `claude -p --json-schema` ends its turn on this result
+    if step["kind"] == "prompt_unanswered" and any(
+            t.lstrip().startswith(_OWNED_PROMPTS) for t in _texts(last)):
+        return None  # WatchTower messaging a worker it already reaped
     return {"kind": "cut_off", "step": step, "at": step.get("at")}
+
+
+def _last_tool(records):
+    for rec in reversed(records):
+        if rec.get("type") == "assistant":
+            uses = [b for b in _rr._blocks(rec) if b.get("type") == "tool_use"]
+            return str(uses[-1].get("name") or "") if uses else ""
+    return ""
 
 
 def _tail(path, size):

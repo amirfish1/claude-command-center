@@ -85,6 +85,9 @@ def test_classify():
     assert sd.classify([_user("go"), _tool_use(),
                         _tool_result("The user doesn't want to proceed with this tool use.")]) is None
     assert sd.classify([_user("go"), _reply(), _user("side", isSidechain=True)]) is None
+    # Headless --json-schema runs end on the StructuredOutput result.
+    assert sd.classify([_user("go"), _tool_use("StructuredOutput"), _tool_result()]) is None
+    assert sd.classify([_reply(), _user("[WATCHTOWER] STOP before you continue.")]) is None
 
 
 def _tick(prev, cur, now):
