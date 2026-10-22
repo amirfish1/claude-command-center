@@ -1,0 +1,1 @@
+- Keep accepted messages out of the composer when updating their delivery status fails, preserving the pending message and any new draft instead of restoring already-submitted text.

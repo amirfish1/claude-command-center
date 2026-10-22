@@ -12082,6 +12082,7 @@
       }
     }
     if (_ttsActive) await stopTextToSpeech();
+    let sendAccepted = false;
     try {
       let res;
       if (currentSession.source === 'pkood') {
@@ -12227,6 +12228,7 @@
           return;
         }
       }
+      sendAccepted = !!(res.ok && data.ok && !data.soft_block && data.submitted !== false);
       if (res.ok && data.ok && data.submitted === false) {
         removePendingSendEcho(pendingSend);
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
@@ -12416,19 +12418,26 @@
         showOpToast(failurePrefix + ': ' + reason, 'error');
       }
     } catch (err) {
-      removePendingSendEcho(pendingSend);
-      restoreInputAfterSendFailure($input, text);
-      flashRed();
-      if (compactRunStarted) {
-        if (_isCompactTimeoutReason((err && (err.name + ' ' + err.message)) || '')) {
-          // The request gave up; the engine may well still be compacting.
-          handleCompactTimeout(sid);
-        } else {
-          failCompactRun(sid, (err && err.message) || 'network error');
-        }
+      // Delivery and presentation are separate outcomes. A rendering error
+      // after acceptance must never turn the sent message back into a draft.
+      if (sendAccepted) {
+        console.warn('Accepted message status could not be rendered', err);
+        showOpToast('Message accepted. Reload to refresh its status.', 'info');
       } else {
-        const failurePrefix = (injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed';
-        showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
+        removePendingSendEcho(pendingSend);
+        restoreInputAfterSendFailure($input, text);
+        flashRed();
+        if (compactRunStarted) {
+          if (_isCompactTimeoutReason((err && (err.name + ' ' + err.message)) || '')) {
+            // The request gave up; the engine may well still be compacting.
+            handleCompactTimeout(sid);
+          } else {
+            failCompactRun(sid, (err && err.message) || 'network error');
+          }
+        } else {
+          const failurePrefix = (injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed';
+          showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
+        }
       }
     }
     if ($actionBtn) $actionBtn.disabled = false;
@@ -75491,6 +75500,7 @@
       clearInputDraftForConversation(draftConversation);
       $cpInput.style.height = '';
       if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
+      let sendAccepted = false;
       try {
         let res;
         if (currentSession.source === 'pkood') {
@@ -75533,6 +75543,7 @@
         }
         let data = {};
         try { data = await res.json(); } catch (_) {}
+        sendAccepted = !!(res.ok && data.ok && !data.soft_block && data.submitted !== false);
         if (res.ok && data.ok && data.submitted === false) {
           removePendingSendEcho(pendingSend);
           showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
@@ -75599,10 +75610,15 @@
           showOpToast('Send failed: ' + reason, 'error', repoNotAllowedToastAction(data));
         }
       } catch (err) {
-        removePendingSendEcho(pendingSend);
-        restoreInputAfterSendFailure($cpInput, text);
-        flashRed();
-        showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
+        if (sendAccepted) {
+          console.warn('Accepted message status could not be rendered', err);
+          showOpToast('Message accepted. Reload to refresh its status.', 'info');
+        } else {
+          removePendingSendEcho(pendingSend);
+          restoreInputAfterSendFailure($cpInput, text);
+          flashRed();
+          showOpToast('Send failed: ' + (err.message || 'network error'), 'error');
+        }
       }
       if ($cpInput.__cpRefresh) $cpInput.__cpRefresh();
       else $cpSendBtn.disabled = false;
