@@ -22551,70 +22551,91 @@
     const e = String((c && (c.engine || c.source)) || '').toLowerCase();
     return _WA_ENGINE_GLYPH[e] ? e : 'claude';
   }
-  // Session avatars: every session gets its own character + gradient, drawn
-  // deterministically from its id out of its project's themed pool, so the
-  // list reads at a glance (which project, which session) and neighbours
-  // rarely match. A corner badge says what kind of work it is.
-  const _WA_POOLS = {
-    // Claude Command Center: robots, space, gadgets.
-    ccc: ['🤖', '🚀', '🛸', '🛰️', '👾', '🦾', '🧠', '🕹️', '🔭', '🪐', '🧑‍🚀', '👽', '🛰', '📡', '🔋', '🧲',
-      '🦿', '🎛️', '🧪', '💾', '🖲️', '🌌', '☄️', '🌠', '🐙', '🦑', '🤹', '🧙', '🦉', '🐲'],
-    // BYM / pilates studios: movement and wellness, with some silly ones.
-    bym: ['🧘', '🧘‍♀️', '🤸', '🤸‍♀️', '🏋️', '🏋️‍♀️', '🚴', '🚴‍♀️', '🤾', '🏊', '🏄', '🧗', '⛹️‍♀️', '🦩', '🦘',
-      '🐒', '🐆', '🦒', '🐇', '💪', '🥑', '🍌', '🥤', '🧃', '🍉', '🫐', '🎽', '👟', '🩰', '🐬'],
-    // bym-growth: plants and things that grow.
-    growth: ['🌱', '🌿', '🌻', '🌷', '🌵', '🌳', '🍄', '🐝', '🐛', '🦋', '🌾', '🍀', '🪴', '🌺', '🍓', '🥕',
-      '🐌', '🐞', '🌽', '🍋', '🪻', '🌼', '🫛', '🐿️', '🦔'],
-    // Everything else: a zoo of funny animals.
-    misc: ['🦥', '🦦', '🦆', '🐸', '🦔', '🐧', '🦄', '🦖', '🐳', '🦊', '🐼', '🐨', '🐢', '🦀', '🦜', '🐻',
-      '🐯', '🦁', '🐮', '🐷', '🐹', '🐰', '🦝', '🦭', '🦫', '🐡', '🦈', '🐊', '🦓', '🦙', '🐐', '🦚', '🐓', '🦡'],
-  };
-  const _WA_GRADIENTS = {
-    ccc: [['#5b8cff', '#9b6bff'], ['#3ec9ff', '#4c6fff'], ['#7f5cff', '#ff6ec7'], ['#00c6a7', '#1e6bff'],
-      ['#4b5dff', '#00d2ff'], ['#8e7dff', '#3ad1e8'], ['#2f80ed', '#56ccf2'], ['#6a5acd', '#00bfa6']],
-    bym: [['#ff8a65', '#ff4f8b'], ['#ffb347', '#ff6f61'], ['#f857a6', '#ff5858'], ['#ff9a8b', '#ff6a88'],
-      ['#f6d365', '#fda085'], ['#fa709a', '#fee140'], ['#ff7eb3', '#ff758c'], ['#fbab7e', '#f7ce68']],
-    growth: [['#43e97b', '#38f9d7'], ['#a8e063', '#56ab2f'], ['#96e6a1', '#3cba92'], ['#d4fc79', '#5fc95b'],
-      ['#0ba360', '#3cba92'], ['#c1f07a', '#26a96c']],
-    misc: [['#a18cd1', '#fbc2eb'], ['#84fab0', '#8fd3f4'], ['#fccb90', '#d57eeb'], ['#e0c3fc', '#8ec5fc'],
-      ['#f093fb', '#f5576c'], ['#4facfe', '#00f2fe'], ['#fdcbf1', '#e6dee9'], ['#ffecd2', '#fcb69f'],
-      ['#a1c4fd', '#c2e9fb'], ['#d299c2', '#fef9d7'], ['#89f7fe', '#66a6ff'], ['#fddb92', '#d1fdff']],
-  };
+  // Session avatars are context, not identity: the background is the repo
+  // (one fixed color per repo path, so a repo always looks the same), the
+  // face is the topic (shared by every session about it), and the corner
+  // badge is the kind of work (the idea ticket's queue when it has one).
   function _waHash(str) {
     let h = 2166136261 >>> 0;
     const t = String(str || '');
     for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
     return h >>> 0;
   }
-  function _waProjectKey(c, title) {
-    // The folder says where it ran; the name often says what it's about
-    // (a BYM task run from the CCC checkout), so both count, BYM/growth first.
-    const where = (String((c && (c.folder_label || c.folder_label_chip || c.slug || c.session_cwd || c.folder_path)) || '')
-      + ' ' + String(title || '')).toLowerCase();
-    if (/growth/.test(where)) return 'growth';
-    if (/\bbym\b|finie|bookyourmat|pilates|fitness|becky/.test(where)) return 'bym';
-    if (/command-center|claude-command|\bccc\b/.test(where)) return 'ccc';
-    return 'misc';
+  const _waRepoBgCache = new Map();
+  function _waRepoBackground(c) {
+    const repo = String((c && (c.folder_path || c.session_cwd || c.slug || c.folder_label)) || '').replace(/\/+$/, '');
+    let bg = _waRepoBgCache.get(repo);
+    if (!bg) {
+      const hue = _waHash(repo) % 360;
+      bg = 'linear-gradient(135deg,hsl(' + hue + ',65%,58%),hsl(' + ((hue + 25) % 360) + ',65%,44%))';
+      _waRepoBgCache.set(repo, bg);
+    }
+    return bg;
   }
-  // Kind of work, guessed from the name and first message.
+  // First match wins, specific before generic. The title is tried before the
+  // first message so a renamed session follows its name.
+  const _WA_TOPICS = [
+    [/\b(ci|pytest|tests?|flaky|pre-push|smoke)\b/, '🧪', 'Tests / CI'],
+    [/\b(release|deploy|deployed|ship|shipped|publish|rollout|vercel|homebrew|dmg|sparkle)\b/, '🚀', 'Release / deploy'],
+    [/\b(security|vulnerab\w*|xss|csrf|injection|secret)\b/, '🔒', 'Security'],
+    [/\b(auth|login|log in|sign in|signin|oauth|password|credentials?|api key)\b/, '🔑', 'Sign-in / credentials'],
+    [/\b(stripe|payments?|billing|invoices?|charge|refund|reimburs\w*|fsa|payroll)\b/, '💳', 'Payments'],
+    [/\b(cost|spend|tokens?|usage|budget|pricing|quota)\b/, '💰', 'Cost / usage'],
+    [/\b(slow|perf|performance|latency|cpu|memory|ram|freez\w*|lag)\b/, '⚡', 'Performance'],
+    [/\b(voice|tts|speech|audio|mic|microphone|dictation)\b/, '🎙️', 'Voice'],
+    [/\b(email|gmail|inbox|resend|newsletter)\b/, '✉️', 'Email'],
+    [/\b(sms|twilio|whatsapp|text message|imessage)\b/, '💬', 'Messaging'],
+    [/\b(calendar|schedul\w*|booking|bookings|class|classes|appointment)\b/, '📅', 'Scheduling'],
+    [/\b(evals?|replay|benchmark|grad(e|ing)|scorecard)\b/, '📊', 'Evals'],
+    [/\b(lead|leads|outreach|marketing|seo|growth|campaign)\b/, '📣', 'Growth / outreach'],
+    [/\b(mobile|phone|iphone|ios|android)\b/, '📱', 'Mobile'],
+    [/\b(queue|queues|ticket|tickets|watchtower|wt|worker|workers|drain)\b/, '📋', 'Queues / tickets'],
+    [/\b(supabase|database|db|sql|migration|schema)\b/, '🗄️', 'Database'],
+    [/\b(git|commit|push|merge|branch|rebase|pr|worktree)\b/, '🔀', 'Git'],
+    [/\b(server|restart|vm|infra|ssh|ops|cron|launchd|systemd)\b/, '🛠️', 'Infra / ops'],
+    [/\b(ui|sidebar|tab|tabs|avatar|layout|css|button|screen|page|view)\b/, '🎨', 'UI'],
+    [/\b(docs?|readme|changelog|spec|writeup)\b/, '📝', 'Docs'],
+    [/\b(claude|codex|model|prompt|llm|agent|agents|session|sessions)\b/, '🤖', 'Agents'],
+    [/\b(idea|ideas|brainstorm|what if|design|concept|proposal)\b/, '💡', 'Ideas / design'],
+  ];
+  const _WA_TOPIC_DEFAULT = ['💭', 'General'];
+  function _waTopicIn(text) {
+    const t = String(text || '').toLowerCase();
+    if (!t) return null;
+    for (const [re, e, label] of _WA_TOPICS) if (re.test(t)) return [e, label];
+    return null;
+  }
+  // Rendered once per row per sidebar pass, so memoize on what it reads.
+  const _waTopicCache = new Map();
+  function _waTopic(c, title) {
+    const first = String((c && c.first_message) || '').slice(0, 300);
+    const key = title + '\u0000' + first;
+    let hit = _waTopicCache.get(key);
+    if (!hit) {
+      hit = _waTopicIn(title) || _waTopicIn(first) || _WA_TOPIC_DEFAULT;
+      if (_waTopicCache.size > 5000) _waTopicCache.clear();
+      _waTopicCache.set(key, hit);
+    }
+    return hit;
+  }
+  // Kind of work: the idea ticket's queue when there is one, else a guess
+  // from the name and first message.
   function _waKind(c, title) {
+    const q = c && c.idea_ticket && ideaTicketsOn() ? c.idea_ticket.queue : '';
+    if (q === 'SMALL-BUGS') return { k: 'bug', e: '🐞', label: 'Small bug' };
+    if (q === 'IDEAS') return { k: 'idea', e: '💡', label: 'Idea' };
     const t = (String(title || '') + ' ' + String((c && c.first_message) || '').slice(0, 300)).toLowerCase();
     if (/\b(fix|bug|broken|crash|error|fails?|failing|regression|stuck|hang|wrong)\b/.test(t)) return { k: 'bug', e: '🐞', label: 'Bug fix' };
-    if (/\b(release|deploy|ship|publish|rollout|roll out|launch)\b/.test(t)) return { k: 'ship', e: '🚀', label: 'Release / deploy' };
     if (/\b(why|investigate|investigation|debug|diagnos|look into|check|audit|research|analy[sz]e)\b/.test(t)) return { k: 'look', e: '🔍', label: 'Investigation' };
     if (/\b(idea|ideas|brainstorm|what if|should we|design|explore|concept|plan|proposal|think)\b/.test(t)) return { k: 'idea', e: '💡', label: 'Idea / design' };
     if (/\b(add|build|implement|create|new|feature|support|improve|make)\b/.test(t)) return { k: 'feat', e: '✨', label: 'Feature' };
     return null;
   }
   function _waAvatarHtml(c, title) {
-    const proj = _waProjectKey(c, title);
-    const h = _waHash((c && (c.session_id || c.id)) || title);
-    const pool = _WA_POOLS[proj];
-    const grads = _WA_GRADIENTS[proj];
-    const face = pool[h % pool.length];
-    const g = grads[Math.floor(h / pool.length) % grads.length];
+    const [face, topic] = _waTopic(c, title);
     const kind = _waKind(c, title);
-    return '<span class="wa-avatar wa-av" aria-hidden="true" style="background:linear-gradient(135deg,' + g[0] + ',' + g[1] + ')">'
+    const repo = String((c && c.folder_label) || '');
+    return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + topic) + '" style="background:' + _waRepoBackground(c) + '">'
       + '<span class="wa-face">' + face + '</span>'
       + (kind ? '<span class="wa-kind" title="' + escapeAttr(kind.label) + '">' + kind.e + '</span>' : '')
       + '</span>';
