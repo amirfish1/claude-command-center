@@ -44,13 +44,11 @@ this service on this machine** only when you want future local requests with the
 same service name and kind to reuse the value automatically. One-time codes
 cannot be remembered. Use a distinct alias for each account or environment.
 
-Remembered values use this first slice's portable fallback: plaintext JSON files
-(mode `0600`) in `~/.claude/command-center/secrets/` (mode `0700`). Existing
-symlinks, foreign ownership and permissive file/directory modes are rejected.
-Files are written atomically with private permissions from creation. This is
-access control by your OS, without encryption or a master password: programs
-running as your OS user and administrators can read them. CCC's Vault and BYOK
-stores remain separate.
+Remembered values are stored in the CCC Vault (macOS Keychain, or the Vault's
+encrypted-file fallback elsewhere), as an entry named `<service>.<kind>` (for
+example `jev-api-key.password`) that also shows up in Settings > Vault. Surrounding
+whitespace is trimmed on save. Nothing is written to disk unless you choose
+**Remember**.
 
 Delete every saved kind for a service and revoke its outstanding deliveries:
 

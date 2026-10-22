@@ -1,0 +1,1 @@
+- Credential broker's **Remember for this service** now saves to the CCC Vault (Keychain or encrypted file) instead of plaintext files.
