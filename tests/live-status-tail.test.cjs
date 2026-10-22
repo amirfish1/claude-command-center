@@ -64,3 +64,42 @@ test('status follows new messages and streaming updates without repeated DOM reb
       position: 'relative', scrollHeightUnchanged: true, labelAnimation: 'none' });
   } finally { await browser.close(); }
 });
+
+test('working status keeps its Thinking row while a completed sidecar name lingers', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>${css}</style><div class="conversations-view"><div class="event assistant">Latest reply</div></div>`);
+    await page.evaluate(code => {
+      window.getConvView = () => document.querySelector('.conversations-view');
+      window.liveStatusMatchesOpenConv = () => true;
+      window.liveStatus = { live: true, codexState: 'working', sidecarStatus: 'idle', sidecarTs: Date.now() / 1000 };
+      window.currentSession = { source: 'codex' };
+      window.escapeHtml = window.escapeAttr = s => String(s);
+      window._liveStripLastKeyTs = window._liveStripLastLiveTime = 0;
+      window._liveStripShown = false;
+      window._streamingBubble = null;
+      window.codexActiveItemLabel = () => ({ label: '', detail: '' });
+      window.codexTokenUsageText = () => '';
+      window.updateLiveStripOffset = () => {};
+      (0, eval)(code + '\nwindow.updateLive = updateLiveToolStrip;');
+    }, fn('anchorCodexStateBadge') + fn('_reanchorToTailUnlessOnlyTransientBetween')
+      + fn('getSingleLiveToolInline') + fn('updateLiveToolStrip'));
+    const result = await page.evaluate(() => {
+      const view = getConvView();
+      updateLive();
+      const row = view.querySelector('.conv-live-tool-inline');
+      const label = row.querySelector('.cl-tool');
+      const height = view.scrollHeight;
+      for (let i = 0; i < 10; i++) {
+        liveStatus.sidecarTool = i % 2 ? 'Bash' : null;
+        updateLive();
+      }
+      return { sameRow: row === view.querySelector('.conv-live-tool-inline'),
+        sameLabel: label === row.querySelector('.cl-tool'),
+        label: row.querySelector('.cl-tool').textContent,
+        heightStable: height === view.scrollHeight };
+    });
+    assert.deepEqual(result, { sameRow: true, sameLabel: true, label: 'Thinking…', heightStable: true });
+  } finally { await browser.close(); }
+});
