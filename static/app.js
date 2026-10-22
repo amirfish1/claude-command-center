@@ -16391,6 +16391,16 @@
     if (_mermaidLoadPromise) return _mermaidLoadPromise;
     _mermaidLoadPromise = new Promise((resolve, reject) => {
       if (window.mermaid && typeof window.mermaid.render === 'function') {
+        try {
+          const theme = (document.documentElement.dataset && document.documentElement.dataset.theme === 'light')
+            ? 'default' : 'dark';
+          window.mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            suppressErrorRendering: true,
+            theme,
+          });
+        } catch (_) {}
         resolve(window.mermaid);
         return;
       }
@@ -16404,7 +16414,12 @@
         try {
           const theme = (document.documentElement.dataset && document.documentElement.dataset.theme === 'light')
             ? 'default' : 'dark';
-          window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme });
+          window.mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            suppressErrorRendering: true,
+            theme,
+          });
           resolve(window.mermaid);
         } catch (err) {
           reject(err);
@@ -16458,6 +16473,11 @@
           try { result.bindFunctions(svgWrap); } catch (_) {}
         }
       } catch (err) {
+        // Clean up any stray error nodes Mermaid mounts directly onto document.body
+        const stray = document.getElementById('d' + id) || document.getElementById(id);
+        if (stray) stray.remove();
+        document.querySelectorAll('body > [id^="dmermaid-svg-"], body > [id^="mermaid-svg-"]').forEach(n => n.remove());
+
         // Render error — put the source back so the user still sees the
         // diagram intent, with a small error note.
         el.setAttribute('data-mermaid-error', 'render-failed');

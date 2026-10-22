@@ -5340,6 +5340,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_loadMermaid", app_js)
         self.assertIn("_renderMermaidBlocks", app_js)
         self.assertIn("cdn.jsdelivr.net/npm/mermaid", app_js)
+        self.assertIn("suppressErrorRendering: true", app_js)
+        self.assertIn("dmermaid-svg-", app_js)
         # Hooked into the existing observer that already does RTL tagging.
         self.assertIn("_renderMermaidBlocks(n)", app_js)
         # CSS for the carrier + SVG container.
