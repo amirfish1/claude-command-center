@@ -69,8 +69,8 @@ CLAIM_STALE_S = 300
 
 _FILED_RE = re.compile(r"^FILED:\s+(\S+)", re.M)
 _EDITED_RE = re.compile(r"^EDITED:\s+(\S+)", re.M)
-# Session-scoped env vars that would make `wt` attribute the ticket to the
-# server's own session instead of the one we pass with --worker.
+# Session-scoped env vars that would make `wt` record the server's own
+# session as the ticket's submitter (and notify it on every change).
 _SESSION_ENV_VARS = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
 
 
@@ -553,7 +553,10 @@ def _file_new(sid, queue, text, cwd, *, label=""):
     """File a fresh ticket for ``sid`` (already claimed) in ``queue``."""
     _ensure_queue(queue)
     rc, out = _wt([
-        "take", "-q", queue, "--worker", sid,
+        # `add`, not `take`: a claim makes WT rename the claiming session to
+        # "IDEAS#N: <title>" on every claim and close. The queue's drain is
+        # off, so the open ticket is never picked up by a worker.
+        "add", "-q", queue,
         "--readiness", "needs-spec", "--type", QUEUE_TYPES[queue],
         "--title", _title_from(text),
         "--text", f"Started in CCC session {sid}.\n\n{text[:2000]}",
@@ -676,7 +679,7 @@ def _archive_worker(sid, ticket, archived):
     latest = ticket["sessions"][-1] if ticket["sessions"] else sid
     try:
         if archived and sid == latest and not ticket["closed"]:
-            rc, _ = _wt(["close", ref, "--force", "--worker", sid, "--no-code",
+            rc, _ = _wt(["close", ref, "--force", "--no-code",
                          "--summary", f"Session {sid} archived in CCC."])
             if rc == 0:
                 _mutate(lambda d: d["tickets"][ref].__setitem__("closed", True))

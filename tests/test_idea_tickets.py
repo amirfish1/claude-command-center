@@ -70,7 +70,7 @@ class IdeaTicketsTest(unittest.TestCase):
 
     def _fake_wt(self, args, cwd=None, timeout=30):
         self.calls.append(list(args))
-        if args[0] == "take":
+        if args[0] in ("take", "add"):
             queue = args[args.index("-q") + 1]
             ref = f"{queue}-{self.next_ref}"
             self.next_ref += 1
@@ -89,8 +89,8 @@ class IdeaTicketsTest(unittest.TestCase):
         self._ui_session("s1", "The save button crashes")
         res = it.attach_or_file("s1", classify_fn=lambda text: "small_bug")
         self.assertEqual(res["ref"], "SMALL-BUGS-1")
-        take = [c for c in self.calls if c[0] == "take"][0]
-        self.assertEqual(take[take.index("--worker") + 1], "s1")
+        take = [c for c in self.calls if c[0] == "add"][0]
+        self.assertNotIn("--worker", take)  # unclaimed: WT never renames the session
         self.assertEqual(take[take.index("--type") + 1], "bug")
         self.assertIn(["drain", "off", "SMALL-BUGS"], self.calls)
         row = it.idea_ticket_rows_map()["s1"]
@@ -108,14 +108,14 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.ticket_for_session("s3")["sessions"], ["s1", "s2", "s3"])
         comments = [c for c in self.calls if c[0] == "comment"]
         self.assertEqual(len(comments), 2)
-        self.assertEqual(len([c for c in self.calls if c[0] == "take"]), 1)
+        self.assertEqual(len([c for c in self.calls if c[0] == "add"]), 1)
 
     def test_non_ui_spawn_is_skipped(self):
         self.registry["w1"] = {"spawned_via": "cli"}
         self.transcripts["w1"] = {"text": "worker"}
         self.assertTrue(it.attach_or_file("w1")["skipped"])
         self.assertNotIn("w1", it.idea_ticket_rows_map())
-        self.assertFalse([c for c in self.calls if c[0] == "take"])
+        self.assertFalse([c for c in self.calls if c[0] == "add"])
         # Known sessions never re-run the lookup on later turns.
         self.assertEqual(it.on_turn_end("w1")["reason"], "known")
 
@@ -170,7 +170,7 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(res["queued"], 3)
         self.assertEqual(it.ticket_for_session("b")["sessions"], ["a", "b"])
         self.assertEqual(it.ticket_for_session("c")["ref"], "IDEAS-2")
-        self.assertEqual(len([c for c in self.calls if c[0] == "take"]), 2)
+        self.assertEqual(len([c for c in self.calls if c[0] == "add"]), 2)
         self.assertEqual(it.load_state()["pending"], {})
         self.assertEqual(it.backfill(["a", "b", "c"])["queued"], 0)  # idempotent
 
@@ -185,7 +185,7 @@ class IdeaTicketsTest(unittest.TestCase):
         self._ui_session("s2")
         it._mutate(lambda d: d["sessions"].__setitem__("s2", {"filing": 1, "at": int(it.time.time())}))
         self.assertTrue(it.attach_or_file("s2", classify_fn=lambda t: "idea")["known"])
-        self.assertEqual(len([c for c in self.calls if c[0] == "take"]), 1)
+        self.assertEqual(len([c for c in self.calls if c[0] == "add"]), 1)
 
     def test_sweep_retitles_ticket_from_session_title(self):
         self._ui_session("s1", "Can we fix this heads up: the VM cannot auto-update")
@@ -221,7 +221,7 @@ class IdeaTicketsTest(unittest.TestCase):
         it.note_ui_spawn("cx1", "ui")
         rows = [{"session_id": "cx1", "last_event_type": "result", "first_message": "Fix the crash"}]
         self.assertEqual(it.sweep_rows(rows), 1)
-        take = [c for c in self.calls if c[0] == "take"][-1]
+        take = [c for c in self.calls if c[0] == "add"][-1]
         self.assertEqual(take[take.index("--title") + 1], "Fix the crash")
 
     def test_flag_off_disables_everything(self):
