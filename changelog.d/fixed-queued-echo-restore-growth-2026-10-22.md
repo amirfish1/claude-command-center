@@ -1,0 +1,1 @@
+- Fixed queued message cards multiplying after their pane was rebuilt by reusing the original pending send record during restoration. Genuine repeated messages remain separate.

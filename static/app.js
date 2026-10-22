@@ -11195,9 +11195,10 @@
     }));
   }
 
-  function appendPendingSendEcho(text, sid, paneId) {
-    const pending = { text, sid, paneId: paneId || activePaneId(), conversationId: currentConversation,
-      element: null, list: null, entry: null };
+  function appendPendingSendEcho(text, sid, paneId, restoredEntry) {
+    const pending = (restoredEntry && restoredEntry.element && restoredEntry.element._pendingRef)
+      || { text, sid, paneId: paneId || activePaneId(), conversationId: currentConversation,
+        element: null, list: null, entry: null };
     const $view = getConvViewForPane(paneId) || getConvView();
     if ($view) {
       const pendingDiv = document.createElement('div');
@@ -11212,12 +11213,14 @@
       showOptimisticAgentIndicator($view);
       scrollConversationToEnd($view);
 
-      const entry = { text, sid, element: pendingDiv, ts: Date.now(), timer: null };
+      const entry = restoredEntry || { text, sid, ts: Date.now(), timer: null };
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.element = pendingDiv;
       pending.element = pendingDiv;
       pendingDiv._pendingRef = pending;
       pending.list = _pendingSends;
       pending.entry = entry;
-      pending.list.push(entry);
+      if (!pending.list.includes(entry)) pending.list.push(entry);
       // Let the user dismiss a still-"sending…" echo immediately rather than
       // wait out the not-acknowledged timeout — a message stuck mid-send
       // (session unreachable, engine crashed) previously had no way to be
@@ -11639,8 +11642,16 @@
           markPendingSendQueued(pending, row.queuedLabel, { sync: false });
         }
       } else {
-        const restored = appendPendingSendEcho(text, sid, paneId);
-        if (restored && restored.entry) restored.entry.ts = Number(row.ts) || now;
+        // Rebuilding a pane can discard its DOM while its pending records
+        // survive. Reuse that send instead of registering another occurrence:
+        // the next restore would otherwise recreate both saved records.
+        // Connected entries are already claimed, so identical genuine sends
+        // still consume separate records, even with the same timestamp.
+        const detached = _pendingSends.find(p => p.sid === sid
+          && !p.element?.isConnected && _normSend(p.text) === normed
+          && Number(p.ts) === Number(row.ts));
+        const restored = appendPendingSendEcho(text, sid, paneId,
+          detached || { text, sid, ts: Number(row.ts) || now, timer: null });
         // Re-create it in the delivered state so it keeps the "✓ Delivered"
         // note and stops re-arming the not-acknowledged timer (CCC-154).
         if (row.delivered && restored) markPendingSendDelivered(restored, null);
