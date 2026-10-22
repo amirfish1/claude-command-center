@@ -5399,9 +5399,15 @@
       try { syncExternalSpawnPlaceholders(data.recent_spawns || []); } catch (_) {}
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
+      let _turnEnded = false;
       for (const [sid, fields] of Object.entries(sessions)) {
+        const prev = _sessionLiveOverlay.get(sid);
+        if (prev && prev.state === 'working' && fields && fields.state && fields.state !== 'working') _turnEnded = true;
         _rememberLiveOverlay(sid, fields);
       }
+      // A turn just ended: its next step / final reply only arrives with the
+      // list rows, whose own refresh is slow, so pull them now.
+      if (_turnEnded) _scheduleTurnEndListRefresh();
       for (const blocker of (Array.isArray(blockerData.sessions) ? blockerData.sessions : [])) {
         const sid = String((blocker && blocker.session_id) || '').trim();
         if (!sid || !blocker.needs_approval) continue;
@@ -7022,6 +7028,20 @@
   // sid -> {ts, text}: the row's preview at send time (stale once working).
   const _preSendPreview = new Map();
   let _earlySendRefreshTimer = null;
+  // Coalesced list refresh after a live turn ends: a short delay lets the
+  // transcript's final message land, and a floor keeps a busy fleet from
+  // refetching the whole list on every poll.
+  let _turnEndRefreshTimer = null;
+  let _turnEndRefreshLast = 0;
+  function _scheduleTurnEndListRefresh() {
+    if (_turnEndRefreshTimer) return;
+    const wait = Math.max(1500, _turnEndRefreshLast + 10000 - Date.now());
+    _turnEndRefreshTimer = setTimeout(() => {
+      _turnEndRefreshTimer = null;
+      _turnEndRefreshLast = Date.now();
+      try { _scheduleDashboardArchiveRefresh(); } catch (_) {}
+    }, wait);
+  }
   function preSendPreviewFor(sid) {
     const e = sid && _preSendPreview.get(sid);
     if (!e) return null;
