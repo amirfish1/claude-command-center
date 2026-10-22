@@ -143,7 +143,9 @@ def test_archive_readiness_settles_even_for_empty_or_failed_loads():
     assert "_markArchiveFirstLoaded();" in finally_block
     marker_start = SOURCE.index("function _markArchiveFirstLoaded()")
     marker_end = SOURCE.index("window.__cccThroughputActivityRows", marker_start)
-    assert "_releaseStartupApiReads();" in SOURCE[marker_start:marker_end]
+    marker_body = SOURCE[marker_start:marker_end]
+    assert "hideLoadingOverlay();" in marker_body
+    assert "_releaseStartupApiReads();" in marker_body
 
 
 def test_merging_spawn_defaults_does_not_refetch_spawn_defaults():
@@ -292,3 +294,21 @@ def test_evergreen_queue_sig_ignores_ticking_past_worker_seconds():
     fresh = _function("async function _ensureEvergreenQueuesFresh()", "function _wtLogVerbClass(")
     assert "pw.ended_ago_seconds])" not in fresh
     assert "_uxqFmtAge(" in fresh
+
+
+def test_startup_critical_read_defers_federated_and_live_activity_session_polls():
+    critical = _function("function _startupCriticalApiRead", "function _startupReplaysDirect")
+    assert "req.pathname === '/api/sessions/live-activity'" in critical
+    assert "req.searchParams.get('peers_only') === '1'" in critical
+    assert "req.searchParams.get('federated') === '1'" in critical
+
+    local_speech = (ROOT / "static" / "local-speech.js").read_text(encoding="utf-8")
+    assert "if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', check);" in local_speech
+
+
+def test_threaded_http_server_increases_listen_backlog_for_reload_bursts():
+    server_py = (ROOT / "server.py").read_text(encoding="utf-8")
+    start = server_py.index("class ThreadedHTTPServer(")
+    block = server_py[start:server_py.index("port = PORT", start)]
+    assert "request_queue_size = 128" in block
+

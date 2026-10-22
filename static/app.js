@@ -2266,7 +2266,7 @@
     let parsed;
     try { parsed = new URL(rawUrl, window.location.origin); } catch (_) { return null; }
     if (parsed.origin !== window.location.origin || !parsed.pathname.startsWith('/api/')) return null;
-    return { method, pathname: parsed.pathname };
+    return { method, pathname: parsed.pathname, searchParams: parsed.searchParams };
   }
   function _startupPathMatches(pathname, prefixes) {
     return prefixes.some(prefix => pathname === prefix || pathname.startsWith(prefix + '/'));
@@ -2275,6 +2275,10 @@
     const req = _startupApiPath(input, init);
     if (!req) return true;
     if (req.method !== 'GET') return !_startupPathMatches(req.pathname, _startupDeferrableBeacons);
+    if (req.pathname === '/api/sessions/live-activity') return false;
+    if (req.pathname === '/api/sessions' && req.searchParams && (req.searchParams.get('peers_only') === '1' || req.searchParams.get('federated') === '1')) {
+      return false;
+    }
     const criticalPaths = [
       '/api/conversations/list', '/api/conversations', '/api/sessions',
       '/api/config', '/api/features', '/api/loading-status',
@@ -71404,6 +71408,7 @@
   let _archiveFirstLoadedResolve = null;
   const _archiveFirstLoaded = new Promise(resolve => { _archiveFirstLoadedResolve = resolve; });
   function _markArchiveFirstLoaded() {
+    hideLoadingOverlay();
     if (!_archiveFirstLoadedResolve) return;
     _releaseStartupApiReads();
     _archiveFirstLoadedResolve();
@@ -73238,7 +73243,7 @@
     if (deferSidebarRenderIfDragging()) return;
     if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
     const q = (filter || '').trim().toLowerCase();
-    if (q && archiveDataWindow && archiveDataWindow !== 'all' && !_archiveRefreshPromise) {
+    if (q && !(opts && opts.skipRestore) && archiveDataWindow && archiveDataWindow !== 'all' && !_archiveRefreshPromise) {
       refreshArchiveData({ staleOk: true, window: 'all' })
         .then(() => renderArchiveList(_archiveQuery()))
         .catch(() => {});

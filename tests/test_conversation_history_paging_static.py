@@ -36,6 +36,12 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         self.assertLess(restore, paint)
         self.assertLess(paint, full)
         self.assertIn("!(opts && opts.skipRestore)", app_js)
+        render_start = app_js.index("function renderArchiveList(filter, opts)")
+        render_head = app_js[render_start:app_js.index("const scrollState =", render_start)]
+        self.assertIn(
+            "if (q && !(opts && opts.skipRestore) && archiveDataWindow && archiveDataWindow !== 'all' && !_archiveRefreshPromise)",
+            render_head,
+        )
         self.assertIn("savedLastView.type === 'gc'", mode_js)
 
     def test_restore_finds_saved_conversation_outside_the_visible_all_lane(self):
