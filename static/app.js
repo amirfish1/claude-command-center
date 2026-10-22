@@ -45385,21 +45385,6 @@
     evEl.appendChild(bar);
   });
 
-  // CCC-1257: when a turn ends, put the top of the final assistant message
-  // near the top of the view (with a little headroom) rather than at the tail.
-  function scrollConversationToLastReplyStart(view) {
-    if (!view) return false;
-    const texts = view.querySelectorAll('.event.assistant .assistant-text');
-    const last = texts[texts.length - 1];
-    if (!last) return false;
-    const evEl = last.closest('.event.assistant') || last;
-    const offset = evEl.getBoundingClientRect().top - view.getBoundingClientRect().top;
-    view.scrollTop = Math.max(0, view.scrollTop + offset - 32);
-    view._pinnedToBottom = false;
-    updateConversationEndAffordance(view);
-    return true;
-  }
-
   function preserveConversationBottomOnComposerPointerDown(ev) {
     const input = ev.target && ev.target.closest
       ? ev.target.closest('.conv-input-bar textarea, .conv-input-bar input[type="text"]')
@@ -65480,11 +65465,6 @@
     if (_hasNewCompactEvent && _newCompactCard && typeof _newCompactCard.scrollIntoView === 'function') {
       _newCompactCard.scrollIntoView({ block: 'start', behavior: 'auto' });
       updateConversationEndAffordance($view);
-    } else if (events.length > 0 && wasAtBottom && !(opts && opts.initialLoad)
-        && events.some(e => e && e.type === 'result')
-        && scrollConversationToLastReplyStart($view)) {
-      // CCC-1257: a live turn just ended; land on the start of the final
-      // reply instead of its tail.
     } else if (events.length > 0 && wasAtBottom) {
       // CCC-131: on a fresh (re)open, prefer the saved scroll position over a
       // forced bottom-scroll. wasAtBottom is always true here (the view was
