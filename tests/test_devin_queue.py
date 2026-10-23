@@ -2045,6 +2045,65 @@ class DevinCliAcpTranscriptMergeTests(unittest.TestCase):
         self.assertEqual([e["type"] for e in events], ["result"])
         self.assertEqual(events[0]["line"], -1)
 
+    def test_incremental_parse_excludes_historical_acp_results_and_orders_microseconds(self):
+        """Historical ACP result rows from earlier turns must not be re-emitted
+        on incremental polls (which would flood the tail of a ?tail=N pane with
+        orphaned DONE / STOPPED cards), and microsecond ACP timestamps must
+        sort after same-second whole-second DB assistant rows."""
+        base = 1_760_000_000
+        con = sqlite3.connect(self.db_path)
+        con.execute("DELETE FROM message_nodes WHERE session_id = 'merge-test'")
+        con.executemany(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, "
+            "created_at) VALUES (?, ?, ?, ?)",
+            [
+                ("merge-test", 1, self._msg("user", "turn 1", is_user_input=True),
+                 base * 1000),
+                ("merge-test", 2, self._msg("assistant", "reply 1"),
+                 (base + 5) * 1000),
+                ("merge-test", 3, self._msg("user", "turn 2", is_user_input=True),
+                 (base + 20) * 1000),
+                ("merge-test", 4, self._msg("assistant", "reply 2"),
+                 (base + 25) * 1000),
+            ],
+        )
+        con.commit()
+        con.close()
+
+        t1_res = datetime.fromtimestamp(
+            base + 5, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S.651630Z")
+        t2_res = datetime.fromtimestamp(
+            base + 25, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S.922121Z")
+        self._write_transcript("merge-test", [
+            {"type": "result", "subtype": "error",
+             "error": "Agent communication channel closed",
+             "line": 10, "ts": t1_res},
+            {"type": "result", "subtype": "end_turn",
+             "line": 20, "ts": t2_res},
+        ])
+
+        full = self.server._parse_devin_cli_conversation("devincli-merge-test")
+        self.assertEqual(
+            [(e["type"], e["line"]) for e in full["events"]],
+            [
+                ("user_text", 1),
+                ("assistant", 2),
+                ("result", -10),
+                ("user_text", 3),
+                ("assistant", 4),
+                ("result", -20),
+            ],
+        )
+
+        inc = self.server._parse_devin_cli_conversation(
+            "devincli-merge-test", after_line=4)
+        self.assertEqual(
+            [(e["type"], e["line"]) for e in inc["events"]],
+            [("result", -20)],
+        )
+
     def test_parse_cache_key_tracks_the_transcript(self):
         conv = "devincli-merge-test"
         key_no_tr = self.server._conv_parse_jsonl_mtime(conv)

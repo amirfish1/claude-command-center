@@ -3110,11 +3110,20 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
             pass
     finally:
         con.close()
+    visible = _merge_devin_acp_result_events(raw_id, list(events))
     if after_line and after_line > 0:
-        visible = [e for e in events if e["line"] > after_line]
-    else:
-        visible = list(events)
-    visible = _merge_devin_acp_result_events(raw_id, visible)
+        # Splice ACP result rows against the full DB event list first, then
+        # slice past the last DB row at or before after_line. Splicing after
+        # filtering dumped every historical ACP result row on incremental
+        # polls, which the client could not dedupe once ?tail=N truncated
+        # older turns out of the DOM.
+        cutoff = -1
+        for idx, ev in enumerate(visible):
+            ev_line = int(ev.get("line") or 0)
+            if 0 < ev_line <= after_line:
+                cutoff = idx
+        if cutoff >= 0:
+            visible = visible[cutoff + 1:]
     elapsed = time.perf_counter() - start
     _devin_cli_profile_log(
         "parse_devin_cli_conversation",
@@ -3213,8 +3222,25 @@ def _merge_devin_acp_result_events(raw_id, events):
     merged = []
     i = 0
     for res in results:
-        res_ts = str(res.get("ts") or "")
-        while i < len(events) and str(events[i].get("ts") or "") <= res_ts:
+        # DB rows carry whole-second ISO timestamps ("...T22:27:12Z") while
+        # ACP result rows carry microseconds ("...T22:27:12.922121Z"); raw
+        # string comparison sorted "." < "Z" and placed same-second result
+        # rows before the assistant reply they closed. Compare at second
+        # resolution, stopping before a same-second queued user prompt that
+        # starts the next turn after an assistant reply.
+        res_sec = str(res.get("ts") or "")[:19]
+        while i < len(events):
+            ev_sec = str(events[i].get("ts") or "")[:19]
+            if ev_sec > res_sec:
+                break
+            if (
+                ev_sec == res_sec
+                and events[i].get("type") == "user_text"
+                and merged
+                and merged[-1].get("type") == "assistant"
+                and str(merged[-1].get("ts") or "")[:19] == res_sec
+            ):
+                break
             merged.append(events[i])
             i += 1
         merged.append(res)
