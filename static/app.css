@@ -32698,9 +32698,9 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   .conv-item .wa-row-footer .conv-ready-archive { min-height: 32px; }
 }
 
-/* Inline message explanations keep the existing title/message split even in
-   Compact's dense table. display:contents would make the explanation a spare
-   grid cell with no width; the row's existing metadata stays below the split.
+/* Put the session title above its explanation, including Compact's dense
+   table. display:contents would make the explanation a spare grid cell with
+   no width; the row's existing metadata stays below the explanation.
    Match the phone breakpoint: the phone chat row already owns that surface. */
 @media (min-width: 1201px) {
   #convList .conv-item:has(.conv-main-row.has-inline-step) { display: block; }
@@ -32712,12 +32712,12 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     row-gap: 6px;
   }
   #convList .conv-item .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
-    flex: 0 1 38%;
+    flex: 1 1 0;
     min-width: 0;
   }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline {
     display: block !important;
-    flex: 1 1 0;
+    flex: 1 1 100%;
     min-width: 0;
     /* Reserve the same three text lines for Working, Next and Close, so
        incoming text cannot resize a row while the list is being read. */
