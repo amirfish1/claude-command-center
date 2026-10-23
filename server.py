@@ -37015,7 +37015,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/idea-ticket$", path):
             # Experimental idea tickets: move a session's ticket between the
-            # IDEAS and SMALL-BUGS queues (sidebar row menu). Body: {queue}.
+            # IDEAS and SMALL-BUGS queues, or detach it with OTHER (sidebar
+            # row menu and tab-bar drag). Body: {queue}.
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

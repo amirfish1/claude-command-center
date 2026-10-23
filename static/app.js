@@ -18616,7 +18616,11 @@
         .find(r => r && (r.session_id === sessionId || r.id === sessionId)) || {}).idea_ticket;
       const fromRef = oldRef && oldRef.ref;
       [conversationsData, archiveData].forEach(rows => (rows || []).forEach(row => {
-        if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
+        if (queue === 'OTHER') {
+          // Detached server-side for every session on the ticket.
+          if (row && row.idea_ticket && ((fromRef && row.idea_ticket.ref === fromRef)
+            || row.session_id === sessionId || row.id === sessionId)) delete row.idea_ticket;
+        } else if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
           row.idea_ticket = Object.assign({}, row.idea_ticket, { ref: data.ref, queue: data.queue });
         } else if (row && !fromRef && (row.session_id === sessionId || row.id === sessionId)) {
           row.idea_ticket = { ref: data.ref, queue: data.queue, sessions: 1, closed: false };
@@ -18624,7 +18628,8 @@
       }));
       _convListRenderSig = null;
       renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
-      showOpToast((fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
+      showOpToast(queue === 'OTHER' ? 'Moved to Other' + (fromRef ? ' (closed ' + fromRef + ')' : '')
+        : (fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
       return true;
     } catch (err) {
       showOpToast('Move failed (' + err.message + ')', 'error');
@@ -41948,11 +41953,37 @@
           : 'Moved ' + rows.length + ' sessions to ' + laneLabel(lane));
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       };
+      // CCC-140: with idea tickets on, Ideas / Small bugs / Other are drop
+      // targets too. Their lane is the session's ticket queue, so a drop moves
+      // (or files, or for Other detaches) the ticket rather than the override.
+      const _ideaDropQueue = { ideas: 'IDEAS', smallbugs: 'SMALL-BUGS', archived: 'OTHER' };
       const _laneDropTarget = (ev) => {
         const opt = ev.target.closest('[data-conv-tab]');
         if (!opt) return null;
         const lane = opt.getAttribute('data-conv-tab');
-        return (lane === 'coding' || lane === 'workers') ? { opt, lane } : null;
+        if (lane === 'coding' || lane === 'workers') return { opt, lane };
+        if (_ideaTicketsOn && _ideaDropQueue[lane]) return { opt, lane, queue: _ideaDropQueue[lane] };
+        return null;
+      };
+      const moveIdeaTicketsFromDrop = async (ev, queue) => {
+        const rawIds = readConvIdsFromDrop(ev);
+        const ids = rawIds.length ? rawIds : (dragSourceId ? [dragSourceId] : []);
+        const sids = [];
+        ids.forEach(id => {
+          const row = rowForAllLaneId(id);
+          if (!row || row.source === 'backlog' || row.source === 'github_pr') return;
+          const sid = row.session_id || row.id;
+          const t = row.idea_ticket;
+          const cur = t && t.ref ? t.queue : 'OTHER';
+          // Already there (or a pending spawn with no ticket to move yet).
+          if (!sid || sids.includes(sid) || cur === queue || (t && t.pending && !t.ref)) return;
+          sids.push(sid);
+        });
+        if (!sids.length) {
+          showOpToast('Already in that tab', 'info');
+          return;
+        }
+        for (const sid of sids) await moveSessionIdeaTicket(sid, queue);
       };
       $laneTabBar.addEventListener('dragover', (ev) => {
         if (!dragSourceId) return;
@@ -41974,7 +42005,8 @@
         ev.preventDefault();
         ev.stopPropagation();
         clearTabDropTargets();
-        assignAllLaneFromDrop(ev, target.lane);
+        if (target.queue) moveIdeaTicketsFromDrop(ev, target.queue);
+        else assignAllLaneFromDrop(ev, target.lane);
       });
     }
     const $archivedExpandAll = $convList.querySelector('[data-role="archived-expand-all"]');

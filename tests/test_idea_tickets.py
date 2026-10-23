@@ -162,6 +162,23 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.ticket_for_session("s1")["ref"], "SMALL-BUGS-99")
         self.assertFalse(it.move_ticket("s1", "WATCH")["ok"])
 
+    def test_move_to_other_detaches_and_refiles_on_return(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        self.transcripts["s2"] = {"text": "cont", "continued_from": "s1"}
+        it.attach_or_file("s2")
+        res = it.move_ticket("s2", "other")
+        self.assertEqual((res["ok"], res["queue"]), (True, "OTHER"))
+        self.assertIn("close", [c[0] for c in self.calls])
+        rows = it.idea_ticket_rows_map()
+        self.assertNotIn("s1", rows)
+        self.assertNotIn("s2", rows)
+        # Skipped, so neither a sweep nor a turn end re-files it.
+        self.assertEqual(it.on_turn_end("s2")["reason"], "known")
+        res = it.move_ticket("s2", "IDEAS")
+        self.assertEqual((res["ok"], res["queue"]), (True, "IDEAS"))
+        self.assertEqual(it.idea_ticket_rows_map()["s2"]["ref"], res["ref"])
+
     def test_old_ui_session_is_not_backfilled(self):
         # spawned_via=ui in the registry, but spawned before the flag noted it.
         self.registry["old"] = {"spawned_via": "ui"}
