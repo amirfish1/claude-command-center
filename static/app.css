@@ -32496,40 +32496,56 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 .tracked-table .tt-pill.is-pr,
 .tracked-table .tt-pill.is-testing { color: var(--purple); }
 
-/* Idea rows use two lines at rest, regardless of outcome or density. */
+/* Keep identity and metadata left, with the message alongside on the right. */
 @media (min-width: 1201px) {
+  #convList .conv-item.is-idea-row { container-type: inline-size; }
   #convList .conv-item.is-idea-row .conv-main-row {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto minmax(112px, 1.2fr);
     align-items: center; gap: 3px 6px; padding-top: 0; padding-bottom: 0;
   }
-  #convList .conv-item.is-idea-row .conv-title { grid-column: 1; grid-row: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #convList .conv-item.is-idea-row .conv-meta-col { grid-column: 2; grid-row: 1; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
-  #convList .conv-item.is-idea-row .conv-pct-badge { grid-column: 3; grid-row: 1; margin: 0; }
-  #convList .conv-item.is-idea-row .conv-row-end { grid-column: 4; grid-row: 1; margin: 0; }
+  #convList .conv-item.is-idea-row .conv-title { grid-column: 1 / 4; grid-row: 1; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; -webkit-line-clamp: unset; line-clamp: unset; }
+  #convList .conv-item.is-idea-row .conv-meta-col { grid-column: 1; grid-row: 2; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  #convList .conv-item.is-idea-row .conv-meta-col > * { flex-shrink: 0; }
+  #convList .conv-item.is-idea-row .conv-pct-badge { grid-column: 2; grid-row: 2; margin: 0; }
+  #convList .conv-item.is-idea-row .conv-row-end { grid-column: 3; grid-row: 2; margin: 0; }
   #convList .conv-item.is-idea-row .conv-row-break { display: none; }
   #convList .conv-item.is-idea-row .conv-outcome {
-    display: flex !important; grid-column: 1 / -1; grid-row: 2; align-items: center;
+    display: flex !important; grid-column: 4; grid-row: 1 / 3; align-items: center;
     gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; background: none;
   }
   #convList .conv-item.is-idea-row .conv-outcome-step,
   #convList .conv-item.is-idea-row .conv-outcome-did {
-    display: block; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    font-size: 12px; line-height: 24px;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    flex: 1; min-width: 0; white-space: normal; overflow: hidden; text-overflow: ellipsis;
+    font-size: 12px; line-height: 20px;
   }
-  #convList .conv-item.is-idea-row .conv-ready-archive { min-height: 24px; padding: 2px 7px; font-size: 11px; }
+  #convList .conv-item.is-idea-row .conv-outcome.is-ready { display: grid !important; grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  #convList .conv-item.is-idea-row .conv-outcome.is-ready .conv-outcome-step { grid-column: 1 / -1; }
+  #convList .conv-item.is-idea-row .conv-ready-archive { grid-column: 1; justify-self: end; min-width: 0; max-width: 100%; box-sizing: border-box; min-height: 24px; padding: 2px 7px; font-size: 11px; overflow-wrap: anywhere; }
+  #convList .conv-item.is-idea-row .conv-outcome-step::before { max-width: 100%; box-sizing: border-box; }
   #convList .conv-item.is-idea-row .conv-worker-history { margin: 0; min-width: 0; font-size: 11px; }
   #convList .conv-item.is-idea-row .conv-worker-history > summary { padding: 0; white-space: nowrap; }
   #convList .conv-item.is-idea-row .conv-worker-history-recent { display: none; }
-  #convList .conv-item.is-idea-row .conv-meta-col:has(.conv-worker-history[open]) { grid-column: 1 / -1; grid-row: 2; min-width: 0; align-items: flex-start; }
-  #convList .conv-item.is-idea-row:has(.conv-worker-history[open]) .conv-outcome { grid-row: 3; }
+  #convList .conv-item.is-idea-row .conv-meta-col:has(details[open]) { grid-column: 1 / -1; grid-row: 3; min-width: 0; align-items: flex-start; overflow: visible; }
   #convList .conv-item.is-idea-row .conv-worker-history[open] { flex: 1; }
   #convList .conv-item.is-idea-row .conv-worker-history-list { overflow-wrap: anywhere; }
 }
+@container (max-width: 300px) {
+  #convList .conv-item.is-idea-row .conv-main-row { grid-template-columns: minmax(0, 1fr) 112px; }
+  #convList .conv-item.is-idea-row .conv-title { grid-column: 1; }
+  #convList .conv-item.is-idea-row .conv-meta-col { grid-column: 1; }
+  #convList .conv-item.is-idea-row .conv-pct-badge { grid-column: 1; grid-row: 3; justify-self: start; }
+  #convList .conv-item.is-idea-row .conv-row-end { grid-column: 1; grid-row: 4; justify-self: start; }
+  #convList .conv-item.is-idea-row .conv-outcome { grid-column: 2; grid-row: 1 / 5; }
+  #convList .conv-item.is-idea-row .conv-meta-col:has(details[open]) { grid-column: 1 / -1; grid-row: 5; }
+}
 @media (max-width: 1200px) {
   #convList .conv-item.is-idea-row .wa-av { width: 32px; height: 32px; flex: 0 0 32px; }
-  #convList .conv-item.is-idea-row .wa-body { height: 56px; }
-  #convList .conv-item.is-idea-row:is(.is-ready-to-close, .is-archived-row) .wa-body { height: 74px; padding-top: 4px; padding-bottom: 4px; }
-  #convList .conv-item.is-idea-row .wa-title { -webkit-line-clamp: 1; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  #convList .conv-item.is-idea-row .wa-body { height: auto; min-height: 56px; }
+  #convList .conv-item.is-idea-row .wa-line2 { flex: 0 0 auto; min-height: 21px; }
+  #convList .conv-item.is-idea-row:is(.is-ready-to-close, .is-archived-row) .wa-body { min-height: 74px; padding-top: 4px; padding-bottom: 4px; }
+  #convList .conv-item.is-idea-row:is(.is-ready-to-close, .is-archived-row) .wa-line2 { min-height: 44px; }
+  #convList .conv-item.is-idea-row .wa-title { -webkit-line-clamp: unset; white-space: normal; overflow-wrap: anywhere; overflow: visible; }
   #convList .conv-item.is-idea-row .wa-preview { -webkit-line-clamp: 1; }
   #convList .conv-item.is-idea-row .wa-ready-label { display: inline; margin-right: 5px; }
 }

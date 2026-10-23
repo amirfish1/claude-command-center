@@ -23049,6 +23049,13 @@
       + '<span class="wa-face">' + cat.e + '</span>'
       + '</span>';
   }
+  function ideaRowTitlePreview(title) {
+    const chars = typeof Intl.Segmenter === 'function'
+      ? Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(title), part => part.segment)
+      : Array.from(title);
+    return chars.length > 40 ? chars.slice(0, 40).join('') + '…' : title;
+  }
+
   function _ideaAvatarHtml(c, mobile = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
     const match = ref && ref.match(/^IDEAS-(\d+)$/);
@@ -37699,7 +37706,7 @@
       const waHtml = '<div class="wa-row">'
         + _waAvatarHtml(c, _waTitle)
         + '<div class="wa-body">'
-        +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
+        +   '<div class="wa-line1"><span class="wa-title" dir="auto" aria-label="' + escapeAttr(_waTitle) + '">' + escapeHtml(_ideaRowRef ? ideaRowTitlePreview(_waTitle) : _waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
@@ -37722,7 +37729,7 @@
             + workerOriginBadgeHtml(c)
             // The numbered avatar already identifies an idea ticket.
             + (_ideaRowRef ? '' : ideaTicketChipHtml(c))
-            + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(_ideaRowRef ? ideaRowTitlePreview(title) : title) + '</div>'
             // A next step takes the space right of the title; CSS wraps the
             // badges after the break onto a second line whenever it shows.
             + (_outcomeInline ? outcomeHtml + '<span class="conv-row-break" aria-hidden="true"></span>' : '')

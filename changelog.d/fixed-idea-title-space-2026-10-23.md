@@ -1,0 +1,1 @@
+- Keep idea messages to the right of the title on desktop. Protect the first 40 title characters from metadata and allow wrapping on desktop and phone, with full titles retained in accessibility labels.
