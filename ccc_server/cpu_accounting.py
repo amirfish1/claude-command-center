@@ -10,6 +10,8 @@ records the culprits.
   route with ids collapsed (``/api/conversations/:id``).
 * Per minute: every live thread's CPU from ``/proc/self/task/<tid>/stat``,
   keyed by Python thread name, so background loops are attributed too.
+* At thread exit: short-lived worker threads (born and gone inside a window)
+  report their own CPU, so they do not vanish into the process total.
 
 Once a window closes, one ``[CPU]`` line goes to stdout (service.out.log) and
 one JSON row is appended to ``cpu-by-route.jsonl`` in the state dir. Stdlib
@@ -46,6 +48,8 @@ _routes = {}            # route -> [cpu_ms, wall_ms, count]
 _window_t0 = time.monotonic()
 _proc_cpu0 = time.process_time()
 _thread_cpu0 = {}       # native tid -> cpu seconds at window start
+_exited = {}            # thread name -> cpu ms of threads that ended this window
+_installed = False
 _CLK = None
 
 
@@ -99,6 +103,48 @@ def _normalize_thread_name(name):
     return m.group(1) if m else (name or "?")
 
 
+def _note_thread_exit(name, started_at, c0):
+    key = _normalize_thread_name(name)
+    if key == "process_request_thread":
+        return  # request CPU is already in the route totals
+    tid = threading.get_native_id()
+    d = None
+    if started_at < _window_t0:
+        # Lived across a window boundary: only the part since the last
+        # snapshot belongs to this window.
+        base = _thread_cpu0.get(tid)
+        now_cpu = _thread_cpu_s(tid) if base is not None else None
+        if base is not None and now_cpu is not None:
+            d = (now_cpu - base) * 1000.0
+    if d is None:
+        d = (time.thread_time() - c0) * 1000.0
+    if d >= 1:
+        with _lock:
+            _exited[key] = _exited.get(key, 0.0) + d
+
+
+def install_thread_exit_accounting():
+    """Wrap threading.Thread.run so ending threads report their CPU."""
+    global _installed
+    if _installed:
+        return
+    _installed = True
+    orig_run = threading.Thread.run
+
+    def run(self):
+        started_at = time.monotonic()
+        c0 = time.thread_time()
+        try:
+            return orig_run(self)
+        finally:
+            try:
+                _note_thread_exit(self.name, started_at, c0)
+            except Exception:
+                pass
+
+    threading.Thread.run = run
+
+
 def record(path, cpu_s, wall_s, now=None):
     """Account one finished request; closes the window when it is due."""
     try:
@@ -117,7 +163,7 @@ def record(path, cpu_s, wall_s, now=None):
 
 def maybe_flush(now=None):
     """Emit the window summary if WINDOW_S has elapsed. Returns the row."""
-    global _window_t0, _proc_cpu0, _thread_cpu0, _routes
+    global _window_t0, _proc_cpu0, _thread_cpu0, _routes, _exited
     now = time.monotonic() if now is None else now
     with _lock:
         if now - _window_t0 < WINDOW_S:
@@ -131,7 +177,8 @@ def maybe_flush(now=None):
         prev = _thread_cpu0
         snap = _thread_snapshot()
         _thread_cpu0 = {tid: cpu for tid, (_n, cpu) in snap.items()}
-    threads = {}
+        exited, _exited = _exited, {}
+    threads = dict(exited)
     for tid, (name, cpu) in snap.items():
         base = prev.get(tid)
         if base is None:
@@ -151,6 +198,9 @@ def maybe_flush(now=None):
         "proc_cpu_ms": round(proc_ms),
         "core_pct": round(100.0 * proc_ms / (span * 1000.0), 1) if span > 0 else 0,
         "req_cpu_ms": round(req_ms),
+        # Process CPU no route or thread claimed (startup, signal handlers,
+        # threads with their own run()).
+        "other_cpu_ms": round(max(0.0, proc_ms - req_ms - sum(threads.values()))),
         "routes": [
             {"route": r, "cpu_ms": round(v[0]), "wall_ms": round(v[1]), "n": v[2]}
             for r, v in top_routes
@@ -167,7 +217,8 @@ def _emit(row):
         bg = ", ".join(f"{t['name']} {t['cpu_ms']}ms" for t in row["threads"][:4])
         print(
             f"[CPU] {time.strftime('%H:%M:%S')} {row['core_pct']}% core "
-            f"(proc {row['proc_cpu_ms']}ms, requests {row['req_cpu_ms']}ms) "
+            f"(proc {row['proc_cpu_ms']}ms, requests {row['req_cpu_ms']}ms, "
+            f"other {row['other_cpu_ms']}ms) "
             f"top: {parts} | threads: {bg}",
             flush=True,
         )

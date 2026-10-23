@@ -33,6 +33,7 @@ class FlushTests(unittest.TestCase):
             mock.patch.object(ca, "_routes", {}),
             mock.patch.object(ca, "_window_t0", 1000.0),
             mock.patch.object(ca, "_thread_cpu0", {}),
+            mock.patch.object(ca, "_exited", {}),
         ]
         for p in patches:
             p.start()
@@ -73,6 +74,25 @@ class FlushTests(unittest.TestCase):
         names = {r["name"]: r["cpu_ms"] for r in row["threads"]}
         self.assertIn("_busy_loop", names)
         self.assertGreater(names["_busy_loop"], 50)
+
+    def test_short_lived_thread_reports_cpu_at_exit(self):
+        ca.install_thread_exit_accounting()
+        ca.install_thread_exit_accounting()  # idempotent
+
+        def _burst():
+            end = time.thread_time() + 0.15
+            while time.thread_time() < end:
+                pass
+
+        with mock.patch.object(ca, "_window_t0", time.monotonic() - 1):
+            t = threading.Thread(target=_burst)
+            t.start()
+            t.join()
+            with mock.patch("builtins.print"):
+                row = ca.maybe_flush(now=time.monotonic() + ca.WINDOW_S)
+        names = {r["name"]: r["cpu_ms"] for r in row["threads"]}
+        self.assertGreater(names.get("_burst", 0), 100)
+        self.assertIn("other_cpu_ms", row)
 
     def test_thread_cpu_parses_comm_with_spaces(self):
         stat = "123 (my (odd) name) S " + " ".join(["0"] * 10) + " 250 50 0 0"

@@ -127,6 +127,7 @@ from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
 from ccc_server import cpu_accounting as _cpu_accounting
+_cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
 from ccc_server import approval_evidence as _approval_evidence
