@@ -275,12 +275,73 @@
       return _timePoller(name, () => fn.apply(self, args));
     };
   }
+  // Recent main-thread long tasks [start, end], so conv_open can report how
+  // much of an open the main thread spent blocked (CCC-143).
+  const _perfLongTasks = [];
+  function _perfLongTaskMs(t0, end) {
+    let ms = 0;
+    for (const lt of _perfLongTasks) {
+      const lo = Math.max(lt[0], t0), hi = Math.min(lt[1], end);
+      if (hi > lo) ms += hi - lo;
+    }
+    return Math.round(ms);
+  }
+  // Resource Timing backs conv_open's list_overlap_ms; the default 250-entry
+  // buffer fills within minutes here, so recycle it instead of going blind.
+  try {
+    if (performance.setResourceTimingBufferSize) performance.setResourceTimingBufferSize(1000);
+    performance.addEventListener('resourcetimingbufferfull', () => {
+      try { performance.clearResourceTimings(); } catch (_) {}
+    });
+  } catch (_) {}
+  function _perfListOverlapMs(t0, end) {
+    let ms = 0;
+    try {
+      for (const e of performance.getEntriesByType('resource')) {
+        const n = e.name || '';
+        if (n.indexOf('/api/conversations/list') < 0 && n.indexOf('/api/sessions?') < 0
+            && !/\/api\/sessions$/.test(n.split('?')[0])) continue;
+        const lo = Math.max(e.startTime, t0), hi = Math.min(e.responseEnd || e.startTime, end);
+        if (hi > lo) ms += hi - lo;
+      }
+    } catch (_) {}
+    return Math.round(ms);
+  }
+  // Fetch a conversation-tail URL and stamp per-phase timings on the parsed
+  // payload as a non-enumerable __perf (never serialized or rendered).
+  // keepErrors: parse non-2xx bodies too (the direct open path renders the
+  // server's error payload); the prefetch path drops them.
+  function _fetchConvJsonTimed(url, init, keepErrors) {
+    const t0 = performance.now();
+    return fetch(url, init).then(r => {
+      if (!r.ok && !keepErrors) return null;
+      const tResp = performance.now();
+      const st = r.headers.get('Server-Timing') || '';
+      return r.text().then(txt => {
+        const tBody = performance.now();
+        const d = JSON.parse(txt);
+        const tParse = performance.now();
+        const num = (k) => { const m = st.match(new RegExp(k + ';dur=([0-9.]+)')); return m ? Math.round(+m[1]) : null; };
+        try {
+          if (d && typeof d === 'object') {
+            Object.defineProperty(d, '__perf', { value: {
+              t0, tResp, tBody, tParse, bytes: txt.length,
+              server_ms: num('app'), server_cpu_ms: num('cpu'),
+            }, enumerable: false, configurable: true });
+          }
+        } catch (_) {}
+        return d;
+      });
+    });
+  }
   // Catch-all for client-side jank that no single poller owns (render/reshuffle
   // thrash, GC pauses): any main-thread block >= 200ms surfaces once per 5s.
   try {
     if (typeof PerformanceObserver === 'function') {
       const _ltObs = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
+          _perfLongTasks.push([entry.startTime, entry.startTime + entry.duration]);
+          if (_perfLongTasks.length > 300) _perfLongTasks.shift();
           if (entry.duration >= 200) {
             _clientLog('[LONGTASK] ' + Math.round(entry.duration) + 'ms blocking frame');
           }
@@ -56237,9 +56298,9 @@
     if (id.startsWith('pkood-') || id.startsWith('issue-')) return null;
     const existing = _convTailPrefetches.get(id);
     if (existing) return existing;
-    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), {
+    const pending = _fetchConvJsonTimed('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), {
       cache: 'no-store',
-    }).then(r => r.ok ? r.json() : null).catch(() => null);
+    }).catch(() => null);
     _convTailPrefetches.set(id, pending);
     while (_convTailPrefetches.size > CONV_TAIL_PREFETCH_MAX) {
       _convTailPrefetches.delete(_convTailPrefetches.keys().next().value);
@@ -56764,6 +56825,26 @@
     return (row && (row.first_message || row.prompt)) || '';
   }
 
+  function _convOpenPhases(data, t0, dataAt, renderAt, end, id) {
+    const out = {
+      engine: (data && data.engine) || sessionSourceByConv[id] || '',
+      wait_ms: Math.round(dataAt - t0),
+      render_ms: Math.round(end - renderAt),
+      longtask_ms: _perfLongTaskMs(t0, end),
+      list_overlap_ms: _perfListOverlapMs(t0, end),
+    };
+    const p = data && data.__perf;
+    if (p) {
+      out.fetch_at = Math.round(p.t0 - t0);
+      out.ttfb_ms = Math.round(p.tResp - p.t0);
+      out.body_ms = Math.round(p.tBody - p.tResp);
+      out.parse_ms = Math.round(p.tParse - p.tBody);
+      out.bytes = p.bytes;
+      if (p.server_ms !== null) out.server_ms = p.server_ms;
+      if (p.server_cpu_ms !== null) out.server_cpu_ms = p.server_cpu_ms;
+    }
+    return out;
+  }
   async function fetchConversationEvents(paneId) {
     if (paneId) {
       const idx = paneIndexByPaneId(paneId);
@@ -56859,9 +56940,14 @@
         }
       }
       if (!data) {
-        const res = await fetch(_url);
-        data = await res.json();
+        if (_freshOpen && !_loadingEarlier) {
+          data = await _fetchConvJsonTimed(_url, undefined, true);
+        } else {
+          const res = await fetch(_url);
+          data = await res.json();
+        }
       }
+      const _perfDataAt = performance.now();
       // Tail is in hand: release the parked select-time fetches once this
       // render has painted (see _afterConvTail).
       if (typeof _flushAfterConvTailAfterPaint === 'function') _flushAfterConvTailAfterPaint();
@@ -56946,6 +57032,7 @@
           // ancestor file's line count must never inflate it.
           if (_prepended !== false && _fetchSid === id) convLastLine = Math.max(convLastLine, data.last_line || 0);
         } else {
+          const _perfRenderAt = performance.now();
           const _renderOk = renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
           if (_renderOk) convLastLine = data.last_line;
           // Perf metric 2 end (conv_open): only the initialLoad render for the
@@ -56966,6 +57053,9 @@
                   truncated: !!data.truncated_before,
                   wall_ms: Math.round(_perfWall),
                   hidden_ms: Math.round(_perfWall - _perfActive),
+                  // Per-phase split (CCC-143). Offsets are ms from the click;
+                  // fetch_at < 0 means a hover/restore prefetch started first.
+                  ..._convOpenPhases(data, _perfConvOpen.t0, _perfDataAt, _perfRenderAt, _perfEnd, id),
                 },
               });
               if (typeof window.__cccPerfRow === 'function') {

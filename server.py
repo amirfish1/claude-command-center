@@ -126,6 +126,7 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+from ccc_server import cpu_accounting as _cpu_accounting
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
 from ccc_server import approval_evidence as _approval_evidence
@@ -29469,6 +29470,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                self._send_server_timing(cache="hit")
                 if enc:
                     self.send_header("Content-Encoding", enc)
                     self.send_header("Vary", "Accept-Encoding")
@@ -29513,6 +29515,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self._send_server_timing(cache="miss")
             if enc:
                 self.send_header("Content-Encoding", enc)
                 self.send_header("Vary", "Accept-Encoding")
@@ -40564,6 +40567,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _send_server_timing(self, cache=None):
+        # Server-side time for this response so the client's conv_open perf
+        # event can split network/queue wait from handler time (CCC-143).
+        # cpu well below app means the handler waited (GIL, locks, disk).
+        try:
+            _st0 = getattr(self, "_ccc_req_t0", None)
+            _sc0 = getattr(self, "_ccc_req_cpu0", None)
+            if _st0 is None or _sc0 is None:
+                return
+            val = "app;dur=%.0f, cpu;dur=%.0f" % ((time.time() - _st0) * 1000.0,
+                                                  (time.thread_time() - _sc0) * 1000.0)
+            if cache:
+                val += ', cache;desc="%s"' % cache
+            self.send_header("Server-Timing", val)
+        except Exception:
+            pass
+
     def send_json(self, data, status=200, etag=False):
         # Any 5xx is a real server-side error — feed the in-process health
         # counter the dashboard's bottom-left bar reads. Cheap, no disk scan.
@@ -40607,6 +40627,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(body)))
+        self._send_server_timing()
         if etag_val:
             self.send_header("ETag", etag_val)
         if enc:
@@ -40627,6 +40648,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # so any other endpoint (not just send_json) doesn't dump a
         # traceback when the client bails on us mid-response.
         _t0 = time.time()
+        _c0 = time.thread_time()
+        self._ccc_req_t0 = _t0
+        self._ccc_req_cpu0 = _c0
+        # A keep-alive connection's final call only waits for a request that
+        # never comes; clear the previous request's path so that idle wait is
+        # not logged as a slow repeat of it.
+        self.path = ""
         try:
             super().handle_one_request()
         except (BrokenPipeError, ConnectionResetError):
@@ -40645,12 +40673,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 _ms = (time.time() - _t0) * 1000.0
                 _p = getattr(self, "path", "?").split("?", 1)[0]
-                if (not _p.startswith("/api/secrets/")
+                if (_p and not _p.startswith("/api/secrets/")
                         and _p not in ("/api/events", "/api/sessions/events", "/api/queue/events", "/api/sessions/ultra-fresh")
                         and _ms >= SLOW_REQ_MS):
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)
+            except Exception:
+                pass
+            # Per-route CPU accounting (CCC-143): which handlers keep the
+            # single-GIL process saturated. Idle keep-alive waits (no path)
+            # are skipped.
+            try:
+                if getattr(self, "path", None):
+                    _cpu_accounting.record(self.path, time.thread_time() - _c0, time.time() - _t0)
             except Exception:
                 pass
 
