@@ -30538,6 +30538,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/doctor/instances":
             # W9-1: read-only duplicate dashboard detector for `ccc doctor`.
             self.send_json(build_doctor_instances())
+        elif path == "/api/repo/guess/status":
+            self.send_json(repo_guess_status())
         elif path == "/api/byok/profiles":
             # BYOK (W2-2): key profiles and the provider catalog for the
             # Settings screen. Never returns secret material — set_key/

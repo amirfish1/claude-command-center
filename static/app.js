@@ -85057,6 +85057,47 @@
   }
 
   // ── New-session repo auto-guess ──
+  async function refreshJevRepoPromo() {
+    const promo = document.getElementById('jevRepoPromo');
+    if (!promo) return;
+    try {
+      const res = await fetch('/api/repo/guess/status', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Status unavailable');
+      const data = await res.json();
+      const configured = data.jev_configured === true;
+      document.getElementById('jevRepoPromoTitle').textContent = configured
+        ? 'Jev matching enabled' : 'Let Jev find the right repo';
+      document.getElementById('jevRepoPromoText').textContent = configured
+        ? 'CCC uses Jev to match your prompt to a repo, with local matching as a fallback.'
+        : 'Add your Jev token for matching based on what you want to work on.';
+      document.getElementById('jevRepoSetupBtn').textContent = configured ? 'Manage token' : 'Add Jev token';
+      promo.hidden = false;
+    } catch (_) {
+      promo.hidden = true;
+    }
+  }
+  const jevRepoSetupBtn = document.getElementById('jevRepoSetupBtn');
+  if (jevRepoSetupBtn) jevRepoSetupBtn.addEventListener('click', async () => {
+    jevRepoSetupBtn.disabled = true;
+    try {
+      const res = await fetch('/api/vault', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Could not load the Vault');
+      const data = await res.json();
+      const entry = (data.entries || []).find(e => e.env_var === 'JEV_API_KEY' ||
+        ['jev-api-key', 'jev-api-key.password', 'jev-api-key.token'].includes(e.name));
+      openSettingsModal();
+      setActiveSettingsRailSection('vault');
+      _vaultOpenForm(entry ? 'edit' : 'add', entry || {
+        name: 'jev-api-key', kind: 'api_key', service: 'TypeSafe Jev', env_var: 'JEV_API_KEY',
+      }, entry ? { name: entry.name } : {});
+      _vaultSetStatus('Save your Jev token here to enable repo matching. Existing environment or provider-profile keys take precedence.');
+      setTimeout(() => { const input = _vaultEl('value'); if (input) input.focus(); }, 0);
+    } catch (err) {
+      showConvToast(err.message || 'Could not open Jev setup');
+    } finally {
+      jevRepoSetupBtn.disabled = false;
+    }
+  });
   // POST /api/repo/guess reads the prompt and names the folder it belongs in.
   // Confident guesses (>= 0.95) fill the picker unless the user already chose;
   // middling ones (>= 0.5) become a click-to-apply chip. An auto-pick is NOT
@@ -85976,6 +86017,7 @@
     if (typeof closeStatusRailFileViewer === 'function') closeStatusRailFileViewer();
     currentConversation = '__new__';
     resetRepoGuess(true);
+    refreshJevRepoPromo();
     if (getSpawnEngine() === 'claude') abortBackgroundApiReadsForSpawn();
     refreshConversationBackgroundForPane(paneId);
     syncActivePaneChrome('__new__');
@@ -87944,6 +87986,7 @@
     });
   }
   async function refreshByokSettings() {
+    refreshJevRepoPromo();
     const backendDesc = document.getElementById('byokBackendDesc');
     const providerSelect = document.getElementById('byokProviderSelect');
     if (!backendDesc && !providerSelect) return;
@@ -88196,6 +88239,7 @@
     });
   }
   async function refreshVaultSettings() {
+    refreshJevRepoPromo();
     const backendDesc = document.getElementById('vaultBackendDesc');
     if (!backendDesc) return;
     try {

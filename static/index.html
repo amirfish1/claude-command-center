@@ -1353,6 +1353,13 @@
           <label class="spawn-worktree-row" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main.">
             <input type="checkbox" id="inlineWorktreeToggle"> 🌿 worktree
           </label>
+          <div id="jevRepoPromo" class="jev-repo-promo" hidden>
+            <div><strong id="jevRepoPromoTitle">Let Jev find the right repo</strong>
+              <span id="jevRepoPromoText">Add your Jev token for matching based on what you want to work on.</span>
+              <small>Jev receives your scrubbed prompt, repo descriptions and recent session titles. Your token stays in the local Vault.</small>
+            </div>
+            <button id="jevRepoSetupBtn" type="button" class="settings-action-btn">Add Jev token</button>
+          </div>
           <span class="wp-usage" data-usage></span>
         </div>
         <!-- Right-side status rail. Always visible — hosts session-level
