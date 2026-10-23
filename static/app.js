@@ -16186,8 +16186,14 @@
       run.el.className = 'compact-run-card';
       if (run.sid) run.el.dataset.sid = run.sid;
     }
-    if (run.el.parentNode !== view && !run.anchored) view.appendChild(run.el);
-    else if (!run.anchored && run.el !== view.lastElementChild) view.appendChild(run.el);
+    if (run.anchored) return;
+    const live = run.stage === 'requested' || run.stage === 'working';
+    if (run.el.parentNode !== view) view.appendChild(run.el);
+    else if (live && run.el !== view.lastElementChild) view.appendChild(run.el);
+    // A finished run stays where it ended. Codex writes no resume-summary
+    // row to anchor to, so without this every later render re-pinned the
+    // done card under the new turns, forever (CCC-151).
+    if (!live) run.anchored = true;
   }
   function _compactRunAnchorTo(node) {
     const run = _compactRun;
