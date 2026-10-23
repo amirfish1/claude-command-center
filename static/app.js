@@ -21220,6 +21220,17 @@
     for (let i = 0; i < splitState.panes.length; i++) if (splitState.panes[i].id === pid) return i;
     return -1;
   }
+  // CCC-129: conversations open in a split pane that is NOT focused, so the
+  // sidebar can mark that row in a second color next to the active row.
+  function otherPaneConvIds() {
+    const ids = new Set();
+    if (!splitState || !splitState.orientation || !Array.isArray(splitState.panes) || splitState.panes.length < 2) return ids;
+    splitState.panes.forEach((p, i) => {
+      if (i !== splitState.activeIndex && p && p.conversationId) ids.add(p.conversationId);
+    });
+    return ids;
+  }
+
   function syncActivePaneChrome(activeConvId) {
     const activePid = activePaneId();
     const newConvId = (arguments.length > 0 && activeConvId !== undefined) ? activeConvId : currentConversation;
@@ -21237,8 +21248,11 @@
     });
     const convId = arguments.length > 0 ? activeConvId : currentConversation;
     if ($convList) {
+      const otherIds = otherPaneConvIds();
       $convList.querySelectorAll('.conv-item').forEach(el => {
-        el.classList.toggle('active', el.dataset.id === convId);
+        const isActive = el.dataset.id === convId;
+        el.classList.toggle('active', isActive);
+        el.classList.toggle('in-other-pane', !isActive && otherIds.has(el.dataset.id));
         el.classList.remove('mobile-tapped');
       });
     }
@@ -36667,6 +36681,7 @@
     }
     const _byRecencyDesc = (a, b) => (b.modified || 0) - (a.modified || 0);
     _openAskConvs.sort(_byRecencyDesc);
+    const _otherPaneIds = otherPaneConvIds();
     // Set true only while the In-progress section's rows are being built (when
     // the Details toggle is on). _renderRow reads it to decide whether to
     // append each row's NYA block. Reset to false afterwards so other sections
@@ -37147,7 +37162,8 @@
         Number(c.modified || 0)
       );
       let rel = relativeTime(_relTs || c.last_interacted || c.modified);
-      const active = currentConversation === c.id ? ' active' : '';
+      const active = currentConversation === c.id ? ' active'
+        : (_otherPaneIds.has(c.id) ? ' in-other-pane' : '');
 
       // Session signals: additive context chips followed by exactly one
       // lifecycle chip per row. Priority chain (highest first):
@@ -45063,6 +45079,19 @@
     if (!categoryEl || !titleEl) return;
     const category = opts.category !== undefined ? opts.category : paneCategoryForRow(row);
     const title = opts.title !== undefined ? opts.title : paneTitleForRow(row);
+    // The session's sidebar-row name (same chain as the phone toolbar title),
+    // so the desktop pane header reads exactly like its list row (CCC-129).
+    let rowName = '';
+    {
+      const rid = row && (row.id || row.session_id);
+      const full = (rid && Array.isArray(conversationsData)
+        && conversationsData.find(x => x && (x.id === rid || x.session_id === rid))) || row;
+      try {
+        if (full && (full.display_name || full.ai_title || full.first_message)) rowName = rowRawTitle(full).rawTitle;
+      } catch (_) {}
+    }
+    rowName = String(rowName || title || '').trim();
+    const headerTitle = opts.title !== undefined ? String(title || '').trim() : rowName;
     // Engine rows render an icon chip (CCC-475) instead of the engine word;
     // explicit opts.category (popouts, issues) and non-engine sources keep
     // the plain-text chip.
@@ -45074,13 +45103,13 @@
     } else {
       categoryEl.textContent = category || '';
     }
-    titleEl.textContent = title || '';
+    titleEl.textContent = headerTitle;
     // CCC-1172: the ellipsized title stays readable in full — hover carries
     // it in the tooltip, click/Enter toggles .is-expanded inline (delegated
     // next to the mobile-original-ask listener). role/tabindex make the
     // span a keyboard-reachable button only while it carries text.
-    titleEl.title = title || '';
-    if (title) {
+    titleEl.title = headerTitle;
+    if (headerTitle) {
       titleEl.tabIndex = 0;
       titleEl.setAttribute('role', 'button');
       titleEl.setAttribute('aria-expanded', titleEl.classList.contains('is-expanded') ? 'true' : 'false');
@@ -45098,14 +45127,7 @@
     if (targetPaneId === activePaneId()) {
       const mobileTitleEl = document.getElementById('mobileConvTitle');
       if (mobileTitleEl) {
-        const rid = row && (row.id || row.session_id);
-        const full = (rid && Array.isArray(conversationsData)
-          && conversationsData.find(x => x && (x.id === rid || x.session_id === rid))) || row;
-        let name = '';
-        try {
-          if (full && (full.display_name || full.ai_title || full.first_message)) name = rowRawTitle(full).rawTitle;
-        } catch (_) {}
-        name = String(name || title || '').trim();
+        const name = rowName;
         mobileTitleEl.textContent = name;
         mobileTitleEl.title = name;
         mobileTitleEl.hidden = !name;

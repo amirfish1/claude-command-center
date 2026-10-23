@@ -2945,6 +2945,24 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* CCC-129: desktop headers lead with the session name, like the phone
+     toolbar title; the latest user message steps back to secondary text. */
+  @media (min-width: 1201px) {
+    .conv-pane-titlebar { flex: 1 1 auto; }
+    .conv-pane-titlebar .conv-pane-title {
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+    .conv-pane-last-user-message {
+      flex: 0 8 auto;
+      max-width: 32%;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .conv-split[data-orientation="vertical"] .conv-pane-last-user-message { max-width: 24%; }
+  }
   .conv-pane-popout {
     flex: 0 0 auto;
     width: 28px;
@@ -3315,6 +3333,20 @@
     box-shadow:
       inset 0 0 0 1px rgba(45, 212, 191, 0.72),
       inset 4px 0 0 rgba(45, 212, 191, 0.86);
+  }
+  /* CCC-129: in a split, the focused pane's header wears the same purple
+     as the focused sidebar row; the unfocused pane's header carries a blue
+     rail matching its .conv-item.in-other-pane row, so each list row maps
+     to its pane at a glance. */
+  .conv-split[data-orientation="vertical"] .conv-pane.is-active > .conv-pane-header,
+  .conv-split[data-orientation="horizontal"] .conv-pane.is-active > .conv-pane-header {
+    background: color-mix(in srgb, var(--purple) 20%, var(--surface));
+    border-bottom-color: var(--purple);
+    box-shadow: inset 4px 0 0 var(--purple);
+  }
+  .conv-split[data-orientation="vertical"] .conv-pane:not(.is-active) > .conv-pane-header,
+  .conv-split[data-orientation="horizontal"] .conv-pane:not(.is-active) > .conv-pane-header {
+    box-shadow: inset 4px 0 0 color-mix(in srgb, #58a6ff 70%, transparent);
   }
   .conv-pane-close {
     background: none;
@@ -5799,6 +5831,8 @@
      already gives the right gap for every tier and no override is needed. */
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: color-mix(in srgb, var(--purple) 12%, var(--surface-2)); border-left-color: var(--purple); }
+  /* CCC-129: the session open in the other (unfocused) split pane. */
+  .conv-item.in-other-pane { background: color-mix(in srgb, #58a6ff 11%, var(--surface-2)); border-left-color: #58a6ff; }
   /* Orchestration family of the selected session: root teal, lanes purple.
      Uses the row's existing 3px border-left, so nothing moves. */
   .conv-item.is-orch-root { border-left-color: #39c5cf; }
@@ -17561,6 +17595,9 @@
   #convList[data-row-delineation="cards"] .conv-item.active {
     background: color-mix(in srgb, var(--purple) 12%, var(--surface-2)) !important;
   }
+  #convList[data-row-delineation="cards"] .conv-item.in-other-pane {
+    background: color-mix(in srgb, #58a6ff 11%, var(--surface-2)) !important;
+  }
   html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title {
     font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", "Nunito", system-ui, sans-serif !important;
     letter-spacing: 0 !important;
@@ -24071,6 +24108,19 @@ body.has-gc-reader .pwa-install-banner {
 .fq-ticket-dialog {
   width: min(640px, 94vw);
 }
+/* CCC-129: the global ticket composer docks to the left and barely dims, so
+   the conversation it is about stays visible while typing. */
+.fq-ticket-composer.upd-overlay {
+  justify-content: flex-start;
+  padding-left: 24px;
+}
+.fq-ticket-composer > .upd-backdrop {
+  background: rgba(0, 0, 0, 0.18);
+  backdrop-filter: none;
+}
+@media (max-width: 700px) {
+  .fq-ticket-composer.upd-overlay { justify-content: center; padding-left: 0; }
+}
 .fq-ticket-header {
   display: flex;
   align-items: center;
@@ -30223,6 +30273,10 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #convList.workers-dense .conv-item.active {
   background: color-mix(in srgb, var(--purple) 14%, transparent) !important;
   border-left-color: var(--purple) !important;
+}
+#convList.workers-dense .conv-item.in-other-pane {
+  background: color-mix(in srgb, #58a6ff 14%, transparent) !important;
+  border-left-color: #58a6ff !important;
 }
 /* CCC-1193: the % and age cells are hidden in a very narrow list (see the
    sidebar 400px tier); collapse their fixed tracks so the title gets them. */
