@@ -882,6 +882,11 @@
             <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
             <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
             <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarGroupChatLiveBtn">Group chat live view</button>
+            <!-- Desktop: render the session list with the phone layout
+                 (app.js mirrors the phone CSS onto #convList). -->
+            <label class="sh-more-item sh-more-desktop-only sh-more-check" role="menuitemcheckbox" title="Show the session list exactly as it looks on a phone">
+              <input type="checkbox" id="mobileListViewToggle"> <span>Mobile view</span>
+            </label>
             <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
             <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarRefreshBtn">Reload page</button>
             <!-- Opens #sysModal, which is the restart UI (Dashboard / Worker /

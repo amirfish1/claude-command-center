@@ -1,0 +1,1 @@
+- Sidebar ⋮ menu gains a **Mobile view** checkbox (desktop) that shows the session list exactly as it looks on a phone, reusing the phone stylesheet.

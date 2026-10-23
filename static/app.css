@@ -32479,6 +32479,11 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 .sh-more-filters { display: grid; gap: 8px; padding: 4px 2px 8px; }
 .sh-more-filters[hidden] { display: none; }
 .settings-about-strip[hidden] { display: none; }
+/* Desktop "Mobile view" (sidebar ⋮): the list's view filters move into the
+   sidebar ⋮ like on phones, so show the phone-only entries there too. */
+html.ccc-mobile-list-view .sh-more-filters .is-phone-menu-only { display: inline-flex !important; }
+html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
+.sh-more-check input { margin: 0; accent-color: var(--accent); }
 @media (max-width: 1200px) {
   #sidebarMoreMenu .sh-more-desktop-only,
   #sidebarMoreMenu .sh-more-divider { display: none !important; }

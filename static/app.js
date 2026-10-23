@@ -20943,6 +20943,122 @@
       });
     }
   })();
+  // ── Desktop "Mobile view" for the session list ──
+  // Reuses the phone stylesheet instead of restyling anything: every rule in
+  // a width media query that a phone viewport matches gets a twin scoped to
+  // html.ccc-mobile-list-view #convList, inserted right after its media block
+  // so cascade order is unchanged (:where keeps specificity unchanged too).
+  // Desktop-only width rules aimed at #convList get a :not() guard.
+  const _MOBILE_LIST_LS = 'ccc-mobile-list-view';
+  const _MOBILE_LIST_CLASS = 'ccc-mobile-list-view';
+  const _MOBILE_LIST_PHONE_W = 420;
+  const _mobileListDoneSheets = new WeakSet();
+  function isMobileListView() {
+    return document.documentElement.classList.contains(_MOBILE_LIST_CLASS);
+  }
+  // true/false for a query with a width feature, judged at phone width
+  // (other features evaluated natively); null when width plays no part.
+  function _mobileListPhoneMatch(mediaText) {
+    let sawWidth = false;
+    const branches = String(mediaText || '').split(',');
+    const results = branches.map((branch) => {
+      const feats = branch.match(/\(([^()]+)\)/g) || [];
+      const widthFeats = feats.filter(f => /^\(\s*(max|min)-width\s*:/.test(f));
+      if (!widthFeats.length) {
+        try { return window.matchMedia(branch.trim() || 'all').matches; } catch (_) { return false; }
+      }
+      sawWidth = true;
+      if (/\bnot\b/.test(branch)) return false;
+      return feats.every((f) => {
+        const m = f.match(/^\(\s*(max|min)-width\s*:\s*([\d.]+)(px|em|rem)\s*\)$/);
+        if (m) {
+          const px = parseFloat(m[2]) * (m[3] === 'px' ? 1 : 16);
+          return m[1] === 'max' ? _MOBILE_LIST_PHONE_W <= px : _MOBILE_LIST_PHONE_W >= px;
+        }
+        if (/-width\s*:/.test(f)) return false;
+        try { return window.matchMedia(f).matches; } catch (_) { return false; }
+      });
+    });
+    return sawWidth ? results.some(Boolean) : null;
+  }
+  function _splitSelectorList(text) {
+    const out = [];
+    let depth = 0, cur = '';
+    for (const ch of String(text || '')) {
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+      if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+  function _mobileListTwinRules(rules, out) {
+    for (const r of Array.from(rules || [])) {
+      if (r.type === CSSRule.MEDIA_RULE) {
+        if (_mobileListPhoneMatch(r.media.mediaText) !== false) _mobileListTwinRules(r.cssRules, out);
+        continue;
+      }
+      if (r.type !== CSSRule.STYLE_RULE) continue;
+      const sels = _splitSelectorList(r.selectorText)
+        .filter(sel => !/^(html|body|:root)\b/.test(sel))
+        .map(sel => (/^#convList\b/.test(sel)
+          ? ':where(html.' + _MOBILE_LIST_CLASS + ') '
+          : ':where(html.' + _MOBILE_LIST_CLASS + ' #convList) ') + sel);
+      if (sels.length) out.push(sels.join(', ') + ' { ' + r.style.cssText + ' }');
+    }
+    return out;
+  }
+  function _mobileListGuardRules(rules) {
+    for (const r of Array.from(rules || [])) {
+      if (r.type === CSSRule.MEDIA_RULE) { _mobileListGuardRules(r.cssRules); continue; }
+      if (r.type !== CSSRule.STYLE_RULE) continue;
+      const sels = _splitSelectorList(r.selectorText);
+      if (!sels.some(sel => /^#convList\b/.test(sel))) continue;
+      r.selectorText = sels.map(sel => (/^#convList\b/.test(sel)
+        ? ':where(html:not(.' + _MOBILE_LIST_CLASS + ')) ' + sel : sel)).join(', ');
+    }
+  }
+  function _buildMobileListRules() {
+    for (const sheet of Array.from(document.styleSheets)) {
+      if (_mobileListDoneSheets.has(sheet)) continue;
+      let rules;
+      try { rules = sheet.cssRules; } catch (_) { continue; }   // cross-origin
+      if (!rules) continue;
+      _mobileListDoneSheets.add(sheet);
+      // Walk backwards so inserting a twin block never shifts a pending index.
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i];
+        if (r.type !== CSSRule.MEDIA_RULE) continue;
+        const phone = _mobileListPhoneMatch(r.media.mediaText);
+        if (phone === true) {
+          const twins = _mobileListTwinRules(r.cssRules, []);
+          if (twins.length) {
+            try { sheet.insertRule('@media all { ' + twins.join('\n') + ' }', i + 1); } catch (_) {}
+          }
+        } else if (phone === false) {
+          _mobileListGuardRules(r.cssRules);
+        }
+      }
+    }
+  }
+  function setMobileListView(on) {
+    on = !!on;
+    if (on) _buildMobileListRules();
+    document.documentElement.classList.toggle(_MOBILE_LIST_CLASS, on);
+    try { localStorage.setItem(_MOBILE_LIST_LS, on ? '1' : '0'); } catch (_) {}
+    const box = document.getElementById('mobileListViewToggle');
+    if (box) box.checked = on;
+  }
+  (function _wireMobileListView() {
+    let on = false;
+    try { on = localStorage.getItem(_MOBILE_LIST_LS) === '1'; } catch (_) {}
+    if (on) setMobileListView(true);
+    const box = document.getElementById('mobileListViewToggle');
+    if (box) {
+      box.checked = on;
+      box.addEventListener('change', () => setMobileListView(box.checked));
+    }
+  })();
   // Mirror the session list's ⋮ view-options into the sidebar ⋮ (phones).
   // The originals' handlers are delegated on #convList, so clicks on the
   // copy are forwarded to the same-position original, then the copy is
@@ -20950,7 +21066,9 @@
   function _syncSidebarMoreFilters() {
     const box = document.getElementById('sidebarMoreFilters');
     if (!box) return;
-    const src = _phoneMenusMQ.matches && document.querySelector('#convList .conv-archived-overflow-menu');
+    // Mobile view hides the list's own ⋮ row (phone CSS), so mirror here too.
+    const src = (_phoneMenusMQ.matches || isMobileListView())
+      && document.querySelector('#convList .conv-archived-overflow-menu');
     box.innerHTML = src ? src.innerHTML : '';
     box.hidden = !src;
   }
@@ -85195,6 +85313,25 @@
     }
   }
 
+  // Blank, "auto" and "adaptive" let the engine choose; a chip for one
+  // doesn't say what you're picking, so the strip never offers them.
+  function _isUnnamedSpawnModel(model) {
+    return /^(|auto|adaptive|default)$/i.test(String(model == null ? '' : model).trim());
+  }
+
+  // The concrete model an unnamed pick stands for: the saved default when it
+  // names one, else the engine's first available catalog model; '' if none.
+  function _namedSpawnModelForEngine(engine) {
+    // Hermes runs its own configured model and ignores the one we pass, so
+    // any name on its chip would be a guess.
+    if (engine === 'hermes') return '';
+    const saved = _defaultModelsByEngine[engine] || '';
+    if (!_isUnnamedSpawnModel(saved) && _modelAllowedForEngine(engine, saved)) return saved;
+    const opt = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => o && !_isUnnamedSpawnModel(o.id)
+      && o.available !== false && !o.disabled && _modelAllowedForEngine(engine, o.id));
+    return opt ? opt.id : '';
+  }
+
   function getTopSpawnPicks(picks = _cachedServerModelPicks) {
     // History tracks effort too; the strip offers models, with effort chosen
     // separately in the composer. Deduplicate before applying the display cap.
@@ -85202,10 +85339,11 @@
     // Engines the New session UI can't launch (droid, aider, pi) would be
     // coerced to claude on click and land on the wrong model; don't offer them.
     const list = (Array.isArray(picks) ? picks : [])
-      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine
-        // A model another engine owns (claude + minimax-m3) can't be selected
-        // in that engine's list, so the select would fall back to the priciest.
-        && (!p.model || _modelAllowedForEngine(p.engine, p.model)));
+      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine)
+      .map(p => (_isUnnamedSpawnModel(p.model) ? { ...p, model: _namedSpawnModelForEngine(p.engine) } : p))
+      // A model another engine owns (claude + minimax-m3) can't be selected
+      // in that engine's list, so the select would fall back to the priciest.
+      .filter(p => p.model && _modelAllowedForEngine(p.engine, p.model));
     // "sonnet-5" is noise once "sonnet-5-5" exists for the same engine, in
     // history or in its catalog.
     const ver = (m) => {
@@ -85235,8 +85373,8 @@
     Array.from((typeof $convInputEngineSelect !== 'undefined' && $convInputEngineSelect && $convInputEngineSelect.options) || [])
       .filter(o => !o.hidden && !o.disabled && SPAWN_DEFAULT_ENGINES.includes(o.value) && !have.has(o.value))
       .forEach(o => {
-        const model = _defaultModelsByEngine[o.value] || '';
-        if (model && !_modelAllowedForEngine(o.value, model)) return;
+        const model = _namedSpawnModelForEngine(o.value);
+        if (!model) return;
         have.add(o.value);
         kept.push({ engine: o.value, model, effort: '', count: 0, last_used: 0 });
       });
@@ -85257,7 +85395,9 @@
     const found = options.find(o => o.id === modelId)
       || options.find(o => _normalizeModelId(o.id) === _normalizeModelId(modelId));
     if (found && found.label) {
-      return found.label;
+      // "Auto (default)", "step-3.7-flash (free, default)": the chip names
+      // the model; whether it is the saved default isn't part of its name.
+      return found.label.replace(/\s*\(default\)/i, '').replace(/,\s*default\)/i, ')').trim() || found.id;
     }
     let clean = modelId;
     if (clean.includes('/')) {
