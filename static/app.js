@@ -79238,10 +79238,19 @@
     }
   }
 
-  function annCaptureDomRegionB64(rect, element) {
+  // Above this many descendants, inlining every computed style takes
+  // seconds on a phone and freezes the tap that opens the editor (CCC-127);
+  // skip the DOM capture and let the editor open without a preview.
+  const ANN_DOM_CAPTURE_MAX_NODES = 1500;
+
+  // `root` is the already-chosen context element. Callers pass the widened
+  // context rect, so re-deriving the root from it would climb another level
+  // (e.g. toolbar -> whole conversation pane) and clone thousands of nodes.
+  function annCaptureDomRegionB64(rect, element, root) {
     if (!rect || rect.width < 2 || rect.height < 2) return Promise.resolve(null);
-    const root = annContextElement(element, rect) || element;
+    root = root || annContextElement(element, rect) || element;
     if (!root || !root.cloneNode || !root.getBoundingClientRect) return Promise.resolve(null);
+    if (root.getElementsByTagName('*').length > ANN_DOM_CAPTURE_MAX_NODES) return Promise.resolve(null);
     const w = Math.max(1, Math.round(rect.width));
     const h = Math.max(1, Math.round(rect.height));
     if (w * h > 6_000_000) return Promise.resolve(null);
@@ -79302,7 +79311,8 @@
     if (!annotationState || !annotationState.rect) return Promise.resolve(null);
     const contextRect = annContextRect(annotationState.element, annotationState.rect);
     const captureElement = annotationState.element;
-    return annCaptureDomRegionB64(contextRect, captureElement)
+    const captureRoot = annContextElement(captureElement, annotationState.rect) || captureElement;
+    return annCaptureDomRegionB64(contextRect, captureElement, captureRoot)
       .catch(() => null)
       .then((b64) => {
         if (annotationState) annotationState.preEditorScreenshotB64 = b64 || '';

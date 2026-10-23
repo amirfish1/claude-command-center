@@ -1,0 +1,1 @@
+- Annotate opens its note editor in about a second on phones instead of 10+ seconds: the element screenshot no longer clones the whole conversation pane.
