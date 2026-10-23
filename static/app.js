@@ -1692,6 +1692,34 @@
     col.insertBefore(row, col.firstChild);
   }
   window.__cccPerfRow = _perfPaneRow;
+  // Click→open timing must not depend on selectConversation being the only
+  // entry point — archive rows, kanban cards and the sessions table all open
+  // conversations, and a missed path leaves the column silently empty. Log
+  // the click from a delegated listener (capture phase, so a handler that
+  // stopPropagation's still gets timed) and let the render completion in
+  // fetchConversationEvents close it.
+  const _perfOpenClicks = new Map(); // convId -> performance.now() at click
+  window.__cccPerfClick = _perfOpenClicks;
+  document.addEventListener('click', function (e) {
+    try {
+      const el = e.target && e.target.closest
+        && e.target.closest('.conv-item[data-id], .kanban-card[data-id], tr[data-id]');
+      if (!el) return;
+      // Skip clicks on action controls nested inside the row (archive ×,
+      // steer buttons) — but not when the row itself IS the control.
+      const ctrl = e.target.closest && e.target.closest('button, a, input, select, textarea');
+      if (ctrl && ctrl !== el && el.contains(ctrl) && !ctrl.contains(el)) return;
+      const id = el.getAttribute('data-id') || el.getAttribute('data-session-id');
+      if (!id) return;
+      _perfOpenClicks.set(String(id), performance.now());
+      if (_perfOpenClicks.size > 50) _perfOpenClicks.delete(_perfOpenClicks.keys().next().value);
+      _perfPaneRow('open', {
+        at: Date.now(),
+        text: '→ ' + String(id).slice(0, 8) + ' opening…',
+        title: 'click — ' + id,
+      });
+    } catch (_) {}
+  }, true);
   function _initPerfSection() {
     const footer = document.querySelector('.sidebar-footer');
     if (!footer || !footer.parentNode) { setTimeout(_initPerfSection, 400); return; }
@@ -46971,7 +46999,7 @@
         window.__cccPerfRow('open', {
           at: Date.now(),
           text: '→ ' + String(id).slice(0, 8) + ' opening…',
-          title: 'click at ' + new Date().toLocaleTimeString() + ' — ' + id,
+          title: 'selectConversation — ' + id,
         });
       }
     } catch (_) {}
@@ -56256,9 +56284,30 @@
                     + (_perfPrefetchHit ? ' (prefetch hit)' : '')
                     + ' — ' + id,
                 });
+                if (window.__cccPerfClick) window.__cccPerfClick.delete(String(id));
               }
             } catch (_) {}
             _perfConvOpen = null;
+          } else if (_freshOpen && _renderOk
+              && window.__cccPerfClick && window.__cccPerfClick.has(String(id))) {
+            // The strict conv_open metric didn't match this open (superseded
+            // click, programmatic open, an entry point that never set
+            // _perfConvOpen) but a fresh-load render DID land — the delegated
+            // click timer still closes it so the pane never stays silent.
+            try {
+              const _ct = window.__cccPerfClick.get(String(id));
+              window.__cccPerfClick.delete(String(id));
+              if (typeof window.__cccPerfRow === 'function' && Number.isFinite(_ct)) {
+                const _ms = Math.round(performance.now() - _ct);
+                if (_ms >= 0 && _ms < 5 * 60 * 1000) {
+                  window.__cccPerfRow('open', {
+                    at: Date.now(),
+                    text: '✓ ' + _ms + 'ms ' + String(id).slice(0, 8),
+                    title: 'click→render ' + _ms + 'ms — ' + id,
+                  });
+                }
+              }
+            } catch (_) {}
           }
         }
         // Live after= polls must not clobber the history cursor. Their
