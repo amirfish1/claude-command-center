@@ -3585,7 +3585,7 @@
   .conv-scroll-speak-btn.speaking.paused { opacity: 0.8; }
   /* Progress ring around the floating speaker, the round version of the
      composer Speak bar. Idle: amber/green arc = share of the on-screen turn's
-     audio already made. Reading: accent = read, bright = made ahead, dim =
+     audio already made. Reading: accent = read, white = made ahead, dim =
      not made yet. */
   .conv-scroll-speak-btn::before {
     content: '';
@@ -3608,7 +3608,7 @@
     display: block;
     background: conic-gradient(
       var(--accent) calc(var(--tts-play, 0) * 1turn),
-      color-mix(in srgb, var(--text) 70%, transparent) 0 calc(var(--tts-cache-f, 0) * 1turn),
+      #ffffff 0 calc(var(--tts-cache-f, 0) * 1turn),
       color-mix(in srgb, var(--text) 14%, transparent) 0);
   }
 
