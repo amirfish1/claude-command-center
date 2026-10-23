@@ -17,7 +17,7 @@
 # (Google SSO) — see scripts/dokploy/gen-claude-command-center-forward-auth.py
 # in the monorepo.
 
-FROM node:22-bookworm-slim AS node
+FROM node:22.23.4-bookworm-slim AS node
 
 FROM python:3.12-slim
 
