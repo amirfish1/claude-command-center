@@ -2542,6 +2542,13 @@ def _acp_prompt(
                 "cwd": cwd or "",
             },
             idempotency_key=idempotency_key,
+            # The worker may have to session/load a long-lived session first
+            # (~27s+ for Devin); the default 45s call budget timed out before
+            # the load could finish and sent the queue down the CLI fallback.
+            timeout_ms=(
+                int(_acp_load_timeout(harness) * 1000) + 15000
+                if harness == "devin" else None
+            ),
         )
         if routed is not None:
             return routed

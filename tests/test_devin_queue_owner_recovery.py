@@ -104,3 +104,12 @@ def test_acp_session_accepts_a_cwd_for_state_that_has_none():
         assert state["cwd"] == "/work/dir"
     finally:
         sessions.pop(sid, None)
+
+
+def test_devin_prompt_call_budget_covers_a_slow_session_load():
+    server = importlib.import_module("server")
+    with mock.patch.object(server, "_control_plane_engine_call", return_value={"ok": True}) as call:
+        server._acp_prompt("devin", "raw", "hi", cwd="/w")
+        server._acp_prompt("kimi", "raw", "hi")
+    assert call.call_args_list[0].kwargs["timeout_ms"] >= 120000
+    assert call.call_args_list[1].kwargs["timeout_ms"] is None
