@@ -32712,7 +32712,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     row-gap: 6px;
   }
   #convList#convList .conv-item .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
-    flex: 1 1 0;
+    flex: 1 1 100%;
     min-width: 0;
   }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline {
@@ -32754,14 +32754,17 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col {
     display: flex;
+    flex: 1 1 0;
     flex-wrap: wrap;
     align-items: center;
     gap: 5px;
     min-width: 0;
     order: 3;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: auto; order: 3; }
-  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col > .conv-sidebar-session-id-chip { order: -1; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: 0; order: 3; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: 0; min-width: 0; order: 3; }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end > .conv-rel { position: static; transform: none; }
 }
 
 /* Archive for a finished session: anchored just above the composer card, on
