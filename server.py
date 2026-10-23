@@ -8332,16 +8332,37 @@ def _first_allowed_curated_model(engine):
     return ""
 
 
+_MODEL_CATALOG_OWNER_INDEX = {"sig": None, "index": {}}
+
+
+def _model_catalog_owner_index():
+    """key -> engines index over _ENGINE_CURATED_MODELS, rebuilt only when the
+    curated table changes. The per-model scan it replaces ran ~120k key
+    normalisations per catalog build (~1.7s of a 2.5s rebuild, CCC-143)."""
+    sig = tuple(
+        (engine, tuple(option.get("id") for option in options))
+        for engine, options in _ENGINE_CURATED_MODELS.items()
+    )
+    cached = _MODEL_CATALOG_OWNER_INDEX
+    if cached["sig"] == sig:
+        return cached["index"]
+    index = {}
+    for engine, options in _ENGINE_CURATED_MODELS.items():
+        for option in options:
+            key = _model_catalog_key(option.get("id"))
+            if key:
+                index.setdefault(key, set()).add(engine)
+    cached["index"] = index
+    cached["sig"] = sig
+    return index
+
+
 def _model_catalog_known_engines(model):
     """Return curated engines that explicitly own a model id."""
     key = _model_catalog_key(model)
     if not key:
         return set()
-    return {
-        engine
-        for engine, options in _ENGINE_CURATED_MODELS.items()
-        if any(_model_catalog_key(option.get("id")) == key for option in options)
-    }
+    return set(_model_catalog_owner_index().get(key, ()))
 
 
 def _model_catalog_allows_model(engine, model):
@@ -9123,14 +9144,34 @@ def _prune_antigravity_models_to_latest_tiers(models, default_id=None):
     return kept
 
 
+_MODEL_CATALOG_REFRESHING = threading.Event()
+
+
+def _refresh_engine_model_catalog_bg():
+    try:
+        _build_engine_model_catalog(force_refresh=True)
+    except Exception:
+        pass
+    finally:
+        _MODEL_CATALOG_REFRESHING.clear()
+
+
 def _build_engine_model_catalog(force_refresh=False):
     now = time.monotonic()
-    if (
-        not force_refresh
-        and _MODEL_CATALOG_CACHE["data"] is not None
-        and now - _MODEL_CATALOG_CACHE["ts"] < _MODEL_CATALOG_TTL_SEC
-    ):
-        return copy.deepcopy(_MODEL_CATALOG_CACHE["data"])
+    cached = _MODEL_CATALOG_CACHE["data"]
+    if not force_refresh and cached is not None:
+        # Stale-while-revalidate: an expired catalog is served at once and one
+        # background thread rebuilds it. The synchronous rebuild on expiry
+        # took 2-17s under load and competed with conversation opens for the
+        # GIL (CCC-143). Explicit invalidation sets data=None, so a settings
+        # change still rebuilds synchronously below.
+        if now - _MODEL_CATALOG_CACHE["ts"] >= _MODEL_CATALOG_TTL_SEC and not _MODEL_CATALOG_REFRESHING.is_set():
+            _MODEL_CATALOG_REFRESHING.set()
+            threading.Thread(
+                target=_refresh_engine_model_catalog_bg, daemon=True,
+                name="model-catalog-refresh",
+            ).start()
+        return copy.deepcopy(cached)
 
     catalog = {}
     for engine in _ORCHESTRATION_SPAWN_ENGINES:
