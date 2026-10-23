@@ -1,0 +1,1 @@
+Ultra-fresh session rows: the top four visible sessions receive agent message explanations through a bounded live stream, without waiting for the archive poll. Tool activity no longer replaces row explanations; selection, scrolling, manual Archive, and completion safeguards stay in place.

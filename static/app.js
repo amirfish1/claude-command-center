@@ -3076,6 +3076,225 @@
       + '<span class="grouping-opt' + (on ? ' is-active' : '') + '" data-tracked-table-toggle="1">Table</span>'
       + '</span>';
   }
+  // Ultra-fresh: one bounded stream for the first four sessions intersecting
+  // the list viewport. Message updates touch only the existing explanation
+  // slots; row identity, ordering, selection and scroll stay under list control.
+  const _ultraFresh = { entries: new Map(), source: null, ids: '', generation: 0, queued: false };
+  function _ultraFreshRow(sid) {
+    return conversationsData.find(c => String(c.session_id || c.id) === sid)
+      || archiveData.find(c => String(c.session_id || c.id) === sid);
+  }
+  function _ultraFreshTime(value) {
+    if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
+    return Date.parse(value || '') || 0;
+  }
+  function _ultraFreshSendBarrier(entry, sid) {
+    const sending = sessionIsOptimisticallySending(sid);
+    const preSend = preSendPreviewFor(sid);
+    if (sending && (!entry.sending || preSend !== entry.preSend)) {
+      entry.sendAt = Date.now(); entry.at = entry.sendAt; entry.userAt = entry.sendAt;
+      entry.text = ''; entry.sessionState = null;
+    }
+    entry.preSend = preSend; entry.sending = sending;
+    return sending;
+  }
+  function _ultraFreshCurrent(c) {
+    const entry = _ultraFresh.entries.get(String(c.session_id || c.id));
+    if (!entry) return c;
+    _ultraFreshSendBarrier(entry, c.session_id || c.id);
+    if (entry.userAt > entry.at) return Object.assign({}, c,
+      { last_event_type: 'user', state: 'working', session_state: null, last_assistant_text: '', last_assistant_preview: '' });
+    if (!entry.text) return c;
+    if (sessionIsOptimisticallySending(c.session_id || c.id) && entry.at <= entry.sendAt) return c;
+    // A newer user event from the ordinary list also invalidates a live reply.
+    if (c.last_event_type === 'user' && _ultraFreshTime(c.modified || c.mtime) > entry.at) return c;
+    return Object.assign({}, c, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
+      session_state: entry.sessionState, last_event_type: 'assistant',
+      modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
+  }
+  function _ultraFreshExplanation(c) {
+    const sid = c.session_id || c.id;
+    const live = _applyLiveOverlayToRow(c);
+    const sending = sessionIsOptimisticallySending(sid);
+    const raw = String(c.last_assistant_text || c.last_assistant_preview || '');
+    const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw;
+    const text = stale ? '' : raw.replace(/<session-state>[\s\S]*$/, '')
+      .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280);
+    const summary = stale ? {} : (c.session_state || {});
+    const working = sending || c.pending_spawn || live.state === 'working' || live.codex_state === 'working'
+      || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight);
+    const ready = !working && !sending && sessionReadyToClose(c, live);
+    const next = String(summary.next_step_user || '').trim();
+    const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(next);
+    return working ? { label: 'Working', kind: 'working', text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
+      : ready ? { label: 'Close', kind: 'ready', text: summary.did || 'Reviewed as complete; archive when ready.' }
+      : { label: 'Next', kind: 'next', text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
+  }
+  function _ultraFreshPaint(sid) {
+    const entry = _ultraFresh.entries.get(sid);
+    const base = _ultraFreshRow(sid);
+    if (!entry || !base) return;
+    const c = _ultraFreshCurrent(base);
+    const info = _ultraFreshExplanation(c);
+    for (const row of document.querySelectorAll('#convList .conv-item[data-session-id="' + CSS.escape(sid) + '"]')) {
+      if (row.dataset.sessionId !== sid) continue;
+      const main = row.querySelector('.conv-main-row');
+      if (main) {
+        let outcome = main.querySelector('.conv-outcome');
+        if (!outcome) {
+          outcome = document.createElement('div');
+          const end = main.querySelector('.conv-row-end');
+          main.insertBefore(outcome, end);
+        }
+        outcome.className = 'conv-outcome is-next-step is-inline is-' + info.kind;
+        outcome.title = 'Ultra-fresh · agent message\n' + info.text;
+        let step = outcome.querySelector('.conv-outcome-step');
+        if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.replaceChildren(step); }
+        step.dataset.label = info.label;
+        step.textContent = info.text;
+        main.classList.add('has-inline-step');
+      }
+      const preview = row.querySelector('.wa-preview');
+      if (preview) {
+        // Keep the ticket link and any listeners already attached to it.
+        let label = preview.querySelector('.wa-explanation-label');
+        if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
+        label.textContent = info.label + ':';
+        for (const node of [...preview.childNodes]) if (node.nodeType === 3) node.remove();
+        preview.appendChild(document.createTextNode(' ' + info.text));
+      }
+      // New message text invalidates an earlier Close recommendation. Archive
+      // remains a manual row action; never archive or move the session here.
+      if (info.kind !== 'ready') {
+        if (row.classList.contains('is-ready-to-close')) row.style.minHeight = row.getBoundingClientRect().height + 'px';
+        row.classList.remove('is-ready-to-close');
+        row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
+      }
+    }
+  }
+  function _ultraFreshAccept(update, generation = _ultraFresh.generation) {
+    const sid = String(update.session_id || '');
+    const entry = _ultraFresh.entries.get(sid);
+    if (!entry || generation !== _ultraFresh.generation) return;
+    const userAt = _ultraFreshTime(update.user_ts);
+    if (userAt > entry.userAt) { entry.userAt = userAt; entry.text = ''; }
+    if (update.clear) { _ultraFreshPaint(sid); return; }
+    const text = String(update.text || '');
+    if (!text.trim()) return;
+    const at = _ultraFreshTime(update.ts) || (update.live ? Date.now() : 0);
+    if (!at || at < entry.userAt) return;
+    const line = Number(update.line) || 0;
+    if (line && line < (entry.line || 0) && at <= entry.at) return;
+    const enrich = text === entry.text && !!update.session_state;
+    if (at < entry.at && !enrich) return;
+    const base = _ultraFreshRow(sid);
+    if (!base) return;
+    // Sending is a barrier, including when an older stream frame was queued
+    // before the send. Untimestamped snapshots cannot cross this barrier.
+    if (_ultraFreshSendBarrier(entry, sid) && (!update.ts || at <= entry.sendAt)) return;
+    if (base.last_event_type === 'user' && at < _ultraFreshTime(base.modified || base.mtime)) return;
+    if (text === entry.text && at === entry.at && !enrich) return;
+    if (line) entry.line = line;
+    entry.text = text; entry.at = Math.max(entry.at, at); entry.sessionState = update.session_state || entry.sessionState;
+    if (!enrich) entry.sessionState = update.session_state || null;
+    if (!entry.paintQueued) {
+      entry.paintQueued = true;
+      requestAnimationFrame(() => {
+        entry.paintQueued = false;
+        if (_ultraFresh.entries.get(sid) === entry) _ultraFreshPaint(sid);
+      });
+    }
+  }
+  function _ultraFreshSpawnFeed(sid, events) {
+    const entry = _ultraFresh.entries.get(String(sid));
+    if (!entry) return;
+    for (const ev of events || []) {
+      if (ev.type !== 'assistant_block' || ev.parent_tool_use_id) continue;
+      const text = (ev.blocks || []).filter(b => b.type === 'text').map(b => b.text || '').join('\n');
+      if (!text) continue;
+      entry.spawnText = (ev.partial && entry.spawnId === ev.message_id ? entry.spawnText || '' : '') + text;
+      entry.spawnText = entry.spawnText.slice(0, 40000);
+      entry.spawnId = ev.message_id;
+      _ultraFreshAccept({ session_id: sid, text: entry.spawnText, live: true });
+    }
+  }
+  function _ultraFreshFeed(sid, events) {
+    if (!_ultraFresh.entries.has(String(sid))) return;
+    for (const ev of events || []) {
+      if (ev.type === 'user_text' && ev.ts) {
+        _ultraFreshAccept({ session_id: sid, user_ts: ev.ts, clear: true });
+      }
+      if (ev.type !== 'assistant' || ev.parent_tool_use_id) continue;
+      const text = (ev.blocks || []).filter(b => b.kind === 'text').map(b => b.text || '').join('\n');
+      if (text && ev.ts) _ultraFreshAccept({ session_id: sid, text, ts: ev.ts, line: ev.line });
+    }
+  }
+  function _ultraFreshSync() {
+    _ultraFresh.queued = false;
+    const list = document.getElementById('convList');
+    const ids = [];
+    if (list && !document.hidden) {
+      const bounds = list.getBoundingClientRect();
+      const byId = new Map(conversationsData.map(c => [String(c.session_id || c.id), c]));
+      for (const row of list.querySelectorAll('.conv-item[data-session-id]')) {
+        const sid = row.dataset.sessionId;
+        const c = byId.get(sid);
+        if (!c || c.archived || c.trashed || ['backlog', 'github_pr', 'group-chat'].includes(c.source)) continue;
+        const rect = row.getBoundingClientRect();
+        if (rect.height <= 0 || rect.bottom <= Math.max(0, bounds.top) || rect.top >= Math.min(innerHeight, bounds.bottom)) continue;
+        if (!ids.includes(sid)) ids.push(sid);
+        if (ids.length === 4) break;
+      }
+    }
+    const key = ids.join(',');
+    if (key !== _ultraFresh.ids) {
+      _ultraFresh.ids = key;
+      _ultraFresh.generation++;
+      if (_ultraFresh.source) _ultraFresh.source.close();
+      _ultraFresh.source = null;
+      for (const sid of _ultraFresh.entries.keys()) if (!ids.includes(sid)) _ultraFresh.entries.delete(sid);
+      for (const sid of ids) if (!_ultraFresh.entries.has(sid)) _ultraFresh.entries.set(sid,
+        { at: 0, userAt: 0, text: '', sessionState: null, sendAt: 0, preSend: null });
+      if (key && typeof EventSource === 'function') {
+        const generation = _ultraFresh.generation;
+        const source = new EventSource('/api/sessions/ultra-fresh?sessions=' + encodeURIComponent(key));
+        _ultraFresh.source = source;
+        source.onmessage = ev => {
+          if (_ultraFresh.source !== source) return;
+          try { for (const update of JSON.parse(ev.data).updates || []) _ultraFreshAccept(update, generation); } catch (_) {}
+        };
+      }
+    }
+    // Ordinary list snapshots may lag this stream. Restore the four text
+    // overlays after a render without replacing rows or mutating list data.
+    ids.forEach(_ultraFreshPaint);
+  }
+  function _ultraFreshSchedule() {
+    if (_ultraFresh.queued) return;
+    _ultraFresh.queued = true;
+    requestAnimationFrame(_ultraFreshSync);
+  }
+  function _ultraFreshStart() {
+    const list = document.getElementById('convList');
+    if (!list) return;
+    const observer = new MutationObserver(records => {
+      if (records.some(r => r.target === list
+          || (r.type === 'attributes' && !r.target.closest('.conv-item'))
+          || [...r.addedNodes, ...r.removedNodes]
+          .some(n => n.nodeType === 1 && (n.matches('.conv-item') || n.querySelector('.conv-item'))))) _ultraFreshSchedule();
+    });
+    observer.observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'style', 'open'] });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(_ultraFreshSchedule).observe(list);
+    // Scroll containers vary with list mode; capture catches nested scrolling.
+    list.addEventListener('scroll', _ultraFreshSchedule, true);
+    list.addEventListener('toggle', _ultraFreshSchedule, true);
+    window.addEventListener('resize', _ultraFreshSchedule);
+    document.addEventListener('visibilitychange', _ultraFreshSchedule);
+    _ultraFreshSchedule();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _ultraFreshStart, { once: true });
+  else _ultraFreshStart();
+
   // The server derives readiness from evidence-backed completion gates.
   // Existing explicit reviews remain valid until new transcript activity.
   function sessionReadyToClose(c, live = c) {
@@ -36545,6 +36764,7 @@
       + '</div>';
     };
     const _renderRow = (c, opts = {}) => {
+      c = _ultraFreshCurrent(c);
       const goalIconOnly = !!opts.goalIconOnly;
       const quietTitleChrome = !!opts.quietTitleChrome;
       const subagentCompact = !!opts.subagentCompact;
@@ -37643,15 +37863,8 @@
         let _label, _kind, _stepText;
         if (_outWorking) {
           _label = 'Working'; _kind = 'working';
-          // Turns are mostly tool calls with text only at the end, so the
-          // live tool (polled every few seconds) is the freshest signal;
-          // fall back to this turn's text, then a bare "Working…".
-          const _liveTool = _liveFresh
-            ? liveActivityToolLabel(_lv.sidecar_tool)
-              + (_lv.sidecar_file ? ': ' + shortenLiveActivityDetail(_lv.sidecar_file, _lv.sidecar_tool, 160) : '')
-            : '';
           const _turnText = (_latest && !_latestStale) ? _latest : '';
-          _stepText = _liveTool || _turnText
+          _stepText = _turnText
             || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
         } else if (_readyToCloseRow || c.archived || c.trashed) {
           _label = 'Close'; _kind = 'ready'; _stepText = _did || 'Reviewed as complete; archive when ready.';
@@ -54932,6 +55145,7 @@
     if (!Array.isArray(events)) return;
     const pane = paneId ? paneByPaneId(paneId) : null;
     if (paneId && (!pane || (convId && pane.conversationId !== convId))) return;
+    _ultraFreshSpawnFeed(streamSid || convId, events);
     const $view = paneId ? getConvViewForPane(paneId) : getConvView();
     const wasAtBottom = $view && isConversationAtBottom($view);
     const _kimiStream = _viewIsWebUiPane($view);
@@ -63993,6 +64207,7 @@
     opts = opts || {};
     const pane = paneByPaneId(paneId);
     const renderedConversationId = (pane && pane.conversationId) || currentConversation || '';
+    if (!opts.isTruncated) _ultraFreshFeed((pane && pane.currentSession && pane.currentSession.id) || renderedConversationId, events);
     if (pane && opts.isTruncated) {
       pane.firstUserMsgRendered = true;
     }

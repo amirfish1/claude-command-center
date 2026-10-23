@@ -46,3 +46,12 @@ test('the next step returns when the Codex turn finishes', () => {
   assert.match(html, /data-label="Next"/);
   assert.match(html, /Reload to load the fix/);
 });
+
+test('tool activity never replaces the agent message explanation', () => {
+  const html = renderOutcome({ ...row, last_assistant_text: 'I am checking the new message path.' }, {
+    ...row, is_live: true, sidecar_status: 'active', sidecar_in_flight: true,
+    sidecar_ts: Date.now() / 1000, sidecar_tool: 'Bash', sidecar_file: 'noisy-command',
+  });
+  assert.match(html, /I am checking the new message path/);
+  assert.doesNotMatch(html, /Bash|noisy-command/);
+});

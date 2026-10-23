@@ -32506,3 +32506,44 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   .conv-item.is-ready-to-close .wa-body { height: auto; min-height: 128px; }
   .conv-item .wa-row-footer .conv-ready-archive { min-height: 32px; }
 }
+
+/* Inline message explanations keep the existing title/message split even in
+   Compact's dense table. display:contents would make the explanation a spare
+   grid cell with no width; the row's existing metadata stays below the split.
+   Match the phone breakpoint: the phone chat row already owns that surface. */
+@media (min-width: 1201px) {
+  #convList .conv-item:has(.conv-main-row.has-inline-step) { display: block; }
+  #convList .conv-item .conv-title-row:has(.conv-main-row.has-inline-step) { display: block; }
+  #convList .conv-item .conv-main-row.has-inline-step {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 6px;
+  }
+  #convList .conv-item .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
+    flex: 0 1 38%;
+    min-width: 0;
+  }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline {
+    display: block !important;
+    flex: 1 1 0;
+    min-width: 0;
+    /* Reserve the same three text lines for Working, Next and Close, so
+       incoming text cannot resize a row while the list is being read. */
+    height: calc(3 * 1.42em + 14px);
+    overflow: hidden;
+    margin: 0;
+  }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step {
+    width: 100%;
+    min-width: 0;
+  }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-break {
+    display: block;
+    flex-basis: 100%;
+    height: 0;
+  }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col { display: contents; }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: auto; }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
+}

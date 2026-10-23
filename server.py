@@ -29379,6 +29379,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
             transcript_path = conversation_transcript_path(conv_id, repo_path=repo_path)
             self.send_json({"transcript_path": transcript_path})
+        elif path == "/api/sessions/ultra-fresh":
+            from ccc_server.ultra_fresh import stream
+            stream(self, urllib.parse.parse_qs(parsed.query))
         elif re.match(r"^/api/conversations/[^/]+/stream$", path):
             conv_id = path.split("/")[-2]
             qs = urllib.parse.parse_qs(parsed.query)
@@ -40642,7 +40645,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _ms = (time.time() - _t0) * 1000.0
                 _p = getattr(self, "path", "?").split("?", 1)[0]
                 if (not _p.startswith("/api/secrets/")
-                        and _p not in ("/api/events", "/api/sessions/events", "/api/queue/events")
+                        and _p not in ("/api/events", "/api/sessions/events", "/api/queue/events", "/api/sessions/ultra-fresh")
                         and _ms >= SLOW_REQ_MS):
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
