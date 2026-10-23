@@ -3733,6 +3733,13 @@ def _transcript_peer_receipt(session_id, msg_id, body, start_offset=0, timeout_s
 
 
 def _resume_queue_engine_busy(sid):
+    if _core._is_antigravity_session(sid):
+        # A persistent stream-json process reports its own turn state (the
+        # `result` event); an idle one is not busy however long it lives.
+        from ccc_server import antigravity_stream
+        stream_state = antigravity_stream.state(sid)
+        if stream_state is not None:
+            return bool(stream_state["busy"])
     if _core._is_devin_cli_session(sid):
         # An in-flight ACP turn on our shared `devin acp` conn is engine-busy
         # the same as a one-shot resume process — the pump must wait for it

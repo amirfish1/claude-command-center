@@ -37,6 +37,7 @@ import urllib.request
 import uuid
 
 from ccc_server import antigravity_ls
+from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
@@ -4567,6 +4568,45 @@ def resume_session_antigravity(session_id, text, mode="send"):
     resolved = _core._resolve_antigravity_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    # A persistent stream-json process owns this conversation: its `result`
+    # event, not process liveness, says whether a turn is running.
+    stream_state = _antigravity_stream.state(session_id)
+    if stream_state is not None:
+        want_dirs = set(_core._pasted_image_parent_dirs(text))
+        have_model, have_dirs = stream_state["key"]
+        override = _core._get_session_override(session_id)
+        want_model = _core._antigravity_model_settings_label(
+            ((override or {}).get("model") if override else None)
+            or os.environ.get("CCC_ANTIGRAVITY_MODEL") or ""
+        )
+        if stream_state["busy"]:
+            if mode == "steer":
+                return {
+                    "ok": True,
+                    "queued_preserved": True,
+                    "pid": stream_state["pid"],
+                    "via": "antigravity-resume-queued",
+                    "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
+                }
+            queued = _core._apply_pending_input_operations(session_id, [{
+                "field": "resume", "action": "append_tail", "value": text,
+            }])
+            if not queued.get("ok"):
+                return {"ok": False, "error": "failed to persist queued Antigravity input"}
+            return {
+                "ok": True,
+                "queued": True,
+                "pid": stream_state["pid"],
+                "via": "antigravity-resume-queued",
+                "queued_reason": "waiting for the current Antigravity turn to finish (it can't take input mid-turn)",
+            }
+        if want_dirs <= set(have_dirs) and (not want_model or want_model == have_model):
+            sent = _antigravity_stream.send(session_id, text)
+            if sent.get("ok"):
+                return sent
+        # Settings changed (model, extra directories) or the write failed:
+        # start a fresh process below.
+        _antigravity_stream.retire(session_id)
     for s in _core._spawned_sessions:
         if s.get("engine") == "antigravity" and s.get("resumed_sid") == session_id:
             try:
@@ -4716,6 +4756,26 @@ def resume_session_antigravity(session_id, text, mode="send"):
         cmd.extend(["--log-file", str(cli_log_path)])
     if not _core._antigravity_has_arg(user_args, "--print-timeout"):
         cmd.extend(["--print-timeout", _core._antigravity_print_timeout()])
+    if _antigravity_stream.enabled():
+        # Documented multi-turn mode: one persistent process per conversation,
+        # NDJSON on stdin, one `result` event per turn. Any failure falls
+        # through to the one-shot `-p` run below (which also owns the
+        # sign-in relay).
+        stream_cmd = cmd + [
+            "--conversation", session_id, "--print=",
+            "--input-format", "stream-json", "--output-format", "stream-json",
+        ]
+        try:
+            _antigravity_stream.spawn(
+                session_id, stream_cmd, cwd, log_path,
+                (model_to_use or "", tuple(sorted(set(add_dirs)))),
+            )
+            sent = _antigravity_stream.send(session_id, text)
+        except (OSError, ValueError):
+            sent = None
+        if sent and sent.get("ok"):
+            return {**sent, "log": str(log_path), "resumed": True, "model": model_to_use}
+        _antigravity_stream.retire(session_id)
     cmd.extend(["--conversation", session_id, "-p", text])
 
     log_fh = open(log_path, "w")
