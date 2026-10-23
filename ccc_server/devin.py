@@ -3229,12 +3229,78 @@ DEVIN_CLI_CONTEXT_LIMIT = 200_000
 # rows interleave, so 1 is not always enough (a dangling tool call or a
 # not-yet-answered user turn can be the literal last row); 8 comfortably
 # covers a normal turn's node count without pulling meaningful data volume.
+# CCC-141: per-session running totals for _extract_devin_cli_usage, so a poll
+# only folds the message_nodes added since the last one. A long session holds
+# ~1 GB of chat_message JSON; decoding all of it in Python took ~20 s per
+# poll, longer than the composer waits, so the model and context pills never
+# appeared on a busy Devin session.
+_DEVIN_CLI_USAGE_CACHE = {}
+_DEVIN_CLI_USAGE_CACHE_LOCK = threading.Lock()
+_DEVIN_CLI_USAGE_CACHE_MAX = 64
+
+
+def _devin_cli_usage_acc():
+    return {"latest": 0, "peak": 0, "in": 0, "out": 0, "cache_read": 0,
+            "cache_creation": 0, "model": "", "series": []}
+
+
+def _devin_cli_usage_fold(acc, rows, series_max):
+    """Fold assistant rows (metrics JSON, generation_model, created_at) into
+    ``acc`` in place."""
+    for metrics_raw, gm, created_at in rows:
+        try:
+            metrics = json.loads(metrics_raw) if metrics_raw else {}
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(metrics, dict):
+            continue
+        in_tok = int(metrics.get("input_tokens") or 0)
+        out_tok = int(metrics.get("output_tokens") or 0)
+        cache_read = int(metrics.get("cache_read_tokens") or 0)
+        cache_creation = int(metrics.get("cache_creation_tokens") or 0)
+        # The context window is non-cached input + cached read + newly
+        # created cached prefix. input_tokens alone is the non-cached
+        # portion, so the live/peak bars must add cache to match the
+        # model's real window.
+        window = in_tok + cache_read + cache_creation
+        if window:
+            acc["latest"] = window
+            acc["peak"] = max(acc["peak"], window)
+        acc["in"] += in_tok
+        acc["out"] += out_tok
+        acc["cache_read"] += cache_read
+        acc["cache_creation"] += cache_creation
+        # Compactor summaries still count toward token totals/turn
+        # series, but "compactor" is not the session's chat model.
+        if gm and str(gm).strip().lower() != "compactor":
+            acc["model"] = str(gm)
+        if window or out_tok:
+            turn_epoch = _devin_epoch(created_at)
+            turn_ts = (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(turn_epoch))
+                if turn_epoch else ""
+            )
+            acc["series"].append({
+                "ts": turn_ts,
+                "tokens_in": window,
+                "tokens_cached": cache_read,
+                "tokens_out": out_tok,
+            })
+    if len(acc["series"]) > series_max:
+        del acc["series"][:-series_max]
+
+
 def _extract_devin_cli_usage(session_id):
     """Token usage for a Devin CLI session, read from the SQLite DB.
 
     Assistant messages carry ``metadata.metrics`` with input/output/cache
     token counts. We sum across all assistant turns and track the peak
     input window — same shape as ``_extract_gemini_usage`` etc.
+
+    SQLite's json_extract pulls just the fields we read (the full message
+    is never decoded in Python), and running totals are cached per session
+    up to the second-newest node: a poll re-reads only the newest node,
+    which may still be streaming, plus anything added since.
     """
     empty = {
         "latest_input_tokens": 0,
@@ -3252,71 +3318,60 @@ def _extract_devin_cli_usage(session_id):
     raw_id = _devin_cli_raw_id(session_id)
     if not raw_id:
         return empty
-    con = _devin_cli_connect_for_raw_id(raw_id)
+    db_path = _devin_cli_db_path_for_raw_id(raw_id)
+    con = _devin_cli_connect(db_path)
     if con is None:
         return empty
-    latest = 0
-    peak = 0
-    total_in = 0
-    total_out = 0
-    total_cache_read = 0
-    total_cache_creation = 0
-    model = ""
     # Per-turn tail for the status-rail column graph — one entry per
     # assistant message with metrics, same raw-count shape Claude's
     # turn_series uses.
-    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
+    series_max = _core.USAGE_TURN_SERIES_MAX
+    key = (str(db_path), raw_id)
+    acc = _devin_cli_usage_acc()
     try:
-        for row in con.execute(
-            "SELECT chat_message FROM message_nodes "
-            "WHERE session_id = ? ORDER BY node_id",
-            (raw_id,),
-        ):
-            try:
-                msg = json.loads(row["chat_message"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            if str(msg.get("role") or "").lower() != "assistant":
-                continue
-            meta = msg.get("metadata") or {}
-            metrics = meta.get("metrics") or {}
-            if not isinstance(metrics, dict):
-                continue
-            in_tok = int(metrics.get("input_tokens") or 0)
-            out_tok = int(metrics.get("output_tokens") or 0)
-            cache_read = int(metrics.get("cache_read_tokens") or 0)
-            cache_creation = int(metrics.get("cache_creation_tokens") or 0)
-            # The context window is non-cached input + cached read + newly
-            # created cached prefix. input_tokens alone is the non-cached
-            # portion, so the live/peak bars must add cache to match the
-            # model's real window.
-            window = in_tok + cache_read + cache_creation
-            if window:
-                latest = window
-                peak = max(peak, window)
-            total_in += in_tok
-            total_out += out_tok
-            total_cache_read += cache_read
-            total_cache_creation += cache_creation
-            gm = meta.get("generation_model")
-            # Compactor summaries still count toward token totals/turn
-            # series, but "compactor" is not the session's chat model.
-            if gm and str(gm).strip().lower() != "compactor":
-                model = gm
-            if window or out_tok:
-                turn_epoch = _devin_epoch(meta.get("created_at"))
-                turn_ts = (
-                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(turn_epoch))
-                    if turn_epoch else ""
-                )
-                turn_series.append({
-                    "ts": turn_ts,
-                    "tokens_in": window,
-                    "tokens_cached": cache_read,
-                    "tokens_out": out_tok,
-                })
+        with _DEVIN_CLI_USAGE_CACHE_LOCK:
+            cached = _DEVIN_CLI_USAGE_CACHE.get(key)
+        through = -1
+        if cached:
+            # Rewritten history (rows deleted or re-inserted below the
+            # commit point) changes the count; rescan from scratch then.
+            n = con.execute(
+                "SELECT COUNT(*) FROM message_nodes "
+                "WHERE session_id = ? AND node_id <= ?",
+                (raw_id, cached["through"]),
+            ).fetchone()[0]
+            if n == cached["count"]:
+                through = cached["through"]
+                acc = json.loads(json.dumps(cached["acc"]))
+        rows = con.execute(
+            "SELECT node_id, "
+            "json_extract(chat_message, '$.metadata.metrics'), "
+            "json_extract(chat_message, '$.metadata.generation_model'), "
+            "json_extract(chat_message, '$.metadata.created_at') "
+            "FROM message_nodes WHERE session_id = ? AND node_id > ? "
+            "AND json_valid(chat_message) "
+            "AND lower(json_extract(chat_message, '$.role')) = 'assistant' "
+            "ORDER BY node_id",
+            (raw_id, through),
+        ).fetchall()
+        settled, tail = rows[:-1], rows[-1:]
+        _devin_cli_usage_fold(acc, [tuple(r)[1:] for r in settled], series_max)
+        if settled:
+            commit = settled[-1][0]
+            count = con.execute(
+                "SELECT COUNT(*) FROM message_nodes "
+                "WHERE session_id = ? AND node_id <= ?",
+                (raw_id, commit),
+            ).fetchone()[0]
+            with _DEVIN_CLI_USAGE_CACHE_LOCK:
+                if key not in _DEVIN_CLI_USAGE_CACHE and len(_DEVIN_CLI_USAGE_CACHE) >= _DEVIN_CLI_USAGE_CACHE_MAX:
+                    _DEVIN_CLI_USAGE_CACHE.pop(next(iter(_DEVIN_CLI_USAGE_CACHE)))
+                _DEVIN_CLI_USAGE_CACHE[key] = {
+                    "through": commit, "count": count,
+                    "acc": json.loads(json.dumps(acc)),
+                }
+        _devin_cli_usage_fold(acc, [tuple(r)[1:] for r in tail], series_max)
+        model = acc["model"]
         if not model:
             # No assistant turn has reported a generation_model yet (fresh
             # session, or the first turn died before producing one) — the
@@ -3326,20 +3381,20 @@ def _extract_devin_cli_usage(session_id):
             ).fetchone()
             model = str((row[0] if row else "") or "")
     except sqlite3.Error:
-        pass
+        model = acc["model"]
     finally:
         con.close()
     return {
         **empty,
-        "latest_input_tokens": latest,
-        "peak_input_tokens": peak,
-        "total_output_tokens": total_out,
-        "total_input_tokens": total_in,
-        "total_cache_read_tokens": total_cache_read,
-        "total_cache_creation_tokens": total_cache_creation,
+        "latest_input_tokens": acc["latest"],
+        "peak_input_tokens": acc["peak"],
+        "total_output_tokens": acc["out"],
+        "total_input_tokens": acc["in"],
+        "total_cache_read_tokens": acc["cache_read"],
+        "total_cache_creation_tokens": acc["cache_creation"],
         "model": model,
         "override": _core._get_session_override(session_id),
-        "turn_series": list(turn_series),
+        "turn_series": list(acc["series"]),
     }
 
 
