@@ -45557,16 +45557,24 @@
     // The session's sidebar-row name (same chain as the phone toolbar title),
     // so the desktop pane header reads exactly like its list row (CCC-129).
     let rowName = '';
-    {
-      const rid = row && (row.id || row.session_id);
-      const full = (rid && Array.isArray(conversationsData)
-        && conversationsData.find(x => x && (x.id === rid || x.session_id === rid))) || row;
-      try {
-        if (full && (full.display_name || full.ai_title || full.first_message)) rowName = rowRawTitle(full).rawTitle;
-      } catch (_) {}
-    }
+    const rowId = row && (row.id || row.session_id);
+    const fullRow = (rowId && Array.isArray(conversationsData)
+      && conversationsData.find(x => x && (x.id === rowId || x.session_id === rowId))) || row;
+    try {
+      if (fullRow && (fullRow.display_name || fullRow.ai_title || fullRow.first_message)) rowName = rowRawTitle(fullRow).rawTitle;
+    } catch (_) {}
     rowName = String(rowName || title || '').trim();
     const headerTitle = opts.title !== undefined ? String(title || '').trim() : rowName;
+    // CCC-149: the single-pane desktop header borrows the phone toolbar's
+    // look (avatar + session name), so carry the sidebar row's avatar.
+    const avatarEl = pane.querySelector('[data-role="pane-avatar"]');
+    if (avatarEl) {
+      let avatarHtml = '';
+      if (fullRow && opts.category === undefined && headerTitle) {
+        try { avatarHtml = _waAvatarHtml(fullRow, headerTitle); } catch (_) {}
+      }
+      if (avatarEl.innerHTML !== avatarHtml) avatarEl.innerHTML = avatarHtml;
+    }
     // Engine rows render an icon chip (CCC-475) instead of the engine word;
     // explicit opts.category (popouts, issues) and non-engine sources keep
     // the plain-text chip.
@@ -46898,6 +46906,8 @@
     const paneTitle = clone.querySelector('[data-role="pane-title"]');
     if (paneCat) paneCat.textContent = '';
     if (paneTitle) paneTitle.textContent = '';
+    const paneAvatar = clone.querySelector('[data-role="pane-avatar"]');
+    if (paneAvatar) paneAvatar.innerHTML = '';
     const bgPalette = clone.querySelector('[data-role="conv-bg-palette"]');
     if (bgPalette) bgPalette.innerHTML = '';
     renderConversationBackgroundPalette(clone);

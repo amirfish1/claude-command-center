@@ -2969,6 +2969,47 @@
     }
     .conv-split[data-orientation="vertical"] .conv-pane-last-user-message { max-width: 24%; }
   }
+  /* CCC-149: a single desktop conversation gets the phone's clean session
+     header: the sidebar row's avatar and the session name, nothing else.
+     Split panes and popouts keep the engine/repo chip and latest message
+     so side-by-side panes stay distinguishable. */
+  .conv-pane-avatar { display: none; }
+  @media (min-width: 1201px) {
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-header {
+      min-height: 52px;
+      padding: 7px 10px 7px 14px;
+    }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar { gap: 12px; }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-avatar:not(:empty) {
+      display: inline-flex;
+      flex: 0 0 auto;
+    }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) :is(.conv-pane-category, .conv-pane-last-user-message) {
+      display: none;
+    }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar .conv-pane-title {
+      font-size: 19px;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+    .conv-pane-avatar .wa-av {
+      position: relative;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      box-shadow: inset 0 -3px 8px rgba(0, 0, 0, 0.18), inset 0 2px 4px rgba(255, 255, 255, 0.25);
+    }
+    .conv-pane-avatar .wa-face {
+      font-size: 22px;
+      line-height: 1;
+      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    }
+  }
   .conv-pane-popout {
     flex: 0 0 auto;
     width: 28px;
