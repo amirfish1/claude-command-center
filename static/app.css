@@ -32761,10 +32761,11 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     min-width: 0;
     order: 3;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col > .conv-sidebar-session-id-chip { order: -1; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: 0; order: 3; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: 0; min-width: 0; order: 3; }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end > .conv-rel { position: static; transform: none; }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-hover-slot { z-index: 7; }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-actions { z-index: 8; }
 }
 
 /* Archive for a finished session: anchored just above the composer card, on

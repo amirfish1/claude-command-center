@@ -38526,7 +38526,6 @@
             + earlierDetailsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
-            + sessionIdChipHtml
             + (goalIconOnly && !_ideaRowRef ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
             + ((opts.evergreenAgent || _ideaRowRef) ? '' : uxFixesQueueProgressHtml)
@@ -38557,9 +38556,9 @@
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<span class="conv-row-hover-slot">'
             +     quickTrashBtn
-            +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
+            +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '</span>'
-            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
+            +   '<span class="conv-row-actions">' + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
