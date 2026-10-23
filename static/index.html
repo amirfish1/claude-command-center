@@ -1185,12 +1185,21 @@
           <button type="button" class="mobile-actions-item" data-simple-action="codex-handover" id="mobileCodexHandoverItem" role="menuitem" hidden><span aria-hidden="true">&#8599;&nbsp;</span>Hand over to Codex Desktop</button>
           <button type="button" class="mobile-actions-item" data-simple-action="annotate" role="menuitem"><span aria-hidden="true">&#9873;&nbsp;</span>Annotate</button>
           <button type="button" class="mobile-actions-item" data-simple-action="reload-app" role="menuitem" title="Reload CCC to pick up a new version (a Home Screen app has no browser reload)"><span aria-hidden="true">&#8635;&nbsp;</span>Reload app</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="font-minus" role="menuitem"><span aria-hidden="true">A-&nbsp;</span>Smaller text</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem"><span aria-hidden="true">A+&nbsp;</span>Bigger text</button>
+          <!-- Text size: one row, menu stays open so several steps take one open. -->
+          <div class="mobile-actions-row" role="group" aria-label="Text size">
+            <button type="button" class="mobile-actions-item" data-simple-action="font-minus" role="menuitem" aria-label="Smaller text" title="Smaller text">A&minus;</button>
+            <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem" aria-label="Bigger text" title="Bigger text">A+</button>
+          </div>
           <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem" data-simple-only><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
           <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem" data-simple-only><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
           <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem" data-simple-only><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
           <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem" data-simple-only><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
+          <!-- Open session's id and repo path; filled by _syncSessionMenuItems,
+               tap to copy. -->
+          <div class="mobile-actions-info" data-role="menu-session-info" hidden>
+            <button type="button" class="mobile-actions-info-item" data-simple-action="copy-session-id" role="menuitem" title="Copy session id"><span class="mobile-actions-info-label">Session</span><span class="mobile-actions-info-value" data-role="menu-session-id"></span></button>
+            <button type="button" class="mobile-actions-info-item" data-simple-action="copy-repo-path" role="menuitem" title="Copy repo path"><span class="mobile-actions-info-label">Repo</span><span class="mobile-actions-info-value" data-role="menu-repo-path"></span></button>
+          </div>
         </div>
       </div>
       <div class="conv-overflow-wrap">

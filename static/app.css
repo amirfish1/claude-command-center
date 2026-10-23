@@ -16868,6 +16868,49 @@
     button.mobile-actions-item:focus-visible {
       background: var(--surface-2, var(--surface));
     }
+    .mobile-actions-row { display: flex; gap: 4px; }
+    .mobile-actions-row > button.mobile-actions-item {
+      flex: 1 1 0;
+      width: auto;
+      text-align: center;
+      font-weight: 600;
+    }
+    .mobile-actions-info[hidden],
+    .mobile-actions-info-item[hidden] { display: none; }
+    .mobile-actions-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: 4px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border);
+    }
+    button.mobile-actions-info-item {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      width: 100%;
+      min-width: 0;
+      text-align: left;
+      font-family: inherit;
+      cursor: pointer;
+      border: 0;
+      background: transparent;
+      color: var(--text-muted, var(--text));
+      border-radius: 7px;
+      font-size: 12px;
+      padding: 6px 12px;
+    }
+    button.mobile-actions-info-item:hover,
+    button.mobile-actions-info-item:focus-visible {
+      background: var(--surface-2, var(--surface));
+    }
+    .mobile-actions-info-label { flex: none; min-width: 4.5em; opacity: 0.7; }
+    .mobile-actions-info-value {
+      min-width: 0;
+      font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+      overflow-wrap: anywhere;
+    }
 
     /* The injection-health banner is `position: fixed; top: 0; z-index: 10000`.
        Desktop gets one line over a topbar with slack; a phone wraps the same

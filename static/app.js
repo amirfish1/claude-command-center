@@ -18631,6 +18631,14 @@
     const ideasOn = isSession && ideaTicketsOn();
     show('idea-IDEAS', ideasOn && ideaQueue !== 'IDEAS');
     show('idea-SMALL-BUGS', ideasOn && ideaQueue !== 'SMALL-BUGS');
+    const sid = isSession ? String(row.session_id || row.id || '') : '';
+    const repo = row ? String(rowRepoPath(row) || '') : '';
+    const info = menu.querySelector('[data-role="menu-session-info"]');
+    const sidEl = menu.querySelector('[data-role="menu-session-id"]');
+    const repoEl = menu.querySelector('[data-role="menu-repo-path"]');
+    if (sidEl) { sidEl.textContent = sid; sidEl.closest('button').hidden = !sid; }
+    if (repoEl) { repoEl.textContent = repo; repoEl.closest('button').hidden = !repo; }
+    if (info) info.hidden = !sid && !repo;
   }
 
   function _wireSimpleActionsMenu() {
@@ -18655,7 +18663,9 @@
     });
     document.addEventListener('click', (ev) => {
       if (menu.hidden) return;
-      if (ev.target.closest('#convSimpleActionsMenu, #convSimpleActionsBtn')) return;
+      // #fontMinus/#fontPlus get a proxied .click() from the menu's text-size
+      // row, which must keep the menu open.
+      if (ev.target.closest('#convSimpleActionsMenu, #convSimpleActionsBtn, #fontMinus, #fontPlus')) return;
       menu.hidden = true;
       btn.setAttribute('aria-expanded', 'false');
     });
@@ -18669,10 +18679,19 @@
       }
       const item = ev.target.closest('[data-simple-action]');
       if (!item) return;
-      menu.hidden = true;
-      btn.setAttribute('aria-expanded', 'false');
       const action = item.getAttribute('data-simple-action');
-      if (action === 'questions') {
+      // Text size stays open so the user can step several sizes and watch.
+      if (action !== 'font-minus' && action !== 'font-plus') {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+      }
+      if (action === 'copy-session-id' || action === 'copy-repo-path') {
+        const value = (item.querySelector('.mobile-actions-info-value') || {}).textContent || '';
+        const label = action === 'copy-session-id' ? 'session id' : 'repo path';
+        if (value) copyTextValue(value).then((ok) => {
+          showOpToast(ok ? 'Copied ' + label : 'Copy failed - try again', ok ? 'ok' : 'error');
+        });
+      } else if (action === 'questions') {
         const pill = document.getElementById('qtagPill');
         if (pill) pill.click();
       } else if (action === 'stop') {
