@@ -43421,8 +43421,24 @@ def main():
         from ccc_server import session_fts as _session_fts_warm
         from ccc_server import ship_graph as _ship_graph_warm
         from ccc_server import sandbox_harvest as _sandbox_harvest_warm
-        threading.Thread(target=_session_fts_warm.warm_start, daemon=True, name="ccc-session-fts-warm").start()
-        threading.Thread(target=_ship_graph_warm.warm_start, daemon=True, name="ccc-ship-graph-warm").start()
+        # Deferred past the first list build and opens (CCC-143: opens within
+        # 5 min of a boot had p95 17s while these warmers, the list rebuild
+        # and the first opens all fought for the GIL). A search arriving
+        # before the delay still kicks its own background sync.
+        try:
+            _boot_warm_delay = float(os.environ.get("CCC_BOOT_WARM_DELAY_S", "90"))
+        except ValueError:
+            _boot_warm_delay = 90.0
+
+        def _after_boot_delay(target):
+            def _run():
+                if _boot_warm_delay > 0:
+                    time.sleep(_boot_warm_delay)
+                target()
+            return _run
+
+        threading.Thread(target=_after_boot_delay(_session_fts_warm.warm_start), daemon=True, name="ccc-session-fts-warm").start()
+        threading.Thread(target=_after_boot_delay(_ship_graph_warm.warm_start), daemon=True, name="ccc-ship-graph-warm").start()
         # Sandbox-transcript harvest (multi-machine S8b): copies queue-worker
         # sandbox transcripts (/tmp/ccc-local-*) into a persistent home
         # before they're wiped, so session_fts above can index them.
