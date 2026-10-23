@@ -15721,7 +15721,15 @@
     }
 
     const rows = [];
-    const nextStep = fields.NEXT_STEP_USER || '';
+    let assessment;
+    try { assessment = JSON.parse(fields.COMPLETION || 'null'); } catch (_) {}
+    let nextStep = fields.NEXT_STEP_USER || '';
+    if (/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)?[.!]?$/i.test(nextStep)
+        && assessment && assessment.decision_dependency
+        && typeof assessment.decision_dependency.score === 'number' && assessment.decision_dependency.score > 0
+        && typeof assessment.decision_dependency.evidence === 'string' && assessment.decision_dependency.evidence.trim()) {
+      nextStep = 'Decision required: ' + assessment.decision_dependency.evidence.trim();
+    }
     const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(nextStep);
     if (hasUserAction) {
       const actions = needsYouActionsHtml(nextStep);
@@ -15729,12 +15737,11 @@
     } else if (fields.DID) {
       rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">Done</span>' + escapeHtml(fields.DID) + '</div>');
     }
+    if (!hasUserAction) rows.push('<div class="ssb-row ssb-no-action"><span class="ssb-key">Needs you</span>' + (nextStep ? 'None' : 'Not specified') + '</div>');
     if (fields.INSIGHT) {
       rows.push('<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>');
     }
     if (fields.COMPLETION) {
-      let assessment;
-      try { assessment = JSON.parse(fields.COMPLETION); } catch (_) {}
       let evidence = '';
       if (assessment && assessment.version === 1) {
         for (const [key, label] of [['resolution', 'Resolution'], ['verification', 'Verification'],
@@ -15743,7 +15750,7 @@
           if (!axis || typeof axis.score !== 'number' || !Number.isFinite(axis.score)
               || axis.score < 0 || axis.score > 1 || typeof axis.evidence !== 'string' || !axis.evidence.trim()) continue;
           const score = key === 'delivery' && axis.applicable === false ? 'N/A' : String(axis.score);
-          evidence += '<div class="ssb-row"><span class="ssb-key">' + label + ' ' + score
+          evidence += '<div class="ssb-row"><span class="ssb-key">' + label + ' <span class="ssb-score">' + score + '</span>'
             + '</span>' + escapeHtml(axis.evidence) + '</div>';
         }
         if (Array.isArray(assessment.caveats)) for (const item of assessment.caveats) {
@@ -15782,7 +15789,15 @@
         : reasons.length ? 'Next · ' + reasons.join('; ') : 'Close criteria met';
       rows.push('<div class="ssb-row ssb-verdict"><span class="ssb-key">Assessment</span>'
         + escapeHtml(verdict) + '</div>');
-      rows.push('<details class="ssb-completion"><summary>Completion assessment · self-reported</summary>'
+      const scores = valid ? '(' + axes.map(k => String(assessment[k].score)).join(', ') + ')' : '(unassessed)';
+      const caveats = valid ? assessment.caveats : [];
+      const firstCaveat = caveats.find(c => c.blocking) || caveats[0];
+      const preview = firstCaveat ? firstCaveat.text.trim().split(/\s+/).slice(0, 7).join(' ') : '';
+      const caveatPreview = preview ? ' · ' + (firstCaveat.blocking ? 'Blocking: ' : 'Caveat: ')
+        + preview.slice(0, 56) + (preview.length < firstCaveat.text.trim().length ? '…' : '')
+        + (caveats.length > 1 ? ' (+' + (caveats.length - 1) + ')' : '') : '';
+      rows.push('<details class="ssb-completion"><summary title="Self-reported scores: resolution, verification, delivery, decision dependency. Delivery may be N/A; expand for evidence."><span class="ssb-key">Assessment</span>'
+        + '<span class="ssb-score">' + escapeHtml(scores) + '</span>' + escapeHtml(caveatPreview) + '</summary>'
         + (evidence || '<div class="ssb-row">Assessment unavailable or invalid.</div>') + '</details>');
     }
     return '<div class="session-state-block">' + rows.concat(otherRows).join('') + '</div>';

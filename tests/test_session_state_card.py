@@ -73,7 +73,7 @@ class TestSessionStateCard(unittest.TestCase):
         self.assertIn('class="ssb-row ssb-primary ssb-done"', html)
         self.assertIn('<span class="ssb-key">Done</span>', html)
         self.assertIn("Updated the dashboard copy.", html)
-        self.assertNotIn("Needs you", html)
+        self.assertIn('<span class="ssb-key">Needs you</span>None', html)
 
     def test_completion_assessment_is_collapsed_and_escaped(self):
         import json
@@ -87,9 +87,11 @@ class TestSessionStateCard(unittest.TestCase):
         html = render_session_state("DID: Finished.\nNEXT_STEP_USER: None.\nCOMPLETION: "
             + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
         self.assertIn('<details class="ssb-completion">', html)
-        self.assertIn('self-reported', html)
-        self.assertIn('Resolution 0.9', html)
-        self.assertIn('Delivery N/A', html)
+        self.assertIn('(0.9, 0.8, 0, 0)', html)
+        self.assertNotIn('· self-reported</summary>', html)
+        self.assertIn('Caveat: Optional follow-up TEST-12.', html)
+        self.assertIn('Resolution <span class="ssb-score">0.9</span>', html)
+        self.assertIn('Delivery <span class="ssb-score">N/A</span>', html)
         self.assertIn('Close criteria met', html)
         self.assertNotIn('data-role="archive"', html)
         self.assertIn('&lt;script&gt;', html)
@@ -115,6 +117,15 @@ class TestSessionStateCard(unittest.TestCase):
                 html = render_session_state("COMPLETION: " + json.dumps(dict(base, **change)), PROJECT_ROOT / "static" / "app.js")
                 self.assertIn(expected, html)
                 self.assertNotIn("Close criteria met", html)
+
+    def test_pending_decision_is_visible_even_when_next_step_says_none(self):
+        import json
+        assessment = {"version": 1, "decision_dependency": {"score": 0.5, "evidence": "Choose a release window."}}
+        html = render_session_state("DID: Prepared.\nNEXT_STEP_USER: None.\nCOMPLETION: "
+            + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+        self.assertIn('class="ssb-row ssb-primary ssb-next"', html)
+        self.assertIn('Decision required: Choose a release window.', html)
+        self.assertNotIn('Needs you</span>None', html)
 
     def test_demo_uses_the_same_compact_summary_behavior(self):
         html = render_session_state(
