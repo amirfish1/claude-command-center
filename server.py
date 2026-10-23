@@ -15619,23 +15619,50 @@ _PREVIEW_STATE_RE = re.compile(r"<session-state>.*?(</session-state>|$)", re.S)
 _PREVIEW_MD_RE = re.compile(r"[`*_#>|]+|\[([^\]]*)\]\([^)]*\)")
 
 
+# Most list polls re-derive the same previews from the same cached row
+# text — memoize by the source string itself (bounded; evicts oldest-first
+# by insertion order, which is fine because hot rows stay hot).
+_ARCHIVE_LIST_PREVIEW_CACHE = {}
+_ARCHIVE_LIST_PREVIEW_CACHE_MAX = 30000
+
+
 def _archive_list_preview(text, limit=140):
     """One-line chat-list preview of an assistant reply: drops the trailing
     <session-state> block, markdown punctuation and link targets, collapses
     whitespace, and caps the length. Pure string work on the in-memory row."""
     if not text:
         return ""
+    if limit == 140:
+        cached = _ARCHIVE_LIST_PREVIEW_CACHE.get(text)
+        if cached is not None:
+            return cached
     t = _PREVIEW_STATE_RE.sub(" ", str(text)[:2000])
     t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
     t = " ".join(t.split())
-    return t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"
+    preview = t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"
+    if limit == 140:
+        cache = _ARCHIVE_LIST_PREVIEW_CACHE
+        cache[text] = preview
+        if len(cache) > _ARCHIVE_LIST_PREVIEW_CACHE_MAX:
+            del cache[next(iter(cache))]
+    return preview
 
 
 def _archive_list_project_row(row, *, resumes=None, parents=None):
     """Project one row for the sidebar list. Bulk callers pass `resumes` /
     `parents` snapshots so the per-row work is dict lookups, not a stat() or
     lock acquisition each (those cost a GIL hand-off apiece)."""
-    out = {key: copy.deepcopy(row[key]) for key in _ARCHIVE_LIST_FIELDS if key in row}
+    # The cached rows are shared with other readers, so container fields
+    # still need isolation — but copy.deepcopy over ~130 mostly-scalar
+    # fields × every row was the single largest slice of
+    # /api/conversations/list CPU time. Deep-copy only dicts/lists; scalars
+    # are immutable and pass straight through.
+    out = {}
+    for key in _ARCHIVE_LIST_FIELDS:
+        if key not in row:
+            continue
+        v = row[key]
+        out[key] = copy.deepcopy(v) if isinstance(v, (dict, list)) else v
     # Chat-list preview line (phone sidebar). The full reply text is too big
     # to ship for every row; a short derived preview is not.
     preview = _archive_list_preview(row.get("last_assistant_text"))

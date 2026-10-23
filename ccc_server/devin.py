@@ -938,16 +938,31 @@ def _devin_cli_pid_alive(pid):
     return reaped == 0
 
 
+# Every Devin row rebuild probes session liveness: lock-file read +
+# kill(0) + waitpid, ~15-20ms across two locks dirs. With ~100+ devin
+# sessions and sessions.db changing on every turn, that probe dominated
+# rebuild time. Liveness changes on lock acquisition (mtime) or process
+# death (seconds-scale) — a short TTL is plenty.
+_DEVIN_CLI_LIVE_CACHE = {}
+_DEVIN_CLI_LIVE_CACHE_TTL_S = 5.0
+
+
 def _devin_cli_session_live(raw_id):
     """True when the session lock's recorded pid is still alive.
 
     A leftover lock file after the CLI exits is not liveness — every Devin
     CLI row was showing as live because locks were never reaped.
     """
+    now = time.monotonic()
+    hit = _DEVIN_CLI_LIVE_CACHE.get(raw_id)
+    if hit and hit[0] > now:
+        return hit[1]
     pid = _devin_cli_lock_pid(raw_id)
-    if not pid:
-        return False
-    return _devin_cli_pid_alive(pid)
+    live = _devin_cli_pid_alive(pid) if pid else False
+    _DEVIN_CLI_LIVE_CACHE[raw_id] = (now + _DEVIN_CLI_LIVE_CACHE_TTL_S, live)
+    if len(_DEVIN_CLI_LIVE_CACHE) > 2000:
+        _DEVIN_CLI_LIVE_CACHE.clear()
+    return live
 
 
 def _devin_cli_raw_id_for_pid(pid):

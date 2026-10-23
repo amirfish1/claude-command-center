@@ -1,0 +1,1 @@
+- `/api/conversations/list` is ~2× faster per poll: row projection deep-copies only container fields instead of all ~130, assistant previews are memoized, and devin session liveness probes are cached for 5s instead of stat'ing lock files per row.
