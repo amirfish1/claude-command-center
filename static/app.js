@@ -41759,6 +41759,7 @@
     // every refresh tick. The user is looking at the input, not the
     // list, so missing the animation is the right trade.
     const _flipBefore = new Map();
+    const _flipBeforeOrder = new Map();
     const _activeEl = document.activeElement;
     const _userIsTyping = !!(_activeEl && (_activeEl.tagName === 'TEXTAREA'
       || (_activeEl.tagName === 'INPUT' && /^(text|search|email|url|tel|password)$/i.test(_activeEl.type || 'text'))));
@@ -41772,7 +41773,10 @@
         // so after the rebuild the FLIP compared the top instance against the
         // tree's old position → a huge phantom delta → 7 rows "moved" every
         // render. Track only the first instance per id.
-        if (id && !_flipBefore.has(id)) _flipBefore.set(id, row.getBoundingClientRect().top);
+        if (id && !_flipBefore.has(id)) {
+          _flipBeforeOrder.set(id, _flipBefore.size);
+          _flipBefore.set(id, row.getBoundingClientRect().top);
+        }
       }
     }
     // WKWebView blurs any focused input adjacent to an innerHTML swap.
@@ -41806,6 +41810,11 @@
     // (missing orch border/lanes chip, missing Other machines section).
     try { if (typeof orchApplyFamilyRows === 'function') orchApplyFamilyRows(); } catch (_) {}
     try { if (window.cccFederatedSidebar && window.cccFederatedSidebar.render) window.cccFederatedSidebar.render(); } catch (_) {}
+    // Same for the ultra-fresh overlays: they can add a Close button or drop
+    // is-ready-to-close, changing row height. Painting them a frame later
+    // made the FLIP below compare overlay-painted old tops with bare new
+    // tops, sliding rows that never moved.
+    try { for (const sid of _ultraFresh.entries.keys()) _ultraFreshPaint(sid); } catch (_) {}
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
     // Jobs tab: refill the fresh host from cached data (no flicker, no fetch).
@@ -41850,6 +41859,8 @@
       const _flipNewRows = $convList.querySelectorAll('[data-id]');
       const _flipMoves = [];
       const _flipSeen = new Set();
+      let _flipLastOrder = -1;
+      let _flipReordered = false;
       for (const row of _flipNewRows) {
         const id = row.getAttribute('data-id');
         if (!id) continue;
@@ -41860,6 +41871,9 @@
         _flipSeen.add(id);
         const oldTop = _flipBefore.get(id);
         if (oldTop === undefined) continue;
+        const oldOrder = _flipBeforeOrder.get(id);
+        if (oldOrder < _flipLastOrder) _flipReordered = true;
+        _flipLastOrder = oldOrder;
         const newTop = row.getBoundingClientRect().top;
         const delta = oldTop - newTop;
         if (Math.abs(delta) < 1) continue;
@@ -41877,7 +41891,11 @@
         const _deltaMode = new Map();
         for (const m of _flipMoves) { const k = Math.round(m.delta); _deltaMode.set(k, (_deltaMode.get(k) || 0) + 1); }
         let _modeN = 0; for (const v of _deltaMode.values()) if (v > _modeN) _modeN = v;
-        const _isBulkShift = _flipMoves.length >= 12 && _modeN >= _flipMoves.length * 0.5;
+        // Rows that kept their relative order only shifted (a row above grew,
+        // a Close button or section appeared). Sliding them reads as a
+        // reorder that never happened, however few rows moved.
+        const _isBulkShift = !_flipReordered
+          || (_flipMoves.length >= 12 && _modeN >= _flipMoves.length * 0.5);
         _logReshuffle(_flipMoves, _isBulkShift);
         if (!_isBulkShift) {
           for (const m of _flipMoves) {
