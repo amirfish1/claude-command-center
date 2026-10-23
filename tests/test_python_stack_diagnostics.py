@@ -93,3 +93,46 @@ def test_debug_stacks_endpoint_returns_samples(monkeypatch):
     assert body["pid"] == os.getpid()
     assert len(body["samples"]) == 2
     assert any("serve_forever" in t["stack"] for t in body["samples"][0]["threads"])
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGUSR2"), reason="SIGUSR2 is unavailable")
+def test_worker_sigusr2_dumps_instead_of_terminating(tmp_path):
+    stack_log = tmp_path / "python-stacks.log"
+    script = f"""
+import threading
+import time
+
+import ccc_worker
+
+ccc_worker._install_stack_dump_signal()
+
+def load():
+    import server
+    server._install_python_stack_dump_handler({str(stack_log)!r})
+    print("ready", flush=True)
+
+threading.Thread(target=load).start()
+time.sleep(60)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=os.path.dirname(os.path.dirname(__file__)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "ready"
+        for _ in range(20):
+            os.kill(child.pid, signal.SIGUSR2)
+            time.sleep(0.02)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if stack_log.exists() and "worker SIGUSR2" in stack_log.read_text():
+                break
+            time.sleep(0.05)
+        assert child.poll() is None, child.stderr.read()
+        assert "=== worker SIGUSR2 sample 1/1" in stack_log.read_text()
+    finally:
+        child.terminate()
+        child.wait(timeout=5)
