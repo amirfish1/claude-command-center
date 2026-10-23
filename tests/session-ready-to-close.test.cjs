@@ -46,7 +46,7 @@ test('ready explanation leaves the archive action in the lower metadata row', ()
     _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
   });
   assert.match(html, /Reviewed as complete; archive when ready/);
-  assert.match(html, /data-label="Ready to close"/);
+  assert.match(html, /data-label="Close"/);
   assert.doesNotMatch(html, /conv-ready-archive/);
   assert.match(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), /data-role="archive" data-archived="true"/);
   assert.doesNotMatch(html, /data-label="Next"/);
@@ -62,4 +62,22 @@ test('an explicit review expires on newer transcript activity and never override
   assert.equal(ready({ ...reviewed, needs_approval: true }), false);
   assert.equal(ready(reviewed, { state: 'working' }), false);
   assert.equal(ready(reviewed, { modified: 120 }), false);
+});
+
+// Normalized assessments come from the shared backend parser, not a model verdict.
+test('a validated assessment can recommend Close without an old manual review', () => {
+  const row = { ...completed, session_state: { completion: { version: 1, valid: true, ready_to_close: true } } };
+  assert.equal(ready(row), true);
+  for (const completion of [{ ready_to_close: true }, { version: 1, valid: false, ready_to_close: true },
+      { version: 1, valid: true, ready_to_close: false }]) {
+    assert.equal(ready({ ...row, session_state: { completion } }), false);
+  }
+  for (const live of [{ state: 'working' }, { last_event_type: 'user' }, { pending_tool: 'Bash' }, { question_waiting: true }]) {
+    assert.equal(ready(row, live), false);
+  }
+});
+
+test('a new incomplete assessment takes precedence over an older review', () => {
+  assert.equal(ready({ ...completed, modified: 100, idea_ticket: { ready_to_close_reviewed_at: 110 },
+    session_state: { completion: { version: 1, valid: true, ready_to_close: false } } }), false);
 });

@@ -75,6 +75,25 @@ class TestSessionStateCard(unittest.TestCase):
         self.assertIn("Updated the dashboard copy.", html)
         self.assertNotIn("Needs you", html)
 
+    def test_completion_assessment_is_collapsed_and_escaped(self):
+        import json
+        assessment = {"version": 1,
+            "resolution": {"score": 0.9, "evidence": "<script>unsafe</script>"},
+            "verification": {"score": 0.8, "evidence": "Browser reproduction passed."},
+            "delivery": {"score": 0, "applicable": False, "evidence": "Analysis only."},
+            "decision_dependency": {"score": 0, "evidence": "No decision remains."},
+            "caveats": [{"text": "Optional follow-up TEST-12.", "blocking": False}],
+            "remaining_actions": []}
+        html = render_session_state("DID: Finished.\nNEXT_STEP_USER: None.\nCOMPLETION: "
+            + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+        self.assertIn('<details class="ssb-completion">', html)
+        self.assertIn('self-reported', html)
+        self.assertIn('Resolution 0.9', html)
+        self.assertIn('Delivery N/A', html)
+        self.assertIn('&lt;script&gt;', html)
+        self.assertNotIn('<script>', html)
+        self.assertNotIn('&quot;version&quot;', html)
+
     def test_demo_uses_the_same_compact_summary_behavior(self):
         html = render_session_state(
             "DID: Updated the demo.\n"

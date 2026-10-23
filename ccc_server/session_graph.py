@@ -1071,7 +1071,7 @@ _SESSION_STATE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _SESSION_STATE_FIELD_RE = re.compile(
-    r"^(DID|INSIGHT|NEXT_STEP_USER)\s*:\s*(.+?)\s*$",
+    r"^(DID|INSIGHT|NEXT_STEP_USER|COMPLETION)\s*:\s*(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE = re.compile(
@@ -1142,14 +1142,51 @@ _CCC_SHELL_SEARCH_SYSTEM_PROMPT = (
     "Exclude `.claude`, `.git`, `node_modules`, `.venv`, `.next`, `dist`, and "
     "`build` unless the user explicitly asks to search them."
 )
-_CCC_SESSION_STATE_SYSTEM_PROMPT = (
-    "End your final reply with a compact CCC session-state block:\n"
-    "<session-state>\n"
-    "DID: one sentence describing what you changed or learned\n"
-    "INSIGHT: one sentence with the main finding, root cause, or surprise\n"
-    "NEXT_STEP_USER: one sentence with the exact next thing the user should do\n"
-    "</session-state>"
-)
+_CCC_SESSION_STATE_SYSTEM_PROMPT = """Complete authorized work before ending a turn. Before asking the user to
+approve another action, assess whether it is within the requested scope, your
+confidence it helps, its downside, and reversibility. For an authorized action
+with confidence >=0.9, downside <=0.2, and easy reversal, do it and verify it
+instead of asking "shall I?". Never infer authorization from a score. Ask only
+for a consequential tradeoff, missing preference, or genuinely required approval;
+explain the downside and recommendation. Do not invent a user action to end a turn.
+
+End your final reply with a compact CCC session-state block:
+<session-state>
+DID: one sentence describing what you changed or learned
+INSIGHT: one sentence with the main finding, root cause, or surprise
+NEXT_STEP_USER: the exact action requiring the user, or None.
+COMPLETION: a single-line JSON object using the schema below
+</session-state>
+
+COMPLETION is a self-assessment of the entire requested task, not just this turn.
+Use version 1 and four axes, each with score (number 0..1) and evidence (a short,
+specific factual string): resolution, verification, delivery, decision_dependency.
+Resolution: 0=unhandled, 0.5=partial, 0.9=all required work handled with only
+nonessential caveats, 1=fully resolved. Verification: 0=unchecked, 0.5=partial
+checks, 0.8=relevant checks of requested behavior passed, 1=strong direct evidence;
+name the checks and limits. Delivery: 0=local/unshipped, 0.5=partly delivered,
+1=at the intended destination; cite the push/deployment/save evidence. Delivery
+may have applicable:false only when no delivery is required, with a reason.
+Decision_dependency: 0=no meaningful decision or approval remains, 0.5=material
+choice remains, 1=blocked on the user; describe the actual tradeoff, not a ritual
+confirmation. Missing evidence means unassessed, not complete. Do not manufacture
+precise confidence: lower a score when evidence is incomplete.
+
+Also include caveats (array of {text,blocking} objects) and remaining_actions
+(array of {text,confidence,downside,reversible,within_scope} objects; confidence
+and downside are numbers 0..1, reversible and within_scope are booleans).
+All unresolved work belongs in remaining_actions. Disclose material caveats;
+blocking:true prevents closure. Queue actionable optional follow-ups where
+appropriate and cite their ticket in the caveat text; do not queue work required
+to finish the current request merely to declare it complete.
+
+CCC computes Close only if resolution>=0.9, verification>=0.8, delivery=1 (or
+explicitly not applicable), decision_dependency=0, no blocking caveat, and no
+remaining action. These are independent gates, never an average. This recommends
+manual archive only; never archive a session yourself.
+Example structure (replace all scores/evidence with facts):
+{"version":1,"resolution":{"score":0,"evidence":"Request not yet handled"},"verification":{"score":0,"evidence":"No checks yet"},"delivery":{"score":0,"evidence":"Not delivered","applicable":true},"decision_dependency":{"score":0,"evidence":"No user decision needed"},"caveats":[],"remaining_actions":[]}
+""".strip()
 
 
 def _claude_session_state_args():
@@ -1172,26 +1209,88 @@ def _claude_peer_inbound_args():
     return ["--settings", json.dumps({"crossSessionInbound": "accept"}, separators=(",", ":"))]
 
 
+def _completion_assessment(value):
+    """Validate a self-report and derive readiness; never accept its verdict."""
+    invalid = {"version": 1, "valid": False, "ready_to_close": False,
+               "reasons": ["Completion assessment is incomplete or invalid."]}
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1:
+        return invalid
+
+    def score(number):
+        return type(number) in (int, float) and 0 <= number <= 1
+
+    result = {"version": 1, "valid": True}
+    for key in ("resolution", "verification", "delivery", "decision_dependency"):
+        axis = value.get(key)
+        if not isinstance(axis, dict) or not score(axis.get("score")):
+            return invalid
+        evidence = axis.get("evidence")
+        if not isinstance(evidence, str) or not evidence.strip():
+            return invalid
+        result[key] = {"score": axis["score"], "evidence": evidence.strip()[:4000]}
+        if key == "delivery":
+            applicable = axis.get("applicable", True)
+            if type(applicable) is not bool:
+                return invalid
+            result[key]["applicable"] = applicable
+    caveats = value.get("caveats")
+    actions = value.get("remaining_actions")
+    if not isinstance(caveats, list) or not isinstance(actions, list):
+        return invalid
+    result["caveats"] = []
+    for caveat in caveats:
+        if (not isinstance(caveat, dict) or not isinstance(caveat.get("text"), str)
+                or not caveat["text"].strip() or type(caveat.get("blocking")) is not bool):
+            return invalid
+        result["caveats"].append({"text": caveat["text"].strip()[:4000], "blocking": caveat["blocking"]})
+    result["remaining_actions"] = []
+    for action in actions:
+        if (not isinstance(action, dict) or not isinstance(action.get("text"), str)
+                or not action["text"].strip() or not score(action.get("confidence"))
+                or not score(action.get("downside"))
+                or type(action.get("reversible")) is not bool
+                or type(action.get("within_scope")) is not bool):
+            return invalid
+        result["remaining_actions"].append({key: action[key] for key in
+            ("text", "confidence", "downside", "reversible", "within_scope")})
+    reasons = []
+    if result["resolution"]["score"] < 0.9:
+        reasons.append("Resolution is below 0.9.")
+    if result["verification"]["score"] < 0.8:
+        reasons.append("Verification is below 0.8.")
+    if result["delivery"]["applicable"] and result["delivery"]["score"] != 1:
+        reasons.append("Delivery is incomplete.")
+    if result["decision_dependency"]["score"] != 0:
+        reasons.append("A user decision remains.")
+    if any(c["blocking"] for c in result["caveats"]):
+        reasons.append("A blocking caveat remains.")
+    if result["remaining_actions"]:
+        reasons.append("Unfinished actions remain.")
+    result["ready_to_close"] = not reasons
+    result["reasons"] = reasons
+    return result
+
+
 def _parse_session_state(text):
-    """Extract the structured `<session-state>` block sessions emit on final
-    reply. Returns {did, insight, next_step_user} or None.
-    """
+    """Parse the last footer, preserving legacy fields and optional assessment."""
     if not text:
         return None
-    m = _SESSION_STATE_RE.search(text)
-    if not m:
+    matches = list(_SESSION_STATE_RE.finditer(text))
+    if not matches:
         return None
-    body = m.group(1)
+    body = matches[-1].group(1)
     out = {"did": None, "insight": None, "next_step_user": None}
     for fm in _SESSION_STATE_FIELD_RE.finditer(body):
         key = fm.group(1).upper()
         val = fm.group(2).strip()
-        if key == "DID":
-            out["did"] = val
-        elif key == "INSIGHT":
-            out["insight"] = val
-        elif key == "NEXT_STEP_USER":
-            out["next_step_user"] = val
+        if key == "COMPLETION":
+            try:
+                raw = json.loads(val) if len(val) <= 32000 else None
+            except (ValueError, TypeError, RecursionError):
+                raw = None
+            out["completion"] = _completion_assessment(raw)
+        else:
+            out[key.lower()] = val
     if not any(out.values()):
         return None
     return out

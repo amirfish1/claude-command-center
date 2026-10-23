@@ -3076,13 +3076,17 @@
       + '<span class="grouping-opt' + (on ? ' is-active' : '') + '" data-tracked-table-toggle="1">Table</span>'
       + '</span>';
   }
-  // A completion summary is not a completion verdict. Only an explicit
-  // review of an unchanged transcript can recommend closing a session.
+  // The server derives readiness from evidence-backed completion gates.
+  // Existing explicit reviews remain valid until new transcript activity.
   function sessionReadyToClose(c, live = c) {
     if (!c || c.archived || c.trashed || c.stale_tool_call || c.last_event_type === 'user') return false;
     if ([c, live].some(r => r && (r.state === 'working' || r.codex_state === 'working'
-        || r.pending_spawn || r.needs_approval || r.question_waiting
+        || r.pending_spawn || r.pending_tool || r.needs_approval || r.question_waiting
+        || r.last_event_type === 'user' || r.stale_tool_call
         || (r.sidecar_in_flight && r.sidecar_status === 'active')))) return false;
+    const completion = c.session_state && c.session_state.completion;
+    if (completion) return completion.version === 1 && completion.valid === true
+      && completion.ready_to_close === true;
     const reviewedAt = Number(c.idea_ticket && c.idea_ticket.ready_to_close_reviewed_at) || 0;
     const activityAt = Math.max(Number(c.mtime) || 0, Number(c.modified) || 0,
       Number(live && live.mtime) || 0, Number(live && live.modified) || 0);
@@ -3096,28 +3100,14 @@
   }
 
   function _trackedRowStatus(c) {
-    const _ss = c.session_state || {};
-    if (!sessionIsOptimisticallySending(c.session_id || c.id) && sessionReadyToClose(c)) return { key: 'ready', label: 'ready to close' };
-    if (c.stale_tool_call || sessionStuckAge(c) > 0) return { key: 'stuck', label: 'stuck' };
-    if (c.needs_approval || (c.state === 'waiting' && !c.archived && !c.verified)
-        || (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')))
-        || isRecentOpenAskRow(c)) {
-      return { key: 'needs-you', label: 'needs you' };
-    }
+    if (c.archived || c.trashed || (!sessionIsOptimisticallySending(c.session_id || c.id)
+        && sessionReadyToClose(c))) return { key: 'ready', label: 'Close' };
     const working = !!c.pending_spawn || (c.is_live && (
       c.state === 'working' || c.codex_state === 'working'
       || c.sidecar_status === 'active' || c.sidecar_in_flight))
-      || (typeof sessionIsOptimisticallySending === 'function'
-        && (!c.state || c.state === 'interactive')
-        && sessionIsOptimisticallySending(c.session_id || c.id));
-    if (working && c.last_event_type !== 'result') return { key: 'working', label: 'working' };
-    if (c.verified) return { key: 'verified', label: 'verified' };
-    if (c.tail_pr_number && String(c.pr_state || '').toUpperCase() === 'OPEN') return { key: 'pr', label: 'PR #' + c.tail_pr_number };
-    const col = classifyKanbanColumn(c);
-    if (col === 'review') return { key: 'committed', label: 'committed' };
-    if (col === 'testing') return { key: 'testing', label: 'testing' };
-    if (_ss.did || c.last_event_type === 'result' || c.state === 'idle' || c.state === 'ended') return { key: 'done', label: 'done' };
-    return { key: 'idle', label: 'idle' };
+      || sessionIsOptimisticallySending(c.session_id || c.id);
+    return working && c.last_event_type !== 'result'
+      ? { key: 'working', label: 'Working' } : { key: 'next', label: 'Next' };
   }
   function _trackedRowNextStep(c) {
     const _ss = c.session_state || {};
@@ -15296,7 +15286,7 @@
     const lines = body.split('\n').map(s => s.trim()).filter(Boolean);
     const fields = {};
     const otherRows = [];
-    const knownKeys = new Set(['DID', 'INSIGHT', 'NEXT_STEP_USER']);
+    const knownKeys = new Set(['DID', 'INSIGHT', 'NEXT_STEP_USER', 'COMPLETION']);
     for (const ln of lines) {
       const m = ln.match(/^([A-Z_]+):\s*(.*)$/);
       if (m && knownKeys.has(m[1])) {
@@ -15319,6 +15309,33 @@
     }
     if (fields.INSIGHT) {
       rows.push('<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>');
+    }
+    if (fields.COMPLETION) {
+      let assessment;
+      try { assessment = JSON.parse(fields.COMPLETION); } catch (_) {}
+      let evidence = '';
+      if (assessment && assessment.version === 1) {
+        for (const [key, label] of [['resolution', 'Resolution'], ['verification', 'Verification'],
+            ['delivery', 'Delivery'], ['decision_dependency', 'Decision dependency']]) {
+          const axis = assessment[key];
+          if (!axis || typeof axis.score !== 'number' || !Number.isFinite(axis.score)
+              || axis.score < 0 || axis.score > 1 || typeof axis.evidence !== 'string' || !axis.evidence.trim()) continue;
+          const score = key === 'delivery' && axis.applicable === false ? 'N/A' : String(axis.score);
+          evidence += '<div class="ssb-row"><span class="ssb-key">' + label + ' ' + score
+            + '</span>' + escapeHtml(axis.evidence) + '</div>';
+        }
+        if (Array.isArray(assessment.caveats)) for (const item of assessment.caveats) {
+          if (item && typeof item.text === 'string') evidence += '<div class="ssb-row"><span class="ssb-key">'
+            + (item.blocking ? 'Blocking caveat' : 'Caveat') + '</span>' + escapeHtml(item.text) + '</div>';
+        }
+        if (Array.isArray(assessment.remaining_actions)) for (const item of assessment.remaining_actions) {
+          if (item && typeof item.text === 'string') evidence += '<div class="ssb-row"><span class="ssb-key">Remaining</span>'
+            + escapeHtml(item.text) + ' · confidence ' + escapeHtml(String(item.confidence))
+            + ' · downside ' + escapeHtml(String(item.downside)) + '</div>';
+        }
+      }
+      rows.push('<details class="ssb-completion"><summary>Completion assessment · self-reported</summary>'
+        + (evidence || '<div class="ssb-row">Assessment unavailable or invalid.</div>') + '</details>');
     }
     return '<div class="session-state-block">' + rows.concat(otherRows).join('') + '</div>';
   }
@@ -37578,11 +37595,11 @@
       // showed in the transcript pane. In the sidebar hover preview we keep
       // this to DID only so the brief reads cleanly in one focused block.
       let outcomeHtml = '';
-      let _outcomeKind = 'latest';
+      let _outcomeKind = 'next';
       let _outcomeText = '';
       const _ss = c.session_state || null;
       // Lead with the session's own next step when it names one: the row's
-      // chips already say the work is done, so "what now" is the useful line.
+      // the next action is more useful than another completion claim.
       // DID stays in the tooltip, and becomes the line when there is no step.
       // Mid-turn the latest message has no summary block yet, so _ss is
       // empty; fall back to that message's opening so the row never goes
@@ -37617,8 +37634,8 @@
         const _next = ((_ss && _ss.next_step_user) || '').trim();
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
         // One label carries the state (no separate status column):
-        // WORKING + what it is saying now, NEXT STEP + the session's own
-        // next step, else LATEST + its last message.
+        // Working + current activity, Next + remaining work, or Close
+        // after an explicit review or passing completion assessment.
         let _label, _kind, _stepText;
         if (_outWorking) {
           _label = 'Working'; _kind = 'working';
@@ -37632,23 +37649,30 @@
           const _turnText = (_latest && !_latestStale) ? _latest : '';
           _stepText = _liveTool || _turnText
             || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
-        } else if (_readyToCloseRow) {
-          _label = 'Ready to close'; _kind = 'ready'; _stepText = _did || 'Reviewed as complete; archive when ready.';
+        } else if (_readyToCloseRow || c.archived || c.trashed) {
+          _label = 'Close'; _kind = 'ready'; _stepText = _did || 'Reviewed as complete; archive when ready.';
         } else if (_hasNext) {
           // A next step is always "yours"; one green label, no separate
           // NEEDS YOU variant.
           _label = 'Next'; _kind = 'next';
           _stepText = _next;
-        } else if (_latest && !_did) {
-          _label = 'Latest'; _kind = 'latest'; _stepText = _latest;
         } else {
-          _stepText = '';
+          _label = 'Next'; _kind = 'next'; _stepText = _did || _latest || 'Completion assessment pending.';
         }
-        _outcomeKind = _kind || 'latest';
+        _outcomeKind = _kind || 'next';
         _outcomeText = _stepText || _did;
+        const _assessment = _ss && _ss.completion;
+        const _assessmentTip = _assessment
+          ? (_assessment.valid ? '\nCompletion assessment (self-reported): '
+            + ['resolution', 'verification', 'delivery', 'decision_dependency'].map(key =>
+              key.replace(/_/g, ' ') + ': ' + _assessment[key].score + ' — ' + _assessment[key].evidence).join('\n')
+            + (_assessment.reasons.length ? '\nNot close: ' + _assessment.reasons.join(' ') : '\nAll completion gates passed.')
+            + _assessment.caveats.map(item => '\nCaveat: ' + item.text).join('')
+            : '\nCompletion assessment is invalid; readiness is unassessed.')
+          : '\nNo completion assessment; only an explicit review can recommend Close.';
         const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
           + (_hasNext ? 'Next step: ' + _next : '')
-          + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Latest: ' + _latest : '');
+          + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Last reply: ' + _latest : '') + _assessmentTip;
         outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + '" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-step" data-label="' + escapeAttr(_label) + '">' + escapeHtml(_stepText) + '</span>'
@@ -37708,8 +37732,7 @@
       // The avatar already says what kind of session this is; drop the
       // decorative leading glyphs (🪄 ✏️ 🧵 ⤴ …) from the name.
       const _waTitle = String(title || '').replace(/^(?:[\p{Extended_Pictographic}\uFE0F\u200d›⤴]\s*)+/u, '') || title;
-      const _waExplanationLabel = c.trashed ? 'Trash' : c.archived ? 'Archived'
-        : ({ working: 'Working', ready: 'Ready', next: 'Next', latest: 'Latest' }[_outcomeKind] || 'Latest');
+      const _waExplanationLabel = ({ working: 'Working', ready: 'Close', next: 'Next' }[_outcomeKind] || 'Next');
       const _waPreview = (_needsYouRow && c.question_text && _outcomeKind !== 'working') ? String(c.question_text)
         : (_outcomeText || c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
           || _waPreviewText(c.session_state && c.session_state.did)
