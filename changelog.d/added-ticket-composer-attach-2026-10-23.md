@@ -1,0 +1,1 @@
+- The New queue ticket dialog now has the same + button as the session composer for attaching files or photos.

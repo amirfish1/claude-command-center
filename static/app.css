@@ -24205,6 +24205,17 @@ body.has-gc-reader .pwa-install-banner {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(88,166,255,0.14);
 }
+/* + file picker in the New queue ticket modal, styled like the composer's. */
+.fq-ticket-actions .fq-ticket-attach-btn {
+  width: 32px; height: 32px; flex-shrink: 0; margin-right: auto;
+  border-radius: 999px; border: 1px solid var(--border); cursor: pointer;
+  background: transparent; color: var(--text-muted);
+  line-height: 1; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.fq-ticket-actions .fq-ticket-attach-btn:hover { background: var(--surface-2); color: var(--text); }
+.fq-ticket-actions .fq-ticket-attach-btn svg { display: block; }
 .files-queue-configure { font-size: 14px; }
 
 /* Plan-to-fleet import dialog (W51). Flat preview list, never a Kanban. */

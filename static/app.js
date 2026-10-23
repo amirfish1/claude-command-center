@@ -53462,6 +53462,10 @@
         +     (queueSelectHtml || '')
         +   '</div>'
         +   '<div class="upd-actions fq-ticket-actions">'
+        +     '<input type="file" id="fqTicketAttachInput" multiple hidden aria-hidden="true" tabindex="-1">'
+        +     '<button type="button" class="attach-btn fq-ticket-attach-btn" id="fqTicketAttachBtn" title="Attach files or photos" aria-label="Attach files or photos">'
+        +       '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>'
+        +     '</button>'
         +     '<button type="button" class="upd-btn" data-fq-ticket-cancel>Cancel</button>'
         +     '<button type="button" class="upd-btn upd-primary" data-fq-ticket-submit disabled>Add ticket</button>'
         +   '</div>'
@@ -53505,6 +53509,14 @@
         // Allow CMD-V of an image: auto-upload to a local pasted-images path and
         // insert the path token (same flow as annotate / the composers).
         try { if (window.__cccAttachImagePaste) window.__cccAttachImagePaste(textarea); } catch (_) {}
+        // Same + file picker as the session composer: uploads each file and
+        // inserts its path token into the note.
+        try {
+          if (window.__cccAttachFilePicker) {
+            window.__cccAttachFilePicker(modal.querySelector('#fqTicketAttachInput'),
+              modal.querySelector('#fqTicketAttachBtn'), () => textarea);
+          }
+        } catch (_) {}
         requestAnimationFrame(() => textarea.focus());
       }
       document.addEventListener('keydown', onKey);
@@ -76129,6 +76141,7 @@
   // Expose so the group-chat reader (created lazily after this block
   // runs) can opt in too — see wireGcMentionAutocomplete's neighbor.
   window.__cccAttachImagePaste = attachImagePaste;
+  window.__cccAttachFilePicker = attachFilePickerButton;
   attachFilePickerButton(document.getElementById('convAttachInput'), document.getElementById('convAttachBtn'));
 
   if ($kptNewSession) {
