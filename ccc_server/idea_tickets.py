@@ -206,6 +206,9 @@ def idea_ticket_rows_map():
             "queue": ticket.get("queue") or "",
             "sessions": len(ticket.get("sessions") or []),
             "closed": bool(ticket.get("closed")),
+            # A review applies only to this session's existing transcript.
+            # The UI invalidates it when newer activity arrives.
+            "ready_to_close_reviewed_at": entry.get("ready_to_close_reviewed_at", 0),
         }
     # UI spawns still waiting for their first reply: no ticket yet, but the
     # row belongs in Ideas now rather than in Other.

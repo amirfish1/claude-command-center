@@ -40,12 +40,25 @@ test('ready outcome offers the existing archive action instead of asking for a r
   const start = app.indexOf('      // Outcome line (GOAL-1)');
   const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
   const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
-    c: completed, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
+    c: { ...completed, session_state: {} }, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
     _codexStateWorking: false, _readyToCloseRow: true,
     sessionIsOptimisticallySending: () => false, preSendPreviewFor: () => null,
     _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
   });
+  assert.match(html, /Reviewed as complete; archive when ready/);
   assert.match(html, /data-label="Ready to close"/);
   assert.match(html, /conv-ready-archive.*data-role="archive" data-archived="true"/);
   assert.doesNotMatch(html, /data-label="Next step"/);
+});
+
+
+test('an explicit review expires on newer transcript activity and never overrides active work', () => {
+  const reviewed = { ...completed, mtime: 100, modified: 100,
+    session_state: {}, idea_ticket: { ready_to_close_reviewed_at: 110 } };
+  assert.equal(ready(reviewed), true);
+  assert.equal(ready({ ...reviewed, mtime: 120 }), false);
+  assert.equal(ready({ ...reviewed, last_event_type: 'user' }), false);
+  assert.equal(ready({ ...reviewed, needs_approval: true }), false);
+  assert.equal(ready(reviewed, { state: 'working' }), false);
+  assert.equal(ready(reviewed, { modified: 120 }), false);
 });

@@ -32170,8 +32170,10 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     min-height: 0;
     overflow: hidden;
   }
-  .conv-item.is-ready-to-close .wa-body { height: 106px; }
-  .conv-item.is-ready-to-close .wa-line2 { align-items: center; }
+  .conv-item.is-ready-to-close .wa-body,
+  .conv-item.is-archived-row .wa-body { height: 106px; }
+  .conv-item.is-ready-to-close .wa-line2,
+  .conv-item.is-archived-row .wa-line2 { align-items: center; }
   .wa-ready-label { display: block; color: var(--green, #3fb950); font-weight: 600; }
   .conv-item .wa-row .conv-ready-archive { min-height: 44px; }
   .wa-preview {

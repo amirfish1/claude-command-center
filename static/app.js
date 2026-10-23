@@ -3010,13 +3010,18 @@
       + '<span class="grouping-opt' + (on ? ' is-active' : '') + '" data-tracked-table-toggle="1">Table</span>'
       + '</span>';
   }
-  // A suggested archive, never an automatic close. Require a completion
-  // report and a passive next step; idle alone says nothing about completion.
+  // A suggested archive, never an automatic close. Accept an explicit review
+  // of an unchanged transcript, or a completion report with a passive next
+  // step. The latter is text matching, not an independent completion judge.
   function sessionReadyToClose(c, live = c) {
     if (!c || c.archived || c.trashed || c.stale_tool_call || c.last_event_type === 'user') return false;
     if ([c, live].some(r => r && (r.state === 'working' || r.codex_state === 'working'
         || r.pending_spawn || r.needs_approval || r.question_waiting
         || (r.sidecar_in_flight && r.sidecar_status === 'active')))) return false;
+    const reviewedAt = Number(c.idea_ticket && c.idea_ticket.ready_to_close_reviewed_at) || 0;
+    const activityAt = Math.max(Number(c.mtime) || 0, Number(c.modified) || 0,
+      Number(live && live.mtime) || 0, Number(live && live.modified) || 0);
+    if (reviewedAt > 0 && activityAt > 0 && activityAt <= reviewedAt) return true;
     const summary = c.session_state || {};
     const did = String(summary.did || '').trim();
     const next = String(summary.next_step_user || '').trim();
@@ -37572,7 +37577,7 @@
       const _outWorking = _outSending || _isWorkingRow || _codexStateWorking
         || _lv.codex_state === 'working' || c.state === 'working'
         || _lv.state === 'working' || (_liveFresh && !!_lv.sidecar_in_flight);
-      if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking)) {
+      if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow)) {
         const _did = ((_ss && _ss.did) || '').trim();
         const _next = ((_ss && _ss.next_step_user) || '').trim();
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
@@ -37593,7 +37598,7 @@
           _stepText = _liveTool || _turnText
             || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
         } else if (_readyToCloseRow) {
-          _label = 'Ready to close'; _kind = 'ready'; _stepText = _did;
+          _label = 'Ready to close'; _kind = 'ready'; _stepText = _did || 'Reviewed as complete; archive when ready.';
         } else if (_hasNext) {
           // A next step is always "yours"; one green label, no separate
           // NEEDS YOU variant.
@@ -37671,7 +37676,11 @@
         : (c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
           || _waPreviewText(c.session_state && c.session_state.did)
           || _waPreviewText(cleanFirst));
-      const _waStatus = _readyToCloseRow ? readyToCloseArchiveHtml()
+      const _waStatus = c.trashed
+        ? '<button type="button" class="conv-trash-btn conv-ready-archive is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">Restore</button>'
+        : c.archived
+          ? '<button type="button" class="conv-archive-btn conv-ready-archive is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active">Restore</button>'
+        : _readyToCloseRow ? readyToCloseArchiveHtml()
         : _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'
@@ -40133,16 +40142,23 @@
     // arrives separately from archive rows: using it to pick a representative
     // swaps the whole card on status polls. Keep identity/order on recency,
     // with a session-id tie-break so input/bucket order cannot flip the row.
-    const _ideaTicketRows = (lane) => {
+    const _ideaTicketRows = (lane, bucket = 'active') => {
       const best = new Map();
       const byRecency = (x, y) => (
         Number(y.mtime || y.modified || 0) - Number(x.mtime || x.modified || 0)
         || _allTabSessionId(x).localeCompare(_allTabSessionId(y))
       );
-      _allTabConvs.forEach(c => {
+      const activeRefs = new Set(_allTabConvs.filter(c => _allTabLaneFor(c) === lane
+        && c.idea_ticket && !c.archived && !c.trashed && !c.idea_ticket.closed).map(c => c.idea_ticket.ref));
+      const candidates = bucket === 'trash' ? _allTabTrashConvs : _allTabConvs;
+      candidates.forEach(c => {
         if (_allTabLaneFor(c) !== lane) return;
         const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
-        if (!ref || c.archived || c.trashed || c.idea_ticket.closed) return;
+        if (!ref) return;
+        if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
+        if (bucket === 'archived' && (c.trashed || activeRefs.has(ref)
+          || (!c.archived && !c.idea_ticket.closed))) return;
+        if (bucket === 'trash' && !c.trashed) return;
         const prev = best.get(ref);
         if (!prev || byRecency(c, prev) < 0) best.set(ref, c);
       });
@@ -40472,7 +40488,25 @@
     // CCC-859: the Workers tab has no Trash section -- worker sessions
     // belong to a queue, not the user, so there's nothing to restore there.
     let _trashHtml = '';
-    if (_allTabView !== 'workers') {
+    let _ideaArchivedHtml = '';
+    const _ticketLifecycleView = _allTabView === 'ideas' || _allTabView === 'smallbugs';
+    const _lifecycleSection = (label, key, rows) => {
+      if (!rows.length) return '';
+      let collapsed = !_hideGroupChatsForSearch;
+      try { collapsed = collapsed && localStorage.getItem(key) !== '0'; } catch (_) {}
+      return '<div class="conv-trash-section' + (collapsed ? ' collapsed' : '') + '" data-role="trash-section">'
+        + '<button type="button" class="conv-trash-header" data-role="trash-toggle" data-storage-key="' + key + '" aria-expanded="' + !collapsed + '">'
+        + '<span class="conv-trash-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
+        + '<span class="conv-trash-label">' + label + '</span><span class="conv-trash-count">' + rows.length + '</span></button>'
+        + '<div class="conv-trash-list">' + rows.map(c => _renderRow(c, {
+          lifecycleContext: label === 'Trash' ? 'trash' : 'all-main',
+          suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true,
+        })).join('') + '</div></div>';
+    };
+    if (_ticketLifecycleView) {
+      _ideaArchivedHtml = _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
+      _trashHtml = _lifecycleSection('Trash', 'ccc-' + _allTabView + '-trash-collapsed', _ideaTicketRows(_allTabView, 'trash'));
+    } else if (_allTabView !== 'workers') {
       const _trashItems = [];
       for (const c of _allTabTrashConvs) {
         _trashItems.push({
@@ -40805,6 +40839,7 @@
         + _wtPendingHtml
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
+        + _ideaArchivedHtml
         + _trashHtmlForAllTabView
         + '</div>';
     }
@@ -41200,19 +41235,18 @@
       });
     }
     // Toggle handler for the All tab's Trash section header (CCC-468).
-    const $trashToggle = $convList.querySelector('[data-role="trash-toggle"]');
-    if ($trashToggle) {
+    $convList.querySelectorAll('[data-role="trash-toggle"]').forEach($trashToggle => {
       $trashToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const section = $trashToggle.closest('[data-role="trash-section"]');
         if (!section) return;
         const wasCollapsed = section.classList.toggle('collapsed');
-        try { localStorage.setItem('ccc-all-trash-collapsed', wasCollapsed ? '1' : '0'); } catch (_) {}
+        try { localStorage.setItem($trashToggle.dataset.storageKey || 'ccc-all-trash-collapsed', wasCollapsed ? '1' : '0'); } catch (_) {}
         const arrowEl = $trashToggle.querySelector('.conv-trash-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         $trashToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
-    }
+    });
     // querySelectorAll + forEach: the control also renders inside the narrow-
     // sidebar ⋮ overflow menu (CCC-1158), and querySelector would bind only
     // the first copy.

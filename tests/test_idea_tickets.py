@@ -96,6 +96,16 @@ class IdeaTicketsTest(unittest.TestCase):
         row = it.idea_ticket_rows_map()["s1"]
         self.assertEqual((row["ref"], row["queue"], row["sessions"]), ("SMALL-BUGS-1", "SMALL-BUGS", 1))
 
+    def test_completion_review_stays_scoped_to_reviewed_session(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda text: "idea")
+        it._mutate(lambda d: d["sessions"]["s1"].update(ready_to_close_reviewed_at=123))
+        self.transcripts["s2"] = {"continued_from": "s1"}
+        it.attach_or_file("s2", continued_from_hint="s1")
+        rows = it.idea_ticket_rows_map()
+        self.assertEqual(rows["s1"]["ready_to_close_reviewed_at"], 123)
+        self.assertEqual(rows["s2"]["ready_to_close_reviewed_at"], 0)
+
     def test_pending_ui_spawn_rows_as_ideas_until_filed(self):
         self._ui_session("s1")
         row = it.idea_ticket_rows_map()["s1"]
