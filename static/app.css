@@ -32719,23 +32719,48 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     display: block !important;
     flex: 1 1 100%;
     min-width: 0;
-    /* Reserve the same three text lines for Working, Next and Close, so
-       incoming text cannot resize a row while the list is being read. */
-    height: calc(3 * 1.42em + 14px);
+    order: 1;
+    height: auto;
     overflow: hidden;
     margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step {
     width: 100%;
     min-width: 0;
+    color: var(--text-muted);
+    -webkit-line-clamp: 2;
+  }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome:not(.has-close-btn) .conv-outcome-step::before {
+    content: attr(data-label) ": ";
+    display: inline;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    letter-spacing: normal;
+    text-transform: none;
+    vertical-align: baseline;
   }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-row-break {
     display: block;
     flex-basis: 100%;
     height: 0;
+    order: 2;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col { display: contents; }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: auto; }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    order: 3;
+  }
+  #convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: auto; order: 3; }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
 }
 

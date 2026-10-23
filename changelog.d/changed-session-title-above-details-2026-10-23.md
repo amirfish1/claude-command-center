@@ -1,1 +1,1 @@
-Session rows show the title above the context and details instead of beside them on desktop.
+Desktop session rows show the title and time above plain context and details, with the session ID below.
