@@ -13673,6 +13673,24 @@
       btn.style.setProperty('--tts-play', play.toFixed(3));
       btn.style.setProperty('--tts-cache-f', cached.toFixed(3));
     });
+    // The floating speaker draws the same two fills around its ring.
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach((f) => {
+      f.style.setProperty('--tts-play', play.toFixed(3));
+      f.style.setProperty('--tts-cache-f', cached.toFixed(3));
+    });
+  }
+  // Idle floating speaker: its ring mirrors the cache bar of the turn it
+  // would read (the one most visible in its pane, picked on scroll).
+  function _syncSpeakFloatCache(f) {
+    const t = f._speakTarget;
+    const st = t && t.isConnected ? t.dataset.ttsCache : '';
+    if (st) {
+      f.dataset.ttsCache = st;
+      f.style.setProperty('--tts-ring-f', t.style.getPropertyValue('--tts-cache-f') || '1');
+    } else {
+      delete f.dataset.ttsCache;
+      f.style.removeProperty('--tts-ring-f');
+    }
   }
   function _ttsMarkCache(paneId, headText, st, f) {
     if (headText) _ttsCacheState.set(headText, { st, f });
@@ -13686,12 +13704,17 @@
     });
     // The per-turn speaker shows the same bar: the last turn's of each pane, or
     // the hovered older turn (quiet prefetch).
-    if (paneId === '__quiet') { if (_ttsHoverBtn && _ttsHoverBtn.isConnected) apply(_ttsHoverBtn); return; }
+    if (paneId === '__quiet') {
+      if (_ttsHoverBtn && _ttsHoverBtn.isConnected) apply(_ttsHoverBtn);
+      document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
+      return;
+    }
     document.querySelectorAll('.conv-pane').forEach((pane) => {
       if (paneId && pane.dataset.paneId !== paneId) return;
       const btns = pane.querySelectorAll('.event.assistant [data-read-assistant-message]');
       btns.forEach((b, i) => { if (i === btns.length - 1) apply(b); else if (b !== _ttsHoverBtn) delete b.dataset.ttsCache; });
     });
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
   }
   let _ttsHoverBtn = null;
   // quiet = a hovered older turn: make the clips but leave the composer bar alone.
@@ -45549,7 +45572,9 @@
     }
     const speakBtn = view._convSpeakButton;
     if (speakBtn) {
-      const showSpeak = !!_visibleSpeakButton(view);
+      speakBtn._speakTarget = _visibleSpeakButton(view);
+      const showSpeak = !!speakBtn._speakTarget;
+      _syncSpeakFloatCache(speakBtn);
       speakBtn.classList.toggle('visible', showSpeak);
       speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
       speakBtn.tabIndex = showSpeak ? 0 : -1;

@@ -3583,6 +3583,34 @@
   .conv-scroll-speak-btn:hover { border-color: var(--accent); background: var(--surface-2); }
   .conv-scroll-speak-btn.speaking { border-color: var(--accent); color: var(--accent); }
   .conv-scroll-speak-btn.speaking.paused { opacity: 0.8; }
+  /* Progress ring around the floating speaker, the round version of the
+     composer Speak bar. Idle: amber/green arc = share of the on-screen turn's
+     audio already made. Reading: accent = read, bright = made ahead, dim =
+     not made yet. */
+  .conv-scroll-speak-btn::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    pointer-events: none;
+    display: none;
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  }
+  .conv-scroll-speak-btn[data-tts-cache]::before {
+    display: block;
+    background: conic-gradient(var(--green) calc(var(--tts-ring-f, 1) * 1turn), transparent 0);
+  }
+  .conv-scroll-speak-btn[data-tts-cache="partial"]::before {
+    background: conic-gradient(#d29922 calc(var(--tts-ring-f, 1) * 1turn), transparent 0);
+  }
+  .conv-scroll-speak-btn.speaking::before {
+    display: block;
+    background: conic-gradient(
+      var(--accent) calc(var(--tts-play, 0) * 1turn),
+      color-mix(in srgb, var(--text) 70%, transparent) 0 calc(var(--tts-cache-f, 0) * 1turn),
+      color-mix(in srgb, var(--text) 14%, transparent) 0);
+  }
 
   /* Seam marker between two CCC continuation segments in the merged
      conversation view: messages above came from the earlier session,
@@ -10061,6 +10089,10 @@
     background: rgba(63,185,80,0.10);
   }
   .conv-input-hint .codex-appsrv.live .dot { background: var(--green); }
+  /* No Speak button in the composer at any width: the floating speaker over
+     the transcript reads the on-screen turn (and keyboard shortcuts still
+     read the last message). Class, not id: split panes clone the composer. */
+  .conv-input-bar .tts-btn { display: none !important; }
   .conv-input-bar .tts-btn {
     width: 32px; height: 32px; flex-shrink: 0;
     border-radius: 999px; border: 1px solid var(--border); cursor: pointer;
@@ -31738,9 +31770,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
   button.mobile-actions-item { font-size: 16px; min-height: 52px; }
 
-  /* Composer: one size for every control, and no Speak button (the floating
-     speaker over the transcript reads the on-screen turn). */
-  .conv-input-bar #convTtsBtn { display: none !important; }
+  /* Composer: one size for every control. */
   .conv-input-bar .conv-input-row-bottom > button,
   .conv-input-bar .conv-actions-btn,
   .conv-input-bar .conv-input-buttons > button {
