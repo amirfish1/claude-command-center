@@ -3173,17 +3173,24 @@
       session_state: entry.sessionState, last_event_type: 'assistant',
       modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
   }
+  function sidebarSessionWorking(c, live = c) {
+    return !c.archived && !c.trashed && !live.needs_approval && !live.question_waiting
+      && (sessionIsOptimisticallySending(c.session_id || c.id) || c.pending_spawn
+        || live.state === 'working' || live.codex_state === 'working'
+        || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight));
+  }
   function _ultraFreshExplanation(c) {
     const sid = c.session_id || c.id;
     const live = _applyLiveOverlayToRow(c);
     const sending = sessionIsOptimisticallySending(sid);
     const raw = String(c.last_assistant_text || c.last_assistant_preview || '');
-    const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw;
+    const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw
+      || (live.last_event_type === 'user'
+        && _ultraFreshTime(live.last_event_ts) > _ultraFreshTime(c.modified || c.mtime));
     const text = stale ? '' : raw.replace(/<session-state>[\s\S]*$/, '')
       .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280);
     const summary = stale ? {} : (c.session_state || {});
-    const working = sending || c.pending_spawn || live.state === 'working' || live.codex_state === 'working'
-      || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight);
+    const working = sidebarSessionWorking(c, live);
     const ready = !working && !sending && sessionReadyToClose(c, live);
     const next = String(summary.next_step_user || '').trim();
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(next);
@@ -3201,6 +3208,16 @@
       if (row.dataset.sessionId !== sid) continue;
       const main = row.querySelector('.conv-main-row');
       if (main) {
+        let dot = main.querySelector('.conv-working-dot');
+        if (info.kind === 'working' && !dot) {
+          dot = document.createElement('span');
+          dot.className = 'conv-working-dot';
+          dot.title = 'Actively working';
+          dot.setAttribute('aria-label', 'Actively working');
+          main.appendChild(dot);
+        }
+        if (info.kind !== 'working' && dot) dot.remove();
+        if (info.kind === 'working') main.querySelectorAll('.conv-needs-you').forEach(el => el.remove());
         let outcome = main.querySelector('.conv-outcome');
         if (!outcome) {
           outcome = document.createElement('div');
@@ -3218,7 +3235,7 @@
         if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.prepend(step); }
         if (closeBtn) delete step.dataset.label;
         else step.dataset.label = info.label;
-        step.textContent = info.text;
+        if (step.textContent !== info.text) step.textContent = info.text;
         main.classList.add('has-inline-step');
       }
       const preview = row.querySelector('.wa-preview');
@@ -3226,6 +3243,12 @@
         // Keep the ticket link and any listeners already attached to it.
         let label = preview.querySelector('.wa-explanation-label');
         const waLine = row.querySelector('.wa-line2');
+        if (waLine) {
+          const dot = waLine.querySelector('.wa-dot');
+          if (info.kind === 'working' && !dot) waLine.insertAdjacentHTML('beforeend', '<span class="wa-dot" title="Working"></span>');
+          if (info.kind !== 'working' && dot) dot.remove();
+          if (info.kind === 'working') waLine.querySelectorAll('.wa-badge').forEach(el => el.remove());
+        }
         if (info.kind === 'ready' && waLine && !waLine.querySelector('.conv-ready-close')) {
           waLine.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
         }
@@ -3235,14 +3258,19 @@
           if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
           label.textContent = info.label + ':';
         }
-        for (const node of [...preview.childNodes]) if (node.nodeType === 3) node.remove();
-        preview.appendChild(document.createTextNode(' ' + info.text));
+        if (preview.dataset.ultraFreshText !== info.text) {
+          for (const node of [...preview.childNodes]) {
+            if (node.nodeType === 3 || (node.nodeType === 1 && node.matches('.qtag-chip'))) node.remove();
+          }
+          preview.appendChild(document.createTextNode(' ' + info.text));
+          preview.dataset.ultraFreshText = info.text;
+        }
       }
       // New message text invalidates an earlier Close recommendation. Archive
       // remains a manual row action; never archive or move the session here.
       if (info.kind === 'ready') row.classList.add('is-ready-to-close');
       if (info.kind !== 'ready') {
-        if (row.classList.contains('is-ready-to-close')) row.style.minHeight = row.getBoundingClientRect().height + 'px';
+        row.style.removeProperty('min-height');
         row.classList.remove('is-ready-to-close');
         row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
       }
@@ -5878,6 +5906,8 @@
       for (const sid of Array.from(_sessionLiveOverlay.keys())) {
         if (!liveIds.has(sid)) _sessionLiveOverlay.delete(sid);
       }
+      // Patch the visible rows even when hover/typing defers a list rebuild.
+      _ultraFreshSchedule();
       if (archiveLoaded && typeof _scheduleSidebarRender === 'function') {
         _scheduleSidebarRender();
       }
@@ -37527,16 +37557,10 @@
             + '</span>';
         }
       }
-      // design_handoff_sidebar_session_list (variant 2c): a small pulsing
-      // dot mirroring the row's working state, additive to the existing
-      // conv-needs-you dot and conv-live-tool pill above — neither is
-      // replaced, this just gives "is something actually happening here"
-      // a glanceable signal that doesn't require reading pill text.
-      // Deliberately excludes "stale"/"sending" pills: those read as
-      // stuck/pending, not confirmed active work. (workingDotHtml itself
-      // is built further down, once _needsYouRow is known — needs-you
-      // takes priority and suppresses this dot.)
-      const _isWorkingRow = !!liveToolHtml
+      // Running turns remain visible between tools, using the same working
+      // state as the live explanation updater. Tool pills remain a fallback
+      // for engines without turn-level status.
+      const _isWorkingRow = sidebarSessionWorking(c, _applyLiveOverlayToRow(c)) || !!liveToolHtml
         && (liveToolHtml.indexOf('conv-live-tool in-flight') !== -1
           || liveToolHtml.indexOf('conv-live-tool is-question') !== -1);
       const isCodexRow = c.source === 'codex' || c.engine === 'codex';
@@ -38287,7 +38311,7 @@
       const _readyToCloseRow = !isBacklogRow && !isGithubPrRow && !_isWorkingRow
         && !sessionIsOptimisticallySending(c.session_id || c.id)
         && sessionReadyToClose(c, _applyLiveOverlayToRow(c));
-      const _needsYouRow = !_readyToCloseRow && ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
+      const _needsYouRow = !_isWorkingRow && !_readyToCloseRow && ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
       const needsYouHtml = _needsYouRow
         ? '<span class="conv-needs-you" title="Needs you - the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
