@@ -467,12 +467,27 @@ def _acp_resume_next_line(harness, sid):
     it silently, so a restart mid-conversation could make new replies vanish
     from the UI while landing fine in the transcript file. Count the file
     instead of assuming.
+
+    Counted in 1 MB binary chunks: this runs under _ACP_LOCK for every
+    persisted session at boot, and iterating text lines over ~135 MB of
+    Devin transcripts held the lock for 15s+ under GIL load, stalling the
+    sidebar list, live builds and conversation opens behind it (CCC-142).
     """
     try:
-        with _core._acp_transcript_path(harness, sid).open() as f:
-            return sum(1 for _ in f) + 1
+        with _core._acp_transcript_path(harness, sid).open("rb") as f:
+            count = 0
+            last = b""
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                count += chunk.count(b"\n")
+                last = chunk[-1:]
     except OSError:
         return 1
+    if last and last != b"\n":
+        count += 1  # unterminated final line still holds a line number
+    return count + 1
 
 
 def _acp_new_session_state(harness, sid, cwd=""):
@@ -506,6 +521,12 @@ def _acp_session(harness, sid, create=False, cwd=""):
     if state is None and create:
         state = _acp_new_session_state(harness, sid, cwd=cwd)
         sessions[sid] = state
+    elif state is not None and create and cwd and not state.get("cwd"):
+        # A state recreated without a cwd (after a worker restart, by a
+        # snapshot read) must still accept the cwd a caller knows, or the
+        # attach fails with "session cwd unknown" and the queue falls back to
+        # one-shot runs that re-send the message.
+        state["cwd"] = cwd
     return state
 
 
@@ -949,6 +970,7 @@ def _acp_load_state(harness):
     for sid, meta in sessions.items():
         if not isinstance(meta, dict):
             continue
+        existed = sid in (_core._ACP_SESSION_STATE.get(harness) or {})
         state = _core._acp_session(harness, sid, create=True, cwd=meta.get("cwd") or "")
         state["status"] = "idle"
         state["turn_seq"] = int(meta.get("turn_seq") or 0)
@@ -959,7 +981,9 @@ def _acp_load_state(harness):
         # most recent activity, or the sid was never captured in a save at
         # all -- see _acp_resume_next_line), so never trust it below what the
         # transcript file actually holds.
-        next_line = max(int(meta.get("next_line") or 1), _acp_resume_next_line(harness, sid))
+        on_disk = (_acp_resume_next_line(harness, sid) if existed
+                   else int(state.get("next_line") or 1))  # just counted on create
+        next_line = max(int(meta.get("next_line") or 1), on_disk)
         state["next_line"] = max(1, next_line)
 
 

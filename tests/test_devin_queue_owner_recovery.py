@@ -88,3 +88,19 @@ def test_delivery_proof_accepts_the_user_message_in_the_session_transcript(tmp_p
         assert eng._devin_cli_prompt_history_count("raw", "hello", 999) == 1
         assert eng._devin_cli_prompt_history_count("raw", "hello", 1002) == 0   # older than the send
         assert eng._devin_cli_prompt_history_count("raw", "other", 999) == 0
+
+
+def test_acp_session_accepts_a_cwd_for_state_that_has_none():
+    """A state recreated without a cwd must take the one the caller supplies."""
+    server = importlib.import_module("server")
+    harness, sid = "devin", "cwd-seed-test"
+    sessions = server._ACP_SESSION_STATE.setdefault(harness, {})
+    try:
+        state = server._acp_session(harness, sid, create=True)          # no cwd known
+        assert not state.get("cwd")
+        again = server._acp_session(harness, sid, create=True, cwd="/work/dir")
+        assert again is state and state["cwd"] == "/work/dir"
+        server._acp_session(harness, sid, create=True, cwd="/other")    # never overwritten
+        assert state["cwd"] == "/work/dir"
+    finally:
+        sessions.pop(sid, None)
