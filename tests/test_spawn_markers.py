@@ -249,3 +249,62 @@ def test_spawn_marker_index_survives_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(server.os, "scandir", no_scan)
     assert server._load_spawn_markers() == first
     assert decoded == []
+
+
+def _fresh_marker_state(monkeypatch, tmp_path):
+    marker_dir = tmp_path / "spawn-markers"
+    marker_dir.mkdir()
+    monkeypatch.setattr(server, "SPAWN_MARKERS_DIR", marker_dir)
+    monkeypatch.setattr(server, "_SPAWN_MARKER_FILE_CACHE", {})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_LOADED", {str(marker_dir)})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_DIR_MTIME", {})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_MEMO", {"ts": 0.0, "dir": None, "out": {}})
+    return marker_dir
+
+
+def _age_dir(path, seconds=60):
+    st = path.stat()
+    old = st.st_mtime_ns - seconds * 1_000_000_000
+    os.utime(path, ns=(old, old))
+
+
+def test_settled_marker_dir_is_not_restatted_every_poll(monkeypatch, tmp_path):
+    """CCC-142: every /list poll re-stat'd ~4k marker files once the 2s memo
+    lapsed. All writers rename into the dir, so an unchanged (settled) dir
+    mtime means unchanged markers: trust the memo past the short TTL."""
+    marker_dir = _fresh_marker_state(monkeypatch, tmp_path)
+    (marker_dir / "aaaa.json").write_text(json.dumps({"lane": "workers"}))
+    _age_dir(marker_dir)
+    assert server._load_spawn_markers() == {"aaaa": {"lane": "workers"}}
+
+    scans = []
+    real_scandir = server.os.scandir
+    monkeypatch.setattr(server.os, "scandir",
+                        lambda p: scans.append(p) or real_scandir(p))
+    # Past the short TTL, dir unchanged: served from memo, no per-file scan.
+    server._SPAWN_MARKER_MEMO["ts"] -= server._SPAWN_MARKER_MEMO_TTL_S + 1
+    assert server._load_spawn_markers() == {"aaaa": {"lane": "workers"}}
+    assert scans == []
+
+    # A new marker (rename into the dir) moves the dir mtime: rescanned.
+    tmp = marker_dir / "bbbb.json.x.tmp"
+    tmp.write_text(json.dumps({"lane": "other"}))
+    os.replace(tmp, marker_dir / "bbbb.json")
+    assert server._load_spawn_markers()["bbbb"] == {"lane": "other"}
+    assert len(scans) == 1
+
+
+def test_concurrent_marker_rescan_is_single_flight(monkeypatch, tmp_path):
+    """While one caller rescans, others reuse the previous map instead of
+    each stat'ing every marker file concurrently."""
+    marker_dir = _fresh_marker_state(monkeypatch, tmp_path)
+    (marker_dir / "aaaa.json").write_text(json.dumps({"lane": "workers"}))
+    first = server._load_spawn_markers()
+    server._SPAWN_MARKER_MEMO["ts"] = 0.0
+    monkeypatch.setattr(server.os, "scandir", lambda p: (_ for _ in ()).throw(
+        AssertionError("must not rescan while another caller holds the scan")))
+    assert server._SPAWN_MARKER_SCAN_LOCK.acquire(blocking=False)
+    try:
+        assert server._load_spawn_markers() == first
+    finally:
+        server._SPAWN_MARKER_SCAN_LOCK.release()
