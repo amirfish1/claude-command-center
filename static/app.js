@@ -18360,9 +18360,10 @@
       || (Array.isArray(archiveData) ? archiveData.find(match) : null);
   }
 
-  // Unarchive / untrash the open session. Same endpoints and row patching as
-  // the sidebar's archive/trash buttons, without needing the row in the DOM
-  // (archived rows often aren't rendered).
+  // Archive / unarchive / untrash the open session. Same endpoints and row
+  // patching as the sidebar's archive/trash buttons, without needing the row
+  // in the DOM (archived rows often aren't rendered; on phones the list is
+  // off-canvas while a conversation is open).
   async function _setOpenSessionLifecycle(kind) {
     const row = _openConversationRow();
     if (!row) { showOpToast('No open task', 'error'); return; }
@@ -18374,7 +18375,7 @@
           session_id: sessionId, repo_path: rowRepoPath(row) || '', trashed: false,
         })
         : await ccPostJson('/api/conversations/' + encodeURIComponent(convId) + '/archive',
-          archivePayloadForRow(row, sessionId, false));
+          archivePayloadForRow(row, sessionId, kind === 'archive'));
       if (!data.ok) throw new Error(data.error || (kind + ' failed'));
       const patch = kind === 'untrash'
         ? { archived: !!data.archived, trashed: false }
@@ -18387,9 +18388,11 @@
       });
       setOptimisticOverride(sessionId, patch);
       renderSidebar(filterConversations($convSearch.value), { force: true });
-      showOpToast(kind === 'untrash' ? 'Untrashed to Archived' : 'Restored to Active');
+      showOpToast(kind === 'untrash' ? 'Untrashed to Archived'
+        : (data.archived ? 'Archived' : 'Restored to Active'));
     } catch (err) {
-      showOpToast((kind === 'untrash' ? 'Untrash' : 'Unarchive') + ' failed (' + err.message + ')', 'error');
+      const label = kind === 'untrash' ? 'Untrash' : (kind === 'archive' ? 'Archive' : 'Unarchive');
+      showOpToast(label + ' failed (' + err.message + ')', 'error');
     }
   }
 
@@ -18402,6 +18405,7 @@
     };
     const isSession = !!row && !String(row.id || '').startsWith('backlog-issue-')
       && !String(row.id || '').startsWith('xrepo-issue-');
+    show('archive', isSession && !row.archived && !row.trashed);
     show('unarchive', isSession && !!row.archived && !row.trashed);
     show('untrash', isSession && !!row.trashed);
     const ideaQueue = row && row.idea_ticket && row.idea_ticket.queue;
@@ -18475,7 +18479,7 @@
         if (handoverBtn) handoverBtn.click();
       } else if (action === 'reload-app') {
         location.reload();
-      } else if (action === 'unarchive' || action === 'untrash') {
+      } else if (action === 'archive' || action === 'unarchive' || action === 'untrash') {
         _setOpenSessionLifecycle(action);
       } else if (action === 'idea-IDEAS' || action === 'idea-SMALL-BUGS') {
         const row = _openConversationRow();

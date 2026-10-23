@@ -1,0 +1,1 @@
+- Phones: the conversation view's ⋮ menu now has an **Archive** item for the open session.
