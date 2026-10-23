@@ -1690,6 +1690,21 @@
     row.title = entry.title || '';
     row.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     col.insertBefore(row, col.firstChild);
+    // Persist alongside the on-screen row — the 20-row DOM buffer is
+    // ephemeral, so list-read latency and open times also land in
+    // service.out.log via the client-log beacon. Posted directly (not via
+    // _clientLog) because that pipeline drops repeated patterns <5s apart,
+    // which would eat every second row here.
+    if (!replay) {
+      try {
+        fetch('/api/client-log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msg: '[PERF] ' + kind + ' ' + entry.text }),
+          keepalive: true,
+        }).catch(function () {});
+      } catch (_) {}
+    }
   }
   window.__cccPerfRow = _perfPaneRow;
   // Click→open timing must not depend on selectConversation being the only
@@ -72861,7 +72876,9 @@
         if (typeof window.__cccPerfRow !== 'function') return;
         const ms = Math.round(performance.now() - _perfT0);
         const size = bytes ? (bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB'
-          : Math.round(bytes / 1024) + 'KB') : (status === 304 ? '304' : '?');
+          : Math.round(bytes / 1024) + 'KB')
+          : (status === 304 ? '304'
+            : (typeof status === 'number' ? 'HTTP' + status : String(status)));
         window.__cccPerfRow('list', {
           at: Date.now(),
           text: ms + 'ms ' + size + (extra ? ' ' + extra : ''),
