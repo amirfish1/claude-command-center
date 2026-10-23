@@ -3010,8 +3010,35 @@
       + '<span class="grouping-opt' + (on ? ' is-active' : '') + '" data-tracked-table-toggle="1">Table</span>'
       + '</span>';
   }
+  // A suggested archive, never an automatic close. Require a completion
+  // report and a passive next step; idle alone says nothing about completion.
+  function sessionReadyToClose(c, live = c) {
+    if (!c || c.archived || c.trashed || c.stale_tool_call || c.last_event_type === 'user') return false;
+    if ([c, live].some(r => r && (r.state === 'working' || r.codex_state === 'working'
+        || r.pending_spawn || r.needs_approval || r.question_waiting
+        || (r.sidecar_in_flight && r.sidecar_status === 'active')))) return false;
+    const summary = c.session_state || {};
+    const did = String(summary.did || '').trim();
+    const next = String(summary.next_step_user || '').trim();
+    if (!did || !next) return false;
+    // Keep unfinished delivery, failures and real decisions in the action queue.
+    if (/\b(?:not (?:(?:yet|fully|visually) )?(?:pushed|shipped|deployed|done|finished|verified)|unpushed|unresolved|blocked|failed|waiting for|needs? (?:approval|input))\b/i.test(did + ' ' + next)) return false;
+    if (/\b(?:approve|decide|choose|pick|answer|reply|confirm whether|tell me whether|yes\s*\/\s*no)\b|\[Q\d+/i.test(next)) return false;
+    if (/\b(?:deploy|merge|repair|install|pay|charge|sign|run the|run a|send a|send the|create a|create the)\b/i.test(next)) return false;
+    const complete = /\b(?:shipped|pushed|completed|finished|resolved|closed|verified|fixed|implemented)\b/i.test(did);
+    const passive = /^(?:none|nothing (?:needed|required|to do)|no (?:action|restart|further action)(?: is)? (?:needed|required)|n\/a|not applicable)\b/i.test(next)
+      || /^(?:(?:please|just)\s+)?(?:reload|refresh|hard[- ]refresh)\b/i.test(next);
+    return complete && passive;
+  }
+
+  function readyToCloseArchiveHtml() {
+    return '<button type="button" class="conv-archive-btn conv-ready-archive" data-role="archive" data-archived="true"'
+      + ' title="Archive completed session" aria-label="Archive completed session">Archive</button>';
+  }
+
   function _trackedRowStatus(c) {
     const _ss = c.session_state || {};
+    if (!sessionIsOptimisticallySending(c.session_id || c.id) && sessionReadyToClose(c)) return { key: 'ready', label: 'ready to close' };
     if (c.stale_tool_call || sessionStuckAge(c) > 0) return { key: 'stuck', label: 'stuck' };
     if (c.needs_approval || (c.state === 'waiting' && !c.archived && !c.verified)
         || (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')))
@@ -37455,7 +37482,10 @@
       // a UI lie, so suppress it there too.
       // Live state first: the row's own state lags, so a session that resumed
       // work kept its yellow needs-you dot until the next list refresh.
-      const _needsYouRow = ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
+      const _readyToCloseRow = !isBacklogRow && !isGithubPrRow && !_isWorkingRow
+        && !sessionIsOptimisticallySending(c.session_id || c.id)
+        && sessionReadyToClose(c, _applyLiveOverlayToRow(c));
+      const _needsYouRow = !_readyToCloseRow && ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
       const needsYouHtml = _needsYouRow
         ? '<span class="conv-needs-you" title="Needs you - the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
@@ -37562,6 +37592,8 @@
           const _turnText = (_latest && !_latestStale) ? _latest : '';
           _stepText = _liveTool || _turnText
             || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
+        } else if (_readyToCloseRow) {
+          _label = 'Ready to close'; _kind = 'ready'; _stepText = _did;
         } else if (_hasNext) {
           // A next step is always "yours"; one green label, no separate
           // NEEDS YOU variant.
@@ -37578,6 +37610,7 @@
         outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + '" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-step" data-label="' + escapeAttr(_label) + '">' + escapeHtml(_stepText) + '</span>'
+            + (_kind === 'ready' ? readyToCloseArchiveHtml() : '')
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
@@ -37638,7 +37671,8 @@
         : (c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
           || _waPreviewText(c.session_state && c.session_state.did)
           || _waPreviewText(cleanFirst));
-      const _waStatus = _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
+      const _waStatus = _readyToCloseRow ? readyToCloseArchiveHtml()
+        : _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'
         + _waAvatarHtml(c, _waTitle)
@@ -37648,10 +37682,10 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Numbered idea avatars already open the ticket.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_readyToCloseRow ? '<strong class="wa-ready-label">Ready to close</strong> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
         + '</div>';
-      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + waHtml
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml

@@ -14,6 +14,7 @@ function renderOutcome(row, overlay = row) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
   }[ch]));
   return vm.runInNewContext('(function () {\n' + outcomeCode + '\nreturn outcomeHtml;\n})()', {
+    _readyToCloseRow: false, readyToCloseArchiveHtml: () => '',
     c: row, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
     _codexStateWorking: row.codex_state === 'working',
     sessionIsOptimisticallySending: () => false, preSendPreviewFor: () => null,

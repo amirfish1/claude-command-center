@@ -8154,6 +8154,25 @@
      follows it. */
   .conv-item .conv-outcome.is-next-step { padding: 7px 9px; }
   .conv-item .conv-outcome.is-next { border-left-color: rgba(63,185,80,0.5); background: rgba(63,185,80,0.07); }
+  .conv-item .conv-outcome.is-ready { display: flex; align-items: center; gap: 10px; border-left-color: var(--green, #3fb950); }
+  .conv-item .conv-outcome.is-ready .conv-outcome-step { flex: 1; }
+  .conv-item .conv-outcome.is-ready .conv-outcome-step::before { color: var(--green, #3fb950); }
+  .conv-item .conv-ready-archive {
+    opacity: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    padding: 5px 10px;
+    border: 1px solid var(--green, #3fb950);
+    border-radius: 6px;
+    color: var(--green, #3fb950);
+    background: rgba(63,185,80,0.08);
+    font: 600 12px/1.2 system-ui, sans-serif;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .conv-item .conv-ready-archive:hover { opacity: 1; }
   .conv-item .conv-outcome.is-needs-you { border-left-color: rgba(245,158,11,0.55); background: rgba(245,158,11,0.08); }
   .conv-item .conv-outcome.is-working { border-left-color: rgba(88,166,255,0.5); background: rgba(88,166,255,0.06); }
   .conv-item .conv-outcome.is-latest { border-left-color: rgba(139,148,158,0.4); background: rgba(139,148,158,0.06); }
@@ -32151,6 +32170,10 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     min-height: 0;
     overflow: hidden;
   }
+  .conv-item.is-ready-to-close .wa-body { height: 106px; }
+  .conv-item.is-ready-to-close .wa-line2 { align-items: center; }
+  .wa-ready-label { display: block; color: var(--green, #3fb950); font-weight: 600; }
+  .conv-item .wa-row .conv-ready-archive { min-height: 44px; }
   .wa-preview {
     flex: 1 1 auto;
     min-width: 0;
@@ -32480,3 +32503,12 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 .tracked-table .tt-pill.is-committed,
 .tracked-table .tt-pill.is-pr,
 .tracked-table .tt-pill.is-testing { color: var(--purple); }
+
+/* Completion actions remain visible at every sidebar density. */
+#convList .conv-item.is-ready-to-close .conv-main-row { flex-wrap: wrap; }
+#convList .conv-item.is-ready-to-close .conv-outcome.is-ready {
+  display: flex !important;
+  flex: 1 1 100%;
+  order: 20;
+  margin-top: 4px;
+}
