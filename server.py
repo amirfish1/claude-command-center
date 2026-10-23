@@ -20,7 +20,7 @@ __version__ = "5.39.0"
 
 import ast
 import base64
-import faulthandler
+import traceback
 import fcntl
 import gzip
 import html
@@ -627,14 +627,106 @@ def _start_control_plane_worker():
         }
 
 
+# Python stack diagnostics. These used to be faulthandler.register(SIGUSR2,
+# all_threads=True), which walks every thread's frames from inside a C signal
+# handler while the other threads keep running; repeated SIGUSR2 segfaulted
+# the live dashboard (CCC-145). Everything below runs as ordinary Python under
+# the GIL: sys._current_frames() is a consistent snapshot, and the signal only
+# wakes a dumper thread.
+_PYTHON_STACK_DUMP_LOCK = threading.Lock()
+_PYTHON_STACK_DUMP_EVENT = threading.Event()
+PYTHON_STACK_SAMPLES_MAX = 50
+PYTHON_STACK_INTERVAL_MAX_S = 2.0
+
+
+def _python_stack_snapshot():
+    """Every live thread's current Python stack, as plain data."""
+    names = {t.ident: t.name for t in threading.enumerate()}
+    current = threading.get_ident()
+    threads = []
+    for ident, frame in sys._current_frames().items():
+        threads.append({
+            "ident": ident,
+            "name": names.get(ident, "?"),
+            "current": ident == current,
+            "stack": "".join(traceback.format_stack(frame)),
+        })
+    threads.sort(key=lambda t: (not t["current"], t["name"]))
+    return threads
+
+
+def _format_python_stack_snapshot(threads, header):
+    lines = [f"\n=== {header} ===\n"]
+    for t in threads:
+        mark = " (current thread)" if t["current"] else ""
+        lines.append(f"Thread 0x{t['ident']:x} [{t['name']}]{mark}:\n{t['stack']}\n")
+    return "".join(lines)
+
+
+def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5):
+    """Append all-thread stacks to python-stacks.log; return the samples.
+
+    Safe to call from any thread, any number of times. Callers that need the
+    stacks at a specific moment (liveness misses) call this directly instead
+    of signalling their own process.
+    """
+    try:
+        samples = max(1, min(int(samples), PYTHON_STACK_SAMPLES_MAX))
+    except (TypeError, ValueError):
+        samples = 1
+    try:
+        interval_s = max(0.0, min(float(interval_s), PYTHON_STACK_INTERVAL_MAX_S))
+    except (TypeError, ValueError):
+        interval_s = 0.5
+    out = []
+    for i in range(samples):
+        if i:
+            time.sleep(interval_s)
+        at = datetime.now(tz=timezone.utc).isoformat()
+        threads = _python_stack_snapshot()
+        out.append({"at": at, "threads": threads})
+        dump_file = _PYTHON_STACK_DUMP_FILE
+        if dump_file is None:
+            continue
+        text = _format_python_stack_snapshot(
+            threads,
+            f"{reason} sample {i + 1}/{samples} {at} pid={os.getpid()}",
+        )
+        try:
+            with _PYTHON_STACK_DUMP_LOCK:
+                dump_file.write(text)
+                dump_file.flush()
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def _python_stack_dump_loop():
+    while True:
+        _PYTHON_STACK_DUMP_EVENT.wait()
+        _PYTHON_STACK_DUMP_EVENT.clear()
+        try:
+            _dump_python_stacks("SIGUSR2")
+        except Exception:
+            pass
+
+
+def _on_python_stack_signal(_signum, _frame):
+    # Only set a flag: a burst of signals coalesces into one dump.
+    _PYTHON_STACK_DUMP_EVENT.set()
+
+
 def _install_python_stack_dump_handler(log_path=None):
-    """Append all-thread Python tracebacks to a log when SIGUSR2 arrives."""
+    """Open python-stacks.log and dump all-thread stacks on SIGUSR2.
+
+    The log opens from any thread. The SIGUSR2 handler can only be installed
+    from the main thread (a Python restriction); the worker imports server
+    from a request thread, so it gets the log (for liveness-miss dumps)
+    without the signal.
+    """
     global _PYTHON_STACK_DUMP_FILE
     if _PYTHON_STACK_DUMP_FILE is not None:
         return True
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None:
-        return False
     path = Path(log_path) if log_path is not None else PYTHON_STACK_DUMP_LOG
     dump_file = None
     try:
@@ -645,8 +737,7 @@ def _install_python_stack_dump_handler(log_path=None):
             f"{datetime.now(tz=timezone.utc).isoformat()} pid={os.getpid()} ===\n"
         )
         dump_file.flush()
-        faulthandler.register(sigusr2, file=dump_file, all_threads=True, chain=False)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except OSError as exc:
         if dump_file is not None:
             try:
                 dump_file.close()
@@ -655,6 +746,15 @@ def _install_python_stack_dump_handler(log_path=None):
         print(f"⚠️  Could not install Python stack diagnostics: {exc}", file=sys.stderr)
         return False
     _PYTHON_STACK_DUMP_FILE = dump_file
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is not None and threading.current_thread() is threading.main_thread():
+        try:
+            signal.signal(sigusr2, _on_python_stack_signal)
+        except (OSError, RuntimeError, ValueError):
+            return True
+        threading.Thread(
+            target=_python_stack_dump_loop, daemon=True, name="ccc-stack-dump",
+        ).start()
     return True
 
 
@@ -28446,6 +28546,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "layout": load_layout()})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/debug/stacks":
+            # All-thread Python stacks, optionally N samples apart, appended
+            # to logs/python-stacks.log and returned as JSON. Local-only: the
+            # stacks show paths and arguments. Safe to call repeatedly, unlike
+            # signal-handler dumps (CCC-145).
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "stack dumps are local-only"}, 403)
+                return
+            qs = urllib.parse.parse_qs(parsed.query)
+            samples = _dump_python_stacks(
+                "api/debug/stacks",
+                samples=(qs.get("samples") or ["1"])[0],
+                interval_s=(qs.get("interval") or ["0.5"])[0],
+            )
+            self.send_json({
+                "ok": True,
+                "pid": os.getpid(),
+                "log": str(PYTHON_STACK_DUMP_LOG),
+                "samples": samples,
+            })
         elif path == "/api/perf/summary":
             # Rolled-up client perf beacons (archive load / conversation
             # open) over a trailing window, plus the self-filed-ticket
