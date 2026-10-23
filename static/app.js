@@ -84010,6 +84010,9 @@
     browse.className = 'spawn-cwd-chip spawn-cwd-browse-chip';
     browse.textContent = 'Browse folders…';
     browse.title = 'Choose a folder on the machine running this session';
+    // Keep composer focus: blurring it can move the compact row before the
+    // pointer is released, so the click would miss this button.
+    browse.addEventListener('pointerdown', (ev) => ev.preventDefault());
     browse.addEventListener('click', async (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
