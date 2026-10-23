@@ -61,3 +61,30 @@ def test_pump_reattaches_through_its_own_conn_before_recycling():
     steer.assert_called_once()
     close.assert_not_called()
     resume.assert_not_called()
+
+
+def test_delivery_proof_accepts_the_user_message_in_the_session_transcript(tmp_path):
+    """A headless -p run that never writes prompt_history still proves delivery."""
+    import json
+    import sqlite3
+    eng = importlib.import_module("ccc_server.engines")
+    db = tmp_path / "sessions.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE prompt_history (id INTEGER PRIMARY KEY, content TEXT, timestamp INTEGER, session_id TEXT, is_shell INT)")
+    con.execute("CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, node_id INT, chat_message TEXT, created_at INT)")
+    con.execute("INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) VALUES (?,?,?,?)",
+                ("raw", 1, json.dumps({"role": "user", "content": "hello"}), 1000))
+    con.execute("INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) VALUES (?,?,?,?)",
+                ("raw", 2, json.dumps({"role": "assistant", "content": "hello"}), 1001))
+    con.commit()
+    con.close()
+
+    def connect():  # the function under test closes what it is given
+        fresh = sqlite3.connect(db)
+        fresh.row_factory = sqlite3.Row
+        return fresh
+
+    with mock.patch.object(eng._core, "_devin_cli_connect", side_effect=connect):
+        assert eng._devin_cli_prompt_history_count("raw", "hello", 999) == 1
+        assert eng._devin_cli_prompt_history_count("raw", "hello", 1002) == 0   # older than the send
+        assert eng._devin_cli_prompt_history_count("raw", "other", 999) == 0

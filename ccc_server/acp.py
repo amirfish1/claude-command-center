@@ -634,6 +634,14 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, mode="steer",
                 "devin", raw_id, text, mode="steer", idempotency_key=retry_key,
                 cwd=cwd,
             )
+        if not result.get("ok"):
+            # Falling back to a one-shot CLI run is slower and can re-send;
+            # say why instead of doing it silently.
+            _core._log_activity(
+                "inject", "DEVIN_ACP_FALLBACK",
+                f"session={session_id} mode={mode} code={result.get('code')} "
+                f"error=\"{str(result.get('error'))[:160]}\"",
+            )
         return result if result.get("ok") else None
     except Exception as exc:
         _core._log_activity(
@@ -2714,6 +2722,18 @@ def _acp_cancel(harness, sid):
     return {"ok": sent, "via": "acp-cancel"}
 
 
+def _acp_load_timeout(harness):
+    """session/load replays the whole history: a long-lived Devin session
+    takes ~27s on an idle box and longer under load, so 30s made the ACP
+    drain fail and fall back to one-shot CLI runs that re-sent the message."""
+    if harness == "devin":
+        try:
+            return max(30.0, float(os.environ.get("CCC_DEVIN_ACP_LOAD_TIMEOUT_S", "120")))
+        except ValueError:
+            return 120.0
+    return 30
+
+
 def _acp_load(harness, sid, cwd):
     """Attach to an existing harness session in the current ACP connection.
 
@@ -2744,7 +2764,7 @@ def _acp_load(harness, sid, cwd):
             state["replay"] = {"kind": None, "text": "", "drop": drop_replay}
     resp = _core._acp_request(harness, method, {
         "sessionId": sid, "cwd": cwd, "mcpServers": [],
-    }, timeout=30, sid=sid)
+    }, timeout=_acp_load_timeout(harness), sid=sid)
     # A harness that doesn't implement session/resume at all (-32601) —
     # the generic version of cfg["no_resume"] for harnesses we haven't
     # annotated — falls back to session/load with the replay dropped.
@@ -2756,7 +2776,7 @@ def _acp_load(harness, sid, cwd):
                 state["replay"] = {"kind": None, "text": "", "drop": True}
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=30, sid=sid)
+        }, timeout=_acp_load_timeout(harness), sid=sid)
     # A dormant harness session can be mid-write from another live consumer
     # of its own on-disk store (e.g. a native TUI the user has open outside
     # CCC) right as we attach — the harness's own resume handler can trip
@@ -2771,7 +2791,7 @@ def _acp_load(harness, sid, cwd):
         time.sleep(0.75)
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=30, sid=sid)
+        }, timeout=_acp_load_timeout(harness), sid=sid)
     with _core._ACP_LOCK:
         state = _core._acp_session(harness, sid, create=True, cwd=cwd)
         desired_mode = state.get("desired_mode")

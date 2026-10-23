@@ -3333,7 +3333,7 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path, *, delivery_s
 # Proof-of-delivery window. A `devin --resume -p` must write the prompt into
 # its own sessions DB (`prompt_history` table) within this many seconds of
 # the dashboard launching it; otherwise the follow-up is requeued for retry.
-_DEVIN_DELIVERY_PROOF_WINDOW_S = 30.0
+_DEVIN_DELIVERY_PROOF_WINDOW_S = 120.0  # resuming a huge session can take 45s+ before it records the prompt
 # How long to sleep between DB polls while waiting for proof.
 _DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S = 0.5
 
@@ -3353,6 +3353,23 @@ def _devin_cli_prompt_history_count(raw_id, text, since_ts):
             "SELECT COUNT(*) AS n FROM prompt_history "
             "WHERE session_id = ? AND content = ? AND timestamp >= ?",
             (raw_id, text, int(since_ts)),
+        ).fetchone()
+        count = int(row["n"]) if row else 0
+        if count:
+            return count
+        # A headless `devin --resume -p` turn can run without writing
+        # prompt_history at all (observed on a long-lived session), which
+        # made delivered messages look undelivered and get sent again every
+        # time the previous run exited. The user message in the session's own
+        # transcript is proof too. Newest rows only: the session index makes
+        # this a handful of rows, not a scan of the multi-GB table.
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM ("
+            " SELECT chat_message, created_at FROM message_nodes"
+            " WHERE session_id = ? ORDER BY row_id DESC LIMIT 60"
+            ") WHERE created_at >= ? AND json_extract(chat_message, '$.role') = 'user'"
+            " AND json_extract(chat_message, '$.content') = ?",
+            (raw_id, int(since_ts), text),
         ).fetchone()
         return int(row["n"]) if row else 0
     except sqlite3.Error:
