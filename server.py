@@ -5271,7 +5271,16 @@ def _decode_spawn_marker_file(path):
 
 _SPAWN_MARKER_MEMO = {"ts": 0.0, "dir": None, "out": {}}
 _SPAWN_MARKER_MEMO_TTL_S = 2.0
+# Every marker writer (server + session-start hook) renames into the
+# directory, so an unchanged directory mtime means unchanged markers. Once
+# that mtime is older than the scan by more than the timestamp granularity,
+# the memo is trusted for this long instead of re-stat'ing ~4k files every
+# 2s (CCC-142: each stat hands the GIL away; under load a /list poll waited
+# seconds here).
+_SPAWN_MARKER_MEMO_SETTLED_TTL_S = 300.0
+_SPAWN_MARKER_SETTLE_MARGIN_NS = 1_000_000_000
 _SPAWN_MARKER_MEMO_LOCK = threading.Lock()
+_SPAWN_MARKER_SCAN_LOCK = threading.Lock()
 _SPAWN_MARKER_INDEX_LOADED = set()
 _SPAWN_MARKER_INDEX_DIR_MTIME = {}
 _SPAWN_MARKER_REVALIDATING = threading.Event()
@@ -5340,6 +5349,28 @@ def _load_spawn_markers():
     except OSError:
         marker_dir = (str(SPAWN_MARKERS_DIR), None)
     with _SPAWN_MARKER_MEMO_LOCK:
+        ttl = (_SPAWN_MARKER_MEMO_SETTLED_TTL_S if _SPAWN_MARKER_MEMO.get("settled")
+               else _SPAWN_MARKER_MEMO_TTL_S)
+        if (
+            _SPAWN_MARKER_MEMO["dir"] == marker_dir
+            and now - _SPAWN_MARKER_MEMO["ts"] < ttl
+        ):
+            return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+    # Single-flight: concurrent pollers reuse the last map for one call
+    # instead of each re-stat'ing every marker file at once.
+    if not _SPAWN_MARKER_SCAN_LOCK.acquire(blocking=False):
+        with _SPAWN_MARKER_MEMO_LOCK:
+            if _SPAWN_MARKER_MEMO["dir"] is not None:
+                return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+        _SPAWN_MARKER_SCAN_LOCK.acquire()
+    try:
+        return _load_spawn_markers_locked(now, marker_dir)
+    finally:
+        _SPAWN_MARKER_SCAN_LOCK.release()
+
+
+def _load_spawn_markers_locked(now, marker_dir):
+    with _SPAWN_MARKER_MEMO_LOCK:
         if (
             _SPAWN_MARKER_MEMO["dir"] == marker_dir
             and now - _SPAWN_MARKER_MEMO["ts"] < _SPAWN_MARKER_MEMO_TTL_S
@@ -5364,7 +5395,7 @@ def _load_spawn_markers():
             if marker and path.endswith(".json")
         }
         with _SPAWN_MARKER_MEMO_LOCK:
-            _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out)
+            _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out, settled=False)
         if not _SPAWN_MARKER_REVALIDATING.is_set():
             _SPAWN_MARKER_REVALIDATING.set()
 
@@ -5381,6 +5412,7 @@ def _load_spawn_markers():
             threading.Thread(target=_revalidate, daemon=True).start()
         return {sid: dict(m) for sid, m in out.items()}
     out = {}
+    scan_started_ns = time.time_ns()
     try:
         with os.scandir(SPAWN_MARKERS_DIR) as it:
             entries = list(it)
@@ -5413,8 +5445,10 @@ def _load_spawn_markers():
     stale = [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]
     for k in stale:
         _SPAWN_MARKER_FILE_CACHE.pop(k, None)
+    settled = (marker_dir[1] is not None
+               and scan_started_ns - marker_dir[1] >= _SPAWN_MARKER_SETTLE_MARGIN_NS)
     with _SPAWN_MARKER_MEMO_LOCK:
-        _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out)
+        _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out, settled=settled)
     if decoded or stale or _SPAWN_MARKER_INDEX_DIR_MTIME.get(marker_dir[0]) != marker_dir[1]:
         _save_spawn_marker_index(marker_dir[1])
         _SPAWN_MARKER_INDEX_DIR_MTIME[marker_dir[0]] = marker_dir[1]
@@ -15877,7 +15911,7 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
     return _archive_list_project_rows(rows, window=window, now=now), from_cache
 
 
-def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
+def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
@@ -15888,6 +15922,15 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     stale_ok=0 requests schedule freshness after a mutation or new-session
     landing without making the HTTP request wait for the archive scan.
     """
+    _pt = time.perf_counter()
+
+    def _phase(name):
+        nonlocal _pt
+        if phases is not None:
+            now = time.perf_counter()
+            phases[name] = round((now - _pt) * 1000.0, 1)
+            _pt = now
+
     key = _archive_response_cache_key(**cache_options)
     rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
         key,
@@ -15895,6 +15938,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
         copy_rows=False,
         force_refresh=force_refresh,
     )
+    _phase("serve_ms")
     # ACP sessions (Kimi/GLM) live in memory before their first transcript
     # lands and before the archive background refresh picks them up. Without
     # this overlay, a brand-new ACP session appears in the UI via the pending
@@ -15905,6 +15949,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     overlay = _archive_overlay_acp_sessions(rows)
     if overlay:
         rows = list(rows or []) + overlay
+    _phase("acp_ms")
     # Same gap for Devin CLI: the session row exists in sessions.db within a
     # second of spawn, but the archive snapshot only picks it up after the
     # next full background rebuild (~20s+ on a large corpus). The Devin CLI
@@ -15913,13 +15958,17 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     devin_overlay = _archive_overlay_devin_cli_sessions(rows)
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
+    _phase("devin_ms")
     # WatchTower already knows the engine session before the archive scan.
     # Keep that worker in its normal session/queue group during the gap.
     worker_overlay = _archive_overlay_wt_worker_sessions(rows)
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
+    _phase("wt_ms")
     extra = (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
-    return rows, from_cache, _archive_list_body_ver(key, rows, extra)
+    body_ver = _archive_list_body_ver(key, rows, extra)
+    _phase("ver_ms")
+    return rows, from_cache, body_ver
 
 
 
@@ -31008,9 +31057,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # snapshot, or (snapshot version, overlay content hash) when
             # in-memory ACP/Devin overlay rows were appended — either way a
             # prebuilt body may be replayed when the version matches.
+            _src_phases = {}
             rows, from_cache, body_ver = _archive_list_source_rows_cached(
                 cache_options,
                 force_refresh=not stale_ok,
+                phases=_src_phases,
             )
             _lt1 = time.perf_counter()
             list_cache_key = _archive_response_cache_key(**cache_options)
@@ -31039,6 +31090,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "from_cache": bool(from_cache),
                 "stale_ok": stale_ok,
                 "refreshing": bool(_archive_serve_refreshing),
+                "src": _src_phases,
             })
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every
