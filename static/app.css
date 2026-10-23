@@ -30417,15 +30417,21 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 
 #convList.workers-dense .conv-item .conv-title,
 #convList.wrap-titles.workers-dense .conv-item .conv-title {
-  white-space: nowrap;
-  display: block;
+  /* CCC-135: a worker's title is the only thing that says what it is working
+     on, and one ellipsized line cut most of it ("The New queue ticke...").
+     Wrap up to three lines instead; the other cells stay vertically centred,
+     so the fixed columns still line up. */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  word-break: normal;
   /* 13/1.25 is what sets the row height. The card list's 14.5/1.4 is sized for
      a card with room to breathe; in a table it is what makes the rows tall. */
   font-size: 13px;
   line-height: 1.25;
-  -webkit-line-clamp: none;
 }
 /* The second line and the drag affordance are what the table trades away. The
    outcome card comes back under Detailed; nothing here removes a row. */
