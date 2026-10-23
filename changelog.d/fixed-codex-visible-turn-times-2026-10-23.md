@@ -1,0 +1,1 @@
+- Keep Codex turn timestamps visible without hovering, including in compact view, with space above the text to prevent overlap.
