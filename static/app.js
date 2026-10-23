@@ -1748,6 +1748,10 @@
     head.innerHTML = '<span>perf</span>' +
       '<span style="flex:1 1 50%;text-align:center;opacity:.8">list reads</span>' +
       '<span style="flex:1 1 50%;text-align:center;opacity:.8">session opens</span>';
+    const wrap = document.createElement('div');
+    const queueStats = document.createElement('div');
+    queueStats.id = 'cccPerfQueueStats';
+    queueStats.style.cssText = 'padding:0 10px 2px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     const body = document.createElement('div');
     body.style.cssText = 'display:flex;max-height:110px;overflow:hidden;padding:0 10px 5px;font-weight:500;';
     const mkCol = function (id) {
@@ -1763,13 +1767,31 @@
     openCol.style.paddingLeft = '8px';
     body.appendChild(listCol);
     body.appendChild(openCol);
+    wrap.appendChild(queueStats);
+    wrap.appendChild(body);
     sec.appendChild(head);
-    sec.appendChild(body);
+    sec.appendChild(wrap);
+    window.__cccPerfQueueHealth = function (qh) {
+      try {
+        if (!qh || typeof qh !== 'object') return;
+        const el = document.getElementById('cccPerfQueueStats');
+        if (!el) return;
+        const fmtWait = function (s) {
+          s = Math.round(Number(s) || 0);
+          return s >= 60 ? Math.floor(s / 60) + 'm' + (s % 60 ? (s % 60) + 's' : '') : s + 's';
+        };
+        const stale = Number(qh.stale_queued_items) || 0;
+        el.textContent = 'turns: ' + (Number(qh.unfinished_turns) || 0) + ' open'
+          + ' · queued: ' + (Number(qh.queued_items) || 0)
+          + (stale ? ' · stale steer: ' + stale + 'msg ' + fmtWait(qh.stale_queued_wait_s) : '');
+        el.title = 'sessions with a turn in flight · durable queued inputs · queued inputs whose session turn already finished (+total wait)';
+      } catch (_) {}
+    };
     let open = localStorage.getItem('ccc-perf-open') !== '0';
-    body.style.display = open ? 'flex' : 'none';
+    wrap.style.display = open ? '' : 'none';
     head.addEventListener('click', function () {
       open = !open;
-      body.style.display = open ? 'flex' : 'none';
+      wrap.style.display = open ? '' : 'none';
       localStorage.setItem('ccc-perf-open', open ? '1' : '0');
     });
     footer.parentNode.insertBefore(sec, footer);
@@ -37556,6 +37578,8 @@
       // showed in the transcript pane. In the sidebar hover preview we keep
       // this to DID only so the brief reads cleanly in one focused block.
       let outcomeHtml = '';
+      let _outcomeKind = 'latest';
+      let _outcomeText = '';
       const _ss = c.session_state || null;
       // Lead with the session's own next step when it names one: the row's
       // chips already say the work is done, so "what now" is the useful line.
@@ -37620,6 +37644,8 @@
         } else {
           _stepText = '';
         }
+        _outcomeKind = _kind || 'latest';
+        _outcomeText = _stepText || _did;
         const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
           + (_hasNext ? 'Next step: ' + _next : '')
           + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Latest: ' + _latest : '');
@@ -37682,8 +37708,10 @@
       // The avatar already says what kind of session this is; drop the
       // decorative leading glyphs (🪄 ✏️ 🧵 ⤴ …) from the name.
       const _waTitle = String(title || '').replace(/^(?:[\p{Extended_Pictographic}\uFE0F\u200d›⤴]\s*)+/u, '') || title;
-      const _waPreview = (_needsYouRow && c.question_text) ? String(c.question_text)
-        : (c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
+      const _waExplanationLabel = c.trashed ? 'Trash' : c.archived ? 'Archived'
+        : ({ working: 'Working', ready: 'Ready', next: 'Next', latest: 'Latest' }[_outcomeKind] || 'Latest');
+      const _waPreview = (_needsYouRow && c.question_text && _outcomeKind !== 'working') ? String(c.question_text)
+        : (_outcomeText || c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
           || _waPreviewText(c.session_state && c.session_state.did)
           || _waPreviewText(cleanFirst));
       const _waStatus = c.trashed
@@ -37701,7 +37729,7 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Numbered idea avatars already open the ticket.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_readyToCloseRow ? '<strong class="wa-ready-label">Ready to close</strong> ' : '') + escapeHtml(_waPreview) + '</span>' + (_readyToCloseRow ? '' : _waStatus) + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + (_readyToCloseRow ? '' : _waStatus) + '</div>'
         + '<div class="wa-row-footer">' + sessionIdChipHtml + (_readyToCloseRow ? _waStatus : '') + '</div>'
         + '</div>'
         + '</div>';
@@ -72919,8 +72947,16 @@
         const etag = r.headers.get('ETag');
         const _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
         const d = await r.json();
+        try {
+          if (d && d.queue_health && typeof window.__cccPerfQueueHealth === 'function') {
+            window.__cccPerfQueueHealth(d.queue_health);
+          }
+        } catch (_) {}
         _perfListLog(_perfLen, r.status, d && Array.isArray(d.conversations)
-          ? d.conversations.length + 'rows' : '');
+          ? d.conversations.length + 'rows'
+            + ((d.queue_health && d.queue_health.stale_queued_items)
+              ? ' stale-steer:' + d.queue_health.stale_queued_items : '')
+          : '');
         if (d && d.cached && d.stale && d.refreshing) {
           _scheduleArchiveStaleRetry();
         }

@@ -16200,6 +16200,42 @@ def _trace_row_flicker(rows, now=None):
         pass
 
 
+def _queue_health_stats(rows, *, now=None):
+    """Queue-vs-turn stats for the perf pane: how many sessions still have a
+    turn in flight, and how long queued inputs have been sitting for
+    sessions whose turn already finished (the drain-lag signal)."""
+    now = time.time() if now is None else now
+    unfinished = 0
+    working_by_sid = {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        sid = r.get("session_id") or r.get("id")
+        working = r.get("state") == "working" or r.get("codex_state") == "working"
+        if working:
+            unfinished += 1
+        if sid and sid not in working_by_sid:
+            working_by_sid[sid] = working
+    try:
+        waits = queued_wait_snapshot(now=now)
+    except Exception:
+        waits = {}
+    queued_items = 0
+    stale_items = 0
+    stale_wait_s = 0.0
+    for sid, w in waits.items():
+        queued_items += w["items"]
+        if not working_by_sid.get(sid):
+            stale_items += w["items"]
+            stale_wait_s += w["wait_s"]
+    return {
+        "unfinished_turns": unfinished,
+        "queued_items": queued_items,
+        "stale_queued_items": stale_items,
+        "stale_queued_wait_s": round(stale_wait_s, 1),
+    }
+
+
 def _archive_list_payload(rows, *, window="all", now=None, cached=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now)
@@ -16212,6 +16248,7 @@ def _archive_list_payload(rows, *, window="all", now=None, cached=None):
         "total_count": sum(isinstance(row, dict) for row in (rows or [])),
         "window": window,
         "fields": list(_ARCHIVE_LIST_FIELDS),
+        "queue_health": _queue_health_stats(rows, now=now),
     }
     if cached is not None:
         payload["cached"] = bool(cached)

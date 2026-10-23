@@ -2596,6 +2596,38 @@ def _refresh_queued_view_if_file_changed(session_id):
             _queued_view_file_identity[session_id] = identity
 
 
+def queued_wait_snapshot(now=None):
+    """Per-session wait stats over the in-memory durable input queues.
+
+    Returns {session_id: {"items": n, "wait_s": total_seconds}} so callers
+    can join against session state without re-reading pending-inputs.json.
+    """
+    now = time.time() if now is None else now
+    with _pending_resume_lock:
+        resume = {s: list(v) for s, v in _core._pending_resume_queue.items()}
+    with _pending_terminal_input_lock:
+        term = {s: list(v) for s, v in _core._pending_terminal_input_queue.items()}
+    out = {}
+
+    def _add(session_id, text):
+        if not session_id or not text:
+            return
+        with _pending_queued_meta_lock:
+            meta = _pending_queued_meta.get((session_id, text)) or {}
+        queued_at = float(meta.get("queued_at") or now)
+        entry = out.setdefault(session_id, {"items": 0, "wait_s": 0.0})
+        entry["items"] += 1
+        entry["wait_s"] += max(0.0, now - queued_at)
+
+    for sid, texts in resume.items():
+        for text in texts:
+            _add(sid, text)
+    for sid, texts in term.items():
+        for text in texts:
+            _add(sid, text)
+    return out
+
+
 def _get_queued_events_for_session(session_id):
     """Get synthetic events for any queued messages of this session."""
     events = []
