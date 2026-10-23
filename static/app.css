@@ -32498,3 +32498,9 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 
 /* Keep the manual archive action available in compact density. */
 #convList .conv-item.is-ready-to-close .conv-outcome.is-ready { display: flex !important; }
+#convList.compact-rows .conv-item.is-ready-to-close .conv-outcome.is-ready,
+.compact-rows #convList .conv-item.is-ready-to-close .conv-outcome.is-ready {
+  flex: 1 1 100%; order: 20; margin-top: 4px;
+}
+#convList.compact-rows .conv-item.is-ready-to-close .conv-main-row,
+.compact-rows #convList .conv-item.is-ready-to-close .conv-main-row { flex-wrap: wrap; }
