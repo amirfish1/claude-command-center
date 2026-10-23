@@ -1728,11 +1728,12 @@
     })();
   }
   // ── Perf pane (above the footer) ──────────────────────────────────────
-  // Two-column diagnostic strip: every /api/conversations/list read (left)
-  // and every conversation open click→render time (right). Pure observer —
+  // Three-column diagnostic strip: every /api/conversations/list read (left),
+  // every conversation open click→render time (middle) and every speaker clip
+  // read — clip cache hit or freshly made (right). Pure observer —
   // logging goes through window.__cccPerfRow so instrumented call sites stay
   // decoupled from whether the pane exists yet.
-  const _perfPaneLog = { list: [], open: [] };
+  const _perfPaneLog = { list: [], open: [], speaker: [] };
   function _perfPaneRow(kind, entry, replay) {
     const buf = _perfPaneLog[kind];
     if (!buf) return;
@@ -1740,7 +1741,8 @@
       buf.push(entry);
       if (buf.length > 20) buf.shift();
     }
-    const col = document.getElementById(kind === 'list' ? 'cccPerfListCol' : 'cccPerfOpenCol');
+    const col = document.getElementById(
+      kind === 'list' ? 'cccPerfListCol' : kind === 'speaker' ? 'cccPerfSpeakerCol' : 'cccPerfOpenCol');
     if (!col) return;
     while (col.children.length >= 20) col.removeChild(col.lastChild);
     const row = document.createElement('div');
@@ -1807,8 +1809,9 @@
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 10px;cursor:pointer;user-select:none;';
     head.innerHTML = '<span>perf</span>' +
-      '<span style="flex:1 1 50%;text-align:center;opacity:.8">list reads</span>' +
-      '<span style="flex:1 1 50%;text-align:center;opacity:.8">session opens</span>';
+      '<span style="flex:1 1 33%;text-align:center;opacity:.8">list reads</span>' +
+      '<span style="flex:1 1 33%;text-align:center;opacity:.8">session opens</span>' +
+      '<span style="flex:1 1 33%;text-align:center;opacity:.8">speaker cache</span>';
     const wrap = document.createElement('div');
     const queueStats = document.createElement('div');
     queueStats.id = 'cccPerfQueueStats';
@@ -1818,16 +1821,20 @@
     const mkCol = function (id) {
       const c = document.createElement('div');
       c.id = id;
-      c.style.cssText = 'flex:1 1 50%;min-width:0;overflow-y:auto;';
+      c.style.cssText = 'flex:1 1 33%;min-width:0;overflow-y:auto;';
       return c;
     };
     const listCol = mkCol('cccPerfListCol');
     const openCol = mkCol('cccPerfOpenCol');
-    openCol.style.borderLeft = '1px solid var(--text-secondary,#9aa)';
-    openCol.style.marginLeft = '8px';
-    openCol.style.paddingLeft = '8px';
+    const speakerCol = mkCol('cccPerfSpeakerCol');
+    [openCol, speakerCol].forEach(function (c) {
+      c.style.borderLeft = '1px solid var(--text-secondary,#9aa)';
+      c.style.marginLeft = '8px';
+      c.style.paddingLeft = '8px';
+    });
     body.appendChild(listCol);
     body.appendChild(openCol);
+    body.appendChild(speakerCol);
     wrap.appendChild(queueStats);
     wrap.appendChild(body);
     sec.appendChild(head);
@@ -1859,6 +1866,7 @@
     // Replay anything logged before the pane mounted.
     _perfPaneLog.list.forEach(function (e) { _perfPaneRow('list', e, true); });
     _perfPaneLog.open.forEach(function (e) { _perfPaneRow('open', e, true); });
+    _perfPaneLog.speaker.forEach(function (e) { _perfPaneRow('speaker', e, true); });
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); _initPerfSection(); });
@@ -14061,6 +14069,25 @@
     voice = voice || ttsVoiceForPane(activePaneId());
     let onDone;
     const done = new Promise((r) => { onDone = r; });
+    const t0 = performance.now();
+    // Perf pane "speaker cache" column: one row per clip read, saying
+    // whether the server replayed it from its clip cache or made it now.
+    const perfRow = (res) => {
+      const cache = res.headers.get('X-CCC-Cache') || '?';
+      const first = Math.round(performance.now() - t0);
+      done.then(() => {
+        const ms = Math.round(performance.now() - t0);
+        try {
+          if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
+            at: Date.now(),
+            text: (prio === 'bg' ? 'bg ' : 'fg ') + (cache === 'hit' ? 'HIT ' : cache === 'miss' ? 'miss ' : '')
+              + String(text || '').length + 'c ' + (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms'),
+            title: 'speaker clip ' + (prio === 'bg' ? 'prepared ahead' : 'for the read') + ' · cache ' + cache
+              + ' · first bytes ' + first + 'ms · whole clip ' + ms + 'ms\n' + String(text || '').slice(0, 120),
+          });
+        } catch (_) {}
+      });
+    };
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -14069,8 +14096,11 @@
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
       const model = res.headers.get('X-CCC-Model') || '';
+      perfRow(res);
       if (res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
-      return { url: URL.createObjectURL(await res.blob()), voice: v, done: Promise.resolve() };
+      const url = URL.createObjectURL(await res.blob());
+      onDone();
+      return { url, voice: v, done: Promise.resolve() };
     }, () => { throw 0; });
   }
   function _ttsSpeakChunkNeural(state, chunk) {
@@ -14093,6 +14123,13 @@
       if (hit && (i === 0 ? !state.geminiVoice : hit.voice === state.geminiVoice)) {
         p = hit.p;
         _ttsHeadCache.delete(c.text);
+        try {
+          if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
+            at: Date.now(),
+            text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
+            title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
+          });
+        } catch (_) {}
       } else {
         p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg');
         p.catch(() => {});
