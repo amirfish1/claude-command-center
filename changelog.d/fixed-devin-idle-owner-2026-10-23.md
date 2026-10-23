@@ -1,0 +1,1 @@
+- Unstick queued Devin messages by safely recycling an idle CCC-owned connection when its loaded-session marker is lost; preserve external owners and active turns.

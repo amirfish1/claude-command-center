@@ -4024,6 +4024,18 @@ def _pump_devin_resume_queue(session_id):
             and live_spawn is None
             and not acp_loaded
         ):
+            # A worker connection may retain the writer lock after losing
+            # its loaded-session marker. It is ours, not an external client.
+            # Recycle only an idle connection through its owner; never kill
+            # another session's active turn or consume the queued input here.
+            owner_pid = _core._devin_cli_lock_pid(raw_id)
+            if owner_pid and owner_pid == _core._acp_conn_pid("devin"):
+                recovery = _core._acp_close_idle_conn("devin")
+                return {
+                    "ok": True,
+                    "queued": True,
+                    "waiting": "owner-released" if recovery.get("closed") else "busy",
+                }
             return {
                 "ok": True,
                 "queued": True,
