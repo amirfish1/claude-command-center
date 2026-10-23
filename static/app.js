@@ -85313,25 +85313,6 @@
     }
   }
 
-  // Blank, "auto" and "adaptive" let the engine choose; a chip for one
-  // doesn't say what you're picking, so the strip never offers them.
-  function _isUnnamedSpawnModel(model) {
-    return /^(|auto|adaptive|default)$/i.test(String(model == null ? '' : model).trim());
-  }
-
-  // The concrete model an unnamed pick stands for: the saved default when it
-  // names one, else the engine's first available catalog model; '' if none.
-  function _namedSpawnModelForEngine(engine) {
-    // Hermes runs its own configured model and ignores the one we pass, so
-    // any name on its chip would be a guess.
-    if (engine === 'hermes') return '';
-    const saved = _defaultModelsByEngine[engine] || '';
-    if (!_isUnnamedSpawnModel(saved) && _modelAllowedForEngine(engine, saved)) return saved;
-    const opt = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => o && !_isUnnamedSpawnModel(o.id)
-      && o.available !== false && !o.disabled && _modelAllowedForEngine(engine, o.id));
-    return opt ? opt.id : '';
-  }
-
   function getTopSpawnPicks(picks = _cachedServerModelPicks) {
     // History tracks effort too; the strip offers models, with effort chosen
     // separately in the composer. Deduplicate before applying the display cap.
@@ -85339,11 +85320,10 @@
     // Engines the New session UI can't launch (droid, aider, pi) would be
     // coerced to claude on click and land on the wrong model; don't offer them.
     const list = (Array.isArray(picks) ? picks : [])
-      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine)
-      .map(p => (_isUnnamedSpawnModel(p.model) ? { ...p, model: _namedSpawnModelForEngine(p.engine) } : p))
-      // A model another engine owns (claude + minimax-m3) can't be selected
-      // in that engine's list, so the select would fall back to the priciest.
-      .filter(p => p.model && _modelAllowedForEngine(p.engine, p.model));
+      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine
+        // A model another engine owns (claude + minimax-m3) can't be selected
+        // in that engine's list, so the select would fall back to the priciest.
+        && (!p.model || _modelAllowedForEngine(p.engine, p.model)));
     // "sonnet-5" is noise once "sonnet-5-5" exists for the same engine, in
     // history or in its catalog.
     const ver = (m) => {
@@ -85373,8 +85353,8 @@
     Array.from((typeof $convInputEngineSelect !== 'undefined' && $convInputEngineSelect && $convInputEngineSelect.options) || [])
       .filter(o => !o.hidden && !o.disabled && SPAWN_DEFAULT_ENGINES.includes(o.value) && !have.has(o.value))
       .forEach(o => {
-        const model = _namedSpawnModelForEngine(o.value);
-        if (!model) return;
+        const model = _defaultModelsByEngine[o.value] || '';
+        if (model && !_modelAllowedForEngine(o.value, model)) return;
         have.add(o.value);
         kept.push({ engine: o.value, model, effort: '', count: 0, last_used: 0 });
       });
@@ -85395,9 +85375,7 @@
     const found = options.find(o => o.id === modelId)
       || options.find(o => _normalizeModelId(o.id) === _normalizeModelId(modelId));
     if (found && found.label) {
-      // "Auto (default)", "step-3.7-flash (free, default)": the chip names
-      // the model; whether it is the saved default isn't part of its name.
-      return found.label.replace(/\s*\(default\)/i, '').replace(/,\s*default\)/i, ')').trim() || found.id;
+      return found.label;
     }
     let clean = modelId;
     if (clean.includes('/')) {
