@@ -31,7 +31,7 @@ MAX_CHARS = 2000
 
 # Bumped when the process's runtime contract changes (priority, threads), so
 # CCC replaces an older process left running from before an upgrade.
-SERVER_REV = 2
+SERVER_REV = 3
 # Normal priority: at nice 10 a loaded machine starved the voice for tens of
 # seconds. Background work is kept polite by the fg-first lock instead.
 
@@ -55,7 +55,7 @@ def model_path():
 
 
 def _load():
-    threads = os.environ.get("CCC_KOKORO_THREADS", "").strip() or "2"
+    threads = os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4"
     try:
         import onnxruntime as ort
         opts = ort.SessionOptions()
@@ -109,19 +109,33 @@ try:
 except ImportError:  # /speak still works; /stream answers 404 and CCC uses /speak
     lameenc = None
 
-FIRST_PIECE_CHARS = 120
-PIECE_CHARS = 300
+# Kokoro's cost grows faster than piece length: on a 16-core host a 300-char
+# piece made audio at 0.5x real time, 90-char pieces at 1.9x (8 threads), so
+# long pieces could never keep up with a read at 1.25x (CCC-144).
+FIRST_PIECE_CHARS = 60
+PIECE_CHARS = 90
+
+
+def _cut_point(sent, limit):
+    """Where to cut an over-long sentence: a clause break, else the last space."""
+    window = sent[:limit]
+    best = max(window.rfind(", "), window.rfind("; "), window.rfind(" - "), window.rfind(" \u2014 "))
+    if best > limit // 2:
+        return best + 1
+    cut = window.rfind(" ")
+    return cut if cut > 20 else limit
 
 
 def split_for_stream(text):
-    """Sentence-sized pieces; the first is kept short so audio starts early."""
+    """Short sentence-sized pieces; the first is shortest so audio starts early."""
     sentences = [s for s in re.split(r"(?<=[.!?;:])\s+|\n+", text) if s.strip()]
     pieces, cur = [], ""
     for sent in sentences:
         limit = FIRST_PIECE_CHARS if not pieces else PIECE_CHARS
-        while len(sent) > limit:  # one long sentence: cut at the last space
-            cut = sent.rfind(" ", 0, limit)
-            cut = cut if cut > 20 else limit
+        if cur and len(cur) < 30 and len(cur) + 1 + len(sent) > limit:
+            sent, cur = cur + " " + sent, ""   # a short leftover rides with the next cut
+        while len(sent) > limit:  # one long sentence: cut at a clause or space
+            cut = _cut_point(sent, limit)
             if cur:
                 pieces.append(cur)
                 cur = ""
@@ -165,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._json(200, {"ok": True, "model": os.path.basename(model_path()), "stream": lameenc is not None,
                              "rev": SERVER_REV, "pid": os.getpid(), "nice": os.nice(0),
-                             "threads": int(os.environ.get("CCC_KOKORO_THREADS", "").strip() or "2")})
+                             "threads": int(os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4")})
         else:
             self._json(404, {"ok": False})
 

@@ -13765,8 +13765,11 @@
   let _ttsKeepVoice = '';   // carries the speaker across a restart (rate step, skip)
   let _ttsNeuralCooldownWhy = '';
   let _ttsStartWhy = '';
-  // A dropped connection (status 0) is usually brief: retry soon, not in 5 minutes.
-  const _ttsCoolMs = (status) => status === 429 ? 60000 : status === 0 ? 15000 : 300000;
+  // Errors from the local voice are usually brief (a restart, a dropped
+  // connection): retry soon. A 5-minute cooldown sent ~22% of reads to the Mac
+  // voice (CCC-144).
+  const _TTS_FAIL_COOL_MS = 20000;
+  const _ttsCoolMs = (status) => status === 429 ? 60000 : status === 0 ? 15000 : _TTS_FAIL_COOL_MS;
   function _ttsCool(ms, status) {
     _ttsNeuralCooldownUntil = Date.now() + ms;
     _ttsNeuralCooldownWhy = 'HTTP ' + status;
@@ -13902,10 +13905,12 @@
   // for the click. Stops when a read starts or a newer message takes over.
   const _ttsChainTokens = {};   // pane id -> latest chain token
   let _ttsChainQueue = Promise.resolve();
-  // Only the start of a message is made ahead: the first clip plus one more
-  // is enough to start instantly and stay ahead of the clip being heard without
-  // saturating CPU on unclicked background messages. The rest is made while reading.
-  const _TTS_PREFETCH_CLIPS = 1;
+  // The focused pane's latest message is made ahead whole (up to ~1,700 chars),
+  // so a click plays from cache instead of racing generation. A hovered older
+  // turn gets one clip past its head. Clips are kept on disk server-side, so
+  // this is paid once per message. Prepare-ahead pauses while a read plays.
+  const _TTS_PREFETCH_CLIPS = 4;
+  const _TTS_PREFETCH_CLIPS_QUIET = 1;
   const _ttsChainRunning = new Set();   // head texts whose chain is queued or running
   function _ttsStartChain(clean, head, got, mk) {
     const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
@@ -13922,7 +13927,8 @@
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
     await headGot.done;
     const end = head.start + head.text.length;
-    const rest = _chunkTtsText(clean.slice(end), 400, end).slice(0, _TTS_PREFETCH_CLIPS);
+    const rest = _chunkTtsText(clean.slice(end), 400, end)
+      .slice(0, paneId === '__quiet' ? _TTS_PREFETCH_CLIPS_QUIET : _TTS_PREFETCH_CLIPS);
     const live = () => token === _ttsChainTokens[paneId || ''] && !_ttsActive && Date.now() >= _ttsNeuralCooldownUntil;
     const entries = [];
     const settle = async (i) => {   // clip i fully made; the bar moves past it
@@ -14132,7 +14138,7 @@
         if (waitFrom) { _ttsPerfSilence(state, now - waitFrom, 'stall'); _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
       });
       audio.addEventListener('waiting', () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); });
-      audio.onerror = () => { URL.revokeObjectURL(got.url); fallBack(300000); };
+      audio.onerror = () => { URL.revokeObjectURL(got.url); fallBack(_TTS_FAIL_COOL_MS); };
       audio.play().catch(() => fallBack(0));
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
   }

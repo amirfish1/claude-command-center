@@ -1,0 +1,1 @@
+- Read-aloud keeps up with playback: the local voice makes audio in short pieces with more threads (about 1.9x real time instead of 0.5x on a 16-core host), prepares the whole latest message ahead, retries after 20s instead of 5 minutes on an error, and restarts itself if it was left at low CPU priority.

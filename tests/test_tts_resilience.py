@@ -70,7 +70,8 @@ console.log(JSON.stringify(chunks));
             self.source, "_ttsBindChunkCompletion", "_ttsStartChunkedSpeech"
         )
         result = self.run_node(
-            binder
+            "const window = { addEventListener: () => {} };\n"
+            + binder
             + """
 const utterance = {};
 const settled = [];
@@ -122,6 +123,9 @@ let _ttsNeuralCooldownUntil = Infinity;
 const _ttsNeuralCooldownWhy = "test";
 const _ttsHeadChunk = () => null;
 const _ttsHeadCache = new Map();
+const _ttsCacheState = new Map();
+const _perfEvent = () => {};
+const _perfActiveElapsed = (a, b) => b - a;
 const _TTS_HEAD_CHARS = 160;
 let _ttsStartWhy = "";
 let _ttsKeepVoice = null;
@@ -132,6 +136,7 @@ const _ttsNeuralUsable = () => false;
 const _ttsSpeakChunkNeural = () => {};
 const _ttsEnginePause = () => {};
 const window = {
+  addEventListener: () => {},
   speechSynthesis: {
     speak: utterance => utterances.push(utterance),
     pause: () => {},
