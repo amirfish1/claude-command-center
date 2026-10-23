@@ -5626,24 +5626,29 @@ def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_regis
 def _tag_spawned_via_in_registry(pid=None, session_id=None, via=""):
     """Persist spawned_via onto the spawn registry entry by PID and/or session_id."""
     clean_via = str(via or "").strip()
-    # Experimental idea tickets: every spawn route tags its origin here, so
-    # this is the one place a UI-started session (any engine) is noted.
-    try:
-        _idea_tickets.note_ui_spawn(session_id, clean_via)
-    except Exception:
-        pass
     if not clean_via or (pid is None and not session_id):
         return
+    session_ids = {session_id} if session_id else set()
     def _mutator(entries):
         changed = False
         for entry in entries:
             pid_match = pid is not None and entry.get("pid") == pid
             sid_match = session_id and entry.get("session_id") == session_id
-            if (pid_match or sid_match) and entry.get("spawned_via") != clean_via:
-                entry["spawned_via"] = clean_via
-                changed = True
+            if pid_match or sid_match:
+                if entry.get("session_id"):
+                    session_ids.add(entry["session_id"])
+                if entry.get("spawned_via") != clean_via:
+                    entry["spawned_via"] = clean_via
+                    changed = True
         return changed
     _mutate_spawn_registry(_mutator)
+    # The native ID may have arrived between the spawn response and this
+    # PID-based tag. Register it even when the response had no session_id.
+    for sid in session_ids:
+        try:
+            _idea_tickets.note_ui_spawn(sid, clean_via)
+        except Exception:
+            pass
 
 
 def _tag_spawn_runtime_in_registry(pid=None, session_id=None, runtime=""):

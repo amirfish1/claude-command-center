@@ -115,6 +115,20 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(row["ref"], "SMALL-BUGS-1")
         self.assertNotIn("pending", row)
 
+    def test_late_ui_origin_recovers_automatic_skip_only(self):
+        it.attach_or_file("late")
+        self.assertIn("skip", it.load_state()["sessions"]["late"])
+        it.note_ui_spawn("late", "ui")
+        self.assertNotIn("late", it.load_state()["sessions"])
+        self.assertIn("late", it.load_state()["pending"])
+        it.attach_or_file("late", classify_fn=lambda text: "small_bug")
+        it.note_ui_spawn("late", "ui")  # polling never reopens a filed entry
+        self.assertNotIn("late", it.load_state()["pending"])
+        it.detach_ticket("late")
+        it.note_ui_spawn("late", "ui")  # explicit Other remains intentional
+        self.assertEqual(it.load_state()["sessions"]["late"]["skip"], "other")
+        self.assertNotIn("late", it.load_state()["pending"])
+
     def test_continuation_and_child_inherit_and_log(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")
