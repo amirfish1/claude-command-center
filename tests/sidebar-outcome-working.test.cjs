@@ -32,7 +32,7 @@ test('a running Codex turn keeps Working through generic-state polling gaps', ()
   for (const state of ['idle', 'working', null, 'idle', 'working']) {
     const html = renderOutcome({ ...row, state });
     assert.match(html, /data-label="Working"/);
-    assert.doesNotMatch(html, /data-label="Next step"/);
+    assert.doesNotMatch(html, /data-label="Next"/);
   }
 });
 
@@ -43,6 +43,6 @@ test('a newer live overlay keeps Working when the census row lags', () => {
 
 test('the next step returns when the Codex turn finishes', () => {
   const html = renderOutcome({ ...row, codex_state: 'idle', state: 'idle' });
-  assert.match(html, /data-label="Next step"/);
+  assert.match(html, /data-label="Next"/);
   assert.match(html, /Reload to load the fix/);
 });

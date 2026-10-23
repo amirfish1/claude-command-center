@@ -36,7 +36,7 @@ test('new work and real approval signals override an earlier completion summary'
   assert.equal(ready(completed, { sidecar_in_flight: true, sidecar_status: 'active' }), false);
 });
 
-test('ready outcome offers the existing archive action instead of asking for a reply', () => {
+test('ready explanation leaves the archive action in the lower metadata row', () => {
   const start = app.indexOf('      // Outcome line (GOAL-1)');
   const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
   const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
@@ -47,8 +47,9 @@ test('ready outcome offers the existing archive action instead of asking for a r
   });
   assert.match(html, /Reviewed as complete; archive when ready/);
   assert.match(html, /data-label="Ready to close"/);
-  assert.match(html, /conv-ready-archive.*data-role="archive" data-archived="true"/);
-  assert.doesNotMatch(html, /data-label="Next step"/);
+  assert.doesNotMatch(html, /conv-ready-archive/);
+  assert.match(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), /data-role="archive" data-archived="true"/);
+  assert.doesNotMatch(html, /data-label="Next"/);
 });
 
 

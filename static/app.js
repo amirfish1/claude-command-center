@@ -23077,10 +23077,8 @@
       + ' title="' + escapeAttr(ref + (repo ? ' · ' + repo : '') + ' · ' + presentation.title) + '"'
       + ' aria-label="Open idea ' + escapeAttr(match[1]) + '">'
       + '<span class="conv-avatar-number">' + escapeHtml(match[1]) + '</span>'
-      + '<span class="conv-avatar-model ' + presentation.engine + '" title="' + escapeAttr(presentation.title) + '">'
+      + '<span class="conv-avatar-model ' + presentation.engine + ' cost-' + presentation.tier + '" title="' + escapeAttr(presentation.title) + '">'
       + '<span class="conv-avatar-engine" aria-hidden="true">' + getEngineSvg(presentation.engine) + '</span>'
-      + (WORKERS_TIER_DOLLARS[presentation.tier]
-        ? '<span class="conv-avatar-cost">' + '$'.repeat(WORKERS_TIER_DOLLARS[presentation.tier]) + '</span>' : '')
       + '</span></button>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with
@@ -36937,15 +36935,6 @@
       }
       const _rowActivityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
       const _rowActivityAge = _rowActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _rowActivityTs)) : 9999;
-      // "done" chip: a turn that completed within the last 15 min reads as a
-      // calm done state; older completed sessions render as plain idle (no
-      // chip spam on every row). Scoped to kimi/codex rows — claude rows
-      // keep their existing lifecycle chips unchanged. last_event_ts (wire /
-      // rollout append time) wins over the row mtime when the server has it.
-      const _DONE_CHIP_FRESH_S = 15 * 60;
-      const _doneActivityTs = c.last_event_ts || _rowActivityTs;
-      const _doneAgeSec = _doneActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _doneActivityTs)) : 9999;
-      const _doneRecently = (isKimiRow || isCodexRow) && c.last_event_type === 'result' && _doneAgeSec < _DONE_CHIP_FRESH_S;
       const _isQuestionWaiting = c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'));
       const _isWaitingForUser = c.is_live && (c.needs_approval || _isQuestionWaiting);
       const _knownActivityTool = c.sidecar_tool || c.pending_tool || '';
@@ -37096,12 +37085,6 @@
         // the row doesn't masquerade as actively running. Uses a muted
         // class (.gh-in-progress) instead of .activity-working.
         signals += '<span class="conv-signal gh-in-progress" title="Linked GitHub issue carries the claude-in-progress label">issue: in progress</span>';
-      } else if (_doneRecently && !liveToolHtml) {
-        // Muted "done" — the turn finished a few minutes ago. Last in the
-        // activity-chip chain so any live/waiting/stuck signal outranks it.
-        const doneMins = Math.floor(_doneAgeSec / 60);
-        const doneTitle = 'Turn finished ' + (doneMins < 1 ? 'just now' : doneMins + 'm ago');
-        signals += '<span class="conv-signal done" title="' + escapeAttr(doneTitle) + '">✓ done</span>';
       }
       signals += wipAgeChipHtml(c);
       const _showGitStateSignals = !_rowsCompactOn;
@@ -37469,7 +37452,7 @@
         ? '<span class="meta-runtime-free" title="This session runs on CCC’s free router - it costs $0.">$0</span>'
         : '';
       // Meta row: shown when there are chips or a brief chevron.
-      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);
+      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);
       const hoverMetaRowHtml = _hasMetaContent
         ? '<div class="conv-hover-meta-row">'
           + _briefChevronHtml
@@ -37477,7 +37460,6 @@
           + _hmFolderChip
           + sessionProvenanceChipHtml
           + _runtimeFreeChipHtml
-          + sessionIdChipHtml
           + goalMetaHtml
           + pinnedHtml
           + (rowSizeHtml || '')
@@ -37631,7 +37613,7 @@
         } else if (_hasNext) {
           // A next step is always "yours"; one green label, no separate
           // NEEDS YOU variant.
-          _label = 'Next step'; _kind = 'next';
+          _label = 'Next'; _kind = 'next';
           _stepText = _next;
         } else if (_latest && !_did) {
           _label = 'Latest'; _kind = 'latest'; _stepText = _latest;
@@ -37644,7 +37626,6 @@
         outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + '" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-step" data-label="' + escapeAttr(_label) + '">' + escapeHtml(_stepText) + '</span>'
-            + (_kind === 'ready' ? readyToCloseArchiveHtml() : '')
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
@@ -37720,7 +37701,8 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Numbered idea avatars already open the ticket.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_readyToCloseRow ? '<strong class="wa-ready-label">Ready to close</strong> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_readyToCloseRow ? '<strong class="wa-ready-label">Ready to close</strong> ' : '') + escapeHtml(_waPreview) + '</span>' + (_readyToCloseRow ? '' : _waStatus) + '</div>'
+        + '<div class="wa-row-footer">' + sessionIdChipHtml + (_readyToCloseRow ? _waStatus : '') + '</div>'
         + '</div>'
         + '</div>';
       return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
@@ -37756,6 +37738,7 @@
             + earlierDetailsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
+            + sessionIdChipHtml
             + (goalIconOnly && !_ideaRowRef ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
             + ((opts.evergreenAgent || _ideaRowRef) ? '' : uxFixesQueueProgressHtml)
@@ -37772,6 +37755,7 @@
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
             + (opts.evergreenAgent ? '' : (lifetimeTokensHtml || ''))
             + '</span>'
+            + (_readyToCloseRow ? readyToCloseArchiveHtml() : '')
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Single-line evergreen variant: the badges that normally drop to a
             // second meta line sit inline here, just left of the time slot.
