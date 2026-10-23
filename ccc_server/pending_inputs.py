@@ -4116,6 +4116,10 @@ def _pump_devin_resume_queue(session_id):
                       "match": text}
             )
             drop_tx = _core._apply_pending_input_operations(session_id, [drop])
+            # The ACP prompt landed: settle the inject receipt too, or a
+            # delivered message keeps showing as "outstanding" forever and
+            # stuck-session triage chases a message that already arrived.
+            _inject_receipts.close_receipt(session_id, text=text)
             return {"ok": True, "started": True, "via": "acp-prompt",
                     "result": acp_result,
                     "queue_cleanup_ok": bool((drop_tx or {}).get("ok"))}

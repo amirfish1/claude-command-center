@@ -53,8 +53,10 @@ def test_pump_reattaches_through_its_own_conn_before_recycling():
          mock.patch.object(server, "_acp_close_idle_conn") as close, \
          mock.patch.object(server, "_apply_pending_input_operations", return_value={"ok": True}), \
          mock.patch.object(server, "_pending_resume_queue", queue), \
+         mock.patch("ccc_server.pending_inputs._inject_receipts.close_receipt") as close_receipt, \
          mock.patch.object(server, "resume_session_devin") as resume:
         result = server._pump_devin_resume_queue(sid)
+    close_receipt.assert_called_once_with(sid, text="first")
     assert result["started"] is True and result["via"] == "acp-prompt"
     steer.assert_called_once()
     close.assert_not_called()
