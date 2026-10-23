@@ -18631,21 +18631,29 @@
       || (Array.isArray(archiveData) ? archiveData.find(match) : null);
   }
 
-  // Keep the close action beside the composer as readiness changes on polls.
+  // Keep the close action just above the composer card, on the right, as
+  // readiness changes on polls. It lives in the bar (the pane is a named-area
+  // grid, so a new sibling would be auto-placed elsewhere) but is anchored
+  // above it; the floating End/Last stack steps up to clear it.
   function syncConversationArchiveButton(bar) {
-    let footer = bar.querySelector('[data-role="conv-ready-archive"]');
+    let footer = bar.querySelector(':scope > [data-role="conv-ready-archive"]');
     if (!footer) {
       footer = document.createElement('div');
       footer.dataset.role = 'conv-ready-archive';
       footer.className = 'conv-ready-archive-footer';
       footer.hidden = true;
-      footer.innerHTML = '<button type="button" class="btn">Archive</button>';
+      footer.innerHTML = '<button type="button" class="conv-ready-archive-btn" title="Archive completed session">Archive</button>';
       bar.prepend(footer);
     }
     const row = _openConversationRow();
-    footer.hidden = activeTab !== 'sessions' || !sessionReadyToClose(row,
+    const hide = activeTab !== 'sessions' || !sessionReadyToClose(row,
       row ? _applyLiveOverlayToRow(row) : null)
       || sessionIsOptimisticallySending(row && (row.session_id || row.id));
+    if (footer.hidden === hide) return;
+    footer.hidden = hide;
+    const pane = bar.closest('.conv-pane');
+    const view = pane && pane.querySelector(':scope > .conversations-view');
+    if (view) positionConversationEndAffordance(view);
   }
 
   document.addEventListener('click', async (ev) => {
@@ -45427,7 +45435,11 @@
     const hostRect = host.getBoundingClientRect();
     const viewRect = view.getBoundingClientRect();
     if (!hostRect.width || !hostRect.height || !viewRect.width || !viewRect.height) return;
-    const endBottom = Math.max(12, Math.round(hostRect.bottom - viewRect.bottom + 14));
+    let endBottom = Math.max(12, Math.round(hostRect.bottom - viewRect.bottom + 14));
+    // The finished-session Archive button sits above the composer's right
+    // edge, in the same strip as this stack.
+    const readyArchive = host.querySelector(':scope > .conv-input-bar.visible > .conv-ready-archive-footer:not([hidden])');
+    if (readyArchive) endBottom += readyArchive.offsetHeight;
     const right = Math.max(14, Math.round(hostRect.right - viewRect.right + 20));
     btn.style.bottom = endBottom + 'px';
     btn.style.right = right + 'px';

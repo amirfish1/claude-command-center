@@ -32675,10 +32675,35 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
 }
 
+/* Archive for a finished session: anchored just above the composer card, on
+   the right, styled like the row's Archive chip. Only the button takes
+   clicks, so the transcript under the strip stays usable. */
 .conv-ready-archive-footer:not([hidden]) {
+  position: absolute;
+  bottom: 100%;
+  right: 20px;
+  z-index: 12;
   display: flex;
-  justify-content: center;
-  flex: 0 0 auto;
-  padding: 8px 0;
+  justify-content: flex-end;
+  padding: 6px 0;
+  pointer-events: none;
 }
-.conv-ready-archive-footer .btn { min-height: 44px; padding: 8px 24px; }
+.conv-ready-archive-footer .conv-ready-archive-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 5px 14px;
+  border: 1px solid var(--text-muted);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--surface);
+  font: 400 13px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.conv-ready-archive-footer .conv-ready-archive-btn:hover { color: var(--text); border-color: var(--text); }
+.conv-ready-archive-footer .conv-ready-archive-btn:disabled { opacity: 0.5; cursor: default; }
+@media (pointer: coarse) {
+  .conv-ready-archive-footer .conv-ready-archive-btn { min-height: 44px; padding: 8px 20px; }
+}

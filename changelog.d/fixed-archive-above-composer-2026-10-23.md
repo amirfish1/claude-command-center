@@ -1,0 +1,1 @@
+- The Archive button for a finished session now sits above the composer on the right, styled like the sidebar's Archive chip, instead of an unstyled button inside the composer.
