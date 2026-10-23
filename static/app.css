@@ -5022,10 +5022,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .conv-input-context .spawn-cwd-chip:hover {
+  .conv-input-context .spawn-cwd-chip:not(.active):hover {
     color: var(--text);
-    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-    background: rgba(88,166,255,0.10);
+    border-color: var(--text-muted);
+    background: rgba(139,148,158,0.12);
   }
   .conv-input-context .spawn-cwd-chip.active {
     color: var(--accent);

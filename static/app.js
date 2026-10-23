@@ -83925,8 +83925,7 @@
     const current = getSpawnCwd();
     const chips = spawnCwdQuickChipOptions(current);
     wrap.innerHTML = '';
-    wrap.style.display = chips.length ? '' : 'none';
-    if (!chips.length) return;
+    wrap.style.display = '';
 
     let lastKind = null;
     for (const opt of chips) {
@@ -83952,6 +83951,19 @@
       });
       wrap.appendChild(btn);
     }
+    const browse = document.createElement('button');
+    browse.type = 'button';
+    browse.className = 'spawn-cwd-chip spawn-cwd-browse-chip';
+    browse.textContent = 'Browse folders…';
+    browse.title = 'Choose a folder on the machine running this session';
+    browse.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      browse.disabled = true;
+      try { await chooseSpawnCwdFolder(); }
+      finally { browse.disabled = false; }
+    });
+    wrap.appendChild(browse);
   }
 
   function refreshNewSessionCwdUi(paneId) {
