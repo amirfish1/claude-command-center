@@ -73636,6 +73636,12 @@
   // metadata, never transcripts or stale live/approval/tool status. This is a
   // bounded preview, not a complete archive or a body usable with an ETag.
   const ARCHIVE_SIDEBAR_CACHE_KEY = 'ccc-sidebar-snapshot-v1';
+  // One snapshot per window (CCC-142): a single shared key meant tabs on
+  // different windows (8h vs 7d) overwrote each other, so the other tab's
+  // reload never painted from cache and waited on /list (archive_load p95).
+  function _archiveSidebarCacheKey(windowName) {
+    return ARCHIVE_SIDEBAR_CACHE_KEY + ':' + windowName;
+  }
   const ARCHIVE_SIDEBAR_CACHE_MAX_ROWS = 500;
   const ARCHIVE_SIDEBAR_CACHE_MAX_CHARS = 256 * 1024;
   const ARCHIVE_SIDEBAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -73668,7 +73674,7 @@
   }
   function _readArchiveSidebarCache(windowName) {
     try {
-      const raw = localStorage.getItem(ARCHIVE_SIDEBAR_CACHE_KEY);
+      const raw = localStorage.getItem(_archiveSidebarCacheKey(windowName));
       if (!raw || raw.length > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) return null;
       const cached = JSON.parse(raw);
       const age = Date.now() - cached.savedAt;
@@ -73693,7 +73699,8 @@
         chars += entry.length + 1;
       }
       const envelope = JSON.stringify({ version: 1, window: windowName, savedAt: Date.now() });
-      localStorage.setItem(ARCHIVE_SIDEBAR_CACHE_KEY,
+      localStorage.removeItem(ARCHIVE_SIDEBAR_CACHE_KEY);  // pre-per-window snapshot
+      localStorage.setItem(_archiveSidebarCacheKey(windowName),
         envelope.slice(0, -1) + ',"rows":[' + entries.join(',') + ']}');
     } catch (_) { /* Storage disabled/full: the network list still works. */ }
   }
