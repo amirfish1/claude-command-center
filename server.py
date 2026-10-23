@@ -24485,15 +24485,27 @@ def _window_parsed_conversation_events(result, tail=None, before=None):
     all_events = list(result.get("events") or [])
     last_line = int(result.get("last_line") or 0)
     window = int(tail or _CONV_TAIL_DEFAULT)
+    # Some sources interleave rows with negated line ids (Devin's merged ACP
+    # result rows). Page by the nearest preceding source line so those rows
+    # stay with their turn instead of leaking into every older window.
+    positions = []
+    prev = 0
+    for event in all_events:
+        try:
+            line = int(event.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        if line > 0:
+            prev = line
+        positions.append(line if line > 0 else prev)
     if before is not None:
-        candidates = [
-            event for event in all_events
-            if int(event.get("line") or 0) < before
-        ]
+        keep = [i for i, pos in enumerate(positions) if pos < before]
     else:
-        candidates = all_events
-    events = candidates[-window:]
-    first_line = int(events[0].get("line") or 0) if events else 0
+        keep = list(range(len(all_events)))
+    candidates = [all_events[i] for i in keep]
+    shown = keep[-window:]
+    events = [all_events[i] for i in shown]
+    first_line = positions[shown[0]] if shown else 0
     # Preserve the parser's extra top-level keys (engine, codex_cloud, meta
     # fields) — rebuilding a bare dict here would silently strip markers the
     # viewer needs on windowed opens, e.g. the cloud-thread read-only flag.
@@ -24505,6 +24517,23 @@ def _window_parsed_conversation_events(result, tail=None, before=None):
         "truncated_before": bool(first_line > 1 and len(candidates) > len(events)),
     })
     return out
+
+
+def _finish_full_parse_conversation(conversation_id, result, tail=None, before=None):
+    """Return a full-parse engine result, honouring the tail/before window.
+
+    Store-backed engines (Devin, Gemini, Antigravity, ...) always parse the
+    whole source. Without this the open shipped every event (CCC-143: a Devin
+    session sent ~2MB/1100 events for tail=120 and paid ~1s to fetch+render).
+    """
+    if tail or before is not None:
+        result = _window_parsed_conversation_events(result, tail=tail, before=before)
+    else:
+        result = {"events": list(result.get("events") or []), "last_line": result.get("last_line", 0)}
+    if before is None:
+        result["events"] = _merge_synthetic_conversation_events(
+            list(result.get("events") or []), _get_queued_events_for_session(conversation_id))
+    return result
 
 
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True,
@@ -24564,33 +24593,23 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     if engine == "gemini":
         result = _parse_gemini_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "antigravity":
         result = _parse_antigravity_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "kilo":
         result = _parse_kilo_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "opencode":
         result = _parse_opencode_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "aider":
         result = _parse_aider_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "hermes":
         result = _parse_hermes_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
@@ -24634,24 +24653,18 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     if engine == "copilot":
         result = _parse_copilot_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "devin":
         if _is_devin_cli_session(conversation_id):
             result = _parse_devin_cli_conversation(conversation_id, after_line=after_line)
         else:
             result = _parse_devin_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "copilotchat":
         result = _parse_copilotchat_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     filepath, parser = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
     if parser is _parse_conversation_event and not Path(filepath).is_file():
         stub = _registry_only_conversation_stub(conversation_id, after_line=after_line)
