@@ -32590,3 +32590,11 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: auto; }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
 }
+
+.conv-ready-archive-footer:not([hidden]) {
+  display: flex;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 8px 0;
+}
+.conv-ready-archive-footer .btn { min-height: 44px; padding: 8px 24px; }

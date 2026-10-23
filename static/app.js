@@ -10852,6 +10852,7 @@
     const _activeInputBar = (typeof getConvInputBarForPane === 'function')
       ? (getConvInputBarForPane(activePaneId()) || $convInputBar)
       : $convInputBar;
+    syncConversationArchiveButton(_activeInputBar);
     const activeInputControls = inputControlsForBar(_activeInputBar);
     const activeInput = activeInputControls.input;
     const activeSendBtn = activeInputControls.sendBtn;
@@ -18579,6 +18580,53 @@
       || (Array.isArray(archiveData) ? archiveData.find(match) : null);
   }
 
+  // Keep the close action beside the composer as readiness changes on polls.
+  function syncConversationArchiveButton(bar) {
+    let footer = bar.querySelector('[data-role="conv-ready-archive"]');
+    if (!footer) {
+      footer = document.createElement('div');
+      footer.dataset.role = 'conv-ready-archive';
+      footer.className = 'conv-ready-archive-footer';
+      footer.hidden = true;
+      footer.innerHTML = '<button type="button" class="btn">Archive</button>';
+      bar.prepend(footer);
+    }
+    const row = _openConversationRow();
+    footer.hidden = activeTab !== 'sessions' || !sessionReadyToClose(row,
+      row ? _applyLiveOverlayToRow(row) : null)
+      || sessionIsOptimisticallySending(row && (row.session_id || row.id));
+  }
+
+  document.addEventListener('click', async (ev) => {
+    const button = ev.target.closest('[data-role="conv-ready-archive"] button');
+    if (!button || button.disabled) return;
+    const pane = button.closest('.conv-pane');
+    if (pane) setActivePaneById(pane.dataset.paneId);
+    const row = _openConversationRow();
+    if (!sessionReadyToClose(row, _applyLiveOverlayToRow(row))
+        || sessionIsOptimisticallySending(row && (row.session_id || row.id))) return;
+    button.disabled = true;
+    try { await _setOpenSessionLifecycle('archive'); }
+    finally { button.disabled = false; }
+  });
+
+  function returnToConversationList() {
+    stopConvStream(activePaneId());
+    stopSpawnStream();
+    stopCodexLogPoller();
+    currentConversation = null;
+    setCurrentSession(null, null, null, false, null);
+    updatePaneHeader(activePaneId(), null);
+    const view = getConvView();
+    if (view) view.innerHTML = '<div class="empty-state">Select a conversation</div>';
+    try { localStorage.removeItem('ccc-last-view'); } catch (_) {}
+    if ($mobileBackBtn) $mobileBackBtn.click();
+    mobileShowConv(false);
+    mobileShowMain(false);
+    updateInputBar();
+    saveSplitState();
+  }
+
   // Archive / unarchive / untrash the open session. Same endpoints and row
   // patching as the sidebar's archive/trash buttons, without needing the row
   // in the DOM (archived rows often aren't rendered; on phones the list is
@@ -18606,6 +18654,12 @@
         }
       });
       setOptimisticOverride(sessionId, patch);
+      // A slow archive must not navigate away from another conversation.
+      if (kind === 'archive' && data.archived
+          && (currentConversation === convId || currentConversation === sessionId)) {
+        returnToConversationList();
+      }
+      updateInputBar();
       renderSidebar(filterConversations($convSearch.value), { force: true });
       showOpToast(kind === 'untrash' ? 'Untrashed to Archived'
         : (data.archived ? 'Archived' : 'Restored to Active'));
