@@ -1,0 +1,1 @@
+- Perf telemetry rows now carry the server build stamp, and `scripts/perf_gate.py` turns them into a WatchTower `cmd:` acceptance gate: a perf ticket passes only when enough samples measured on code containing the fix meet the latency budget.

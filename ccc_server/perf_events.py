@@ -287,10 +287,17 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
     breach = ms_f >= threshold_ms
     load1, ncpu = _machine_load()
 
+    try:
+        build = str(getattr(_core, "_SERVER_CODE_REV", "") or "")
+    except Exception:
+        build = ""
     row = {
         "ts": _iso_now(),
         "kind": kind,
         "ms": ms_int,
+        # Server git HEAD at process start: lets an acceptance gate count only
+        # samples measured on a build that contains the fix (scripts/perf_gate.py).
+        "build": build,
         "boot_id": str(boot_id or ""),
         "conv_id": str(conv_id or ""),
         "warm": warm,
