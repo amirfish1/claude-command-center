@@ -21050,18 +21050,42 @@
       }
     }
   }
-  function setMobileListView(on) {
-    on = !!on;
+  // CCC-139: Small bugs is a short list of one-line tickets that reads best
+  // as the phone list, so it keeps its own Mobile view preference that
+  // defaults ON. Every other tab shares the original key, default OFF.
+  const _MOBILE_LIST_SMALLBUGS_LS = 'ccc-mobile-list-view-smallbugs';
+  function _mobileListKeyForTab(tab) {
+    return tab === 'smallbugs' ? _MOBILE_LIST_SMALLBUGS_LS : _MOBILE_LIST_LS;
+  }
+  function _currentSidebarTabKey() {
+    try { return normalizeSidebarTabKey(localStorage.getItem('ccc-sidebar-tab')); }
+    catch (_) { return ''; }
+  }
+  function _mobileListPrefForTab(tab) {
+    let stored = null;
+    try { stored = localStorage.getItem(_mobileListKeyForTab(tab)); } catch (_) {}
+    return stored === null ? tab === 'smallbugs' : stored === '1';
+  }
+  function _applyMobileListView(on) {
     if (on) _buildMobileListRules();
     document.documentElement.classList.toggle(_MOBILE_LIST_CLASS, on);
-    try { localStorage.setItem(_MOBILE_LIST_LS, on ? '1' : '0'); } catch (_) {}
     const box = document.getElementById('mobileListViewToggle');
     if (box) box.checked = on;
   }
+  function setMobileListView(on) {
+    on = !!on;
+    _applyMobileListView(on);
+    try { localStorage.setItem(_mobileListKeyForTab(_currentSidebarTabKey()), on ? '1' : '0'); } catch (_) {}
+  }
+  // Called on every list render; only touches the DOM when the tab's
+  // preference differs from what is applied.
+  function syncMobileListViewForTab(tab) {
+    const on = _mobileListPrefForTab(tab);
+    if (on !== isMobileListView()) _applyMobileListView(on);
+  }
   (function _wireMobileListView() {
-    let on = false;
-    try { on = localStorage.getItem(_MOBILE_LIST_LS) === '1'; } catch (_) {}
-    if (on) setMobileListView(true);
+    const on = _mobileListPrefForTab(_currentSidebarTabKey());
+    if (on) _applyMobileListView(true);
     const box = document.getElementById('mobileListViewToggle');
     if (box) {
       box.checked = on;
@@ -23601,8 +23625,11 @@
   }
   function _ideaAvatarHtml(c, mobile = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
-    const match = ref && ref.match(/^IDEAS-(\d+)$/);
+    // CCC-139: Small bugs rows get the same numbered avatar as Ideas.
+    const match = ref && ref.match(/^(IDEAS|SMALL-BUGS)-(\d+)$/);
     if (!match) return '';
+    const num = match[2];
+    const noun = match[1] === 'IDEAS' ? 'idea' : 'small bug';
     const repo = String(c.folder_label || c.folder_label_chip || c.folder_path || c.session_cwd || '');
     const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
     const presentation = sessionIconPresentation(c, false);
@@ -23610,8 +23637,8 @@
       + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
       + ' style="--avatar-hue:' + (hue | 0) + '"'
       + ' title="' + escapeAttr(ref + (repo ? ' · ' + repo : '') + ' · ' + presentation.title) + '"'
-      + ' aria-label="Open idea ' + escapeAttr(match[1]) + '">'
-      + '<span class="conv-avatar-number">' + escapeHtml(match[1]) + '</span>'
+      + ' aria-label="Open ' + noun + ' ' + escapeAttr(num) + '">'
+      + '<span class="conv-avatar-number">' + escapeHtml(num) + '</span>'
       + '<span class="conv-avatar-model ' + presentation.engine + ' cost-' + presentation.tier + '" title="' + escapeAttr(presentation.title) + '">'
       + '<span class="conv-avatar-engine" aria-hidden="true">' + getEngineSvg(presentation.engine) + '</span>'
       + '</span></button>';
@@ -36537,6 +36564,7 @@
         return normalizeSidebarTabKey(t);
       } catch (_) { return 'coding'; }
     })();
+    try { if (typeof syncMobileListViewForTab === 'function') syncMobileListViewForTab(_sidebarTab); } catch (_) {}
     const _activeDraftInputBefore = document.activeElement;
     const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
       ? (_activeDraftInputBefore.getAttribute('data-draft-id') || '')
