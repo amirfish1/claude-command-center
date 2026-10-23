@@ -4226,6 +4226,108 @@ def _antigravity_resume_stale_seconds():
     return _core._antigravity_print_timeout_seconds() + 60
 
 
+def _antigravity_turn_idle_seconds():
+    try:
+        return max(15.0, float(os.environ.get("CCC_ANTIGRAVITY_TURN_IDLE_S", "90")))
+    except ValueError:
+        return 90.0
+
+
+def _pid_age_seconds(pid):
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "etimes=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=5,
+        )
+        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _antigravity_turn_finished(session_id, pid=None, idle_s=None):
+    """True when the conversation's own record says its turn is over.
+
+    A headless ``agy -p`` is documented to exit when the turn ends, but a
+    process can outlive its turn (observed: alive for an hour after the final
+    answer, which made every queued message wait behind it). Process liveness
+    therefore cannot decide busy vs idle. The transcript can: the last row is
+    the model's final PLANNER_RESPONSE (DONE, no tool calls) and nothing has
+    been written for ``idle_s`` seconds. The process must also be older than
+    ``idle_s``, so a resume that has only just started (transcript still
+    showing the previous turn's answer) is never mistaken for a finished one.
+    """
+    idle_s = _antigravity_turn_idle_seconds() if idle_s is None else idle_s
+    newest = None
+    for brain_root in (_core.ANTIGRAVITY_BRAIN, _core.ANTIGRAVITY_CLI_BRAIN):
+        for name in ("transcript_full.jsonl", "transcript.jsonl"):
+            path = brain_root / str(session_id) / ".system_generated" / "logs" / name
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if newest is None or mtime > newest[0]:
+                newest = (mtime, path)
+    if newest is None or time.time() - newest[0] < idle_s:
+        return False
+    if pid is not None:
+        age = _pid_age_seconds(pid)
+        if age is None or age < idle_s:
+            return False
+    try:
+        with open(newest[1], "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 1024 * 1024))
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+        row = json.loads(lines[-1])
+    except (OSError, ValueError, IndexError):
+        return False
+    return (
+        isinstance(row, dict)
+        and row.get("source") == "MODEL"
+        and row.get("type") == "PLANNER_RESPONSE"
+        and row.get("status") == "DONE"
+        and not row.get("tool_calls")
+    )
+
+
+def _antigravity_reap_finished_process(session_id, pid):
+    """Stop an ``agy --conversation <sid>`` process that outlived its turn.
+
+    Only a process whose argv really is that conversation's agy is touched.
+    Returns True when it is gone.
+    """
+    try:
+        pid = int(pid)
+        argv = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except (OSError, TypeError, ValueError):
+        return True  # already gone
+    if f"--conversation {session_id}" not in argv or Path(argv.split(" ", 1)[0]).name != "agy":
+        return False
+    for sig, wait_s in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 2.0)):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
+        except OSError:
+            return False
+        deadline = time.time() + wait_s
+        while time.time() < deadline and Path(f"/proc/{pid}").exists():
+            try:  # a child of this server stays a zombie until reaped
+                if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                    break
+            except ChildProcessError:
+                pass
+            time.sleep(0.2)
+        if not Path(f"/proc/{pid}").exists():
+            break
+    _core._log_activity(
+        "inject", "AGY_REAP",
+        f"session={session_id} pid={pid} reason=turn_finished_process_lingered",
+    )
+    return not Path(f"/proc/{pid}").exists()
+
+
 def _antigravity_live_resume_pid(session_id):
     """Ground-truth check: is any `agy ... --conversation <sid>` process
     actually alive right now, independent of `_spawned_sessions`/the on-disk
@@ -4478,6 +4580,14 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     started = _spawn_entry_started_epoch(s)
                     if started and (time.time() - started) > _antigravity_resume_stale_seconds():
                         continue
+                    # The turn already ended (final answer in the transcript)
+                    # but the process lingers: free the conversation and fall
+                    # through to a fresh resume instead of queueing behind it.
+                    if (
+                        _antigravity_turn_finished(session_id, pid=s.get("pid"))
+                        and _antigravity_reap_finished_process(session_id, s.get("pid"))
+                    ):
+                        continue
                     # Our own headless run is mid-turn. If its agent
                     # registered the language server, hand the message to
                     # that run directly: it handles a message queued
@@ -4519,6 +4629,12 @@ def resume_session_antigravity(session_id, text, mode="send"):
     # An untracked headless `-p` run only takes it while still mid-turn.
     term_pid = _antigravity_terminal_holder_pid(session_id)
     live_pid = _antigravity_live_resume_pid(session_id) if term_pid is None else None
+    if (
+        live_pid is not None
+        and _antigravity_turn_finished(session_id, pid=live_pid)
+        and _antigravity_reap_finished_process(session_id, live_pid)
+    ):
+        live_pid = None
     delivered = antigravity_ls.send(
         session_id, text, mode=mode, require_running=live_pid is not None)
     if delivered:
