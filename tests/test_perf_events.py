@@ -72,6 +72,11 @@ class PerfEventsTestBase(unittest.TestCase):
         warmup = mock.patch.object(pe, "_PROCESS_STARTED_AT", time.time() - pe.WARMUP_S - 1)
         warmup.start()
         self.addCleanup(warmup.stop)
+        # Self-filing is opt-in in production (CCC_PERF_TICKETS=1); tests that
+        # exercise the filing path enable it explicitly here.
+        enabled = mock.patch.object(pe, "_perf_tickets_enabled", lambda: True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self._orig_override = pe._STATE_DIR_OVERRIDE
@@ -230,6 +235,16 @@ class TestPerfTicketCheckOnce(PerfEventsTestBase):
     def test_no_data_is_ok(self):
         result = pe.perf_ticket_check_once(now=time.time())
         self.assertEqual(result, "ok")
+
+    def test_filing_disabled_returns_without_wt_call(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        with mock.patch.object(pe, "_perf_tickets_enabled", lambda: False):
+            result = pe.perf_ticket_check_once(now=now)
+        self.assertEqual(result, "disabled")
+        self.assertFalse(fake.calls)
 
     def test_stale_breach_does_not_file_a_new_ticket(self):
         now = time.time()

@@ -83,6 +83,10 @@ def _env_float(name, default):
 ARCHIVE_COLD_MS = _env_int("CCC_PERF_ARCHIVE_COLD_MS", 5000)
 ARCHIVE_WARM_MS = _env_int("CCC_PERF_ARCHIVE_WARM_MS", 1000)
 CONV_OPEN_MS = _env_int("CCC_PERF_CONV_OPEN_MS", 5000)
+# list_read = client-observed /api/conversations/list fetch+parse per poll;
+# live_build = server-side live-activity rebuild (build_live_sessions_activity).
+LIST_READ_MS = _env_int("CCC_PERF_LIST_READ_MS", 3000)
+LIVE_BUILD_MS = _env_int("CCC_PERF_LIVE_BUILD_MS", 3000)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -174,7 +178,17 @@ def _in_warmup(now=None):
     return (t - _PROCESS_STARTED_AT) < WARMUP_S
 
 
-_VALID_KINDS = ("archive_load", "conv_open")
+_VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build")
+
+
+def _perf_tickets_enabled():
+    """Self-filing is opt-in: the daemon records and evaluates breaches on
+    every install, but only a maintainer box that sets CCC_PERF_TICKETS=1
+    opens WatchTower tickets. Regular users never spawn queue work."""
+    return str(os.environ.get("CCC_PERF_TICKETS") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 _TAIL_READ_BYTES = 2 * 1024 * 1024  # the JSONL sink grows forever; only tail this much
 _OPEN_STATUSES = {"open", "in_progress", "claimed", "blocked"}
 
@@ -225,6 +239,10 @@ def archive_is_warm(page_start_ts=None, now=None):
 def _threshold_for(kind, warm):
     if kind == "archive_load":
         return ARCHIVE_WARM_MS if warm else ARCHIVE_COLD_MS
+    if kind == "list_read":
+        return LIST_READ_MS
+    if kind == "live_build":
+        return LIVE_BUILD_MS
     return CONV_OPEN_MS
 
 
@@ -430,6 +448,8 @@ def summarize(hours=24, now=None):
             "archive_load_cold_ms": ARCHIVE_COLD_MS,
             "archive_load_warm_ms": ARCHIVE_WARM_MS,
             "conv_open_ms": CONV_OPEN_MS,
+            "list_read_ms": LIST_READ_MS,
+            "live_build_ms": LIVE_BUILD_MS,
         },
         "kinds": kinds,
         "ticket": _ticket_summary(_load_ticket_state()),
@@ -656,8 +676,8 @@ def refresh_ticket_status(state):
 
 def _build_note(pattern, state):
     lines = [
-        "Thresholds: archive_load_cold_ms=%d archive_load_warm_ms=%d conv_open_ms=%d"
-        % (ARCHIVE_COLD_MS, ARCHIVE_WARM_MS, CONV_OPEN_MS),
+        "Thresholds: archive_load_cold_ms=%d archive_load_warm_ms=%d conv_open_ms=%d list_read_ms=%d live_build_ms=%d"
+        % (ARCHIVE_COLD_MS, ARCHIVE_WARM_MS, CONV_OPEN_MS, LIST_READ_MS, LIVE_BUILD_MS),
         "kind=%s count=%d p50=%sms p95=%sms max=%sms"
         % (pattern["kind"], pattern["count"], pattern["p50"], pattern["p95"], pattern["max"]),
         "Startup archive loads use the cold-load budget (including persisted warm caches).",
@@ -814,6 +834,8 @@ def perf_ticket_check_once(now=None):
     never raises (the daemon loop would otherwise die on the first bug)."""
     now = time.time() if now is None else now
     try:
+        if not _perf_tickets_enabled():
+            return "disabled"
         # The 24-hour window supplies useful ticket context, but must not
         # resurrect an already-recovered incident after its old outliers keep
         # the aggregate above threshold. A ticket is actionable only when a

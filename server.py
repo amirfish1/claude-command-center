@@ -12355,7 +12355,12 @@ def build_live_sessions_activity():
         # path, and the only place an actual (non-cached) build happens.
         _t0 = time.perf_counter()
         data = _build_live_sessions_activity_uncached()
-        _record_live_build_ms((time.perf_counter() - _t0) * 1000.0)
+        _build_ms = (time.perf_counter() - _t0) * 1000.0
+        _record_live_build_ms(_build_ms)
+        try:
+            record_event("live_build", _build_ms)
+        except Exception:
+            pass
         snap["data"] = data
         snap["ts"] = time.time()
         return data

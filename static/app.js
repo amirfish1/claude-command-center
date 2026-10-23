@@ -72895,6 +72895,14 @@
           text: ms + 'ms ' + size + (extra ? ' ' + extra : ''),
           title: url + ' → ' + status,
         });
+        // Structured beacon too — the perf watchdog only sees /api/perf-event
+        // samples, so list-read latency feeds the same breach evaluation and
+        // (maintainer-box) self-filing as conv_open/archive_load.
+        if (typeof _perfEvent === 'function') {
+          _perfEvent('list_read', ms, {
+            detail: { bytes: bytes || 0, status: status, extra: extra || '' },
+          });
+        }
       } catch (_) {}
     };
     const p = (async () => {
