@@ -3038,9 +3038,8 @@
       + '<span class="grouping-opt' + (on ? ' is-active' : '') + '" data-tracked-table-toggle="1">Table</span>'
       + '</span>';
   }
-  // A suggested archive, never an automatic close. Accept an explicit review
-  // of an unchanged transcript, or a completion report with a passive next
-  // step. The latter is text matching, not an independent completion judge.
+  // A completion summary is not a completion verdict. Only an explicit
+  // review of an unchanged transcript can recommend closing a session.
   function sessionReadyToClose(c, live = c) {
     if (!c || c.archived || c.trashed || c.stale_tool_call || c.last_event_type === 'user') return false;
     if ([c, live].some(r => r && (r.state === 'working' || r.codex_state === 'working'
@@ -3050,18 +3049,7 @@
     const activityAt = Math.max(Number(c.mtime) || 0, Number(c.modified) || 0,
       Number(live && live.mtime) || 0, Number(live && live.modified) || 0);
     if (reviewedAt > 0 && activityAt > 0 && activityAt <= reviewedAt) return true;
-    const summary = c.session_state || {};
-    const did = String(summary.did || '').trim();
-    const next = String(summary.next_step_user || '').trim();
-    if (!did || !next) return false;
-    // Keep unfinished delivery, failures and real decisions in the action queue.
-    if (/\b(?:not (?:(?:yet|fully|visually) )?(?:pushed|shipped|deployed|done|finished|verified)|unpushed|unresolved|blocked|failed|waiting for|needs? (?:approval|input))\b/i.test(did + ' ' + next)) return false;
-    if (/\b(?:approve|decide|choose|pick|answer|reply|confirm whether|tell me whether|yes\s*\/\s*no)\b|\[Q\d+/i.test(next)) return false;
-    if (/\b(?:deploy|merge|repair|install|pay|charge|sign|run the|run a|send a|send the|create a|create the)\b/i.test(next)) return false;
-    const complete = /\b(?:shipped|pushed|completed|finished|resolved|closed|verified|fixed|implemented)\b/i.test(did);
-    const passive = /^(?:none|nothing (?:needed|required|to do)|no (?:action|restart|further action)(?: is)? (?:needed|required)|n\/a|not applicable)\b/i.test(next)
-      || /^(?:(?:please|just)\s+)?(?:reload|refresh|hard[- ]refresh)\b/i.test(next);
-    return complete && passive;
+    return false;
   }
 
   function readyToCloseArchiveHtml() {
@@ -23066,9 +23054,6 @@
     if (!match) return '';
     const repo = String(c.folder_label || c.folder_label_chip || c.folder_path || c.session_cwd || '');
     const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
-    const model = c.model ? formatModelNameForBadge(sessionIconEngine(c), c.model)
-      .replace(/^(?:claude|gpt|gemini)[\s-]+/i, '')
-      .replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '') : 'Default';
     const presentation = sessionIconPresentation(c, false);
     return '<button type="button" class="conv-idea-avatar' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
       + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
@@ -23077,7 +23062,7 @@
       + ' aria-label="Open idea ' + escapeAttr(match[1]) + '">'
       + '<span class="conv-avatar-number">' + escapeHtml(match[1]) + '</span>'
       + '<span class="conv-avatar-model ' + presentation.engine + '" title="' + escapeAttr(presentation.title) + '">'
-      + '<span class="conv-avatar-model-name">' + escapeHtml(model) + '</span>'
+      + '<span class="conv-avatar-engine" aria-hidden="true">' + getEngineSvg(presentation.engine) + '</span>'
       + (WORKERS_TIER_DOLLARS[presentation.tier]
         ? '<span class="conv-avatar-cost">' + '$'.repeat(WORKERS_TIER_DOLLARS[presentation.tier]) + '</span>' : '')
       + '</span></button>';
@@ -37650,7 +37635,6 @@
             + '</div>';
       }
       const _outcomeInline = outcomeHtml.indexOf(' is-inline ') !== -1;
-      const _ideaStack = _outcomeInline && !!_ideaRowRef;
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
           + (_summaryState.did ? '<div><strong>Did:</strong> ' + escapeHtml(_summaryState.did) + '</div>' : '')
@@ -37722,7 +37706,7 @@
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_readyToCloseRow ? '<strong class="wa-ready-label">Ready to close</strong> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
         + '</div>';
-      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + (_ideaRowRef ? ' is-idea-row' : '') + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + waHtml
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
@@ -37735,14 +37719,9 @@
             + sessionStuckWarningHtml(c)
             + (window.cccClaudeReauth ? window.cccClaudeReauth.rowChipHtml(c) : '')
             + workerOriginBadgeHtml(c)
-            // Idea-ticket rows give the title the whole first line; the
-            // ticket chip moves to the line below (see _ideaRowLine).
+            // The numbered avatar already identifies an idea ticket.
             + (_ideaRowRef ? '' : ideaTicketChipHtml(c))
-            // With an inline next step, an idea row's ticket chip stacks under
-            // the title in the left column instead of on a line below the row.
-            + (_ideaStack ? '<div class="conv-title-stack">' : '')
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
-            + (_ideaStack ? _ideaRowLine(c) + '</div>' : '')
             // A next step takes the space right of the title; CSS wraps the
             // badges after the break onto a second line whenever it shows.
             + (_outcomeInline ? outcomeHtml + '<span class="conv-row-break" aria-hidden="true"></span>' : '')
@@ -37752,6 +37731,7 @@
             // occupy a column together; display:contents makes that wrapper
             // invisible to every other view's flex layout.
             + '<span class="conv-meta-col">'
+            + (_ideaRowRef ? _ideaRowLine(c) : '')
             + earlierDetailsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
@@ -37791,7 +37771,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
-        + (_ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c)))
+        + (_ideaRowRef ? '' : _uxFixesWorkerHistoryHtml(c))
         + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
@@ -46995,7 +46975,11 @@
     // no event fires for the abandoned one.
     try { _perfConvOpen = { id: id, paneId: paneId, t0: performance.now() }; } catch (_) {}
     try {
-      if (id && typeof window.__cccPerfRow === 'function') {
+      const _clickT = window.__cccPerfClick && window.__cccPerfClick.get(String(id));
+      // The delegated click listener already logged this open — a real row
+      // click hits both paths and would print the arrow twice.
+      const _dup = Number.isFinite(_clickT) && (performance.now() - _clickT) < 800;
+      if (id && !_dup && typeof window.__cccPerfRow === 'function') {
         window.__cccPerfRow('open', {
           at: Date.now(),
           text: '→ ' + String(id).slice(0, 8) + ' opening…',
@@ -72218,17 +72202,16 @@
     return '🧵 ' + generated[1].trim() + ' worker' + (identity ? ' · ' + identity : '');
   }
 
-  // Second line of an idea-ticket row: its ticket chip, plus the recorded-
-  // ticket history only when it holds more than the idea ticket itself.
+  // Idea metadata stays collapsed to a count until explicitly expanded.
   function _ideaRowLine(c) {
     const ref = c.idea_ticket.ref;
     const others = _uxFixesWorkerTicketsForRow(c).some(t => t && t.ref !== ref);
     return (_ideaAvatarHtml(c) ? '' : '<div class="conv-idea-line">' + ideaTicketChipHtml(c) + '</div>')
-      + (others ? _uxFixesWorkerHistoryHtml(c) : '');
+      + (others ? _uxFixesWorkerHistoryHtml(c, true) : '');
   }
 
   const _uxFixesHistoryExpanded = new Set();
-  function _uxFixesWorkerHistoryHtml(c) {
+  function _uxFixesWorkerHistoryHtml(c, compact = false) {
     const tickets = _uxFixesWorkerTicketsForRow(c);
     // The Workers table keeps a fixed chips column, and a blank cell reads as
     // "not loaded yet" rather than "this worker closed nothing". Say it. CSS
@@ -72272,9 +72255,9 @@
       // The "+N" chip carries the same count the prose label does, in a tenth
       // of the width. Dense mode hides the label and keeps the chips, so the
       // total stays visible either way.
-      + '<summary><span class="conv-worker-history-count">' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
-      + '<span class="conv-worker-history-recent">' + elideRefs(tickets.slice(0, 3))
-      + (tickets.length > 3
+      + '<summary><span class="conv-worker-history-count">' + tickets.length + (compact ? ' ticket' : ' recorded ticket') + (tickets.length === 1 ? '' : 's') + '</span>'
+      + '<span class="conv-worker-history-recent">' + (compact ? '' : elideRefs(tickets.slice(0, 3)))
+      + (!compact && tickets.length > 3
           ? '<span class="conv-worker-history-more" title="' + escapeAttr((tickets.length - 3) + ' more recorded ticket' + (tickets.length - 3 === 1 ? '' : 's')) + '">+' + (tickets.length - 3) + '</span>'
           : '')
       + '</span></summary>'
