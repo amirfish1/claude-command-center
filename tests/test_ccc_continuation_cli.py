@@ -10,7 +10,7 @@ import importlib.machinery
 import importlib.util
 import io
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -247,6 +247,36 @@ class ContinuationCliTests(unittest.TestCase):
                 self.assertTrue(got.dry_run)
         finally:
             sys.argv = old_argv
+
+    def test_unknown_subcommand_fails_fast_instead_of_execing_run_sh(self):
+        ccc = self.ccc
+        err = io.StringIO()
+        with mock.patch.object(ccc.os, "execv") as execv, \
+             redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                ccc.main(["sesssion", "--help"])
+        self.assertEqual(ctx.exception.code, 2)
+        execv.assert_not_called()
+        self.assertIn("invalid choice: 'sesssion'", err.getvalue())
+
+    def test_launcher_flags_and_empty_argv_exec_run_sh(self):
+        ccc = self.ccc
+        for argv in ([], ["--install-service"], ["--uninstall-service"], ["--service-status"], ["--app", "--size", "1600x1000"]):
+            with mock.patch.object(ccc.os, "execv") as execv:
+                execv.side_effect = SystemExit(0)
+                with self.assertRaises(SystemExit):
+                    ccc.main(argv)
+                execv.assert_called_once()
+                self.assertTrue(execv.call_args[0][0].endswith("run.sh"))
+                self.assertEqual(execv.call_args[0][1][1:], argv)
+
+    def test_session_singular_alias_routes_to_cmd_sessions(self):
+        ccc = self.ccc
+        with mock.patch.object(ccc, "cmd_sessions", return_value=0) as sessions_fn:
+            rc = ccc.main(["session", "--since", "5h"])
+        self.assertEqual(rc, 0)
+        sessions_fn.assert_called_once()
+        self.assertEqual(sessions_fn.call_args[0][0].since, 18000)
 
 
 if __name__ == "__main__":

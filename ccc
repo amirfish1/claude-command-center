@@ -82,9 +82,11 @@ from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota",
+SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "brief", "where",
                "brain", "consent", "jobs", "vault", "secret")
+
+RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
 BRAIN_CONFIG_FILE = os.path.expanduser("~/.claude/command-center/brain-plugin.json")
 
@@ -2119,20 +2121,18 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     _register_antigravity_session()
     # `ccc` is also the Homebrew launcher's name (foreground server /
-    # --install-service). Keep one name for both roles: known query
-    # subcommands run the client below; anything else (no args, unknown
-    # flags) passes through to ./run.sh so `ccc` still launches CCC.
+    # --install-service). Keep one name for both roles: no args or explicit
+    # run.sh launcher flags pass through to ./run.sh; everything else is
+    # parsed as a CLI invocation so mistyped subcommands fail fast instead
+    # of accidentally launching a second server.
     # `ccc astra-check <sid>` is a thin wrapper over scripts/astra-check (the
     # astra-guardrail skill's spend audit); it needs no running server.
     if argv and argv[0] == "astra-check":
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "astra-check")
         os.execv(script, [script] + argv[1:])
-    if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--server"):
+    if not argv or argv[0] in RUN_SH_FLAGS:
         run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
         os.execv(run_sh, [run_sh] + argv)
-    if not argv:
-        run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
-        os.execv(run_sh, [run_sh])
 
     parser = argparse.ArgumentParser(
         prog="ccc",
@@ -2142,7 +2142,7 @@ def main(argv=None):
     parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("sessions", "list-sessions"):
+    for name in ("sessions", "session", "list-sessions"):
         p = sub.add_parser(name, help="live session census (state, age, engine, repo, name)")
         p.add_argument("--since", type=_parse_since,
                        help="show sessions (live + recently-ended) with activity in "
