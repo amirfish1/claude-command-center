@@ -79,3 +79,24 @@ test('initial server fetch deduplicates before applying the ten-model limit', as
     assert.equal(new Set(keys).size, 10);
   } finally { await page.close(); }
 });
+
+test('unnamed picks become a named model or drop; labels never say default', async () => {
+  const page = await pickerPage([pick(''), pick('auto'), pick('model-b')]);
+  try {
+    // The saved default (model-a) stands in for blank and "auto" history.
+    assert.deepEqual(await modelKeys(page), ['codex/model-a', 'codex/model-b']);
+    await page.evaluate(() => {
+      _defaultModelsByEngine.codex = 'adaptive';
+      MODEL_OPTIONS_BY_ENGINE.codex = [{ id: 'adaptive', label: 'Adaptive (default)' }, { id: 'model-c', label: 'Model C (free, default)' }];
+      _cachedServerModelPicks = [{ engine: 'codex', model: 'adaptive' }, { engine: 'codex', model: '' }];
+      renderNsModelPickerPills();
+    });
+    assert.deepEqual(await modelKeys(page), ['codex/model-c']);
+    assert.equal(await page.$eval('#nsModelPickerPills', el => /default/i.test(el.textContent)), false);
+    // No named model to stand in: the engine gets no chip at all.
+    assert.deepEqual(await page.evaluate(() => {
+      MODEL_OPTIONS_BY_ENGINE.codex = [{ id: 'auto', label: 'Auto (default)' }];
+      return getTopSpawnPicks([{ engine: 'codex', model: 'auto' }, { engine: 'codex', model: '' }]);
+    }), []);
+  } finally { await page.close(); }
+});

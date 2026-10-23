@@ -1,0 +1,1 @@
+- New session model chips always name a real model: "Claude default", "Devin default" and "Auto (default)" chips are replaced by the model they stand for, or dropped when no named model is known.
