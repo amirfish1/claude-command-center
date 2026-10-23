@@ -9,7 +9,8 @@ function fn(name, indent = 2) {
   return (app.slice(start - 6, start) === 'async ' ? 'async ' : '') + app.slice(start, app.indexOf('\n' + ' '.repeat(indent) + '}', start) + indent + 2);
 }
 function harness(split, options = {}) {
-  const input = { value: 'Submitted message', style: {}, closest() { return {}; }, focus() {}, dispatchEvent() {} };
+  const inputListeners = [];
+  const input = { addEventListener(type, listener) { if (type === 'input') inputListeners.push(listener); }, value: 'Submitted message', style: {}, closest() { return {}; }, focus() {}, dispatchEvent() {} };
   const button = { disabled: false };
   const notices = [], removed = [], warnings = [];
   let resolve;
@@ -38,9 +39,9 @@ function harness(split, options = {}) {
     moveInputCaretToEnd: noop,
   };
   vm.createContext(ctx);
-  vm.runInContext(fn('restoreInputAfterSendFailure') + '\n' + fn(split ? 'sendToSplitTerminal' : 'sendToTerminal', split ? 4 : 2), ctx);
+  vm.runInContext(fn('composerUserEditRevision') + '\n' + fn('clearAcceptedComposerInput') + '\n' + fn('restoreInputAfterSendFailure') + '\n' + fn(split ? 'sendToSplitTerminal' : 'sendToTerminal', split ? 4 : 2), ctx);
   const send = split ? ctx.sendToSplitTerminal : ctx.sendToTerminal;
-  return { input, button, notices, removed, warnings, send, respond(data, ok = true) { resolve({ ok, status: ok ? 200 : 500, json: async () => data }); } };
+  return { input, edit(value) { input.value = value; inputListeners.forEach(listener => listener({ isTrusted: true })); }, switchConversation() { ctx.currentConversation = 'other'; }, button, notices, removed, warnings, send, respond(data, ok = true) { resolve({ ok, status: ok ? 200 : 500, json: async () => data }); } };
 }
 for (const split of [false, true]) {
   const label = split ? 'split composer' : 'pane composer';
@@ -75,6 +76,31 @@ for (const split of [false, true]) {
     await sending;
     assert.equal(h.input.value, 'Next message');
     assert.equal(h.removed.length, 0);
+  });
+  test(label + ': acceptance retires a restored copy of the submitted draft', async () => {
+    const h = harness(split);
+    const sending = h.send();
+    h.input.value = 'Submitted message';
+    h.respond({ ok: true, via: 'acp-prompt' });
+    await sending;
+    assert.equal(h.input.value, '');
+  });
+  test(label + ': acceptance preserves an identical message typed again', async () => {
+    const h = harness(split);
+    const sending = h.send();
+    h.edit('Submitted message');
+    h.respond({ ok: true, via: 'acp-prompt' });
+    await sending;
+    assert.equal(h.input.value, 'Submitted message');
+  });
+  test(label + ': acceptance preserves a different conversation composer', async () => {
+    const h = harness(split);
+    const sending = h.send();
+    h.switchConversation();
+    h.input.value = 'Submitted message';
+    h.respond({ ok: true, via: 'acp-prompt' });
+    await sending;
+    assert.equal(h.input.value, 'Submitted message');
   });
   test(label + ': rejected message is restored for retry', async () => {
     const h = harness(split);

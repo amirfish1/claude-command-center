@@ -12047,6 +12047,32 @@
     syncQueuedSteerTray($view, paneId, false);
   }
 
+  function composerUserEditRevision(input) {
+    if (!input.__composerEditTracking) {
+      input.__composerEditTracking = true;
+      input.__composerEditRevision = 0;
+      input.addEventListener('input', event => {
+        if (event.isTrusted) input.__composerEditRevision++;
+      });
+    }
+    return input.__composerEditRevision;
+  }
+
+  function clearAcceptedComposerInput(input, text, convId, revision) {
+    // A draft restore can repopulate the textarea while the send is pending.
+    // Retire only that submitted copy, preserving subsequent human edits and
+    // composers that have moved to a different conversation.
+    if (composerUserEditRevision(input) !== revision) return;
+    const paneEl = input.closest('.conv-pane');
+    const pane = paneEl && paneEl.dataset && paneByPaneId(paneEl.dataset.paneId);
+    if ((pane ? pane.conversationId : currentConversation) !== convId) return;
+    if ((input.value || '').trim() !== text) return;
+    input.value = '';
+    clearInputDraftForConversation(convId);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    _autosizeTextareaLike(input, input.closest('.conv-input-bar'));
+  }
+
   function restoreInputAfterSendFailure($input, text) {
     if (!$input) return;
     if (($input.value || '').trim()) return;
@@ -12387,6 +12413,7 @@
       : appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, paneId || activePaneId());
     if (compactRunStarted && sid) markSessionSending(sid);
     updateInputBar();
+    const submittedRevision = composerUserEditRevision($input);
     $input.value = '';
     _autosizeTextareaLike($input, $input.closest('.conv-input-bar'));
     clearInputDraftForConversation(draftConversation);
@@ -12547,6 +12574,7 @@
         }
       }
       sendAccepted = !!(res.ok && data.ok && !data.soft_block && data.submitted !== false);
+      if (sendAccepted) clearAcceptedComposerInput($input, text, draftConversation, submittedRevision);
       if (res.ok && data.ok && data.submitted === false) {
         removePendingSendEcho(pendingSend);
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
@@ -76135,6 +76163,7 @@
       const pendingSend = appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, activePaneId());
       const idempotencyKey = durableActionId('inject');
       const draftConversation = currentConversation;
+      const submittedRevision = composerUserEditRevision($cpInput);
       $cpInput.value = '';
       clearInputDraftForConversation(draftConversation);
       $cpInput.style.height = '';
@@ -76183,6 +76212,7 @@
         let data = {};
         try { data = await res.json(); } catch (_) {}
         sendAccepted = !!(res.ok && data.ok && !data.soft_block && data.submitted !== false);
+        if (sendAccepted) clearAcceptedComposerInput($cpInput, text, draftConversation, submittedRevision);
         if (res.ok && data.ok && data.submitted === false) {
           removePendingSendEcho(pendingSend);
           showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');

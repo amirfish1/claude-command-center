@@ -1,0 +1,1 @@
+- Clear a submitted draft restored while Send is pending once the message is accepted, while preserving new typing and drafts in other conversations.
