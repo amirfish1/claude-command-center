@@ -1846,6 +1846,43 @@ def test_devin_overlay_cold_miss_does_not_block_list(monkeypatch):
     assert not devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked()
 
 
+def test_devin_overlay_stale_rows_trigger_background_refresh(monkeypatch):
+    """CCC-137: an expired cache served to a stale-ok poll must also start a
+    background rebuild; otherwise Devin rows kept a stale ``modified`` forever
+    and sorted below a fake time gap."""
+    import threading
+    from ccc_server import devin
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_build(**kwargs):
+        calls.append(kwargs)
+        started.set()
+        release.wait(5)
+        return [{"session_id": "devincli-fresh"}]
+
+    def cached(key, ttl_only=True):
+        return None if ttl_only else [{"session_id": "devincli-stale"}]
+
+    monkeypatch.setattr(devin, "_devin_cli_cached_rows", cached)
+    monkeypatch.setattr(devin, "_find_devin_cli_conversations_locked", slow_build)
+    t0 = time.monotonic()
+    rows = devin.find_devin_cli_conversations(include_old=True, stale_ok=True)
+    assert [r["session_id"] for r in rows] == ["devincli-stale"]
+    assert time.monotonic() - t0 < 1.0
+    assert started.wait(5), "stale serve should start a background rebuild"
+    # A second poll while it runs serves stale rows without a second build.
+    rows = devin.find_devin_cli_conversations(include_old=True, stale_ok=True)
+    assert [r["session_id"] for r in rows] == ["devincli-stale"]
+    release.set()
+    deadline = time.monotonic() + 5
+    while devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked()
+    assert len(calls) == 1
+
+
 def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
     """Touching a transcript must bust the signature and force exactly one rebuild
     (the build cache must never serve a stale payload after a real change)."""

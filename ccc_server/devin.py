@@ -2032,6 +2032,32 @@ def _devin_cli_cached_rows(params_key, *, ttl_only=True):
         return list(entry["rows"])
 
 
+def _devin_cli_start_bg_rebuild(**kwargs):
+    """Start one detached list rebuild unless one is already running.
+
+    Returns True when this call started the thread. The rebuild lock is
+    taken non-blocking here and released by the thread, so concurrent
+    stale-ok polls never queue behind (or duplicate) a sessions.db scan.
+    """
+    if not _DEVIN_CLI_LIST_REBUILD_LOCK.acquire(blocking=False):
+        return False
+
+    def _rebuild():
+        try:
+            _find_devin_cli_conversations_locked(**kwargs)
+        except Exception:
+            pass
+        finally:
+            _DEVIN_CLI_LIST_REBUILD_LOCK.release()
+
+    try:
+        threading.Thread(target=_rebuild, name="devin-cli-list-rebuild", daemon=True).start()
+    except Exception:
+        _DEVIN_CLI_LIST_REBUILD_LOCK.release()
+        raise
+    return True
+
+
 def find_devin_cli_conversations(
     repo_path=None,
     include_old=False,
@@ -2068,52 +2094,37 @@ def find_devin_cli_conversations(
         )
         return hit
     if stale_ok:
-        # Prefer any cached rows — even expired — over a 30-60s rebuild.
-        # The /list overlay is a gap-filler; freshness comes from the
-        # detached archive build, not from blocking the sidebar poll.
+        # Prefer any cached rows — even expired — over a 30-60s rebuild, but
+        # kick a background refresh so the next poll is fresh. Without it an
+        # expired cache was served forever: Devin rows kept a stale
+        # ``modified`` and sorted below a fake time gap while the row's
+        # ultra-fresh text said "8m ago" (CCC-137).
         stale = _devin_cli_cached_rows(params_key, ttl_only=False)
+        started = _devin_cli_start_bg_rebuild(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=repo_only,
+            progress=progress,
+            limit=limit,
+        )
         if stale is not None:
             _devin_cli_profile_log(
                 "find_devin_cli_conversations",
                 time.perf_counter() - start,
-                f"rows={len(stale)} repo_only={repo_only} stale-ok",
+                f"rows={len(stale)} repo_only={repo_only} stale-ok"
+                + ("-bg" if started else ""),
             )
             return stale
-        acquired = _DEVIN_CLI_LIST_REBUILD_LOCK.acquire(blocking=False)
-        if not acquired:
-            _devin_cli_profile_log(
-                "find_devin_cli_conversations",
-                time.perf_counter() - start,
-                f"rows=0 repo_only={repo_only} stale-ok-busy",
-            )
-            return []
-        # Cold miss (fresh process, nothing cached): build in the background
-        # and return [] now. Built inline, this was the first sidebar list
-        # after every restart paying the ~28s cold sessions.db scan
-        # (CCC-1244); the archive snapshot already carries Devin rows, and
-        # the next poll reads the rows this thread caches.
-        def _rebuild():
-            try:
-                _find_devin_cli_conversations_locked(
-                    repo_path=repo_path,
-                    include_old=include_old,
-                    repo_only=repo_only,
-                    progress=progress,
-                    limit=limit,
-                )
-            except Exception:
-                pass
-            finally:
-                _DEVIN_CLI_LIST_REBUILD_LOCK.release()
-        try:
-            threading.Thread(target=_rebuild, name="devin-cli-list-rebuild", daemon=True).start()
-        except Exception:
-            _DEVIN_CLI_LIST_REBUILD_LOCK.release()
-            raise
+        # Cold miss (fresh process, nothing cached): return [] now and let
+        # the background build fill the cache. Built inline, this was the
+        # first sidebar list after every restart paying the ~28s cold
+        # sessions.db scan (CCC-1244); the archive snapshot already carries
+        # Devin rows, and the next poll reads the rows the thread caches.
         _devin_cli_profile_log(
             "find_devin_cli_conversations",
             time.perf_counter() - start,
-            f"rows=0 repo_only={repo_only} stale-ok-cold-bg",
+            f"rows=0 repo_only={repo_only} "
+            + ("stale-ok-cold-bg" if started else "stale-ok-busy"),
         )
         return []
     with _DEVIN_CLI_LIST_REBUILD_LOCK:
