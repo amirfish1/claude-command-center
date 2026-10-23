@@ -3981,6 +3981,9 @@
   // Snapshot of liveStatus before the most recent refresh, used to detect
   // transitions (working -> idle, running -> idle) for audible feedback.
   let _liveStatusPrev = null;
+  // Single-read hysteresis counters for refreshLiveStatus (CCC-147).
+  let _codexWorkingHoldCount = 0;
+  let _liveStatusFailHoldCount = 0;
   // Footer sound-toggle button element; updated when preference changes.
   let _soundToggleBtn = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
@@ -6737,9 +6740,23 @@
         // cross-repo, placeholder swaps), so this is the reliable path.
         devinAcpReady: data.devin_acp_ready === true,
       };
+      // Hysteresis for the Codex Thinking row / Working badge: one null
+      // codex_state read mid-turn (server fail-quiet) would otherwise remove
+      // both for a tick and re-add them on the next poll — a visible flicker.
+      // Hold the previous 'working' through a single null read; a second
+      // consecutive null (or any explicit non-working state) lets it go.
+      if (!liveStatus.codexState && _liveStatusPrev && _liveStatusPrev.forSessionId === _fetchedFor
+          && _liveStatusPrev.codexState === 'working' && _codexWorkingHoldCount < 1) {
+        _codexWorkingHoldCount++;
+        liveStatus.codexState = 'working';
+        liveStatus.codexFresh = !!_liveStatusPrev.codexFresh;
+      } else {
+        _codexWorkingHoldCount = 0;
+      }
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
       _lastStatusCheckedAt = Date.now();
+      _liveStatusFailHoldCount = 0;
       // Rewrite the generic "still running" queued-send note into something
       // that actually explains why nothing is landing, the moment the
       // watcher confirms there's no delivery channel — the submission-time
@@ -6880,7 +6897,16 @@
         codex_desktop_attached: !!data.codex_desktop_attached,
       });
     } catch (err) {
+      // One failed/aborted read for the same session keeps the previous
+      // status instead of blanking it (which dropped the Codex Thinking row
+      // and Working badge for a tick); a second consecutive failure resets.
+      if (_liveStatusPrev && _liveStatusPrev.forSessionId === _fetchedFor && _liveStatusFailHoldCount < 1) {
+        _liveStatusFailHoldCount++;
+        liveStatus = _liveStatusPrev;
+      } else {
+      _liveStatusFailHoldCount = 0;
       liveStatus = { forSessionId: _fetchedFor, live: false, status: null, recentlyWritten: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
+      }
     }
     updateJumpButton();
     updateInputBar();

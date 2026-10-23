@@ -1,0 +1,1 @@
+- Codex sessions no longer flicker their Thinking row and Working badge when a single live-status read comes back empty or fails mid-turn.
