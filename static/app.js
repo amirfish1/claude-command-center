@@ -73652,7 +73652,12 @@
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
-        const ms = Math.round(performance.now() - _perfT0);
+        // Subtract hidden/suspended time like conv_open/archive_load: a
+        // background tab's throttled fetch otherwise reads as a multi-minute
+        // "slow list" (CCC-142). Wall time still ships as detail.wall_ms.
+        const _perfEnd = performance.now();
+        const wallMs = Math.round(_perfEnd - _perfT0);
+        const ms = Math.round(_perfActiveElapsed(_perfT0, _perfEnd));
         const size = bytes ? (bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB'
           : Math.round(bytes / 1024) + 'KB')
           : (status === 304 ? '304'
@@ -73667,7 +73672,10 @@
         // (maintainer-box) self-filing as conv_open/archive_load.
         if (typeof _perfEvent === 'function') {
           _perfEvent('list_read', ms, {
-            detail: { bytes: bytes || 0, status: status, extra: extra || '' },
+            detail: {
+              bytes: bytes || 0, status: status, extra: extra || '',
+              wall_ms: wallMs, hidden_ms: wallMs - ms,
+            },
           });
         }
       } catch (_) {}

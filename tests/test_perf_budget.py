@@ -4890,6 +4890,33 @@ def test_archive_list_projection_loads_per_row_stores_once(monkeypatch):
     assert parents == []
 
 
+def test_archive_list_acp_overlay_skips_sidecars_without_candidates(monkeypatch):
+    """CCC-142: every /api/conversations/list poll ran the ACP overlay, which
+    loaded (and re-stat'd) every spawn marker on disk before checking for a
+    single attached ACP session. Live stack dumps caught 3-4s list requests
+    sitting there. With no candidate, no sidecar may be read; with one
+    missing attached session, they are read exactly once."""
+    import server
+    loads = []
+    monkeypatch.setattr(server, "_load_spawn_markers", lambda: loads.append("m") or {})
+    monkeypatch.setattr(server, "_load_session_name_overrides", lambda: loads.append("n") or {})
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets",
+                        lambda: loads.append("l") or (set(), set()))
+    monkeypatch.setattr(server, "_load_pinned_conversations", lambda: loads.append("p") or [])
+    monkeypatch.setattr(server, "_ACP_HARNESSES", {"kimi": {"label": "Kimi"}})
+    monkeypatch.setattr(server, "_acp_harness_enabled", lambda h: True)
+    rows = [{"id": f"s{i}", "session_id": f"s{i}"} for i in range(2000)]
+    state = {"kimi": {"s5": {"attached": True, "cwd": "/tmp", "status": "active"}}}
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", state)
+    assert server._archive_overlay_acp_sessions(rows) == []
+    assert loads == []
+    state["kimi"]["new-acp"] = {"attached": True, "cwd": "/tmp", "status": "active"}
+    state["kimi"]["other-acp"] = {"attached": True, "cwd": "/tmp", "status": "idle"}
+    out = server._archive_overlay_acp_sessions(rows)
+    assert sorted(r["session_id"] for r in out) == ["new-acp", "other-acp"]
+    assert sorted(loads) == ["l", "m", "n", "p"]
+
+
 def test_restart_recovery_reads_only_window_tails_once_per_boot(monkeypatch, tmp_path):
     """Restart recovery stats every transcript once per boot, opens only the
     ones that went quiet in the window before a shutdown, and serves every

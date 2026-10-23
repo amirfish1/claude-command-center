@@ -15967,28 +15967,35 @@ def _archive_overlay_acp_sessions(rows):
     refresh."""
     if not _ACP_HARNESSES:
         return []
-    try:
-        spawn_markers = _load_spawn_markers()
-    except Exception:
-        spawn_markers = {}
-    existing = set()
-    for r in (rows or []):
-        sid = r.get("session_id") or r.get("id")
-        if sid:
-            existing.add(str(sid))
-    try:
-        name_overrides = _load_session_name_overrides()
-    except Exception:
-        name_overrides = {}
-    try:
-        archived_set, trashed_set = _load_conversation_lifecycle_sets()
-    except Exception:
-        archived_set, trashed_set = set(), set()
-    try:
-        pinned_list = _load_pinned_conversations()
-    except Exception:
-        pinned_list = []
-    pinned_rank = _pinned_rank_map(pinned_list)
+    existing = None
+    # Gate by candidacy (CCC-142): the sidecar loads below cost O(all spawn
+    # markers) -- ~4k files, re-stat'd on nearly every poll behind a 2s memo
+    # -- yet are only needed to build a row for an attached ACP session that
+    # the snapshot is missing. Normally there is none, so load them lazily.
+    ctx = {}
+
+    def _overlay_ctx():
+        if ctx:
+            return ctx
+        try:
+            ctx["spawn_markers"] = _load_spawn_markers()
+        except Exception:
+            ctx["spawn_markers"] = {}
+        try:
+            ctx["name_overrides"] = _load_session_name_overrides()
+        except Exception:
+            ctx["name_overrides"] = {}
+        try:
+            ctx["archived_set"], ctx["trashed_set"] = _load_conversation_lifecycle_sets()
+        except Exception:
+            ctx["archived_set"], ctx["trashed_set"] = set(), set()
+        try:
+            pinned_list = _load_pinned_conversations()
+        except Exception:
+            pinned_list = []
+        ctx["pinned_rank"] = _pinned_rank_map(pinned_list)
+        return ctx
+
     out = []
     now = time.time()
     for harness in _ACP_HARNESSES:
@@ -16007,7 +16014,15 @@ def _archive_overlay_acp_sessions(rows):
         label = (_ACP_HARNESSES.get(harness) or {}).get("label", harness)
         for sid, state in sessions.items():
             sid = str(sid)
-            if not sid or sid in existing:
+            if not sid:
+                continue
+            if existing is None:
+                existing = set()
+                for r in (rows or []):
+                    rsid = r.get("session_id") or r.get("id")
+                    if rsid:
+                        existing.add(str(rsid))
+            if sid in existing:
                 continue
             if not (state and state.get("attached")):
                 continue
@@ -16017,6 +16032,11 @@ def _archive_overlay_acp_sessions(rows):
             cwd = str((state.get("cwd") or "")).strip()
             if not cwd:
                 continue
+            c = _overlay_ctx()
+            spawn_markers = c["spawn_markers"]
+            name_overrides = c["name_overrides"]
+            archived_set, trashed_set = c["archived_set"], c["trashed_set"]
+            pinned_rank = c["pinned_rank"]
             try:
                 cwd_exists = Path(cwd).is_dir()
             except OSError:
@@ -16307,6 +16327,9 @@ def _stamp_archive_goals(rows):
     return rows
 
 
+_ARCHIVE_COMPUTE_LAST_PHASES = {}
+
+
 def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None):
     """Produce archive rows under the per-key build lock (single-flight).
 
@@ -16319,14 +16342,25 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
     if serve_generation is None:
         with _archive_serve_lock:
             serve_generation = _archive_serve_generation
+    # CCC-142: per-phase timings, shipped back by the refresh worker.
+    phases = _ARCHIVE_COMPUTE_LAST_PHASES
+    phases.clear()
+    _ph = time.perf_counter()
     sig = _archive_corpus_signature()
+    phases["signature_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
     lock = _archive_build_lock(key)
     with lock:
+        _ph = time.perf_counter()
         entry = _archive_response_cache_get(key)
+        phases["cache_get_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
+        _ph = time.perf_counter()
         if entry and entry.get("signature") == sig:
+            phases["tier"] = "match"
             rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
+            phases["rehydrate_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
             from_cache = True
         else:
+            phases["tier"] = "full"
             rows = None
             # Incremental tier: the corpus changed, but if we know exactly
             # WHICH transcripts changed (both signatures' stat maps are still
@@ -16340,7 +16374,10 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                 delta = _archive_signature_delta(entry.get("signature"), sig)
                 if delta is not None:
                     changed, removed, refresh_engines = delta
+                    phases["tier"] = "incremental"
+                    phases["changed"] = len(changed)
                     try:
+                        _sp = time.perf_counter()
                         fresh = find_all_conversations(
                             resolve_pr_states=cache_options.get("resolve_pr_states", False),
                             resolve_effective=cache_options.get("resolve_effective", False),
@@ -16350,6 +16387,9 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                         merged = _archive_merge_incremental_rows(
                             entry.get("conversations") or [], fresh, removed,
                         )
+                        phases["parse_merge_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        phases["engines"] = sorted(refresh_engines)
+                        _sp = time.perf_counter()
                         if "hermes" in refresh_engines:
                             merged = _archive_merge_engine_rows(
                                 merged,
@@ -16379,18 +16419,27 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                                     repo_only=False,
                                 ),
                             )
+                        phases["engine_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         _archive_response_cache_put(key, merged, signature=sig)
+                        phases["cache_put_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         _save_conv_meta_cache()
+                        phases["meta_save_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         rows = _rehydrate_archive_cached_rows(merged)
+                        phases["rehydrate_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         from_cache = True
                     except Exception as e:
                         print(f"  [archive-cache] incremental refresh failed, rebuilding: {e}")
                         rows = None
             if rows is None:
+                phases["tier"] = "full"
                 rows = _build_archive_conversations(**cache_options, progress_step=progress_step)
                 _archive_response_cache_put(key, rows, signature=sig)
                 _save_conv_meta_cache()
                 from_cache = False
+        phases["build_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
     if not from_cache:
         # The cache branches already ran all three stamps inside
         # _rehydrate_archive_cached_rows; the full-build branch stamps state
@@ -16458,12 +16507,16 @@ def _archive_refresh_worker_main(encoded_options, output_path):
             )
         }
         key = _archive_response_cache_key(**cache_options)
+        _wt0 = time.perf_counter()
         rows, from_cache = _archive_compute_rows(key, cache_options)
+        phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
+        phases["compute_ms"] = round((time.perf_counter() - _wt0) * 1000.0, 1)
         result = {
             "ok": True,
             "key": key,
             "rows": rows,
             "from_cache": bool(from_cache),
+            "phases": phases,
         }
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
@@ -16510,12 +16563,15 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     # 2026-08-04 blocked every subsequent refresh attempt forever with no
     # exception, no log line, nothing to restart into. Failing loud beats
     # hanging silent even when it can't fix the underlying stuck holder.
+    _rt0 = time.perf_counter()
+    _rphase = {}
     try:
         if not _ARCHIVE_BUILD_GLOBAL_LOCK.acquire(timeout=_ARCHIVE_REFRESH_WATCHDOG_S):
             raise RuntimeError(
                 "archive refresh worker could not acquire the build lock within "
                 f"{_ARCHIVE_REFRESH_WATCHDOG_S:.0f}s -- another refresh is stuck holding it"
             )
+        _rphase["lock_wait_ms"] = round((time.perf_counter() - _rt0) * 1000.0, 1)
         try:
             completed = subprocess.run(
                 command,
@@ -16529,8 +16585,13 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             )
         finally:
             _ARCHIVE_BUILD_GLOBAL_LOCK.release()
+        _rt1 = time.perf_counter()
+        _rphase["worker_ms"] = round((_rt1 - _rt0) * 1000.0 - _rphase["lock_wait_ms"], 1)
         try:
-            result = json.loads(Path(output_name).read_text(encoding="utf-8"))
+            _rtext = Path(output_name).read_text(encoding="utf-8")
+            _rphase["result_bytes"] = len(_rtext)
+            result = json.loads(_rtext)
+            del _rtext
         except (OSError, json.JSONDecodeError) as exc:
             detail = (completed.stderr or completed.stdout or "").strip()[-500:]
             raise RuntimeError(
@@ -16544,8 +16605,16 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         rows = result.get("rows")
         if not isinstance(rows, list):
             raise RuntimeError("archive refresh worker returned invalid rows")
+        _rt2 = time.perf_counter()
+        _rphase["decode_ms"] = round((_rt2 - _rt1) * 1000.0, 1)
         if _ARCHIVE_SERVE_TTL > 0:
             _archive_serve_cache_store(key, rows, serve_generation)
+        _rt3 = time.perf_counter()
+        _rphase["store_ms"] = round((_rt3 - _rt2) * 1000.0, 1)
+        _rphase["rows"] = len(rows)
+        _rphase["key"] = str(key)[:80]
+        _rphase["worker_phases"] = result.get("phases")
+        record_diag("archive_rebuild", (_rt3 - _rt0) * 1000.0, _rphase)
         return rows, bool(result.get("from_cache"))
     finally:
         try:
@@ -30754,6 +30823,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
             }
             stale_ok = qs.get("stale_ok", ["0"])[0] in ("1", "true")
+            # CCC-142: per-phase server timing. wall vs thread CPU separates
+            # real work from waiting on the GIL / locks behind a rebuild.
+            _lt0 = time.perf_counter()
+            _lc0 = time.thread_time()
             # Body-cache version: snapshot version when rows ARE the stored
             # snapshot, or (snapshot version, overlay content hash) when
             # in-memory ACP/Devin overlay rows were appended — either way a
@@ -30762,12 +30835,34 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cache_options,
                 force_refresh=not stale_ok,
             )
+            _lt1 = time.perf_counter()
             list_cache_key = _archive_response_cache_key(**cache_options)
-            self._send_archive_list_json(
-                list_cache_key, window, from_cache,
-                lambda: _archive_list_payload(rows, window=window, cached=from_cache),
-                body_ver,
+            _payload_ms = []
+
+            def _timed_payload():
+                _pt0 = time.perf_counter()
+                try:
+                    return _archive_list_payload(rows, window=window, cached=from_cache)
+                finally:
+                    _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
+
+            _status = self._send_archive_list_json(
+                list_cache_key, window, from_cache, _timed_payload, body_ver,
             )
+            _lt2 = time.perf_counter()
+            record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
+                "window": window,
+                "status": _status,
+                "rows_src": len(rows or []),
+                "source_ms": round((_lt1 - _lt0) * 1000.0, 1),
+                "payload_ms": round(_payload_ms[0], 1) if _payload_ms else None,
+                "send_ms": round((_lt2 - _lt1) * 1000.0, 1),
+                "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                "body_hit": not _payload_ms,
+                "from_cache": bool(from_cache),
+                "stale_ok": stale_ok,
+                "refreshing": bool(_archive_serve_refreshing),
+            })
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every
             # folder under ~/.claude/projects/, tagged with folder + reverse
@@ -40549,7 +40644,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(304)
             self.send_header("ETag", etag_val)
             self.end_headers()
-            return
+            return 304
         if accept_gzip and gzip_body is not None:
             body, enc = gzip_body, "gzip"
         else:
@@ -40565,7 +40660,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
-            pass
+            return "pipe"
+        return 200
 
     def _send_server_timing(self, cache=None):
         # Server-side time for this response so the client's conv_open perf

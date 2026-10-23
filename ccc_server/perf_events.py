@@ -349,6 +349,45 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
     }
 
 
+# Server-only diagnostic kinds (CCC-142): per-phase timings of the list
+# request and of each archive rebuild. They share the JSONL sink so
+# scripts/perf_gate.py --kind can read them, but stay out of _VALID_KINDS:
+# no breach verdict, no summary row, no self-filed ticket, no [PERF] line
+# (the list is polled every few seconds per tab).
+_DIAG_KINDS = ("list_server", "archive_rebuild")
+
+
+def record_diag(kind, ms, detail=None):
+    """Append one diagnostic sample. Never raises."""
+    try:
+        if kind not in _DIAG_KINDS:
+            return
+        ms_f = float(ms)
+        if not math.isfinite(ms_f) or ms_f < 0:
+            return
+        try:
+            build = str(getattr(_core, "_SERVER_CODE_REV", "") or "")
+        except Exception:
+            build = ""
+        load1, ncpu = _machine_load()
+        row = {
+            "ts": _iso_now(),
+            "kind": kind,
+            "ms": int(round(ms_f)),
+            "build": build,
+            "warmup": _in_warmup(),
+            "load1": load1,
+            "ncpu": ncpu,
+            "detail": detail if isinstance(detail, dict) else None,
+        }
+        path = _events_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
 def _iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
