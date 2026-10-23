@@ -1727,7 +1727,7 @@
     const sec = document.createElement('div');
     sec.id = 'cccPerfSection';
     sec.style.cssText = 'flex:0 0 auto;border-top:1px solid var(--border-color,#30363d);' +
-      'font:600 10px/1.4 ui-monospace,Menlo,monospace;color:var(--text-secondary,#9aa);';
+      'font:600 12px/1.5 ui-monospace,Menlo,monospace;color:var(--text-secondary,#9aa);';
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 10px;cursor:pointer;user-select:none;';
     head.innerHTML = '<span>perf</span>' +
