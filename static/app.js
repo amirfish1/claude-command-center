@@ -1743,7 +1743,8 @@
     };
     const listCol = mkCol('cccPerfListCol');
     const openCol = mkCol('cccPerfOpenCol');
-    openCol.style.borderLeft = '1px solid var(--border-color,#30363d)';
+    openCol.style.borderLeft = '1px solid var(--text-secondary,#9aa)';
+    openCol.style.marginLeft = '8px';
     openCol.style.paddingLeft = '8px';
     body.appendChild(listCol);
     body.appendChild(openCol);
