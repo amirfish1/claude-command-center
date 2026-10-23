@@ -32154,7 +32154,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .conv-item.is-archived-row .wa-body { height: 106px; }
   .conv-item.is-ready-to-close .wa-line2,
   .conv-item.is-archived-row .wa-line2 { align-items: center; }
-  .wa-ready-label { display: block; color: var(--text-muted); font-weight: 400; }
+  .wa-explanation-label { color: inherit; font-weight: 500; }
   .conv-item .wa-row .conv-ready-archive { min-height: 44px; }
   .wa-preview {
     flex: 1 1 auto;
