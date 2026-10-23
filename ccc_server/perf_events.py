@@ -87,6 +87,10 @@ CONV_OPEN_MS = _env_int("CCC_PERF_CONV_OPEN_MS", 5000)
 # live_build = server-side live-activity rebuild (build_live_sessions_activity).
 LIST_READ_MS = _env_int("CCC_PERF_LIST_READ_MS", 3000)
 LIVE_BUILD_MS = _env_int("CCC_PERF_LIVE_BUILD_MS", 3000)
+# tts_start = speaker click -> first audible audio (active time, one per read);
+# tts_gap = longest silence between consecutive clips within one read.
+TTS_START_MS = _env_int("CCC_PERF_TTS_START_MS", 300)
+TTS_GAP_MS = _env_int("CCC_PERF_TTS_GAP_MS", 250)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -178,7 +182,11 @@ def _in_warmup(now=None):
     return (t - _PROCESS_STARTED_AT) < WARMUP_S
 
 
-_VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build")
+_VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
+                "tts_start", "tts_gap")
+# Recorded and summarized with a breach verdict, but never self-filed: the
+# speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates.
+_NO_SELF_FILE_KINDS = ("tts_start", "tts_gap")
 
 
 def _perf_tickets_enabled():
@@ -243,6 +251,10 @@ def _threshold_for(kind, warm):
         return LIST_READ_MS
     if kind == "live_build":
         return LIVE_BUILD_MS
+    if kind == "tts_start":
+        return TTS_START_MS
+    if kind == "tts_gap":
+        return TTS_GAP_MS
     return CONV_OPEN_MS
 
 
@@ -457,6 +469,8 @@ def summarize(hours=24, now=None):
             "conv_open_ms": CONV_OPEN_MS,
             "list_read_ms": LIST_READ_MS,
             "live_build_ms": LIVE_BUILD_MS,
+            "tts_start_ms": TTS_START_MS,
+            "tts_gap_ms": TTS_GAP_MS,
         },
         "kinds": kinds,
         "ticket": _ticket_summary(_load_ticket_state()),
@@ -472,6 +486,8 @@ def _alert_rows(events):
     """Apply startup budgets to both new and previously recorded samples."""
     rows = []
     for event in events:
+        if event.get("kind") in _NO_SELF_FILE_KINDS:
+            continue
         if event.get("warmup"):
             if event.get("kind") != "archive_load":
                 continue

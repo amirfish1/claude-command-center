@@ -14020,6 +14020,7 @@
         _ttsUtterance = null;
         state.index += 1;
         state.gapFrom = Date.now();
+        if (state.perf) state.perf.gapT0 = performance.now();
         _ttsSpeakNextChunk();
       };
       // Where reads wait: time to first sound, gaps between clips, and stalls
@@ -14028,10 +14029,12 @@
       audio.addEventListener('playing', () => {
         if (stale()) return;
         const now = Date.now();
+        _ttsPerfStart(state, { engine: 'neural', voice: got.voice });
+        if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, performance.now() - state.perf.gapT0, 'gap'); state.perf.gapT0 = 0; }
         if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms'); state.t0 = 0; }
         else if (state.gapFrom) { const g = now - state.gapFrom; if (g > 300) _ttsLog('GAP', g + 'ms before clip ' + idx + ' (' + chunk.text.length + ' chars)'); }
         state.gapFrom = 0;
-        if (waitFrom) { _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
+        if (waitFrom) { _ttsPerfSilence(state, now - waitFrom, 'stall'); _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
       });
       audio.addEventListener('waiting', () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); });
       audio.onerror = () => { URL.revokeObjectURL(got.url); fallBack(300000); };
@@ -14071,6 +14074,7 @@
     clearTtsHighlight();
     clearTtsCaption();
     _ttsShowVoice('');
+    _ttsPerfFlush(_ttsChunkState);
     _ttsChunkState = null;
     if (window.speechSynthesis) {
       _ttsEngineCancel();
@@ -14293,9 +14297,54 @@
     };
   }
 
+  // Speaker telemetry (CCC-144): tts_start = click -> first audible audio
+  // (active time, like conv_open), tts_gap = longest silence between clips
+  // (or a stream stall inside one) during a read, one sample per read. A
+  // restart (rate step, skip) keeps the read's perf record instead of
+  // counting as a new click. _ttsPerfTarget says what was clicked.
+  let _ttsPerfTarget = '';
+  // Last read state carrying a perf record: callers null _ttsChunkState
+  // before restarting, so the restart finds its read here.
+  let _ttsPerfState = null;
+  function _ttsPerfStart(state, how) {
+    const p = state && state.perf;
+    if (!p || p.started) return;
+    p.started = true;
+    const end = performance.now();
+    _perfEvent('tts_start', _perfActiveElapsed(p.t0, end), { detail: {
+      engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
+      chars: p.chars, clips: p.clips, target: p.target, rate: _ttsRate,
+      wall_ms: Math.round(end - p.t0),
+    } });
+  }
+  function _ttsPerfSilence(state, ms, kind) {
+    const p = state && state.perf;
+    if (!p || !(ms >= 0)) return;
+    if (kind === 'gap') { p.gaps += 1; p.maxGap = Math.max(p.maxGap, ms); }
+    else { p.stalls += 1; p.maxStall = Math.max(p.maxStall, ms); }
+  }
+  function _ttsPerfFlush(state) {
+    const p = state && state.perf;
+    if (!p || p.flushed) return;
+    p.flushed = true;
+    if (!p.gaps && !p.stalls) return;
+    _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
+      max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
+      max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
+      voice: state.geminiVoice || '', cache: p.cache, chars: p.chars,
+      clips: p.clips, played: state.index, target: p.target, rate: _ttsRate,
+    } });
+  }
+  // A read paused and left (tab closed, reload) still reports its gaps.
+  window.addEventListener('pagehide', () => { try { _ttsPerfFlush(_ttsPerfState); } catch (_) {} });
+
   function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart) {
     let chunks = _chunkTtsText(text, TTS_CHUNK_MAX_CHARS, baseOffset);
     if (!chunks.length) return false;
+    const _ttsPrev = _ttsChunkState || _ttsPerfState;
+    const _ttsPerfHead = _ttsHeadChunk(text, baseOffset);
+    const _ttsPerfEntry = _ttsPerfHead && _ttsHeadCache.get(_ttsPerfHead.text);
+    const _ttsPerfCs = _ttsPerfHead && _ttsCacheState.get(_ttsPerfHead.text);
     // Free voice whenever it isn't cooling down. A prepared first chunk starts
     // instantly; otherwise it is fetched now (a 160-char head takes ~1-2 s).
     // The Mac voice is only the fallback when that fetch or playback fails.
@@ -14321,6 +14370,23 @@
         chunks = [head].concat(_chunkTtsText(text.slice(used), 400, (Number(baseOffset) || 0) + used));
       }
     }
+    const _ttsFresh = !(Number(baseOffset) > 0) && !pauseOnStart && !_ttsKeepVoice;
+    let perf = null;
+    if (!_ttsFresh && _ttsPrev && _ttsPrev.perf && !_ttsPrev.perf.flushed) {
+      perf = _ttsPrev.perf;   // a restart continues the same read
+    } else {
+      if (_ttsPrev) _ttsPerfFlush(_ttsPrev);
+      if (_ttsFresh && !_ttsHebrew) {
+        perf = {
+          t0: performance.now(), started: false, flushed: false,
+          cache: _ttsPerfCs && _ttsPerfCs.st === 'ready' ? 'ready' : _ttsPerfEntry ? 'partial' : 'none',
+          head: _ttsPerfEntry ? (_ttsPerfEntry.ready ? 'ready' : 'generating') : 'none',
+          chars: text.length, clips: chunks.length, target: _ttsPerfTarget || 'other',
+          gaps: 0, maxGap: 0, stalls: 0, maxStall: 0, gapT0: 0,
+        };
+      }
+    }
+    _ttsPerfTarget = '';
     _ttsChunkState = {
       chunks,
       neuralOk: _ttsHeadReady,
@@ -14330,7 +14396,9 @@
       paneId: paneId || _ttsActivePaneId || activePaneId(),
       pauseOnStart: !!pauseOnStart,
       t0: Date.now(),
+      perf,
     };
+    _ttsPerfState = perf ? _ttsChunkState : null;
     _ttsSpeakNextChunk();
     return true;
   }
@@ -14351,6 +14419,7 @@
 
     utterance.onstart = () => {
       if (_ttsUtterance !== utterance || _ttsChunkState !== state) return;
+      _ttsPerfStart(state, { engine: 'mac', voice: 'Mac voice' });
       setTtsButtonsState(true, false, state.paneId);
       _ttsShowVoice('Mac voice');
       if (_ttsStartWhy) ttsButtons().concat(_ttsDirectBtn ? [_ttsDirectBtn] : []).forEach(btn => { btn.title = 'Mac voice: ' + _ttsStartWhy; });
@@ -14431,6 +14500,7 @@
     const clipped = clean.length > TTS_TEXT_MAX_CHARS ? clean.slice(0, TTS_TEXT_MAX_CHARS) : clean;
     _ttsBoundUtteranceText = clipped;
     _ttsActiveConvId = convId || null;
+    _ttsPerfTarget = sourceBtn ? 'turn' : 'direct';
     if (!_ttsStartChunkedSpeech(clipped, paneId, 0, false)) return false;
     // Reflect state immediately in case onstart is slow to fire.
     setTtsButtonsState(true, false, paneId || _ttsActivePaneId || activePaneId());
@@ -14450,6 +14520,7 @@
     if (_ttsActive && !_ttsPaused) {
       try { _ttsEnginePause(); } catch (_) {}
       _ttsPaused = true;
+      if (_ttsChunkState && _ttsChunkState.perf) _ttsChunkState.perf.gapT0 = 0;
       ttsButtons().forEach(btn => {
         if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
           btn.classList.add('paused');
@@ -14497,7 +14568,8 @@
     // and inaudible; needs on-device verification.
     _primeTtsEngine();
     paneId = paneId || activePaneId();
-    const data = selectedConversationTtsData(paneId) || lastMessageTtsData(paneId);
+    const _ttsSel = selectedConversationTtsData(paneId);
+    const data = _ttsSel || lastMessageTtsData(paneId);
     if (!data || !data.text.trim()) {
       setTtsButtonsState(false, true);
       showOpToast('No message to read yet.', 'error');
@@ -14517,6 +14589,7 @@
 
     _ttsTextMapping = mappingToUse;
     _ttsBoundUtteranceText = textToSpeak;
+    _ttsPerfTarget = _ttsSel ? 'selection' : 'last';
     _ttsStartChunkedSpeech(textToSpeak, paneId, 0, false);
   }
 

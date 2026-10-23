@@ -127,6 +127,28 @@ class TestRecordEvent(PerfEventsTestBase):
         with self.assertRaises(ValueError):
             pe.record_event("not_a_real_kind", 100)
 
+    def test_tts_kinds_record_with_own_thresholds(self):
+        start = pe.record_event("tts_start", pe.TTS_START_MS + 1,
+                                detail={"cache": "none", "voice": "af_heart"})
+        gap = pe.record_event("tts_gap", pe.TTS_GAP_MS - 1)
+        self.assertEqual(start["threshold_ms"], pe.TTS_START_MS)
+        self.assertTrue(start["breach"])
+        self.assertEqual(gap["threshold_ms"], pe.TTS_GAP_MS)
+        self.assertFalse(gap["breach"])
+        rows = [json.loads(l) for l in self.events_path().read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([r["kind"] for r in rows], ["tts_start", "tts_gap"])
+        self.assertEqual(rows[0]["detail"]["cache"], "none")
+
+    def test_tts_breaches_never_self_file(self):
+        # CCC-144 tracks the speaker kinds; repeated or extreme breaches must
+        # not open a parallel perf ticket or a machine-saturation alert.
+        now = time.time()
+        rows = [_row("tts_start", 30000, now - i, pe.TTS_START_MS) for i in range(5)]
+        rows += [dict(_row("tts_gap", 9000, now - i, pe.TTS_GAP_MS), load1=999, ncpu=1)
+                 for i in range(5)]
+        self.assertIsNone(pe.evaluate_breach_pattern(rows))
+        self.assertIsNone(pe.evaluate_saturation(rows))
+
     def test_non_numeric_ms_raises(self):
         with self.assertRaises(ValueError):
             pe.record_event("conv_open", "abc")
