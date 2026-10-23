@@ -7893,18 +7893,8 @@
   .conv-item .conv-title.untitled {
     font-weight: 500; color: var(--text-muted); font-style: italic;
   }
-  /* User-rename marker: a muted leading chevron. Pairs with the ✨ glyph
-     that the renderer prepends to AI-titled rows — user-curated names
-     get a quiet "›" instead so you can scan at a glance which titles you
-     personally set vs which Claude/Codex/Antigravity invented. Earlier
-     attempts used teal, pencil emoji, and a dotted underline; all were
-     either too loud or got clipped by the row's `overflow: hidden`. */
   .conv-item .conv-title.user-renamed { color: inherit; }
-  .conv-item .conv-title.user-renamed::before {
-    content: "› ";
-    color: var(--text-muted);
-    font-weight: 500;
-  }
+  .conv-item .conv-title.user-renamed::before { content: none; }
   /* CCC-842: auto-titling only fires from the session's Stop hook (after its
      first turn ends), so a still-live session showing its raw first message
      hasn't reached that point yet — this pulses an hourglass instead of
@@ -30404,15 +30394,15 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   font: inherit;
 }
 .conv-item:has(.conv-main-row > .conv-idea-avatar) {
-  --conv-content-left: calc(var(--conv-icon-left) + 80px);
-  min-height: 70px;
+  --conv-content-left: calc(var(--conv-icon-left) + 44px);
+  min-height: 54px;
 }
 .conv-item .conv-session-icon.conv-idea-avatar {
   top: 6px;
   transform: none;
   display: inline-flex;
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border-radius: 50%;
   align-items: center;
@@ -30421,28 +30411,28 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   opacity: 1;
   z-index: 3;
 }
-.conv-avatar-number { font: 700 18px/1 system-ui, sans-serif; }
+.conv-avatar-number { font: 700 15px/1 system-ui, sans-serif; }
 .conv-avatar-model {
   position: absolute;
-  bottom: -12px;
-  right: -28px;
+  bottom: -5px;
+  right: -4px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  max-width: 78px;
+  gap: 2px;
+  max-width: 36px;
   box-sizing: border-box;
-  padding: 2px 4px;
+  padding: 1px 3px;
   border: 1px solid color-mix(in srgb, currentColor 45%, var(--border));
   border-radius: 5px;
   background: color-mix(in srgb, currentColor 12%, var(--bg));
   color: var(--text);
-  font: 9px/1.2 system-ui, sans-serif;
+  font: 8px/1.2 system-ui, sans-serif;
   white-space: nowrap;
 }
-.conv-avatar-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.conv-avatar-engine, .conv-avatar-engine svg { display: block; width: 12px; height: 12px; }
 .conv-avatar-cost { flex: 0 0 auto; font-weight: 700; }
 @media (max-width: 1200px) {
-  #convList .conv-item > .wa-row:has(.conv-idea-avatar) { gap: 30px; }
+  #convList .conv-item > .wa-row:has(.conv-idea-avatar) { gap: 10px; }
   .wa-av.conv-idea-avatar { align-self: flex-start; margin-top: 8px; }
 }
 .conv-idea-avatar:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -32506,11 +32496,40 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 .tracked-table .tt-pill.is-pr,
 .tracked-table .tt-pill.is-testing { color: var(--purple); }
 
-/* Completion actions remain visible at every sidebar density. */
-#convList .conv-item.is-ready-to-close .conv-main-row { flex-wrap: wrap; }
-#convList .conv-item.is-ready-to-close .conv-outcome.is-ready {
-  display: flex !important;
-  flex: 1 1 100%;
-  order: 20;
-  margin-top: 4px;
+/* Idea rows use two lines at rest, regardless of outcome or density. */
+@media (min-width: 1201px) {
+  #convList .conv-item.is-idea-row .conv-main-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+    align-items: center; gap: 3px 6px; padding-top: 0; padding-bottom: 0;
+  }
+  #convList .conv-item.is-idea-row .conv-title { grid-column: 1; grid-row: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #convList .conv-item.is-idea-row .conv-meta-col { grid-column: 2; grid-row: 1; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
+  #convList .conv-item.is-idea-row .conv-pct-badge { grid-column: 3; grid-row: 1; margin: 0; }
+  #convList .conv-item.is-idea-row .conv-row-end { grid-column: 4; grid-row: 1; margin: 0; }
+  #convList .conv-item.is-idea-row .conv-row-break { display: none; }
+  #convList .conv-item.is-idea-row .conv-outcome {
+    display: flex !important; grid-column: 1 / -1; grid-row: 2; align-items: center;
+    gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; background: none;
+  }
+  #convList .conv-item.is-idea-row .conv-outcome-step,
+  #convList .conv-item.is-idea-row .conv-outcome-did {
+    display: block; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 12px; line-height: 24px;
+  }
+  #convList .conv-item.is-idea-row .conv-ready-archive { min-height: 24px; padding: 2px 7px; font-size: 11px; }
+  #convList .conv-item.is-idea-row .conv-worker-history { margin: 0; min-width: 0; font-size: 11px; }
+  #convList .conv-item.is-idea-row .conv-worker-history > summary { padding: 0; white-space: nowrap; }
+  #convList .conv-item.is-idea-row .conv-worker-history-recent { display: none; }
+  #convList .conv-item.is-idea-row .conv-meta-col:has(.conv-worker-history[open]) { grid-column: 1 / -1; grid-row: 2; min-width: 0; align-items: flex-start; }
+  #convList .conv-item.is-idea-row:has(.conv-worker-history[open]) .conv-outcome { grid-row: 3; }
+  #convList .conv-item.is-idea-row .conv-worker-history[open] { flex: 1; }
+  #convList .conv-item.is-idea-row .conv-worker-history-list { overflow-wrap: anywhere; }
+}
+@media (max-width: 1200px) {
+  #convList .conv-item.is-idea-row .wa-av { width: 32px; height: 32px; flex: 0 0 32px; }
+  #convList .conv-item.is-idea-row .wa-body { height: 56px; }
+  #convList .conv-item.is-idea-row:is(.is-ready-to-close, .is-archived-row) .wa-body { height: 74px; padding-top: 4px; padding-bottom: 4px; }
+  #convList .conv-item.is-idea-row .wa-title { -webkit-line-clamp: 1; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  #convList .conv-item.is-idea-row .wa-preview { -webkit-line-clamp: 1; }
+  #convList .conv-item.is-idea-row .wa-ready-label { display: inline; margin-right: 5px; }
 }

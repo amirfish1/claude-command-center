@@ -10,10 +10,10 @@ const completed = {
   session_state: { did: 'Fixed the layout and pushed the change.', next_step_user: 'Reload CCC to load the fix.' },
 };
 
-test('completed work with a reload or no-action next step is ready', () => {
-  assert.equal(ready(completed), true);
+test('completion words and passive next steps alone cannot mark a topic complete', () => {
+  assert.equal(ready(completed), false);
   for (const next of ['Nothing required.', 'No action is needed.', 'None.', 'Refresh CCC and check the layout.']) {
-    assert.equal(ready({ ...completed, session_state: { ...completed.session_state, next_step_user: next } }), true);
+    assert.equal(ready({ ...completed, session_state: { ...completed.session_state, next_step_user: next } }), false);
   }
 });
 

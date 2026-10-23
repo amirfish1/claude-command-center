@@ -1,0 +1,1 @@
+- Keep idea rows compact with a single-line preview, small engine-icon and cost badges, and ticket references revealed only on expansion. Remove leading title chevrons and keyword-based completion guesses; only explicit reviews mark unchanged sessions ready to close.
