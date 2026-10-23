@@ -3548,23 +3548,27 @@ def _extract_files_from_devin_cli_conversation(session_id):
     line = ent["line"]
     max_row = ent["max_row"]
     try:
+        # Decode in SQLite, not Python: a cold walk (every dashboard restart)
+        # json.loads'd ~1 GB of chat_message rows and held the GIL for ~20s
+        # while the session's open waited (CCC-143). sqlite3 releases the GIL
+        # while stepping. Every row still counts toward `line`.
         for row in con.execute(
-            "SELECT row_id, chat_message FROM message_nodes "
+            "SELECT row_id, "
+            "CASE WHEN json_valid(chat_message) AND json_type(chat_message) = 'object' "
+            "THEN json_extract(chat_message, '$.role') END AS role, "
+            "CASE WHEN json_valid(chat_message) AND json_type(chat_message) = 'object' "
+            "AND json_type(chat_message, '$.content') = 'text' "
+            "THEN json_extract(chat_message, '$.content') END AS content "
+            "FROM message_nodes "
             "WHERE session_id = ? AND row_id > ? ORDER BY row_id",
             (raw_id, max_row),
         ):
             line += 1
             max_row = max(max_row, int(row["row_id"] or 0))
-            try:
-                msg = json.loads(row["chat_message"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            role = str(msg.get("role") or "").lower()
+            role = str(row["role"] or "").lower()
             if role == "system":
                 continue
-            content = msg.get("content")
+            content = row["content"]
             if not isinstance(content, str) or not content:
                 continue
             for target, kind in _core._ffc_iter_targets(content):
