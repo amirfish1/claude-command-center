@@ -1751,10 +1751,10 @@
     sec.appendChild(head);
     sec.appendChild(body);
     let open = localStorage.getItem('ccc-perf-open') !== '0';
-    body.style.display = open ? '' : 'none';
+    body.style.display = open ? 'flex' : 'none';
     head.addEventListener('click', function () {
       open = !open;
-      body.style.display = open ? '' : 'none';
+      body.style.display = open ? 'flex' : 'none';
       localStorage.setItem('ccc-perf-open', open ? '1' : '0');
     });
     footer.parentNode.insertBefore(sec, footer);
@@ -60902,16 +60902,58 @@
   // cannot consume it again for an identical queued or steered message.
   function takeQueuedSendAcknowledgement(rows, text, queuedAt) {
     if (!text || !queuedAt) return false;
-    const match = rows.find(row => {
-      if (row.dataset.sendAcknowledged === 'true') return false;
+    for (const row of rows) {
       const stamp = Number(row.dataset.tsEpoch || 0);
       const msg = row.querySelector('.user-msg');
-      return stamp >= queuedAt && msg
-        && _normSend(msg.getAttribute('data-raw-text') || msg.textContent) === text;
-    });
-    if (!match) return false;
-    match.dataset.sendAcknowledged = 'true';
-    return true;
+      if (stamp < queuedAt || !msg) continue;
+      const raw = msg.getAttribute('data-raw-text') || msg.textContent;
+      const fullText = _normSend(raw);
+      if (fullText === text) {
+        if (row.dataset.sendAcknowledged === 'true' || row.dataset.sendAcknowledgedParts) continue;
+        row.dataset.sendAcknowledged = 'true';
+        return true;
+      }
+      // Codex can coalesce separate submissions into one durable message.
+      // Each complete paragraph range supplies its own one-use receipt;
+      // quoted substrings and later identical sends are not acknowledgements.
+      const parts = String(raw).split(/\n\s*\n/).map(_normSend).filter(Boolean);
+      if (parts.length < 2) continue;
+      const used = new Set(JSON.parse(row.dataset.sendAcknowledgedParts || '[]'));
+      if (row.dataset.sendAcknowledged === 'true') {
+        const earlier = row.dataset.sendAcknowledgedText;
+        if (!earlier || earlier === fullText) continue;
+        if (!used.size) {
+          for (let start = 0; start < parts.length; start++) {
+            let candidate = '';
+            for (let end = start + 1; end <= parts.length; end++) {
+              candidate += (candidate ? ' ' : '') + parts[end - 1];
+              if (candidate.length > earlier.length) break;
+              if (candidate === earlier) {
+                for (let i = start; i < end; i++) used.add(i);
+                break;
+              }
+            }
+            if (used.size) break;
+          }
+          // A fuzzy FIFO acknowledgement cannot establish which part it used.
+          if (!used.size) continue;
+        }
+      }
+      for (let start = 0; start < parts.length; start++) {
+        let candidate = '';
+        for (let end = start + 1; end <= parts.length; end++) {
+          candidate += (candidate ? ' ' : '') + parts[end - 1];
+          if (candidate.length > text.length) break;
+          if (candidate !== text) continue;
+          const indices = Array.from({ length: end - start }, (_, i) => start + i);
+          if (indices.some(i => used.has(i))) continue;
+          indices.forEach(i => used.add(i));
+          row.dataset.sendAcknowledgedParts = JSON.stringify([...used]);
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // Queued sends are actionable steer candidates, not past conversation.
@@ -64623,6 +64665,7 @@
         // (the real event lands in its place below).
         const normed = _normSend(ev.text);
         let _reconciledExact = false;
+        let _acknowledgedSendText = '';
         // App-server live-overlay userMessage items are provisional. They can
         // appear before the rollout JSONL or queue state confirms delivery,
         // then disappear when the live snapshot clears. Only a durable
@@ -64645,6 +64688,7 @@
           if (p.sid) clearSessionSending(p.sid);
           _pendingSends.splice(pIdx, 1);
           _reconciledExact = true;
+          _acknowledgedSendText = _normSend(p.text);
           const pane = paneByPaneId(paneId);
           if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
         }
@@ -64671,6 +64715,7 @@
             if (_normSend(rawText) === normed) {
               if (pDiv.parentNode) pDiv.parentNode.removeChild(pDiv);
               _reconciledExact = true;
+              _acknowledgedSendText = _normSend(rawText);
               // One durable message acknowledges one occurrence, even when
               // the user has queued the same words more than once.
               break;
@@ -64693,6 +64738,7 @@
             const oldest = _pendingSends.shift();
             if (oldest) {
               _reconciledExact = true;
+              _acknowledgedSendText = _normSend(oldest.text);
               if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
               if (oldest.timer) clearTimeout(oldest.timer);
               if (oldest.sid) clearSessionSending(oldest.sid);
@@ -64716,13 +64762,18 @@
               if (!canAcknowledgeSend(_oEntry || { ts: _o.dataset.tsEpoch })) continue;
               if (_o.parentNode) _o.parentNode.removeChild(_o);
               _reconciledExact = true;
+              const _orphanMsg = _o.querySelector('.user-msg');
+              _acknowledgedSendText = _normSend(_orphanMsg && (_orphanMsg.getAttribute('data-raw-text') || _orphanMsg.textContent));
               break;
             }
           }
         }
         // The render-tail and tray sweeps see this same durable row next.
         // They must not reuse its receipt to clear a second identical send.
-        if (_reconciledExact) div.dataset.sendAcknowledged = 'true';
+        if (_reconciledExact) {
+          div.dataset.sendAcknowledged = 'true';
+          div.dataset.sendAcknowledgedText = _acknowledgedSendText;
+        }
         // Webui panes: collapse a durable user bubble that repeats the most
         // recent durable user bubble when that bubble was NEVER ANSWERED.
         // The Codex queue pump can persist the same queued text several
