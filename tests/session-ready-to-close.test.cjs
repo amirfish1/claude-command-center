@@ -36,7 +36,7 @@ test('new work and real approval signals override an earlier completion summary'
   assert.equal(ready(completed, { sidecar_in_flight: true, sidecar_status: 'active' }), false);
 });
 
-test('ready explanation leaves the archive action in the lower metadata row', () => {
+test('ready explanation ends in a Close button instead of a CLOSE label (CCC-136)', () => {
   const start = app.indexOf('      // Outcome line (GOAL-1)');
   const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
   const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
@@ -46,9 +46,11 @@ test('ready explanation leaves the archive action in the lower metadata row', ()
     _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
   });
   assert.match(html, /Reviewed as complete; archive when ready/);
-  assert.match(html, /data-label="Close"/);
-  assert.doesNotMatch(html, /conv-ready-archive/);
+  assert.doesNotMatch(html, /data-label=/);
+  // The button follows the text, inside the explanation box.
+  assert.match(html, /archive when ready\.<\/span><button [^>]*conv-ready-close[^>]*>Close<\/button><\/div>$/);
   assert.match(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), /data-role="archive" data-archived="true"/);
+  assert.doesNotMatch(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), />Archive</);
   assert.doesNotMatch(html, /data-label="Next"/);
 });
 

@@ -3146,11 +3146,14 @@
           const end = main.querySelector('.conv-row-end');
           main.insertBefore(outcome, end);
         }
-        outcome.className = 'conv-outcome is-next-step is-inline is-' + info.kind;
+        // A ready row's Close button (rendered with the row) replaces the label.
+        const closeBtn = info.kind === 'ready' && outcome.querySelector('.conv-ready-close');
+        outcome.className = 'conv-outcome is-next-step is-inline is-' + info.kind + (closeBtn ? ' has-close-btn' : '');
         outcome.title = 'Ultra-fresh · agent message\n' + info.text;
         let step = outcome.querySelector('.conv-outcome-step');
         if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.replaceChildren(step); }
-        step.dataset.label = info.label;
+        if (closeBtn) delete step.dataset.label;
+        else step.dataset.label = info.label;
         step.textContent = info.text;
         main.classList.add('has-inline-step');
       }
@@ -3158,8 +3161,12 @@
       if (preview) {
         // Keep the ticket link and any listeners already attached to it.
         let label = preview.querySelector('.wa-explanation-label');
-        if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
-        label.textContent = info.label + ':';
+        const waClose = info.kind === 'ready' && row.querySelector('.wa-line2 .conv-ready-close');
+        if (waClose) { if (label) label.remove(); }
+        else {
+          if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
+          label.textContent = info.label + ':';
+        }
         for (const node of [...preview.childNodes]) if (node.nodeType === 3) node.remove();
         preview.appendChild(document.createTextNode(' ' + info.text));
       }
@@ -3313,9 +3320,11 @@
     return false;
   }
 
+  // The finished row's one action: a Close button at the end of its
+  // explanation (it archives the session; no separate Archive chip).
   function readyToCloseArchiveHtml() {
-    return '<button type="button" class="conv-archive-btn conv-ready-archive" data-role="archive" data-archived="true"'
-      + ' title="Archive completed session" aria-label="Archive completed session">Archive</button>';
+    return '<button type="button" class="conv-archive-btn conv-ready-archive conv-ready-close" data-role="archive" data-archived="true"'
+      + ' title="Close: archive this finished session" aria-label="Close: archive this finished session">Close</button>';
   }
 
   function _trackedRowStatus(c) {
@@ -38156,9 +38165,12 @@
         const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
           + (_hasNext ? 'Next step: ' + _next : '')
           + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Last reply: ' + _latest : '') + _assessmentTip;
+        // A finished row's label is its Close button, after the text.
+        const _closeBtn = _kind === 'ready' && _readyToCloseRow;
         outcomeHtml = _stepText
-          ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + '" title="' + escapeAttr(_outTip) + '">'
-            + '<span class="conv-outcome-step" data-label="' + escapeAttr(_label) + '">' + escapeHtml(_stepText) + '</span>'
+          ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + (_closeBtn ? ' has-close-btn' : '') + '" title="' + escapeAttr(_outTip) + '">'
+            + '<span class="conv-outcome-step"' + (_closeBtn ? '' : ' data-label="' + escapeAttr(_label) + '"') + '>' + escapeHtml(_stepText) + '</span>'
+            + (_closeBtn ? readyToCloseArchiveHtml() : '')
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
@@ -38235,8 +38247,8 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Numbered idea avatars already open the ticket.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + (_readyToCloseRow ? '' : _waStatus) + '</div>'
-        + '<div class="wa-row-footer">' + sessionIdChipHtml + (_readyToCloseRow ? _waStatus : '') + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview && !_readyToCloseRow ? '<span class="wa-explanation-label">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        + '<div class="wa-row-footer">' + sessionIdChipHtml + '</div>'
         + '</div>'
         + '</div>';
       return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
@@ -38289,7 +38301,7 @@
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
             + (opts.evergreenAgent ? '' : (lifetimeTokensHtml || ''))
             + '</span>'
-            + (_readyToCloseRow ? readyToCloseArchiveHtml() : '')
+            + (_readyToCloseRow && !_outcomeInline ? readyToCloseArchiveHtml() : '')
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Single-line evergreen variant: the badges that normally drop to a
             // second meta line sit inline here, just left of the time slot.
