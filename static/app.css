@@ -32711,7 +32711,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     align-items: flex-start;
     row-gap: 6px;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
+  #convList#convList .conv-item .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
     flex: 1 1 0;
     min-width: 0;
   }
@@ -32761,7 +32761,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     order: 3;
   }
   #convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: auto; order: 3; }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
 }
 
 /* Archive for a finished session: anchored just above the composer card, on
