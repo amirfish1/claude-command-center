@@ -51661,7 +51661,7 @@
       + '<div class="uxq-td-pg-label">Properties</div>'
       + _propSel('Priority', 'priority',   [['','-'],['p0','p0 - urgent'],['p1','p1'],['p2','p2'],['p3','p3']], item.priority || '')
       + _propSel('Type', 'type',           [['','-'],['feature','feature'],['bug','bug']], item.type || '')
-      + _propSel('Readiness', 'readiness', [['','-'],['shovel-ready','shovel-ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping']], item.readiness || '')
+      + _propSel('Readiness', 'readiness', [['','-'],['ready','ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping'],['needs-rationale','needs-rationale (parked)']], item.readiness || '')
       + _propSel('Value', 'value',         [['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.value || '')
       + _propSel('Confidence', 'confidence',[['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.confidence || '')
       + _propSel('Runs on', 'placement',    [['','any machine (default)'],['any','any (cloud ok)'],['mac','Mac only'],['cloud','cloud only']], item.placement || '')
@@ -52841,7 +52841,7 @@
         return '';
       };
       const _UXQ_STAGE_TONE_WORD = { planning: 'planning', verifying: 'verifying', stuck: 'stuck', verified: 'closed - verified' };
-      const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
+      const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec' || it.readiness === 'needs-rationale') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
       // A close with unresolved work is not a clean green close. Put it with
       // other attention-bearing rows, ahead of tickets merely waiting to run.
@@ -52895,7 +52895,7 @@
       const historyStart = historyOrder ? _uxqHistoryPage * _UXQ_HISTORY_PAGE_SIZE : 0;
       const historyEnd = historyOrder ? historyStart + _UXQ_HISTORY_PAGE_SIZE : rows.length;
       const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;
-      const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale', 'shovel-ready': 'ready' };
+      const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale', 'ready': 'ready', 'shovel-ready': 'ready' };
       const _typeShort = { 'feature': 'FR', 'bug': 'BUG' };
       // A closed ticket can still carry resolution.unresolved (CCC-420): the
       // worker closed it but flagged something it couldn't finish. That read
