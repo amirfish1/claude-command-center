@@ -30957,6 +30957,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # — no subprocess, no all-conversations scan. Same loopback trust as
             # every other GET.
             self.send_json(objects_store.load_state())
+        elif path in ("/api/repo/avatar", "/api/repo/avatar/info"):
+            from ccc_server import repo_avatars
+            try:
+                qs = urllib.parse.parse_qs(parsed.query)
+                repo = resolve_repo_path(qs.get("repo_path", [""])[0])
+                data, content_type, mode, source = repo_avatars.avatar(repo, COMMAND_CENTER_STATE_DIR)
+            except (RepoContextError, ValueError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            if path.endswith("/info"):
+                self.send_json({"ok": True, "mode": mode, "source": source})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=60")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+            self.end_headers()
+            self.wfile.write(data)
         elif path == "/api/repo/list":
             # List of repos the picker offers. There is no server-active repo.
             repos = load_known_repos()
@@ -35064,6 +35084,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except (json.JSONDecodeError, ValueError, TypeError):
                 body = {}
             self.send_json(repo_guess_request(body))
+            return
+        if path == "/api/repo/avatar":
+            from ccc_server import repo_avatars
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= repo_avatars.MAX_IMAGE * 4 // 3 + 4096:
+                    self.send_json({"ok": False, "error": "Choose an image smaller than 2 MB"}, 413)
+                    return
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or "image" not in body:
+                    raise ValueError("image is required (null restores automatic detection)")
+                repo = resolve_repo_path(body.get("repo_path", ""))
+                repo_avatars.save(repo, COMMAND_CENTER_STATE_DIR, body["image"])
+                self.send_json({"ok": True})
+            except (RepoContextError, ValueError, TypeError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except OSError:
+                self.send_json({"ok": False, "error": "Could not save avatar"}, 500)
             return
         if path == "/api/repo/add":
             # Persist a user-picked repo path so it appears in the picker and

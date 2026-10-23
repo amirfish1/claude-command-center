@@ -23901,9 +23901,24 @@
     }
     return hit;
   }
+  function repoAvatarHtml(repoPath, label = '', extraClass = '') {
+    if (!repoPath) return '';
+    const initials = String(label || repoPath.split('/').filter(Boolean).pop() || '?')
+      .split(/[-_\s]+/).slice(0, 2).map(word => word[0] || '').join('').toUpperCase();
+    return '<span class="repo-avatar ' + extraClass + '" aria-hidden="true" data-repo-avatar="' + escapeAttr(repoPath) + '">'
+      + '<span class="repo-avatar-initials">' + escapeHtml(initials) + '</span>'
+      + '<img src="/api/repo/avatar?repo_path=' + encodeURIComponent(repoPath) + '&v=' + ((repoAvatarHtml.versions || {})[repoPath] || '0') + '" alt="" loading="lazy" decoding="async"></span>';
+  }
+  // Broken images leave readable initials, including missing/offline repos.
+  document.addEventListener('error', event => {
+    if (event.target.matches && event.target.matches('.repo-avatar img')) event.target.hidden = true;
+  }, true);
+
   function _waAvatarHtml(c, title) {
     const ideaAvatar = _ideaAvatarHtml(c, true);
     if (ideaAvatar) return ideaAvatar;
+    const repoPath = c && (c.folder_path || c.repo_path || c.session_cwd);
+    if (repoPath) return repoAvatarHtml(repoPath, c.folder_label, 'wa-avatar wa-av');
     const cat = _waCategory(c, title);
     const repo = String((c && c.folder_label) || '');
     return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + cat.label) + '" style="background:linear-gradient(135deg,' + cat.bg[0] + ',' + cat.bg[1] + ')">'
@@ -28403,7 +28418,7 @@
         + collapseBtn
         + archiveBtn
         + flowPinBtn
-        + '<div class="flow-node-kicker">' + escapeHtml(rec.kicker) + '</div>'
+        + '<div class="flow-node-kicker">' + (rec.kind === 'repo' ? repoAvatarHtml(rec.repoPath, rec.title) : '') + escapeHtml(rec.kicker) + '</div>'
         + bodyHtml
         + '</div>';
     });
@@ -32614,7 +32629,7 @@
         '<div class="gc-addpart-row' + (i === sel ? ' is-selected' : '') + '" data-idx="' + i + '">'
         + '<span class="gc-addpart-emoji">' + engineEmoji(c) + '</span>'
         + '<span class="gc-addpart-name">' + escapeHtml(rowTitle(c)) + '</span>'
-        + (c.folder_label_chip ? '<span class="gc-addpart-repo">' + escapeHtml(c.folder_label_chip) + '</span>' : '')
+        + (c.folder_label_chip ? '<span class="gc-addpart-repo">' + repoAvatarHtml(c.folder_path || c.session_cwd, c.folder_label_chip) + escapeHtml(c.folder_label_chip) + '</span>' : '')
         + '<span class="gc-addpart-when">' + escapeHtml(c.modified ? timeAgo(c.modified * 1000) : '') + '</span>'
         + '</div>'
       ).join('') || '<div class="gc-addpart-empty">No matching sessions.</div>';
@@ -38088,7 +38103,7 @@
         ? '<span class="conv-folder-chip' + (c.folder_chip_orphan ? ' is-orphan' : '')
             + '" style="--chip-hue:' + (c.folder_chip_hue | 0) + ';"'
             + ' title="' + escapeHtml(c.folder_path || c.session_cwd || '') + '">'
-            + escapeHtml(c.folder_label_chip) + '</span>'
+            + repoAvatarHtml(c.folder_path || c.session_cwd, c.folder_label_chip) + escapeHtml(c.folder_label_chip) + '</span>'
         : '';
       // Worktree badge — shown when the session came from a sibling worktree
       // dir (e.g. "claude-command-center-wt-gemini" → badge shows "wt-gemini").
@@ -39228,7 +39243,7 @@
         + '<button type="button" class="conv-folder-group-arrow" data-role="folder-group-collapse"'
         + ' title="Collapse or expand group" aria-label="Collapse or expand group">'
         + (collapsed ? '▸' : '▾') + '</button>'
-        + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + titleHtml + '</span>'
+        + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + (!archiveObjectId ? repoAvatarHtml(repoPath, folder) : '') + titleHtml + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
         + inlineMetaHtml
         + objectActions
@@ -84633,7 +84648,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'spawn-cwd-chip' + (active ? ' active' : '');
-      btn.textContent = opt.label;
+      btn.innerHTML = repoAvatarHtml(opt.value, opt.label) + escapeHtml(opt.label);
       btn.title = 'Use ' + opt.value + ' as the folder';
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
       if (active) btn.setAttribute('aria-current', 'true');
@@ -84724,7 +84739,7 @@
       item.dataset.value = opt.value;
       const label = document.createElement('span');
       label.className = 'spawn-cwd-option-label';
-      label.textContent = opt.label || opt.value;
+      label.innerHTML = repoAvatarHtml(opt.value, opt.label) + escapeHtml(opt.label || opt.value);
       const path = document.createElement('span');
       path.className = 'spawn-cwd-option-path';
       path.textContent = opt.value;
@@ -88734,6 +88749,82 @@
   window.addEventListener('ccc:flags', renderExperimentalFlags);
   renderExperimentalFlags();
 
+  async function refreshRepoAvatarSettings() {
+    const select = document.getElementById('repoAvatarSelect');
+    if (!select) return;
+    const previous = select.value;
+    try {
+      const state = await loadRepoList({ foreground: true });
+      const repos = new Map();
+      [...state.repos, ...state.suggested].forEach(repo => { if (repo.path) repos.set(repo.path, repo); });
+      select.replaceChildren();
+      for (const repo of repos.values()) {
+        const option = document.createElement('option');
+        option.value = repo.path;
+        option.textContent = repo.label || repo.path;
+        option.title = repo.path;
+        select.appendChild(option);
+      }
+      if (repos.has(previous)) select.value = previous;
+      await previewRepoAvatar();
+    } catch (_) {
+      document.getElementById('repoAvatarStatus').textContent = 'Could not load repositories. Reopen settings to retry.';
+    }
+  }
+  async function previewRepoAvatar() {
+    const repo = document.getElementById('repoAvatarSelect').value;
+    const preview = document.getElementById('repoAvatarPreview');
+    const status = document.getElementById('repoAvatarStatus');
+    preview.innerHTML = repoAvatarHtml(repo, '', 'repo-avatar-preview');
+    status.textContent = repo ? 'Looking for a logo…' : 'Add a repository to choose its avatar.';
+    if (!repo) return;
+    try {
+      const response = await fetch('/api/repo/avatar/info?repo_path=' + encodeURIComponent(repo));
+      const info = await response.json();
+      if (repo !== document.getElementById('repoAvatarSelect').value) return;
+      if (!response.ok) throw new Error(info.error || 'Could not load avatar');
+      status.textContent = info.mode === 'custom' ? 'Custom avatar' : (info.mode === 'initials' ? 'Initials · no local logo found' : 'Automatic · ' + info.source);
+    } catch (error) { status.textContent = error.message; }
+  }
+  async function saveRepoAvatar(image) {
+    const repo = document.getElementById('repoAvatarSelect').value;
+    if (!repo) return;
+    const controls = [...document.querySelectorAll('#repoAvatarControls button, #repoAvatarControls input, #repoAvatarSelect')];
+    controls.forEach(control => { control.disabled = true; });
+    try {
+      const response = await fetch('/api/repo/avatar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_path: repo, image }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Could not save avatar');
+      repoAvatarHtml.versions = repoAvatarHtml.versions || {};
+      repoAvatarHtml.versions[repo] = Date.now();
+      await previewRepoAvatar();
+      document.querySelectorAll('[data-repo-avatar]').forEach(avatar => {
+        if (avatar.dataset.repoAvatar !== repo) return;
+        const img = avatar.querySelector('img');
+        img.hidden = false;
+        img.src = '/api/repo/avatar?repo_path=' + encodeURIComponent(repo) + '&v=' + Date.now();
+      });
+      showOpToast(image === null ? 'Automatic repo avatar restored.' : 'Repo avatar saved.', 'success');
+    } catch (error) { showOpToast(error.message, 'error'); }
+    finally { controls.forEach(control => { control.disabled = false; }); }
+  }
+  document.getElementById('repoAvatarSelect')?.addEventListener('change', previewRepoAvatar);
+  document.getElementById('repoAvatarReset')?.addEventListener('click', () => saveRepoAvatar(null));
+  document.getElementById('repoAvatarUpload')?.addEventListener('click', () => document.getElementById('repoAvatarFile').click());
+  document.getElementById('repoAvatarFile')?.addEventListener('change', async event => {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { showOpToast('Choose an image smaller than 2 MB', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = () => saveRepoAvatar(reader.result);
+    reader.onerror = () => showOpToast('Could not read image', 'error');
+    reader.readAsDataURL(file);
+  });
+
   function openSettingsModal() {
     if (!$settingsModal) return;
     _settingsModalPrevFocus = document.activeElement;
@@ -88744,6 +88835,7 @@
     renderExperimentalFlags();
     buildSettingsSearchIndex();
     refreshAppearanceChecks();
+    refreshRepoAvatarSettings();
     refreshMonthlyClaudePlanInput();
     refreshMonthlyCodexPlanInput();
     refreshSpawnEngineValue();

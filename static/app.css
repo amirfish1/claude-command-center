@@ -32880,3 +32880,15 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 @media (pointer: coarse) {
   .conv-ready-archive-footer .conv-ready-archive-btn { min-height: 44px; padding: 8px 20px; }
 }
+
+/* Repository logos share a stable square footprint, with readable fallbacks. */
+.repo-avatar { display:inline-flex; position:relative; width:20px; height:20px; flex:0 0 20px; vertical-align:middle; border-radius:5px; overflow:hidden; background:var(--bg-secondary, #334155); color:var(--text, #fff); margin-right:5px; }
+.repo-avatar-initials { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:600 10px sans-serif; }
+.repo-avatar img { position:relative; width:100%; height:100%; object-fit:contain; background:var(--bg-secondary, #334155); }
+.repo-avatar img[hidden] { display:none; }
+.repo-avatar.wa-avatar { width:42px; height:42px; flex-basis:42px; border-radius:12px; }
+.repo-avatar.wa-avatar .repo-avatar-initials { font-size:17px; }
+.repo-avatar-preview { width:44px; height:44px; flex-basis:44px; border-radius:10px; }
+.repo-avatar-preview .repo-avatar-initials { font-size:18px; }
+.conv-folder-chip .repo-avatar { width:14px; height:14px; flex-basis:14px; border-radius:3px; }
+#repoAvatarControls { flex-wrap:wrap; }

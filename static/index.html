@@ -2638,6 +2638,22 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="repository repo logo avatar image icon upload">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Repository avatars</div>
+                <div class="settings-row-desc">Uses a logo or favicon from each repo, then initials. Upload an image to override it on this machine.</div>
+                <label for="repoAvatarSelect">Repository</label>
+                <select id="repoAvatarSelect" class="settings-select" style="max-width:100%;width:100%"></select>
+                <div id="repoAvatarStatus" class="settings-row-desc" role="status"></div>
+              </div>
+              <div class="settings-row-control" id="repoAvatarControls">
+                <span id="repoAvatarPreview"></span>
+                <input type="file" id="repoAvatarFile" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/x-icon,image/vnd.microsoft.icon" hidden>
+                <button type="button" class="settings-action-btn" id="repoAvatarUpload">Upload image…</button>
+                <button type="button" class="settings-action-btn" id="repoAvatarReset">Use automatic</button>
+              </div>
+            </div>
+
             <div class="settings-row" data-keywords="folder chip chips color colors colour hue palette muted level hierarchy repo">
               <div class="settings-row-main">
                 <div class="settings-row-label">Folder chip colors</div>
