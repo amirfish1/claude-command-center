@@ -32824,6 +32824,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { grid-column: 3; grid-row: 1; margin: 2px 0 0; min-width: 20px; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end > .conv-rel { position: static; transform: none; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-hover-slot { z-index: 7; background: var(--surface-2); }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-hover-slot > .conv-trash-btn { display: none; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-actions { z-index: 8; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-idea-avatar {
     top: 8px;
