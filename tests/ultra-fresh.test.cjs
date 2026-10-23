@@ -38,6 +38,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
         + '<div class="conv-outcome is-next-step is-inline is-working"><span class="conv-outcome-step" data-label="Working">Original message</span></div>'
         + '<span class="conv-row-break"></span><span class="conv-meta-col"><code>'+c.id+'</code></span><span class="conv-row-end"></span></div></div><button data-role="archive">Archive</button></div>').join('');
       document.querySelector('#convList').innerHTML = rows();
+      ${app.slice(app.indexOf('  function readyToCloseArchiveHtml('), app.indexOf('  function _trackedRowStatus('))}
       ${block}
       window.uf = { sync:_ultraFreshSync, accept:_ultraFreshAccept, feed:_ultraFreshFeed,
         spawn:_ultraFreshSpawnFeed, current:_ultraFreshCurrent, state:_ultraFresh,
@@ -80,6 +81,16 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
     });
     assert.equal(await page.$eval('[data-id="s0"] .conv-outcome-step',el => el.textContent),'I found the message stream.');
     assert.doesNotMatch(await page.$eval('#convList',el=>el.textContent), /tool noise|private thinking|Out of view leak|Old turn/);
+    // A final assessment arriving on an existing row must create the action,
+    // without relying on a future full-list render. A new turn removes it.
+    await page.evaluate(() => {
+      uf.rows()[0].state = 'idle';
+      uf.accept({session_id:'s0', text:'Finished and checked.', ts:'2099-01-01T18:00:00Z',
+        session_state:{did:'Finished and checked.', completion:{valid:true,ready_to_close:true}}});
+    });
+    await page.waitForFunction(() => document.querySelectorAll('[data-id="s0"] .conv-ready-close').length === 2);
+    assert.equal(await page.$eval('[data-id="s0"] .conv-outcome .conv-ready-close',el=>el.textContent),'Close');
+    assert.equal(await page.$eval('[data-id="s0"] .wa-line2 .conv-ready-close',el=>el.dataset.archived),'true');
     // A user starts a newer turn; even a subsequently delivered old reply
     // cannot resurrect its explanation or completion recommendation.
     await page.evaluate(() => {
@@ -87,6 +98,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
       uf.accept({session_id:'s0',text:'Stale final',ts:'2099-01-01T12:00:00Z',session_state:{completion:{valid:true,ready_to_close:true}}});
     });
     assert.doesNotMatch(await page.$eval('[data-id="s0"]',el=>el.textContent),/Stale final|I found the message stream/);
+    assert.equal(await page.$$eval('[data-id="s0"] .conv-ready-close',els=>els.length),0);
     await page.evaluate(() => { document.querySelector('#convList').scrollTop = 400; });
     await page.waitForFunction(() => !uf.state.entries.has('s0') && uf.state.entries.size <= 4);
     assert.equal(await page.evaluate(() => sources[0].closed),true);

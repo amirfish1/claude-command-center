@@ -3207,12 +3207,15 @@
           const end = main.querySelector('.conv-row-end');
           main.insertBefore(outcome, end);
         }
-        // A ready row's Close button (rendered with the row) replaces the label.
+        // Completion can arrive after this row was rendered as Working/Next.
+        if (info.kind === 'ready' && !outcome.querySelector('.conv-ready-close')) {
+          outcome.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
+        }
         const closeBtn = info.kind === 'ready' && outcome.querySelector('.conv-ready-close');
         outcome.className = 'conv-outcome is-next-step is-inline is-' + info.kind + (closeBtn ? ' has-close-btn' : '');
         outcome.title = 'Ultra-fresh · agent message\n' + info.text;
         let step = outcome.querySelector('.conv-outcome-step');
-        if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.replaceChildren(step); }
+        if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.prepend(step); }
         if (closeBtn) delete step.dataset.label;
         else step.dataset.label = info.label;
         step.textContent = info.text;
@@ -3222,6 +3225,10 @@
       if (preview) {
         // Keep the ticket link and any listeners already attached to it.
         let label = preview.querySelector('.wa-explanation-label');
+        const waLine = row.querySelector('.wa-line2');
+        if (info.kind === 'ready' && waLine && !waLine.querySelector('.conv-ready-close')) {
+          waLine.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
+        }
         const waClose = info.kind === 'ready' && row.querySelector('.wa-line2 .conv-ready-close');
         if (waClose) { if (label) label.remove(); }
         else {
@@ -3233,6 +3240,7 @@
       }
       // New message text invalidates an earlier Close recommendation. Archive
       // remains a manual row action; never archive or move the session here.
+      if (info.kind === 'ready') row.classList.add('is-ready-to-close');
       if (info.kind !== 'ready') {
         if (row.classList.contains('is-ready-to-close')) row.style.minHeight = row.getBoundingClientRect().height + 'px';
         row.classList.remove('is-ready-to-close');
@@ -15748,6 +15756,32 @@
             + ' · downside ' + escapeHtml(String(item.downside)) + '</div>';
         }
       }
+      // Historical cards describe this assessment, not the current session's
+      // eligibility: only the live row may offer the manual Close action.
+      const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+      const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
+      const valid = assessment && assessment.version === 1 && axes.every(k => {
+        const a = assessment[k];
+        return a && numeric(a.score) && typeof a.evidence === 'string' && a.evidence.trim();
+      }) && (assessment.delivery.applicable === undefined || typeof assessment.delivery.applicable === 'boolean')
+        && Array.isArray(assessment.caveats) && assessment.caveats.every(c => c && typeof c.text === 'string'
+          && c.text.trim() && typeof c.blocking === 'boolean')
+        && Array.isArray(assessment.remaining_actions) && assessment.remaining_actions.every(a => a
+          && typeof a.text === 'string' && a.text.trim() && numeric(a.confidence) && numeric(a.downside)
+          && typeof a.reversible === 'boolean' && typeof a.within_scope === 'boolean');
+      const reasons = [];
+      if (valid) {
+        if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
+        if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
+        if (assessment.delivery.applicable !== false && assessment.delivery.score !== 1) reasons.push('delivery incomplete');
+        if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
+        if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
+        if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
+      }
+      const verdict = !valid ? 'Unassessed · invalid assessment'
+        : reasons.length ? 'Next · ' + reasons.join('; ') : 'Close criteria met';
+      rows.push('<div class="ssb-row ssb-verdict"><span class="ssb-key">Assessment</span>'
+        + escapeHtml(verdict) + '</div>');
       rows.push('<details class="ssb-completion"><summary>Completion assessment · self-reported</summary>'
         + (evidence || '<div class="ssb-row">Assessment unavailable or invalid.</div>') + '</details>');
     }
