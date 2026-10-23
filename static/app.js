@@ -72952,6 +72952,14 @@
             window.__cccPerfQueueHealth(d.queue_health);
           }
         } catch (_) {}
+        if (!window.__cccPerfFirstListAt && d && Array.isArray(d.conversations)) {
+          window.__cccPerfFirstListAt = true;
+          window.__cccPerfRow && window.__cccPerfRow('list', {
+            at: Date.now(),
+            text: 'first-list ' + Math.round(performance.now()) + 'ms',
+            title: 'page load → first conversation list response parsed',
+          });
+        }
         _perfListLog(_perfLen, r.status, d && Array.isArray(d.conversations)
           ? d.conversations.length + 'rows'
             + ((d.queue_health && d.queue_health.stale_queued_items)
