@@ -23064,13 +23064,6 @@
       + '<span class="wa-face">' + cat.e + '</span>'
       + '</span>';
   }
-  function ideaRowTitlePreview(title) {
-    const chars = typeof Intl.Segmenter === 'function'
-      ? Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(title), part => part.segment)
-      : Array.from(title);
-    return chars.length > 40 ? chars.slice(0, 40).join('') + '…' : title;
-  }
-
   function _ideaAvatarHtml(c, mobile = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
     const match = ref && ref.match(/^IDEAS-(\d+)$/);
@@ -37658,6 +37651,7 @@
             + '</div>';
       }
       const _outcomeInline = outcomeHtml.indexOf(' is-inline ') !== -1;
+      const _ideaStack = _outcomeInline && !!_ideaRowRef;
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
           + (_summaryState.did ? '<div><strong>Did:</strong> ' + escapeHtml(_summaryState.did) + '</div>' : '')
@@ -37721,7 +37715,7 @@
       const waHtml = '<div class="wa-row">'
         + _waAvatarHtml(c, _waTitle)
         + '<div class="wa-body">'
-        +   '<div class="wa-line1"><span class="wa-title" dir="auto" aria-label="' + escapeAttr(_waTitle) + '">' + escapeHtml(_ideaRowRef ? ideaRowTitlePreview(_waTitle) : _waTitle) + '</span>'
+        +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
@@ -37729,7 +37723,7 @@
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_readyToCloseRow ? '<strong class="wa-ready-label">Ready to close</strong> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '</div>'
         + '</div>';
-      return '<div class="conv-item' + (_ideaRowRef ? ' is-idea-row' : '') + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + waHtml
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
@@ -37742,9 +37736,14 @@
             + sessionStuckWarningHtml(c)
             + (window.cccClaudeReauth ? window.cccClaudeReauth.rowChipHtml(c) : '')
             + workerOriginBadgeHtml(c)
-            // The numbered avatar already identifies an idea ticket.
+            // Idea-ticket rows give the title the whole first line; the
+            // ticket chip moves to the line below (see _ideaRowLine).
             + (_ideaRowRef ? '' : ideaTicketChipHtml(c))
-            + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(_ideaRowRef ? ideaRowTitlePreview(title) : title) + '</div>'
+            // With an inline next step, an idea row's ticket chip stacks under
+            // the title in the left column instead of on a line below the row.
+            + (_ideaStack ? '<div class="conv-title-stack">' : '')
+            + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            + (_ideaStack ? _ideaRowLine(c) + '</div>' : '')
             // A next step takes the space right of the title; CSS wraps the
             // badges after the break onto a second line whenever it shows.
             + (_outcomeInline ? outcomeHtml + '<span class="conv-row-break" aria-hidden="true"></span>' : '')
@@ -37754,7 +37753,6 @@
             // occupy a column together; display:contents makes that wrapper
             // invisible to every other view's flex layout.
             + '<span class="conv-meta-col">'
-            + (_ideaRowRef ? _ideaRowLine(c) : '')
             + earlierDetailsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
@@ -37794,7 +37792,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
-        + (_ideaRowRef ? '' : _uxFixesWorkerHistoryHtml(c))
+        + (_ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c)))
         + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
@@ -72276,16 +72274,17 @@
     return '🧵 ' + generated[1].trim() + ' worker' + (identity ? ' · ' + identity : '');
   }
 
-  // Idea metadata stays collapsed to a count until explicitly expanded.
+  // Second line of an idea-ticket row: its ticket chip, plus the recorded-
+  // ticket history only when it holds more than the idea ticket itself.
   function _ideaRowLine(c) {
     const ref = c.idea_ticket.ref;
     const others = _uxFixesWorkerTicketsForRow(c).some(t => t && t.ref !== ref);
     return (_ideaAvatarHtml(c) ? '' : '<div class="conv-idea-line">' + ideaTicketChipHtml(c) + '</div>')
-      + (others ? _uxFixesWorkerHistoryHtml(c, true) : '');
+      + (others ? _uxFixesWorkerHistoryHtml(c) : '');
   }
 
   const _uxFixesHistoryExpanded = new Set();
-  function _uxFixesWorkerHistoryHtml(c, compact = false) {
+  function _uxFixesWorkerHistoryHtml(c) {
     const tickets = _uxFixesWorkerTicketsForRow(c);
     // The Workers table keeps a fixed chips column, and a blank cell reads as
     // "not loaded yet" rather than "this worker closed nothing". Say it. CSS
@@ -72329,9 +72328,9 @@
       // The "+N" chip carries the same count the prose label does, in a tenth
       // of the width. Dense mode hides the label and keeps the chips, so the
       // total stays visible either way.
-      + '<summary><span class="conv-worker-history-count">' + tickets.length + (compact ? ' ticket' : ' recorded ticket') + (tickets.length === 1 ? '' : 's') + '</span>'
-      + '<span class="conv-worker-history-recent">' + (compact ? '' : elideRefs(tickets.slice(0, 3)))
-      + (!compact && tickets.length > 3
+      + '<summary><span class="conv-worker-history-count">' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
+      + '<span class="conv-worker-history-recent">' + elideRefs(tickets.slice(0, 3))
+      + (tickets.length > 3
           ? '<span class="conv-worker-history-more" title="' + escapeAttr((tickets.length - 3) + ' more recorded ticket' + (tickets.length - 3 === 1 ? '' : 's')) + '">+' + (tickets.length - 3) + '</span>'
           : '')
       + '</span></summary>'
