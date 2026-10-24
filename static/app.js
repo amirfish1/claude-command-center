@@ -13980,15 +13980,29 @@
       panel.id = 'ttsCacheDebugQueue';
       const summary = document.createElement('summary');
       summary.textContent = 'TTS queue';
-      panel.append(summary, document.createElement('div'));
+      const positions = document.createElement('div');
+      positions.className = 'tts-queue-positions';
+      const log = document.createElement('div');
+      log.className = 'tts-queue-log';
+      panel.append(summary, positions, log);
+      panel.addEventListener('toggle', () => {
+        if (panel.open) log.scrollTop = log.scrollHeight;
+      });
       document.body.appendChild(panel);
     }
     const waiting = _ttsDebugJobs.filter(j => j.status === 'queued');
     const processing = _ttsDebugJobs.filter(j => j.status === 'processing');
     const title = 'TTS: ' + processing.length + ' sent · ' + waiting.length + ' waiting';
     if (panel.firstChild.textContent !== title) panel.firstChild.textContent = title;
-    const jobs = _ttsDebugJobs.filter(j => ['queued', 'processing'].includes(j.status))
-      .concat(_ttsDebugJobs.filter(j => !['queued', 'processing'].includes(j.status)).slice(-8));
+    const positions = panel.querySelector('.tts-queue-positions');
+    const queueText = waiting.length
+      ? 'Browser waiting: ' + waiting.map((_, i) => '#' + (i + 1) + (i === 0 ? ' next' : '')).join(' · ') + '.'
+      : 'No browser requests waiting.';
+    const queueHint = ' Sent requests: engine position unavailable.';
+    if (positions.textContent !== queueText + queueHint) positions.textContent = queueText + queueHint;
+    const recent = new Set(_ttsDebugJobs.filter(j => !['queued', 'processing'].includes(j.status)).slice(-8));
+    // Keep creation order, so newly queued/sent chunks appear at the bottom.
+    const jobs = _ttsDebugJobs.filter(j => ['queued', 'processing'].includes(j.status) || recent.has(j));
     const labels = jobs.map(j => ({ status: j.status, label:
       (j.status === 'queued' ? '#' + (waiting.indexOf(j) + 1) + ' waiting'
         : j.status === 'processing' ? 'Sent · engine position unknown'
@@ -14009,6 +14023,7 @@
       row.textContent = item.label;
       list.appendChild(row);
     }
+    list.scrollTop = list.scrollHeight;
   }
   function _ttsRefreshCacheDebug() {
     _ttsCacheDebugFrame = null;

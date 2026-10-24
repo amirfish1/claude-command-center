@@ -32953,7 +32953,8 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   font-size: 12px; box-shadow: 0 2px 10px #0008;
 }
 #ttsCacheDebugQueue summary { padding: 7px 10px; cursor: pointer; }
-#ttsCacheDebugQueue > div { max-height: 32vh; overflow: auto; padding: 0 10px 8px; }
+#ttsCacheDebugQueue .tts-queue-log { max-height: 32vh; overflow: auto; padding: 0 10px 8px; overflow-anchor: none; }
+#ttsCacheDebugQueue .tts-queue-positions { padding: 0 10px 8px; border-bottom: 1px solid #59636e; overflow-wrap: anywhere; }
 #ttsCacheDebugQueue p { margin: 4px 0 8px; }
 #ttsCacheDebugQueue [data-status] { padding: 5px; margin: 3px 0; overflow-wrap: anywhere; }
 #ttsCacheDebugQueue [data-status="processing"] { background: #f59e0b52; }
