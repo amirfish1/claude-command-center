@@ -13795,6 +13795,7 @@
   // outage (cool-down) or no router falls back to the browser voice. The next
   // chunk is fetched while the current one plays. No word highlight here: the
   // audio carries no boundaries.
+  let _ttsAudio = null;           // reuse the gesture-authorized player across clips
   let _ttsNeural = null;          // { audio, token } while a neural chunk plays
   let _ttsNeuralToken = 0;
   let _ttsNeuralCooldownUntil = 0;
@@ -13803,7 +13804,18 @@
     if (window.speechSynthesis) window.speechSynthesis.pause();
   }
   function _ttsEngineResume() {
-    if (_ttsNeural && _ttsNeural.audio) { try { _ttsNeural.audio.play(); } catch (_) {} }
+    if (_ttsNeural && _ttsNeural.audio) {
+      const player = _ttsNeural;
+      try {
+        player.audio.play().catch(error => {
+          if (_ttsNeural !== player) return;
+          _ttsLog('ERROR', 'resume rejected: ' + (error?.name || 'unknown'));
+          _ttsPaused = true;
+          if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
+          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === _ttsActivePaneId) btn.classList.add('paused'); });
+        });
+      } catch (_) {}
+    }
     if (window.speechSynthesis) window.speechSynthesis.resume();
   }
   function _ttsEngineCancel() {
@@ -14384,7 +14396,12 @@
       if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
       // Give each playback its own URL; revoking it must not invalidate the cache.
       const playUrl = got.blob ? URL.createObjectURL(got.blob) : got.url;
-      const audio = new Audio(playUrl);
+      // Safari authorizes playback per element. A new Audio for every clip
+      // can leave an already prepared continuation blocked after the first.
+      const audio = _ttsAudio || (_ttsAudio = new Audio());
+      audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
+      audio.onplaying = audio.onwaiting = null;
+      audio.src = playUrl;
       audio.playbackRate = _ttsRate;
       _ttsNeural = { audio, token };
       // No word boundaries from an audio file: estimate the read position from
@@ -14414,6 +14431,8 @@
         _ttsShowVoice(got.voice + (got.model ? ' · ' + got.model : ''));
       };
       audio.onended = () => {
+        if (stale()) return;
+        _ttsLog('ENDED', 'clip ' + idx);
         URL.revokeObjectURL(playUrl);
         state.debugCache.delete(chunk.text);
         _ttsScheduleCacheDebug();
@@ -14428,20 +14447,39 @@
       // Where reads wait: time to first sound, gaps between clips, and stalls
       // inside a clip (the stream ran dry), so slow reads can be measured.
       let waitFrom = 0;
-      audio.addEventListener('playing', () => {
+      audio.onplaying = () => {
         if (stale()) return;
         const now = Date.now();
+        _ttsLog('PLAY', 'clip ' + idx + ' (' + chunk.text.length + ' chars)');
         _ttsPerfStart(state, { engine: 'neural', voice: got.voice });
         if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, performance.now() - state.perf.gapT0, 'gap'); state.perf.gapT0 = 0; }
         if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms'); state.t0 = 0; }
         else if (state.gapFrom) { const g = now - state.gapFrom; if (g > 300) _ttsLog('GAP', g + 'ms before clip ' + idx + ' (' + chunk.text.length + ' chars)'); }
         state.gapFrom = 0;
         if (waitFrom) { _ttsPerfSilence(state, now - waitFrom, 'stall'); _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
-      });
-      audio.addEventListener('waiting', () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); });
+      };
+      audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
       const releaseDebug = () => { state.debugCache.delete(chunk.text); _ttsScheduleCacheDebug(); };
-      audio.onerror = () => { URL.revokeObjectURL(playUrl); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS); };
-      audio.play().catch(() => { releaseDebug(); fallBack(0); });
+      audio.onerror = () => {
+        if (stale()) return;
+        _ttsLog('ERROR', 'clip ' + idx + ' media error ' + (audio.error?.code || 'unknown'));
+        URL.revokeObjectURL(playUrl); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS);
+      };
+      audio.play().catch((error) => {
+        if (stale()) return;
+        _ttsLog('ERROR', 'clip ' + idx + ' play rejected: ' + (error?.name || 'unknown'));
+        if (error?.name === 'NotAllowedError') {
+          // Keep the selected ready clip. The next tap can grant permission;
+          // do not silently switch voices or discard its position.
+          _ttsPaused = true;
+          setTtsButtonsBusy(false);
+          if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
+          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
+          showOpToast('Tap the speaker to resume audio.', 'info');
+          return;
+        }
+        releaseDebug(); fallBack(0);
+      });
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
   }
 

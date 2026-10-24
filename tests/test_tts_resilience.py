@@ -226,9 +226,12 @@ console.log(JSON.stringify({sentOnly, partial, capped, ready}));
         start = self.source.index("  function _ttsSpeakChunkNeural(")
         end = self.source.index("  // One-time iOS-Safari", start)
         result = self.run_node("""
-let _ttsNeuralToken = 0, _ttsUtterance, _ttsChunkState, _ttsNeural;
+let _ttsNeuralToken = 0, _ttsUtterance, _ttsChunkState, _ttsNeural, _ttsAudio;
 let _ttsRate = 1.25, _ttsActivePaneId = 'p1', _ttsLastCharIndex;
-let fetches = 0, plays = 0, urls = 0;
+let fetches = 0, plays = 0, urls = 0, blockNext = false, _ttsPaused = false;
+const _ttsDirectBtn = {};
+const _setTtsDirectBtnState = (btn, state) => {btn.state = state;};
+const showOpToast = () => {};
 const revoked = [], audios = [], _ttsHeadCache = new Map();
 const window = {};
 const URL = {createObjectURL: () => 'play-' + (++urls), revokeObjectURL: u => revoked.push(u)};
@@ -239,7 +242,10 @@ const ttsButtons = () => [], _ttsShowVoice = () => {}, _ttsLog = () => {};
 const _ttsPerfStart = () => {}, _ttsPerfSilence = () => {};
 function Audio(url) {
   this.url = url; this.addEventListener = () => {};
-  this.play = () => {plays++; return Promise.resolve();}; audios.push(this);
+  this.play = () => {
+    if (blockNext) { blockNext=false; return Promise.reject({name:'NotAllowedError'}); }
+    plays++; return Promise.resolve();
+  }; audios.push(this);
 }
 for (const text of ['Prepared head.', 'Prepared continuation.']) {
   const got = {url: 'cache-' + text, blob: {}, voice: 'Kokoro:test', done: Promise.resolve()};
@@ -258,13 +264,19 @@ const drain = async () => { for(let i=0; i<8; i++) await Promise.resolve(); };
     audios[audios.length-1].onended(); await drain();
     audios[audios.length-1].onended(); await drain();
   }
-  console.log(JSON.stringify({fetches, plays, cacheSize: _ttsHeadCache.size, revoked}));
+  const completed = {fetches, plays, cacheSize: _ttsHeadCache.size, players: audios.length, revoked};
+  blockNext = true;
+  _ttsChunkState = {chunks:[{text:'Prepared head.',start:0},{text:'Prepared continuation.',start:15}],index:1,paneId:'p1'};
+  _ttsSpeakNextChunk(); await drain();
+  console.log(JSON.stringify({...completed, blocked:{paused:_ttsPaused,index:_ttsChunkState.index,button:_ttsDirectBtn.state,cacheSize:_ttsHeadCache.size,fetches}}));
 })();
 """)
         self.assertEqual(result["fetches"], 0)
         self.assertEqual(result["plays"], 4)
         self.assertEqual(result["cacheSize"], 2)
+        self.assertEqual(result["players"], 1)
         self.assertEqual(result["revoked"], ["play-1", "play-2", "play-3", "play-4"])
+        self.assertEqual(result["blocked"], {"paused":True,"index":1,"button":"paused","cacheSize":2,"fetches":0})
 
     def test_floating_speaker_targets_text_near_circle_instead_of_larger_footer(self):
         selector = function_block(self.source, "_visibleSpeakButton", "attachConversationEndAffordance")

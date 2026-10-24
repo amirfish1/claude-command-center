@@ -1,0 +1,1 @@
+- Reuse one audio player across speech chunks and replays so per-element browser playback permissions carry over to prepared continuations. Log clip starts, endings, and playback errors; keep a blocked ready clip available to resume instead of silently changing voices.
