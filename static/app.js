@@ -16625,7 +16625,7 @@
     syncRowQuickActions(sid);
     let accepted = false;
     try {
-      const data = await postInjectInput(sid, action.reply, 'send');
+      const data = await postInjectInput(sid, action.reply, 'send', { userInitiated: true });
       if (!data.ok) throw new Error(data.error || 'Send failed');
       accepted = true;
       feedback.state = data.queued ? 'queued' : 'sent';
@@ -36660,6 +36660,9 @@
       idempotency_key: durableActionId('inject'),
     };
     if (mode) payload.mode = mode;
+    // A human clicking a reply chip has the same authority as composer input.
+    // Leave automated callers on the API/peer route unless explicitly opted in.
+    if (opts && opts.userInitiated === true) payload.source = 'composer';
     if (opts && opts.replaceQueued) payload.replace_queued = true;
     if (opts && Array.isArray(opts.replaceQueuedTexts) && opts.replaceQueuedTexts.length) {
       // Steer-all delivers the concatenation, so the server cannot find the

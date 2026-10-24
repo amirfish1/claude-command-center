@@ -86,7 +86,10 @@ them directly for idle sessions with a pending request. Rendering makes no
 additional model call and sends no session text to another provider. Answers
 without valid action metadata keep their normal summary text. Hovering the
 chip shows the exact reply; clicking sends it through the normal session input
-API. The older `/api/conversations/<id>/quick-action` suggestion endpoint
+API with the same `source:"composer"` provenance as a typed human reply,
+so Claude receives the click as user input rather than an agent peer message.
+Rendering the chip alone never sends that reply. Automated API and peer sends
+keep their existing provenance. The older `/api/conversations/<id>/quick-action` suggestion endpoint
 returns a no-action response for compatibility and never invokes a model.
 
 ## Optional outbound call: share card upload

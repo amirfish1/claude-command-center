@@ -76,7 +76,7 @@ test('row action replies, stale state, failure recovery and responsive rendering
       const b = document.querySelector('.wa-line2 .conv-quick-action'); b.click(); b.click();
     });
     await page.waitForFunction(() => row.state === 'working');
-    assert.deepEqual(await page.evaluate(() => sent[1]), ['restart-session', 'Yes, restart the dashboard and worker.', 'send']);
+    assert.deepEqual(await page.evaluate(() => sent[1]), ['restart-session', 'Yes, restart the dashboard and worker.', 'send', {userInitiated:true}]);
     assert.equal(await page.evaluate(() => sent.length), 2, 'double tap sends only once');
     assert.equal(await page.evaluate(() => document.querySelectorAll('.conv-quick-action').length), 0);
     assert.deepEqual(await page.$$eval('.conv-quick-action-status', els=>els.map(el=>el.textContent)), ['Sent','Sent']);
@@ -106,7 +106,7 @@ test('row action replies, stale state, failure recovery and responsive rendering
     }), 'short phrase stays inside the phone row');
     await page.evaluate(() => document.querySelector('.wa-line2 .conv-quick-action').click());
     await page.waitForFunction(() => row.state === 'working');
-    assert.deepEqual(await page.evaluate(() => sent[2]), ['restart-session', 'Yes, build the triage routine.', 'send']);
+    assert.deepEqual(await page.evaluate(() => sent[2]), ['restart-session', 'Yes, build the triage routine.', 'send', {userInitiated:true}]);
     await page.evaluate(() => {
       row.state = 'idle';
       row.session_state.next_action = {label:'<script>',reply:'Yes'}; syncActions();
@@ -135,10 +135,32 @@ test('row action replies, stale state, failure recovery and responsive rendering
     });
     await page.waitForFunction(() => document.querySelector('.wa-line2 .conv-quick-action-status')?.textContent === 'Queued');
     assert.equal(await page.evaluate(() => sent.length), 4);
-    assert.deepEqual(await page.evaluate(() => sent[3]), ['restart-session','Restart only the dashboard.','send']);
+    assert.deepEqual(await page.evaluate(() => sent[3]), ['restart-session','Restart only the dashboard.','send', {userInitiated:true}]);
     assert.equal(await page.$$eval('.conv-quick-action',els=>els.length),0);
     assert.equal(await page.evaluate(() => inferences), 0, 'no inference request in any state');
   } finally {
     await browser.close();
   }
+});
+
+test('human row replies use composer provenance without promoting automated sends', async () => {
+  const vm = require('node:vm');
+  const start = app.indexOf('  async function postInjectInput(');
+  const code = app.slice(start, app.indexOf('  function steeredToastText(', start));
+  const sent = [];
+  const post = vm.runInNewContext(code + '\npostInjectInput;', {
+    durableActionId: () => 'inject-test-id',
+    fetch: async (url, opts) => {
+      sent.push({url, payload:JSON.parse(opts.body)});
+      return {ok:true, json:async()=>({ok:true})};
+    },
+  });
+  await post('test-session', 'Yes, enable the scoped test routine.', 'send', {userInitiated:true});
+  assert.deepEqual(sent[0], {url:'/api/inject-input', payload:{session_id:'test-session',
+    text:'Yes, enable the scoped test routine.', mode:'send', idempotency_key:'inject-test-id', source:'composer'}});
+  await post('test-session', 'Automated nudge.', 'send');
+  assert.equal(Object.hasOwn(sent[1].payload, 'source'), false);
+  await post('test-session', 'Peer report.', 'send', {announcedFrom:'Verifier',userInitiated:false});
+  assert.equal(Object.hasOwn(sent[2].payload, 'source'), false);
+  assert.equal(sent[2].payload.announced_from, 'Verifier');
 });
