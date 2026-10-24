@@ -4222,7 +4222,14 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         silent_turn = _core._codex_recovery_is_silent_turn(recovery)
 
         suppressed = None
-        if state.get("thread_needs_approval") or _core._codex_app_server_pending_approval_item(state):
+        known_turns = {
+            str(recovery.get("compaction_turn_id") or ""),
+            str(recovery.get("recovery_turn_id") or ""),
+        }
+        latest_turn = str(state.get("active_turn_id") or state.get("last_turn_id") or "")
+        if not silent_turn and latest_turn and latest_turn not in known_turns:
+            suppressed = "later-turn"
+        elif state.get("thread_needs_approval") or _core._codex_app_server_pending_approval_item(state):
             suppressed = "approval"
         elif state.get("active_flags"):
             suppressed = "active-flag"
@@ -4265,6 +4272,18 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
             if active_item.get("type") == "contextCompaction":
                 return {"ok": True, "waiting": "compacting"}
             return {"ok": True, "waiting": "active-tool"}
+
+        # Successful turn/start RPCs consume the same bounded retry budget as
+        # failed ones. A turn that never emits completion must not loop forever.
+        if int(recovery.get("attempts") or 0) >= _core._CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS:
+            recovery["status"] = "exhausted"
+            recovery["reason"] = "Recovery attempts exhausted"
+            _core._codex_coordination_event_unlocked(
+                state, _core._codex_recovery_event_kind(recovery, "exhausted"),
+                detail=recovery["reason"], now=now,
+            )
+            _core._save_codex_app_server_state_unlocked()
+            return {"ok": True, "exhausted": True}
 
         active_turn = bool(
             state.get("active_turn_id")
@@ -4443,6 +4462,11 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         recovery = state.get("compaction_recovery")
         if not isinstance(recovery, dict):
             return {"ok": False, "started": False, "result": result}
+        # Notifications can prove execution resumed before turn/start returns.
+        # Never overwrite that terminal latch with the RPC's older snapshot.
+        if str(recovery.get("status") or "") in _core._CODEX_COMPACTION_RECOVERY_TERMINAL:
+            return {"ok": bool(result and result.get("ok")),
+                    "started": started, "result": result}
         if started:
             recovery["status"] = "recovering"
             recovery["reason"] = _core._codex_recovery_activity_text(recovery)

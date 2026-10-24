@@ -2034,6 +2034,29 @@ def _codex_compaction_recovery_note_notification_unlocked(
     if str(recovery.get("status") or "") in _CODEX_COMPACTION_RECOVERY_TERMINAL:
         return
 
+    # Compaction recovery only bridges the gap until execution resumes. Once
+    # Codex is producing output or running tools, later silence belongs to the
+    # normal silent-turn watchdog, not this old compaction episode.
+    resumed = (
+        method.startswith("item/")
+        and item_type != "contextCompaction"
+        and (
+            (method in ("item/started", "item/completed")
+             and item_type not in ("", "userMessage"))
+            or bool(str(params.get("delta") or "").strip())
+        )
+    )
+    if resumed and not _codex_recovery_is_silent_turn(recovery):
+        recovery["status"] = "recovered"
+        recovery["reason"] = "Codex resumed execution after compaction"
+        recovery["recovered_at"] = float(now)
+        recovery["last_progress_at"] = float(now)
+        _core._codex_coordination_event_unlocked(
+            state, "compaction_recovery_recovered",
+            detail=recovery["reason"], now=now,
+        )
+        return
+
     if method == "turn/started":
         if turn_id and str(turn_id) != str(recovery.get("compaction_turn_id") or ""):
             recovery["status"] = "recovering"
