@@ -3066,6 +3066,62 @@
   #convSplit[data-orientation]:not([data-orientation=""]) .conv-pane-split-next {
     display: none;
   }
+  /* CCC-154: session ⋮ menu, desktop single-pane header only (phones use
+     the toolbar ⋮ menu; split panes/popouts keep their compact header). */
+  .conv-pane-session-wrap { display: none; position: relative; flex: 0 0 auto; }
+  @media (min-width: 1201px) {
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-session-wrap {
+      display: inline-flex;
+    }
+  }
+  .conv-pane-session-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .conv-pane-session-btn:hover,
+  .conv-pane-session-btn[aria-expanded="true"] {
+    color: var(--text);
+    border-color: var(--text-muted);
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  }
+  .conv-pane-session-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .conv-pane-session-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    display: grid;
+    gap: 2px;
+    min-width: 200px;
+    max-width: 360px;
+    padding: 4px;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 6px;
+    background: var(--surface, #161b22);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  }
+  .conv-pane-session-menu[hidden],
+  .conv-pane-session-menu [hidden] { display: none; }
+  .conv-pane-session-menu [data-role="menu-session-info"]:not([hidden]) {
+    display: grid;
+    gap: 2px;
+    margin-top: 2px;
+    padding-top: 2px;
+    border-top: 1px solid var(--border, #2a2a2a);
+  }
+  .conv-pane-session-menu .conv-pane-more-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-pane-session-meta { color: var(--text-muted); font-size: 11px; margin-left: 4px; }
   @media (min-width: 1201px) {
     .conversations-view .conv-sticky-header { display: none !important; }
   }

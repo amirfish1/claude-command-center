@@ -1,0 +1,1 @@
+- Desktop conversation header now has a ⋮ session menu with Archive / Unarchive / Untrash, Move to Ideas / Small bugs, and copy session id / repo path.

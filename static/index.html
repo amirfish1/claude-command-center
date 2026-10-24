@@ -1253,6 +1253,24 @@
               <path d="M2.6 6h2.3m0 0-1-1m1 1-1 1" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
+          <!-- CCC-154: desktop single-pane ⋮ session menu (the phone toolbar's
+               ⋮ menu is hidden on desktop). Lifecycle items are filtered by
+               _syncSessionMenuItems; clicks go through _wirePaneSessionMenu. -->
+          <span class="conv-pane-session-wrap" data-role="pane-session-wrap">
+            <button type="button" class="conv-pane-session-btn" data-role="pane-session-btn"
+                    title="Session actions" aria-label="Session actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
+            <div class="conv-pane-session-menu" data-role="pane-session-menu" role="menu" hidden>
+              <button type="button" class="conv-pane-more-item" data-simple-action="archive" role="menuitem" hidden>&#128230; Archive</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="unarchive" role="menuitem" hidden>&#8617; Unarchive</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="untrash" role="menuitem" hidden>&#8617; Untrash</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="idea-IDEAS" role="menuitem" hidden>&#128161; Move to Ideas</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="idea-SMALL-BUGS" role="menuitem" hidden>&#128027; Move to Small bugs</button>
+              <div data-role="menu-session-info" hidden>
+                <button type="button" class="conv-pane-more-item" data-simple-action="copy-session-id" role="menuitem" title="Copy session id">Copy session id <span class="conv-pane-session-meta" data-role="menu-session-id"></span></button>
+                <button type="button" class="conv-pane-more-item" data-simple-action="copy-repo-path" role="menuitem" title="Copy repo path">Copy repo path <span class="conv-pane-session-meta" data-role="menu-repo-path"></span></button>
+              </div>
+            </div>
+          </span>
           <!-- Per-pane header actions are compact in split mode / popouts:
                Annotate remains one-click, while recording controls live in
                the adjacent overflow menu. -->

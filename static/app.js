@@ -19776,6 +19776,56 @@
   }
   _wireSimpleActionsMenu();
 
+  // CCC-154: desktop pane-header ⋮ menu. Delegated because split panes clone
+  // the header; acts on the open session like the phone ⋮ menu above.
+  function _closePaneSessionMenus(except) {
+    document.querySelectorAll('[data-role="pane-session-menu"]:not([hidden])').forEach((m) => {
+      if (m === except) return;
+      m.hidden = true;
+      const b = m.parentElement && m.parentElement.querySelector('[data-role="pane-session-btn"]');
+      if (b) b.setAttribute('aria-expanded', 'false');
+    });
+  }
+  function _wirePaneSessionMenu() {
+    document.addEventListener('click', (ev) => {
+      const t = ev.target;
+      const btn = t && t.closest && t.closest('[data-role="pane-session-btn"]');
+      if (btn) {
+        ev.stopPropagation();
+        const menu = btn.parentElement.querySelector('[data-role="pane-session-menu"]');
+        if (!menu) return;
+        const opening = menu.hidden;
+        _closePaneSessionMenus(menu);
+        if (opening) _syncSessionMenuItems(menu);
+        menu.hidden = !opening;
+        btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        return;
+      }
+      const item = t && t.closest && t.closest('[data-role="pane-session-menu"] [data-simple-action]');
+      _closePaneSessionMenus(null);
+      if (!item) return;
+      const action = item.getAttribute('data-simple-action');
+      if (action === 'copy-session-id' || action === 'copy-repo-path') {
+        const el = item.querySelector('[data-role="menu-session-id"], [data-role="menu-repo-path"]');
+        const value = (el && el.textContent) || '';
+        const label = action === 'copy-session-id' ? 'session id' : 'repo path';
+        if (value) copyTextValue(value).then((ok) => {
+          showOpToast(ok ? 'Copied ' + label : 'Copy failed - try again', ok ? 'ok' : 'error');
+        });
+      } else if (action === 'archive' || action === 'unarchive' || action === 'untrash') {
+        _setOpenSessionLifecycle(action);
+      } else if (action === 'idea-IDEAS' || action === 'idea-SMALL-BUGS') {
+        const row = _openConversationRow();
+        const sid = row && (row.session_id || row.id);
+        if (sid) moveSessionIdeaTicket(sid, action.slice(5));
+      }
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') _closePaneSessionMenus(null);
+    });
+  }
+  _wirePaneSessionMenu();
+
   // Simple mode never shows the raw session id inline — this is the
   // grandma-mode-friendly way to still hand a session id to another
   // session/tool without exposing the id in the UI itself. Used by the
