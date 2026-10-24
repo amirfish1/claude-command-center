@@ -44,7 +44,7 @@ the release, and leave the `[Unreleased]` header empty.
   fallback no longer exists).
 - **docs/index.html** (ccc.amirfish.ai) — bump the nav badge, hero badge,
   release meta line, compare-table header, and the `#whats-new` strip; swap the
-  hero frame image; keep engine counts honest ("eight engines", not seven).
+  hero frame image; keep engine counts honest ("nine engines", not eight).
   The GET CCC button links `releases/latest` so it never pins an old tag.
 - **Screenshots** — never capture the live dashboard (real session titles =
   PII). Use the seeded fixtures via `scripts/story-capture`:
