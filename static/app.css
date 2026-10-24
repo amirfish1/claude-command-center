@@ -1981,25 +1981,31 @@
     padding: 6px 10px;
     background: rgba(255, 255, 255, 0.03);
     border-left: 3px solid #64748b;
-    color: var(--text-muted);
+    --ssb-label: #93c5fd;
+    --ssb-score: #fcd34d;
+    color: var(--text);
     font-size: 13px;
-    line-height: 1.35;
-    opacity: 0.9;
+    line-height: 1.45;
   }
+  :root[data-theme="light"] .session-state-block {
+    --ssb-label: #075985;
+    --ssb-score: #854d0e;
+  }
+  .session-state-block .ssb-score { color: var(--ssb-score); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .session-state-block .ssb-completion > summary { cursor: pointer; color: var(--text); }
   .session-state-block .ssb-row { margin: 0; }
   .session-state-block .ssb-key {
     display: inline-block; margin-right: 6px;
-    color: var(--text-muted);
+    color: var(--ssb-label);
     font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.05em;
-    opacity: 0.75;
   }
   .session-state-block .ssb-primary {
     color: var(--text);
     font-size: 14px;
   }
-  .session-state-block .ssb-next .ssb-key { color: #f59e0b; opacity: 0.9; }
-  .session-state-block .ssb-done .ssb-key { color: #10b981; opacity: 0.9; }
+  .session-state-block .ssb-next .ssb-key { color: var(--ssb-score); }
+  .session-state-block .ssb-done .ssb-key { color: var(--ssb-label); }
   .session-state-block .ssb-reason {
     margin-top: 2px;
     font-size: 12px;
@@ -2963,6 +2969,47 @@
     }
     .conv-split[data-orientation="vertical"] .conv-pane-last-user-message { max-width: 24%; }
   }
+  /* CCC-149: a single desktop conversation gets the phone's clean session
+     header: the sidebar row's avatar and the session name, nothing else.
+     Split panes and popouts keep the engine/repo chip and latest message
+     so side-by-side panes stay distinguishable. */
+  .conv-pane-avatar { display: none; }
+  @media (min-width: 1201px) {
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-header {
+      min-height: 52px;
+      padding: 7px 10px 7px 14px;
+    }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar { gap: 12px; }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-avatar:not(:empty) {
+      display: inline-flex;
+      flex: 0 0 auto;
+    }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) :is(.conv-pane-category, .conv-pane-last-user-message) {
+      display: none;
+    }
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar .conv-pane-title {
+      font-size: 19px;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+    .conv-pane-avatar .wa-av {
+      position: relative;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      box-shadow: inset 0 -3px 8px rgba(0, 0, 0, 0.18), inset 0 2px 4px rgba(255, 255, 255, 0.25);
+    }
+    .conv-pane-avatar .wa-face {
+      font-size: 22px;
+      line-height: 1;
+      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    }
+  }
   .conv-pane-popout {
     flex: 0 0 auto;
     width: 28px;
@@ -3581,12 +3628,12 @@
   }
   .conv-scroll-speak-btn.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
   .conv-scroll-speak-btn:hover { border-color: var(--accent); background: var(--surface-2); }
-  .conv-scroll-speak-btn.speaking { border-color: var(--accent); color: var(--accent); }
+  .conv-scroll-speak-btn.speaking { border-color: var(--accent, var(--cyan)); color: var(--accent, var(--cyan)); }
   .conv-scroll-speak-btn.speaking.paused { opacity: 0.8; }
   /* Progress ring around the floating speaker, the round version of the
      composer Speak bar. Idle: amber/green arc = share of the on-screen turn's
-     audio already made. Reading: accent = read, bright = made ahead, dim =
-     not made yet. */
+     audio sent to processing and ready. Reading: accent = read, green =
+     ready, amber = processing, dim = not sent yet. */
   .conv-scroll-speak-btn::before {
     content: '';
     position: absolute;
@@ -3599,17 +3646,20 @@
   }
   .conv-scroll-speak-btn[data-tts-cache]::before {
     display: block;
-    background: conic-gradient(var(--green) calc(var(--tts-ring-f, 1) * 1turn), transparent 0);
-  }
-  .conv-scroll-speak-btn[data-tts-cache="partial"]::before {
-    background: conic-gradient(#d29922 calc(var(--tts-ring-f, 1) * 1turn), transparent 0);
+    background: conic-gradient(
+      var(--green) calc(var(--tts-ring-f, 0) * 1turn),
+      #d29922 0 calc(var(--tts-ring-sent-f, 0) * 1turn),
+      #a855f7 0 calc(var(--tts-ring-cancelled-f, 0) * 1turn),
+      transparent 0);
   }
   .conv-scroll-speak-btn.speaking::before {
     display: block;
     background: conic-gradient(
-      var(--accent) calc(var(--tts-play, 0) * 1turn),
-      color-mix(in srgb, var(--text) 70%, transparent) 0 calc(var(--tts-cache-f, 0) * 1turn),
-      color-mix(in srgb, var(--text) 14%, transparent) 0);
+      var(--accent, var(--cyan)) calc(var(--tts-play, 0) * 1turn),
+      var(--green) 0 calc(max(var(--tts-play, 0), var(--tts-ring-f, 0)) * 1turn),
+      #d29922 0 calc(max(var(--tts-play, 0), var(--tts-ring-sent-f, 0)) * 1turn),
+      #a855f7 0 calc(max(var(--tts-play, 0), var(--tts-ring-cancelled-f, 0)) * 1turn),
+      color-mix(in srgb, var(--text, #c9d1d9) 14%, transparent) 0);
   }
 
   /* Seam marker between two CCC continuation segments in the merged
@@ -5093,6 +5143,18 @@
     background: rgba(88,166,255,0.16);
   }
   /* Repo auto-guess chips beside the folder picker (new-session only). */
+  .conv-input-context .jev-repo-promo { display: none; }
+  .conv-input-context.is-new-session .jev-repo-promo:not([hidden]) {
+    display: flex; align-items: center; gap: 12px; grid-column: 1 / -1; min-width: 0;
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); font-size: 12px; line-height: 1.5;
+  }
+  .jev-repo-promo strong, .jev-repo-promo span, .jev-repo-promo small { display: block; }
+  .jev-repo-promo small { color: var(--text-muted); }
+  .jev-repo-promo button { flex-shrink: 0; }
+  @media (max-width: 600px) {
+    .conv-input-context.is-new-session .jev-repo-promo:not([hidden]) { flex-wrap: wrap; }
+  }
   .conv-input-context .spawn-cwd-guess-chip {
     display: inline-flex;
     align-items: center;
@@ -21593,6 +21655,12 @@ body.status-pos-right #convToolbar {
   pointer-events: none;
 }
 
+/* Debug backgrounds coexist with the active spoken word's foreground color. */
+::highlight(tts-cache-sent) { background-color: rgba(245, 158, 11, 0.32); }
+::highlight(tts-cache-ready) { background-color: rgba(34, 197, 94, 0.30); }
+.tts-cache-debug-sent { background-color: rgba(245, 158, 11, 0.32); }
+.tts-cache-debug-ready { background-color: rgba(34, 197, 94, 0.30); }
+
 /* TTS Word Highlighting */
 ::highlight(tts-highlight) {
   color: #eab308;
@@ -32479,6 +32547,11 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 .sh-more-filters { display: grid; gap: 8px; padding: 4px 2px 8px; }
 .sh-more-filters[hidden] { display: none; }
 .settings-about-strip[hidden] { display: none; }
+/* Desktop "Mobile view" (sidebar ⋮): the list's view filters move into the
+   sidebar ⋮ like on phones, so show the phone-only entries there too. */
+html.ccc-mobile-list-view .sh-more-filters .is-phone-menu-only { display: inline-flex !important; }
+html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
+.sh-more-check input { margin: 0; accent-color: var(--accent); }
 @media (max-width: 1200px) {
   #sidebarMoreMenu .sh-more-desktop-only,
   #sidebarMoreMenu .sh-more-divider { display: none !important; }
@@ -32646,6 +32719,22 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 .compact-rows .conv-item.is-ready-to-close .conv-row-break { display: block; flex-basis: 100%; height: 0; }
 .conv-item .conv-main-row > .conv-ready-archive { margin-left: auto; }
 #convList .conv-item.is-ready-to-close .conv-main-row > .conv-ready-archive + .conv-pct-badge { margin-left: 0; }
+/* A finished row's Close button ends its explanation: the text keeps its
+   own width (clamped as usual) and the button follows the last line. */
+#convList .conv-item .conv-outcome.is-ready.has-close-btn,
+#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline.has-close-btn {
+  display: flex !important;
+  align-items: flex-end;
+  gap: 8px;
+}
+#convList .conv-item .conv-outcome.has-close-btn .conv-outcome-step,
+#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.has-close-btn .conv-outcome-step {
+  flex: 0 1 auto;
+  width: auto;
+}
+#convList .conv-item .conv-outcome.has-close-btn .conv-outcome-step::before { content: none; display: none; }
+.conv-item .conv-outcome .conv-ready-close { min-height: 24px; padding: 2px 10px; }
+.conv-item .conv-ready-close:hover { color: var(--text); border-color: var(--text); }
 .conv-item .conv-main-row .conv-sidebar-session-id-chip,
 .conv-item .wa-row-footer .conv-sidebar-session-id-chip {
   display: inline-flex; align-items: center; border: 0; background: none;
@@ -32659,45 +32748,113 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   .conv-item .wa-row-footer .conv-ready-archive { min-height: 32px; }
 }
 
-/* Inline message explanations keep the existing title/message split even in
-   Compact's dense table. display:contents would make the explanation a spare
-   grid cell with no width; the row's existing metadata stays below the split.
-   Match the phone breakpoint: the phone chat row already owns that surface. */
+/* Desktop session rows use the phone list's tight avatar/title/preview
+   structure, retaining question chips, lane controls and hover actions. */
 @media (min-width: 1201px) {
-  #convList .conv-item:has(.conv-main-row.has-inline-step) { display: block; }
-  #convList .conv-item .conv-title-row:has(.conv-main-row.has-inline-step) { display: block; }
-  #convList .conv-item .conv-main-row.has-inline-step {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    row-gap: 6px;
+  #convList#convList .conv-item:has(.conv-main-row.has-inline-step) {
+    display: block;
+    --conv-content-left: calc(var(--conv-icon-left) + 56px);
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+    margin: 0 !important;
+    min-height: 0 !important;
+    border-radius: 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent) !important;
+    box-shadow: none;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
-    flex: 0 1 38%;
+  #convList#convList .conv-item:has(.conv-main-row.has-inline-step):not(.active):not(.in-other-pane) { background: transparent !important; }
+  #convList#convList .conv-item .conv-title-row:has(.conv-main-row.has-inline-step) { display: block; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: start;
+    gap: 2px 5px;
+  }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
+    grid-column: 1;
+    grid-row: 1;
     min-width: 0;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline {
+  #convList#convList .conv-item .conv-main-row.has-inline-step .conv-title {
+    font-size: 16px !important;
+    font-weight: 600;
+    line-height: 21px !important;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline {
     display: block !important;
-    flex: 1 1 0;
+    grid-column: 1 / -1;
+    grid-row: 2;
     min-width: 0;
-    /* Reserve the same three text lines for Working, Next and Close, so
-       incoming text cannot resize a row while the list is being read. */
-    height: calc(3 * 1.42em + 14px);
+    height: auto;
     overflow: hidden;
     margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step {
-    width: 100%;
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.has-close-btn { display: flex !important; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step {
     min-width: 0;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 18px;
+    -webkit-line-clamp: 2;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-break {
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome:not(.has-close-btn) .conv-outcome-step::before {
+    content: attr(data-label) ": ";
+    display: inline;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    letter-spacing: normal;
+    text-transform: none;
+    vertical-align: baseline;
+  }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-break { display: none; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col:empty { display: none; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { grid-column: 2; grid-row: 1; margin: 2px 0 0; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { grid-column: 3; grid-row: 1; margin: 2px 0 0; min-width: 20px; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end > .conv-rel { position: static; transform: none; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-hover-slot { z-index: 7; background: var(--surface-2); }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-hover-slot > .conv-trash-btn { display: none; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-row-end .conv-row-actions { z-index: 8; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-idea-avatar {
+    top: 8px;
+    width: 46px;
+    height: 46px;
+  }
+  #convList#convList .conv-item .conv-main-row.has-inline-step .conv-avatar-number { font-size: 18px; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-working-dot {
     display: block;
-    flex-basis: 100%;
-    height: 0;
+    position: absolute;
+    left: calc(var(--conv-icon-left) + 38px);
+    top: 8px;
+    width: 8px;
+    height: 8px;
+    margin: 0;
+    transform: none;
+    background: var(--green, #3fb950);
+    z-index: 4;
   }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-meta-col { display: contents; }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-pct-badge { margin-left: auto; }
-  #convList .conv-item .conv-main-row.has-inline-step > .conv-row-end { margin-left: auto; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-working-dot::after { background: var(--green, #3fb950); }
+  #convList#convList .conv-gap-separator { display: none; }
 }
 
 /* Archive for a finished session: anchored just above the composer card, on
@@ -32732,3 +32889,42 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 @media (pointer: coarse) {
   .conv-ready-archive-footer .conv-ready-archive-btn { min-height: 44px; padding: 8px 20px; }
 }
+
+/* Repository logos share a stable square footprint, with readable fallbacks. */
+.repo-avatar { display:inline-flex; position:relative; width:20px; height:20px; flex:0 0 20px; vertical-align:middle; border-radius:5px; overflow:hidden; background:var(--bg-secondary, #334155); color:var(--text, #fff); margin-right:5px; }
+.repo-avatar-initials { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:600 10px sans-serif; }
+.repo-avatar img { position:relative; width:100%; height:100%; object-fit:contain; background:var(--bg-secondary, #334155); }
+.repo-avatar img[hidden] { display:none; }
+.repo-avatar.wa-avatar { width:42px; height:42px; flex-basis:42px; border-radius:12px; }
+.repo-avatar.wa-avatar .repo-avatar-initials { font-size:17px; }
+.repo-avatar-preview { width:44px; height:44px; flex-basis:44px; border-radius:10px; }
+.repo-avatar-preview .repo-avatar-initials { font-size:18px; }
+.conv-folder-chip .repo-avatar { width:14px; height:14px; flex-basis:14px; border-radius:3px; }
+#repoAvatarControls { flex-wrap:wrap; }
+/* Keep the talking entity: a circle, ticket number and corner model badge.
+   The repository image replaces only the old repo-colored background. */
+.conv-idea-avatar.has-repo-background { background:var(--surface, #161b22); border-radius:50%; overflow:visible; }
+.conv-idea-avatar > .repo-avatar.conv-avatar-background { position:absolute; inset:0; width:100%; height:100%; margin:0; border-radius:50%; overflow:hidden; pointer-events:none; }
+.conv-idea-avatar > .conv-avatar-background img { object-fit:cover; }
+.conv-idea-avatar:has(.conv-avatar-number) > .conv-avatar-background { opacity:0.55; }
+.conv-avatar-background .repo-avatar-initials { display:none; }
+.conv-idea-avatar > .conv-avatar-number { position:relative; z-index:1; text-shadow:0 1px 3px #000, 0 0 5px #000; }
+.conv-idea-avatar > .conv-avatar-model { z-index:2; }
+.conv-repo-portrait { cursor:default; }
+.conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }
+
+/* Optional TTS scheduler inspector; kept outside transcript text and copying. */
+::highlight(tts-cache-cancelled) { background-color: rgba(168, 85, 247, 0.32); }
+#ttsCacheDebugQueue {
+  position: fixed; top: 74px; left: 12px; z-index: 100100;
+  max-width: min(360px, calc(100vw - 24px)); color: #e6edf3;
+  background: #161b22; border: 1px solid #59636e; border-radius: 8px;
+  font-size: 12px; box-shadow: 0 2px 10px #0008;
+}
+#ttsCacheDebugQueue summary { padding: 7px 10px; cursor: pointer; }
+#ttsCacheDebugQueue > div { max-height: 32vh; overflow: auto; padding: 0 10px 8px; }
+#ttsCacheDebugQueue p { margin: 4px 0 8px; }
+#ttsCacheDebugQueue [data-status] { padding: 5px; margin: 3px 0; overflow-wrap: anywhere; }
+#ttsCacheDebugQueue [data-status="processing"] { background: #f59e0b52; }
+#ttsCacheDebugQueue [data-status="ready"] { background: #22c55e4d; }
+#ttsCacheDebugQueue [data-status="cancelled"] { background: #a855f752; }

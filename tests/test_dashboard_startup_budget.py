@@ -91,8 +91,10 @@ def test_optional_startup_reads_wait_for_archive_then_use_the_four_slot_pool():
     assert "_startupReplaysDirect(task.input, task.init) ? _startupBaseFetch : backgroundApiFetch" in source
     assert "'/api/conversations/list'" in source
     assert "window.fetch = startupBudgetedFetch" in source
-    assert "addEventListener('pointerdown', _releaseStartupApiReads" in source
-    assert "addEventListener('keydown', _releaseStartupApiReads" in source
+    assert "window.addEventListener('pointerdown'" in source
+    assert "window.addEventListener('keydown', () => _releaseStartupApiReads()" in source
+    # CCC-143: the release waits for an in-flight conversation tail.
+    assert "_startupOpenFetches.size && held < STARTUP_OPEN_HOLD_MAX_MS" in source
 
 
 def test_background_pool_reads_honor_the_startup_deferral():

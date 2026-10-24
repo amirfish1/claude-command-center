@@ -20,7 +20,7 @@ __version__ = "5.39.0"
 
 import ast
 import base64
-import faulthandler
+import traceback
 import fcntl
 import gzip
 import html
@@ -126,6 +126,8 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+from ccc_server import cpu_accounting as _cpu_accounting
+_cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
 from ccc_server import approval_evidence as _approval_evidence
@@ -625,14 +627,106 @@ def _start_control_plane_worker():
         }
 
 
+# Python stack diagnostics. These used to be faulthandler.register(SIGUSR2,
+# all_threads=True), which walks every thread's frames from inside a C signal
+# handler while the other threads keep running; repeated SIGUSR2 segfaulted
+# the live dashboard (CCC-145). Everything below runs as ordinary Python under
+# the GIL: sys._current_frames() is a consistent snapshot, and the signal only
+# wakes a dumper thread.
+_PYTHON_STACK_DUMP_LOCK = threading.Lock()
+_PYTHON_STACK_DUMP_EVENT = threading.Event()
+PYTHON_STACK_SAMPLES_MAX = 50
+PYTHON_STACK_INTERVAL_MAX_S = 2.0
+
+
+def _python_stack_snapshot():
+    """Every live thread's current Python stack, as plain data."""
+    names = {t.ident: t.name for t in threading.enumerate()}
+    current = threading.get_ident()
+    threads = []
+    for ident, frame in sys._current_frames().items():
+        threads.append({
+            "ident": ident,
+            "name": names.get(ident, "?"),
+            "current": ident == current,
+            "stack": "".join(traceback.format_stack(frame)),
+        })
+    threads.sort(key=lambda t: (not t["current"], t["name"]))
+    return threads
+
+
+def _format_python_stack_snapshot(threads, header):
+    lines = [f"\n=== {header} ===\n"]
+    for t in threads:
+        mark = " (current thread)" if t["current"] else ""
+        lines.append(f"Thread 0x{t['ident']:x} [{t['name']}]{mark}:\n{t['stack']}\n")
+    return "".join(lines)
+
+
+def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5):
+    """Append all-thread stacks to python-stacks.log; return the samples.
+
+    Safe to call from any thread, any number of times. Callers that need the
+    stacks at a specific moment (liveness misses) call this directly instead
+    of signalling their own process.
+    """
+    try:
+        samples = max(1, min(int(samples), PYTHON_STACK_SAMPLES_MAX))
+    except (TypeError, ValueError):
+        samples = 1
+    try:
+        interval_s = max(0.0, min(float(interval_s), PYTHON_STACK_INTERVAL_MAX_S))
+    except (TypeError, ValueError):
+        interval_s = 0.5
+    out = []
+    for i in range(samples):
+        if i:
+            time.sleep(interval_s)
+        at = datetime.now(tz=timezone.utc).isoformat()
+        threads = _python_stack_snapshot()
+        out.append({"at": at, "threads": threads})
+        dump_file = _PYTHON_STACK_DUMP_FILE
+        if dump_file is None:
+            continue
+        text = _format_python_stack_snapshot(
+            threads,
+            f"{reason} sample {i + 1}/{samples} {at} pid={os.getpid()}",
+        )
+        try:
+            with _PYTHON_STACK_DUMP_LOCK:
+                dump_file.write(text)
+                dump_file.flush()
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def _python_stack_dump_loop():
+    while True:
+        _PYTHON_STACK_DUMP_EVENT.wait()
+        _PYTHON_STACK_DUMP_EVENT.clear()
+        try:
+            _dump_python_stacks("SIGUSR2")
+        except Exception:
+            pass
+
+
+def _on_python_stack_signal(_signum, _frame):
+    # Only set a flag: a burst of signals coalesces into one dump.
+    _PYTHON_STACK_DUMP_EVENT.set()
+
+
 def _install_python_stack_dump_handler(log_path=None):
-    """Append all-thread Python tracebacks to a log when SIGUSR2 arrives."""
+    """Open python-stacks.log and dump all-thread stacks on SIGUSR2.
+
+    The log opens from any thread. The SIGUSR2 handler can only be installed
+    from the main thread (a Python restriction); the worker imports server
+    from a request thread, so it gets the log (for liveness-miss dumps)
+    without the signal.
+    """
     global _PYTHON_STACK_DUMP_FILE
     if _PYTHON_STACK_DUMP_FILE is not None:
         return True
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None:
-        return False
     path = Path(log_path) if log_path is not None else PYTHON_STACK_DUMP_LOG
     dump_file = None
     try:
@@ -643,8 +737,7 @@ def _install_python_stack_dump_handler(log_path=None):
             f"{datetime.now(tz=timezone.utc).isoformat()} pid={os.getpid()} ===\n"
         )
         dump_file.flush()
-        faulthandler.register(sigusr2, file=dump_file, all_threads=True, chain=False)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except OSError as exc:
         if dump_file is not None:
             try:
                 dump_file.close()
@@ -653,6 +746,15 @@ def _install_python_stack_dump_handler(log_path=None):
         print(f"⚠️  Could not install Python stack diagnostics: {exc}", file=sys.stderr)
         return False
     _PYTHON_STACK_DUMP_FILE = dump_file
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is not None and threading.current_thread() is threading.main_thread():
+        try:
+            signal.signal(sigusr2, _on_python_stack_signal)
+        except (OSError, RuntimeError, ValueError):
+            return True
+        threading.Thread(
+            target=_python_stack_dump_loop, daemon=True, name="ccc-stack-dump",
+        ).start()
     return True
 
 
@@ -5169,7 +5271,16 @@ def _decode_spawn_marker_file(path):
 
 _SPAWN_MARKER_MEMO = {"ts": 0.0, "dir": None, "out": {}}
 _SPAWN_MARKER_MEMO_TTL_S = 2.0
+# Every marker writer (server + session-start hook) renames into the
+# directory, so an unchanged directory mtime means unchanged markers. Once
+# that mtime is older than the scan by more than the timestamp granularity,
+# the memo is trusted for this long instead of re-stat'ing ~4k files every
+# 2s (CCC-142: each stat hands the GIL away; under load a /list poll waited
+# seconds here).
+_SPAWN_MARKER_MEMO_SETTLED_TTL_S = 300.0
+_SPAWN_MARKER_SETTLE_MARGIN_NS = 1_000_000_000
 _SPAWN_MARKER_MEMO_LOCK = threading.Lock()
+_SPAWN_MARKER_SCAN_LOCK = threading.Lock()
 _SPAWN_MARKER_INDEX_LOADED = set()
 _SPAWN_MARKER_INDEX_DIR_MTIME = {}
 _SPAWN_MARKER_REVALIDATING = threading.Event()
@@ -5238,6 +5349,28 @@ def _load_spawn_markers():
     except OSError:
         marker_dir = (str(SPAWN_MARKERS_DIR), None)
     with _SPAWN_MARKER_MEMO_LOCK:
+        ttl = (_SPAWN_MARKER_MEMO_SETTLED_TTL_S if _SPAWN_MARKER_MEMO.get("settled")
+               else _SPAWN_MARKER_MEMO_TTL_S)
+        if (
+            _SPAWN_MARKER_MEMO["dir"] == marker_dir
+            and now - _SPAWN_MARKER_MEMO["ts"] < ttl
+        ):
+            return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+    # Single-flight: concurrent pollers reuse the last map for one call
+    # instead of each re-stat'ing every marker file at once.
+    if not _SPAWN_MARKER_SCAN_LOCK.acquire(blocking=False):
+        with _SPAWN_MARKER_MEMO_LOCK:
+            if _SPAWN_MARKER_MEMO["dir"] is not None:
+                return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+        _SPAWN_MARKER_SCAN_LOCK.acquire()
+    try:
+        return _load_spawn_markers_locked(now, marker_dir)
+    finally:
+        _SPAWN_MARKER_SCAN_LOCK.release()
+
+
+def _load_spawn_markers_locked(now, marker_dir):
+    with _SPAWN_MARKER_MEMO_LOCK:
         if (
             _SPAWN_MARKER_MEMO["dir"] == marker_dir
             and now - _SPAWN_MARKER_MEMO["ts"] < _SPAWN_MARKER_MEMO_TTL_S
@@ -5262,7 +5395,7 @@ def _load_spawn_markers():
             if marker and path.endswith(".json")
         }
         with _SPAWN_MARKER_MEMO_LOCK:
-            _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out)
+            _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out, settled=False)
         if not _SPAWN_MARKER_REVALIDATING.is_set():
             _SPAWN_MARKER_REVALIDATING.set()
 
@@ -5279,6 +5412,7 @@ def _load_spawn_markers():
             threading.Thread(target=_revalidate, daemon=True).start()
         return {sid: dict(m) for sid, m in out.items()}
     out = {}
+    scan_started_ns = time.time_ns()
     try:
         with os.scandir(SPAWN_MARKERS_DIR) as it:
             entries = list(it)
@@ -5311,8 +5445,10 @@ def _load_spawn_markers():
     stale = [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]
     for k in stale:
         _SPAWN_MARKER_FILE_CACHE.pop(k, None)
+    settled = (marker_dir[1] is not None
+               and scan_started_ns - marker_dir[1] >= _SPAWN_MARKER_SETTLE_MARGIN_NS)
     with _SPAWN_MARKER_MEMO_LOCK:
-        _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out)
+        _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out, settled=settled)
     if decoded or stale or _SPAWN_MARKER_INDEX_DIR_MTIME.get(marker_dir[0]) != marker_dir[1]:
         _save_spawn_marker_index(marker_dir[1])
         _SPAWN_MARKER_INDEX_DIR_MTIME[marker_dir[0]] = marker_dir[1]
@@ -5490,24 +5626,29 @@ def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_regis
 def _tag_spawned_via_in_registry(pid=None, session_id=None, via=""):
     """Persist spawned_via onto the spawn registry entry by PID and/or session_id."""
     clean_via = str(via or "").strip()
-    # Experimental idea tickets: every spawn route tags its origin here, so
-    # this is the one place a UI-started session (any engine) is noted.
-    try:
-        _idea_tickets.note_ui_spawn(session_id, clean_via)
-    except Exception:
-        pass
     if not clean_via or (pid is None and not session_id):
         return
+    session_ids = {session_id} if session_id else set()
     def _mutator(entries):
         changed = False
         for entry in entries:
             pid_match = pid is not None and entry.get("pid") == pid
             sid_match = session_id and entry.get("session_id") == session_id
-            if (pid_match or sid_match) and entry.get("spawned_via") != clean_via:
-                entry["spawned_via"] = clean_via
-                changed = True
+            if pid_match or sid_match:
+                if entry.get("session_id"):
+                    session_ids.add(entry["session_id"])
+                if entry.get("spawned_via") != clean_via:
+                    entry["spawned_via"] = clean_via
+                    changed = True
         return changed
     _mutate_spawn_registry(_mutator)
+    # The native ID may have arrived between the spawn response and this
+    # PID-based tag. Register it even when the response had no session_id.
+    for sid in session_ids:
+        try:
+            _idea_tickets.note_ui_spawn(sid, clean_via)
+        except Exception:
+            pass
 
 
 def _tag_spawn_runtime_in_registry(pid=None, session_id=None, runtime=""):
@@ -8230,16 +8371,37 @@ def _first_allowed_curated_model(engine):
     return ""
 
 
+_MODEL_CATALOG_OWNER_INDEX = {"sig": None, "index": {}}
+
+
+def _model_catalog_owner_index():
+    """key -> engines index over _ENGINE_CURATED_MODELS, rebuilt only when the
+    curated table changes. The per-model scan it replaces ran ~120k key
+    normalisations per catalog build (~1.7s of a 2.5s rebuild, CCC-143)."""
+    sig = tuple(
+        (engine, tuple(option.get("id") for option in options))
+        for engine, options in _ENGINE_CURATED_MODELS.items()
+    )
+    cached = _MODEL_CATALOG_OWNER_INDEX
+    if cached["sig"] == sig:
+        return cached["index"]
+    index = {}
+    for engine, options in _ENGINE_CURATED_MODELS.items():
+        for option in options:
+            key = _model_catalog_key(option.get("id"))
+            if key:
+                index.setdefault(key, set()).add(engine)
+    cached["index"] = index
+    cached["sig"] = sig
+    return index
+
+
 def _model_catalog_known_engines(model):
     """Return curated engines that explicitly own a model id."""
     key = _model_catalog_key(model)
     if not key:
         return set()
-    return {
-        engine
-        for engine, options in _ENGINE_CURATED_MODELS.items()
-        if any(_model_catalog_key(option.get("id")) == key for option in options)
-    }
+    return set(_model_catalog_owner_index().get(key, ()))
 
 
 def _model_catalog_allows_model(engine, model):
@@ -9021,14 +9183,34 @@ def _prune_antigravity_models_to_latest_tiers(models, default_id=None):
     return kept
 
 
+_MODEL_CATALOG_REFRESHING = threading.Event()
+
+
+def _refresh_engine_model_catalog_bg():
+    try:
+        _build_engine_model_catalog(force_refresh=True)
+    except Exception:
+        pass
+    finally:
+        _MODEL_CATALOG_REFRESHING.clear()
+
+
 def _build_engine_model_catalog(force_refresh=False):
     now = time.monotonic()
-    if (
-        not force_refresh
-        and _MODEL_CATALOG_CACHE["data"] is not None
-        and now - _MODEL_CATALOG_CACHE["ts"] < _MODEL_CATALOG_TTL_SEC
-    ):
-        return copy.deepcopy(_MODEL_CATALOG_CACHE["data"])
+    cached = _MODEL_CATALOG_CACHE["data"]
+    if not force_refresh and cached is not None:
+        # Stale-while-revalidate: an expired catalog is served at once and one
+        # background thread rebuilds it. The synchronous rebuild on expiry
+        # took 2-17s under load and competed with conversation opens for the
+        # GIL (CCC-143). Explicit invalidation sets data=None, so a settings
+        # change still rebuilds synchronously below.
+        if now - _MODEL_CATALOG_CACHE["ts"] >= _MODEL_CATALOG_TTL_SEC and not _MODEL_CATALOG_REFRESHING.is_set():
+            _MODEL_CATALOG_REFRESHING.set()
+            threading.Thread(
+                target=_refresh_engine_model_catalog_bg, daemon=True,
+                name="model-catalog-refresh",
+            ).start()
+        return copy.deepcopy(cached)
 
     catalog = {}
     for engine in _ORCHESTRATION_SPAWN_ENGINES:
@@ -15734,7 +15916,7 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
     return _archive_list_project_rows(rows, window=window, now=now), from_cache
 
 
-def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
+def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
@@ -15745,6 +15927,15 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     stale_ok=0 requests schedule freshness after a mutation or new-session
     landing without making the HTTP request wait for the archive scan.
     """
+    _pt = time.perf_counter()
+
+    def _phase(name):
+        nonlocal _pt
+        if phases is not None:
+            now = time.perf_counter()
+            phases[name] = round((now - _pt) * 1000.0, 1)
+            _pt = now
+
     key = _archive_response_cache_key(**cache_options)
     rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
         key,
@@ -15752,6 +15943,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
         copy_rows=False,
         force_refresh=force_refresh,
     )
+    _phase("serve_ms")
     # ACP sessions (Kimi/GLM) live in memory before their first transcript
     # lands and before the archive background refresh picks them up. Without
     # this overlay, a brand-new ACP session appears in the UI via the pending
@@ -15762,6 +15954,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     overlay = _archive_overlay_acp_sessions(rows)
     if overlay:
         rows = list(rows or []) + overlay
+    _phase("acp_ms")
     # Same gap for Devin CLI: the session row exists in sessions.db within a
     # second of spawn, but the archive snapshot only picks it up after the
     # next full background rebuild (~20s+ on a large corpus). The Devin CLI
@@ -15770,13 +15963,17 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     devin_overlay = _archive_overlay_devin_cli_sessions(rows)
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
+    _phase("devin_ms")
     # WatchTower already knows the engine session before the archive scan.
     # Keep that worker in its normal session/queue group during the gap.
     worker_overlay = _archive_overlay_wt_worker_sessions(rows)
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
+    _phase("wt_ms")
     extra = (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
-    return rows, from_cache, _archive_list_body_ver(key, rows, extra)
+    body_ver = _archive_list_body_ver(key, rows, extra)
+    _phase("ver_ms")
+    return rows, from_cache, body_ver
 
 
 
@@ -15966,28 +16163,35 @@ def _archive_overlay_acp_sessions(rows):
     refresh."""
     if not _ACP_HARNESSES:
         return []
-    try:
-        spawn_markers = _load_spawn_markers()
-    except Exception:
-        spawn_markers = {}
-    existing = set()
-    for r in (rows or []):
-        sid = r.get("session_id") or r.get("id")
-        if sid:
-            existing.add(str(sid))
-    try:
-        name_overrides = _load_session_name_overrides()
-    except Exception:
-        name_overrides = {}
-    try:
-        archived_set, trashed_set = _load_conversation_lifecycle_sets()
-    except Exception:
-        archived_set, trashed_set = set(), set()
-    try:
-        pinned_list = _load_pinned_conversations()
-    except Exception:
-        pinned_list = []
-    pinned_rank = _pinned_rank_map(pinned_list)
+    existing = None
+    # Gate by candidacy (CCC-142): the sidecar loads below cost O(all spawn
+    # markers) -- ~4k files, re-stat'd on nearly every poll behind a 2s memo
+    # -- yet are only needed to build a row for an attached ACP session that
+    # the snapshot is missing. Normally there is none, so load them lazily.
+    ctx = {}
+
+    def _overlay_ctx():
+        if ctx:
+            return ctx
+        try:
+            ctx["spawn_markers"] = _load_spawn_markers()
+        except Exception:
+            ctx["spawn_markers"] = {}
+        try:
+            ctx["name_overrides"] = _load_session_name_overrides()
+        except Exception:
+            ctx["name_overrides"] = {}
+        try:
+            ctx["archived_set"], ctx["trashed_set"] = _load_conversation_lifecycle_sets()
+        except Exception:
+            ctx["archived_set"], ctx["trashed_set"] = set(), set()
+        try:
+            pinned_list = _load_pinned_conversations()
+        except Exception:
+            pinned_list = []
+        ctx["pinned_rank"] = _pinned_rank_map(pinned_list)
+        return ctx
+
     out = []
     now = time.time()
     for harness in _ACP_HARNESSES:
@@ -16006,7 +16210,15 @@ def _archive_overlay_acp_sessions(rows):
         label = (_ACP_HARNESSES.get(harness) or {}).get("label", harness)
         for sid, state in sessions.items():
             sid = str(sid)
-            if not sid or sid in existing:
+            if not sid:
+                continue
+            if existing is None:
+                existing = set()
+                for r in (rows or []):
+                    rsid = r.get("session_id") or r.get("id")
+                    if rsid:
+                        existing.add(str(rsid))
+            if sid in existing:
                 continue
             if not (state and state.get("attached")):
                 continue
@@ -16016,6 +16228,11 @@ def _archive_overlay_acp_sessions(rows):
             cwd = str((state.get("cwd") or "")).strip()
             if not cwd:
                 continue
+            c = _overlay_ctx()
+            spawn_markers = c["spawn_markers"]
+            name_overrides = c["name_overrides"]
+            archived_set, trashed_set = c["archived_set"], c["trashed_set"]
+            pinned_rank = c["pinned_rank"]
             try:
                 cwd_exists = Path(cwd).is_dir()
             except OSError:
@@ -16306,6 +16523,9 @@ def _stamp_archive_goals(rows):
     return rows
 
 
+_ARCHIVE_COMPUTE_LAST_PHASES = {}
+
+
 def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None):
     """Produce archive rows under the per-key build lock (single-flight).
 
@@ -16318,14 +16538,25 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
     if serve_generation is None:
         with _archive_serve_lock:
             serve_generation = _archive_serve_generation
+    # CCC-142: per-phase timings, shipped back by the refresh worker.
+    phases = _ARCHIVE_COMPUTE_LAST_PHASES
+    phases.clear()
+    _ph = time.perf_counter()
     sig = _archive_corpus_signature()
+    phases["signature_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
     lock = _archive_build_lock(key)
     with lock:
+        _ph = time.perf_counter()
         entry = _archive_response_cache_get(key)
+        phases["cache_get_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
+        _ph = time.perf_counter()
         if entry and entry.get("signature") == sig:
+            phases["tier"] = "match"
             rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
+            phases["rehydrate_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
             from_cache = True
         else:
+            phases["tier"] = "full"
             rows = None
             # Incremental tier: the corpus changed, but if we know exactly
             # WHICH transcripts changed (both signatures' stat maps are still
@@ -16339,7 +16570,10 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                 delta = _archive_signature_delta(entry.get("signature"), sig)
                 if delta is not None:
                     changed, removed, refresh_engines = delta
+                    phases["tier"] = "incremental"
+                    phases["changed"] = len(changed)
                     try:
+                        _sp = time.perf_counter()
                         fresh = find_all_conversations(
                             resolve_pr_states=cache_options.get("resolve_pr_states", False),
                             resolve_effective=cache_options.get("resolve_effective", False),
@@ -16349,6 +16583,9 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                         merged = _archive_merge_incremental_rows(
                             entry.get("conversations") or [], fresh, removed,
                         )
+                        phases["parse_merge_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        phases["engines"] = sorted(refresh_engines)
+                        _sp = time.perf_counter()
                         if "hermes" in refresh_engines:
                             merged = _archive_merge_engine_rows(
                                 merged,
@@ -16378,18 +16615,27 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                                     repo_only=False,
                                 ),
                             )
+                        phases["engine_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         _archive_response_cache_put(key, merged, signature=sig)
+                        phases["cache_put_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         _save_conv_meta_cache()
+                        phases["meta_save_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         rows = _rehydrate_archive_cached_rows(merged)
+                        phases["rehydrate_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         from_cache = True
                     except Exception as e:
                         print(f"  [archive-cache] incremental refresh failed, rebuilding: {e}")
                         rows = None
             if rows is None:
+                phases["tier"] = "full"
                 rows = _build_archive_conversations(**cache_options, progress_step=progress_step)
                 _archive_response_cache_put(key, rows, signature=sig)
                 _save_conv_meta_cache()
                 from_cache = False
+        phases["build_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
     if not from_cache:
         # The cache branches already ran all three stamps inside
         # _rehydrate_archive_cached_rows; the full-build branch stamps state
@@ -16457,12 +16703,16 @@ def _archive_refresh_worker_main(encoded_options, output_path):
             )
         }
         key = _archive_response_cache_key(**cache_options)
+        _wt0 = time.perf_counter()
         rows, from_cache = _archive_compute_rows(key, cache_options)
+        phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
+        phases["compute_ms"] = round((time.perf_counter() - _wt0) * 1000.0, 1)
         result = {
             "ok": True,
             "key": key,
             "rows": rows,
             "from_cache": bool(from_cache),
+            "phases": phases,
         }
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
@@ -16509,12 +16759,15 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     # 2026-08-04 blocked every subsequent refresh attempt forever with no
     # exception, no log line, nothing to restart into. Failing loud beats
     # hanging silent even when it can't fix the underlying stuck holder.
+    _rt0 = time.perf_counter()
+    _rphase = {}
     try:
         if not _ARCHIVE_BUILD_GLOBAL_LOCK.acquire(timeout=_ARCHIVE_REFRESH_WATCHDOG_S):
             raise RuntimeError(
                 "archive refresh worker could not acquire the build lock within "
                 f"{_ARCHIVE_REFRESH_WATCHDOG_S:.0f}s -- another refresh is stuck holding it"
             )
+        _rphase["lock_wait_ms"] = round((time.perf_counter() - _rt0) * 1000.0, 1)
         try:
             completed = subprocess.run(
                 command,
@@ -16528,8 +16781,13 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             )
         finally:
             _ARCHIVE_BUILD_GLOBAL_LOCK.release()
+        _rt1 = time.perf_counter()
+        _rphase["worker_ms"] = round((_rt1 - _rt0) * 1000.0 - _rphase["lock_wait_ms"], 1)
         try:
-            result = json.loads(Path(output_name).read_text(encoding="utf-8"))
+            _rtext = Path(output_name).read_text(encoding="utf-8")
+            _rphase["result_bytes"] = len(_rtext)
+            result = json.loads(_rtext)
+            del _rtext
         except (OSError, json.JSONDecodeError) as exc:
             detail = (completed.stderr or completed.stdout or "").strip()[-500:]
             raise RuntimeError(
@@ -16543,8 +16801,16 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         rows = result.get("rows")
         if not isinstance(rows, list):
             raise RuntimeError("archive refresh worker returned invalid rows")
+        _rt2 = time.perf_counter()
+        _rphase["decode_ms"] = round((_rt2 - _rt1) * 1000.0, 1)
         if _ARCHIVE_SERVE_TTL > 0:
             _archive_serve_cache_store(key, rows, serve_generation)
+        _rt3 = time.perf_counter()
+        _rphase["store_ms"] = round((_rt3 - _rt2) * 1000.0, 1)
+        _rphase["rows"] = len(rows)
+        _rphase["key"] = str(key)[:80]
+        _rphase["worker_phases"] = result.get("phases")
+        record_diag("archive_rebuild", (_rt3 - _rt0) * 1000.0, _rphase)
         return rows, bool(result.get("from_cache"))
     finally:
         try:
@@ -23840,6 +24106,12 @@ _CONV_PARSE_CACHE_MAX = 96
 
 _CONV_PATH_CACHE = {}
 _CONV_PATH_CACHE_LOCK = threading.Lock()
+# Codex reader resolution opens the Codex state DB (and may glob rollouts),
+# and live pollers stat a codex transcript several times a second (CCC-152).
+# Short TTL, not forever: a stub rollout resolves to the exec log until the
+# real rollout fills in.
+_CODEX_READER_PATH_CACHE = {}
+_CODEX_READER_PATH_TTL = 2.0
 
 
 def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
@@ -23857,7 +24129,18 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         if engine == "antigravity":
             return _antigravity_reader_cache_key(conversation_id)
         if engine == "codex":
-            resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
+            cache_key = (conversation_id, repo_path)
+            now = time.monotonic()
+            with _CONV_PATH_CACHE_LOCK:
+                hit = _CODEX_READER_PATH_CACHE.get(cache_key)
+            if hit is not None and now < hit[1]:
+                resolved = hit[0]
+            else:
+                resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
+                with _CONV_PATH_CACHE_LOCK:
+                    if len(_CODEX_READER_PATH_CACHE) > 512:
+                        _CODEX_READER_PATH_CACHE.clear()
+                    _CODEX_READER_PATH_CACHE[cache_key] = (resolved, now + _CODEX_READER_PATH_TTL)
             st = Path(resolved).stat()
             return (st.st_mtime_ns, st.st_size)
         with _CONV_PATH_CACHE_LOCK:
@@ -24314,15 +24597,27 @@ def _window_parsed_conversation_events(result, tail=None, before=None):
     all_events = list(result.get("events") or [])
     last_line = int(result.get("last_line") or 0)
     window = int(tail or _CONV_TAIL_DEFAULT)
+    # Some sources interleave rows with negated line ids (Devin's merged ACP
+    # result rows). Page by the nearest preceding source line so those rows
+    # stay with their turn instead of leaking into every older window.
+    positions = []
+    prev = 0
+    for event in all_events:
+        try:
+            line = int(event.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        if line > 0:
+            prev = line
+        positions.append(line if line > 0 else prev)
     if before is not None:
-        candidates = [
-            event for event in all_events
-            if int(event.get("line") or 0) < before
-        ]
+        keep = [i for i, pos in enumerate(positions) if pos < before]
     else:
-        candidates = all_events
-    events = candidates[-window:]
-    first_line = int(events[0].get("line") or 0) if events else 0
+        keep = list(range(len(all_events)))
+    candidates = [all_events[i] for i in keep]
+    shown = keep[-window:]
+    events = [all_events[i] for i in shown]
+    first_line = positions[shown[0]] if shown else 0
     # Preserve the parser's extra top-level keys (engine, codex_cloud, meta
     # fields) — rebuilding a bare dict here would silently strip markers the
     # viewer needs on windowed opens, e.g. the cloud-thread read-only flag.
@@ -24334,6 +24629,23 @@ def _window_parsed_conversation_events(result, tail=None, before=None):
         "truncated_before": bool(first_line > 1 and len(candidates) > len(events)),
     })
     return out
+
+
+def _finish_full_parse_conversation(conversation_id, result, tail=None, before=None):
+    """Return a full-parse engine result, honouring the tail/before window.
+
+    Store-backed engines (Devin, Gemini, Antigravity, ...) always parse the
+    whole source. Without this the open shipped every event (CCC-143: a Devin
+    session sent ~2MB/1100 events for tail=120 and paid ~1s to fetch+render).
+    """
+    if tail or before is not None:
+        result = _window_parsed_conversation_events(result, tail=tail, before=before)
+    else:
+        result = {"events": list(result.get("events") or []), "last_line": result.get("last_line", 0)}
+    if before is None:
+        result["events"] = _merge_synthetic_conversation_events(
+            list(result.get("events") or []), _get_queued_events_for_session(conversation_id))
+    return result
 
 
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True,
@@ -24393,33 +24705,23 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     if engine == "gemini":
         result = _parse_gemini_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "antigravity":
         result = _parse_antigravity_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "kilo":
         result = _parse_kilo_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "opencode":
         result = _parse_opencode_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "aider":
         result = _parse_aider_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "hermes":
         result = _parse_hermes_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
@@ -24463,24 +24765,18 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     if engine == "copilot":
         result = _parse_copilot_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "devin":
         if _is_devin_cli_session(conversation_id):
             result = _parse_devin_cli_conversation(conversation_id, after_line=after_line)
         else:
             result = _parse_devin_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "copilotchat":
         result = _parse_copilotchat_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     filepath, parser = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
     if parser is _parse_conversation_event and not Path(filepath).is_file():
         stub = _registry_only_conversation_stub(conversation_id, after_line=after_line)
@@ -28375,6 +28671,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "layout": load_layout()})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/debug/stacks":
+            # All-thread Python stacks, optionally N samples apart, appended
+            # to logs/python-stacks.log and returned as JSON. Local-only: the
+            # stacks show paths and arguments. Safe to call repeatedly, unlike
+            # signal-handler dumps (CCC-145).
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "stack dumps are local-only"}, 403)
+                return
+            qs = urllib.parse.parse_qs(parsed.query)
+            samples = _dump_python_stacks(
+                "api/debug/stacks",
+                samples=(qs.get("samples") or ["1"])[0],
+                interval_s=(qs.get("interval") or ["0.5"])[0],
+            )
+            self.send_json({
+                "ok": True,
+                "pid": os.getpid(),
+                "log": str(PYTHON_STACK_DUMP_LOG),
+                "samples": samples,
+            })
         elif path == "/api/perf/summary":
             # Rolled-up client perf beacons (archive load / conversation
             # open) over a trailing window, plus the self-filed-ticket
@@ -29469,6 +29785,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                self._send_server_timing(cache="hit")
                 if enc:
                     self.send_header("Content-Encoding", enc)
                     self.send_header("Vary", "Accept-Encoding")
@@ -29513,6 +29830,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self._send_server_timing(cache="miss")
             if enc:
                 self.send_header("Content-Encoding", enc)
                 self.send_header("Vary", "Accept-Encoding")
@@ -30345,6 +30663,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/doctor/instances":
             # W9-1: read-only duplicate dashboard detector for `ccc doctor`.
             self.send_json(build_doctor_instances())
+        elif path == "/api/repo/guess/status":
+            self.send_json(repo_guess_status())
         elif path == "/api/byok/profiles":
             # BYOK (W2-2): key profiles and the provider catalog for the
             # Settings screen. Never returns secret material — set_key/
@@ -30659,6 +30979,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # — no subprocess, no all-conversations scan. Same loopback trust as
             # every other GET.
             self.send_json(objects_store.load_state())
+        elif path in ("/api/repo/avatar", "/api/repo/avatar/info"):
+            from ccc_server import repo_avatars
+            try:
+                qs = urllib.parse.parse_qs(parsed.query)
+                repo = resolve_repo_path(qs.get("repo_path", [""])[0])
+                data, content_type, mode, source = repo_avatars.avatar(repo, COMMAND_CENTER_STATE_DIR)
+            except (RepoContextError, ValueError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            if path.endswith("/info"):
+                self.send_json({"ok": True, "mode": mode, "source": source})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=60")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+            self.end_headers()
+            self.wfile.write(data)
         elif path == "/api/repo/list":
             # List of repos the picker offers. There is no server-active repo.
             repos = load_known_repos()
@@ -30751,20 +31091,49 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
             }
             stale_ok = qs.get("stale_ok", ["0"])[0] in ("1", "true")
+            # CCC-142: per-phase server timing. wall vs thread CPU separates
+            # real work from waiting on the GIL / locks behind a rebuild.
+            _lt0 = time.perf_counter()
+            _lc0 = time.thread_time()
             # Body-cache version: snapshot version when rows ARE the stored
             # snapshot, or (snapshot version, overlay content hash) when
             # in-memory ACP/Devin overlay rows were appended — either way a
             # prebuilt body may be replayed when the version matches.
+            _src_phases = {}
             rows, from_cache, body_ver = _archive_list_source_rows_cached(
                 cache_options,
                 force_refresh=not stale_ok,
+                phases=_src_phases,
             )
+            _lt1 = time.perf_counter()
             list_cache_key = _archive_response_cache_key(**cache_options)
-            self._send_archive_list_json(
-                list_cache_key, window, from_cache,
-                lambda: _archive_list_payload(rows, window=window, cached=from_cache),
-                body_ver,
+            _payload_ms = []
+
+            def _timed_payload():
+                _pt0 = time.perf_counter()
+                try:
+                    return _archive_list_payload(rows, window=window, cached=from_cache)
+                finally:
+                    _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
+
+            _status = self._send_archive_list_json(
+                list_cache_key, window, from_cache, _timed_payload, body_ver,
             )
+            _lt2 = time.perf_counter()
+            record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
+                "window": window,
+                "status": _status,
+                "rows_src": len(rows or []),
+                "source_ms": round((_lt1 - _lt0) * 1000.0, 1),
+                "payload_ms": round(_payload_ms[0], 1) if _payload_ms else None,
+                "send_ms": round((_lt2 - _lt1) * 1000.0, 1),
+                "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                "body_hit": not _payload_ms,
+                "from_cache": bool(from_cache),
+                "stale_ok": stale_ok,
+                "refreshing": bool(_archive_serve_refreshing),
+                "src": _src_phases,
+            })
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every
             # folder under ~/.claude/projects/, tagged with folder + reverse
@@ -31544,6 +31913,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         if _label.startswith("Kokoro"):
                             self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
                         self.send_header("X-CCC-Stream", "1")
+                        # Perf pane "speaker cache" column: was this clip
+                        # replayed from the clip cache or made just now?
+                        self.send_header("X-CCC-Cache", "hit" if isinstance(
+                            _resp, _free_runtime._CachedClip) else "miss")
                         self.send_header("Cache-Control", "no-store")
                         self.send_header("Connection", "close")
                         self.end_headers()
@@ -34734,6 +35107,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = {}
             self.send_json(repo_guess_request(body))
             return
+        if path == "/api/repo/avatar":
+            from ccc_server import repo_avatars
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= repo_avatars.MAX_IMAGE * 4 // 3 + 4096:
+                    self.send_json({"ok": False, "error": "Choose an image smaller than 2 MB"}, 413)
+                    return
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or "image" not in body:
+                    raise ValueError("image is required (null restores automatic detection)")
+                repo = resolve_repo_path(body.get("repo_path", ""))
+                repo_avatars.save(repo, COMMAND_CENTER_STATE_DIR, body["image"])
+                self.send_json({"ok": True})
+            except (RepoContextError, ValueError, TypeError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except OSError:
+                self.send_json({"ok": False, "error": "Could not save avatar"}, 500)
+            return
         if path == "/api/repo/add":
             # Persist a user-picked repo path so it appears in the picker and
             # can be used by repo-scoped APIs. Intended for folders outside
@@ -37015,7 +37406,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/idea-ticket$", path):
             # Experimental idea tickets: move a session's ticket between the
-            # IDEAS and SMALL-BUGS queues (sidebar row menu). Body: {queue}.
+            # IDEAS and SMALL-BUGS queues, or detach it with OTHER (sidebar
+            # row menu and tab-bar drag). Body: {queue}.
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -37150,9 +37542,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # to Active races this request, it must run after the kill so
                 # the final Active state never points at a just-killed session.
                 with _conversation_lifecycle_lock:
-                    now_archived, _changed = _set_conversation_archived(
-                        sid, desired, source="manual",
+                    now_archived = (
+                        desired if isinstance(desired, bool)
+                        else sid not in _load_archived_conversations()
                     )
+                    changed, unchanged, _, _ = _set_conversations_archived(
+                        [sid], now_archived, source="manual",
+                    )
+                    group = changed + unchanged
                     # Archiving retires the session — drop any stale Notification-hook
                     # marker so the dashboard doesn't keep classifying it as Waiting
                     # (which would pin the row to "In progress" and undo the move).
@@ -37203,11 +37600,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except RepoContextError:
                         _bust_issue_state_cache()
                 _restamp_archive_serve_cache_after_mutation()
-                _publish_dashboard_patch(
-                    "conversation.patch", "conversation", sid,
-                    {"archived": now_archived, "trashed": False},
-                )
-                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result, "deferred": deferred})
+                for member in group:
+                    patch = {"archived": now_archived}
+                    if not now_archived:
+                        patch["trashed"] = False
+                    _publish_dashboard_patch(
+                        "conversation.patch", "conversation", member, patch,
+                    )
+                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result, "deferred": deferred, "session_ids": group})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/trash$", path):
@@ -40545,7 +40945,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(304)
             self.send_header("ETag", etag_val)
             self.end_headers()
-            return
+            return 304
         if accept_gzip and gzip_body is not None:
             body, enc = gzip_body, "gzip"
         else:
@@ -40561,6 +40961,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
+            return "pipe"
+        return 200
+
+    def _send_server_timing(self, cache=None):
+        # Server-side time for this response so the client's conv_open perf
+        # event can split network/queue wait from handler time (CCC-143).
+        # cpu well below app means the handler waited (GIL, locks, disk).
+        try:
+            _st0 = getattr(self, "_ccc_req_t0", None)
+            _sc0 = getattr(self, "_ccc_req_cpu0", None)
+            if _st0 is None or _sc0 is None:
+                return
+            val = "app;dur=%.0f, cpu;dur=%.0f" % ((time.time() - _st0) * 1000.0,
+                                                  (time.thread_time() - _sc0) * 1000.0)
+            if cache:
+                val += ', cache;desc="%s"' % cache
+            self.send_header("Server-Timing", val)
+        except Exception:
             pass
 
     def send_json(self, data, status=200, etag=False):
@@ -40606,6 +41024,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(body)))
+        self._send_server_timing()
         if etag_val:
             self.send_header("ETag", etag_val)
         if enc:
@@ -40626,6 +41045,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # so any other endpoint (not just send_json) doesn't dump a
         # traceback when the client bails on us mid-response.
         _t0 = time.time()
+        _c0 = time.thread_time()
+        self._ccc_req_t0 = _t0
+        self._ccc_req_cpu0 = _c0
+        # A keep-alive connection's final call only waits for a request that
+        # never comes; clear the previous request's path so that idle wait is
+        # not logged as a slow repeat of it.
+        self.path = ""
         try:
             super().handle_one_request()
         except (BrokenPipeError, ConnectionResetError):
@@ -40644,12 +41070,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 _ms = (time.time() - _t0) * 1000.0
                 _p = getattr(self, "path", "?").split("?", 1)[0]
-                if (not _p.startswith("/api/secrets/")
+                if (_p and not _p.startswith("/api/secrets/")
                         and _p not in ("/api/events", "/api/sessions/events", "/api/queue/events", "/api/sessions/ultra-fresh")
                         and _ms >= SLOW_REQ_MS):
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)
+            except Exception:
+                pass
+            # Per-route CPU accounting (CCC-143): which handlers keep the
+            # single-GIL process saturated. Idle keep-alive waits (no path)
+            # are skipped.
+            try:
+                if getattr(self, "path", None):
+                    _cpu_accounting.record(self.path, time.thread_time() - _c0, time.time() - _t0)
             except Exception:
                 pass
 
@@ -43111,8 +43545,24 @@ def main():
         from ccc_server import session_fts as _session_fts_warm
         from ccc_server import ship_graph as _ship_graph_warm
         from ccc_server import sandbox_harvest as _sandbox_harvest_warm
-        threading.Thread(target=_session_fts_warm.warm_start, daemon=True, name="ccc-session-fts-warm").start()
-        threading.Thread(target=_ship_graph_warm.warm_start, daemon=True, name="ccc-ship-graph-warm").start()
+        # Deferred past the first list build and opens (CCC-143: opens within
+        # 5 min of a boot had p95 17s while these warmers, the list rebuild
+        # and the first opens all fought for the GIL). A search arriving
+        # before the delay still kicks its own background sync.
+        try:
+            _boot_warm_delay = float(os.environ.get("CCC_BOOT_WARM_DELAY_S", "90"))
+        except ValueError:
+            _boot_warm_delay = 90.0
+
+        def _after_boot_delay(target):
+            def _run():
+                if _boot_warm_delay > 0:
+                    time.sleep(_boot_warm_delay)
+                target()
+            return _run
+
+        threading.Thread(target=_after_boot_delay(_session_fts_warm.warm_start), daemon=True, name="ccc-session-fts-warm").start()
+        threading.Thread(target=_after_boot_delay(_ship_graph_warm.warm_start), daemon=True, name="ccc-ship-graph-warm").start()
         # Sandbox-transcript harvest (multi-machine S8b): copies queue-worker
         # sandbox transcripts (/tmp/ccc-local-*) into a persistent home
         # before they're wiped, so session_fts above can index them.

@@ -460,8 +460,9 @@ def _local_tts_health():
 
 
 # The local voice server's runtime contract (scripts/local_tts_server.py
-# SERVER_REV). An older process (nice 10, no fg/bg priority) is replaced.
-_LOCAL_TTS_REV = 2
+# SERVER_REV). An older process (nice 10, no fg/bg priority; rev 2's 300-char
+# pieces ran at half real time) is replaced.
+_LOCAL_TTS_REV = 3
 
 
 def _local_tts_current(health):
@@ -557,7 +558,7 @@ def _local_tts_start():
                 _LOCAL_TTS_PORT = listener.getsockname()[1]
         env = dict(os.environ, CCC_LOCAL_TTS_DIR=str(_LOCAL_TTS_DIR),
                    CCC_LOCAL_TTS_PORT=str(_LOCAL_TTS_PORT),
-                   CCC_KOKORO_THREADS=os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4")
+                   CCC_KOKORO_THREADS=os.environ.get("CCC_KOKORO_THREADS", "").strip() or str(_local_tts_threads()))
         cmd = [str(_LOCAL_TTS_DIR / "venv" / "bin" / "python"), str(_LOCAL_TTS_SCRIPT)]
         weight = _local_tts_weight_prefix()
         # Weighted first; if systemd-run can't make the scope, run it plain.
@@ -575,6 +576,12 @@ def _local_tts_start():
             else:
                 return False   # still loading after 30 s; leave it be
         return False
+
+
+def _local_tts_threads():
+    """Kokoro threads: half the cores, 2..8. A read must be made faster than it
+    plays (1.25x); on 16 cores 8 threads gave 1.9x real time, 4 gave 1.2x."""
+    return max(2, min(8, (os.cpu_count() or 4) // 2))
 
 
 def _local_tts_weight_prefix():
@@ -809,10 +816,27 @@ def local_tts_keepalive(interval=60.0):
     while True:
         try:
             if local_tts_installed():
+                _local_tts_renice_check()
                 _local_tts_start()
         except Exception:
             pass
         time.sleep(interval)
+
+
+def _local_tts_renice_check():
+    """Retire a voice server niced below this process so the next start makes
+    it at our priority. A niced spawner (e.g. a low-priority helper process)
+    leaves it at nice 10, where a busy host starves reads (CCC-144); it can't
+    raise its own priority, so only a respawn fixes it."""
+    health = _local_tts_health()
+    try:
+        theirs, ours = int(health.get("nice")), os.nice(0)
+    except (TypeError, ValueError, OSError, AttributeError):
+        return False
+    if health.get("ok") and theirs > ours:
+        _local_tts_retire(health)
+        return True
+    return False
 
 
 def local_tts(text, voice=""):

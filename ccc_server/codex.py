@@ -2034,6 +2034,29 @@ def _codex_compaction_recovery_note_notification_unlocked(
     if str(recovery.get("status") or "") in _CODEX_COMPACTION_RECOVERY_TERMINAL:
         return
 
+    # Compaction recovery only bridges the gap until execution resumes. Once
+    # Codex is producing output or running tools, later silence belongs to the
+    # normal silent-turn watchdog, not this old compaction episode.
+    resumed = (
+        method.startswith("item/")
+        and item_type != "contextCompaction"
+        and (
+            (method in ("item/started", "item/completed")
+             and item_type not in ("", "userMessage"))
+            or bool(str(params.get("delta") or "").strip())
+        )
+    )
+    if resumed and not _codex_recovery_is_silent_turn(recovery):
+        recovery["status"] = "recovered"
+        recovery["reason"] = "Codex resumed execution after compaction"
+        recovery["recovered_at"] = float(now)
+        recovery["last_progress_at"] = float(now)
+        _core._codex_coordination_event_unlocked(
+            state, "compaction_recovery_recovered",
+            detail=recovery["reason"], now=now,
+        )
+        return
+
     if method == "turn/started":
         if turn_id and str(turn_id) != str(recovery.get("compaction_turn_id") or ""):
             recovery["status"] = "recovering"
@@ -3793,26 +3816,17 @@ def _codex_app_server_reap_stray_children():
 def _codex_app_server_dump_stacks_on_liveness_miss(reason):
     """Capture every thread's current frame when a liveness check misses.
 
-    Reuses the existing SIGUSR2 stack-dump handler (see
-    _install_python_stack_dump_handler) instead of duplicating dump logic --
-    this just writes a locating marker into the same python-stacks.log and
-    then raises the signal against our own process so faulthandler produces
-    an all-thread traceback right at the moment of the miss. That's the
-    evidence needed to identify which thread was actually holding the GIL
-    (or otherwise busy) when the app-server reader thread should have been
-    running, rather than guessing at a cause.
+    Appends an all-thread traceback to python-stacks.log via
+    _dump_python_stacks (see _install_python_stack_dump_handler) right at the
+    moment of the miss. That's the evidence needed to identify which thread
+    was actually holding the GIL (or otherwise busy) when the app-server
+    reader thread should have been running, rather than guessing at a cause.
     """
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None or _core._PYTHON_STACK_DUMP_FILE is None:
+    if _core._PYTHON_STACK_DUMP_FILE is None:
         return
     try:
-        _core._PYTHON_STACK_DUMP_FILE.write(
-            f"\n=== app-server liveness miss ({reason}) pid={os.getpid()} "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC ===\n"
-        )
-        _core._PYTHON_STACK_DUMP_FILE.flush()
-        os.kill(os.getpid(), sigusr2)
-    except OSError:
+        _core._dump_python_stacks(f"app-server liveness miss ({reason})")
+    except Exception:
         pass
 
 

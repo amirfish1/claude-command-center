@@ -78,8 +78,8 @@ class EngineHost:
                     server._ccc_closure = None
                 # server.main() installs this for the dashboard process, but
                 # the worker never calls main() -- it only imports server as
-                # a library here. Without this, SIGUSR2-triggered dumps (used
-                # by e.g. _codex_app_server_dump_stacks_on_liveness_miss) are
+                # a library here. Without this, liveness-miss stack dumps
+                # (e.g. _codex_app_server_dump_stacks_on_liveness_miss) are
                 # silent no-ops in the one process that actually owns Codex
                 # app-server execution and liveness churn.
                 server._install_python_stack_dump_handler()

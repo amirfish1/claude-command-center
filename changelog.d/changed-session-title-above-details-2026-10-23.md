@@ -1,0 +1,1 @@
+Desktop session rows use the tighter mobile layout: larger avatars, bold titles, plain details, thin dividers, and context and time together at the top right. Hover replaces time with the actions menu.

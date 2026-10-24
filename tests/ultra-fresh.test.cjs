@@ -38,6 +38,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
         + '<div class="conv-outcome is-next-step is-inline is-working"><span class="conv-outcome-step" data-label="Working">Original message</span></div>'
         + '<span class="conv-row-break"></span><span class="conv-meta-col"><code>'+c.id+'</code></span><span class="conv-row-end"></span></div></div><button data-role="archive">Archive</button></div>').join('');
       document.querySelector('#convList').innerHTML = rows();
+      ${app.slice(app.indexOf('  function readyToCloseArchiveHtml('), app.indexOf('  function _trackedRowStatus('))}
       ${block}
       window.uf = { sync:_ultraFreshSync, accept:_ultraFreshAccept, feed:_ultraFreshFeed,
         spawn:_ultraFreshSpawnFeed, current:_ultraFreshCurrent, state:_ultraFresh,
@@ -48,11 +49,11 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
       const title = row.querySelector('.conv-title').getBoundingClientRect();
       const outcome = row.querySelector('.conv-outcome').getBoundingClientRect();
       const step = row.querySelector('.conv-outcome-step').getBoundingClientRect();
-      return {titleRight:title.right, outcomeLeft:outcome.left, width:step.width, height:outcome.height};
+      return {titleBottom:title.bottom, outcomeTop:outcome.top, width:step.width, height:outcome.height};
     }));
     for (const slot of slots) {
       assert.ok(slot.width > 50, 'actual compact+dense explanation must remain visible');
-      assert.ok(slot.outcomeLeft >= slot.titleRight, 'message must remain right of title');
+      assert.ok(slot.outcomeTop >= slot.titleBottom, 'message must sit directly below title');
       assert.ok(slot.height > 0 && slot.height < 100, 'message cannot collapse into a tall empty grid cell');
     }
     const before = await page.evaluate(() => {
@@ -61,6 +62,9 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
       const t = originalRow.querySelector('.conv-title').getBoundingClientRect();
       return { x: t.x, width:t.width, h:r.height, scroll:document.querySelector('#convList').scrollTop };
     });
+    // CCC-143: the stream opens only after the visible set settles.
+    assert.equal(await page.evaluate(() => sources.length), 0);
+    await page.waitForFunction(() => sources.length === 1, { timeout: 3000 });
     await page.evaluate(() => {
       sources.at(-1).onmessage({ data:JSON.stringify({updates:[{session_id:'s0', text:'I found the message stream.', ts:'2099-01-01T00:00:00Z'}]}) });
     });
@@ -73,6 +77,24 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
     assert.deepEqual(after,before);
     assert.equal(await page.evaluate(() => originalRow === document.querySelector('[data-id="s0"]') && originalRow.classList.contains('active')),true);
     assert.equal(await page.$eval('[data-id="s0"] [data-role="archive"]', el => el.textContent), 'Archive');
+    const dot = await page.$eval('[data-id="s0"] .conv-working-dot', el => ({
+      display: getComputedStyle(el).display,
+      animation: getComputedStyle(el, '::after').animationName,
+    }));
+    assert.notEqual(dot.display, 'none', 'dense rows must show the working dot');
+    assert.equal(dot.animation, 'ccc-working-dot-pulse');
+    // A live-state poll patches status even when hovering defers full-list
+    // renders, including a Codex turn between tools.
+    await page.hover('[data-id="s0"]');
+    await page.evaluate(() => {
+      uf.rows()[0].state = 'idle';
+      uf.rows()[0].codex_state = 'idle';
+      uf.sync();
+    });
+    assert.equal(await page.$$eval('[data-id="s0"] .conv-working-dot', els => els.length), 0);
+    await page.evaluate(() => { uf.rows()[0].codex_state = 'working'; uf.sync(); });
+    assert.equal(await page.$$eval('[data-id="s0"] .conv-working-dot', els => els.length), 1);
+    assert.equal(await page.evaluate(() => originalRow === document.querySelector('[data-id="s0"]')), true);
     await page.evaluate(() => {
       uf.feed('s0', [{type:'assistant',ts:'2099-01-02T00:00:00Z',blocks:[{kind:'tool_use',name:'Bash',text:'tool noise'},{kind:'thinking',text:'private thinking'}]}]);
       uf.accept({session_id:'s0',text:'Old turn',ts:'2098-01-01T00:00:00Z'});
@@ -80,6 +102,29 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
     });
     assert.equal(await page.$eval('[data-id="s0"] .conv-outcome-step',el => el.textContent),'I found the message stream.');
     assert.doesNotMatch(await page.$eval('#convList',el=>el.textContent), /tool noise|private thinking|Out of view leak|Old turn/);
+    await page.evaluate(() => uf.accept({ session_id:'s0',
+      text:'New message while hovered [Q1:example]', ts:'2099-01-01T12:00:00Z' }));
+    await page.waitForFunction(() => document.querySelector('[data-id="s0"] .conv-outcome-step').textContent.includes('New message while hovered'));
+    await page.evaluate(() => {
+      const step = document.querySelector('[data-id="s0"] .conv-outcome-step');
+      step.innerHTML = 'New message while hovered <button class="qtag-chip">[Q1:example]</button>';
+      window.originalQuestionChip = step.querySelector('.qtag-chip');
+      uf.sync();
+    });
+    assert.equal(await page.evaluate(() => originalQuestionChip === document.querySelector('[data-id="s0"] .conv-outcome-step .qtag-chip')), true,
+      'status refresh must retain the existing question chip');
+    assert.equal(await page.evaluate(() => originalRow === document.querySelector('[data-id="s0"]')), true);
+    // A final assessment arriving on an existing row must create the action,
+    // without relying on a future full-list render. A new turn removes it.
+    await page.evaluate(() => {
+      uf.rows()[0].state = 'idle';
+      uf.rows()[0].codex_state = 'idle';
+      uf.accept({session_id:'s0', text:'Finished and checked.', ts:'2099-01-01T18:00:00Z',
+        session_state:{did:'Finished and checked.', completion:{valid:true,ready_to_close:true}}});
+    });
+    await page.waitForFunction(() => document.querySelectorAll('[data-id="s0"] .conv-ready-close').length === 2);
+    assert.equal(await page.$eval('[data-id="s0"] .conv-outcome .conv-ready-close',el=>el.textContent),'Close');
+    assert.equal(await page.$eval('[data-id="s0"] .wa-line2 .conv-ready-close',el=>el.dataset.archived),'true');
     // A user starts a newer turn; even a subsequently delivered old reply
     // cannot resurrect its explanation or completion recommendation.
     await page.evaluate(() => {
@@ -87,6 +132,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
       uf.accept({session_id:'s0',text:'Stale final',ts:'2099-01-01T12:00:00Z',session_state:{completion:{valid:true,ready_to_close:true}}});
     });
     assert.doesNotMatch(await page.$eval('[data-id="s0"]',el=>el.textContent),/Stale final|I found the message stream/);
+    assert.equal(await page.$$eval('[data-id="s0"] .conv-ready-close',els=>els.length),0);
     await page.evaluate(() => { document.querySelector('#convList').scrollTop = 400; });
     await page.waitForFunction(() => !uf.state.entries.has('s0') && uf.state.entries.size <= 4);
     assert.equal(await page.evaluate(() => sources[0].closed),true);

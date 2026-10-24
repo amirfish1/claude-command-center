@@ -1,0 +1,1 @@
+- A single desktop conversation now has the phone's clean session header: the session's sidebar avatar beside its name, without the engine/repo chip and latest-message text.

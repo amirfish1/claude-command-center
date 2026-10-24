@@ -1,0 +1,1 @@
+- Queue speech preparation when scrolling to an older answer, without starting playback. The floating speaker follows the visible answer and measures its actual cached text coverage. Codex speech now uses the same rendered text for preparation and playback, including tables and links, and prepared clips remain reusable after playback.

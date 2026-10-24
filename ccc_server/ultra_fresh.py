@@ -15,6 +15,11 @@ from ccc_server.session_graph import _parse_session_state
 
 MAX_SESSIONS = 4
 MAX_TEXT = 40000
+# Transcript source-key checks resolve per-engine stores (Codex SQLite, Hermes
+# and Devin DB keys); at the 100ms loop cadence across every open stream they
+# starved the GIL and stalled /list for seconds (CCC-152). Live spawn-log text
+# still tails every loop tick.
+TRANSCRIPT_CHECK_S = 0.5
 
 
 def event_time(value):
@@ -55,6 +60,7 @@ class FreshSession:
         self.leftover = b""
         self.normalizer = _SpawnEventNormalizer()
         self.last_resolve = 0
+        self.last_transcript_check = 0
         self.codex_key = None
         self.codex_turn = ""
         self.retired_turns = set()
@@ -75,7 +81,11 @@ class FreshSession:
 
     def read(self):
         updates = []
-        key = core._conv_parse_jsonl_mtime(self.sid)
+        now = time.monotonic()
+        key = self.key
+        if self.key is None or now - self.last_transcript_check >= TRANSCRIPT_CHECK_S:
+            self.last_transcript_check = now
+            key = core._conv_parse_jsonl_mtime(self.sid)
         if key != self.key:
             initial = self.key is None
             self.key = key

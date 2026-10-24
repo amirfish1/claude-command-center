@@ -275,12 +275,76 @@
       return _timePoller(name, () => fn.apply(self, args));
     };
   }
+  // Recent main-thread long tasks [start, end], so conv_open can report how
+  // much of an open the main thread spent blocked (CCC-143).
+  const _perfLongTasks = [];
+  function _perfLongTaskMs(t0, end) {
+    let ms = 0;
+    for (const lt of _perfLongTasks) {
+      const lo = Math.max(lt[0], t0), hi = Math.min(lt[1], end);
+      if (hi > lo) ms += hi - lo;
+    }
+    return Math.round(ms);
+  }
+  // Resource Timing backs conv_open's list_overlap_ms; the default 250-entry
+  // buffer fills within minutes here, so recycle it instead of going blind.
+  try {
+    if (performance.setResourceTimingBufferSize) performance.setResourceTimingBufferSize(1000);
+    performance.addEventListener('resourcetimingbufferfull', () => {
+      try { performance.clearResourceTimings(); } catch (_) {}
+    });
+  } catch (_) {}
+  function _perfListOverlapMs(t0, end) {
+    let ms = 0;
+    try {
+      for (const e of performance.getEntriesByType('resource')) {
+        const n = e.name || '';
+        if (n.indexOf('/api/conversations/list') < 0 && n.indexOf('/api/sessions?') < 0
+            && !/\/api\/sessions$/.test(n.split('?')[0])) continue;
+        const lo = Math.max(e.startTime, t0), hi = Math.min(e.responseEnd || e.startTime, end);
+        if (hi > lo) ms += hi - lo;
+      }
+    } catch (_) {}
+    return Math.round(ms);
+  }
+  // Fetch a conversation-tail URL and stamp per-phase timings on the parsed
+  // payload as a non-enumerable __perf (never serialized or rendered).
+  // keepErrors: parse non-2xx bodies too (the direct open path renders the
+  // server's error payload); the prefetch path drops them.
+  function _fetchConvJsonTimed(url, init, keepErrors) {
+    const t0 = performance.now();
+    const pending = fetch(url, init).then(r => {
+      if (!r.ok && !keepErrors) return null;
+      const tResp = performance.now();
+      const st = r.headers.get('Server-Timing') || '';
+      return r.text().then(txt => {
+        const tBody = performance.now();
+        const d = JSON.parse(txt);
+        const tParse = performance.now();
+        const num = (k) => { const m = st.match(new RegExp(k + ';dur=([0-9.]+)')); return m ? Math.round(+m[1]) : null; };
+        try {
+          if (d && typeof d === 'object') {
+            Object.defineProperty(d, '__perf', { value: {
+              t0, tResp, tBody, tParse, bytes: txt.length,
+              server_ms: num('app'), server_cpu_ms: num('cpu'),
+            }, enumerable: false, configurable: true });
+          }
+        } catch (_) {}
+        return d;
+      });
+    });
+    // A conversation tail in flight holds the startup read gate (CCC-143).
+    if (typeof window.__cccStartupHoldForOpen === 'function') window.__cccStartupHoldForOpen(pending);
+    return pending;
+  }
   // Catch-all for client-side jank that no single poller owns (render/reshuffle
   // thrash, GC pauses): any main-thread block >= 200ms surfaces once per 5s.
   try {
     if (typeof PerformanceObserver === 'function') {
       const _ltObs = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
+          _perfLongTasks.push([entry.startTime, entry.startTime + entry.duration]);
+          if (_perfLongTasks.length > 300) _perfLongTasks.shift();
           if (entry.duration >= 200) {
             _clientLog('[LONGTASK] ' + Math.round(entry.duration) + 'ms blocking frame');
           }
@@ -1667,11 +1731,12 @@
     })();
   }
   // ── Perf pane (above the footer) ──────────────────────────────────────
-  // Two-column diagnostic strip: every /api/conversations/list read (left)
-  // and every conversation open click→render time (right). Pure observer —
+  // Three-column diagnostic strip: every /api/conversations/list read (left),
+  // every conversation open click→render time (middle) and every speaker clip
+  // read — clip cache hit or freshly made (right). Pure observer —
   // logging goes through window.__cccPerfRow so instrumented call sites stay
   // decoupled from whether the pane exists yet.
-  const _perfPaneLog = { list: [], open: [] };
+  const _perfPaneLog = { list: [], open: [], speaker: [] };
   function _perfPaneRow(kind, entry, replay) {
     const buf = _perfPaneLog[kind];
     if (!buf) return;
@@ -1679,7 +1744,8 @@
       buf.push(entry);
       if (buf.length > 20) buf.shift();
     }
-    const col = document.getElementById(kind === 'list' ? 'cccPerfListCol' : 'cccPerfOpenCol');
+    const col = document.getElementById(
+      kind === 'list' ? 'cccPerfListCol' : kind === 'speaker' ? 'cccPerfSpeakerCol' : 'cccPerfOpenCol');
     if (!col) return;
     while (col.children.length >= 20) col.removeChild(col.lastChild);
     const row = document.createElement('div');
@@ -1746,8 +1812,9 @@
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 10px;cursor:pointer;user-select:none;';
     head.innerHTML = '<span>perf</span>' +
-      '<span style="flex:1 1 50%;text-align:center;opacity:.8">list reads</span>' +
-      '<span style="flex:1 1 50%;text-align:center;opacity:.8">session opens</span>';
+      '<span style="flex:1 1 33%;text-align:center;opacity:.8">list reads</span>' +
+      '<span style="flex:1 1 33%;text-align:center;opacity:.8">session opens</span>' +
+      '<span style="flex:1 1 33%;text-align:center;opacity:.8">speaker cache</span>';
     const wrap = document.createElement('div');
     const queueStats = document.createElement('div');
     queueStats.id = 'cccPerfQueueStats';
@@ -1757,16 +1824,20 @@
     const mkCol = function (id) {
       const c = document.createElement('div');
       c.id = id;
-      c.style.cssText = 'flex:1 1 50%;min-width:0;overflow-y:auto;';
+      c.style.cssText = 'flex:1 1 33%;min-width:0;overflow-y:auto;';
       return c;
     };
     const listCol = mkCol('cccPerfListCol');
     const openCol = mkCol('cccPerfOpenCol');
-    openCol.style.borderLeft = '1px solid var(--text-secondary,#9aa)';
-    openCol.style.marginLeft = '8px';
-    openCol.style.paddingLeft = '8px';
+    const speakerCol = mkCol('cccPerfSpeakerCol');
+    [openCol, speakerCol].forEach(function (c) {
+      c.style.borderLeft = '1px solid var(--text-secondary,#9aa)';
+      c.style.marginLeft = '8px';
+      c.style.paddingLeft = '8px';
+    });
     body.appendChild(listCol);
     body.appendChild(openCol);
+    body.appendChild(speakerCol);
     wrap.appendChild(queueStats);
     wrap.appendChild(body);
     sec.appendChild(head);
@@ -1798,6 +1869,7 @@
     // Replay anything logged before the pane mounted.
     _perfPaneLog.list.forEach(function (e) { _perfPaneRow('list', e, true); });
     _perfPaneLog.open.forEach(function (e) { _perfPaneRow('open', e, true); });
+    _perfPaneLog.speaker.forEach(function (e) { _perfPaneRow('speaker', e, true); });
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); _initPerfSection(); });
@@ -2354,9 +2426,38 @@
     });
   }
 
+  // CCC-143: the gate used to release when the first rows painted or on the
+  // first click, i.e. exactly while the restored or clicked conversation's
+  // tail fetch was in flight. ~30 queued status reads (plus their server
+  // GIL time) then landed on top of it: opens in the first minutes after a
+  // page load measured p95 2.5-6s vs ~1s later. Keep the queue parked until
+  // in-flight conversation tails settle, capped so a hung read can't starve
+  // the dashboard.
+  const STARTUP_OPEN_HOLD_MAX_MS = 5000;
+  const STARTUP_ROW_PRESS_GRACE_MS = 400;
+  const _startupOpenFetches = new Set();
+  let _startupReleaseRequestedAt = 0;
+  window.__cccStartupHoldForOpen = function (pending) {
+    if (_startupApiReadsReleased || !pending || typeof pending.finally !== 'function') return;
+    _startupOpenFetches.add(pending);
+    const settle = () => {
+      _startupOpenFetches.delete(pending);
+      if (_startupReleaseRequestedAt && !_startupOpenFetches.size) _releaseStartupApiReads();
+    };
+    pending.then(settle, settle);
+  };
   function _releaseStartupApiReads() {
     if (_startupApiReadsReleased) return;
+    const now = performance.now();
+    if (!_startupReleaseRequestedAt) _startupReleaseRequestedAt = now;
+    const held = now - _startupReleaseRequestedAt;
+    if (_startupOpenFetches.size && held < STARTUP_OPEN_HOLD_MAX_MS) {
+      clearTimeout(_startupApiReleaseTimer);
+      _startupApiReleaseTimer = setTimeout(_releaseStartupApiReads, STARTUP_OPEN_HOLD_MAX_MS - held);
+      return;
+    }
     _startupApiReadsReleased = true;
+    _startupOpenFetches.clear();
     clearTimeout(_startupApiReleaseTimer);
     const queued = _startupDeferredApiReads.splice(0);
     queued.forEach(task => {
@@ -2367,8 +2468,15 @@
 
   window.fetch = startupBudgetedFetch;
   _startupApiReleaseTimer = setTimeout(_releaseStartupApiReads, 20 * 1000);
-  window.addEventListener('pointerdown', _releaseStartupApiReads, { capture: true, once: true });
-  window.addEventListener('keydown', _releaseStartupApiReads, { capture: true, once: true });
+  // A press on a session row is about to start that row's tail fetch (on
+  // click, after pointerup): give it a moment to register before releasing.
+  window.addEventListener('pointerdown', (e) => {
+    const row = e && e.target && e.target.closest
+      && e.target.closest('.conv-item[data-id], .kanban-card[data-id], tr[data-id]');
+    if (row) setTimeout(_releaseStartupApiReads, STARTUP_ROW_PRESS_GRACE_MS);
+    else _releaseStartupApiReads();
+  }, { capture: true, once: true });
+  window.addEventListener('keydown', () => _releaseStartupApiReads(), { capture: true, once: true });
 
   function abortBackgroundApiReadsForSpawn() {
     for (const controller of _backgroundApiReadControllers) {
@@ -3079,7 +3187,13 @@
   // Ultra-fresh: one bounded stream for the first four sessions intersecting
   // the list viewport. Message updates touch only the existing explanation
   // slots; row identity, ordering, selection and scroll stay under list control.
-  const _ultraFresh = { entries: new Map(), source: null, ids: '', generation: 0, queued: false };
+  const _ultraFresh = { entries: new Map(), source: null, ids: '', generation: 0, queued: false, connectTimer: null };
+  // Each connect re-parses the transcript tail of every watched row on the
+  // server, and boot/list refreshes reshuffle the top rows many times a
+  // second: 65-72 reconnects/min cost ~30s of server CPU per minute right
+  // when the first conversation opens were waiting on the GIL (CCC-143).
+  // Open the stream only once the visible set has held still.
+  const ULTRA_FRESH_CONNECT_SETTLE_MS = 1200;
   function _ultraFreshRow(sid) {
     return conversationsData.find(c => String(c.session_id || c.id) === sid)
       || archiveData.find(c => String(c.session_id || c.id) === sid);
@@ -3112,17 +3226,24 @@
       session_state: entry.sessionState, last_event_type: 'assistant',
       modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
   }
+  function sidebarSessionWorking(c, live = c) {
+    return !c.archived && !c.trashed && !live.needs_approval && !live.question_waiting
+      && (sessionIsOptimisticallySending(c.session_id || c.id) || c.pending_spawn
+        || live.state === 'working' || live.codex_state === 'working'
+        || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight));
+  }
   function _ultraFreshExplanation(c) {
     const sid = c.session_id || c.id;
     const live = _applyLiveOverlayToRow(c);
     const sending = sessionIsOptimisticallySending(sid);
     const raw = String(c.last_assistant_text || c.last_assistant_preview || '');
-    const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw;
+    const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw
+      || (live.last_event_type === 'user'
+        && _ultraFreshTime(live.last_event_ts) > _ultraFreshTime(c.modified || c.mtime));
     const text = stale ? '' : raw.replace(/<session-state>[\s\S]*$/, '')
       .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280);
     const summary = stale ? {} : (c.session_state || {});
-    const working = sending || c.pending_spawn || live.state === 'working' || live.codex_state === 'working'
-      || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight);
+    const working = sidebarSessionWorking(c, live);
     const ready = !working && !sending && sessionReadyToClose(c, live);
     const next = String(summary.next_step_user || '').trim();
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(next);
@@ -3140,33 +3261,69 @@
       if (row.dataset.sessionId !== sid) continue;
       const main = row.querySelector('.conv-main-row');
       if (main) {
+        let dot = main.querySelector('.conv-working-dot');
+        if (info.kind === 'working' && !dot) {
+          dot = document.createElement('span');
+          dot.className = 'conv-working-dot';
+          dot.title = 'Actively working';
+          dot.setAttribute('aria-label', 'Actively working');
+          main.appendChild(dot);
+        }
+        if (info.kind !== 'working' && dot) dot.remove();
+        if (info.kind === 'working') main.querySelectorAll('.conv-needs-you').forEach(el => el.remove());
         let outcome = main.querySelector('.conv-outcome');
         if (!outcome) {
           outcome = document.createElement('div');
           const end = main.querySelector('.conv-row-end');
           main.insertBefore(outcome, end);
         }
-        outcome.className = 'conv-outcome is-next-step is-inline is-' + info.kind;
+        // Completion can arrive after this row was rendered as Working/Next.
+        if (info.kind === 'ready' && !outcome.querySelector('.conv-ready-close')) {
+          outcome.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
+        }
+        const closeBtn = info.kind === 'ready' && outcome.querySelector('.conv-ready-close');
+        outcome.className = 'conv-outcome is-next-step is-inline is-' + info.kind + (closeBtn ? ' has-close-btn' : '');
         outcome.title = 'Ultra-fresh · agent message\n' + info.text;
         let step = outcome.querySelector('.conv-outcome-step');
-        if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.replaceChildren(step); }
-        step.dataset.label = info.label;
-        step.textContent = info.text;
+        if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.prepend(step); }
+        if (closeBtn) delete step.dataset.label;
+        else step.dataset.label = info.label;
+        if (step.textContent !== info.text) step.textContent = info.text;
         main.classList.add('has-inline-step');
       }
       const preview = row.querySelector('.wa-preview');
       if (preview) {
         // Keep the ticket link and any listeners already attached to it.
         let label = preview.querySelector('.wa-explanation-label');
-        if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
-        label.textContent = info.label + ':';
-        for (const node of [...preview.childNodes]) if (node.nodeType === 3) node.remove();
-        preview.appendChild(document.createTextNode(' ' + info.text));
+        const waLine = row.querySelector('.wa-line2');
+        if (waLine) {
+          const dot = waLine.querySelector('.wa-dot');
+          if (info.kind === 'working' && !dot) waLine.insertAdjacentHTML('beforeend', '<span class="wa-dot" title="Working"></span>');
+          if (info.kind !== 'working' && dot) dot.remove();
+          if (info.kind === 'working') waLine.querySelectorAll('.wa-badge').forEach(el => el.remove());
+        }
+        if (info.kind === 'ready' && waLine && !waLine.querySelector('.conv-ready-close')) {
+          waLine.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
+        }
+        const waClose = info.kind === 'ready' && row.querySelector('.wa-line2 .conv-ready-close');
+        if (waClose) { if (label) label.remove(); }
+        else {
+          if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
+          label.textContent = info.label + ':';
+        }
+        if (preview.dataset.ultraFreshText !== info.text) {
+          for (const node of [...preview.childNodes]) {
+            if (node.nodeType === 3 || (node.nodeType === 1 && node.matches('.qtag-chip'))) node.remove();
+          }
+          preview.appendChild(document.createTextNode(' ' + info.text));
+          preview.dataset.ultraFreshText = info.text;
+        }
       }
       // New message text invalidates an earlier Close recommendation. Archive
       // remains a manual row action; never archive or move the session here.
+      if (info.kind === 'ready') row.classList.add('is-ready-to-close');
       if (info.kind !== 'ready') {
-        if (row.classList.contains('is-ready-to-close')) row.style.minHeight = row.getBoundingClientRect().height + 'px';
+        row.style.removeProperty('min-height');
         row.classList.remove('is-ready-to-close');
         row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
       }
@@ -3255,14 +3412,20 @@
       for (const sid of _ultraFresh.entries.keys()) if (!ids.includes(sid)) _ultraFresh.entries.delete(sid);
       for (const sid of ids) if (!_ultraFresh.entries.has(sid)) _ultraFresh.entries.set(sid,
         { at: 0, userAt: 0, text: '', sessionState: null, sendAt: 0, preSend: null });
+      clearTimeout(_ultraFresh.connectTimer);
+      _ultraFresh.connectTimer = null;
       if (key && typeof EventSource === 'function') {
         const generation = _ultraFresh.generation;
-        const source = new EventSource('/api/sessions/ultra-fresh?sessions=' + encodeURIComponent(key));
-        _ultraFresh.source = source;
-        source.onmessage = ev => {
-          if (_ultraFresh.source !== source) return;
-          try { for (const update of JSON.parse(ev.data).updates || []) _ultraFreshAccept(update, generation); } catch (_) {}
-        };
+        _ultraFresh.connectTimer = setTimeout(() => {
+          _ultraFresh.connectTimer = null;
+          if (_ultraFresh.generation !== generation || _ultraFresh.source) return;
+          const source = new EventSource('/api/sessions/ultra-fresh?sessions=' + encodeURIComponent(key));
+          _ultraFresh.source = source;
+          source.onmessage = ev => {
+            if (_ultraFresh.source !== source) return;
+            try { for (const update of JSON.parse(ev.data).updates || []) _ultraFreshAccept(update, generation); } catch (_) {}
+          };
+        }, ULTRA_FRESH_CONNECT_SETTLE_MS);
       }
     }
     // Ordinary list snapshots may lag this stream. Restore the four text
@@ -3313,9 +3476,11 @@
     return false;
   }
 
+  // The finished row's one action: a Close button at the end of its
+  // explanation (it archives the session; no separate Archive chip).
   function readyToCloseArchiveHtml() {
-    return '<button type="button" class="conv-archive-btn conv-ready-archive" data-role="archive" data-archived="true"'
-      + ' title="Archive completed session" aria-label="Archive completed session">Archive</button>';
+    return '<button type="button" class="conv-archive-btn conv-ready-archive conv-ready-close" data-role="archive" data-archived="true"'
+      + ' title="Close: archive this finished session" aria-label="Close: archive this finished session">Close</button>';
   }
 
   function _trackedRowStatus(c) {
@@ -3903,6 +4068,9 @@
   // Snapshot of liveStatus before the most recent refresh, used to detect
   // transitions (working -> idle, running -> idle) for audible feedback.
   let _liveStatusPrev = null;
+  // Single-read hysteresis counters for refreshLiveStatus (CCC-147).
+  let _codexWorkingHoldCount = 0;
+  let _liveStatusFailHoldCount = 0;
   // Footer sound-toggle button element; updated when preference changes.
   let _soundToggleBtn = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
@@ -5797,6 +5965,8 @@
       for (const sid of Array.from(_sessionLiveOverlay.keys())) {
         if (!liveIds.has(sid)) _sessionLiveOverlay.delete(sid);
       }
+      // Patch the visible rows even when hover/typing defers a list rebuild.
+      _ultraFreshSchedule();
       if (archiveLoaded && typeof _scheduleSidebarRender === 'function') {
         _scheduleSidebarRender();
       }
@@ -6659,9 +6829,23 @@
         // cross-repo, placeholder swaps), so this is the reliable path.
         devinAcpReady: data.devin_acp_ready === true,
       };
+      // Hysteresis for the Codex Thinking row / Working badge: one null
+      // codex_state read mid-turn (server fail-quiet) would otherwise remove
+      // both for a tick and re-add them on the next poll — a visible flicker.
+      // Hold the previous 'working' through a single null read; a second
+      // consecutive null (or any explicit non-working state) lets it go.
+      if (!liveStatus.codexState && _liveStatusPrev && _liveStatusPrev.forSessionId === _fetchedFor
+          && _liveStatusPrev.codexState === 'working' && _codexWorkingHoldCount < 1) {
+        _codexWorkingHoldCount++;
+        liveStatus.codexState = 'working';
+        liveStatus.codexFresh = !!_liveStatusPrev.codexFresh;
+      } else {
+        _codexWorkingHoldCount = 0;
+      }
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
       _lastStatusCheckedAt = Date.now();
+      _liveStatusFailHoldCount = 0;
       // Rewrite the generic "still running" queued-send note into something
       // that actually explains why nothing is landing, the moment the
       // watcher confirms there's no delivery channel — the submission-time
@@ -6802,7 +6986,16 @@
         codex_desktop_attached: !!data.codex_desktop_attached,
       });
     } catch (err) {
+      // One failed/aborted read for the same session keeps the previous
+      // status instead of blanking it (which dropped the Codex Thinking row
+      // and Working badge for a tick); a second consecutive failure resets.
+      if (_liveStatusPrev && _liveStatusPrev.forSessionId === _fetchedFor && _liveStatusFailHoldCount < 1) {
+        _liveStatusFailHoldCount++;
+        liveStatus = _liveStatusPrev;
+      } else {
+      _liveStatusFailHoldCount = 0;
       liveStatus = { forSessionId: _fetchedFor, live: false, status: null, recentlyWritten: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
+      }
     }
     updateJumpButton();
     updateInputBar();
@@ -7661,8 +7854,30 @@
   // already spoken for. Set once per render, before any row is built.
   let _workersHoistState = { engine: '', tier: '' };
 
+  function sessionRepoAvatarPath(row) {
+    const candidate = row && [row.folder_path, row.repo_path, row.spawn_cwd, row.session_cwd, row.cwd]
+      .find(value => typeof value === 'string' && value.startsWith('/'));
+    if (typeof candidate !== 'string' || !candidate.startsWith('/')) return '';
+    const folder = candidate.replace(/\/+$/, '') || '/';
+    // Prefer the closest registered repo, including nested repos. A slash
+    // boundary prevents a sibling such as project-tools matching project.
+    const repos = repoListState.repos;
+    const suggested = repoListState.suggested;
+    let cache = sessionRepoAvatarPath.cache;
+    if (!cache || cache.repos !== repos || cache.suggested !== suggested) {
+      const roots = [...(repos || []), ...(suggested || [])]
+        .map(repo => String(repo.path || '').replace(/\/+$/, '')).filter(Boolean)
+        .sort((a, b) => b.length - a.length);
+      cache = sessionRepoAvatarPath.cache = { repos, suggested, roots };
+    }
+    return cache.roots.find(root => folder === root || folder.startsWith(root + '/')) || folder;
+  }
+  // end sessionRepoAvatarPath
+
   function sessionEngineIconHtml(row, options) {
     const opts = options || {};
+    const portrait = _ideaAvatarHtml(row, opts.context === 'pane') || _repoSessionAvatarHtml(row, opts.context === 'pane');
+    if (portrait) return portrait;
     const sid = row && (row.session_id || row.id);
     const optimistic = !!(sid && typeof sessionIsOptimisticallySending === 'function'
       && sessionIsOptimisticallySending(sid));
@@ -7670,11 +7885,6 @@
     const baseClass = opts.context === 'pane' ? 'conv-pane-cat-icon' : 'conv-session-icon';
     const tierClass = presentation.tier ? ' cost-' + presentation.tier : '';
     const activityClass = presentation.working ? ' is-working' : ' is-not-working';
-    const tierDollarCounts = { premium: 3, high: 2, medium: 1, low: 0 };
-    const dollarCount = tierDollarCounts[presentation.tier] || 0;
-    const tierCost = dollarCount
-      ? '<span class="session-tier-cost" aria-hidden="true">' + '<i>$</i>'.repeat(dollarCount) + '</span>'
-      : '';
     // Rows whose engine/tier the banner already states get marked, so the
     // stylesheet can drop just those glyphs and leave the exceptions visible.
     const hoistClass = (_workersHoistState.engine && presentation.engine === _workersHoistState.engine ? ' hoisted-engine' : '')
@@ -7684,7 +7894,6 @@
       + ' role="img" aria-label="' + escapeAttr(presentation.title) + '">'
       + getEngineSvg(presentation.engine)
       + '<span class="session-activity-dot" aria-hidden="true"></span>'
-      + tierCost
       + '</span>';
   }
 
@@ -9384,7 +9593,25 @@
   // read-aloud. Empty when the node isn't a rendered assistant event.
   function assistantTextElements(node) {
     if (!node || !node.querySelectorAll) return [];
+    if (node.classList.contains('kimi-answer-meta')) {
+      const els = [];
+      for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
+        if (prev.matches('.kimi-answer-meta, .kimi-marker')) break;
+        if (prev.matches('.assistant-text')) els.unshift(prev);
+      }
+      return els;
+    }
     return Array.from(node.querySelectorAll('.assistant-text'));
+  }
+
+  function _ttsSpeakButtonData(btn) {
+    if (!btn) return null;
+    const result = btn.closest('.event.result');
+    const node = result ? agentAnswerNodeBeforeResult(result)
+      : btn.closest('.event.assistant, .kimi-answer-meta, .ask-turn-a');
+    const els = assistantTextElements(node);
+    const data = els.length ? buildTtsDataFromElements(els) : null;
+    return data && data.text.trim() ? data : { text: assistantNodeTextForCopy(node) };
   }
 
   function assistantMessageActionsHtml(ev) {
@@ -9879,14 +10106,10 @@
     _ttsHoverBtn = btn;
     _ttsHoverTimer = setTimeout(() => {
       try {
-        const resultEl = btn.closest('.event.result');
-        const eventEl = resultEl ? agentAnswerNodeBeforeResult(resultEl) : btn.closest('.event.assistant');
-        const els = assistantTextElements(eventEl);
-        if (!els.length) return;
-        const data = buildTtsDataFromElements(els);
+        const data = _ttsSpeakButtonData(btn);
         const pane = btn.closest('.conv-pane');
         const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
-        if (data && data.text.trim()) _ttsPrefetchHead(data.text, paneId, true);
+        if (data && data.text.trim()) _ttsPrefetchHead(data.text, paneId, true, btn);
       } catch (_) {}
     }, 200);
   });
@@ -13606,8 +13829,9 @@
     }
     _ttsDirectBtn = state ? btn : null;
     document.querySelectorAll('.conv-scroll-speak-btn').forEach(f => {
-      f.classList.toggle('speaking', state === 'speaking');
-      f.classList.toggle('paused', state === 'paused');
+      const selected = f._speakTarget === btn;
+      f.classList.toggle('speaking', selected && state === 'speaking');
+      f.classList.toggle('paused', selected && state === 'paused');
     });
     if (btn) {
       btn.classList.toggle('speaking', state === 'speaking' || state === 'paused');
@@ -13622,6 +13846,7 @@
   // outage (cool-down) or no router falls back to the browser voice. The next
   // chunk is fetched while the current one plays. No word highlight here: the
   // audio carries no boundaries.
+  let _ttsAudio = null;           // reuse the gesture-authorized player across clips
   let _ttsNeural = null;          // { audio, token } while a neural chunk plays
   let _ttsNeuralToken = 0;
   let _ttsNeuralCooldownUntil = 0;
@@ -13630,12 +13855,25 @@
     if (window.speechSynthesis) window.speechSynthesis.pause();
   }
   function _ttsEngineResume() {
-    if (_ttsNeural && _ttsNeural.audio) { try { _ttsNeural.audio.play(); } catch (_) {} }
+    if (_ttsNeural && _ttsNeural.audio) {
+      const player = _ttsNeural;
+      try {
+        player.audio.play().catch(error => {
+          if (_ttsNeural !== player) return;
+          _ttsLog('ERROR', 'resume rejected: ' + (error?.name || 'unknown'));
+          _ttsPaused = true;
+          if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
+          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === _ttsActivePaneId) btn.classList.add('paused'); });
+        });
+      } catch (_) {}
+    }
     if (window.speechSynthesis) window.speechSynthesis.resume();
   }
   function _ttsEngineCancel() {
     _ttsNeuralToken += 1;
-    if (_ttsNeural && _ttsNeural.audio) { try { _ttsNeural.audio.pause(); } catch (_) {} }
+    if (_ttsNeural && _ttsNeural.audio) {
+      try { _ttsNeural.audio.pause(); URL.revokeObjectURL(_ttsNeural.audio.src); } catch (_) {}
+    }
     _ttsNeural = null;
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   }
@@ -13661,8 +13899,11 @@
   let _ttsKeepVoice = '';   // carries the speaker across a restart (rate step, skip)
   let _ttsNeuralCooldownWhy = '';
   let _ttsStartWhy = '';
-  // A dropped connection (status 0) is usually brief: retry soon, not in 5 minutes.
-  const _ttsCoolMs = (status) => status === 429 ? 60000 : status === 0 ? 15000 : 300000;
+  // Errors from the local voice are usually brief (a restart, a dropped
+  // connection): retry soon. A 5-minute cooldown sent ~22% of reads to the Mac
+  // voice (CCC-144).
+  const _TTS_FAIL_COOL_MS = 20000;
+  const _ttsCoolMs = (status) => status === 429 ? 60000 : status === 0 ? 15000 : _TTS_FAIL_COOL_MS;
   function _ttsCool(ms, status) {
     _ttsNeuralCooldownUntil = Date.now() + ms;
     _ttsNeuralCooldownWhy = 'HTTP ' + status;
@@ -13682,6 +13923,197 @@
   }
   const _ttsHeadCache = new Map();   // chunk text -> { p, ready, got }
   let _ttsPrefetchTimer = null;
+  let _ttsPrefetchTarget = null;
+  // Diagnostic paint follows the live cache, never transcript markup. Rebuild
+  // ranges after renders so replacing text nodes cannot leave stale highlights.
+  let _ttsCacheDebug = false;
+  try { _ttsCacheDebug = localStorage.getItem('ccc-tts-cache-debug') === '1'; } catch (_) {}
+  let _ttsCacheDebugFrame = null;
+  let _ttsCacheDebugObserver = null;
+  // This is the browser scheduler's queue, not the engine's internal queue.
+  // Sent requests run to completion; only unsent continuation work is dropped.
+  const _ttsDebugJobs = [];
+  const _ttsPrefetchTargets = new Map();
+  function _ttsDebugJob(text, status, owner) {
+    const job = { text, status, owner };
+    _ttsDebugJobs.push(job);
+    while (_ttsDebugJobs.length > 120) {
+      const i = _ttsDebugJobs.findIndex(j => !['queued', 'processing'].includes(j.status));
+      if (i < 0) break;
+      _ttsDebugJobs.splice(i, 1);
+    }
+    _ttsScheduleCacheDebug();
+    return job;
+  }
+  function _ttsSelectPrefetchTarget(owner, text) {
+    if (_ttsPrefetchTargets.get(owner) === text) return;
+    _ttsPrefetchTargets.set(owner, text);
+    _ttsChainTokens[owner || ''] = (_ttsChainTokens[owner || ''] || 0) + 1;
+    for (const job of _ttsDebugJobs) {
+      if (job.owner === owner && job.status === 'queued') job.status = 'cancelled';
+    }
+    _ttsScheduleCacheDebug();
+  }
+  function _ttsRenderDebugQueue() {
+    let panel = document.getElementById('ttsCacheDebugQueue');
+    if (!_ttsCacheDebug) { panel?.remove(); return; }
+    if (!panel) {
+      panel = document.createElement('details');
+      panel.id = 'ttsCacheDebugQueue';
+      const summary = document.createElement('summary');
+      summary.textContent = 'TTS queue';
+      panel.append(summary, document.createElement('div'));
+      document.body.appendChild(panel);
+    }
+    const waiting = _ttsDebugJobs.filter(j => j.status === 'queued');
+    const processing = _ttsDebugJobs.filter(j => j.status === 'processing');
+    const title = 'TTS: ' + processing.length + ' sent · ' + waiting.length + ' waiting';
+    if (panel.firstChild.textContent !== title) panel.firstChild.textContent = title;
+    const jobs = _ttsDebugJobs.filter(j => ['queued', 'processing'].includes(j.status))
+      .concat(_ttsDebugJobs.filter(j => !['queued', 'processing'].includes(j.status)).slice(-8));
+    const labels = jobs.map(j => ({ status: j.status, label:
+      (j.status === 'queued' ? '#' + (waiting.indexOf(j) + 1) + ' waiting'
+        : j.status === 'processing' ? 'Sent · engine position unknown'
+        : j.status === 'cancelled' ? 'Cancelled · newer priority (not sent)'
+        : j.status === 'deferred' ? 'Deferred · playback/cooldown' : j.status)
+      + ' — ' + j.text.slice(0, 90) }));
+    const signature = JSON.stringify(labels);
+    if (panel._signature === signature) return;
+    panel._signature = signature;
+    const list = panel.lastChild;
+    list.replaceChildren();
+    const legend = document.createElement('p');
+    legend.textContent = 'Amber: sent · Green: ready · Purple: cancelled before sending. Numbers are browser queue positions.';
+    list.appendChild(legend);
+    for (const item of labels) {
+      const row = document.createElement('div');
+      row.dataset.status = item.status;
+      row.textContent = item.label;
+      list.appendChild(row);
+    }
+  }
+  function _ttsRefreshCacheDebug() {
+    _ttsCacheDebugFrame = null;
+    _ttsRenderDebugQueue();
+    if (!window.CSS || !CSS.highlights || typeof Highlight === 'undefined') return;
+    CSS.highlights.delete('tts-cache-sent');
+    CSS.highlights.delete('tts-cache-ready');
+    CSS.highlights.delete('tts-cache-cancelled');
+    if (!_ttsCacheDebug) return;
+    const sent = new Highlight(), ready = new Highlight(), cancelled = new Highlight();
+    // Group text exactly as the per-turn reader does, including inline markup
+    // and synthetic paragraph separators. Sanitizing preserves these offsets.
+    const latestJobs = new Map(_ttsDebugJobs.map(j => [j.text, j]));
+    const clips = new Map(Array.from(latestJobs.values()).filter(j => j.status === 'cancelled').map(j => [j.text, { cancelled: true }]));
+    for (const [text, entry] of _ttsHeadCache) clips.set(text, entry);
+    if (_ttsChunkState && _ttsChunkState.debugCache) {
+      for (const [text, entry] of _ttsChunkState.debugCache) clips.set(text, entry);
+    }
+    document.querySelectorAll('.conv-pane .event, .conv-pane .stream-bubble, .conv-pane .assistant-text, .gc-reader .event, .gc-reader .assistant-text').forEach(el => {
+      if (el.matches('.assistant-text') && el.closest('.event, .stream-bubble')) return;
+      const elements = el.matches('.assistant-text') ? [el]
+        : el.matches('.stream-bubble') ? [el.querySelector('.stream-bubble-blocks')].filter(Boolean)
+        : el.matches('.assistant') ? Array.from(el.querySelectorAll('.assistant-text'))
+        : el.matches('.user_text:not(.pending)') ? [el.querySelector('.user-msg')].filter(Boolean) : [];
+      if (!elements.length) return;
+      const data = buildTtsDataFromElements(elements);
+      const clean = _sanitizeTtsText(data.text, true);
+      for (const [text, entry] of clips) {
+        let from = 0, start;
+        while ((start = clean.indexOf(text, from)) !== -1) {
+          const end = start + text.length;
+          // Separate ranges per node avoid painting excluded footer text.
+          for (const m of data.mapping) {
+            const a = Math.max(start, m.start), b = Math.min(end, m.end);
+            if (a >= b) continue;
+            const range = new Range();
+            range.setStart(m.node, m.nodeOffsetStart + a - m.start);
+            range.setEnd(m.node, m.nodeOffsetStart + b - m.start);
+            (entry.cancelled ? cancelled : entry.debugReady ? ready : sent).add(range);
+          }
+          from = end;
+        }
+      }
+    });
+    CSS.highlights.set('tts-cache-cancelled', cancelled);
+    CSS.highlights.set('tts-cache-sent', sent);
+    CSS.highlights.set('tts-cache-ready', ready);
+  }
+  // Measure text coverage, not number of clips (the short head and the
+  // 400-character clips differ greatly). Never call a capped prefetch complete.
+  function _ttsTextCacheCoverage(clean) {
+    const head = _ttsHeadChunk(clean, 0);
+    if (!head) return { fraction: 0, sentFraction: 0, cancelledFraction: 0, pending: false };
+    const end = head.start + head.text.length;
+    const chunks = [head].concat(_chunkTtsText(clean.slice(end), 400, end));
+    let ready = 0, sent = 0, cancelled = 0, total = 0, pending = false;
+    const latestJobs = new Map(_ttsDebugJobs.map(j => [j.text, j]));
+    for (const c of chunks) {
+      total += c.text.length;
+      const entry = _ttsHeadCache.get(c.text);
+      const active = _ttsChunkState?.debugCache?.get(c.text);
+      if (entry || active) sent += c.text.length;
+      else if (_ttsCacheDebug && latestJobs.get(c.text)?.status === 'cancelled') cancelled += c.text.length;
+      if (entry?.debugReady || active?.debugReady) ready += c.text.length;
+      else if (entry || active) pending = true;
+    }
+    return { fraction: total ? ready / total : 0, sentFraction: total ? sent / total : 0, cancelledFraction: total ? cancelled / total : 0, pending };
+  }
+  function _ttsRefreshCacheCoverage() {
+    const targets = new Set(document.querySelectorAll('.conv-pane [data-tts-head]'));
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(f => { if (f._speakTarget) targets.add(f._speakTarget); });
+    if (_ttsDirectBtn) targets.add(_ttsDirectBtn);
+    targets.forEach(btn => {
+      const data = _ttsSpeakButtonData(btn);
+      const clean = _sanitizeTtsText(data?.text || '', true);
+      const { fraction, sentFraction, cancelledFraction, pending } = _ttsTextCacheCoverage(clean);
+      if (fraction || pending || cancelledFraction) {
+        btn.dataset.ttsCache = fraction >= 1 ? 'ready' : 'partial';
+        btn.style.setProperty('--tts-cache-f', String(fraction));
+        btn.style.setProperty('--tts-cache-sent-f', String(sentFraction));
+        btn.style.setProperty('--tts-cache-cancelled-f', String(sentFraction + cancelledFraction));
+      } else {
+        delete btn.dataset.ttsCache;
+        btn.style.removeProperty('--tts-cache-f');
+        btn.style.removeProperty('--tts-cache-sent-f');
+        btn.style.removeProperty('--tts-cache-cancelled-f');
+      }
+    });
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
+  }
+  function _ttsScheduleCacheDebug() {
+    if (_ttsCacheDebugFrame == null) _ttsCacheDebugFrame = requestAnimationFrame(() => {
+      _ttsRefreshCacheCoverage();
+      _ttsRefreshCacheDebug();
+    });
+  }
+  function _ttsWatchCacheEntry(text, entry) {
+    _ttsScheduleCacheDebug();
+    entry.p.then(got => got.done).then(() => {
+      if (_ttsHeadCache.get(text) !== entry) return;
+      entry.debugReady = true;
+      _ttsScheduleCacheDebug();
+    }).catch(() => { _ttsScheduleCacheDebug(); });
+  }
+  function _ttsSetCacheDebug(enabled) {
+    _ttsCacheDebug = !!enabled;
+    try { localStorage.setItem('ccc-tts-cache-debug', enabled ? '1' : '0'); } catch (_) {}
+    const btn = document.getElementById('settingsTtsCacheDebugToggle');
+    if (btn) {
+      btn.setAttribute('aria-checked', String(_ttsCacheDebug));
+      btn.classList.toggle('is-on', _ttsCacheDebug);
+    }
+    if (_ttsCacheDebugObserver) _ttsCacheDebugObserver.disconnect();
+    if (_ttsCacheDebug) {
+      _ttsCacheDebugObserver = _ttsCacheDebugObserver || new MutationObserver(_ttsScheduleCacheDebug);
+      _ttsCacheDebugObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+    _ttsRefreshCacheCoverage();
+    _ttsRefreshCacheDebug();
+  }
+  document.getElementById('settingsTtsCacheDebugToggle')?.addEventListener('click', () => _ttsSetCacheDebug(!_ttsCacheDebug));
+  _ttsSetCacheDebug(_ttsCacheDebug);
+
   function _ttsHeadChunk(text, baseOffset) {
     return _chunkTtsText(text, _TTS_HEAD_CHARS, baseOffset)[0] || null;
   }
@@ -13703,6 +14135,7 @@
     });
     // The floating speaker draws the same two fills around its ring.
     document.querySelectorAll('.conv-scroll-speak-btn').forEach((f) => {
+      if (_ttsDirectBtn && f._speakTarget !== _ttsDirectBtn) return;
       f.style.setProperty('--tts-play', play.toFixed(3));
       f.style.setProperty('--tts-cache-f', cached.toFixed(3));
     });
@@ -13714,10 +14147,14 @@
     const st = t && t.isConnected ? t.dataset.ttsCache : '';
     if (st) {
       f.dataset.ttsCache = st;
-      f.style.setProperty('--tts-ring-f', t.style.getPropertyValue('--tts-cache-f') || '1');
+      f.style.setProperty('--tts-ring-f', t.style.getPropertyValue('--tts-cache-f') || '0');
+      f.style.setProperty('--tts-ring-sent-f', t.style.getPropertyValue('--tts-cache-sent-f') || '0');
+      f.style.setProperty('--tts-ring-cancelled-f', t.style.getPropertyValue('--tts-cache-cancelled-f') || '0');
     } else {
       delete f.dataset.ttsCache;
       f.style.removeProperty('--tts-ring-f');
+      f.style.removeProperty('--tts-ring-sent-f');
+      f.style.removeProperty('--tts-ring-cancelled-f');
     }
   }
   function _ttsMarkCache(paneId, headText, st, f) {
@@ -13730,33 +14167,39 @@
       if (paneId && ttsButtonPaneId(btn) !== paneId) return;
       apply(btn);
     });
-    // The per-turn speaker shows the same bar: the last turn's of each pane, or
-    // the hovered older turn (quiet prefetch).
-    if (paneId === '__quiet') {
-      if (_ttsHoverBtn && _ttsHoverBtn.isConnected) apply(_ttsHoverBtn);
-      document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
-      return;
-    }
-    document.querySelectorAll('.conv-pane').forEach((pane) => {
-      if (paneId && pane.dataset.paneId !== paneId) return;
-      const btns = pane.querySelectorAll('.event.assistant [data-read-assistant-message]');
-      btns.forEach((b, i) => { if (i === btns.length - 1) apply(b); else if (b !== _ttsHoverBtn) delete b.dataset.ttsCache; });
+    // Attribute asynchronous completion to the answer that requested it,
+    // even if the user has since scrolled or hovered somewhere else.
+    document.querySelectorAll('[data-tts-head]').forEach((btn) => {
+      if (headText && btn.dataset.ttsHead === headText) apply(btn);
     });
-    document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
+    if (paneId !== '__quiet' && !(paneId || '').startsWith('__viewport:')) {
+      document.querySelectorAll('.conv-pane').forEach((pane) => {
+        if (paneId && pane.dataset.paneId !== paneId) return;
+        const btns = pane.querySelectorAll('[data-read-assistant-message]');
+        const last = btns[btns.length - 1];
+        if (last) {
+          if (headText) last.dataset.ttsHead = headText;
+          apply(last);
+        }
+      });
+    }
+    _ttsRefreshCacheCoverage();
   }
   let _ttsHoverBtn = null;
-  // quiet = a hovered older turn: make the clips but leave the composer bar alone.
-  function _ttsPrefetchHead(rawText, paneId, quiet) {
-    const mk = quiet ? '__quiet' : paneId;
+  // Hover and viewport preparation leave the composer's latest-reply bar alone.
+  function _ttsPrefetchHead(rawText, paneId, quiet, sourceBtn) {
+    const mk = quiet === 'viewport' ? '__viewport:' + paneId : quiet ? '__quiet' : paneId;
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
     const clean = _sanitizeTtsText(rawText, true);
     if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
+    _ttsSelectPrefetchTarget(mk, head.text);
+    if (sourceBtn) sourceBtn.dataset.ttsHead = head.text;
     if (_ttsHeadCache.has(head.text)) {
       const c = _ttsCacheState.get(head.text);
-      _ttsMarkCache(mk, null, c ? c.st : null, c ? c.f : 0);
+      _ttsMarkCache(mk, head.text, c ? c.st : null, c ? c.f : 0);
       // A newer prefetch in the same pane may have abandoned this message's
       // chain half-way; without a restart its speaker stays amber forever.
       const hit = _ttsHeadCache.get(head.text);
@@ -13765,7 +14208,7 @@
       }
       return;
     }
-    _ttsMarkCache(mk, null, null);
+    _ttsMarkCache(mk, head.text, 'partial', 0);
     const entry = { ready: false, got: null };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
@@ -13780,9 +14223,11 @@
     });
     entry.p.catch((status) => {
       _ttsHeadCache.delete(head.text);
+      _ttsScheduleCacheDebug();
       _ttsCool(_ttsCoolMs(status), status);
     });
     _ttsHeadCache.set(head.text, entry);
+    _ttsWatchCacheEntry(head.text, entry);
     _ttsEvictCache();
   }
   function _ttsEvictCache() {
@@ -13791,6 +14236,7 @@
       const old = _ttsHeadCache.get(oldest);
       if (old && old.got) URL.revokeObjectURL(old.got.url);
       _ttsHeadCache.delete(oldest);
+      _ttsScheduleCacheDebug();
     }
   }
   // Generation is local and free, so once the first clip is ready the rest of
@@ -13798,38 +14244,64 @@
   // for the click. Stops when a read starts or a newer message takes over.
   const _ttsChainTokens = {};   // pane id -> latest chain token
   let _ttsChainQueue = Promise.resolve();
-  // Only the start of a message is made ahead: the first clip plus one more
-  // is enough to start instantly and stay ahead of the clip being heard without
-  // saturating CPU on unclicked background messages. The rest is made while reading.
-  const _TTS_PREFETCH_CLIPS = 1;
+  // The focused pane's latest message is made ahead whole (up to ~1,700 chars),
+  // so a click plays from cache instead of racing generation. A hovered older
+  // turn gets one clip past its head. Clips are kept on disk server-side, so
+  // this is paid once per message. Prepare-ahead pauses while a read plays.
+  const _TTS_PREFETCH_CLIPS = 4;
+  const _TTS_PREFETCH_CLIPS_QUIET = 1;
   const _ttsChainRunning = new Set();   // head texts whose chain is queued or running
   function _ttsStartChain(clean, head, got, mk) {
+    if (_ttsPrefetchTargets.get(mk) !== head.text) return;
+    const end = head.start + head.text.length;
+    const planned = got.voice && got.voice !== 'MeloTTS'
+      ? _chunkTtsText(clean.slice(end), 400, end).slice(0, mk === '__quiet' ? _TTS_PREFETCH_CLIPS_QUIET : _TTS_PREFETCH_CLIPS) : [];
+    const jobs = planned.map(c => {
+      const entry = _ttsHeadCache.get(c.text);
+      const status = entry ? (entry.debugReady ? 'ready' : 'processing') : 'queued';
+      // A shared in-flight cache entry represents one request, even when
+      // multiple preparation chains reuse it.
+      const existing = entry && Array.from(_ttsDebugJobs).reverse().find(j => j.text === c.text && j.status === status);
+      return existing || _ttsDebugJob(c.text, status, mk);
+    });
     const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
     _ttsChainRunning.add(head.text);
     // One message's clips at a time, serialized so background prefetch never
     // saturates CPU cores.
     _ttsChainQueue = _ttsChainQueue
-      .then(() => _ttsPrefetchRest(clean, head, got, token, mk))
+      .then(() => _ttsPrefetchRest(clean, head, got, token, mk, jobs))
       .catch(() => {})
-      .then(() => { _ttsChainRunning.delete(head.text); });
+      .then(() => {
+        _ttsChainRunning.delete(head.text);
+        // The user can return while this superseded chain is still draining
+        // its sent request. Retry the visible target once that request settles.
+        if (_ttsPrefetchTargets.get(mk) === head.text && token !== _ttsChainTokens[mk || '']) {
+          setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 0);
+        }
+      });
   }
   const _TTS_PREFETCH_WIDTH = 1;
-  async function _ttsPrefetchRest(clean, head, headGot, token, paneId) {
+  async function _ttsPrefetchRest(clean, head, headGot, token, paneId, jobs) {
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
     await headGot.done;
     const end = head.start + head.text.length;
-    const rest = _chunkTtsText(clean.slice(end), 400, end).slice(0, _TTS_PREFETCH_CLIPS);
+    const rest = _chunkTtsText(clean.slice(end), 400, end)
+      .slice(0, paneId === '__quiet' ? _TTS_PREFETCH_CLIPS_QUIET : _TTS_PREFETCH_CLIPS);
     const live = () => token === _ttsChainTokens[paneId || ''] && !_ttsActive && Date.now() >= _ttsNeuralCooldownUntil;
     const entries = [];
     const settle = async (i) => {   // clip i fully made; the bar moves past it
       const got = await entries[i].p;
       await got.done;
+      jobs[i].status = 'ready';
+      _ttsScheduleCacheDebug();
       if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'partial', (i + 2) / (rest.length + 1));
     };
     try {
       for (let i = 0; i < rest.length; i++) {
         if (i >= _TTS_PREFETCH_WIDTH) await settle(i - _TTS_PREFETCH_WIDTH);
         if (!live()) {
+          for (const job of jobs) if (job.status === 'queued') job.status = token === _ttsChainTokens[paneId || ''] ? 'deferred' : 'cancelled';
+          _ttsScheduleCacheDebug();
           // Paused by a read or the cooldown, not superseded: nothing else
           // would restart this message, leaving its speaker amber for good.
           if (token === _ttsChainTokens[paneId || '']) setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 20000);
@@ -13839,15 +14311,22 @@
         let entry = _ttsHeadCache.get(c.text);
         if (!entry) {
           entry = { ready: false, got: null, voice: headGot.voice };
-          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg').then((got) => { entry.ready = true; entry.got = got; return got; });
+          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg', jobs[i]).then((got) => { entry.ready = true; entry.got = got; return got; });
           entry.p.catch(() => { if (_ttsHeadCache.get(c.text) === entry) _ttsHeadCache.delete(c.text); });
           _ttsHeadCache.set(c.text, entry);
+          _ttsWatchCacheEntry(c.text, entry);
           _ttsEvictCache();
         }
+        if (jobs[i].status === 'queued') jobs[i].status = entry.debugReady ? 'ready' : 'processing';
+        _ttsScheduleCacheDebug();
         entries.push(entry);
       }
       for (let i = Math.max(0, rest.length - _TTS_PREFETCH_WIDTH); i < rest.length; i++) await settle(i);
-    } catch (_) { return; }
+    } catch (_) {
+      for (const job of jobs) if (job.status === 'queued') job.status = 'deferred';
+      _ttsScheduleCacheDebug();
+      return;
+    }
     if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
@@ -13855,10 +14334,62 @@
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { try { scheduleTtsPrefetch(); } catch (_) {} }
   });
+  function scheduleTtsViewportPrefetch(view, btn) {
+    const pane = view && view.closest('.conv-pane');
+    const eligible = pane && pane.dataset.paneId === activePaneId()
+      && !isConversationAtBottom(view) && btn;
+    const data = eligible && _ttsSpeakButtonData(btn);
+    const text = data && data.text || '';
+    const previous = view._ttsViewportPrefetch;
+    if (previous && previous.btn === btn && previous.text === text) return;
+    if (previous) clearTimeout(previous.timer);
+    const pending = view._ttsViewportPrefetch = { btn, text, timer: null };
+    if (!text.trim()) return;
+    clearTimeout(_ttsPrefetchTimer);
+    _ttsPrefetchTimer = null;
+    pending.timer = setTimeout(() => {
+      pending.timer = null;
+      if (!btn.isConnected || view._convSpeakButton?._speakTarget !== btn
+          || pane.dataset.paneId !== activePaneId() || document.hidden) {
+        view._ttsViewportPrefetch = null;
+        return;
+      }
+      if (_ttsActive || _ttsPaused) {
+        // Retry after playback instead of losing this queued visible answer.
+        view._ttsViewportPrefetch = null;
+        pending.timer = setTimeout(() => {
+          if (view._ttsViewportPrefetch !== pending) return;
+          view._ttsViewportPrefetch = null;
+          scheduleTtsViewportPrefetch(view, btn);
+        }, 1000);
+        view._ttsViewportPrefetch = pending;
+        return;
+      }
+      _ttsLog('QUEUE', 'viewport: ' + JSON.stringify(text.slice(0, 60)));
+      _ttsPrefetchHead(text, pane.dataset.paneId, 'viewport', btn);
+    }, 200);
+  }
   // Called after a transcript render; waits for the text to stop changing.
   function scheduleTtsPrefetch() {
+    const paneId = activePaneId();
+    const view = Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
+    if (view && !isConversationAtBottom(view) && view._convSpeakButton?._speakTarget) {
+      clearTimeout(_ttsPrefetchTimer);
+      _ttsPrefetchTimer = null;
+      if (view._ttsViewportPrefetch?.timer == null) view._ttsViewportPrefetch = null;
+      scheduleTtsViewportPrefetch(view, view._convSpeakButton._speakTarget);
+      return;
+    }
+    const data = paneId && lastMessageTtsData(paneId);
+    const text = data && data.text || '';
+    // Live snapshots repeat every ~900ms. Only changed text resets the quiet
+    // period; identical snapshots must not postpone preparation indefinitely.
+    if (_ttsPrefetchTimer != null && _ttsPrefetchTarget
+        && _ttsPrefetchTarget.paneId === paneId && _ttsPrefetchTarget.text === text) return;
     clearTimeout(_ttsPrefetchTimer);
+    _ttsPrefetchTarget = { paneId, text };
     _ttsPrefetchTimer = setTimeout(() => {
+      _ttsPrefetchTimer = null;
       try {
         if (_ttsActive || _ttsPaused || document.hidden) return;
         // Prefetch only the focused pane; background split panes prefetch on
@@ -13917,21 +14448,52 @@
   const _ttsCanStream = () => typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mpeg');
   // Resolves { url, voice } or rejects with the HTTP status (0 = network).
   // prio 'bg' = prepare-ahead: the local voice makes 'fg' (a read being heard) first.
-  function _ttsFetchNeural(text, voice, prio) {
+  function _ttsFetchNeural(text, voice, prio, debugJob) {
+    const job = debugJob || _ttsDebugJob(text, 'processing', null);
+    job.status = 'processing';
+    _ttsScheduleCacheDebug();
     voice = voice || ttsVoiceForPane(activePaneId());
     let onDone;
     const done = new Promise((r) => { onDone = r; });
+    const t0 = performance.now();
+    // Perf pane "speaker cache" column: one row per clip read, saying
+    // whether the server replayed it from its clip cache or made it now.
+    const perfRow = (res) => {
+      const cache = res.headers.get('X-CCC-Cache') || '?';
+      const first = Math.round(performance.now() - t0);
+      done.then(() => {
+        const ms = Math.round(performance.now() - t0);
+        try {
+          if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
+            at: Date.now(),
+            text: (prio === 'bg' ? 'bg ' : 'fg ') + (cache === 'hit' ? 'HIT ' : cache === 'miss' ? 'miss ' : '')
+              + String(text || '').length + 'c ' + (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms'),
+            title: 'speaker clip ' + (prio === 'bg' ? 'prepared ahead' : 'for the read') + ' · cache ' + cache
+              + ' · first bytes ' + first + 'ms · whole clip ' + ms + 'ms\n' + String(text || '').slice(0, 120),
+          });
+        } catch (_) {}
+      });
+    };
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: voice || '', stream: _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
+      body: JSON.stringify({ text, voice: voice || '', stream: prio !== 'bg' && _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
       const model = res.headers.get('X-CCC-Model') || '';
-      if (res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
-      return { url: URL.createObjectURL(await res.blob()), voice: v, done: Promise.resolve() };
-    }, () => { throw 0; });
+      perfRow(res);
+      done.then(() => { job.status = 'ready'; _ttsScheduleCacheDebug(); });
+      if (prio !== 'bg' && res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      onDone();
+      return { url, blob, voice: v, model, done: Promise.resolve() };
+    }, () => { throw 0; }).catch(error => {
+      job.status = 'failed';
+      _ttsScheduleCacheDebug();
+      throw error;
+    });
   }
   function _ttsSpeakChunkNeural(state, chunk) {
     const token = ++_ttsNeuralToken;
@@ -13950,14 +14512,34 @@
       if (!c || state.prefetch[i]) return;
       const hit = _ttsHeadCache.get(c.text);
       let p;
-      if (hit && (i === 0 ? !state.geminiVoice : hit.voice === state.geminiVoice)) {
+      if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
         p = hit.p;
-        _ttsHeadCache.delete(c.text);
+        // Prepared blobs remain reusable after playback, seeks and rate changes.
+        try {
+          if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
+            at: Date.now(),
+            text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
+            title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
+          });
+        } catch (_) {}
       } else {
         p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg');
         p.catch(() => {});
       }
       state.prefetch[i] = p;
+      // Keep the paint through the handoff from prepare-ahead to playback,
+      // and include clips generated during a read, until they are released.
+      state.debugCache = state.debugCache || new Map();
+      const debugEntry = { debugReady: !!(hit && p === hit.p && hit.debugReady) };
+      state.debugCache.set(c.text, debugEntry);
+      _ttsScheduleCacheDebug();
+      p.then(g => g.done).then(() => {
+        debugEntry.debugReady = true;
+        _ttsScheduleCacheDebug();
+      }).catch(() => {
+        state.debugCache.delete(c.text);
+        _ttsScheduleCacheDebug();
+      });
       // Once this clip is fully made, the bar's cached end moves past it.
       p.then((g) => g.done).then(() => {
         if (_ttsChunkState !== state) return;
@@ -13968,14 +14550,21 @@
     ensure(state.index);
     state.prefetch[state.index].then((got) => {
       delete state.prefetch[state.index];
-      if (stale()) { URL.revokeObjectURL(got.url); return; }
+      if (stale()) { if (!got.blob) URL.revokeObjectURL(got.url); return; }
       // Start the next clip the moment this one is fully generated, not at
       // onplay. One at a time: the local voice server shares the CPU, so two
       // clips made at once both finish late and playback stalls.
       const idx = state.index;
       got.done.then(() => { if (!stale()) ensure(idx + 1); });
       if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
-      const audio = new Audio(got.url);
+      // Give each playback its own URL; revoking it must not invalidate the cache.
+      const playUrl = got.blob ? URL.createObjectURL(got.blob) : got.url;
+      // Safari authorizes playback per element. A new Audio for every clip
+      // can leave an already prepared continuation blocked after the first.
+      const audio = _ttsAudio || (_ttsAudio = new Audio());
+      audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
+      audio.onplaying = audio.onwaiting = null;
+      audio.src = playUrl;
       audio.playbackRate = _ttsRate;
       _ttsNeural = { audio, token };
       // No word boundaries from an audio file: estimate the read position from
@@ -14005,28 +14594,55 @@
         _ttsShowVoice(got.voice + (got.model ? ' · ' + got.model : ''));
       };
       audio.onended = () => {
-        URL.revokeObjectURL(got.url);
+        if (stale()) return;
+        _ttsLog('ENDED', 'clip ' + idx);
+        URL.revokeObjectURL(playUrl);
+        state.debugCache.delete(chunk.text);
+        _ttsScheduleCacheDebug();
         if (stale()) return;
         _ttsNeural = null;
         _ttsUtterance = null;
         state.index += 1;
         state.gapFrom = Date.now();
+        if (state.perf) state.perf.gapT0 = performance.now();
         _ttsSpeakNextChunk();
       };
       // Where reads wait: time to first sound, gaps between clips, and stalls
       // inside a clip (the stream ran dry), so slow reads can be measured.
       let waitFrom = 0;
-      audio.addEventListener('playing', () => {
+      audio.onplaying = () => {
         if (stale()) return;
         const now = Date.now();
+        _ttsLog('PLAY', 'clip ' + idx + ' (' + chunk.text.length + ' chars)');
+        _ttsPerfStart(state, { engine: 'neural', voice: got.voice });
+        if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, performance.now() - state.perf.gapT0, 'gap'); state.perf.gapT0 = 0; }
         if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms'); state.t0 = 0; }
         else if (state.gapFrom) { const g = now - state.gapFrom; if (g > 300) _ttsLog('GAP', g + 'ms before clip ' + idx + ' (' + chunk.text.length + ' chars)'); }
         state.gapFrom = 0;
-        if (waitFrom) { _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
+        if (waitFrom) { _ttsPerfSilence(state, now - waitFrom, 'stall'); _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
+      };
+      audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
+      const releaseDebug = () => { state.debugCache.delete(chunk.text); _ttsScheduleCacheDebug(); };
+      audio.onerror = () => {
+        if (stale()) return;
+        _ttsLog('ERROR', 'clip ' + idx + ' media error ' + (audio.error?.code || 'unknown'));
+        URL.revokeObjectURL(playUrl); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS);
+      };
+      audio.play().catch((error) => {
+        if (stale()) return;
+        _ttsLog('ERROR', 'clip ' + idx + ' play rejected: ' + (error?.name || 'unknown'));
+        if (error?.name === 'NotAllowedError') {
+          // Keep the selected ready clip. The next tap can grant permission;
+          // do not silently switch voices or discard its position.
+          _ttsPaused = true;
+          setTtsButtonsBusy(false);
+          if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
+          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
+          showOpToast('Tap the speaker to resume audio.', 'info');
+          return;
+        }
+        releaseDebug(); fallBack(0);
       });
-      audio.addEventListener('waiting', () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); });
-      audio.onerror = () => { URL.revokeObjectURL(got.url); fallBack(300000); };
-      audio.play().catch(() => fallBack(0));
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
   }
 
@@ -14062,7 +14678,9 @@
     clearTtsHighlight();
     clearTtsCaption();
     _ttsShowVoice('');
+    _ttsPerfFlush(_ttsChunkState);
     _ttsChunkState = null;
+    _ttsScheduleCacheDebug();
     if (window.speechSynthesis) {
       _ttsEngineCancel();
     }
@@ -14284,9 +14902,54 @@
     };
   }
 
+  // Speaker telemetry (CCC-144): tts_start = click -> first audible audio
+  // (active time, like conv_open), tts_gap = longest silence between clips
+  // (or a stream stall inside one) during a read, one sample per read. A
+  // restart (rate step, skip) keeps the read's perf record instead of
+  // counting as a new click. _ttsPerfTarget says what was clicked.
+  let _ttsPerfTarget = '';
+  // Last read state carrying a perf record: callers null _ttsChunkState
+  // before restarting, so the restart finds its read here.
+  let _ttsPerfState = null;
+  function _ttsPerfStart(state, how) {
+    const p = state && state.perf;
+    if (!p || p.started) return;
+    p.started = true;
+    const end = performance.now();
+    _perfEvent('tts_start', _perfActiveElapsed(p.t0, end), { detail: {
+      engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
+      chars: p.chars, clips: p.clips, target: p.target, rate: _ttsRate,
+      wall_ms: Math.round(end - p.t0),
+    } });
+  }
+  function _ttsPerfSilence(state, ms, kind) {
+    const p = state && state.perf;
+    if (!p || !(ms >= 0)) return;
+    if (kind === 'gap') { p.gaps += 1; p.maxGap = Math.max(p.maxGap, ms); }
+    else { p.stalls += 1; p.maxStall = Math.max(p.maxStall, ms); }
+  }
+  function _ttsPerfFlush(state) {
+    const p = state && state.perf;
+    if (!p || p.flushed) return;
+    p.flushed = true;
+    if (!p.gaps && !p.stalls) return;
+    _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
+      max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
+      max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
+      voice: state.geminiVoice || '', cache: p.cache, chars: p.chars,
+      clips: p.clips, played: state.index, target: p.target, rate: _ttsRate,
+    } });
+  }
+  // A read paused and left (tab closed, reload) still reports its gaps.
+  window.addEventListener('pagehide', () => { try { _ttsPerfFlush(_ttsPerfState); } catch (_) {} });
+
   function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart) {
     let chunks = _chunkTtsText(text, TTS_CHUNK_MAX_CHARS, baseOffset);
     if (!chunks.length) return false;
+    const _ttsPrev = _ttsChunkState || _ttsPerfState;
+    const _ttsPerfHead = _ttsHeadChunk(text, baseOffset);
+    const _ttsPerfEntry = _ttsPerfHead && _ttsHeadCache.get(_ttsPerfHead.text);
+    const _ttsPerfCs = _ttsPerfHead && _ttsCacheState.get(_ttsPerfHead.text);
     // Free voice whenever it isn't cooling down. A prepared first chunk starts
     // instantly; otherwise it is fetched now (a 160-char head takes ~1-2 s).
     // The Mac voice is only the fallback when that fetch or playback fails.
@@ -14312,6 +14975,23 @@
         chunks = [head].concat(_chunkTtsText(text.slice(used), 400, (Number(baseOffset) || 0) + used));
       }
     }
+    const _ttsFresh = !(Number(baseOffset) > 0) && !pauseOnStart && !_ttsKeepVoice;
+    let perf = null;
+    if (!_ttsFresh && _ttsPrev && _ttsPrev.perf && !_ttsPrev.perf.flushed) {
+      perf = _ttsPrev.perf;   // a restart continues the same read
+    } else {
+      if (_ttsPrev) _ttsPerfFlush(_ttsPrev);
+      if (_ttsFresh && !_ttsHebrew) {
+        perf = {
+          t0: performance.now(), started: false, flushed: false,
+          cache: _ttsPerfCs && _ttsPerfCs.st === 'ready' ? 'ready' : _ttsPerfEntry ? 'partial' : 'none',
+          head: _ttsPerfEntry ? (_ttsPerfEntry.ready ? 'ready' : 'generating') : 'none',
+          chars: text.length, clips: chunks.length, target: _ttsPerfTarget || 'other',
+          gaps: 0, maxGap: 0, stalls: 0, maxStall: 0, gapT0: 0,
+        };
+      }
+    }
+    _ttsPerfTarget = '';
     _ttsChunkState = {
       chunks,
       neuralOk: _ttsHeadReady,
@@ -14321,7 +15001,9 @@
       paneId: paneId || _ttsActivePaneId || activePaneId(),
       pauseOnStart: !!pauseOnStart,
       t0: Date.now(),
+      perf,
     };
+    _ttsPerfState = perf ? _ttsChunkState : null;
     _ttsSpeakNextChunk();
     return true;
   }
@@ -14342,6 +15024,7 @@
 
     utterance.onstart = () => {
       if (_ttsUtterance !== utterance || _ttsChunkState !== state) return;
+      _ttsPerfStart(state, { engine: 'mac', voice: 'Mac voice' });
       setTtsButtonsState(true, false, state.paneId);
       _ttsShowVoice('Mac voice');
       if (_ttsStartWhy) ttsButtons().concat(_ttsDirectBtn ? [_ttsDirectBtn] : []).forEach(btn => { btn.title = 'Mac voice: ' + _ttsStartWhy; });
@@ -14412,6 +15095,7 @@
     // Starting a fresh read supersedes any prior utterance.
     if (_ttsActive || _ttsPaused || _ttsUtterance) {
       _ttsChunkState = null;
+      _ttsScheduleCacheDebug();
       try { _ttsEngineCancel(); } catch (_) {}
     }
     _setTtsDirectBtnState(sourceBtn || null, sourceBtn ? 'speaking' : null);
@@ -14422,6 +15106,7 @@
     const clipped = clean.length > TTS_TEXT_MAX_CHARS ? clean.slice(0, TTS_TEXT_MAX_CHARS) : clean;
     _ttsBoundUtteranceText = clipped;
     _ttsActiveConvId = convId || null;
+    _ttsPerfTarget = sourceBtn ? 'turn' : 'direct';
     if (!_ttsStartChunkedSpeech(clipped, paneId, 0, false)) return false;
     // Reflect state immediately in case onstart is slow to fire.
     setTtsButtonsState(true, false, paneId || _ttsActivePaneId || activePaneId());
@@ -14441,6 +15126,7 @@
     if (_ttsActive && !_ttsPaused) {
       try { _ttsEnginePause(); } catch (_) {}
       _ttsPaused = true;
+      if (_ttsChunkState && _ttsChunkState.perf) _ttsChunkState.perf.gapT0 = 0;
       ttsButtons().forEach(btn => {
         if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
           btn.classList.add('paused');
@@ -14473,6 +15159,7 @@
       // Fresh selection present — drop the paused utterance and fall through
       // to the start path below, which reads selectedConversationTtsData first.
       _ttsChunkState = null;
+      _ttsScheduleCacheDebug();
       try { _ttsEngineCancel(); } catch (_) {}
       clearTtsHighlight();
       _ttsActive = false;
@@ -14488,7 +15175,8 @@
     // and inaudible; needs on-device verification.
     _primeTtsEngine();
     paneId = paneId || activePaneId();
-    const data = selectedConversationTtsData(paneId) || lastMessageTtsData(paneId);
+    const _ttsSel = selectedConversationTtsData(paneId);
+    const data = _ttsSel || lastMessageTtsData(paneId);
     if (!data || !data.text.trim()) {
       setTtsButtonsState(false, true);
       showOpToast('No message to read yet.', 'error');
@@ -14508,6 +15196,7 @@
 
     _ttsTextMapping = mappingToUse;
     _ttsBoundUtteranceText = textToSpeak;
+    _ttsPerfTarget = _ttsSel ? 'selection' : 'last';
     _ttsStartChunkedSpeech(textToSpeak, paneId, 0, false);
   }
 
@@ -14804,6 +15493,7 @@
     const wasPaused = _ttsPaused;
     _ttsKeepVoice = (_ttsChunkState && _ttsChunkState.geminiVoice) || '';
     _ttsChunkState = null;
+    _ttsScheduleCacheDebug();
     try { _ttsEngineCancel(); } catch (_) {}
     // Keep _ttsBoundUtteranceText pointing at the full text so subsequent
     // changes continue to use global offsets for captions/highlights.
@@ -15570,7 +16260,15 @@
     }
 
     const rows = [];
-    const nextStep = fields.NEXT_STEP_USER || '';
+    let assessment;
+    try { assessment = JSON.parse(fields.COMPLETION || 'null'); } catch (_) {}
+    let nextStep = fields.NEXT_STEP_USER || '';
+    if (/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)?[.!]?$/i.test(nextStep)
+        && assessment && assessment.decision_dependency
+        && typeof assessment.decision_dependency.score === 'number' && assessment.decision_dependency.score > 0
+        && typeof assessment.decision_dependency.evidence === 'string' && assessment.decision_dependency.evidence.trim()) {
+      nextStep = 'Decision required: ' + assessment.decision_dependency.evidence.trim();
+    }
     const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(nextStep);
     if (hasUserAction) {
       const actions = needsYouActionsHtml(nextStep);
@@ -15578,12 +16276,11 @@
     } else if (fields.DID) {
       rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">Done</span>' + escapeHtml(fields.DID) + '</div>');
     }
+    if (!hasUserAction) rows.push('<div class="ssb-row ssb-no-action"><span class="ssb-key">Needs you</span>' + (nextStep ? 'None' : 'Not specified') + '</div>');
     if (fields.INSIGHT) {
       rows.push('<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>');
     }
     if (fields.COMPLETION) {
-      let assessment;
-      try { assessment = JSON.parse(fields.COMPLETION); } catch (_) {}
       let evidence = '';
       if (assessment && assessment.version === 1) {
         for (const [key, label] of [['resolution', 'Resolution'], ['verification', 'Verification'],
@@ -15592,7 +16289,7 @@
           if (!axis || typeof axis.score !== 'number' || !Number.isFinite(axis.score)
               || axis.score < 0 || axis.score > 1 || typeof axis.evidence !== 'string' || !axis.evidence.trim()) continue;
           const score = key === 'delivery' && axis.applicable === false ? 'N/A' : String(axis.score);
-          evidence += '<div class="ssb-row"><span class="ssb-key">' + label + ' ' + score
+          evidence += '<div class="ssb-row"><span class="ssb-key">' + label + ' <span class="ssb-score">' + score + '</span>'
             + '</span>' + escapeHtml(axis.evidence) + '</div>';
         }
         if (Array.isArray(assessment.caveats)) for (const item of assessment.caveats) {
@@ -15605,7 +16302,41 @@
             + ' · downside ' + escapeHtml(String(item.downside)) + '</div>';
         }
       }
-      rows.push('<details class="ssb-completion"><summary>Completion assessment · self-reported</summary>'
+      // Historical cards describe this assessment, not the current session's
+      // eligibility: only the live row may offer the manual Close action.
+      const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+      const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
+      const valid = assessment && assessment.version === 1 && axes.every(k => {
+        const a = assessment[k];
+        return a && numeric(a.score) && typeof a.evidence === 'string' && a.evidence.trim();
+      }) && (assessment.delivery.applicable === undefined || typeof assessment.delivery.applicable === 'boolean')
+        && Array.isArray(assessment.caveats) && assessment.caveats.every(c => c && typeof c.text === 'string'
+          && c.text.trim() && typeof c.blocking === 'boolean')
+        && Array.isArray(assessment.remaining_actions) && assessment.remaining_actions.every(a => a
+          && typeof a.text === 'string' && a.text.trim() && numeric(a.confidence) && numeric(a.downside)
+          && typeof a.reversible === 'boolean' && typeof a.within_scope === 'boolean');
+      const reasons = [];
+      if (valid) {
+        if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
+        if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
+        if (assessment.delivery.applicable !== false && assessment.delivery.score !== 1) reasons.push('delivery incomplete');
+        if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
+        if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
+        if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
+      }
+      const verdict = !valid ? 'Unassessed · invalid assessment'
+        : reasons.length ? 'Next · ' + reasons.join('; ') : 'Close criteria met';
+      rows.push('<div class="ssb-row ssb-verdict"><span class="ssb-key">Assessment</span>'
+        + escapeHtml(verdict) + '</div>');
+      const scores = valid ? '(' + axes.map(k => String(assessment[k].score)).join(', ') + ')' : '(unassessed)';
+      const caveats = valid ? assessment.caveats : [];
+      const firstCaveat = caveats.find(c => c.blocking) || caveats[0];
+      const preview = firstCaveat ? firstCaveat.text.trim().split(/\s+/).slice(0, 7).join(' ') : '';
+      const caveatPreview = preview ? ' · ' + (firstCaveat.blocking ? 'Blocking: ' : 'Caveat: ')
+        + preview.slice(0, 56) + (preview.length < firstCaveat.text.trim().length ? '…' : '')
+        + (caveats.length > 1 ? ' (+' + (caveats.length - 1) + ')' : '') : '';
+      rows.push('<details class="ssb-completion"><summary title="Self-reported scores: resolution, verification, delivery, decision dependency. Delivery may be N/A; expand for evidence."><span class="ssb-key">Assessment</span>'
+        + '<span class="ssb-score">' + escapeHtml(scores) + '</span>' + escapeHtml(caveatPreview) + '</summary>'
         + (evidence || '<div class="ssb-row">Assessment unavailable or invalid.</div>') + '</details>');
     }
     return '<div class="session-state-block">' + rows.concat(otherRows).join('') + '</div>';
@@ -15895,8 +16626,14 @@
       run.el.className = 'compact-run-card';
       if (run.sid) run.el.dataset.sid = run.sid;
     }
-    if (run.el.parentNode !== view && !run.anchored) view.appendChild(run.el);
-    else if (!run.anchored && run.el !== view.lastElementChild) view.appendChild(run.el);
+    if (run.anchored) return;
+    const live = run.stage === 'requested' || run.stage === 'working';
+    if (run.el.parentNode !== view) view.appendChild(run.el);
+    else if (live && run.el !== view.lastElementChild) view.appendChild(run.el);
+    // A finished run stays where it ended. Codex writes no resume-summary
+    // row to anchor to, so without this every later render re-pinned the
+    // done card under the new turns, forever (CCC-151).
+    if (!live) run.anchored = true;
   }
   function _compactRunAnchorTo(node) {
     const run = _compactRun;
@@ -18607,7 +19344,11 @@
         .find(r => r && (r.session_id === sessionId || r.id === sessionId)) || {}).idea_ticket;
       const fromRef = oldRef && oldRef.ref;
       [conversationsData, archiveData].forEach(rows => (rows || []).forEach(row => {
-        if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
+        if (queue === 'OTHER') {
+          // Detached server-side for every session on the ticket.
+          if (row && row.idea_ticket && ((fromRef && row.idea_ticket.ref === fromRef)
+            || row.session_id === sessionId || row.id === sessionId)) delete row.idea_ticket;
+        } else if (row && row.idea_ticket && fromRef && row.idea_ticket.ref === fromRef) {
           row.idea_ticket = Object.assign({}, row.idea_ticket, { ref: data.ref, queue: data.queue });
         } else if (row && !fromRef && (row.session_id === sessionId || row.id === sessionId)) {
           row.idea_ticket = { ref: data.ref, queue: data.queue, sessions: 1, closed: false };
@@ -18615,7 +19356,8 @@
       }));
       _convListRenderSig = null;
       renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
-      showOpToast((fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
+      showOpToast(queue === 'OTHER' ? 'Moved to Other' + (fromRef ? ' (closed ' + fromRef + ')' : '')
+        : (fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
       return true;
     } catch (err) {
       showOpToast('Move failed (' + err.message + ')', 'error');
@@ -18706,13 +19448,14 @@
       const patch = kind === 'untrash'
         ? { archived: !!data.archived, trashed: false }
         : { archived: !!data.archived, ...(!data.archived ? { trashed: false } : {}) };
+      const group = new Set(data.session_ids || [sessionId]);
       [conversationsData, archiveData, currentRepoBacklogData].forEach(rows => {
         if (!Array.isArray(rows)) return;
         for (const r of rows) {
-          if (r && (r.id === convId || (r.session_id || r.id) === sessionId)) Object.assign(r, patch);
+          if (r && (r.id === convId || group.has(r.session_id || r.id))) Object.assign(r, patch);
         }
       });
-      setOptimisticOverride(sessionId, patch);
+      for (const member of group) setOptimisticOverride(member, patch);
       // A slow archive must not navigate away from another conversation.
       if (kind === 'archive' && data.archived
           && (currentConversation === convId || currentConversation === sessionId)) {
@@ -20943,6 +21686,146 @@
       });
     }
   })();
+  // ── Desktop "Mobile view" for the session list ──
+  // Reuses the phone stylesheet instead of restyling anything: every rule in
+  // a width media query that a phone viewport matches gets a twin scoped to
+  // html.ccc-mobile-list-view #convList, inserted right after its media block
+  // so cascade order is unchanged (:where keeps specificity unchanged too).
+  // Desktop-only width rules aimed at #convList get a :not() guard.
+  const _MOBILE_LIST_LS = 'ccc-mobile-list-view';
+  const _MOBILE_LIST_CLASS = 'ccc-mobile-list-view';
+  const _MOBILE_LIST_PHONE_W = 420;
+  const _mobileListDoneSheets = new WeakSet();
+  function isMobileListView() {
+    return document.documentElement.classList.contains(_MOBILE_LIST_CLASS);
+  }
+  // true/false for a query with a width feature, judged at phone width
+  // (other features evaluated natively); null when width plays no part.
+  function _mobileListPhoneMatch(mediaText) {
+    let sawWidth = false;
+    const branches = String(mediaText || '').split(',');
+    const results = branches.map((branch) => {
+      const feats = branch.match(/\(([^()]+)\)/g) || [];
+      const widthFeats = feats.filter(f => /^\(\s*(max|min)-width\s*:/.test(f));
+      if (!widthFeats.length) {
+        try { return window.matchMedia(branch.trim() || 'all').matches; } catch (_) { return false; }
+      }
+      sawWidth = true;
+      if (/\bnot\b/.test(branch)) return false;
+      return feats.every((f) => {
+        const m = f.match(/^\(\s*(max|min)-width\s*:\s*([\d.]+)(px|em|rem)\s*\)$/);
+        if (m) {
+          const px = parseFloat(m[2]) * (m[3] === 'px' ? 1 : 16);
+          return m[1] === 'max' ? _MOBILE_LIST_PHONE_W <= px : _MOBILE_LIST_PHONE_W >= px;
+        }
+        if (/-width\s*:/.test(f)) return false;
+        try { return window.matchMedia(f).matches; } catch (_) { return false; }
+      });
+    });
+    return sawWidth ? results.some(Boolean) : null;
+  }
+  function _splitSelectorList(text) {
+    const out = [];
+    let depth = 0, cur = '';
+    for (const ch of String(text || '')) {
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+      if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+  function _mobileListTwinRules(rules, out) {
+    for (const r of Array.from(rules || [])) {
+      if (r.type === CSSRule.MEDIA_RULE) {
+        if (_mobileListPhoneMatch(r.media.mediaText) !== false) _mobileListTwinRules(r.cssRules, out);
+        continue;
+      }
+      if (r.type !== CSSRule.STYLE_RULE) continue;
+      const sels = _splitSelectorList(r.selectorText)
+        .filter(sel => !/^(html|body|:root)\b/.test(sel))
+        .map(sel => (/^#convList\b/.test(sel)
+          ? ':where(html.' + _MOBILE_LIST_CLASS + ') '
+          : ':where(html.' + _MOBILE_LIST_CLASS + ' #convList) ') + sel);
+      if (sels.length) out.push(sels.join(', ') + ' { ' + r.style.cssText + ' }');
+    }
+    return out;
+  }
+  function _mobileListGuardRules(rules) {
+    for (const r of Array.from(rules || [])) {
+      if (r.type === CSSRule.MEDIA_RULE) { _mobileListGuardRules(r.cssRules); continue; }
+      if (r.type !== CSSRule.STYLE_RULE) continue;
+      const sels = _splitSelectorList(r.selectorText);
+      if (!sels.some(sel => /^#convList\b/.test(sel))) continue;
+      r.selectorText = sels.map(sel => (/^#convList\b/.test(sel)
+        ? ':where(html:not(.' + _MOBILE_LIST_CLASS + ')) ' + sel : sel)).join(', ');
+    }
+  }
+  function _buildMobileListRules() {
+    for (const sheet of Array.from(document.styleSheets)) {
+      if (_mobileListDoneSheets.has(sheet)) continue;
+      let rules;
+      try { rules = sheet.cssRules; } catch (_) { continue; }   // cross-origin
+      if (!rules) continue;
+      _mobileListDoneSheets.add(sheet);
+      // Walk backwards so inserting a twin block never shifts a pending index.
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i];
+        if (r.type !== CSSRule.MEDIA_RULE) continue;
+        const phone = _mobileListPhoneMatch(r.media.mediaText);
+        if (phone === true) {
+          const twins = _mobileListTwinRules(r.cssRules, []);
+          if (twins.length) {
+            try { sheet.insertRule('@media all { ' + twins.join('\n') + ' }', i + 1); } catch (_) {}
+          }
+        } else if (phone === false) {
+          _mobileListGuardRules(r.cssRules);
+        }
+      }
+    }
+  }
+  // CCC-139: Small bugs is a short list of one-line tickets that reads best
+  // as the phone list, so it keeps its own Mobile view preference that
+  // defaults ON. Every other tab shares the original key, default OFF.
+  const _MOBILE_LIST_SMALLBUGS_LS = 'ccc-mobile-list-view-smallbugs';
+  function _mobileListKeyForTab(tab) {
+    return tab === 'smallbugs' ? _MOBILE_LIST_SMALLBUGS_LS : _MOBILE_LIST_LS;
+  }
+  function _currentSidebarTabKey() {
+    try { return normalizeSidebarTabKey(localStorage.getItem('ccc-sidebar-tab')); }
+    catch (_) { return ''; }
+  }
+  function _mobileListPrefForTab(tab) {
+    let stored = null;
+    try { stored = localStorage.getItem(_mobileListKeyForTab(tab)); } catch (_) {}
+    return stored === null ? tab === 'smallbugs' : stored === '1';
+  }
+  function _applyMobileListView(on) {
+    if (on) _buildMobileListRules();
+    document.documentElement.classList.toggle(_MOBILE_LIST_CLASS, on);
+    const box = document.getElementById('mobileListViewToggle');
+    if (box) box.checked = on;
+  }
+  function setMobileListView(on) {
+    on = !!on;
+    _applyMobileListView(on);
+    try { localStorage.setItem(_mobileListKeyForTab(_currentSidebarTabKey()), on ? '1' : '0'); } catch (_) {}
+  }
+  // Called on every list render; only touches the DOM when the tab's
+  // preference differs from what is applied.
+  function syncMobileListViewForTab(tab) {
+    const on = _mobileListPrefForTab(tab);
+    if (on !== isMobileListView()) _applyMobileListView(on);
+  }
+  (function _wireMobileListView() {
+    const on = _mobileListPrefForTab(_currentSidebarTabKey());
+    if (on) _applyMobileListView(true);
+    const box = document.getElementById('mobileListViewToggle');
+    if (box) {
+      box.checked = on;
+      box.addEventListener('change', () => setMobileListView(box.checked));
+    }
+  })();
   // Mirror the session list's ⋮ view-options into the sidebar ⋮ (phones).
   // The originals' handlers are delegated on #convList, so clicks on the
   // copy are forwarded to the same-position original, then the copy is
@@ -20950,7 +21833,9 @@
   function _syncSidebarMoreFilters() {
     const box = document.getElementById('sidebarMoreFilters');
     if (!box) return;
-    const src = _phoneMenusMQ.matches && document.querySelector('#convList .conv-archived-overflow-menu');
+    // Mobile view hides the list's own ⋮ row (phone CSS), so mirror here too.
+    const src = (_phoneMenusMQ.matches || isMobileListView())
+      && document.querySelector('#convList .conv-archived-overflow-menu');
     box.innerHTML = src ? src.innerHTML : '';
     box.hidden = !src;
   }
@@ -21436,6 +22321,7 @@
       if (typeof updateAnnounceButton === 'function') updateAnnounceButton();
       if (typeof updateJumpButton === 'function') updateJumpButton();
       if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
+      scheduleTtsPrefetch();
       try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
       try {
         if (typeof resetLocalhostPill === 'function') resetLocalhostPill();
@@ -23463,31 +24349,64 @@
     }
     return hit;
   }
+  function repoAvatarHtml(repoPath, label = '', extraClass = '') {
+    if (!repoPath) return '';
+    const initials = String(label || repoPath.split('/').filter(Boolean).pop() || '?')
+      .split(/[-_\s]+/).slice(0, 2).map(word => word[0] || '').join('').toUpperCase();
+    return '<span class="repo-avatar ' + extraClass + '" aria-hidden="true" data-repo-avatar="' + escapeAttr(repoPath) + '">'
+      + '<span class="repo-avatar-initials">' + escapeHtml(initials) + '</span>'
+      + '<img src="/api/repo/avatar?repo_path=' + encodeURIComponent(repoPath) + '&v=' + ((repoAvatarHtml.versions || {})[repoPath] || '0') + '" alt="" loading="lazy" decoding="async"></span>';
+  }
+  // Broken images leave readable initials, including missing/offline repos.
+  document.addEventListener('error', event => {
+    if (event.target.matches && event.target.matches('.repo-avatar img')) event.target.hidden = true;
+  }, true);
+
   function _waAvatarHtml(c, title) {
     const ideaAvatar = _ideaAvatarHtml(c, true);
     if (ideaAvatar) return ideaAvatar;
+    const repoAvatar = _repoSessionAvatarHtml(c, true);
+    if (repoAvatar) return repoAvatar;
     const cat = _waCategory(c, title);
     const repo = String((c && c.folder_label) || '');
     return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + cat.label) + '" style="background:linear-gradient(135deg,' + cat.bg[0] + ',' + cat.bg[1] + ')">'
       + '<span class="wa-face">' + cat.e + '</span>'
       + '</span>';
   }
+  function _avatarModelBadgeHtml(presentation) {
+    return '<span class="conv-avatar-model ' + presentation.engine + ' cost-' + presentation.tier + '" title="' + escapeAttr(presentation.title) + '">'
+      + '<span class="conv-avatar-engine" aria-hidden="true">' + getEngineSvg(presentation.engine) + '</span></span>';
+  }
+  function _repoSessionAvatarHtml(c, mobile = false) {
+    const repoPath = sessionRepoAvatarPath(c);
+    if (!repoPath) return '';
+    const presentation = sessionIconPresentation(c, false);
+    return '<span class="conv-idea-avatar conv-repo-portrait has-repo-background' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon')
+      + (presentation.working ? ' is-working' : ' is-not-working') + '" role="img" aria-label="' + escapeAttr(presentation.title) + '">'
+      + repoAvatarHtml(repoPath, c.folder_label_chip || c.folder_label, 'conv-avatar-background')
+      + _avatarModelBadgeHtml(presentation)
+      + '<span class="session-activity-dot" aria-hidden="true"></span></span>';
+  }
   function _ideaAvatarHtml(c, mobile = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
-    const match = ref && ref.match(/^IDEAS-(\d+)$/);
+    // CCC-139: Small bugs rows get the same numbered avatar as Ideas.
+    const match = ref && ref.match(/^(IDEAS|SMALL-BUGS)-(\d+)$/);
     if (!match) return '';
+    const num = match[2];
+    const noun = match[1] === 'IDEAS' ? 'idea' : 'small bug';
     const repo = String(c.folder_label || c.folder_label_chip || c.folder_path || c.session_cwd || '');
     const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
     const presentation = sessionIconPresentation(c, false);
-    return '<button type="button" class="conv-idea-avatar' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
+    const repoPath = sessionRepoAvatarPath(c);
+    const background = repoPath ? repoAvatarHtml(repoPath, repo, 'conv-avatar-background') : '';
+    return '<button type="button" class="conv-idea-avatar' + (background ? ' has-repo-background' : '') + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
       + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
       + ' style="--avatar-hue:' + (hue | 0) + '"'
       + ' title="' + escapeAttr(ref + (repo ? ' · ' + repo : '') + ' · ' + presentation.title) + '"'
-      + ' aria-label="Open idea ' + escapeAttr(match[1]) + '">'
-      + '<span class="conv-avatar-number">' + escapeHtml(match[1]) + '</span>'
-      + '<span class="conv-avatar-model ' + presentation.engine + ' cost-' + presentation.tier + '" title="' + escapeAttr(presentation.title) + '">'
-      + '<span class="conv-avatar-engine" aria-hidden="true">' + getEngineSvg(presentation.engine) + '</span>'
-      + '</span></button>';
+      + ' aria-label="Open ' + noun + ' ' + escapeAttr(num) + '">'
+      + background
+      + '<span class="conv-avatar-number">' + escapeHtml(num) + '</span>'
+      + _avatarModelBadgeHtml(presentation) + '</button>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with
   // the full reply (per-repo /api/conversations) instead of the preview.
@@ -27962,7 +28881,7 @@
         + collapseBtn
         + archiveBtn
         + flowPinBtn
-        + '<div class="flow-node-kicker">' + escapeHtml(rec.kicker) + '</div>'
+        + '<div class="flow-node-kicker">' + (rec.kind === 'repo' ? repoAvatarHtml(rec.repoPath, rec.title) : '') + escapeHtml(rec.kicker) + '</div>'
         + bodyHtml
         + '</div>';
     });
@@ -32173,7 +33092,7 @@
         '<div class="gc-addpart-row' + (i === sel ? ' is-selected' : '') + '" data-idx="' + i + '">'
         + '<span class="gc-addpart-emoji">' + engineEmoji(c) + '</span>'
         + '<span class="gc-addpart-name">' + escapeHtml(rowTitle(c)) + '</span>'
-        + (c.folder_label_chip ? '<span class="gc-addpart-repo">' + escapeHtml(c.folder_label_chip) + '</span>' : '')
+        + (c.folder_label_chip ? '<span class="gc-addpart-repo">' + repoAvatarHtml(c.folder_path || c.session_cwd, c.folder_label_chip) + escapeHtml(c.folder_label_chip) + '</span>' : '')
         + '<span class="gc-addpart-when">' + escapeHtml(c.modified ? timeAgo(c.modified * 1000) : '') + '</span>'
         + '</div>'
       ).join('') || '<div class="gc-addpart-empty">No matching sessions.</div>';
@@ -33118,6 +34037,27 @@
     const payload = { session_id: sessionId };
     if (typeof archived === 'boolean') payload.archived = archived;
     return withRepoPath(payload, rowRepoPath(row));
+  }
+
+  function archiveGroupSessionIdsForRow(row, sessionId) {
+    const ids = new Set([sessionId]);
+    const rows = [conversationsData, archiveData, currentRepoBacklogData]
+      .flatMap(items => Array.isArray(items) ? items : []);
+    const ref = ideaTicketsOn() && row && row.idea_ticket && row.idea_ticket.ref;
+    if (ref) for (const member of rows) {
+      if (member.idea_ticket && member.idea_ticket.ref === ref) ids.add(member.session_id || member.id);
+    }
+    // Match descendants already loaded in the sidebar; the server supplies
+    // the authoritative full group, including members outside this view.
+    const children = new Map();
+    for (const member of rows) {
+      const parent = member.parent_session_id || member.hermes_parent_session_id;
+      if (!parent) continue;
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent).push(member.session_id || member.id);
+    }
+    for (const id of ids) for (const child of children.get(id) || []) ids.add(child);
+    return ids;
   }
 
   // The server host may be headless (no xdg-open) while the viewer sits on
@@ -36410,6 +37350,7 @@
         return normalizeSidebarTabKey(t);
       } catch (_) { return 'coding'; }
     })();
+    try { if (typeof syncMobileListViewForTab === 'function') syncMobileListViewForTab(_sidebarTab); } catch (_) {}
     const _activeDraftInputBefore = document.activeElement;
     const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
       ? (_activeDraftInputBefore.getAttribute('data-draft-id') || '')
@@ -37152,16 +38093,10 @@
             + '</span>';
         }
       }
-      // design_handoff_sidebar_session_list (variant 2c): a small pulsing
-      // dot mirroring the row's working state, additive to the existing
-      // conv-needs-you dot and conv-live-tool pill above — neither is
-      // replaced, this just gives "is something actually happening here"
-      // a glanceable signal that doesn't require reading pill text.
-      // Deliberately excludes "stale"/"sending" pills: those read as
-      // stuck/pending, not confirmed active work. (workingDotHtml itself
-      // is built further down, once _needsYouRow is known — needs-you
-      // takes priority and suppresses this dot.)
-      const _isWorkingRow = !!liveToolHtml
+      // Running turns remain visible between tools, using the same working
+      // state as the live explanation updater. Tool pills remain a fallback
+      // for engines without turn-level status.
+      const _isWorkingRow = sidebarSessionWorking(c, _applyLiveOverlayToRow(c)) || !!liveToolHtml
         && (liveToolHtml.indexOf('conv-live-tool in-flight') !== -1
           || liveToolHtml.indexOf('conv-live-tool is-question') !== -1);
       const isCodexRow = c.source === 'codex' || c.engine === 'codex';
@@ -37652,7 +38587,7 @@
         ? '<span class="conv-folder-chip' + (c.folder_chip_orphan ? ' is-orphan' : '')
             + '" style="--chip-hue:' + (c.folder_chip_hue | 0) + ';"'
             + ' title="' + escapeHtml(c.folder_path || c.session_cwd || '') + '">'
-            + escapeHtml(c.folder_label_chip) + '</span>'
+            + repoAvatarHtml(c.folder_path || c.session_cwd, c.folder_label_chip) + escapeHtml(c.folder_label_chip) + '</span>'
         : '';
       // Worktree badge — shown when the session came from a sibling worktree
       // dir (e.g. "claude-command-center-wt-gemini" → badge shows "wt-gemini").
@@ -37912,7 +38847,7 @@
       const _readyToCloseRow = !isBacklogRow && !isGithubPrRow && !_isWorkingRow
         && !sessionIsOptimisticallySending(c.session_id || c.id)
         && sessionReadyToClose(c, _applyLiveOverlayToRow(c));
-      const _needsYouRow = !_readyToCloseRow && ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
+      const _needsYouRow = !_isWorkingRow && !_readyToCloseRow && ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
       const needsYouHtml = _needsYouRow
         ? '<span class="conv-needs-you" title="Needs you - the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
@@ -38038,9 +38973,12 @@
         const _outTip = (_did ? 'Did: ' + _did : '') + (_did && _hasNext ? '\n' : '')
           + (_hasNext ? 'Next step: ' + _next : '')
           + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Last reply: ' + _latest : '') + _assessmentTip;
+        // A finished row's label is its Close button, after the text.
+        const _closeBtn = _kind === 'ready' && _readyToCloseRow;
         outcomeHtml = _stepText
-          ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + '" title="' + escapeAttr(_outTip) + '">'
-            + '<span class="conv-outcome-step" data-label="' + escapeAttr(_label) + '">' + escapeHtml(_stepText) + '</span>'
+          ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + (_closeBtn ? ' has-close-btn' : '') + '" title="' + escapeAttr(_outTip) + '">'
+            + '<span class="conv-outcome-step"' + (_closeBtn ? '' : ' data-label="' + escapeAttr(_label) + '"') + '>' + escapeHtml(_stepText) + '</span>'
+            + (_closeBtn ? readyToCloseArchiveHtml() : '')
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
@@ -38117,8 +39055,8 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Numbered idea avatars already open the ticket.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + (_readyToCloseRow ? '' : _waStatus) + '</div>'
-        + '<div class="wa-row-footer">' + sessionIdChipHtml + (_readyToCloseRow ? _waStatus : '') + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview && !_readyToCloseRow ? '<span class="wa-explanation-label">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        + '<div class="wa-row-footer">' + sessionIdChipHtml + '</div>'
         + '</div>'
         + '</div>';
       return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
@@ -38154,7 +39092,6 @@
             + earlierDetailsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
-            + sessionIdChipHtml
             + (goalIconOnly && !_ideaRowRef ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
             + ((opts.evergreenAgent || _ideaRowRef) ? '' : uxFixesQueueProgressHtml)
@@ -38171,7 +39108,7 @@
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
             + (opts.evergreenAgent ? '' : (lifetimeTokensHtml || ''))
             + '</span>'
-            + (_readyToCloseRow ? readyToCloseArchiveHtml() : '')
+            + (_readyToCloseRow && !_outcomeInline ? readyToCloseArchiveHtml() : '')
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Single-line evergreen variant: the badges that normally drop to a
             // second meta line sit inline here, just left of the time slot.
@@ -38185,9 +39122,9 @@
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<span class="conv-row-hover-slot">'
             +     quickTrashBtn
-            +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
+            +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '</span>'
-            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
+            +   '<span class="conv-row-actions">' + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
@@ -38790,7 +39727,7 @@
         + '<button type="button" class="conv-folder-group-arrow" data-role="folder-group-collapse"'
         + ' title="Collapse or expand group" aria-label="Collapse or expand group">'
         + (collapsed ? '▸' : '▾') + '</button>'
-        + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + titleHtml + '</span>'
+        + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + (!archiveObjectId ? repoAvatarHtml(repoPath, folder) : '') + titleHtml + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
         + inlineMetaHtml
         + objectActions
@@ -41413,6 +42350,7 @@
     // every refresh tick. The user is looking at the input, not the
     // list, so missing the animation is the right trade.
     const _flipBefore = new Map();
+    const _flipBeforeOrder = new Map();
     const _activeEl = document.activeElement;
     const _userIsTyping = !!(_activeEl && (_activeEl.tagName === 'TEXTAREA'
       || (_activeEl.tagName === 'INPUT' && /^(text|search|email|url|tel|password)$/i.test(_activeEl.type || 'text'))));
@@ -41426,7 +42364,10 @@
         // so after the rebuild the FLIP compared the top instance against the
         // tree's old position → a huge phantom delta → 7 rows "moved" every
         // render. Track only the first instance per id.
-        if (id && !_flipBefore.has(id)) _flipBefore.set(id, row.getBoundingClientRect().top);
+        if (id && !_flipBefore.has(id)) {
+          _flipBeforeOrder.set(id, _flipBefore.size);
+          _flipBefore.set(id, row.getBoundingClientRect().top);
+        }
       }
     }
     // WKWebView blurs any focused input adjacent to an innerHTML swap.
@@ -41460,6 +42401,11 @@
     // (missing orch border/lanes chip, missing Other machines section).
     try { if (typeof orchApplyFamilyRows === 'function') orchApplyFamilyRows(); } catch (_) {}
     try { if (window.cccFederatedSidebar && window.cccFederatedSidebar.render) window.cccFederatedSidebar.render(); } catch (_) {}
+    // Same for the ultra-fresh overlays: they can add a Close button or drop
+    // is-ready-to-close, changing row height. Painting them a frame later
+    // made the FLIP below compare overlay-painted old tops with bare new
+    // tops, sliding rows that never moved.
+    try { for (const sid of _ultraFresh.entries.keys()) _ultraFreshPaint(sid); } catch (_) {}
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
     // Jobs tab: refill the fresh host from cached data (no flicker, no fetch).
@@ -41504,6 +42450,8 @@
       const _flipNewRows = $convList.querySelectorAll('[data-id]');
       const _flipMoves = [];
       const _flipSeen = new Set();
+      let _flipLastOrder = -1;
+      let _flipReordered = false;
       for (const row of _flipNewRows) {
         const id = row.getAttribute('data-id');
         if (!id) continue;
@@ -41514,6 +42462,9 @@
         _flipSeen.add(id);
         const oldTop = _flipBefore.get(id);
         if (oldTop === undefined) continue;
+        const oldOrder = _flipBeforeOrder.get(id);
+        if (oldOrder < _flipLastOrder) _flipReordered = true;
+        _flipLastOrder = oldOrder;
         const newTop = row.getBoundingClientRect().top;
         const delta = oldTop - newTop;
         if (Math.abs(delta) < 1) continue;
@@ -41531,7 +42482,11 @@
         const _deltaMode = new Map();
         for (const m of _flipMoves) { const k = Math.round(m.delta); _deltaMode.set(k, (_deltaMode.get(k) || 0) + 1); }
         let _modeN = 0; for (const v of _deltaMode.values()) if (v > _modeN) _modeN = v;
-        const _isBulkShift = _flipMoves.length >= 12 && _modeN >= _flipMoves.length * 0.5;
+        // Rows that kept their relative order only shifted (a row above grew,
+        // a Close button or section appeared). Sliding them reads as a
+        // reorder that never happened, however few rows moved.
+        const _isBulkShift = !_flipReordered
+          || (_flipMoves.length >= 12 && _modeN >= _flipMoves.length * 0.5);
         _logReshuffle(_flipMoves, _isBulkShift);
         if (!_isBulkShift) {
           for (const m of _flipMoves) {
@@ -41790,11 +42745,37 @@
           : 'Moved ' + rows.length + ' sessions to ' + laneLabel(lane));
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       };
+      // CCC-140: with idea tickets on, Ideas / Small bugs / Other are drop
+      // targets too. Their lane is the session's ticket queue, so a drop moves
+      // (or files, or for Other detaches) the ticket rather than the override.
+      const _ideaDropQueue = { ideas: 'IDEAS', smallbugs: 'SMALL-BUGS', archived: 'OTHER' };
       const _laneDropTarget = (ev) => {
         const opt = ev.target.closest('[data-conv-tab]');
         if (!opt) return null;
         const lane = opt.getAttribute('data-conv-tab');
-        return (lane === 'coding' || lane === 'workers') ? { opt, lane } : null;
+        if (lane === 'coding' || lane === 'workers') return { opt, lane };
+        if (_ideaTicketsOn && _ideaDropQueue[lane]) return { opt, lane, queue: _ideaDropQueue[lane] };
+        return null;
+      };
+      const moveIdeaTicketsFromDrop = async (ev, queue) => {
+        const rawIds = readConvIdsFromDrop(ev);
+        const ids = rawIds.length ? rawIds : (dragSourceId ? [dragSourceId] : []);
+        const sids = [];
+        ids.forEach(id => {
+          const row = rowForAllLaneId(id);
+          if (!row || row.source === 'backlog' || row.source === 'github_pr') return;
+          const sid = row.session_id || row.id;
+          const t = row.idea_ticket;
+          const cur = t && t.ref ? t.queue : 'OTHER';
+          // Already there (or a pending spawn with no ticket to move yet).
+          if (!sid || sids.includes(sid) || cur === queue || (t && t.pending && !t.ref)) return;
+          sids.push(sid);
+        });
+        if (!sids.length) {
+          showOpToast('Already in that tab', 'info');
+          return;
+        }
+        for (const sid of sids) await moveSessionIdeaTicket(sid, queue);
       };
       $laneTabBar.addEventListener('dragover', (ev) => {
         if (!dragSourceId) return;
@@ -41816,7 +42797,8 @@
         ev.preventDefault();
         ev.stopPropagation();
         clearTabDropTargets();
-        assignAllLaneFromDrop(ev, target.lane);
+        if (target.queue) moveIdeaTicketsFromDrop(ev, target.queue);
+        else assignAllLaneFromDrop(ev, target.lane);
       });
     }
     const $archivedExpandAll = $convList.querySelector('[data-role="archived-expand-all"]');
@@ -43429,7 +44411,7 @@
         }
       });
     });
-    const _visibleConversationNeighborId = (convId, sourceItem = null) => {
+    const _visibleConversationNeighborId = (convId, sourceItem = null, excludedIds = new Set()) => {
       const target = sourceItem && sourceItem.isConnected
         ? sourceItem
         : Array.from($convList.querySelectorAll('.conv-item[data-id]')).find(row =>
@@ -43440,6 +44422,7 @@
       const rows = Array.from($convList.querySelectorAll('.conv-item[data-id]')).filter(row =>
         row.offsetParent !== null
         && !!row.closest('.conv-trash-section') === targetIsTrash
+        && (row === target || !excludedIds.has(row.dataset.sessionId || row.dataset.id))
       );
       const index = rows.indexOf(target);
       if (index < 0) return null;
@@ -43456,23 +44439,32 @@
         // Set for one click by the phone's left "Background" swipe.
         const keepRunning = nextArchived && btn.dataset.keepRunning === '1';
         delete btn.dataset.keepRunning;
+        const priorRow = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
+          || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
+        const knownGroup = archiveGroupSessionIdsForRow(priorRow, sessionId);
+        const priorStates = new Map();
+        for (const rows of [conversationsData, archiveData, currentRepoBacklogData]) {
+          if (!Array.isArray(rows)) continue;
+          for (const row of rows) {
+            const id = row.session_id || row.id;
+            if (knownGroup.has(id)) priorStates.set(row, !!row.archived);
+          }
+        }
+        const priorOverrides = new Map(Array.from(knownGroup, id => [id, _optimisticOverrides.get(id)]));
         // Capture visual order before the selected row disappears. This works
         // across folder/group wrappers instead of assuming direct siblings.
         const nextSelectId = nextArchived && currentConversation === convId
-          ? _visibleConversationNeighborId(convId, item)
+          ? _visibleConversationNeighborId(convId, item, knownGroup)
           : null;
         btn.disabled = true;
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
         // Archiving hides the row at once (same as trash); the server call
         // below confirms it and the catch restores the row on failure.
-        const priorRow = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
-          || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
-        const priorArchivedState = priorRow ? !!priorRow.archived : false;
         const patchArchivedNow = (rows, val) => {
           if (!Array.isArray(rows)) return;
           for (const row of rows) {
-            if (row && (row.id === convId || (row.session_id || row.id) === sessionId)) row.archived = val;
+            if (row && (row.id === convId || knownGroup.has(row.session_id || row.id))) row.archived = val;
           }
         };
         if (nextArchived) {
@@ -43480,7 +44472,7 @@
           patchArchivedNow(conversationsData, true);
           patchArchivedNow(archiveData, true);
           patchArchivedNow(currentRepoBacklogData, true);
-          setOptimisticOverride(sessionId, { archived: true });
+          for (const member of knownGroup) setOptimisticOverride(member, { archived: true });
           if (nextSelectId) selectConversation(nextSelectId);
           requestAnimationFrame(() => {
             renderSidebar(filterConversations($convSearch.value), { force: true });
@@ -43497,11 +44489,12 @@
             const ghError = data.github && data.github.stderr;
             throw new Error(data.error || ghError || 'archive failed');
           }
+          const archivedGroup = new Set(data.session_ids || [sessionId]);
           const patchLifecycle = (rows) => {
             if (!Array.isArray(rows)) return;
             for (const row of rows) {
               if (!row) continue;
-              if (row.id === convId || (row.session_id || row.id) === sessionId) {
+              if (row.id === convId || archivedGroup.has(row.session_id || row.id)) {
                 row.archived = !!data.archived;
                 if (!data.archived) row.trashed = false;
               }
@@ -43510,7 +44503,7 @@
           patchLifecycle(conversationsData);
           patchLifecycle(archiveData);
           patchLifecycle(currentRepoBacklogData);
-          setOptimisticOverride(sessionId, {
+          for (const member of archivedGroup) setOptimisticOverride(member, {
             archived: !!data.archived,
             ...(!data.archived ? { trashed: false } : {}),
           });
@@ -43526,10 +44519,11 @@
           if (!data.archived) showOpToast('Restored to Active');
         } catch (err) {
           if (nextArchived) {
-            patchArchivedNow(conversationsData, priorArchivedState);
-            patchArchivedNow(archiveData, priorArchivedState);
-            patchArchivedNow(currentRepoBacklogData, priorArchivedState);
-            _optimisticOverrides.delete(sessionId);
+            for (const [row, archived] of priorStates) row.archived = archived;
+            for (const [id, override] of priorOverrides) {
+              if (override) _optimisticOverrides.set(id, override);
+              else _optimisticOverrides.delete(id);
+            }
             item.style.display = '';
             renderSidebar(filterConversations($convSearch.value), { force: true });
           }
@@ -45141,16 +46135,24 @@
     // The session's sidebar-row name (same chain as the phone toolbar title),
     // so the desktop pane header reads exactly like its list row (CCC-129).
     let rowName = '';
-    {
-      const rid = row && (row.id || row.session_id);
-      const full = (rid && Array.isArray(conversationsData)
-        && conversationsData.find(x => x && (x.id === rid || x.session_id === rid))) || row;
-      try {
-        if (full && (full.display_name || full.ai_title || full.first_message)) rowName = rowRawTitle(full).rawTitle;
-      } catch (_) {}
-    }
+    const rowId = row && (row.id || row.session_id);
+    const fullRow = (rowId && Array.isArray(conversationsData)
+      && conversationsData.find(x => x && (x.id === rowId || x.session_id === rowId))) || row;
+    try {
+      if (fullRow && (fullRow.display_name || fullRow.ai_title || fullRow.first_message)) rowName = rowRawTitle(fullRow).rawTitle;
+    } catch (_) {}
     rowName = String(rowName || title || '').trim();
     const headerTitle = opts.title !== undefined ? String(title || '').trim() : rowName;
+    // CCC-149: the single-pane desktop header borrows the phone toolbar's
+    // look (avatar + session name), so carry the sidebar row's avatar.
+    const avatarEl = pane.querySelector('[data-role="pane-avatar"]');
+    if (avatarEl) {
+      let avatarHtml = '';
+      if (fullRow && opts.category === undefined && headerTitle) {
+        try { avatarHtml = _waAvatarHtml(fullRow, headerTitle); } catch (_) {}
+      }
+      if (avatarEl.innerHTML !== avatarHtml) avatarEl.innerHTML = avatarHtml;
+    }
     // Engine rows render an icon chip (CCC-475) instead of the engine word;
     // explicit opts.category (popouts, issues) and non-engine sources keep
     // the plain-text chip.
@@ -45543,6 +46545,7 @@
         btn._suppressClick = true;
         setTimeout(() => { btn._suppressClick = false; }, 350);
         btn.classList.remove('is-dragging');
+        if (btn._convTargetView) updateConversationEndAffordance(btn._convTargetView);
       }
       drag = null;
     };
@@ -45610,15 +46613,6 @@
       nextBtn.setAttribute('aria-hidden', showNext ? 'false' : 'true');
       nextBtn.tabIndex = showNext ? 0 : -1;
     }
-    const speakBtn = view._convSpeakButton;
-    if (speakBtn) {
-      speakBtn._speakTarget = _visibleSpeakButton(view);
-      const showSpeak = !!speakBtn._speakTarget;
-      _syncSpeakFloatCache(speakBtn);
-      speakBtn.classList.toggle('visible', showSpeak);
-      speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
-      speakBtn.tabIndex = showSpeak ? 0 : -1;
-    }
     // "Sessions" shows only while the merged view actually holds more than
     // one session — i.e. at least one continuation seam marker is rendered.
     const segBtn = view._convSegmentButton;
@@ -45629,6 +46623,21 @@
       segBtn.tabIndex = showSeg ? 0 : -1;
     }
     positionConversationEndAffordance(view);
+    // Resolve against the final position after resize or navigation changes.
+    const speakBtn = view._convSpeakButton;
+    if (speakBtn) {
+      speakBtn._speakTarget = _visibleSpeakButton(view);
+      const readingTarget = !!_ttsDirectBtn && speakBtn._speakTarget === _ttsDirectBtn;
+      speakBtn.classList.toggle('speaking', readingTarget && _ttsActive && !_ttsPaused);
+      speakBtn.classList.toggle('paused', readingTarget && _ttsPaused);
+      scheduleTtsViewportPrefetch(view, speakBtn._speakTarget);
+      _ttsScheduleCacheDebug();
+      const showSpeak = !!speakBtn._speakTarget;
+      _syncSpeakFloatCache(speakBtn);
+      speakBtn.classList.toggle('visible', showSpeak);
+      speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
+      speakBtn.tabIndex = showSpeak ? 0 : -1;
+    }
   }
 
   // Surface a plain-language banner at the end of the conversation when a
@@ -46031,19 +47040,42 @@
     return true;
   }
 
-  // The per-turn speaker button of the assistant turn that occupies most of
-  // the pane right now (earliest wins ties), or null.
+  // Read the answer underneath the floating speaker, using spoken text
+  // geometry. A large status footer above it must not steal a shorter answer.
   function _visibleSpeakButton(view) {
     if (!view) return null;
     const vr = view.getBoundingClientRect();
-    let best = null, bestVis = 0;
+    const circle = view._convSpeakButton?.getBoundingClientRect();
+    const anchor = Math.max(vr.top, Math.min(vr.bottom,
+      circle && circle.height ? (circle.top + circle.bottom) / 2 : (vr.top + vr.bottom) / 2));
+    let best = null, bestDistance = Infinity, fallback = null, fallbackVis = 0;
     view.querySelectorAll('[data-read-assistant-message], [data-read-agent-answer]').forEach(btn => {
-      const ev = btn.closest('.event.assistant, .event.result, .kimi-answer-meta, .ask-turn-a') || btn;
-      const r = ev.getBoundingClientRect();
-      const vis = Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top);
-      if (vis > bestVis + 1) { best = btn; bestVis = vis; }
+      const result = btn.closest('.event.result');
+      const node = result ? agentAnswerNodeBeforeResult(result)
+        : btn.closest('.event.assistant, .kimi-answer-meta, .ask-turn-a');
+      const elements = assistantTextElements(node);
+      if (!elements.length) return;
+      const bounds = elements.map(el => el.getBoundingClientRect());
+      const top = Math.min(...bounds.map(r => r.top));
+      const bottom = Math.max(...bounds.map(r => r.bottom));
+      const visible = Math.min(bottom, vr.bottom) - Math.max(top, vr.top);
+      if (visible <= 0) return;
+      if (visible > fallbackVis) { fallback = btn; fallbackVis = visible; }
+      const data = buildTtsDataFromElements(elements);
+      for (const m of data.mapping) {
+        if (!m.node.nodeValue.trim()) continue;
+        const range = new Range();
+        range.setStart(m.node, m.nodeOffsetStart);
+        range.setEnd(m.node, m.nodeOffsetStart + m.end - m.start);
+        for (const r of range.getClientRects()) {
+          const a = Math.max(r.top, vr.top), b = Math.min(r.bottom, vr.bottom);
+          if (b <= a || !r.width) continue;
+          const distance = Math.max(a - anchor, anchor - b, 0);
+          if (distance < bestDistance) { best = btn; bestDistance = distance; }
+        }
+      }
     });
-    return best;
+    return best || fallback;
   }
 
   function attachConversationEndAffordance(view) {
@@ -46121,7 +47153,7 @@
       updateConversationEndAffordance(v);
     });
     view._convNextButton = nextBtn;
-    // Floating speaker: reads whichever assistant turn is most visible in the
+    // Floating speaker: reads the assistant turn underneath its position in the
     // pane, so the tiny per-turn speaker icons aren't the only way to start a
     // read. Clicking it again on the same turn pauses/resumes (same as the
     // per-turn button, which it delegates to).
@@ -46139,7 +47171,8 @@
     _makeSpeakBtnDraggable(speakBtn, host);
     speakBtn.addEventListener('click', () => {
       const v = speakBtn._convTargetView || view;
-      const target = _visibleSpeakButton(v);
+      const selected = speakBtn._speakTarget;
+      const target = selected?.isConnected && v.contains(selected) ? selected : _visibleSpeakButton(v);
       if (!target) { showOpToast('No assistant message on screen to read', 'error'); return; }
       target.click();
     });
@@ -46482,6 +47515,8 @@
     const paneTitle = clone.querySelector('[data-role="pane-title"]');
     if (paneCat) paneCat.textContent = '';
     if (paneTitle) paneTitle.textContent = '';
+    const paneAvatar = clone.querySelector('[data-role="pane-avatar"]');
+    if (paneAvatar) paneAvatar.innerHTML = '';
     const bgPalette = clone.querySelector('[data-role="conv-bg-palette"]');
     if (bgPalette) bgPalette.innerHTML = '';
     renderConversationBackgroundPalette(clone);
@@ -51303,7 +52338,7 @@
       + '<div class="uxq-td-pg-label">Properties</div>'
       + _propSel('Priority', 'priority',   [['','-'],['p0','p0 - urgent'],['p1','p1'],['p2','p2'],['p3','p3']], item.priority || '')
       + _propSel('Type', 'type',           [['','-'],['feature','feature'],['bug','bug']], item.type || '')
-      + _propSel('Readiness', 'readiness', [['','-'],['shovel-ready','shovel-ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping']], item.readiness || '')
+      + _propSel('Readiness', 'readiness', [['','-'],['ready','ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping'],['needs-rationale','needs-rationale (parked)']], item.readiness || '')
       + _propSel('Value', 'value',         [['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.value || '')
       + _propSel('Confidence', 'confidence',[['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.confidence || '')
       + _propSel('Runs on', 'placement',    [['','any machine (default)'],['any','any (cloud ok)'],['mac','Mac only'],['cloud','cloud only']], item.placement || '')
@@ -52483,7 +53518,7 @@
         return '';
       };
       const _UXQ_STAGE_TONE_WORD = { planning: 'planning', verifying: 'verifying', stuck: 'stuck', verified: 'closed - verified' };
-      const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
+      const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec' || it.readiness === 'needs-rationale') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
       // A close with unresolved work is not a clean green close. Put it with
       // other attention-bearing rows, ahead of tickets merely waiting to run.
@@ -52537,7 +53572,7 @@
       const historyStart = historyOrder ? _uxqHistoryPage * _UXQ_HISTORY_PAGE_SIZE : 0;
       const historyEnd = historyOrder ? historyStart + _UXQ_HISTORY_PAGE_SIZE : rows.length;
       const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;
-      const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale', 'shovel-ready': 'ready' };
+      const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale', 'ready': 'ready', 'shovel-ready': 'ready' };
       const _typeShort = { 'feature': 'FR', 'bug': 'BUG' };
       // A closed ticket can still carry resolution.unresolved (CCC-420): the
       // worker closed it but flagged something it couldn't finish. That read
@@ -55974,9 +57009,9 @@
     if (id.startsWith('pkood-') || id.startsWith('issue-')) return null;
     const existing = _convTailPrefetches.get(id);
     if (existing) return existing;
-    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), {
+    const pending = _fetchConvJsonTimed('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), {
       cache: 'no-store',
-    }).then(r => r.ok ? r.json() : null).catch(() => null);
+    }).catch(() => null);
     _convTailPrefetches.set(id, pending);
     while (_convTailPrefetches.size > CONV_TAIL_PREFETCH_MAX) {
       _convTailPrefetches.delete(_convTailPrefetches.keys().next().value);
@@ -56501,6 +57536,26 @@
     return (row && (row.first_message || row.prompt)) || '';
   }
 
+  function _convOpenPhases(data, t0, dataAt, renderAt, end, id) {
+    const out = {
+      engine: (data && data.engine) || sessionSourceByConv[id] || '',
+      wait_ms: Math.round(dataAt - t0),
+      render_ms: Math.round(end - renderAt),
+      longtask_ms: _perfLongTaskMs(t0, end),
+      list_overlap_ms: _perfListOverlapMs(t0, end),
+    };
+    const p = data && data.__perf;
+    if (p) {
+      out.fetch_at = Math.round(p.t0 - t0);
+      out.ttfb_ms = Math.round(p.tResp - p.t0);
+      out.body_ms = Math.round(p.tBody - p.tResp);
+      out.parse_ms = Math.round(p.tParse - p.tBody);
+      out.bytes = p.bytes;
+      if (p.server_ms !== null) out.server_ms = p.server_ms;
+      if (p.server_cpu_ms !== null) out.server_cpu_ms = p.server_cpu_ms;
+    }
+    return out;
+  }
   async function fetchConversationEvents(paneId) {
     if (paneId) {
       const idx = paneIndexByPaneId(paneId);
@@ -56596,9 +57651,14 @@
         }
       }
       if (!data) {
-        const res = await fetch(_url);
-        data = await res.json();
+        if (_freshOpen && !_loadingEarlier) {
+          data = await _fetchConvJsonTimed(_url, undefined, true);
+        } else {
+          const res = await fetch(_url);
+          data = await res.json();
+        }
       }
+      const _perfDataAt = performance.now();
       // Tail is in hand: release the parked select-time fetches once this
       // render has painted (see _afterConvTail).
       if (typeof _flushAfterConvTailAfterPaint === 'function') _flushAfterConvTailAfterPaint();
@@ -56683,6 +57743,7 @@
           // ancestor file's line count must never inflate it.
           if (_prepended !== false && _fetchSid === id) convLastLine = Math.max(convLastLine, data.last_line || 0);
         } else {
+          const _perfRenderAt = performance.now();
           const _renderOk = renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
           if (_renderOk) convLastLine = data.last_line;
           // Perf metric 2 end (conv_open): only the initialLoad render for the
@@ -56703,6 +57764,9 @@
                   truncated: !!data.truncated_before,
                   wall_ms: Math.round(_perfWall),
                   hidden_ms: Math.round(_perfWall - _perfActive),
+                  // Per-phase split (CCC-143). Offsets are ms from the click;
+                  // fetch_at < 0 means a hover/restore prefetch started first.
+                  ..._convOpenPhases(data, _perfConvOpen.t0, _perfDataAt, _perfRenderAt, _perfEnd, id),
                 },
               });
               if (typeof window.__cccPerfRow === 'function') {
@@ -64431,12 +65495,8 @@
         // is playing) must not cancel the in-progress utterance — that's the
         // whole point of decoupling playback from focus.
         resetTtsOnNewTurn(currentConversation);
-        scheduleTtsPrefetch();
         break;
       }
-    } else if (opts && opts.initialLoad) {
-      // Switching to a conversation: make its last message ready to play too.
-      scheduleTtsPrefetch();
     }
     function whatsappBridgeSenderHtml(ev) {
       if (!ev || ev.subtype !== 'hermes_whatsapp_bridge') return '';
@@ -66236,6 +67296,10 @@
     } else {
       updateConversationEndAffordance($view);
     }
+    // Prepare after painting, including provisional live messages. Playback
+    // rearm above deliberately ignores provisional rows, but caching must not.
+    if (paneId === activePaneId() && (opts.initialLoad || events.some(ev =>
+        ev && (ev.type === 'assistant' || ev.type === 'result')))) scheduleTtsPrefetch();
     ffcRefreshForCurrent();
     updateSessionOutcomeBanner($view);
     _firePhoneModeReadIfDone(events, paneId);
@@ -73175,6 +74239,12 @@
   // metadata, never transcripts or stale live/approval/tool status. This is a
   // bounded preview, not a complete archive or a body usable with an ETag.
   const ARCHIVE_SIDEBAR_CACHE_KEY = 'ccc-sidebar-snapshot-v1';
+  // One snapshot per window (CCC-142): a single shared key meant tabs on
+  // different windows (8h vs 7d) overwrote each other, so the other tab's
+  // reload never painted from cache and waited on /list (archive_load p95).
+  function _archiveSidebarCacheKey(windowName) {
+    return ARCHIVE_SIDEBAR_CACHE_KEY + ':' + windowName;
+  }
   const ARCHIVE_SIDEBAR_CACHE_MAX_ROWS = 500;
   const ARCHIVE_SIDEBAR_CACHE_MAX_CHARS = 256 * 1024;
   const ARCHIVE_SIDEBAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -73207,7 +74277,7 @@
   }
   function _readArchiveSidebarCache(windowName) {
     try {
-      const raw = localStorage.getItem(ARCHIVE_SIDEBAR_CACHE_KEY);
+      const raw = localStorage.getItem(_archiveSidebarCacheKey(windowName));
       if (!raw || raw.length > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) return null;
       const cached = JSON.parse(raw);
       const age = Date.now() - cached.savedAt;
@@ -73232,7 +74302,8 @@
         chars += entry.length + 1;
       }
       const envelope = JSON.stringify({ version: 1, window: windowName, savedAt: Date.now() });
-      localStorage.setItem(ARCHIVE_SIDEBAR_CACHE_KEY,
+      localStorage.removeItem(ARCHIVE_SIDEBAR_CACHE_KEY);  // pre-per-window snapshot
+      localStorage.setItem(_archiveSidebarCacheKey(windowName),
         envelope.slice(0, -1) + ',"rows":[' + entries.join(',') + ']}');
     } catch (_) { /* Storage disabled/full: the network list still works. */ }
   }
@@ -73299,7 +74370,12 @@
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
-        const ms = Math.round(performance.now() - _perfT0);
+        // Subtract hidden/suspended time like conv_open/archive_load: a
+        // background tab's throttled fetch otherwise reads as a multi-minute
+        // "slow list" (CCC-142). Wall time still ships as detail.wall_ms.
+        const _perfEnd = performance.now();
+        const wallMs = Math.round(_perfEnd - _perfT0);
+        const ms = Math.round(_perfActiveElapsed(_perfT0, _perfEnd));
         const size = bytes ? (bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB'
           : Math.round(bytes / 1024) + 'KB')
           : (status === 304 ? '304'
@@ -73314,7 +74390,10 @@
         // (maintainer-box) self-filing as conv_open/archive_load.
         if (typeof _perfEvent === 'function') {
           _perfEvent('list_read', ms, {
-            detail: { bytes: bytes || 0, status: status, extra: extra || '' },
+            detail: {
+              bytes: bytes || 0, status: status, extra: extra || '',
+              wall_ms: wallMs, hidden_ms: wallMs - ms,
+            },
           });
         }
       } catch (_) {}
@@ -84096,7 +85175,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'spawn-cwd-chip' + (active ? ' active' : '');
-      btn.textContent = opt.label;
+      btn.innerHTML = repoAvatarHtml(opt.value, opt.label) + escapeHtml(opt.label);
       btn.title = 'Use ' + opt.value + ' as the folder';
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
       if (active) btn.setAttribute('aria-current', 'true');
@@ -84187,7 +85266,7 @@
       item.dataset.value = opt.value;
       const label = document.createElement('span');
       label.className = 'spawn-cwd-option-label';
-      label.textContent = opt.label || opt.value;
+      label.innerHTML = repoAvatarHtml(opt.value, opt.label) + escapeHtml(opt.label || opt.value);
       const path = document.createElement('span');
       path.className = 'spawn-cwd-option-path';
       path.textContent = opt.value;
@@ -84603,6 +85682,47 @@
   }
 
   // ── New-session repo auto-guess ──
+  async function refreshJevRepoPromo() {
+    const promo = document.getElementById('jevRepoPromo');
+    if (!promo) return;
+    try {
+      const res = await fetch('/api/repo/guess/status', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Status unavailable');
+      const data = await res.json();
+      const configured = data.jev_configured === true;
+      document.getElementById('jevRepoPromoTitle').textContent = configured
+        ? 'Jev matching enabled' : 'Let Jev find the right repo';
+      document.getElementById('jevRepoPromoText').textContent = configured
+        ? 'CCC uses Jev to match your prompt to a repo, with local matching as a fallback.'
+        : 'Add your Jev token for matching based on what you want to work on.';
+      document.getElementById('jevRepoSetupBtn').textContent = configured ? 'Manage token' : 'Add Jev token';
+      promo.hidden = false;
+    } catch (_) {
+      promo.hidden = true;
+    }
+  }
+  const jevRepoSetupBtn = document.getElementById('jevRepoSetupBtn');
+  if (jevRepoSetupBtn) jevRepoSetupBtn.addEventListener('click', async () => {
+    jevRepoSetupBtn.disabled = true;
+    try {
+      const res = await fetch('/api/vault', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Could not load the Vault');
+      const data = await res.json();
+      const entry = (data.entries || []).find(e => e.env_var === 'JEV_API_KEY' ||
+        ['jev-api-key', 'jev-api-key.password', 'jev-api-key.token'].includes(e.name));
+      openSettingsModal();
+      setActiveSettingsRailSection('vault');
+      _vaultOpenForm(entry ? 'edit' : 'add', entry || {
+        name: 'jev-api-key', kind: 'api_key', service: 'TypeSafe Jev', env_var: 'JEV_API_KEY',
+      }, entry ? { name: entry.name } : {});
+      _vaultSetStatus('Save your Jev token here to enable repo matching. Existing environment or provider-profile keys take precedence.');
+      setTimeout(() => { const input = _vaultEl('value'); if (input) input.focus(); }, 0);
+    } catch (err) {
+      showConvToast(err.message || 'Could not open Jev setup');
+    } finally {
+      jevRepoSetupBtn.disabled = false;
+    }
+  });
   // POST /api/repo/guess reads the prompt and names the folder it belongs in.
   // Confident guesses (>= 0.95) fill the picker unless the user already chose;
   // middling ones (>= 0.5) become a click-to-apply chip. An auto-pick is NOT
@@ -85195,6 +86315,25 @@
     }
   }
 
+  // Blank, "auto" and "adaptive" let the engine choose; a chip for one
+  // doesn't say what you're picking, so the strip never offers them.
+  function _isUnnamedSpawnModel(model) {
+    return /^(|auto|adaptive|default)$/i.test(String(model == null ? '' : model).trim());
+  }
+
+  // The concrete model an unnamed pick stands for: the saved default when it
+  // names one, else the engine's first available catalog model; '' if none.
+  function _namedSpawnModelForEngine(engine) {
+    // Hermes runs its own configured model and ignores the one we pass, so
+    // any name on its chip would be a guess.
+    if (engine === 'hermes') return '';
+    const saved = _defaultModelsByEngine[engine] || '';
+    if (!_isUnnamedSpawnModel(saved) && _modelAllowedForEngine(engine, saved)) return saved;
+    const opt = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => o && !_isUnnamedSpawnModel(o.id)
+      && o.available !== false && !o.disabled && _modelAllowedForEngine(engine, o.id));
+    return opt ? opt.id : '';
+  }
+
   function getTopSpawnPicks(picks = _cachedServerModelPicks) {
     // History tracks effort too; the strip offers models, with effort chosen
     // separately in the composer. Deduplicate before applying the display cap.
@@ -85202,10 +86341,11 @@
     // Engines the New session UI can't launch (droid, aider, pi) would be
     // coerced to claude on click and land on the wrong model; don't offer them.
     const list = (Array.isArray(picks) ? picks : [])
-      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine
-        // A model another engine owns (claude + minimax-m3) can't be selected
-        // in that engine's list, so the select would fall back to the priciest.
-        && (!p.model || _modelAllowedForEngine(p.engine, p.model)));
+      .filter(p => p && SPAWN_DEFAULT_ENGINES.includes(normalizeSpawnDefaultEngine(p.engine)) && normalizeSpawnDefaultEngine(p.engine) === p.engine)
+      .map(p => (_isUnnamedSpawnModel(p.model) ? { ...p, model: _namedSpawnModelForEngine(p.engine) } : p))
+      // A model another engine owns (claude + minimax-m3) can't be selected
+      // in that engine's list, so the select would fall back to the priciest.
+      .filter(p => p.model && _modelAllowedForEngine(p.engine, p.model));
     // "sonnet-5" is noise once "sonnet-5-5" exists for the same engine, in
     // history or in its catalog.
     const ver = (m) => {
@@ -85235,8 +86375,8 @@
     Array.from((typeof $convInputEngineSelect !== 'undefined' && $convInputEngineSelect && $convInputEngineSelect.options) || [])
       .filter(o => !o.hidden && !o.disabled && SPAWN_DEFAULT_ENGINES.includes(o.value) && !have.has(o.value))
       .forEach(o => {
-        const model = _defaultModelsByEngine[o.value] || '';
-        if (model && !_modelAllowedForEngine(o.value, model)) return;
+        const model = _namedSpawnModelForEngine(o.value);
+        if (!model) return;
         have.add(o.value);
         kept.push({ engine: o.value, model, effort: '', count: 0, last_used: 0 });
       });
@@ -85257,7 +86397,9 @@
     const found = options.find(o => o.id === modelId)
       || options.find(o => _normalizeModelId(o.id) === _normalizeModelId(modelId));
     if (found && found.label) {
-      return found.label;
+      // "Auto (default)", "step-3.7-flash (free, default)": the chip names
+      // the model; whether it is the saved default isn't part of its name.
+      return found.label.replace(/\s*\(default\)/i, '').replace(/,\s*default\)/i, ')').trim() || found.id;
     }
     let clean = modelId;
     if (clean.includes('/')) {
@@ -85500,6 +86642,7 @@
     if (typeof closeStatusRailFileViewer === 'function') closeStatusRailFileViewer();
     currentConversation = '__new__';
     resetRepoGuess(true);
+    refreshJevRepoPromo();
     if (getSpawnEngine() === 'claude') abortBackgroundApiReadsForSpawn();
     refreshConversationBackgroundForPane(paneId);
     syncActivePaneChrome('__new__');
@@ -87468,6 +88611,7 @@
     });
   }
   async function refreshByokSettings() {
+    refreshJevRepoPromo();
     const backendDesc = document.getElementById('byokBackendDesc');
     const providerSelect = document.getElementById('byokProviderSelect');
     if (!backendDesc && !providerSelect) return;
@@ -87720,6 +88864,7 @@
     });
   }
   async function refreshVaultSettings() {
+    refreshJevRepoPromo();
     const backendDesc = document.getElementById('vaultBackendDesc');
     if (!backendDesc) return;
     try {
@@ -88131,6 +89276,82 @@
   window.addEventListener('ccc:flags', renderExperimentalFlags);
   renderExperimentalFlags();
 
+  async function refreshRepoAvatarSettings() {
+    const select = document.getElementById('repoAvatarSelect');
+    if (!select) return;
+    const previous = select.value;
+    try {
+      const state = await loadRepoList({ foreground: true });
+      const repos = new Map();
+      [...state.repos, ...state.suggested].forEach(repo => { if (repo.path) repos.set(repo.path, repo); });
+      select.replaceChildren();
+      for (const repo of repos.values()) {
+        const option = document.createElement('option');
+        option.value = repo.path;
+        option.textContent = repo.label || repo.path;
+        option.title = repo.path;
+        select.appendChild(option);
+      }
+      if (repos.has(previous)) select.value = previous;
+      await previewRepoAvatar();
+    } catch (_) {
+      document.getElementById('repoAvatarStatus').textContent = 'Could not load repositories. Reopen settings to retry.';
+    }
+  }
+  async function previewRepoAvatar() {
+    const repo = document.getElementById('repoAvatarSelect').value;
+    const preview = document.getElementById('repoAvatarPreview');
+    const status = document.getElementById('repoAvatarStatus');
+    preview.innerHTML = repoAvatarHtml(repo, '', 'repo-avatar-preview');
+    status.textContent = repo ? 'Looking for a logo…' : 'Add a repository to choose its avatar.';
+    if (!repo) return;
+    try {
+      const response = await fetch('/api/repo/avatar/info?repo_path=' + encodeURIComponent(repo));
+      const info = await response.json();
+      if (repo !== document.getElementById('repoAvatarSelect').value) return;
+      if (!response.ok) throw new Error(info.error || 'Could not load avatar');
+      status.textContent = info.mode === 'custom' ? 'Custom avatar' : (info.mode === 'initials' ? 'Initials · no local logo found' : 'Automatic · ' + info.source);
+    } catch (error) { status.textContent = error.message; }
+  }
+  async function saveRepoAvatar(image) {
+    const repo = document.getElementById('repoAvatarSelect').value;
+    if (!repo) return;
+    const controls = [...document.querySelectorAll('#repoAvatarControls button, #repoAvatarControls input, #repoAvatarSelect')];
+    controls.forEach(control => { control.disabled = true; });
+    try {
+      const response = await fetch('/api/repo/avatar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_path: repo, image }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Could not save avatar');
+      repoAvatarHtml.versions = repoAvatarHtml.versions || {};
+      repoAvatarHtml.versions[repo] = Date.now();
+      await previewRepoAvatar();
+      document.querySelectorAll('[data-repo-avatar]').forEach(avatar => {
+        if (avatar.dataset.repoAvatar !== repo) return;
+        const img = avatar.querySelector('img');
+        img.hidden = false;
+        img.src = '/api/repo/avatar?repo_path=' + encodeURIComponent(repo) + '&v=' + Date.now();
+      });
+      showOpToast(image === null ? 'Automatic repo avatar restored.' : 'Repo avatar saved.', 'success');
+    } catch (error) { showOpToast(error.message, 'error'); }
+    finally { controls.forEach(control => { control.disabled = false; }); }
+  }
+  document.getElementById('repoAvatarSelect')?.addEventListener('change', previewRepoAvatar);
+  document.getElementById('repoAvatarReset')?.addEventListener('click', () => saveRepoAvatar(null));
+  document.getElementById('repoAvatarUpload')?.addEventListener('click', () => document.getElementById('repoAvatarFile').click());
+  document.getElementById('repoAvatarFile')?.addEventListener('change', async event => {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { showOpToast('Choose an image smaller than 2 MB', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = () => saveRepoAvatar(reader.result);
+    reader.onerror = () => showOpToast('Could not read image', 'error');
+    reader.readAsDataURL(file);
+  });
+
   function openSettingsModal() {
     if (!$settingsModal) return;
     _settingsModalPrevFocus = document.activeElement;
@@ -88141,6 +89362,7 @@
     renderExperimentalFlags();
     buildSettingsSearchIndex();
     refreshAppearanceChecks();
+    refreshRepoAvatarSettings();
     refreshMonthlyClaudePlanInput();
     refreshMonthlyCodexPlanInput();
     refreshSpawnEngineValue();

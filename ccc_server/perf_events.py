@@ -87,6 +87,10 @@ CONV_OPEN_MS = _env_int("CCC_PERF_CONV_OPEN_MS", 5000)
 # live_build = server-side live-activity rebuild (build_live_sessions_activity).
 LIST_READ_MS = _env_int("CCC_PERF_LIST_READ_MS", 3000)
 LIVE_BUILD_MS = _env_int("CCC_PERF_LIVE_BUILD_MS", 3000)
+# tts_start = speaker click -> first audible audio (active time, one per read);
+# tts_gap = longest silence between consecutive clips within one read.
+TTS_START_MS = _env_int("CCC_PERF_TTS_START_MS", 300)
+TTS_GAP_MS = _env_int("CCC_PERF_TTS_GAP_MS", 250)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -178,7 +182,11 @@ def _in_warmup(now=None):
     return (t - _PROCESS_STARTED_AT) < WARMUP_S
 
 
-_VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build")
+_VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
+                "tts_start", "tts_gap")
+# Recorded and summarized with a breach verdict, but never self-filed: the
+# speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates.
+_NO_SELF_FILE_KINDS = ("tts_start", "tts_gap")
 
 
 def _perf_tickets_enabled():
@@ -243,6 +251,10 @@ def _threshold_for(kind, warm):
         return LIST_READ_MS
     if kind == "live_build":
         return LIVE_BUILD_MS
+    if kind == "tts_start":
+        return TTS_START_MS
+    if kind == "tts_gap":
+        return TTS_GAP_MS
     return CONV_OPEN_MS
 
 
@@ -287,10 +299,17 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
     breach = ms_f >= threshold_ms
     load1, ncpu = _machine_load()
 
+    try:
+        build = str(getattr(_core, "_SERVER_CODE_REV", "") or "")
+    except Exception:
+        build = ""
     row = {
         "ts": _iso_now(),
         "kind": kind,
         "ms": ms_int,
+        # Server git HEAD at process start: lets an acceptance gate count only
+        # samples measured on a build that contains the fix (scripts/perf_gate.py).
+        "build": build,
         "boot_id": str(boot_id or ""),
         "conv_id": str(conv_id or ""),
         "warm": warm,
@@ -328,6 +347,45 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         "threshold_ms": threshold_ms,
         "breach": breach,
     }
+
+
+# Server-only diagnostic kinds (CCC-142): per-phase timings of the list
+# request and of each archive rebuild. They share the JSONL sink so
+# scripts/perf_gate.py --kind can read them, but stay out of _VALID_KINDS:
+# no breach verdict, no summary row, no self-filed ticket, no [PERF] line
+# (the list is polled every few seconds per tab).
+_DIAG_KINDS = ("list_server", "archive_rebuild")
+
+
+def record_diag(kind, ms, detail=None):
+    """Append one diagnostic sample. Never raises."""
+    try:
+        if kind not in _DIAG_KINDS:
+            return
+        ms_f = float(ms)
+        if not math.isfinite(ms_f) or ms_f < 0:
+            return
+        try:
+            build = str(getattr(_core, "_SERVER_CODE_REV", "") or "")
+        except Exception:
+            build = ""
+        load1, ncpu = _machine_load()
+        row = {
+            "ts": _iso_now(),
+            "kind": kind,
+            "ms": int(round(ms_f)),
+            "build": build,
+            "warmup": _in_warmup(),
+            "load1": load1,
+            "ncpu": ncpu,
+            "detail": detail if isinstance(detail, dict) else None,
+        }
+        path = _events_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
 
 
 def _iso_now():
@@ -450,6 +508,8 @@ def summarize(hours=24, now=None):
             "conv_open_ms": CONV_OPEN_MS,
             "list_read_ms": LIST_READ_MS,
             "live_build_ms": LIVE_BUILD_MS,
+            "tts_start_ms": TTS_START_MS,
+            "tts_gap_ms": TTS_GAP_MS,
         },
         "kinds": kinds,
         "ticket": _ticket_summary(_load_ticket_state()),
@@ -465,6 +525,8 @@ def _alert_rows(events):
     """Apply startup budgets to both new and previously recorded samples."""
     rows = []
     for event in events:
+        if event.get("kind") in _NO_SELF_FILE_KINDS:
+            continue
         if event.get("warmup"):
             if event.get("kind") != "archive_load":
                 continue

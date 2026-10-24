@@ -1,0 +1,1 @@
+- Make Jev repo matching discoverable beside the new-session folder picker, with direct Vault setup, a configured indicator, and support for tokens saved through the credential broker.

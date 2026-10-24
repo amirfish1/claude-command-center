@@ -8,6 +8,22 @@ Save provider API keys in **Settings > Engines** to use them for supported
 spawns instead of the CLI's existing login. Keys belong to named profiles,
 such as `work` or `personal`, so projects can use different providers.
 
+### Jev repo matching
+
+Start a new session and choose **Add Jev token** beside the folder picker.
+CCC opens a prefilled **Settings > Vault** entry; paste your token into the
+masked value field and save. The picker then shows **Jev matching enabled**.
+This means a token is configured; failed or expired tokens fall back to local
+matching. **Manage token** opens the saved Vault entry.
+
+CCC also accepts `JEV_API_KEY` in its environment or a Jev provider profile
+(those take precedence over the Vault). Vault entries named `jev-api-key`,
+`jev-api-key.password`, or `jev-api-key.token`, or with env var `JEV_API_KEY`,
+are recognized, including tokens saved using `ccc secret request jev-api-key`.
+The configuration-only `GET /api/repo/guess/status` returns `jev_configured`
+without exposing the token or calling Jev. See [the outbound data
+disclosure](../SECURITY.md#optional-outbound-call-new-session-repo-guess).
+
 ### Storage
 
 On macOS, CCC uses Keychain service `ccc-byok`. Elsewhere it uses a stdlib-only

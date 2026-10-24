@@ -31,7 +31,7 @@ function harness() {
       addEventListener() {},
     },
     localStorage: { getItem() { return null; } },
-    Response, AbortController, DOMException, URL, setTimeout, clearTimeout,
+    Response, AbortController, DOMException, URL, setTimeout, clearTimeout, performance,
     encodeURIComponent, Object, Promise, console,
   };
   vm.createContext(ctx);
@@ -85,4 +85,26 @@ test('reader-only popouts release the startup gate at boot', () => {
   const after = app.slice(at, app.indexOf('\n\n', at));
   assert.match(after, /if \(READER_ONLY_POPOUT\) _releaseStartupApiReads\(\);/);
   assert.ok(app.indexOf('function _releaseStartupApiReads') < at, 'gate is defined before the popout release');
+});
+
+test('release waits for an in-flight conversation tail (CCC-143)', async () => {
+  const ctx = harness();
+  let finishOpen;
+  const open = new Promise(r => { finishOpen = r; });
+  ctx.window.__cccStartupHoldForOpen(open);
+  ctx.fetchViaGate('/api/vercel-deploy');
+  ctx.release();
+  await new Promise(r => setTimeout(r, 20));
+  assert.ok(!urls(ctx).includes('GET /api/vercel-deploy'), 'deferred read stays parked while the open is in flight');
+  finishOpen({});
+  await new Promise(r => setTimeout(r, 20));
+  assert.ok(urls(ctx).includes('GET /api/vercel-deploy'), 'settled open releases the queue');
+});
+
+test('release without a pending open is immediate', async () => {
+  const ctx = harness();
+  ctx.fetchViaGate('/api/vercel-deploy');
+  ctx.release();
+  await new Promise(r => setTimeout(r, 1));
+  assert.ok(urls(ctx).includes('GET /api/vercel-deploy'));
 });

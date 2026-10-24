@@ -3733,6 +3733,13 @@ def _transcript_peer_receipt(session_id, msg_id, body, start_offset=0, timeout_s
 
 
 def _resume_queue_engine_busy(sid):
+    if _core._is_antigravity_session(sid):
+        # A persistent stream-json process reports its own turn state (the
+        # `result` event); an idle one is not busy however long it lives.
+        from ccc_server import antigravity_stream
+        stream_state = antigravity_stream.state(sid)
+        if stream_state is not None:
+            return bool(stream_state["busy"])
     if _core._is_devin_cli_session(sid):
         # An in-flight ACP turn on our shared `devin acp` conn is engine-busy
         # the same as a one-shot resume process — the pump must wait for it
@@ -3764,8 +3771,19 @@ def _resume_queue_engine_busy(sid):
             started = _core._spawn_entry_started_epoch(s)
             if started and (time.time() - started) > _core._antigravity_resume_stale_seconds():
                 continue
+            # Finished turn, lingering process: not busy (see
+            # _antigravity_turn_finished); free the conversation.
+            if (
+                _core._antigravity_turn_finished(sid, pid=s.get("pid"))
+                and _core._antigravity_reap_finished_process(sid, s.get("pid"))
+            ):
+                continue
         return True
-    if _core._antigravity_live_resume_pid(sid) is not None:
+    live_agy = _core._antigravity_live_resume_pid(sid)
+    if live_agy is not None and _core._antigravity_turn_finished(sid, pid=live_agy):
+        if _core._antigravity_reap_finished_process(sid, live_agy):
+            live_agy = None
+    if live_agy is not None:
         # Ground-truth fallback: `_spawned_sessions` lost track of a live
         # `agy` resume for this sid (registry reattach can drop a live PID
         # under load, CCC-1011) -- a real OS-level scan still finds it, so
@@ -3995,6 +4013,27 @@ def _pump_codex_resume_queue(session_id, *, _backstop=False):
     return result
 
 
+_devin_pump_last_wait = {}
+
+
+def _note_devin_pump_wait(session_id, reason, **fields):
+    """Log why a queued Devin message is not being delivered, once per change.
+
+    The pump ticks every 5s and used to wait silently, so a stuck queue left
+    no trace in activity.log. One line per (session, reason) change keeps the
+    log quiet while making the cause visible.
+    """
+    key = (reason, tuple(sorted(fields.items())))
+    if _devin_pump_last_wait.get(session_id) == key:
+        return
+    _devin_pump_last_wait[session_id] = key
+    detail = " ".join(f"{k}={v}" for k, v in fields.items())
+    _core._log_activity(
+        "inject", "Q_WAIT",
+        f"session={session_id} engine=devin reason={reason} {detail}".rstrip(),
+    )
+
+
 def _pump_devin_resume_queue(session_id):
     """Deliver at most one durable Devin CLI message, preserving FIFO order.
 
@@ -4011,6 +4050,7 @@ def _pump_devin_resume_queue(session_id):
         if not _core._pending_resume_retry_due(session_id):
             return {"ok": True, "waiting": "backoff"}
         if _core._resume_queue_engine_busy(session_id):
+            _note_devin_pump_wait(session_id, "engine-busy")
             return {"ok": True, "waiting": "busy"}
         raw_id = _core._devin_cli_raw_id(session_id)
         live_spawn = _core._find_live_spawn_entry_for_session(session_id)
@@ -4019,30 +4059,28 @@ def _pump_devin_resume_queue(session_id):
         # check every ACP-attached session would park its durable queue in
         # "external-owner" forever.
         acp_loaded = _core._devin_acp_session_loaded(raw_id)
+        own_conn_holds_lock = False
         if (
             _core._devin_cli_session_live(raw_id)
             and live_spawn is None
             and not acp_loaded
         ):
             # A worker connection may retain the writer lock after losing
-            # its loaded-session marker. It is ours, not an external client.
-            # Recycle only an idle connection through its owner; never kill
-            # another session's active turn or consume the queued input here.
+            # its loaded-session marker (conn re-created, worker restart).
+            # It is ours, not an external client: re-attach through that same
+            # conn below instead of waiting. Never race a `devin --resume -p`
+            # onto it -- that can only fail with session_locked.
             owner_pid = _core._devin_cli_lock_pid(raw_id)
-            if owner_pid and owner_pid == _core._acp_conn_pid("devin"):
-                recovery = _core._acp_close_idle_conn("devin")
+            if not (owner_pid and owner_pid == _core._acp_conn_pid("devin")):
+                _note_devin_pump_wait(session_id, "external-owner", lock_pid=owner_pid)
                 return {
                     "ok": True,
                     "queued": True,
-                    "waiting": "owner-released" if recovery.get("closed") else "busy",
+                    "waiting": "external-owner",
+                    "external_devin_owner": True,
+                    "via": "devin-external-owner-queued",
                 }
-            return {
-                "ok": True,
-                "queued": True,
-                "waiting": "external-owner",
-                "external_devin_owner": True,
-                "via": "devin-external-owner-queued",
-            }
+            own_conn_holds_lock = True
         with _core._pending_resume_lock:
             queue = _core._pending_resume_queue.get(session_id) or []
             text = queue[0] if queue else None
@@ -4078,9 +4116,22 @@ def _pump_devin_resume_queue(session_id):
                       "match": text}
             )
             drop_tx = _core._apply_pending_input_operations(session_id, [drop])
+            # The ACP prompt landed: settle the inject receipt too, or a
+            # delivered message keeps showing as "outstanding" forever and
+            # stuck-session triage chases a message that already arrived.
+            _inject_receipts.close_receipt(session_id, text=text)
             return {"ok": True, "started": True, "via": "acp-prompt",
                     "result": acp_result,
                     "queue_cleanup_ok": bool((drop_tx or {}).get("ok"))}
+
+        if own_conn_holds_lock:
+            # The re-attach above did not land. Recycle only an idle conn
+            # through its owner (never one that is mid-turn); the next tick
+            # then finds the lock free and the ACP drain loads the session.
+            recovery = _core._acp_close_idle_conn("devin")
+            waiting = "owner-released" if recovery.get("closed") else "busy"
+            _note_devin_pump_wait(session_id, waiting, lock_pid=_core._devin_cli_lock_pid(raw_id))
+            return {"ok": True, "queued": True, "waiting": waiting}
 
         result = _core.resume_session_devin(
             session_id, text, _delivery_slot=delivery_slot,
@@ -4171,7 +4222,14 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         silent_turn = _core._codex_recovery_is_silent_turn(recovery)
 
         suppressed = None
-        if state.get("thread_needs_approval") or _core._codex_app_server_pending_approval_item(state):
+        known_turns = {
+            str(recovery.get("compaction_turn_id") or ""),
+            str(recovery.get("recovery_turn_id") or ""),
+        }
+        latest_turn = str(state.get("active_turn_id") or state.get("last_turn_id") or "")
+        if not silent_turn and latest_turn and latest_turn not in known_turns:
+            suppressed = "later-turn"
+        elif state.get("thread_needs_approval") or _core._codex_app_server_pending_approval_item(state):
             suppressed = "approval"
         elif state.get("active_flags"):
             suppressed = "active-flag"
@@ -4214,6 +4272,18 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
             if active_item.get("type") == "contextCompaction":
                 return {"ok": True, "waiting": "compacting"}
             return {"ok": True, "waiting": "active-tool"}
+
+        # Successful turn/start RPCs consume the same bounded retry budget as
+        # failed ones. A turn that never emits completion must not loop forever.
+        if int(recovery.get("attempts") or 0) >= _core._CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS:
+            recovery["status"] = "exhausted"
+            recovery["reason"] = "Recovery attempts exhausted"
+            _core._codex_coordination_event_unlocked(
+                state, _core._codex_recovery_event_kind(recovery, "exhausted"),
+                detail=recovery["reason"], now=now,
+            )
+            _core._save_codex_app_server_state_unlocked()
+            return {"ok": True, "exhausted": True}
 
         active_turn = bool(
             state.get("active_turn_id")
@@ -4392,6 +4462,11 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         recovery = state.get("compaction_recovery")
         if not isinstance(recovery, dict):
             return {"ok": False, "started": False, "result": result}
+        # Notifications can prove execution resumed before turn/start returns.
+        # Never overwrite that terminal latch with the RPC's older snapshot.
+        if str(recovery.get("status") or "") in _core._CODEX_COMPACTION_RECOVERY_TERMINAL:
+            return {"ok": bool(result and result.get("ok")),
+                    "started": started, "result": result}
         if started:
             recovery["status"] = "recovering"
             recovery["reason"] = _core._codex_recovery_activity_text(recovery)

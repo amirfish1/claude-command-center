@@ -1846,6 +1846,43 @@ def test_devin_overlay_cold_miss_does_not_block_list(monkeypatch):
     assert not devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked()
 
 
+def test_devin_overlay_stale_rows_trigger_background_refresh(monkeypatch):
+    """CCC-137: an expired cache served to a stale-ok poll must also start a
+    background rebuild; otherwise Devin rows kept a stale ``modified`` forever
+    and sorted below a fake time gap."""
+    import threading
+    from ccc_server import devin
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_build(**kwargs):
+        calls.append(kwargs)
+        started.set()
+        release.wait(5)
+        return [{"session_id": "devincli-fresh"}]
+
+    def cached(key, ttl_only=True):
+        return None if ttl_only else [{"session_id": "devincli-stale"}]
+
+    monkeypatch.setattr(devin, "_devin_cli_cached_rows", cached)
+    monkeypatch.setattr(devin, "_find_devin_cli_conversations_locked", slow_build)
+    t0 = time.monotonic()
+    rows = devin.find_devin_cli_conversations(include_old=True, stale_ok=True)
+    assert [r["session_id"] for r in rows] == ["devincli-stale"]
+    assert time.monotonic() - t0 < 1.0
+    assert started.wait(5), "stale serve should start a background rebuild"
+    # A second poll while it runs serves stale rows without a second build.
+    rows = devin.find_devin_cli_conversations(include_old=True, stale_ok=True)
+    assert [r["session_id"] for r in rows] == ["devincli-stale"]
+    release.set()
+    deadline = time.monotonic() + 5
+    while devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked()
+    assert len(calls) == 1
+
+
 def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
     """Touching a transcript must bust the signature and force exactly one rebuild
     (the build cache must never serve a stale payload after a real change)."""
@@ -4851,6 +4888,33 @@ def test_archive_list_projection_loads_per_row_stores_once(monkeypatch):
     server._archive_list_project_rows(rows, window="all")
     assert len(loads) == 1
     assert parents == []
+
+
+def test_archive_list_acp_overlay_skips_sidecars_without_candidates(monkeypatch):
+    """CCC-142: every /api/conversations/list poll ran the ACP overlay, which
+    loaded (and re-stat'd) every spawn marker on disk before checking for a
+    single attached ACP session. Live stack dumps caught 3-4s list requests
+    sitting there. With no candidate, no sidecar may be read; with one
+    missing attached session, they are read exactly once."""
+    import server
+    loads = []
+    monkeypatch.setattr(server, "_load_spawn_markers", lambda: loads.append("m") or {})
+    monkeypatch.setattr(server, "_load_session_name_overrides", lambda: loads.append("n") or {})
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets",
+                        lambda: loads.append("l") or (set(), set()))
+    monkeypatch.setattr(server, "_load_pinned_conversations", lambda: loads.append("p") or [])
+    monkeypatch.setattr(server, "_ACP_HARNESSES", {"kimi": {"label": "Kimi"}})
+    monkeypatch.setattr(server, "_acp_harness_enabled", lambda h: True)
+    rows = [{"id": f"s{i}", "session_id": f"s{i}"} for i in range(2000)]
+    state = {"kimi": {"s5": {"attached": True, "cwd": "/tmp", "status": "active"}}}
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", state)
+    assert server._archive_overlay_acp_sessions(rows) == []
+    assert loads == []
+    state["kimi"]["new-acp"] = {"attached": True, "cwd": "/tmp", "status": "active"}
+    state["kimi"]["other-acp"] = {"attached": True, "cwd": "/tmp", "status": "idle"}
+    out = server._archive_overlay_acp_sessions(rows)
+    assert sorted(r["session_id"] for r in out) == ["new-acp", "other-acp"]
+    assert sorted(loads) == ["l", "m", "n", "p"]
 
 
 def test_restart_recovery_reads_only_window_tails_once_per_boot(monkeypatch, tmp_path):

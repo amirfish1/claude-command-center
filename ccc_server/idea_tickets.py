@@ -53,6 +53,8 @@ FLAG = "idea_tickets"
 STATE_FILE_NAME = "idea-tickets.json"
 QUEUES = {"idea": "IDEAS", "small_bug": "SMALL-BUGS"}
 QUEUE_TYPES = {"IDEAS": "feature", "SMALL-BUGS": "bug"}
+# Not a queue: moving a session here detaches it from its ticket.
+OTHER = "OTHER"
 
 JEV_API_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-latest"
@@ -364,6 +366,32 @@ def _title_from(text):
     return "Untitled session"
 
 
+def _opening_text(sid, jsonl=None):
+    text = _first_user_text(jsonl) if jsonl else ""
+    if text:
+        return text
+    # Antigravity's transcript is outside Claude's project JSONL tree and
+    # wraps user input in USER_REQUEST/metadata tags.
+    try:
+        transcript = _core._antigravity_transcript_path(sid)
+        if transcript:
+            with open(transcript, encoding="utf-8") as fh:
+                for i, line in enumerate(fh):
+                    if i >= 200:
+                        break
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    if ev.get("type") == "USER_INPUT":
+                        text = _core._antigravity_user_text(ev.get("content"))
+                        if text:
+                            return text
+    except (AttributeError, OSError):
+        pass
+    return ""
+
+
 # ── lifecycle ──────────────────────────────────────────────────────────────
 
 def note_ui_spawn(session_id, via):
@@ -372,9 +400,19 @@ def note_ui_spawn(session_id, via):
     sid = str(session_id or "").strip()
     if not sid or str(via or "") != "ui" or not _enabled():
         return
-    if sid in load_state()["pending"]:
+    state = load_state()
+    entry = state["sessions"].get(sid) or {}
+    if sid in state["pending"] or entry.get("ref") or entry.get("filing") or entry.get("skip") == "other":
         return
-    _mutate(lambda d: d["pending"].__setitem__(sid, {"at": int(time.time())}))
+    def _mark(d):
+        existing = d["sessions"].get(sid) or {}
+        if existing.get("ref") or existing.get("filing") or existing.get("skip") == "other":
+            return
+        # A fast first reply may have recorded an automatic skip before the
+        # launch route supplied its explicit UI origin. Preserve manual Other.
+        d["sessions"].pop(sid, None)
+        d["pending"].setdefault(sid, {"at": int(time.time())})
+    _mutate(_mark)
 
 
 SWEEP_MAX_PER_CALL = 5
@@ -553,7 +591,7 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
     if sid in state["sessions"]:
         return {"ok": True, "known": True}
 
-    text = (_first_user_text(jsonl) if jsonl else "") or str(text_hint or "")
+    text = _opening_text(sid, jsonl) or str(text_hint or "")
     if not _claim(sid):
         return {"ok": True, "known": True}
     label = (classify_fn or classify)(text)
@@ -602,7 +640,7 @@ def file_ticket(sid, queue):
     except Exception:
         jsonl = None
     _via, _parent, cwd = _spawn_meta(sid)
-    text = _first_user_text(jsonl) if jsonl else ""
+    text = _opening_text(sid, jsonl)
     if not _claim(sid, over_skip=True):
         ticket = ticket_for_session(sid)
         return ({"ok": True, "ref": ticket["ref"], "queue": ticket["queue"]} if ticket
@@ -705,12 +743,15 @@ def _archive_worker(sid, ticket, archived):
 
 
 def move_ticket(session_id, queue):
-    """Move a session's ticket to IDEAS or SMALL-BUGS. Synchronous: the row
-    menu waits for the new ref so the sidebar regroups at once."""
+    """Move a session's ticket to IDEAS or SMALL-BUGS, or to OTHER (detach it,
+    see ``detach_ticket``). Synchronous: the row menu waits for the new ref so
+    the sidebar regroups at once."""
     sid = str(session_id or "").strip()
     queue = str(queue or "").strip().upper()
+    if queue == OTHER:
+        return detach_ticket(sid)
     if queue not in QUEUE_TYPES:
-        return {"ok": False, "error": "queue must be IDEAS or SMALL-BUGS"}
+        return {"ok": False, "error": "queue must be IDEAS, SMALL-BUGS or OTHER"}
     ticket = ticket_for_session(sid)
     if not ticket:
         return file_ticket(sid, queue) if sid else {"ok": False, "error": "no session"}
@@ -733,3 +774,31 @@ def move_ticket(session_id, queue):
                 d["sessions"][s]["ref"] = new
     _mutate(_record)
     return {"ok": True, "ref": new, "queue": queue}
+
+
+def detach_ticket(session_id):
+    """Drag to the Other tab: the session is neither an idea nor a small bug.
+    Close its CCC-owned ticket and mark every session on it skipped, so the
+    sweep never re-files it and continuations stop inheriting it. Dragging it
+    back to Ideas / Small bugs files a fresh ticket (``file_ticket``)."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "no session"}
+    ticket = ticket_for_session(sid)
+    if ticket and not ticket["closed"]:
+        rc, _ = _wt(["close", ticket["ref"], "--force", "--no-code",
+                     "--summary", f"Session {sid} moved to Other in CCC."])
+        if rc != 0:
+            return {"ok": False, "error": "wt close failed"}
+    now = int(time.time())
+
+    def _record(d):
+        sids = set(ticket["sessions"] if ticket else []) | {sid}
+        if ticket:
+            d["tickets"].pop(ticket["ref"], None)
+        for s in sids:
+            d["sessions"][s] = {"skip": "other", "at": now}
+            d["pending"].pop(s, None)
+    _mutate(_record)
+    return {"ok": True, "ref": "", "queue": OTHER}
+

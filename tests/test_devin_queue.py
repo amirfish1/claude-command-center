@@ -1820,6 +1820,7 @@ class DevinCompactorSummaryTests(unittest.TestCase):
         self.addCleanup(env_patch.stop)
         for p in (
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_PARSE_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_USAGE_CACHE", {}),
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_LIST_CACHE", {}),
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_ID_CACHE", {}),
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
@@ -1887,6 +1888,48 @@ class DevinCompactorSummaryTests(unittest.TestCase):
         self.assertEqual(usage["model"], "swarm-1")
         # The compactor's tokens are still real spend — totals include them.
         self.assertEqual(usage["total_output_tokens"], 5000)
+
+    def _add_node(self, node_id, msg):
+        con = sqlite3.connect(self.db_path)
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)", ("sum-test", node_id, msg, node_id))
+        con.commit()
+        con.close()
+
+    def test_usage_folds_only_new_nodes_and_rereads_streaming_tail(self):
+        """CCC-141: a poll must not re-decode the whole session; totals are
+        cached up to the second-newest node, and the newest node (possibly
+        still streaming) is re-read every time."""
+        m = self.devin_mod
+        first = m._extract_devin_cli_usage("devincli-sum-test")
+        self.assertEqual(first["total_output_tokens"], 5000)
+        self.assertEqual(len(m._DEVIN_CLI_USAGE_CACHE), 1)
+        self._add_node(4, self._msg("assistant", "next", generation_model="swarm-2",
+                                    metrics={"input_tokens": 10, "output_tokens": 7}))
+        usage = m._extract_devin_cli_usage("devincli-sum-test")
+        self.assertEqual(usage["total_output_tokens"], 5007)
+        self.assertEqual(usage["latest_input_tokens"], 10)
+        self.assertEqual(usage["peak_input_tokens"], 60000)
+        self.assertEqual(usage["model"], "swarm-2")
+        # The newest node is rewritten in place as it streams.
+        con = sqlite3.connect(self.db_path)
+        con.execute("UPDATE message_nodes SET chat_message = ? WHERE node_id = 4",
+                    (self._msg("assistant", "next!", generation_model="swarm-2",
+                               metrics={"input_tokens": 10, "output_tokens": 50}),))
+        con.commit()
+        con.close()
+        self.assertEqual(m._extract_devin_cli_usage("devincli-sum-test")["total_output_tokens"], 5050)
+
+    def test_usage_rescans_when_history_is_rewritten(self):
+        m = self.devin_mod
+        self._add_node(4, self._msg("assistant", "tail", metrics={"output_tokens": 1}))
+        self.assertEqual(m._extract_devin_cli_usage("devincli-sum-test")["total_output_tokens"], 5001)
+        con = sqlite3.connect(self.db_path)
+        con.execute("DELETE FROM message_nodes WHERE node_id = 3")
+        con.commit()
+        con.close()
+        self.assertEqual(m._extract_devin_cli_usage("devincli-sum-test")["total_output_tokens"], 1)
 
 
 class DevinCliAcpTranscriptMergeTests(unittest.TestCase):
@@ -2001,6 +2044,65 @@ class DevinCliAcpTranscriptMergeTests(unittest.TestCase):
         events = parsed["events"]
         self.assertEqual([e["type"] for e in events], ["result"])
         self.assertEqual(events[0]["line"], -1)
+
+    def test_incremental_parse_excludes_historical_acp_results_and_orders_microseconds(self):
+        """Historical ACP result rows from earlier turns must not be re-emitted
+        on incremental polls (which would flood the tail of a ?tail=N pane with
+        orphaned DONE / STOPPED cards), and microsecond ACP timestamps must
+        sort after same-second whole-second DB assistant rows."""
+        base = 1_760_000_000
+        con = sqlite3.connect(self.db_path)
+        con.execute("DELETE FROM message_nodes WHERE session_id = 'merge-test'")
+        con.executemany(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, "
+            "created_at) VALUES (?, ?, ?, ?)",
+            [
+                ("merge-test", 1, self._msg("user", "turn 1", is_user_input=True),
+                 base * 1000),
+                ("merge-test", 2, self._msg("assistant", "reply 1"),
+                 (base + 5) * 1000),
+                ("merge-test", 3, self._msg("user", "turn 2", is_user_input=True),
+                 (base + 20) * 1000),
+                ("merge-test", 4, self._msg("assistant", "reply 2"),
+                 (base + 25) * 1000),
+            ],
+        )
+        con.commit()
+        con.close()
+
+        t1_res = datetime.fromtimestamp(
+            base + 5, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S.651630Z")
+        t2_res = datetime.fromtimestamp(
+            base + 25, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S.922121Z")
+        self._write_transcript("merge-test", [
+            {"type": "result", "subtype": "error",
+             "error": "Agent communication channel closed",
+             "line": 10, "ts": t1_res},
+            {"type": "result", "subtype": "end_turn",
+             "line": 20, "ts": t2_res},
+        ])
+
+        full = self.server._parse_devin_cli_conversation("devincli-merge-test")
+        self.assertEqual(
+            [(e["type"], e["line"]) for e in full["events"]],
+            [
+                ("user_text", 1),
+                ("assistant", 2),
+                ("result", -10),
+                ("user_text", 3),
+                ("assistant", 4),
+                ("result", -20),
+            ],
+        )
+
+        inc = self.server._parse_devin_cli_conversation(
+            "devincli-merge-test", after_line=4)
+        self.assertEqual(
+            [(e["type"], e["line"]) for e in inc["events"]],
+            [("result", -20)],
+        )
 
     def test_parse_cache_key_tracks_the_transcript(self):
         conv = "devincli-merge-test"

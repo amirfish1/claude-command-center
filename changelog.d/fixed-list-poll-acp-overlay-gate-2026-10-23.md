@@ -1,0 +1,1 @@
+- Sidebar list polls no longer read every spawn marker on disk when no Kimi/GLM session needs an overlay row, and the list-read perf number no longer counts time the tab spent hidden.

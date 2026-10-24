@@ -115,6 +115,20 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(row["ref"], "SMALL-BUGS-1")
         self.assertNotIn("pending", row)
 
+    def test_late_ui_origin_recovers_automatic_skip_only(self):
+        it.attach_or_file("late")
+        self.assertIn("skip", it.load_state()["sessions"]["late"])
+        it.note_ui_spawn("late", "ui")
+        self.assertNotIn("late", it.load_state()["sessions"])
+        self.assertIn("late", it.load_state()["pending"])
+        it.attach_or_file("late", classify_fn=lambda text: "small_bug")
+        it.note_ui_spawn("late", "ui")  # polling never reopens a filed entry
+        self.assertNotIn("late", it.load_state()["pending"])
+        it.detach_ticket("late")
+        it.note_ui_spawn("late", "ui")  # explicit Other remains intentional
+        self.assertEqual(it.load_state()["sessions"]["late"]["skip"], "other")
+        self.assertNotIn("late", it.load_state()["pending"])
+
     def test_continuation_and_child_inherit_and_log(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")
@@ -161,6 +175,23 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual((res["ref"], res["queue"]), ("SMALL-BUGS-99", "SMALL-BUGS"))
         self.assertEqual(it.ticket_for_session("s1")["ref"], "SMALL-BUGS-99")
         self.assertFalse(it.move_ticket("s1", "WATCH")["ok"])
+
+    def test_move_to_other_detaches_and_refiles_on_return(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        self.transcripts["s2"] = {"text": "cont", "continued_from": "s1"}
+        it.attach_or_file("s2")
+        res = it.move_ticket("s2", "other")
+        self.assertEqual((res["ok"], res["queue"]), (True, "OTHER"))
+        self.assertIn("close", [c[0] for c in self.calls])
+        rows = it.idea_ticket_rows_map()
+        self.assertNotIn("s1", rows)
+        self.assertNotIn("s2", rows)
+        # Skipped, so neither a sweep nor a turn end re-files it.
+        self.assertEqual(it.on_turn_end("s2")["reason"], "known")
+        res = it.move_ticket("s2", "IDEAS")
+        self.assertEqual((res["ok"], res["queue"]), (True, "IDEAS"))
+        self.assertEqual(it.idea_ticket_rows_map()["s2"]["ref"], res["ref"])
 
     def test_old_ui_session_is_not_backfilled(self):
         # spawned_via=ui in the registry, but spawned before the flag noted it.
