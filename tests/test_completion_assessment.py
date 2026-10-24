@@ -34,6 +34,47 @@ def test_boundary_scores_pass_without_averaging():
     assert state["completion"]["reasons"] == []
 
 
+def topic_scope(closure_met=False):
+    return {"goal": "Make session rows reliable for tracking an ongoing experiment.",
+        "done_when": "Actions and status remain accurate across real follow-ups.",
+        "closure_met": closure_met,
+        "evidence": "One chip fix shipped; the broader workflow is still being evaluated."}
+
+
+def test_shipped_milestone_cannot_close_an_open_topic_even_with_passing_scores():
+    assessment = completed()
+    assessment["scope"] = topic_scope()
+    assessment["ready_to_close"] = True
+    state = _parse_session_state(footer(assessment))
+    assert state["completion"]["valid"] is True
+    assert state["completion"]["scope"] == assessment["scope"]
+    assert state["completion"]["ready_to_close"] is False
+    assert state["completion"]["reasons"] == ["Topic goal is not yet met."]
+    assert state["next_step_user"] == "None."
+    assert "next_action" not in state
+
+
+def test_met_topic_criteria_still_require_all_existing_completion_gates():
+    assessment = completed()
+    assessment["scope"] = topic_scope(True)
+    assessment["scope"]["evidence"] = "Original workflow and follow-up cases passed."
+    assert _completion_assessment(assessment)["ready_to_close"] is True
+    assessment["verification"]["score"] = 0.5
+    assert _completion_assessment(assessment)["ready_to_close"] is False
+
+
+@pytest.mark.parametrize("scope", [None, {}, [], "ongoing",
+    {**topic_scope(), "closure_met": "false"}, {**topic_scope(), "closure_met": 0},
+    {**topic_scope(), "goal": " "}, {**topic_scope(), "done_when": None},
+    {**topic_scope(), "evidence": ""}])
+def test_explicit_malformed_scope_fails_closed(scope):
+    assessment = completed()
+    assessment["scope"] = scope
+    result = _completion_assessment(assessment)
+    assert result["valid"] is False
+    assert result["ready_to_close"] is False
+
+
 @pytest.mark.parametrize("axis,score", [
     ("resolution", 0.899), ("verification", 0.799), ("delivery", 0.999),
     ("decision_dependency", 0.001),

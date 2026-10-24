@@ -1189,6 +1189,23 @@ Remove an earlier action only when evidence shows it was performed, superseded,
 or no longer needed. Do not carry obsolete actions forward or treat an unrelated
 new task as a continuation when the user clearly changes scope.
 
+Separate the stable topic goal from the latest execution milestone. For an
+ongoing experiment, investigation, or long-term topic, shipping one fix does
+not establish that the overall solution is settled. Keep the goal and closure
+criteria across follow-ups; change them only when the user changes the scope
+or new evidence refines the criteria. Do not infer completion from inactivity,
+elapsed time, a successful subtask, or the absence of a user decision.
+Include scope in COMPLETION: {"goal":"the overall requested outcome",
+"done_when":"observable conditions for closing this topic","closure_met":false,
+"evidence":"what remains unresolved at the topic level"}. Set closure_met true
+only with evidence that those conditions are met. If the solution or closure
+criteria are still being explored, keep it false and resolution below 0.9.
+Report the shipped milestone in DID and delivery; assess resolution and
+verification against the whole goal. Put unresolved experiments and validation
+in remaining_actions, without inventing an immediate human action. Routine page
+reloads belong in delivery notes unless they actually block the requested work;
+they must not replace the topic's unresolved goal or become its closure criteria.
+
 End your final reply with a compact CCC session-state block:
 <session-state>
 DID: one sentence describing what you changed or learned
@@ -1234,9 +1251,10 @@ to finish the current request merely to declare it complete.
 CCC computes Close only if resolution>=0.9, verification>=0.8, delivery=1 (or
 explicitly not applicable), decision_dependency=0, no blocking caveat, and no
 remaining action. These are independent gates, never an average. This recommends
-manual archive only; never archive a session yourself.
+manual archive only; never archive a session yourself. An explicit scope with
+closure_met false also prevents Close, regardless of the numeric scores.
 Example structure (replace all scores/evidence with facts):
-{"version":1,"resolution":{"score":0,"evidence":"Request not yet handled"},"verification":{"score":0,"evidence":"No checks yet"},"delivery":{"score":0,"evidence":"Not delivered","applicable":true},"decision_dependency":{"score":0,"evidence":"No user decision needed"},"caveats":[],"remaining_actions":[]}
+{"version":1,"scope":{"goal":"The overall requested outcome","done_when":"Observable topic closure criteria","closure_met":false,"evidence":"The topic is still unresolved"},"resolution":{"score":0,"evidence":"Request not yet handled"},"verification":{"score":0,"evidence":"No checks yet"},"delivery":{"score":0,"evidence":"Not delivered","applicable":true},"decision_dependency":{"score":0,"evidence":"No user decision needed"},"caveats":[],"remaining_actions":[]}
 """.strip()
 
 
@@ -1271,6 +1289,15 @@ def _completion_assessment(value):
         return type(number) in (int, float) and 0 <= number <= 1
 
     result = {"version": 1, "valid": True}
+    if "scope" in value:
+        scope = value["scope"]
+        if (not isinstance(scope, dict) or type(scope.get("closure_met")) is not bool
+                or any(not isinstance(scope.get(key), str) or not scope[key].strip()
+                       for key in ("goal", "done_when", "evidence"))):
+            return invalid
+        result["scope"] = {key: scope[key].strip()[:4000]
+                           for key in ("goal", "done_when", "evidence")}
+        result["scope"]["closure_met"] = scope["closure_met"]
     for key in ("resolution", "verification", "delivery", "decision_dependency"):
         axis = value.get(key)
         if not isinstance(axis, dict) or not score(axis.get("score")):
@@ -1305,6 +1332,8 @@ def _completion_assessment(value):
         result["remaining_actions"].append({key: action[key] for key in
             ("text", "confidence", "downside", "reversible", "within_scope")})
     reasons = []
+    if "scope" in result and not result["scope"]["closure_met"]:
+        reasons.append("Topic goal is not yet met.")
     if result["resolution"]["score"] < 0.9:
         reasons.append("Resolution is below 0.9.")
     if result["verification"]["score"] < 0.8:

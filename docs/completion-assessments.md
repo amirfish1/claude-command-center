@@ -31,6 +31,33 @@ complete the current task. Malformed or missing assessment fields are
 unassessed, never ready. Active work, a newer user event, or an outstanding
 question/approval overrides an assessment. Archive is always manual.
 
+## Ongoing topics and milestones
+
+A shipped milestone is progress within a topic, not proof that the topic is
+finished. New assessments include a `scope` object with a stable `goal`,
+observable `done_when` criteria, a boolean `closure_met`, and `evidence` about
+the overall outcome. For example:
+
+```json
+{"goal":"Make session rows reliable for tracking ongoing work","done_when":"Actions and status remain accurate across real follow-ups","closure_met":false,"evidence":"One chip fix shipped; the wider workflow is still being evaluated"}
+```
+
+`closure_met:false` independently prevents Close even when all four numeric
+scores pass. An explicitly malformed scope makes the assessment unassessed.
+Older assessments without scope remain compatible. The transcript shows the
+topic goal, labels the latest milestone **Update**, and reports **Open** while
+the topic criteria remain unmet; the closure criteria and evidence are in the
+expanded assessment.
+
+The originating model carries the goal and criteria across related turns.
+It must keep resolution below 0.9 while the solution or criteria are still
+being explored. Delivery can reach 1 for a shipped milestone while the topic
+remains unresolved. Inactivity, elapsed time, and no pending human decision do
+not establish completion. Routine reload instructions do not replace the goal.
+This is still a self-report: the scope gate validates its structure and blocks
+an explicitly open topic; it cannot independently detect a falsely claimed or
+forgotten goal. No extra model call infers topic scope from historical replies.
+
 ## Wire format
 
 Existing DID, INSIGHT, and NEXT_STEP_USER fields retain their meanings and API

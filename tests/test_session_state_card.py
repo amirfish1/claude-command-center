@@ -130,6 +130,30 @@ class TestSessionStateCard(unittest.TestCase):
         self.assertIn('Decision required: Choose a release window.', html)
         self.assertNotIn('Needs you</span>None', html)
 
+    def test_open_topic_is_distinct_from_a_finished_milestone(self):
+        import json
+        assessment = {"version": 1, **{k: {"score": v, "evidence": "Milestone checked."}
+            for k, v in [("resolution", 1), ("verification", 0.9), ("delivery", 1), ("decision_dependency", 0)]},
+            "scope": {"goal": "Reliable <session> tracking.", "done_when": "Follow-ups stay accurate.",
+                "closure_met": False, "evidence": "The wider experiment is still open."},
+            "caveats": [], "remaining_actions": []}
+        body = "DID: Shipped one chip fix.\nNEXT_STEP_USER: None.\nCOMPLETION: "
+        html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+        self.assertIn('Update</span>Shipped one chip fix.', html)
+        self.assertIn('Topic</span>Reliable &lt;session&gt; tracking.', html)
+        self.assertIn('Open · topic goal is not yet met', html)
+        self.assertIn('Done when</span>Follow-ups stay accurate.', html)
+        self.assertIn('Needs you</span>None', html)
+        self.assertNotIn('Close criteria met', html)
+        self.assertNotIn('ssb-action', html)
+        assessment["scope"]["closure_met"] = True
+        html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+        self.assertIn('Close criteria met', html)
+        assessment["scope"]["closure_met"] = "false"
+        html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+        self.assertIn('Unassessed · invalid assessment', html)
+        self.assertNotIn('Close criteria met', html)
+
     def test_demo_uses_the_same_compact_summary_behavior(self):
         html = render_session_state(
             "DID: Updated the demo.\n"

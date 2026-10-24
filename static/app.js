@@ -16801,6 +16801,11 @@
     const rows = [];
     let assessment;
     try { assessment = JSON.parse(fields.COMPLETION || 'null'); } catch (_) {}
+    const scope = assessment && assessment.scope;
+    const validScope = scope === undefined || (!!scope && typeof scope === 'object'
+      && typeof scope.closure_met === 'boolean'
+      && ['goal', 'done_when', 'evidence'].every(k => typeof scope[k] === 'string' && scope[k].trim()));
+    const openTopic = validScope && scope && scope.closure_met === false;
     let nextStep = fields.NEXT_STEP_USER || '';
     if (/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)?[.!]?$/i.test(nextStep)
         && assessment && assessment.decision_dependency
@@ -16818,15 +16823,19 @@
         : needsYouActionsHtml(nextStep);
       rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + renderInline(nextStep) + (actions ? ' <span class="ssb-actions">' + actions + '</span>' : '') + '</div>');
     } else if (fields.DID) {
-      rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">Done</span>' + escapeHtml(fields.DID) + '</div>');
+      rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">' + (openTopic ? 'Update' : 'Done') + '</span>' + escapeHtml(fields.DID) + '</div>');
     }
     if (!hasUserAction) rows.push('<div class="ssb-row ssb-no-action"><span class="ssb-key">Needs you</span>' + (nextStep ? 'None' : 'Not specified') + '</div>');
+    if (validScope && scope) rows.push('<div class="ssb-row ssb-scope"><span class="ssb-key">Topic</span>' + escapeHtml(scope.goal) + '</div>');
     if (fields.INSIGHT) {
       rows.push('<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>');
     }
     if (fields.COMPLETION) {
       let evidence = '';
       if (assessment && assessment.version === 1) {
+        if (validScope && scope) evidence += '<div class="ssb-row"><span class="ssb-key">Done when</span>'
+          + escapeHtml(scope.done_when) + '</div><div class="ssb-row"><span class="ssb-key">Topic evidence</span>'
+          + escapeHtml(scope.evidence) + '</div>';
         for (const [key, label] of [['resolution', 'Resolution'], ['verification', 'Verification'],
             ['delivery', 'Delivery'], ['decision_dependency', 'Decision dependency']]) {
           const axis = assessment[key];
@@ -16850,7 +16859,7 @@
       // eligibility: only the live row may offer the manual Close action.
       const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
       const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
-      const valid = assessment && assessment.version === 1 && axes.every(k => {
+      const valid = assessment && assessment.version === 1 && validScope && axes.every(k => {
         const a = assessment[k];
         return a && numeric(a.score) && typeof a.evidence === 'string' && a.evidence.trim();
       }) && (assessment.delivery.applicable === undefined || typeof assessment.delivery.applicable === 'boolean')
@@ -16861,6 +16870,7 @@
           && typeof a.reversible === 'boolean' && typeof a.within_scope === 'boolean');
       const reasons = [];
       if (valid) {
+        if (openTopic) reasons.push('topic goal is not yet met');
         if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
         if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
         if (assessment.delivery.applicable !== false && assessment.delivery.score !== 1) reasons.push('delivery incomplete');
@@ -16869,7 +16879,7 @@
         if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
       }
       const verdict = !valid ? 'Unassessed · invalid assessment'
-        : reasons.length ? 'Next · ' + reasons.join('; ') : 'Close criteria met';
+        : reasons.length ? (openTopic ? 'Open · ' : 'Next · ') + reasons.join('; ') : 'Close criteria met';
       rows.push('<div class="ssb-row ssb-verdict"><span class="ssb-key">Assessment</span>'
         + escapeHtml(verdict) + '</div>');
       const scores = valid ? '(' + axes.map(k => String(assessment[k].score)).join(', ') + ')' : '(unassessed)';
