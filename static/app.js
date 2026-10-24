@@ -1731,19 +1731,68 @@
     })();
   }
   // ── Perf pane (above the footer) ──────────────────────────────────────
-  // Three-column diagnostic strip: every /api/conversations/list read (left),
-  // every conversation open click→render time (middle) and every speaker clip
-  // read — clip cache hit or freshly made (right). Pure observer —
-  // logging goes through window.__cccPerfRow so instrumented call sites stay
-  // decoupled from whether the pane exists yet.
+  // Three-column diagnostic strip: /api/conversations/list reads (left),
+  // conversation open click→render times (middle) and speaker clip reads
+  // (right). Only ANOMALIES get a row (CCC-160): normal samples just bump the
+  // column's "N ok" summary line. Every sample still reaches service.out.log
+  // via the [PERF] beacon below. Pure observer — logging goes through
+  // window.__cccPerfRow so instrumented call sites stay decoupled from
+  // whether the pane exists yet.
   const _perfPaneLog = { list: [], open: [], speaker: [] };
+  const _perfPaneOk = { list: 0, open: 0, speaker: 0 };
+  // Thresholds: the owner's open budget is ~1s; a speaker clip should already
+  // be prepared when it is read. Call sites can force a verdict via
+  // entry.anomaly; entry.ms / entry.status / entry.pending feed the defaults.
+  function _perfIsAnomaly(kind, entry) {
+    if (typeof entry.anomaly === 'boolean') return entry.anomaly;
+    if (entry.pending) return false;
+    const ms = Number(entry.ms);
+    if (kind === 'list') {
+      if (entry.status != null && entry.status !== 200 && entry.status !== 304) return true;
+      return ms > (entry.firstList ? 5000 : 1000);
+    }
+    if (kind === 'open') return ms > 1000;
+    return false;
+  }
+  function _perfPaneSummary(kind) {
+    const el = document.getElementById(
+      kind === 'list' ? 'cccPerfListOk' : kind === 'speaker' ? 'cccPerfSpeakerOk' : 'cccPerfOpenOk');
+    if (!el) return;
+    const n = _perfPaneOk[kind] || 0;
+    el.textContent = n ? '✓ ' + n + ' ok' : '';
+  }
   function _perfPaneRow(kind, entry, replay) {
     const buf = _perfPaneLog[kind];
     if (!buf) return;
+    const anomaly = _perfIsAnomaly(kind, entry);
     if (!replay) {
-      buf.push(entry);
-      if (buf.length > 20) buf.shift();
+      if (anomaly) {
+        buf.push(entry);
+        if (buf.length > 20) buf.shift();
+      } else if (!entry.pending) {
+        _perfPaneOk[kind] = (_perfPaneOk[kind] || 0) + 1;
+      }
     }
+    _perfPaneRender(kind, entry, replay, anomaly);
+    // Persist every sample, normal or not — the pane shows anomalies only,
+    // but list-read latency and open times also land in service.out.log via
+    // the client-log beacon. Posted directly (not via _clientLog) because
+    // that pipeline drops repeated patterns <5s apart, which would eat every
+    // second row here.
+    if (!replay) {
+      try {
+        fetch('/api/client-log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msg: '[PERF] ' + kind + ' ' + entry.text }),
+          keepalive: true,
+        }).catch(function () {});
+      } catch (_) {}
+    }
+  }
+  function _perfPaneRender(kind, entry, replay, anomaly) {
+    _perfPaneSummary(kind);
+    if (!anomaly) return;
     const col = document.getElementById(
       kind === 'list' ? 'cccPerfListCol' : kind === 'speaker' ? 'cccPerfSpeakerCol' : 'cccPerfOpenCol');
     if (!col) return;
@@ -1756,21 +1805,6 @@
     row.title = entry.title || '';
     row.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     col.insertBefore(row, col.firstChild);
-    // Persist alongside the on-screen row — the 20-row DOM buffer is
-    // ephemeral, so list-read latency and open times also land in
-    // service.out.log via the client-log beacon. Posted directly (not via
-    // _clientLog) because that pipeline drops repeated patterns <5s apart,
-    // which would eat every second row here.
-    if (!replay) {
-      try {
-        fetch('/api/client-log', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ msg: '[PERF] ' + kind + ' ' + entry.text }),
-          keepalive: true,
-        }).catch(function () {});
-      } catch (_) {}
-    }
   }
   window.__cccPerfRow = _perfPaneRow;
   // Click→open timing must not depend on selectConversation being the only
@@ -1798,6 +1832,7 @@
         at: Date.now(),
         text: '→ ' + String(id).slice(0, 8) + ' opening…',
         title: 'click — ' + id,
+        pending: true,
       });
     } catch (_) {}
   }, true);
@@ -1821,10 +1856,19 @@
     queueStats.style.cssText = 'padding:0 10px 2px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     const body = document.createElement('div');
     body.style.cssText = 'display:flex;max-height:110px;overflow:hidden;padding:0 10px 5px;font-weight:500;';
+    // Each column: a "✓ N ok" summary line over the anomaly rows (the row
+    // list is trimmed from the bottom, so the summary lives outside it).
     const mkCol = function (id) {
       const c = document.createElement('div');
-      c.id = id;
-      c.style.cssText = 'flex:1 1 33%;min-width:0;overflow-y:auto;';
+      c.style.cssText = 'flex:1 1 33%;min-width:0;display:flex;flex-direction:column;';
+      const ok = document.createElement('div');
+      ok.id = id.replace(/Col$/, 'Ok');
+      ok.style.cssText = 'opacity:.6;white-space:nowrap;';
+      const rows = document.createElement('div');
+      rows.id = id;
+      rows.style.cssText = 'min-height:0;overflow-y:auto;';
+      c.appendChild(ok);
+      c.appendChild(rows);
       return c;
     };
     const listCol = mkCol('cccPerfListCol');
@@ -1870,6 +1914,7 @@
     _perfPaneLog.list.forEach(function (e) { _perfPaneRow('list', e, true); });
     _perfPaneLog.open.forEach(function (e) { _perfPaneRow('open', e, true); });
     _perfPaneLog.speaker.forEach(function (e) { _perfPaneRow('speaker', e, true); });
+    ['list', 'open', 'speaker'].forEach(_perfPaneSummary);
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); _initPerfSection(); });
@@ -14602,6 +14647,9 @@
             at: Date.now(),
             text: (prio === 'bg' ? 'bg ' : 'fg ') + (cache === 'hit' ? 'HIT ' : cache === 'miss' ? 'miss ' : '')
               + String(text || '').length + 'c ' + (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms'),
+            // Background prepare-ahead is invisible to the listener; a read
+            // that had to generate (or fetch for >3s) is the anomaly.
+            anomaly: prio !== 'bg' && (cache !== 'hit' || ms > 3000),
             title: 'speaker clip ' + (prio === 'bg' ? 'prepared ahead' : 'for the read') + ' · cache ' + cache
               + ' · first bytes ' + first + 'ms · whole clip ' + ms + 'ms\n' + String(text || '').slice(0, 120),
           });
@@ -14681,6 +14729,7 @@
           if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
             at: Date.now(),
             text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
+            anomaly: !hit.ready,
             title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
           });
         } catch (_) {}
@@ -48801,6 +48850,7 @@
           at: Date.now(),
           text: '→ ' + String(id).slice(0, 8) + ' opening…',
           title: 'selectConversation — ' + id,
+          pending: true,
         });
       }
     } catch (_) {}
@@ -58122,6 +58172,7 @@
                 window.__cccPerfRow('open', {
                   at: Date.now(),
                   text: '✓ ' + Math.round(_perfWall) + 'ms ' + String(id).slice(0, 8),
+                  ms: Math.round(_perfWall),
                   title: 'click→render ' + Math.round(_perfWall) + 'ms wall, '
                     + Math.round(_perfActive) + 'ms active'
                     + (_perfPrefetchHit ? ' (prefetch hit)' : '')
@@ -58146,6 +58197,7 @@
                   window.__cccPerfRow('open', {
                     at: Date.now(),
                     text: '✓ ' + _ms + 'ms ' + String(id).slice(0, 8),
+                    ms: _ms,
                     title: 'click→render ' + _ms + 'ms — ' + id,
                   });
                 }
@@ -74733,6 +74785,8 @@
           at: Date.now(),
           text: ms + 'ms ' + size + (extra ? ' ' + extra : ''),
           title: url + ' → ' + status,
+          ms: ms,
+          status: status,
         });
         // Structured beacon too — the perf watchdog only sees /api/perf-event
         // samples, so list-read latency feeds the same breach evaluation and
@@ -74807,6 +74861,8 @@
           window.__cccPerfRow && window.__cccPerfRow('list', {
             at: Date.now(),
             text: 'first-list ' + Math.round(performance.now()) + 'ms',
+            ms: Math.round(performance.now()),
+            firstList: true,
             title: 'page load → first conversation list response parsed',
           });
         }
