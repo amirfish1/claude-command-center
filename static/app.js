@@ -9542,7 +9542,25 @@
   // read-aloud. Empty when the node isn't a rendered assistant event.
   function assistantTextElements(node) {
     if (!node || !node.querySelectorAll) return [];
+    if (node.classList.contains('kimi-answer-meta')) {
+      const els = [];
+      for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
+        if (prev.matches('.kimi-answer-meta, .kimi-marker')) break;
+        if (prev.matches('.assistant-text')) els.unshift(prev);
+      }
+      return els;
+    }
     return Array.from(node.querySelectorAll('.assistant-text'));
+  }
+
+  function _ttsSpeakButtonData(btn) {
+    if (!btn) return null;
+    const result = btn.closest('.event.result');
+    const node = result ? agentAnswerNodeBeforeResult(result)
+      : btn.closest('.event.assistant, .kimi-answer-meta, .ask-turn-a');
+    const els = assistantTextElements(node);
+    const data = els.length ? buildTtsDataFromElements(els) : null;
+    return data && data.text.trim() ? data : { text: assistantNodeTextForCopy(node) };
   }
 
   function assistantMessageActionsHtml(ev) {
@@ -10037,14 +10055,10 @@
     _ttsHoverBtn = btn;
     _ttsHoverTimer = setTimeout(() => {
       try {
-        const resultEl = btn.closest('.event.result');
-        const eventEl = resultEl ? agentAnswerNodeBeforeResult(resultEl) : btn.closest('.event.assistant');
-        const els = assistantTextElements(eventEl);
-        if (!els.length) return;
-        const data = buildTtsDataFromElements(els);
+        const data = _ttsSpeakButtonData(btn);
         const pane = btn.closest('.conv-pane');
         const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
-        if (data && data.text.trim()) _ttsPrefetchHead(data.text, paneId, true);
+        if (data && data.text.trim()) _ttsPrefetchHead(data.text, paneId, true, btn);
       } catch (_) {}
     }, 200);
   });
@@ -13764,8 +13778,9 @@
     }
     _ttsDirectBtn = state ? btn : null;
     document.querySelectorAll('.conv-scroll-speak-btn').forEach(f => {
-      f.classList.toggle('speaking', state === 'speaking');
-      f.classList.toggle('paused', state === 'paused');
+      const selected = f._speakTarget === btn;
+      f.classList.toggle('speaking', selected && state === 'speaking');
+      f.classList.toggle('paused', selected && state === 'paused');
     });
     if (btn) {
       btn.classList.toggle('speaking', state === 'speaking' || state === 'paused');
@@ -13793,7 +13808,9 @@
   }
   function _ttsEngineCancel() {
     _ttsNeuralToken += 1;
-    if (_ttsNeural && _ttsNeural.audio) { try { _ttsNeural.audio.pause(); } catch (_) {} }
+    if (_ttsNeural && _ttsNeural.audio) {
+      try { _ttsNeural.audio.pause(); URL.revokeObjectURL(_ttsNeural.audio.src); } catch (_) {}
+    }
     _ttsNeural = null;
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   }
@@ -13892,8 +13909,46 @@
     CSS.highlights.set('tts-cache-sent', sent);
     CSS.highlights.set('tts-cache-ready', ready);
   }
+  // Measure text coverage, not number of clips (the short head and the
+  // 400-character clips differ greatly). Never call a capped prefetch complete.
+  function _ttsTextCacheCoverage(clean) {
+    const head = _ttsHeadChunk(clean, 0);
+    if (!head) return { fraction: 0, pending: false };
+    const end = head.start + head.text.length;
+    const chunks = [head].concat(_chunkTtsText(clean.slice(end), 400, end));
+    let ready = 0, total = 0, pending = false;
+    for (const c of chunks) {
+      total += c.text.length;
+      const entry = _ttsHeadCache.get(c.text);
+      const active = _ttsChunkState?.debugCache?.get(c.text);
+      if (entry?.debugReady || active?.debugReady) ready += c.text.length;
+      else if (entry || active) pending = true;
+    }
+    return { fraction: total ? ready / total : 0, pending };
+  }
+  function _ttsRefreshCacheCoverage() {
+    const targets = new Set(document.querySelectorAll('.conv-pane [data-tts-head]'));
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(f => { if (f._speakTarget) targets.add(f._speakTarget); });
+    if (_ttsDirectBtn) targets.add(_ttsDirectBtn);
+    targets.forEach(btn => {
+      const data = _ttsSpeakButtonData(btn);
+      const clean = _sanitizeTtsText(data?.text || '', true);
+      const { fraction, pending } = _ttsTextCacheCoverage(clean);
+      if (fraction || pending) {
+        btn.dataset.ttsCache = fraction >= 1 ? 'ready' : 'partial';
+        btn.style.setProperty('--tts-cache-f', String(fraction));
+      } else {
+        delete btn.dataset.ttsCache;
+        btn.style.removeProperty('--tts-cache-f');
+      }
+    });
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
+  }
   function _ttsScheduleCacheDebug() {
-    if (_ttsCacheDebug && _ttsCacheDebugFrame == null) _ttsCacheDebugFrame = requestAnimationFrame(_ttsRefreshCacheDebug);
+    if (_ttsCacheDebugFrame == null) _ttsCacheDebugFrame = requestAnimationFrame(() => {
+      _ttsRefreshCacheCoverage();
+      _ttsRefreshCacheDebug();
+    });
   }
   function _ttsWatchCacheEntry(text, entry) {
     _ttsScheduleCacheDebug();
@@ -13942,6 +13997,7 @@
     });
     // The floating speaker draws the same two fills around its ring.
     document.querySelectorAll('.conv-scroll-speak-btn').forEach((f) => {
+      if (_ttsDirectBtn && f._speakTarget !== _ttsDirectBtn) return;
       f.style.setProperty('--tts-play', play.toFixed(3));
       f.style.setProperty('--tts-cache-f', cached.toFixed(3));
     });
@@ -13969,33 +14025,38 @@
       if (paneId && ttsButtonPaneId(btn) !== paneId) return;
       apply(btn);
     });
-    // The per-turn speaker shows the same bar: the last turn's of each pane, or
-    // the hovered older turn (quiet prefetch).
-    if (paneId === '__quiet') {
-      if (_ttsHoverBtn && _ttsHoverBtn.isConnected) apply(_ttsHoverBtn);
-      document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
-      return;
-    }
-    document.querySelectorAll('.conv-pane').forEach((pane) => {
-      if (paneId && pane.dataset.paneId !== paneId) return;
-      const btns = pane.querySelectorAll('.event.assistant [data-read-assistant-message]');
-      btns.forEach((b, i) => { if (i === btns.length - 1) apply(b); else if (b !== _ttsHoverBtn) delete b.dataset.ttsCache; });
+    // Attribute asynchronous completion to the answer that requested it,
+    // even if the user has since scrolled or hovered somewhere else.
+    document.querySelectorAll('[data-tts-head]').forEach((btn) => {
+      if (headText && btn.dataset.ttsHead === headText) apply(btn);
     });
-    document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
+    if (paneId !== '__quiet' && !(paneId || '').startsWith('__viewport:')) {
+      document.querySelectorAll('.conv-pane').forEach((pane) => {
+        if (paneId && pane.dataset.paneId !== paneId) return;
+        const btns = pane.querySelectorAll('[data-read-assistant-message]');
+        const last = btns[btns.length - 1];
+        if (last) {
+          if (headText) last.dataset.ttsHead = headText;
+          apply(last);
+        }
+      });
+    }
+    _ttsRefreshCacheCoverage();
   }
   let _ttsHoverBtn = null;
-  // quiet = a hovered older turn: make the clips but leave the composer bar alone.
-  function _ttsPrefetchHead(rawText, paneId, quiet) {
-    const mk = quiet ? '__quiet' : paneId;
+  // Hover and viewport preparation leave the composer's latest-reply bar alone.
+  function _ttsPrefetchHead(rawText, paneId, quiet, sourceBtn) {
+    const mk = quiet === 'viewport' ? '__viewport:' + paneId : quiet ? '__quiet' : paneId;
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
     const clean = _sanitizeTtsText(rawText, true);
     if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
+    if (sourceBtn) sourceBtn.dataset.ttsHead = head.text;
     if (_ttsHeadCache.has(head.text)) {
       const c = _ttsCacheState.get(head.text);
-      _ttsMarkCache(mk, null, c ? c.st : null, c ? c.f : 0);
+      _ttsMarkCache(mk, head.text, c ? c.st : null, c ? c.f : 0);
       // A newer prefetch in the same pane may have abandoned this message's
       // chain half-way; without a restart its speaker stays amber forever.
       const hit = _ttsHeadCache.get(head.text);
@@ -14004,7 +14065,7 @@
       }
       return;
     }
-    _ttsMarkCache(mk, null, null);
+    _ttsMarkCache(mk, head.text, 'partial', 0);
     const entry = { ready: false, got: null };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
@@ -14101,9 +14162,52 @@
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { try { scheduleTtsPrefetch(); } catch (_) {} }
   });
+  function scheduleTtsViewportPrefetch(view, btn) {
+    const pane = view && view.closest('.conv-pane');
+    const eligible = pane && pane.dataset.paneId === activePaneId()
+      && !isConversationAtBottom(view) && btn;
+    const data = eligible && _ttsSpeakButtonData(btn);
+    const text = data && data.text || '';
+    const previous = view._ttsViewportPrefetch;
+    if (previous && previous.btn === btn && previous.text === text) return;
+    if (previous) clearTimeout(previous.timer);
+    const pending = view._ttsViewportPrefetch = { btn, text, timer: null };
+    if (!text.trim()) return;
+    clearTimeout(_ttsPrefetchTimer);
+    _ttsPrefetchTimer = null;
+    pending.timer = setTimeout(() => {
+      pending.timer = null;
+      if (!btn.isConnected || view._convSpeakButton?._speakTarget !== btn
+          || pane.dataset.paneId !== activePaneId() || document.hidden) {
+        view._ttsViewportPrefetch = null;
+        return;
+      }
+      if (_ttsActive || _ttsPaused) {
+        // Retry after playback instead of losing this queued visible answer.
+        view._ttsViewportPrefetch = null;
+        pending.timer = setTimeout(() => {
+          if (view._ttsViewportPrefetch !== pending) return;
+          view._ttsViewportPrefetch = null;
+          scheduleTtsViewportPrefetch(view, btn);
+        }, 1000);
+        view._ttsViewportPrefetch = pending;
+        return;
+      }
+      _ttsLog('QUEUE', 'viewport: ' + JSON.stringify(text.slice(0, 60)));
+      _ttsPrefetchHead(text, pane.dataset.paneId, 'viewport', btn);
+    }, 200);
+  }
   // Called after a transcript render; waits for the text to stop changing.
   function scheduleTtsPrefetch() {
     const paneId = activePaneId();
+    const view = Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
+    if (view && !isConversationAtBottom(view) && view._convSpeakButton?._speakTarget) {
+      clearTimeout(_ttsPrefetchTimer);
+      _ttsPrefetchTimer = null;
+      if (view._ttsViewportPrefetch?.timer == null) view._ttsViewportPrefetch = null;
+      scheduleTtsViewportPrefetch(view, view._convSpeakButton._speakTarget);
+      return;
+    }
     const data = paneId && lastMessageTtsData(paneId);
     const text = data && data.text || '';
     // Live snapshots repeat every ~900ms. Only changed text resets the quiet
@@ -14198,16 +14302,17 @@
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: voice || '', stream: _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
+      body: JSON.stringify({ text, voice: voice || '', stream: prio !== 'bg' && _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
       const model = res.headers.get('X-CCC-Model') || '';
       perfRow(res);
-      if (res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
-      const url = URL.createObjectURL(await res.blob());
+      if (prio !== 'bg' && res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
       onDone();
-      return { url, voice: v, done: Promise.resolve() };
+      return { url, blob, voice: v, model, done: Promise.resolve() };
     }, () => { throw 0; });
   }
   function _ttsSpeakChunkNeural(state, chunk) {
@@ -14227,10 +14332,9 @@
       if (!c || state.prefetch[i]) return;
       const hit = _ttsHeadCache.get(c.text);
       let p;
-      if (hit && (i === 0 ? !state.geminiVoice : hit.voice === state.geminiVoice)) {
+      if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
         p = hit.p;
-        _ttsHeadCache.delete(c.text);
-        _ttsScheduleCacheDebug();
+        // Prepared blobs remain reusable after playback, seeks and rate changes.
         try {
           if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
             at: Date.now(),
@@ -14266,14 +14370,16 @@
     ensure(state.index);
     state.prefetch[state.index].then((got) => {
       delete state.prefetch[state.index];
-      if (stale()) { URL.revokeObjectURL(got.url); return; }
+      if (stale()) { if (!got.blob) URL.revokeObjectURL(got.url); return; }
       // Start the next clip the moment this one is fully generated, not at
       // onplay. One at a time: the local voice server shares the CPU, so two
       // clips made at once both finish late and playback stalls.
       const idx = state.index;
       got.done.then(() => { if (!stale()) ensure(idx + 1); });
       if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
-      const audio = new Audio(got.url);
+      // Give each playback its own URL; revoking it must not invalidate the cache.
+      const playUrl = got.blob ? URL.createObjectURL(got.blob) : got.url;
+      const audio = new Audio(playUrl);
       audio.playbackRate = _ttsRate;
       _ttsNeural = { audio, token };
       // No word boundaries from an audio file: estimate the read position from
@@ -14303,7 +14409,7 @@
         _ttsShowVoice(got.voice + (got.model ? ' · ' + got.model : ''));
       };
       audio.onended = () => {
-        URL.revokeObjectURL(got.url);
+        URL.revokeObjectURL(playUrl);
         state.debugCache.delete(chunk.text);
         _ttsScheduleCacheDebug();
         if (stale()) return;
@@ -14329,7 +14435,7 @@
       });
       audio.addEventListener('waiting', () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); });
       const releaseDebug = () => { state.debugCache.delete(chunk.text); _ttsScheduleCacheDebug(); };
-      audio.onerror = () => { URL.revokeObjectURL(got.url); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS); };
+      audio.onerror = () => { URL.revokeObjectURL(playUrl); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS); };
       audio.play().catch(() => { releaseDebug(); fallBack(0); });
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
   }
@@ -46269,6 +46375,11 @@
     const speakBtn = view._convSpeakButton;
     if (speakBtn) {
       speakBtn._speakTarget = _visibleSpeakButton(view);
+      const readingTarget = !!_ttsDirectBtn && speakBtn._speakTarget === _ttsDirectBtn;
+      speakBtn.classList.toggle('speaking', readingTarget && _ttsActive && !_ttsPaused);
+      speakBtn.classList.toggle('paused', readingTarget && _ttsPaused);
+      scheduleTtsViewportPrefetch(view, speakBtn._speakTarget);
+      _ttsScheduleCacheDebug();
       const showSpeak = !!speakBtn._speakTarget;
       _syncSpeakFloatCache(speakBtn);
       speakBtn.classList.toggle('visible', showSpeak);
@@ -46695,7 +46806,15 @@
     let best = null, bestVis = 0;
     view.querySelectorAll('[data-read-assistant-message], [data-read-agent-answer]').forEach(btn => {
       const ev = btn.closest('.event.assistant, .event.result, .kimi-answer-meta, .ask-turn-a') || btn;
-      const r = ev.getBoundingClientRect();
+      let r = ev.getBoundingClientRect();
+      if (ev.classList.contains('kimi-answer-meta')) {
+        for (let prev = ev.previousElementSibling; prev; prev = prev.previousElementSibling) {
+          if (prev.matches('.kimi-answer-meta, .kimi-marker')) break;
+          if (prev.matches('.assistant-text')) {
+            r = { top: Math.min(r.top, prev.getBoundingClientRect().top), bottom: r.bottom };
+          }
+        }
+      }
       const vis = Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top);
       if (vis > bestVis + 1) { best = btn; bestVis = vis; }
     });
