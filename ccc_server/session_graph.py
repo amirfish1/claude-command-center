@@ -1172,8 +1172,9 @@ COMPLETION: a single-line JSON object using the schema below
 Write NEXT_ACTION yourself in this same answer; the dashboard renders it
 directly without another model call. Use {"label":"Restart","reply":"Yes, restart the dashboard and worker."}
 (on ONE line) only when NEXT_STEP_USER offers exactly one concrete, scoped
-next step and needs the user's go-ahead. The label is one short verb (at most
-20 letters); reply is the exact text to send back to this session (at most
+next step and needs the user's go-ahead. Prefer one short verb for the label;
+up to three words and 24 characters are allowed when needed for clarity.
+Reply is the exact text to send back to this session (at most
 400 characters), preserving the scope and qualifications. Otherwise use null.
 Never choose between alternatives, invent missing information, claim the user
 performed a task, or turn a request to review/read/check something into approval.

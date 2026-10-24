@@ -1,0 +1,1 @@
+Session action chips accept short model-authored labels such as “Build triage” instead of silently falling back to Reply when a label contains spaces. Labels remain limited to three words and 24 characters, and rendering makes no extra model call.

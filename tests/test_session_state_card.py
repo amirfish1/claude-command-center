@@ -169,6 +169,16 @@ class TestSessionStateCard(unittest.TestCase):
         self.assertNotIn('next action</span>', html)
         self.assertNotIn('&quot;label&quot;', html)
 
+    def test_short_model_label_renders_instead_of_reply_fallback(self):
+        html = render_session_state(
+            'NEXT_STEP_USER: Confirm the proposed triage routine.\n'
+            'NEXT_ACTION: {"label":"Build triage","reply":"Yes, build the triage routine."}',
+            PROJECT_ROOT / "static" / "app.js",
+        )
+        self.assertIn('>Build triage</button>', html)
+        self.assertIn('data-ssb-value="Yes, build the triage routine."', html)
+        self.assertNotIn('>Reply</button>', html)
+
     def test_needs_you_offers_restart_for_ccc_kickstart(self):
         html = render_session_state(
             "NEXT_STEP_USER: Run `launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center`"

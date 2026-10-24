@@ -89,7 +89,21 @@ test('row action replies, stale state, failure recovery and responsive rendering
       row.session_state.next_action = {label:'Proceed',reply:'Please restart only the dashboard.'}; syncActions();
     });
     assert.match(await visibleButton(), />Proceed</);
+    // A short model-authored phrase must survive validation and send verbatim.
     await page.evaluate(() => {
+      row.session_state.next_action = {label:'Build triage',reply:'Yes, build the triage routine.'}; syncActions();
+    });
+    assert.match(await visibleButton(), />Build triage</);
+    assert.ok(await page.evaluate(() => {
+      const button = document.querySelector('.wa-line2 .conv-quick-action').getBoundingClientRect();
+      const row = document.querySelector('.conv-item').getBoundingClientRect();
+      return button.width > 0 && button.right <= row.right + 1;
+    }), 'short phrase stays inside the phone row');
+    await page.evaluate(() => document.querySelector('.wa-line2 .conv-quick-action').click());
+    await page.waitForFunction(() => row.state === 'working');
+    assert.deepEqual(await page.evaluate(() => sent[2]), ['restart-session', 'Yes, build the triage routine.', 'send']);
+    await page.evaluate(() => {
+      row.state = 'idle';
       row.session_state.next_action = {label:'<script>',reply:'Yes'}; syncActions();
     });
     assert.equal(await page.evaluate(() => document.querySelectorAll('.conv-quick-action').length), 0);
@@ -103,7 +117,7 @@ test('row action replies, stale state, failure recovery and responsive rendering
       row.session_state.next_action.reply = 'Restart only the dashboard.';
       document.querySelector('.wa-line2 .conv-quick-action').click();
     });
-    assert.equal(await page.evaluate(() => sent.length), 2, 'stale click is rejected');
+    assert.equal(await page.evaluate(() => sent.length), 3, 'stale click is rejected');
     assert.equal(await page.evaluate(() => inferences), 0, 'no inference request in any state');
   } finally {
     await browser.close();

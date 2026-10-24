@@ -16357,7 +16357,7 @@
   const _rowQuickActionSending = new Set();
   function sessionQuickAction(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || typeof value.label !== 'string' || !/^[\p{L}]{1,20}$/u.test(value.label)
+        || typeof value.label !== 'string' || value.label.length > 24 || !/^\p{L}+(?: \p{L}+){0,2}$/u.test(value.label)
         || typeof value.reply !== 'string' || !value.reply.trim() || value.reply.trim().length > 400
         || /[\x00-\x1f]/.test(value.reply)) return null;
     return { label: value.label, reply: value.reply.trim() };

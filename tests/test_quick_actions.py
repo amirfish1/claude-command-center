@@ -30,12 +30,20 @@ class QuickActionTests(unittest.TestCase):
         self.assertNotIn("next_action", parsed)
 
     def test_no_action_for_invalid_or_null_metadata(self):
-        for raw in ["null", "not json", '"Restart"', '{"label":"Restart all","reply":"yes"}',
+        for raw in ["null", "not json", '"Restart"', '{"label":"Please restart all services","reply":"yes"}',
+                    json.dumps({"label": "A" * 25, "reply": "yes"}),
+                    json.dumps({"label": "Build\ntriage", "reply": "yes"}),
                     '{"label":"<script>","reply":"yes"}', '{"label":"Restart","reply":""}',
                     '{"label":"Restart","reply":"line\\nbreak"}',
                     json.dumps({"label":"Restart", "reply":"x" * 401}), "[" * 2500]:
             with self.subTest(raw=raw[:60]):
                 self.assertNotIn("next_action", self.parse(raw))
+
+    def test_short_labels_are_preserved_as_authored(self):
+        for label in ("Build triage", "Review the plan", "Revisar plan"):
+            with self.subTest(label=label):
+                action = {"label": label, "reply": "Yes, proceed with the proposed scope."}
+                self.assertEqual(self.parse(json.dumps(action))["next_action"], action)
 
     def test_action_requires_a_pending_user_step(self):
         action = json.dumps({"label": "Restart", "reply": "Yes, restart both."})
