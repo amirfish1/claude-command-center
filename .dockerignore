@@ -61,4 +61,8 @@ ingesters
 # Docker meta itself
 Dockerfile
 docker-compose.yml
+docker-compose.hardened.yml
 .dockerignore
+.env.hardened
+.env.hardened.example
+infra/caddy
