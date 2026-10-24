@@ -1,0 +1,1 @@
+- Show a blue speaker with a LIVE badge while the current audio clip is still streaming. Keep cache coverage colors on the outer ring, and clear the indicator when the clip finishes downloading or playback stops.

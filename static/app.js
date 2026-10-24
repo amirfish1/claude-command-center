@@ -14023,13 +14023,22 @@
   // active utterance, so a second click on THAT SAME button pauses/resumes
   // instead of restarting the read from the top (CCC-408).
   let _ttsDirectBtn = null;
+  let _ttsStreaming = false;
+  function _ttsSetStreaming(streaming) {
+    _ttsStreaming = !!streaming;
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatPlayback);
+  }
   function _syncSpeakFloatPlayback(btn) {
     const action = btn.classList.contains('paused') ? 'resume'
       : btn.classList.contains('speaking') ? 'pause' : 'read';
-    if (btn.dataset.ttsAction === action) return;
+    const streaming = _ttsStreaming && action !== 'read';
+    const streamChanged = btn.classList.contains('tts-streaming') !== streaming;
+    btn.classList.toggle('tts-streaming', streaming);
+    if (btn.dataset.ttsAction === action && !streamChanged) return;
     btn.dataset.ttsAction = action;
-    const label = action === 'pause' ? 'Pause reading'
-      : action === 'resume' ? 'Resume reading' : 'Read the message on screen aloud';
+    const label = (action === 'pause' ? 'Pause reading'
+      : action === 'resume' ? 'Resume reading' : 'Read the message on screen aloud')
+      + (streaming ? ' (streaming audio)' : '');
     btn.title = label;
     btn.setAttribute('aria-label', label);
     const shape = action === 'pause'
@@ -14086,6 +14095,7 @@
     if (window.speechSynthesis) window.speechSynthesis.resume();
   }
   function _ttsEngineCancel() {
+    _ttsSetStreaming(false);
     _ttsNeuralToken += 1;
     if (_ttsNeural && _ttsNeural.audio) {
       _ttsNeural.stopHighlight?.();
@@ -14860,6 +14870,7 @@
     const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
     const fallBack = (cooldownMs) => {
       if (stale()) return;
+      _ttsSetStreaming(false);
       // A failed body can reject completion and raise a media error. Settle
       // this player once, so the two signals cannot start overlapping reads.
       _ttsNeuralToken += 1;
@@ -14934,7 +14945,11 @@
       audio.playbackRate = _ttsRate;
       let wordFrame = null, lastWord = -1, complete = !!got.blob;
       const words = Array.from(chunk.text.matchAll(/\S+/g), m => ({ start: m.index, length: m[0].length }));
-      got.done.then(() => { complete = true; }).catch(() => {
+      _ttsSetStreaming(!complete);
+      got.done.then(() => {
+        complete = true;
+        if (!stale()) _ttsSetStreaming(false);
+      }).catch(() => {
         if (!stale()) audio.onerror?.();
       });
       const stopHighlight = () => {
@@ -14983,6 +14998,7 @@
         stopHighlight();
         clearTtsHighlight();
         clearTtsCaption();
+        _ttsSetStreaming(false);
         _ttsLog('ENDED', 'clip ' + idx);
         URL.revokeObjectURL(playUrl);
         state.debugCache.delete(chunk.text);

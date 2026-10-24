@@ -314,7 +314,7 @@ const showOpToast = () => {};
 const revoked = [], audios = [], _ttsHeadCache = new Map();
 const window = {};
 const URL = {createObjectURL: () => 'play-' + (++urls), revokeObjectURL: u => revoked.push(u)};
-const _ttsScheduleCacheDebug = () => {}, _ttsSetPlay = () => {};
+const _ttsScheduleCacheDebug = () => {}, _ttsSetPlay = () => {}, _ttsSetStreaming = () => {};
 const clearTtsHighlight = () => {}, clearTtsCaption = () => {};
 const _ttsFetchNeural = () => { fetches++; throw Error('Unexpected cache miss'); };
 const setTtsButtonsState = () => {}, setTtsButtonsBusy = () => {};
