@@ -13109,6 +13109,7 @@ def _decode_project_slug_walk(slug):
 
 
 _GENERATED_HELPER_SESSION_PREFIXES = (
+    "Produce a one-word session action chip",
     "Produce a concise 4-8 word title summarizing what the user is trying to do",
     "Produce a concise 4-8 word title for the GitHub issue below",
 )
@@ -22238,6 +22239,7 @@ _SESSION_ISSUES_CACHE = None
 _issue_titles_overrides_cache = None
 
 _adopt_ccc_module("session_graph")
+_adopt_ccc_module("quick_actions")
 _adopt_ccc_module("cross_repo_issues")
 # ---------------------------------------------------------------------------
 # Conversation parsing (Claude Code interactive sessions)
@@ -37323,6 +37325,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(request_auto_title(sid))
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[^/]+/quick-action$", path):
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 16000:
+                self.send_json({"ok": False, "error": "invalid request size"}, 400)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length))
+                self.send_json(suggest_session_quick_action(payload))
+            except (ValueError, UnicodeError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/summarize$", path):
             conv_id = path.split("/")[-2]
             length = int(self.headers.get("Content-Length", "0"))

@@ -78,6 +78,19 @@ We'll respond within a week. If the report is valid we'll cut a fix release befo
 
 When you start a new session, CCC guesses the right folder from your first prompt. Path and folder-name matching is local and never touches the network. Only if you add a TypeSafe Jev key (the new-session **Add Jev token** button, Settings > Engines provider profiles, or the `JEV_API_KEY` environment variable) does CCC also send the prompt (up to 3000 characters, with likely secrets such as tokens, API keys and passwords replaced by `[REDACTED]`) plus opaque repo labels, short repo descriptions (from each repo's README / CLAUDE.md / AGENTS.md) and up to a dozen of your past session titles per repo (scrubbed the same way) to `https://api.typesafe.ai/v1/systemone`. Vault entries named `jev-api-key`, `jev-api-key.password`, or `jev-api-key.token`, or marked with env var `JEV_API_KEY`, enable matching too. Environment keys take precedence over provider profiles, then Vault entries. No key means no call. The configured indicator checks key availability, not provider validity. The key is used only for this call and is not passed to spawned agent sessions unless you explicitly choose that BYOK profile at spawn; failures and timeouts (3 seconds) silently fall back to the local result.
 
+## Session row reply suggestions
+
+For visible, idle sessions with a structured pending request, CCC asks the
+installed Claude CLI (Haiku) for a one-word action label and a scoped reply.
+It supplies at most 2,000 characters of the request and 4,000 characters of
+the session's summary and latest assistant preview, using the CLI's configured
+provider and account. The helper has no tools, MCP servers, settings or hooks.
+Results (including no-action answers) are cached in memory, with at most two
+concurrent calls. Set `CCC_QUICK_ACTIONS=0` on the dashboard server to disable
+these calls. Missing CLI access or model failures leave the normal row intact.
+Hovering the chip shows the exact reply; clicking sends it through the normal
+session input API. Inference itself never sends a reply or executes a command.
+
 ## Optional outbound call: share card upload
 
 The Throughput page has a Share button that renders a card image (totals only, never prompts, code, paths, session names or project names). Posting to X, LinkedIn, Bluesky or Threads, or clicking Copy link, uploads that one PNG and its one-line headline (for example "2.28B tokens processed this week") from your browser to the card worker at `https://ccc-card.claude-command-center.workers.dev` (source: [`infra/card-worker/`](infra/card-worker/)). Nothing is uploaded until you click one of those buttons, Copy image and Download PNG stay fully local, and CCC's own server makes no call. The worker stores the PNG and headline under a random unguessable id, serves them at a public page so social networks can show your card, and deletes them after one year. It accepts only real PNGs of exactly 1200x630 or 1080x1080, up to 1.5 MB, at most 10 uploads per IP per hour (the rate limiter keeps a salted hash of the IP for under an hour; no IP, user agent or account identifier is stored with a card). Browser uploads are accepted only from `localhost`, `127.0.0.1` and `[::1]` origins. Anyone with the link can view the card, so share it only if you are happy to share the numbers on it. If the upload fails, CCC falls back to text plus the repo link and copies the image so you can paste it. To use a different host, set `localStorage["ccc.share.cardBase"]` to an `https://` origin.

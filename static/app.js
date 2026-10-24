@@ -3328,6 +3328,8 @@
         row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
       }
     }
+    // Live activity invalidates any pending one-tap reply immediately.
+    syncRowQuickActions(sid);
   }
   function _ultraFreshAccept(update, generation = _ultraFresh.generation) {
     const sid = String(update.session_id || '');
@@ -16110,6 +16112,162 @@
       if (fresh && fresh.textContent !== el.textContent) el.textContent = fresh.textContent;
     });
   }
+
+  // Row actions are model-authored replies, never model-selected shell commands.
+  // Only visible, idle rows are inferred, with at most two requests in flight.
+  const _rowQuickActions = new Map();
+  const _rowQuickActionSending = new Set();
+  let _rowQuickActionObserver = null;
+  let _rowQuickActionActive = 0;
+  const _rowQuickActionQueue = [];
+  function rowQuickActionSource(c) {
+    if (!c || c.archived || c.trashed || c.pending_spawn) return null;
+    const sid = String(c.session_id || c.id || '');
+    const live = _applyLiveOverlayToRow(c);
+    if (!sid || _rowQuickActionSending.has(sid) || live.needs_approval || live.question_waiting
+        || c.last_event_type === 'user' || _ultraFreshExplanation(c).kind !== 'next') return null;
+    const next = String((c.session_state || {}).next_step_user || '').trim();
+    if (!next || next.length > 2000 || /^(?:none|nothing|n\/a|not applicable)[.!]?$/i.test(next)) return null;
+    if (_ultraFreshExplanation(c).text !== next) return null;
+    const state = c.session_state || {};
+    const context = [state.did, state.insight, c.last_assistant_text || c.last_assistant_preview]
+      .filter(Boolean).join('\n').slice(0, 4000);
+    return { sid, next_step: next, context, key: JSON.stringify([sid, next, context]) };
+  }
+  function currentRowQuickActionSource(sid) {
+    const base = _ultraFreshRow(sid);
+    return base ? rowQuickActionSource(_ultraFreshCurrent(base)) : null;
+  }
+  function paintRowQuickAction(slot, entry) {
+    if (!slot.isConnected || slot.dataset.quickActionKey !== entry.source.key) return;
+    const current = currentRowQuickActionSource(entry.source.sid);
+    if (!current || current.key !== entry.source.key || !entry.action) { slot.replaceChildren(); return; }
+    if (slot.querySelector('button[data-role="quick-action"]')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'conv-quick-action';
+    btn.dataset.role = 'quick-action';
+    btn.dataset.quickActionKey = entry.source.key;
+    btn.textContent = entry.action.label;
+    btn.title = 'Send to this session: ' + entry.action.reply;
+    btn.setAttribute('aria-label', btn.title);
+    slot.appendChild(btn);
+  }
+  async function drainRowQuickActions() {
+    while (_rowQuickActionActive < 2 && _rowQuickActionQueue.length) {
+      const entry = _rowQuickActionQueue.shift();
+      const current = currentRowQuickActionSource(entry.source.sid);
+      if (!current || current.key !== entry.source.key) {
+        _rowQuickActions.delete(entry.source.key);
+        continue;
+      }
+      _rowQuickActionActive++;
+      (async () => {
+        try {
+          const res = await fetch('/api/conversations/' + encodeURIComponent(entry.source.sid) + '/quick-action', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ next_step: entry.source.next_step, context: entry.source.context }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error('suggestion unavailable');
+          const action = data.action;
+          entry.action = action && typeof action.label === 'string' && /^[\p{L}]{1,20}$/u.test(action.label)
+            && typeof action.reply === 'string' && action.reply.length <= 400 ? action : null;
+          entry.done = true;
+        } catch (_) {
+          entry.done = true;
+          entry.retryAfter = Date.now() + 60000;
+        } finally {
+          _rowQuickActionActive--;
+          document.querySelectorAll('.conv-quick-action-slot').forEach(slot => paintRowQuickAction(slot, entry));
+          drainRowQuickActions();
+        }
+      })();
+    }
+  }
+  function requestRowQuickAction(slot) {
+    const source = currentRowQuickActionSource(slot.dataset.quickActionSid);
+    if (!source || source.key !== slot.dataset.quickActionKey) return;
+    let entry = _rowQuickActions.get(source.key);
+    if (entry && entry.retryAfter && Date.now() >= entry.retryAfter) {
+      _rowQuickActions.delete(source.key); entry = null;
+    }
+    if (!entry) {
+      // Bound browser memory too; pending entries stay until their work ends.
+      if (_rowQuickActions.size >= 256) {
+        for (const [key, old] of _rowQuickActions) {
+          if (old.done) { _rowQuickActions.delete(key); break; }
+        }
+        if (_rowQuickActions.size >= 256) return;
+      }
+      entry = { source, action: null, done: false };
+      _rowQuickActions.set(source.key, entry);
+      _rowQuickActionQueue.push(entry);
+      drainRowQuickActions();
+    }
+    paintRowQuickAction(slot, entry);
+  }
+  function syncRowQuickActions(sid) {
+    if (!_rowQuickActionObserver && typeof IntersectionObserver === 'function') {
+      _rowQuickActionObserver = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            _rowQuickActionObserver.unobserve(entry.target);
+            requestRowQuickAction(entry.target);
+          }
+        });
+      });
+    }
+    if (_rowQuickActionObserver && !sid) _rowQuickActionObserver.disconnect();
+    const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
+    document.querySelectorAll(selector).forEach(row => {
+      const source = currentRowQuickActionSource(row.dataset.sessionId);
+      const outcome = row.querySelector('.conv-outcome.is-next');
+      if (!source || !outcome) {
+        row.querySelectorAll('.conv-quick-action-slot').forEach(slot => slot.remove());
+        return;
+      }
+      // The phone list has its own preview markup. Hidden copies don't infer.
+      [outcome, row.querySelector('.wa-line2')].filter(Boolean).forEach(host => {
+        let slot = host.querySelector('.conv-quick-action-slot');
+        if (!slot) {
+          slot = document.createElement('span');
+          slot.className = 'conv-quick-action-slot';
+          host.appendChild(slot);
+        }
+        if (slot.dataset.quickActionKey !== source.key) slot.replaceChildren();
+        slot.dataset.quickActionKey = source.key;
+        slot.dataset.quickActionSid = source.sid;
+        const entry = _rowQuickActions.get(source.key);
+        if (entry) paintRowQuickAction(slot, entry);
+        if (_rowQuickActionObserver) _rowQuickActionObserver.observe(slot);
+      });
+    });
+  }
+  document.addEventListener('click', async ev => {
+    const btn = ev.target.closest && ev.target.closest('[data-role="quick-action"]');
+    if (!btn) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    const entry = _rowQuickActions.get(btn.dataset.quickActionKey);
+    if (!entry || !entry.action) return;
+    const { sid, key } = entry.source;
+    const current = currentRowQuickActionSource(sid);
+    if (!current || current.key !== key) { btn.remove(); return; }
+    _rowQuickActionSending.add(sid);
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      const data = await postInjectInput(sid, entry.action.reply, 'send');
+      if (!data.ok) throw new Error(data.error || 'Send failed');
+      markSessionSending(sid);
+      showOpToast('Sent: ' + entry.action.reply);
+      refreshConversationList();
+    } catch (error) {
+      btn.disabled = false; btn.textContent = entry.action.label;
+      showOpToast(String(error.message || error), 'error');
+    } finally {
+      _rowQuickActionSending.delete(sid);
+    }
+  }, true);
 
   // CCC-1218: turn a "Needs you" ask into buttons. Built from what agents
   // actually write there: decide/confirm/tell/answer (-> Reply), reload or
@@ -30266,6 +30424,7 @@
   }
 
   const CONVERSATION_ROW_ACTION_SELECTOR = [
+    '[data-role="quick-action"]',
     '[data-role="edit"]',
     '[data-role="pin"]',
     '[data-role="archive"]',
@@ -42406,6 +42565,7 @@
     // made the FLIP below compare overlay-painted old tops with bare new
     // tops, sliding rows that never moved.
     try { for (const sid of _ultraFresh.entries.keys()) _ultraFreshPaint(sid); } catch (_) {}
+    syncRowQuickActions();
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
     // Jobs tab: refill the fresh host from cached data (no flicker, no fetch).
