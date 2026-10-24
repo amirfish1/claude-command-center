@@ -17,9 +17,10 @@
   'use strict';
 
   var TAG_RE = /\[Q(\d+):([a-z0-9-]+)\]/g;
-  var TARGETS = '.assistant-text, .user-msg, .conv-outcome-step';
+  var TARGETS = '.assistant-text, .user-msg, .conv-outcome-step, .wa-preview';
   var POLL_MS = 60000;
   var index = { byN: {}, list: [], scanning: false, at: 0 };
+  var loadGeneration = 0;
 
   function splitTags(text) {
     var out = [], last = 0, m;
@@ -58,7 +59,9 @@
           b.type = 'button';
           b.className = 'qtag-chip';
           b.setAttribute('data-qn', p.n);
-          b.textContent = p.tag;
+          b.textContent = host.closest('.conv-item') ? 'Q' + p.n : p.tag;
+          b.title = p.tag + ' — view question and answer';
+          b.setAttribute('aria-label', b.title);
           frag.appendChild(b);
         });
         node.parentNode.replaceChild(frag, node);
@@ -77,7 +80,9 @@
 
   function load(force) {
     if (!force && Date.now() - index.at < 5000) return Promise.resolve(index);
+    var generation = ++loadGeneration;
     return fetch('/api/question-tags').then(function (r) { return r.json(); }).then(function (d) {
+      if (generation !== loadGeneration) return index;
       if (!d || !d.ok) return index;
       index.list = d.questions || [];
       index.byN = {};
@@ -92,7 +97,7 @@
   }
 
   /* ---------------- UI ---------------- */
-  var sheet, pill;
+  var sheet, pill, activeQuestion;
 
   function esc(s) {
     return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
@@ -109,10 +114,12 @@
       var jump = ev.target.closest('[data-qjump]');
       if (jump) { jumpTo(+jump.getAttribute('data-qjump')); return; }
       if (ev.target.closest('[data-qlist]')) { showPanel(); return; }
+      var send = ev.target.closest('[data-qsend]');
+      if (send) { sendAnswer(+send.getAttribute('data-qsend'), send); return; }
       var add = ev.target.closest('[data-qadd]');
       if (add) { addAnswer(+add.getAttribute('data-qadd')); return; }
       var open = ev.target.closest('[data-qshow]');
-      if (open) showQuestion(+open.getAttribute('data-qshow'));
+      if (open) { activeQuestion = null; showQuestion(+open.getAttribute('data-qshow')); }
     });
     document.body.appendChild(sheet);
     return sheet;
@@ -120,11 +127,12 @@
 
   // A tag from a message written seconds ago may not be indexed yet: the
   // server rescans in the background, so retry a few times before giving up.
-  function lookup(n, attempt) {
+  function lookup(n, attempt, context) {
     load(true).then(function () {
+      if (context !== activeQuestion) return;
       if (index.byN[n] || attempt >= 4 || !(index.scanning || index.refreshing)) { showQuestion(n); return; }
       showQuestion(n, true);
-      setTimeout(function () { if (!sheet.hidden && sheet.getAttribute('data-qwait') === String(n)) lookup(n, attempt + 1); }, 3000);
+      setTimeout(function () { if (!sheet.hidden && context === activeQuestion && sheet.getAttribute('data-qwait') === String(n)) lookup(n, attempt + 1, context); }, 3000);
     });
   }
 
@@ -140,8 +148,9 @@
         + ' first asked ' + esc(fmtTs(q.first.ts)) + ' · ' + q.mentions.length + ' reminder' + (q.mentions.length === 1 ? '' : 's') + '</div>'
         + '<div class="qtag-text assistant-text-plain">' + (md || '<p style="white-space:pre-wrap">' + esc(q.first.text) + '</p>') + '</div>'
         + '<label class="qtag-ans-label" for="qtagAns">Your answer</label>'
-        + '<textarea id="qtagAns" class="qtag-ans" rows="3" placeholder="Type your answer. It goes into the session\'s composer; nothing is sent."></textarea>'
-        + '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qadd="' + q.n + '">Add to composer</button>'
+        + '<textarea id="qtagAns" class="qtag-ans" rows="3" placeholder="Type your answer, then choose Send answer or Add to composer."></textarea>'
+        + '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qsend="' + q.n + '">Send answer</button>'
+        + '<button type="button" class="qtag-btn" data-qadd="' + q.n + '">Add to composer</button>'
         + '<button type="button" class="qtag-btn" data-qjump="' + q.n + '">Jump to original</button>'
         + (openQuestions(index.list).length > 1 ? '<button type="button" class="qtag-btn" data-qlist="1">All open questions</button>' : '')
         + '</div><div class="qtag-added" aria-live="polite"></div>';
@@ -158,14 +167,38 @@
     if (!q || !txt) { if (note) note.textContent = 'Type an answer first.'; return; }
     if (note) note.textContent = 'Adding…';
     // Tag the line so the agent (and the open/answered tracker) can tell which question it answers.
-    window.cccAppendToComposer(q.first.sid, '[Q' + n + '] ' + txt).then(function (ok) {
+    var answerSid = activeQuestion && activeQuestion.n === n && activeQuestion.sid || q.first.sid;
+    window.cccAppendToComposer(answerSid, '[Q' + n + '] ' + txt).then(function (ok) {
       if (!note) return;
       if (ok) { ta.value = ''; note.textContent = 'Added to the composer for that session (not sent). Add more answers, or close and send when ready.'; }
       else note.textContent = 'Could not reach that session\'s composer. Open the session and try again.';
     });
   }
 
+  var sending = new Set();
+  function sendAnswer(n, button) {
+    var q = index.byN[n], ta = document.getElementById('qtagAns'), note = sheet.querySelector('.qtag-added');
+    var txt = ta && ta.value.trim();
+    if (!q || !txt) { if (note) note.textContent = 'Type an answer first.'; return; }
+    var sid = activeQuestion && activeQuestion.n === n && activeQuestion.sid || q.first.sid;
+    var key = sid + ':' + n;
+    if (sending.has(key)) return;
+    sending.add(key);
+    button.disabled = true;
+    if (note) note.textContent = 'Sending…';
+    Promise.resolve().then(function () {
+      return window.cccSendQuestionAnswer(sid, '[Q' + n + '] ' + txt);
+    }).then(function (result) {
+      if (!result || !result.ok) throw new Error(result && result.error || 'Send failed');
+      if (ta.value.trim() === txt) ta.value = '';
+      if (note) note.textContent = result.queued ? 'Queued for this session.' : 'Sent to this session.';
+    }).catch(function (error) {
+      if (note) note.textContent = 'Could not send: ' + error.message + '. Your answer is still here.';
+    }).finally(function () { sending.delete(key); button.disabled = false; });
+  }
+
   function showPanel() {
+    activeQuestion = null;
     var s = ensureSheet();
     var open = openQuestions(index.list);
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>Open questions (' + open.length + ')</strong>'
@@ -261,7 +294,12 @@
       var chip = ev.target.closest && ev.target.closest('.qtag-chip[data-qn]');
       if (!chip) return;
       ev.preventDefault();
-      lookup(+chip.getAttribute('data-qn'), 0);
+      ev.stopPropagation();
+      var row = chip.closest('.conv-item[data-session-id]');
+      var sid = row ? row.getAttribute('data-session-id')
+        : (typeof window.cccFrontSessionId === 'function' ? window.cccFrontSessionId() : '');
+      activeQuestion = {n: +chip.getAttribute('data-qn'), sid: sid};
+      lookup(activeQuestion.n, 0, activeQuestion);
     }, true); // capture: sidebar rows stop click propagation before it bubbles here
 
     var pending = new Set(), queued = false;
@@ -293,5 +331,10 @@
     setInterval(function () { if (!document.hidden) load(true); }, POLL_MS);
   }
 
-  return { boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify };
+  function open(n, sid) {
+    activeQuestion = {n: n, sid: sid};
+    lookup(n, 0, activeQuestion);
+  }
+
+  return { open: open, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify };
 });

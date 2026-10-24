@@ -374,17 +374,19 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
 
 
 def build_index(files: dict | None = None) -> dict:
-    """Pure: fold per-file events into {"questions": [...]} ordered by n."""
+    """Fold events into questions; answers belong to question-bearing sessions."""
     events = []
     for rec in (files if files is not None else _files).values():
         events.extend(rec.get("ev") or [])
     events.sort(key=lambda e: e.get("ts") or "")
     qs: dict[int, dict] = {}
+    question_sessions: dict[int, set] = {}
     for e in events:
         text = e["text"]
         if e["role"] == "assistant":
             for m in _TAG.finditer(text):
                 n = int(m.group(1))
+                question_sessions.setdefault(n, set()).add(e["sid"])
                 q = qs.get(n)
                 if q is None:
                     qs[n] = q = {
@@ -396,12 +398,13 @@ def build_index(files: dict | None = None) -> dict:
                     q["mentions"].append({"sid": e["sid"], "ts": e["ts"], "uuid": e["uuid"]})
             for m in _ANSWERED.finditer(text):
                 q = qs.get(int(m.group(1)))
-                if q and not q["answered"]:
+                if q and not q["answered"] and e["sid"] in question_sessions.get(q["n"], set()):
                     q["answered"], q["answered_by"] = True, "agent"
         else:
             for m in _BARE.finditer(text):
                 q = qs.get(int(m.group(1)))
-                if q and not q["answered"] and e["ts"] >= q["first"]["ts"]:
+                if (q and not q["answered"] and e["ts"] >= q["first"]["ts"]
+                        and e["sid"] in question_sessions.get(q["n"], set())):
                     q["answered"], q["answered_by"] = True, "owner"
     return {"questions": [qs[n] for n in sorted(qs)]}
 

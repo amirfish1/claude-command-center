@@ -8,6 +8,25 @@ def ev(role, ts, text, uuid):
 
 
 class BuildIndexTest(unittest.TestCase):
+    def test_quoting_question_in_unrelated_session_does_not_answer_it(self):
+        ask = ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] OK to publish?", "ask")
+        quote = dict(ev("user", "2026-01-01T00:00:02Z", "The original was [Q7:publish] OK to publish?", "quote"), sid="other")
+        marker = dict(ev("assistant", "2026-01-01T00:00:03Z", "[Q7] answered", "marker"), sid="other")
+        q = qt.build_index({"a": {"ev": [ask, quote, marker]}})["questions"][0]
+        self.assertFalse(q["answered"])
+        self.assertEqual(q["first"]["uuid"], "ask")
+
+    def test_continuation_reply_answers_after_assistant_reminder(self):
+        events = [ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] OK to publish?", "ask")]
+        # The display cap must not discard the continuation's answer provenance.
+        for n in range(55):
+            events.append(dict(ev("assistant", f"2026-01-01T00:01:{n:02}Z", "[Q7:publish] yes/no?", f"r{n}"), sid=f"continuation-{n}"))
+        events.append(dict(ev("user", "2026-01-01T00:02:00Z", "[Q7] no", "answer"), sid="continuation-54"))
+        q = qt.build_index({"a": {"ev": events}})["questions"][0]
+        self.assertTrue(q["answered"])
+        self.assertEqual(q["answered_by"], "owner")
+        self.assertEqual(len(q["mentions"]), 50)
+
     def test_first_mention_is_explanation_and_owner_reply_answers(self):
         files = {"a": {"ev": [
             ev("assistant", "2026-01-01T00:00:02Z", "[Q7:x] reminder", "u2"),

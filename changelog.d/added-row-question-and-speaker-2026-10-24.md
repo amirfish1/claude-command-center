@@ -1,0 +1,1 @@
+Open question details from compact question chips on desktop and phone session rows, and send or draft answers in the current continuation without navigating to the session. Add a row speaker button to read the latest full answer without opening the session. Ignore answers quoted in unrelated sessions when tracking open questions.
