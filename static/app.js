@@ -13825,6 +13825,21 @@
   // active utterance, so a second click on THAT SAME button pauses/resumes
   // instead of restarting the read from the top (CCC-408).
   let _ttsDirectBtn = null;
+  function _syncSpeakFloatPlayback(btn) {
+    const action = btn.classList.contains('paused') ? 'resume'
+      : btn.classList.contains('speaking') ? 'pause' : 'read';
+    if (btn.dataset.ttsAction === action) return;
+    btn.dataset.ttsAction = action;
+    const label = action === 'pause' ? 'Pause reading'
+      : action === 'resume' ? 'Resume reading' : 'Read the message on screen aloud';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    const shape = action === 'pause'
+      ? '<path d="M8 5v14M16 5v14" stroke-width="4"></path>'
+      : action === 'resume' ? '<path d="m8 5 11 7-11 7Z" fill="currentColor" stroke="none"></path>'
+      : '<path d="M11 5 6 9H2v6h4l5 4V5z"></path><path class="spk-wave" d="M15.5 8.5a5 5 0 0 1 0 7"></path><path class="spk-wave" d="M18.5 5.5a9 9 0 0 1 0 13"></path>';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + shape + '</svg>';
+  }
   function _setTtsDirectBtnState(btn, state) {
     if (_ttsDirectBtn && _ttsDirectBtn !== btn) {
       _ttsDirectBtn.classList.remove('speaking', 'paused');
@@ -13834,6 +13849,7 @@
       const selected = f._speakTarget === btn;
       f.classList.toggle('speaking', selected && state === 'speaking');
       f.classList.toggle('paused', selected && state === 'paused');
+      _syncSpeakFloatPlayback(f);
     });
     if (btn) {
       btn.classList.toggle('speaking', state === 'speaking' || state === 'paused');
@@ -46790,6 +46806,7 @@
       const readingTarget = !!_ttsDirectBtn && speakBtn._speakTarget === _ttsDirectBtn;
       speakBtn.classList.toggle('speaking', readingTarget && _ttsActive && !_ttsPaused);
       speakBtn.classList.toggle('paused', readingTarget && _ttsPaused);
+      _syncSpeakFloatPlayback(speakBtn);
       scheduleTtsViewportPrefetch(view, speakBtn._speakTarget);
       _ttsScheduleCacheDebug();
       const showSpeak = !!speakBtn._speakTarget;
@@ -47324,7 +47341,7 @@
       speakBtn.className = 'conv-scroll-speak-btn';
       speakBtn.title = 'Read the message on screen aloud';
       speakBtn.setAttribute('aria-label', 'Read the message on screen aloud');
-      speakBtn.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"></path><path class="spk-wave" d="M15.5 8.5a5 5 0 0 1 0 7"></path><path class="spk-wave" d="M18.5 5.5a9 9 0 0 1 0 13"></path></svg>';
+      _syncSpeakFloatPlayback(speakBtn);
       host.appendChild(speakBtn);
     }
     speakBtn._convTargetView = view;
