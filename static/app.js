@@ -13843,6 +13843,7 @@
   }
   const _ttsHeadCache = new Map();   // chunk text -> { p, ready, got }
   let _ttsPrefetchTimer = null;
+  let _ttsPrefetchTarget = null;
   // Diagnostic paint follows the live cache, never transcript markup. Rebuild
   // ranges after renders so replacing text nodes cannot leave stale highlights.
   let _ttsCacheDebug = false;
@@ -13862,8 +13863,10 @@
     if (_ttsChunkState && _ttsChunkState.debugCache) {
       for (const [text, entry] of _ttsChunkState.debugCache) clips.set(text, entry);
     }
-    document.querySelectorAll('.conv-pane .event, .conv-pane .stream-bubble, .gc-reader .event').forEach(el => {
-      const elements = el.matches('.stream-bubble') ? [el.querySelector('.stream-bubble-blocks')].filter(Boolean)
+    document.querySelectorAll('.conv-pane .event, .conv-pane .stream-bubble, .conv-pane .assistant-text, .gc-reader .event, .gc-reader .assistant-text').forEach(el => {
+      if (el.matches('.assistant-text') && el.closest('.event, .stream-bubble')) return;
+      const elements = el.matches('.assistant-text') ? [el]
+        : el.matches('.stream-bubble') ? [el.querySelector('.stream-bubble-blocks')].filter(Boolean)
         : el.matches('.assistant') ? Array.from(el.querySelectorAll('.assistant-text'))
         : el.matches('.user_text:not(.pending)') ? [el.querySelector('.user-msg')].filter(Boolean) : [];
       if (!elements.length) return;
@@ -14100,8 +14103,17 @@
   });
   // Called after a transcript render; waits for the text to stop changing.
   function scheduleTtsPrefetch() {
+    const paneId = activePaneId();
+    const data = paneId && lastMessageTtsData(paneId);
+    const text = data && data.text || '';
+    // Live snapshots repeat every ~900ms. Only changed text resets the quiet
+    // period; identical snapshots must not postpone preparation indefinitely.
+    if (_ttsPrefetchTimer != null && _ttsPrefetchTarget
+        && _ttsPrefetchTarget.paneId === paneId && _ttsPrefetchTarget.text === text) return;
     clearTimeout(_ttsPrefetchTimer);
+    _ttsPrefetchTarget = { paneId, text };
     _ttsPrefetchTimer = setTimeout(() => {
+      _ttsPrefetchTimer = null;
       try {
         if (_ttsActive || _ttsPaused || document.hidden) return;
         // Prefetch only the focused pane; background split panes prefetch on
@@ -21996,6 +22008,7 @@
       if (typeof updateAnnounceButton === 'function') updateAnnounceButton();
       if (typeof updateJumpButton === 'function') updateJumpButton();
       if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
+      scheduleTtsPrefetch();
       try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
       try {
         if (typeof resetLocalhostPill === 'function') resetLocalhostPill();
@@ -65105,12 +65118,8 @@
         // is playing) must not cancel the in-progress utterance — that's the
         // whole point of decoupling playback from focus.
         resetTtsOnNewTurn(currentConversation);
-        scheduleTtsPrefetch();
         break;
       }
-    } else if (opts && opts.initialLoad) {
-      // Switching to a conversation: make its last message ready to play too.
-      scheduleTtsPrefetch();
     }
     function whatsappBridgeSenderHtml(ev) {
       if (!ev || ev.subtype !== 'hermes_whatsapp_bridge') return '';
@@ -66910,6 +66919,10 @@
     } else {
       updateConversationEndAffordance($view);
     }
+    // Prepare after painting, including provisional live messages. Playback
+    // rearm above deliberately ignores provisional rows, but caching must not.
+    if (paneId === activePaneId() && (opts.initialLoad || events.some(ev =>
+        ev && (ev.type === 'assistant' || ev.type === 'result')))) scheduleTtsPrefetch();
     ffcRefreshForCurrent();
     updateSessionOutcomeBanner($view);
     _firePhoneModeReadIfDone(events, paneId);

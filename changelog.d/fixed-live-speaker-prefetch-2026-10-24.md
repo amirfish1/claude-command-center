@@ -1,0 +1,1 @@
+- Start speaker audio preparation automatically for live replies and on pane focus. Repeated unchanged live snapshots no longer postpone preparation, and cache debug highlights now cover standalone Codex answer blocks.

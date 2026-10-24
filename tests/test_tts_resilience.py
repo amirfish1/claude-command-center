@@ -83,6 +83,63 @@ console.log(JSON.stringify(settled));
         )
         self.assertEqual(result, [True])
 
+    def test_live_prefetch_waits_for_changed_text_without_poll_starvation(self):
+        scheduler = function_block(
+            self.source, "scheduleTtsPrefetch", "_ttsShowVoice"
+        )
+        result = self.run_node(
+            """
+let now = 0, nextTimer = 0, text = 'A settled reply.';
+let _ttsPrefetchTimer = null, _ttsPrefetchTarget = null;
+const timers = new Map(), requests = [];
+const activePaneId = () => 'p1';
+const lastMessageTtsData = () => ({ text });
+const document = { hidden: false };
+const _ttsActive = false, _ttsPaused = false;
+const _ttsMarkCache = () => {}, _ttsLog = () => {};
+const _ttsPrefetchHead = (text, paneId) => requests.push({ at: now, text, paneId });
+const setTimeout = (fn, delay) => {
+  const id = ++nextTimer;
+  timers.set(id, { fn, at: now + delay });
+  return id;
+};
+const clearTimeout = id => timers.delete(id);
+function tick(to) {
+  for (;;) {
+    const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!next || next[1].at > to) break;
+    now = next[1].at;
+    timers.delete(next[0]);
+    next[1].fn();
+  }
+  now = to;
+}
+"""
+            + scheduler
+            + """
+scheduleTtsPrefetch();
+tick(900); scheduleTtsPrefetch();
+tick(1800); scheduleTtsPrefetch();
+tick(2500);
+const stable = requests.splice(0);
+text = 'A reply still being written.';
+scheduleTtsPrefetch();
+tick(3400); text += ' Now complete.'; scheduleTtsPrefetch();
+tick(4300); scheduleTtsPrefetch();
+tick(5899);
+const beforeQuiet = requests.length;
+tick(5900);
+console.log(JSON.stringify({ stable, beforeQuiet, changed: requests }));
+"""
+        )
+        self.assertEqual(result["stable"], [
+            {"at": 2500, "text": "A settled reply.", "paneId": "p1"}
+        ])
+        self.assertEqual(result["beforeQuiet"], 0)
+        self.assertEqual(result["changed"], [
+            {"at": 5900, "text": "A reply still being written. Now complete.", "paneId": "p1"}
+        ])
+
     def test_failed_chunk_advances_queue_and_warns_non_blockingly(self):
         chunker = function_block(
             self.source, "_chunkTtsText", "_ttsBindChunkCompletion"
