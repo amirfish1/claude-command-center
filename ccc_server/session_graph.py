@@ -25,6 +25,7 @@ import uuid
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
+from ccc_server.quick_actions import _validated_quick_action
 
 # ---------------------------------------------------------------------------
 # SessionGraph — unified parent-child adjacency list
@@ -1071,7 +1072,7 @@ _SESSION_STATE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _SESSION_STATE_FIELD_RE = re.compile(
-    r"^(DID|INSIGHT|NEXT_STEP_USER|COMPLETION)\s*:\s*(.+?)\s*$",
+    r"^(DID|INSIGHT|NEXT_STEP_USER|NEXT_ACTION|COMPLETION)[ \t]*:[ \t]*(.*?)[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE = re.compile(
@@ -1155,8 +1156,19 @@ End your final reply with a compact CCC session-state block:
 DID: one sentence describing what you changed or learned
 INSIGHT: one sentence with the main finding, root cause, or surprise
 NEXT_STEP_USER: the exact action requiring the user, or None.
+NEXT_ACTION: null or a single-line JSON object as described below
 COMPLETION: a single-line JSON object using the schema below
 </session-state>
+
+Write NEXT_ACTION yourself in this same answer; the dashboard renders it
+directly without another model call. Use {"label":"Restart","reply":"Yes, restart the dashboard and worker."}
+(on ONE line) only when NEXT_STEP_USER offers exactly one concrete, scoped
+next step and needs the user's go-ahead. The label is one short verb (at most
+20 letters); reply is the exact text to send back to this session (at most
+400 characters), preserving the scope and qualifications. Otherwise use null.
+Never choose between alternatives, invent missing information, claim the user
+performed a task, or turn a request to review/read/check something into approval.
+Do authorized work first; do not invent a pending action just to provide a button.
 
 COMPLETION is a self-assessment of the entire requested task, not just this turn.
 Use version 1 and four axes, each with score (number 0..1) and evidence (a short,
@@ -1283,7 +1295,15 @@ def _parse_session_state(text):
     for fm in _SESSION_STATE_FIELD_RE.finditer(body):
         key = fm.group(1).upper()
         val = fm.group(2).strip()
-        if key == "COMPLETION":
+        if key == "NEXT_ACTION":
+            out.pop("next_action", None)
+            try:
+                action = _validated_quick_action(json.loads(val)) if len(val) <= 2000 else None
+            except (ValueError, TypeError, RecursionError):
+                action = None
+            if action:
+                out["next_action"] = action
+        elif key == "COMPLETION":
             try:
                 raw = json.loads(val) if len(val) <= 32000 else None
             except (ValueError, TypeError, RecursionError):
@@ -1291,6 +1311,10 @@ def _parse_session_state(text):
             out["completion"] = _completion_assessment(raw)
         else:
             out[key.lower()] = val
+    next_step = str(out.get("next_step_user") or "").strip()
+    if not next_step or re.fullmatch(
+            r"(?:none|nothing|no action(?: is)? needed|n/a|not applicable)[.!]?", next_step, re.I):
+        out.pop("next_action", None)
     if not any(out.values()):
         return None
     return out

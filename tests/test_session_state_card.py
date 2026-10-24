@@ -16,6 +16,9 @@ def render_session_state(body: str, app_path: Path) -> str:
     helpers = source.rfind("// CCC-1218:", 0, start)
     if helpers != -1:
         start = helpers
+    row_helpers = source.rfind("// Row actions are model-authored replies", 0, start)
+    if row_helpers != -1:
+        start = row_helpers
     function_source = source[start:end]
     harness = f"""
 function escapeHtml(value) {{
@@ -154,6 +157,17 @@ class TestSessionStateCard(unittest.TestCase):
             self.assertRegex(styles, r"font-size: 1[45]px")
             self.assertIn(".session-state-block .ssb-reason {", styles)
             self.assertRegex(styles, r"font-size: 1[23]px")
+
+    def test_originating_model_action_renders_without_raw_json(self):
+        html = render_session_state(
+            'NEXT_STEP_USER: Say yes to restart both services.\n'
+            'NEXT_ACTION: {"label":"Restart","reply":"Yes, restart the dashboard and worker."}',
+            PROJECT_ROOT / "static" / "app.js",
+        )
+        self.assertIn('data-ssb-value="Yes, restart the dashboard and worker."', html)
+        self.assertIn('>Restart</button>', html)
+        self.assertNotIn('next action</span>', html)
+        self.assertNotIn('&quot;label&quot;', html)
 
     def test_needs_you_offers_restart_for_ccc_kickstart(self):
         html = render_session_state(

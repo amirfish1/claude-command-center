@@ -22239,7 +22239,6 @@ _SESSION_ISSUES_CACHE = None
 _issue_titles_overrides_cache = None
 
 _adopt_ccc_module("session_graph")
-_adopt_ccc_module("quick_actions")
 _adopt_ccc_module("cross_repo_issues")
 # ---------------------------------------------------------------------------
 # Conversation parsing (Claude Code interactive sessions)
@@ -37332,7 +37331,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 payload = json.loads(self.rfile.read(length))
-                self.send_json(suggest_session_quick_action(payload))
+                # Compatibility for older dashboard tabs. Actions now arrive
+                # in the answer footer; this endpoint never invokes a model.
+                self.send_json({"ok": True, "action": None})
             except (ValueError, UnicodeError):
                 self.send_json({"ok": False, "error": "invalid JSON"}, 400)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/summarize$", path):

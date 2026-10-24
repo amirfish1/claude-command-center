@@ -80,16 +80,14 @@ When you start a new session, CCC guesses the right folder from your first promp
 
 ## Session row reply suggestions
 
-For visible, idle sessions with a structured pending request, CCC asks the
-installed Claude CLI (Haiku) for a one-word action label and a scoped reply.
-It supplies at most 2,000 characters of the request and 4,000 characters of
-the session's summary and latest assistant preview, using the CLI's configured
-provider and account. The helper has no tools, MCP servers, settings or hooks.
-Results (including no-action answers) are cached in memory, with at most two
-concurrent calls. Set `CCC_QUICK_ACTIONS=0` on the dashboard server to disable
-these calls. Missing CLI access or model failures leave the normal row intact.
-Hovering the chip shows the exact reply; clicking sends it through the normal
-session input API. Inference itself never sends a reply or executes a command.
+The model answering a session can include a `NEXT_ACTION` label and scoped
+reply in its `<session-state>` footer. CCC validates those fields and renders
+them directly for idle sessions with a pending request. Rendering makes no
+additional model call and sends no session text to another provider. Answers
+without valid action metadata keep their normal summary text. Hovering the
+chip shows the exact reply; clicking sends it through the normal session input
+API. The older `/api/conversations/<id>/quick-action` suggestion endpoint
+returns a no-action response for compatibility and never invokes a model.
 
 ## Optional outbound call: share card upload
 

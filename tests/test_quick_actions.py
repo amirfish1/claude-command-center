@@ -1,86 +1,65 @@
-"""Model reply suggestions stay bounded, text-only and failure-tolerant."""
+"""Action metadata comes from the answer footer without a second model call."""
 
 import importlib
 import json
-import subprocess
-from types import SimpleNamespace
 import unittest
-from unittest import mock
 
 
 class QuickActionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        importlib.import_module("server")
-        cls.actions = importlib.import_module("ccc_server.quick_actions")
+        cls.server = importlib.import_module("server")
 
-    def setUp(self):
-        self.actions._quick_action_cache.clear()
-        self.cli = mock.patch.object(self.actions._core, "_resolve_claude_bin",
-                                     return_value={"available": True, "bin": "claude"})
-        self.cli.start()
-        self.addCleanup(self.cli.stop)
-        self.payload = {"next_step": "Say yes to a dashboard and worker restart, or run it yourself.",
-                        "context": "The running processes have not picked up the new code."}
+    def parse(self, action, next_step="Say yes to a dashboard and worker restart."):
+        return self.server._parse_session_state(
+            "<session-state>\nDID: Checked the running version.\n"
+            "INSIGHT: The running processes are older.\n"
+            + "NEXT_STEP_USER: " + next_step + "\nNEXT_ACTION: " + action + "\n</session-state>")
 
-    def test_model_chooses_label_and_scoped_reply_and_caches_it(self):
+    def test_originating_answer_supplies_label_and_scoped_reply(self):
         action = {"label": "Restart", "reply": "Yes, restart the dashboard and worker."}
-        with mock.patch.object(self.actions.subprocess, "run", return_value=SimpleNamespace(
-                returncode=0, stdout=json.dumps(action))) as run:
-            self.assertEqual(self.actions.suggest_session_quick_action(self.payload), {"ok": True, "action": action})
-            self.assertEqual(self.actions.suggest_session_quick_action(self.payload)["action"], action)
-        self.assertEqual(run.call_count, 1)
-        argv = run.call_args.args[0]
-        self.assertEqual(argv[argv.index("--tools") + 1], "")
-        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
-        self.assertIn('"mcpServers":{}', argv[argv.index("--strict-mcp-config") + 1])
-        self.assertIn(self.payload["next_step"], argv[-1])
-        self.assertIn("Never choose between alternatives", argv[-1])
+        parsed = self.parse(json.dumps(action))
+        self.assertEqual(parsed["next_action"], action)
+        self.assertEqual(parsed["did"], "Checked the running version.")
+        self.assertEqual(parsed["next_step_user"], "Say yes to a dashboard and worker restart.")
 
-    def test_abstention_is_cached_but_changed_request_is_recomputed(self):
-        with mock.patch.object(self.actions.subprocess, "run", return_value=SimpleNamespace(
-                returncode=0, stdout="null")) as run:
-            for _ in range(2):
-                self.assertEqual(self.actions.suggest_session_quick_action(self.payload), {"ok": True, "action": None})
-            self.actions.suggest_session_quick_action(dict(self.payload, next_step="Choose one."))
-        self.assertEqual(run.call_count, 2)
+    def test_legacy_footer_does_not_invent_an_action(self):
+        parsed = self.server._parse_session_state(
+            "<session-state>\nNEXT_STEP_USER: Say yes to a restart.\n</session-state>")
+        self.assertEqual(parsed["next_step_user"], "Say yes to a restart.")
+        self.assertNotIn("next_action", parsed)
 
-    def test_provider_json_fences_and_disable_switch(self):
-        with mock.patch.object(self.actions.subprocess, "run", return_value=SimpleNamespace(
-                returncode=0, stdout='```json\n{"label":"Restart","reply":"Yes, restart both."}\n```')):
-            self.assertEqual(self.actions.suggest_session_quick_action(self.payload)["action"]["label"], "Restart")
-        with mock.patch.dict(self.actions.os.environ, {"CCC_QUICK_ACTIONS": "0"}), \
-                mock.patch.object(self.actions.subprocess, "run") as run:
-            self.assertEqual(self.actions.suggest_session_quick_action(self.payload), {"ok": True, "action": None})
-            run.assert_not_called()
+    def test_no_action_for_invalid_or_null_metadata(self):
+        for raw in ["null", "not json", '"Restart"', '{"label":"Restart all","reply":"yes"}',
+                    '{"label":"<script>","reply":"yes"}', '{"label":"Restart","reply":""}',
+                    '{"label":"Restart","reply":"line\\nbreak"}',
+                    json.dumps({"label":"Restart", "reply":"x" * 401}), "[" * 2500]:
+            with self.subTest(raw=raw[:60]):
+                self.assertNotIn("next_action", self.parse(raw))
 
-    def test_invalid_model_output_is_not_an_action(self):
-        for output in ["not json", '"Restart"', '{"label":"Restart all","reply":"yes"}',
-                       '{"label":"<script>","reply":"yes"}', '{"label":"Restart","reply":""}',
-                       '{"label":"Restart","reply":"line\\nbreak"}']:
-            with self.subTest(output=output), mock.patch.object(self.actions.subprocess, "run",
-                    return_value=SimpleNamespace(returncode=0, stdout=output)):
-                self.assertFalse(self.actions.suggest_session_quick_action(self.payload)["ok"])
+    def test_action_requires_a_pending_user_step(self):
+        action = json.dumps({"label": "Restart", "reply": "Yes, restart both."})
+        for next_step in ["None.", "nothing", "N/A", "No action is needed", ""]:
+            with self.subTest(next_step=next_step):
+                self.assertNotIn("next_action", self.parse(action, next_step))
 
-    def test_failure_and_busy_slots_do_not_spawn_unbounded_work(self):
-        with mock.patch.object(self.actions.subprocess, "run", side_effect=subprocess.TimeoutExpired("claude", 30)):
-            self.assertFalse(self.actions.suggest_session_quick_action(self.payload)["ok"])
-        self.actions._quick_action_slots.acquire()
-        self.actions._quick_action_slots.acquire()
-        try:
-            with mock.patch.object(self.actions.subprocess, "run") as run:
-                self.assertFalse(self.actions.suggest_session_quick_action(self.payload)["ok"])
-                run.assert_not_called()
-        finally:
-            self.actions._quick_action_slots.release()
-            self.actions._quick_action_slots.release()
+    def test_last_footer_wins_without_leaking_previous_action(self):
+        first = '<session-state>\nNEXT_STEP_USER: Approve restart.\nNEXT_ACTION: {"label":"Restart","reply":"Restart both."}\n</session-state>'
+        last = '<session-state>\nNEXT_STEP_USER: None.\n</session-state>'
+        self.assertNotIn("next_action", self.server._parse_session_state(first + last))
 
-    def test_oversized_or_invalid_requests_never_reach_model(self):
-        for payload in [[], {}, {"next_step": 1}, {"next_step": "x" * 2001},
-                        dict(self.payload, context="x" * 4001)]:
-            with mock.patch.object(self.actions.subprocess, "run") as run:
-                self.assertFalse(self.actions.suggest_session_quick_action(payload)["ok"])
-                run.assert_not_called()
+    def test_empty_metadata_does_not_consume_the_following_field(self):
+        parsed = self.server._parse_session_state(
+            '<session-state>\nNEXT_ACTION: \nNEXT_STEP_USER: Approve restart.\n</session-state>')
+        self.assertNotIn("next_action", parsed)
+        self.assertEqual(parsed["next_step_user"], "Approve restart.")
+
+    def test_originating_model_instructions_request_metadata(self):
+        prompt = self.server._CCC_SESSION_STATE_SYSTEM_PROMPT
+        self.assertIn("NEXT_ACTION:", prompt)
+        self.assertIn("without another model call", prompt)
+        self.assertIn('"label":"Restart"', prompt)
+        self.assertIn("Otherwise use null", prompt)
 
 
 if __name__ == "__main__":

@@ -16144,112 +16144,48 @@
     });
   }
 
-  // Row actions are model-authored replies, never model-selected shell commands.
-  // Only visible, idle rows are inferred, with at most two requests in flight.
-  const _rowQuickActions = new Map();
+  // Row actions are model-authored replies supplied in the answer footer.
+  // Rendering a chip never asks another model to interpret the answer.
   const _rowQuickActionSending = new Set();
-  let _rowQuickActionObserver = null;
-  let _rowQuickActionActive = 0;
-  const _rowQuickActionQueue = [];
+  function sessionQuickAction(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || typeof value.label !== 'string' || !/^[\p{L}]{1,20}$/u.test(value.label)
+        || typeof value.reply !== 'string' || !value.reply.trim() || value.reply.trim().length > 400
+        || /[\x00-\x1f]/.test(value.reply)) return null;
+    return { label: value.label, reply: value.reply.trim() };
+  }
   function rowQuickActionSource(c) {
     if (!c || c.archived || c.trashed || c.pending_spawn) return null;
     const sid = String(c.session_id || c.id || '');
     const live = _applyLiveOverlayToRow(c);
     if (!sid || _rowQuickActionSending.has(sid) || live.needs_approval || live.question_waiting
-        || c.last_event_type === 'user' || _ultraFreshExplanation(c).kind !== 'next') return null;
+        || c.last_event_type === 'user') return null;
+    const info = _ultraFreshExplanation(c);
     const next = String((c.session_state || {}).next_step_user || '').trim();
-    if (!next || next.length > 2000 || /^(?:none|nothing|n\/a|not applicable)[.!]?$/i.test(next)) return null;
-    if (_ultraFreshExplanation(c).text !== next) return null;
-    const state = c.session_state || {};
-    const context = [state.did, state.insight, c.last_assistant_text || c.last_assistant_preview]
-      .filter(Boolean).join('\n').slice(0, 4000);
-    return { sid, next_step: next, context, key: JSON.stringify([sid, next, context]) };
+    const action = sessionQuickAction((c.session_state || {}).next_action);
+    if (!action || !next || info.kind !== 'next' || info.text !== next) return null;
+    const replyText = String(c.last_assistant_text || c.last_assistant_preview || '').slice(0, 4000);
+    return { sid, action, key: JSON.stringify([sid, next, action, replyText]) };
   }
   function currentRowQuickActionSource(sid) {
     const base = _ultraFreshRow(sid);
     return base ? rowQuickActionSource(_ultraFreshCurrent(base)) : null;
   }
-  function paintRowQuickAction(slot, entry) {
-    if (!slot.isConnected || slot.dataset.quickActionKey !== entry.source.key) return;
-    const current = currentRowQuickActionSource(entry.source.sid);
-    if (!current || current.key !== entry.source.key || !entry.action) { slot.replaceChildren(); return; }
-    if (slot.querySelector('button[data-role="quick-action"]')) return;
+  function paintRowQuickAction(slot, source) {
+    if (slot.dataset.quickActionKey === source.key && slot.firstElementChild) return;
+    slot.replaceChildren();
+    slot.dataset.quickActionKey = source.key;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'conv-quick-action';
     btn.dataset.role = 'quick-action';
-    btn.dataset.quickActionKey = entry.source.key;
-    btn.textContent = entry.action.label;
-    btn.title = 'Send to this session: ' + entry.action.reply;
+    btn.dataset.quickActionKey = source.key;
+    btn.textContent = source.action.label;
+    btn.title = 'Send to this session: ' + source.action.reply;
     btn.setAttribute('aria-label', btn.title);
     slot.appendChild(btn);
   }
-  async function drainRowQuickActions() {
-    while (_rowQuickActionActive < 2 && _rowQuickActionQueue.length) {
-      const entry = _rowQuickActionQueue.shift();
-      const current = currentRowQuickActionSource(entry.source.sid);
-      if (!current || current.key !== entry.source.key) {
-        _rowQuickActions.delete(entry.source.key);
-        continue;
-      }
-      _rowQuickActionActive++;
-      (async () => {
-        try {
-          const res = await fetch('/api/conversations/' + encodeURIComponent(entry.source.sid) + '/quick-action', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ next_step: entry.source.next_step, context: entry.source.context }),
-          });
-          const data = await res.json();
-          if (!res.ok || !data.ok) throw new Error('suggestion unavailable');
-          const action = data.action;
-          entry.action = action && typeof action.label === 'string' && /^[\p{L}]{1,20}$/u.test(action.label)
-            && typeof action.reply === 'string' && action.reply.length <= 400 ? action : null;
-          entry.done = true;
-        } catch (_) {
-          entry.done = true;
-          entry.retryAfter = Date.now() + 60000;
-        } finally {
-          _rowQuickActionActive--;
-          document.querySelectorAll('.conv-quick-action-slot').forEach(slot => paintRowQuickAction(slot, entry));
-          drainRowQuickActions();
-        }
-      })();
-    }
-  }
-  function requestRowQuickAction(slot) {
-    const source = currentRowQuickActionSource(slot.dataset.quickActionSid);
-    if (!source || source.key !== slot.dataset.quickActionKey) return;
-    let entry = _rowQuickActions.get(source.key);
-    if (entry && entry.retryAfter && Date.now() >= entry.retryAfter) {
-      _rowQuickActions.delete(source.key); entry = null;
-    }
-    if (!entry) {
-      // Bound browser memory too; pending entries stay until their work ends.
-      if (_rowQuickActions.size >= 256) {
-        for (const [key, old] of _rowQuickActions) {
-          if (old.done) { _rowQuickActions.delete(key); break; }
-        }
-        if (_rowQuickActions.size >= 256) return;
-      }
-      entry = { source, action: null, done: false };
-      _rowQuickActions.set(source.key, entry);
-      _rowQuickActionQueue.push(entry);
-      drainRowQuickActions();
-    }
-    paintRowQuickAction(slot, entry);
-  }
   function syncRowQuickActions(sid) {
-    if (!_rowQuickActionObserver && typeof IntersectionObserver === 'function') {
-      _rowQuickActionObserver = new IntersectionObserver(entries => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            _rowQuickActionObserver.unobserve(entry.target);
-            requestRowQuickAction(entry.target);
-          }
-        });
-      });
-    }
-    if (_rowQuickActionObserver && !sid) _rowQuickActionObserver.disconnect();
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
     document.querySelectorAll(selector).forEach(row => {
       const source = currentRowQuickActionSource(row.dataset.sessionId);
@@ -16258,7 +16194,7 @@
         row.querySelectorAll('.conv-quick-action-slot').forEach(slot => slot.remove());
         return;
       }
-      // The phone list has its own preview markup. Hidden copies don't infer.
+      // The phone list has its own preview markup.
       [outcome, row.querySelector('.wa-line2')].filter(Boolean).forEach(host => {
         let slot = host.querySelector('.conv-quick-action-slot');
         if (!slot) {
@@ -16266,12 +16202,7 @@
           slot.className = 'conv-quick-action-slot';
           host.appendChild(slot);
         }
-        if (slot.dataset.quickActionKey !== source.key) slot.replaceChildren();
-        slot.dataset.quickActionKey = source.key;
-        slot.dataset.quickActionSid = source.sid;
-        const entry = _rowQuickActions.get(source.key);
-        if (entry) paintRowQuickAction(slot, entry);
-        if (_rowQuickActionObserver) _rowQuickActionObserver.observe(slot);
+        paintRowQuickAction(slot, source);
       });
     });
   }
@@ -16279,21 +16210,20 @@
     const btn = ev.target.closest && ev.target.closest('[data-role="quick-action"]');
     if (!btn) return;
     ev.preventDefault(); ev.stopImmediatePropagation();
-    const entry = _rowQuickActions.get(btn.dataset.quickActionKey);
-    if (!entry || !entry.action) return;
-    const { sid, key } = entry.source;
-    const current = currentRowQuickActionSource(sid);
-    if (!current || current.key !== key) { btn.remove(); return; }
+    const row = btn.closest('.conv-item[data-session-id]');
+    const current = row && currentRowQuickActionSource(row.dataset.sessionId);
+    if (!current || current.key !== btn.dataset.quickActionKey) { btn.remove(); return; }
+    const { sid, action } = current;
     _rowQuickActionSending.add(sid);
     btn.disabled = true; btn.textContent = 'Sending…';
     try {
-      const data = await postInjectInput(sid, entry.action.reply, 'send');
+      const data = await postInjectInput(sid, action.reply, 'send');
       if (!data.ok) throw new Error(data.error || 'Send failed');
       markSessionSending(sid);
-      showOpToast('Sent: ' + entry.action.reply);
+      showOpToast('Sent: ' + action.reply);
       refreshConversationList();
     } catch (error) {
-      btn.disabled = false; btn.textContent = entry.action.label;
+      btn.disabled = false; btn.textContent = action.label;
       showOpToast(String(error.message || error), 'error');
     } finally {
       _rowQuickActionSending.delete(sid);
@@ -16436,7 +16366,7 @@
     const lines = body.split('\n').map(s => s.trim()).filter(Boolean);
     const fields = {};
     const otherRows = [];
-    const knownKeys = new Set(['DID', 'INSIGHT', 'NEXT_STEP_USER', 'COMPLETION']);
+    const knownKeys = new Set(['DID', 'INSIGHT', 'NEXT_STEP_USER', 'NEXT_ACTION', 'COMPLETION']);
     for (const ln of lines) {
       const m = ln.match(/^([A-Z_]+):\s*(.*)$/);
       if (m && knownKeys.has(m[1])) {
@@ -16460,7 +16390,12 @@
     }
     const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(nextStep);
     if (hasUserAction) {
-      const actions = needsYouActionsHtml(nextStep);
+      let action = null;
+      try { action = sessionQuickAction(JSON.parse(fields.NEXT_ACTION || 'null')); } catch (_) {}
+      const actions = action
+        ? '<button type="button" class="ssb-action ssb-act-say" data-ssb-act="say" data-ssb-value="' + escapeAttr(action.reply)
+          + '" title="' + escapeAttr('Send to this session: ' + action.reply) + '">' + escapeHtml(action.label) + '</button>'
+        : needsYouActionsHtml(nextStep);
       rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + renderInline(nextStep) + (actions ? ' <span class="ssb-actions">' + actions + '</span>' : '') + '</div>');
     } else if (fields.DID) {
       rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">Done</span>' + escapeHtml(fields.DID) + '</div>');

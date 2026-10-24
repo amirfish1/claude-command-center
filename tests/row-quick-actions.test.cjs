@@ -24,8 +24,8 @@ test('row action replies, stale state, failure recovery and responsive rendering
       </div></div>`);
     await page.addScriptTag({ content: `
       window.row = {session_id:'restart-session', state:'idle', last_event_type:'assistant',
-        session_state:{next_step_user:'Say yes to a dashboard and worker restart.'}};
-      window.sent = []; window.inferences = 0; window.sendFails = false; window.deferModel = false;
+        session_state:{next_step_user:'Say yes to a dashboard and worker restart.',next_action:{label:'Restart',reply:'Yes, restart the dashboard and worker.'}}};
+      window.sent = []; window.inferences = 0; window.sendFails = false;
       const _ultraFreshRow = () => window.row;
       const _ultraFreshCurrent = c => c;
       const _applyLiveOverlayToRow = c => c;
@@ -34,14 +34,9 @@ test('row action replies, stale state, failure recovery and responsive rendering
       const markSessionSending = () => { row.state = 'working'; syncRowQuickActions(); };
       const showOpToast = () => {};
       const refreshConversationList = () => {};
-      window.fetch = async () => {
-        inferences++;
-        if (deferModel) await new Promise(r => { window.releaseModel = r; });
-        return {ok:true,json:async()=>({ok:true,action:{label:'Restart',reply:'Yes, restart the dashboard and worker.'}})};
-      };
+      window.fetch = async () => { inferences++; throw new Error('Unexpected model request'); };
       ${helpers}
       window.syncActions = syncRowQuickActions;
-      window.clearActions = () => _rowQuickActions.clear();
       syncRowQuickActions();
     ` });
     const visibleButton = () => page.evaluate(() => [...document.querySelectorAll('.conv-quick-action')]
@@ -52,13 +47,13 @@ test('row action replies, stale state, failure recovery and responsive rendering
     assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.conv-outcome')).display),
       'flex', 'desktop rules keep chip beside the pending request');
     await page.evaluate(() => { syncActions(); syncActions(); });
-    assert.equal(await page.evaluate(() => inferences), 1, 'polling reuses inference');
+    assert.equal(await page.evaluate(() => inferences), 0, 'rendering never requests a model');
     assert.equal(await page.evaluate(() => {
       const button = [...document.querySelectorAll('.conv-quick-action')].find(b => b.getBoundingClientRect().width);
       button.focus(); syncActions(); return document.activeElement === button;
     }), true, 'unchanged updates preserve button and keyboard focus');
 
-    // The mobile markup has a separate slot but reuses the same inference.
+    // The mobile markup renders the same originating answer metadata.
     await page.setViewport({ width: 390, height: 844 });
     await page.waitForFunction(() => document.querySelector('.wa-line2 .conv-quick-action'));
     const mobile = await page.evaluate(() => {
@@ -83,26 +78,33 @@ test('row action replies, stale state, failure recovery and responsive rendering
     assert.equal(await page.evaluate(() => sent.length), 2, 'double tap sends only once');
     assert.equal(await page.evaluate(() => document.querySelectorAll('.conv-quick-action').length), 0);
 
-    // An inference finishing after a new turn cannot install an old action.
+    // Old replies without metadata keep their text without model fallback.
     await page.evaluate(() => {
-      row.state = 'idle'; row.session_state.next_step_user = 'Confirm the next restart.';
-      deferModel = true; syncActions();
+      row.state = 'idle'; delete row.session_state.next_action; syncActions();
     });
-    await page.waitForFunction(() => typeof releaseModel === 'function');
-    await page.evaluate(() => { row.last_event_type = 'user'; releaseModel(); syncActions(); });
-    await page.waitForFunction(() => !document.querySelector('.conv-quick-action-slot'));
-    assert.equal(await page.evaluate(() => sent.length), 2);
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.conv-quick-action').length), 0);
+    assert.equal(await page.evaluate(() => inferences), 0);
+    // A different label is used verbatim rather than guessed from restart text.
+    await page.evaluate(() => {
+      row.session_state.next_action = {label:'Proceed',reply:'Please restart only the dashboard.'}; syncActions();
+    });
+    assert.match(await visibleButton(), />Proceed</);
+    await page.evaluate(() => {
+      row.session_state.next_action = {label:'<script>',reply:'Yes'}; syncActions();
+    });
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.conv-quick-action').length), 0);
 
     // A click on an already painted action also rechecks the source.
     await page.evaluate(() => {
-      deferModel = false; row.last_event_type = 'assistant'; syncActions();
+      row.session_state.next_action = {label:'Restart',reply:'Yes, restart the dashboard and worker.'}; syncActions();
     });
     await page.waitForFunction(() => document.querySelector('.wa-line2 .conv-quick-action'));
     await page.evaluate(() => {
-      row.session_state.next_step_user = 'Choose staging or production.';
+      row.session_state.next_action.reply = 'Restart only the dashboard.';
       document.querySelector('.wa-line2 .conv-quick-action').click();
     });
     assert.equal(await page.evaluate(() => sent.length), 2, 'stale click is rejected');
+    assert.equal(await page.evaluate(() => inferences), 0, 'no inference request in any state');
   } finally {
     await browser.close();
   }
