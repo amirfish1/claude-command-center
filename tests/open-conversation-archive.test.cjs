@@ -63,3 +63,20 @@ test('restoring a conversation keeps its reader open', async () => {
   assert.equal(f.calls.includes('list'), false);
   assert.equal(f.row.archived, false);
 });
+
+
+test('archive and restore patch every returned group member but leave other ideas alone', async () => {
+  for (const archived of [true, false]) {
+    const f = fixture({ ok: true, archived, session_ids: ['session-test', 'child', 'continued'] });
+    const child = { id: 'child', archived: !archived };
+    const continued = { id: 'continued', archived: !archived };
+    const other = { id: 'unrelated', archived: !archived };
+    f.context.conversationsData.push(child, other);
+    f.context.archiveData.push(continued);
+    await f.run(archived ? 'archive' : 'unarchive');
+    assert.equal(f.row.archived, archived);
+    assert.equal(child.archived, archived);
+    assert.equal(continued.archived, archived);
+    assert.equal(other.archived, !archived);
+  }
+});

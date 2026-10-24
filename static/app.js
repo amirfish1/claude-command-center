@@ -19247,13 +19247,14 @@
       const patch = kind === 'untrash'
         ? { archived: !!data.archived, trashed: false }
         : { archived: !!data.archived, ...(!data.archived ? { trashed: false } : {}) };
+      const group = new Set(data.session_ids || [sessionId]);
       [conversationsData, archiveData, currentRepoBacklogData].forEach(rows => {
         if (!Array.isArray(rows)) return;
         for (const r of rows) {
-          if (r && (r.id === convId || (r.session_id || r.id) === sessionId)) Object.assign(r, patch);
+          if (r && (r.id === convId || group.has(r.session_id || r.id))) Object.assign(r, patch);
         }
       });
-      setOptimisticOverride(sessionId, patch);
+      for (const member of group) setOptimisticOverride(member, patch);
       // A slow archive must not navigate away from another conversation.
       if (kind === 'archive' && data.archived
           && (currentConversation === convId || currentConversation === sessionId)) {
@@ -33837,6 +33838,27 @@
     return withRepoPath(payload, rowRepoPath(row));
   }
 
+  function archiveGroupSessionIdsForRow(row, sessionId) {
+    const ids = new Set([sessionId]);
+    const rows = [conversationsData, archiveData, currentRepoBacklogData]
+      .flatMap(items => Array.isArray(items) ? items : []);
+    const ref = ideaTicketsOn() && row && row.idea_ticket && row.idea_ticket.ref;
+    if (ref) for (const member of rows) {
+      if (member.idea_ticket && member.idea_ticket.ref === ref) ids.add(member.session_id || member.id);
+    }
+    // Match descendants already loaded in the sidebar; the server supplies
+    // the authoritative full group, including members outside this view.
+    const children = new Map();
+    for (const member of rows) {
+      const parent = member.parent_session_id || member.hermes_parent_session_id;
+      if (!parent) continue;
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent).push(member.session_id || member.id);
+    }
+    for (const id of ids) for (const child of children.get(id) || []) ids.add(child);
+    return ids;
+  }
+
   // The server host may be headless (no xdg-open) while the viewer sits on
   // another machine (CCC-62). /api/open then answers 501 with the path; show
   // the folder in an in-page viewer instead (listing via /api/fs/browse,
@@ -44188,7 +44210,7 @@
         }
       });
     });
-    const _visibleConversationNeighborId = (convId, sourceItem = null) => {
+    const _visibleConversationNeighborId = (convId, sourceItem = null, excludedIds = new Set()) => {
       const target = sourceItem && sourceItem.isConnected
         ? sourceItem
         : Array.from($convList.querySelectorAll('.conv-item[data-id]')).find(row =>
@@ -44199,6 +44221,7 @@
       const rows = Array.from($convList.querySelectorAll('.conv-item[data-id]')).filter(row =>
         row.offsetParent !== null
         && !!row.closest('.conv-trash-section') === targetIsTrash
+        && (row === target || !excludedIds.has(row.dataset.sessionId || row.dataset.id))
       );
       const index = rows.indexOf(target);
       if (index < 0) return null;
@@ -44215,23 +44238,32 @@
         // Set for one click by the phone's left "Background" swipe.
         const keepRunning = nextArchived && btn.dataset.keepRunning === '1';
         delete btn.dataset.keepRunning;
+        const priorRow = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
+          || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
+        const knownGroup = archiveGroupSessionIdsForRow(priorRow, sessionId);
+        const priorStates = new Map();
+        for (const rows of [conversationsData, archiveData, currentRepoBacklogData]) {
+          if (!Array.isArray(rows)) continue;
+          for (const row of rows) {
+            const id = row.session_id || row.id;
+            if (knownGroup.has(id)) priorStates.set(row, !!row.archived);
+          }
+        }
+        const priorOverrides = new Map(Array.from(knownGroup, id => [id, _optimisticOverrides.get(id)]));
         // Capture visual order before the selected row disappears. This works
         // across folder/group wrappers instead of assuming direct siblings.
         const nextSelectId = nextArchived && currentConversation === convId
-          ? _visibleConversationNeighborId(convId, item)
+          ? _visibleConversationNeighborId(convId, item, knownGroup)
           : null;
         btn.disabled = true;
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
         // Archiving hides the row at once (same as trash); the server call
         // below confirms it and the catch restores the row on failure.
-        const priorRow = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
-          || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
-        const priorArchivedState = priorRow ? !!priorRow.archived : false;
         const patchArchivedNow = (rows, val) => {
           if (!Array.isArray(rows)) return;
           for (const row of rows) {
-            if (row && (row.id === convId || (row.session_id || row.id) === sessionId)) row.archived = val;
+            if (row && (row.id === convId || knownGroup.has(row.session_id || row.id))) row.archived = val;
           }
         };
         if (nextArchived) {
@@ -44239,7 +44271,7 @@
           patchArchivedNow(conversationsData, true);
           patchArchivedNow(archiveData, true);
           patchArchivedNow(currentRepoBacklogData, true);
-          setOptimisticOverride(sessionId, { archived: true });
+          for (const member of knownGroup) setOptimisticOverride(member, { archived: true });
           if (nextSelectId) selectConversation(nextSelectId);
           requestAnimationFrame(() => {
             renderSidebar(filterConversations($convSearch.value), { force: true });
@@ -44256,11 +44288,12 @@
             const ghError = data.github && data.github.stderr;
             throw new Error(data.error || ghError || 'archive failed');
           }
+          const archivedGroup = new Set(data.session_ids || [sessionId]);
           const patchLifecycle = (rows) => {
             if (!Array.isArray(rows)) return;
             for (const row of rows) {
               if (!row) continue;
-              if (row.id === convId || (row.session_id || row.id) === sessionId) {
+              if (row.id === convId || archivedGroup.has(row.session_id || row.id)) {
                 row.archived = !!data.archived;
                 if (!data.archived) row.trashed = false;
               }
@@ -44269,7 +44302,7 @@
           patchLifecycle(conversationsData);
           patchLifecycle(archiveData);
           patchLifecycle(currentRepoBacklogData);
-          setOptimisticOverride(sessionId, {
+          for (const member of archivedGroup) setOptimisticOverride(member, {
             archived: !!data.archived,
             ...(!data.archived ? { trashed: false } : {}),
           });
@@ -44285,10 +44318,11 @@
           if (!data.archived) showOpToast('Restored to Active');
         } catch (err) {
           if (nextArchived) {
-            patchArchivedNow(conversationsData, priorArchivedState);
-            patchArchivedNow(archiveData, priorArchivedState);
-            patchArchivedNow(currentRepoBacklogData, priorArchivedState);
-            _optimisticOverrides.delete(sessionId);
+            for (const [row, archived] of priorStates) row.archived = archived;
+            for (const [id, override] of priorOverrides) {
+              if (override) _optimisticOverrides.set(id, override);
+              else _optimisticOverrides.delete(id);
+            }
             item.style.display = '';
             renderSidebar(filterConversations($convSearch.value), { force: true });
           }

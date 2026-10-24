@@ -1832,31 +1832,27 @@ def _clear_trashed_on_unarchive_many(session_ids):
             _core._save_trashed_conversations(remaining)
 
 
+def _conversation_archive_group(session_ids):
+    """Expand archive actions to the same ticket/tree the sidebar groups."""
+    from ccc_server import idea_tickets
+
+    group = dict.fromkeys(session_ids)
+    for sid in list(group):
+        ticket = idea_tickets.ticket_for_session(sid) if idea_tickets._enabled() else None
+        if ticket:
+            group.update(dict.fromkeys(ticket["sessions"]))
+    for sid in list(group):
+        group.update(dict.fromkeys(_core._find_descendant_sessions(sid)))
+    return list(group)
+
+
 def _set_conversation_archived(sid, desired=None, *, source="manual"):
-    """Atomically set/toggle one Archive state and its Trash/grace invariants."""
+    """Atomically set/toggle Archive membership for a session's whole group."""
     with _conversation_lifecycle_lock:
-        archived = _core._load_archived_conversations()
-        is_archived = sid in archived
+        is_archived = sid in _core._load_archived_conversations()
         want_archived = desired if isinstance(desired, bool) else not is_archived
-        changed = want_archived != is_archived
-
-        if want_archived and not is_archived:
-            archived.append(sid)
-            _core._archive_grace[sid] = time.time()
-            _core._save_archive_grace()
-            _core._log_archive_event("archive", sid, source)
-        elif not want_archived and is_archived:
-            archived.remove(sid)
-            _core._archive_grace.pop(sid, None)
-            _core._save_archive_grace()
-            _core._log_archive_event("unarchive", sid, source)
-
-        if not want_archived:
-            _core._clear_trashed_on_unarchive(sid)
-        _core._save_archived_conversations(archived)
-        if changed:
-            _idea_tickets_on_archive(sid, want_archived)
-        return want_archived, changed
+        _core._set_conversations_archived([sid], want_archived, source=source)
+        return want_archived, want_archived != is_archived
 
 
 def _idea_tickets_on_archive(sid, archived):
@@ -1869,8 +1865,9 @@ def _idea_tickets_on_archive(sid, archived):
         pass
 
 
-def _set_conversations_archived(session_ids, want_archived):
-    """Atomically set Archive state for a deduplicated batch."""
+def _set_conversations_archived(session_ids, want_archived, *, source="bulk"):
+    """Atomically set Archive state for every requested session group."""
+    session_ids = _core._conversation_archive_group(session_ids)
     with _conversation_lifecycle_lock:
         archived = _core._load_archived_conversations()
         archived_set = set(archived)
@@ -1888,17 +1885,22 @@ def _set_conversations_archived(session_ids, want_archived):
             else:
                 unchanged.append(sid)
 
+        if not want_archived:
+            # Clear Trash first so even a failed archive write preserves
+            # the invariant that every trashed session is archived.
+            if to_remove:
+                _clear_trashed_on_unarchive_many(to_remove)
+            else:
+                _clear_trashed_on_unarchive_many(session_ids)
         if changed:
             new_list = [sid for sid in archived if sid not in to_remove] + to_add
             now = time.time()
             for sid in to_add:
                 _core._archive_grace[sid] = now
-                _core._log_archive_event("archive", sid, "bulk")
+                _core._log_archive_event("archive", sid, source)
             for sid in to_remove:
                 _core._archive_grace.pop(sid, None)
-                _core._log_archive_event("unarchive", sid, "bulk")
-            if to_remove:
-                _clear_trashed_on_unarchive_many(to_remove)
+                _core._log_archive_event("unarchive", sid, source)
             _core._save_archived_conversations(new_list)
             _core._save_archive_grace()
             for sid in to_add:

@@ -37542,9 +37542,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # to Active races this request, it must run after the kill so
                 # the final Active state never points at a just-killed session.
                 with _conversation_lifecycle_lock:
-                    now_archived, _changed = _set_conversation_archived(
-                        sid, desired, source="manual",
+                    now_archived = (
+                        desired if isinstance(desired, bool)
+                        else sid not in _load_archived_conversations()
                     )
+                    changed, unchanged, _, _ = _set_conversations_archived(
+                        [sid], now_archived, source="manual",
+                    )
+                    group = changed + unchanged
                     # Archiving retires the session — drop any stale Notification-hook
                     # marker so the dashboard doesn't keep classifying it as Waiting
                     # (which would pin the row to "In progress" and undo the move).
@@ -37595,11 +37600,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except RepoContextError:
                         _bust_issue_state_cache()
                 _restamp_archive_serve_cache_after_mutation()
-                _publish_dashboard_patch(
-                    "conversation.patch", "conversation", sid,
-                    {"archived": now_archived, "trashed": False},
-                )
-                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result, "deferred": deferred})
+                for member in group:
+                    patch = {"archived": now_archived}
+                    if not now_archived:
+                        patch["trashed"] = False
+                    _publish_dashboard_patch(
+                        "conversation.patch", "conversation", member, patch,
+                    )
+                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result, "deferred": deferred, "session_ids": group})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/trash$", path):
