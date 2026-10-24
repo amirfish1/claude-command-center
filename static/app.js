@@ -13843,6 +13843,78 @@
   }
   const _ttsHeadCache = new Map();   // chunk text -> { p, ready, got }
   let _ttsPrefetchTimer = null;
+  // Diagnostic paint follows the live cache, never transcript markup. Rebuild
+  // ranges after renders so replacing text nodes cannot leave stale highlights.
+  let _ttsCacheDebug = false;
+  try { _ttsCacheDebug = localStorage.getItem('ccc-tts-cache-debug') === '1'; } catch (_) {}
+  let _ttsCacheDebugFrame = null;
+  let _ttsCacheDebugObserver = null;
+  function _ttsRefreshCacheDebug() {
+    _ttsCacheDebugFrame = null;
+    if (!window.CSS || !CSS.highlights || typeof Highlight === 'undefined') return;
+    CSS.highlights.delete('tts-cache-sent');
+    CSS.highlights.delete('tts-cache-ready');
+    if (!_ttsCacheDebug) return;
+    const sent = new Highlight(), ready = new Highlight();
+    // Group text exactly as the per-turn reader does, including inline markup
+    // and synthetic paragraph separators. Sanitizing preserves these offsets.
+    const clips = new Map(_ttsHeadCache);
+    if (_ttsChunkState && _ttsChunkState.debugCache) {
+      for (const [text, entry] of _ttsChunkState.debugCache) clips.set(text, entry);
+    }
+    document.querySelectorAll('.conv-pane .event, .conv-pane .stream-bubble, .gc-reader .event').forEach(el => {
+      const elements = el.matches('.stream-bubble') ? [el.querySelector('.stream-bubble-blocks')].filter(Boolean)
+        : el.matches('.assistant') ? Array.from(el.querySelectorAll('.assistant-text'))
+        : el.matches('.user_text:not(.pending)') ? [el.querySelector('.user-msg')].filter(Boolean) : [];
+      if (!elements.length) return;
+      const data = buildTtsDataFromElements(elements);
+      const clean = _sanitizeTtsText(data.text, true);
+      for (const [text, entry] of clips) {
+        let from = 0, start;
+        while ((start = clean.indexOf(text, from)) !== -1) {
+          const end = start + text.length;
+          // Separate ranges per node avoid painting excluded footer text.
+          for (const m of data.mapping) {
+            const a = Math.max(start, m.start), b = Math.min(end, m.end);
+            if (a >= b) continue;
+            const range = new Range();
+            range.setStart(m.node, m.nodeOffsetStart + a - m.start);
+            range.setEnd(m.node, m.nodeOffsetStart + b - m.start);
+            (entry.debugReady ? ready : sent).add(range);
+          }
+          from = end;
+        }
+      }
+    });
+    CSS.highlights.set('tts-cache-sent', sent);
+    CSS.highlights.set('tts-cache-ready', ready);
+  }
+  function _ttsScheduleCacheDebug() {
+    if (_ttsCacheDebug && _ttsCacheDebugFrame == null) _ttsCacheDebugFrame = requestAnimationFrame(_ttsRefreshCacheDebug);
+  }
+  function _ttsWatchCacheEntry(text, entry) {
+    _ttsScheduleCacheDebug();
+    entry.p.then(got => got.done).then(() => {
+      if (_ttsHeadCache.get(text) !== entry) return;
+      entry.debugReady = true;
+      _ttsScheduleCacheDebug();
+    }).catch(() => { _ttsScheduleCacheDebug(); });
+  }
+  function _ttsSetCacheDebug(enabled) {
+    _ttsCacheDebug = !!enabled;
+    try { localStorage.setItem('ccc-tts-cache-debug', enabled ? '1' : '0'); } catch (_) {}
+    const btn = document.getElementById('settingsTtsCacheDebugToggle');
+    if (btn) btn.setAttribute('aria-checked', String(_ttsCacheDebug));
+    if (_ttsCacheDebugObserver) _ttsCacheDebugObserver.disconnect();
+    if (_ttsCacheDebug) {
+      _ttsCacheDebugObserver = _ttsCacheDebugObserver || new MutationObserver(_ttsScheduleCacheDebug);
+      _ttsCacheDebugObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+    _ttsRefreshCacheDebug();
+  }
+  document.getElementById('settingsTtsCacheDebugToggle')?.addEventListener('click', () => _ttsSetCacheDebug(!_ttsCacheDebug));
+  _ttsSetCacheDebug(_ttsCacheDebug);
+
   function _ttsHeadChunk(text, baseOffset) {
     return _chunkTtsText(text, _TTS_HEAD_CHARS, baseOffset)[0] || null;
   }
@@ -13941,9 +14013,11 @@
     });
     entry.p.catch((status) => {
       _ttsHeadCache.delete(head.text);
+      _ttsScheduleCacheDebug();
       _ttsCool(_ttsCoolMs(status), status);
     });
     _ttsHeadCache.set(head.text, entry);
+    _ttsWatchCacheEntry(head.text, entry);
     _ttsEvictCache();
   }
   function _ttsEvictCache() {
@@ -13952,6 +14026,7 @@
       const old = _ttsHeadCache.get(oldest);
       if (old && old.got) URL.revokeObjectURL(old.got.url);
       _ttsHeadCache.delete(oldest);
+      _ttsScheduleCacheDebug();
     }
   }
   // Generation is local and free, so once the first clip is ready the rest of
@@ -14006,6 +14081,7 @@
           entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg').then((got) => { entry.ready = true; entry.got = got; return got; });
           entry.p.catch(() => { if (_ttsHeadCache.get(c.text) === entry) _ttsHeadCache.delete(c.text); });
           _ttsHeadCache.set(c.text, entry);
+          _ttsWatchCacheEntry(c.text, entry);
           _ttsEvictCache();
         }
         entries.push(entry);
@@ -14139,6 +14215,7 @@
       if (hit && (i === 0 ? !state.geminiVoice : hit.voice === state.geminiVoice)) {
         p = hit.p;
         _ttsHeadCache.delete(c.text);
+        _ttsScheduleCacheDebug();
         try {
           if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
             at: Date.now(),
@@ -14151,6 +14228,19 @@
         p.catch(() => {});
       }
       state.prefetch[i] = p;
+      // Keep the paint through the handoff from prepare-ahead to playback,
+      // and include clips generated during a read, until they are released.
+      state.debugCache = state.debugCache || new Map();
+      const debugEntry = { debugReady: !!(hit && p === hit.p && hit.debugReady) };
+      state.debugCache.set(c.text, debugEntry);
+      _ttsScheduleCacheDebug();
+      p.then(g => g.done).then(() => {
+        debugEntry.debugReady = true;
+        _ttsScheduleCacheDebug();
+      }).catch(() => {
+        state.debugCache.delete(c.text);
+        _ttsScheduleCacheDebug();
+      });
       // Once this clip is fully made, the bar's cached end moves past it.
       p.then((g) => g.done).then(() => {
         if (_ttsChunkState !== state) return;
@@ -14199,6 +14289,8 @@
       };
       audio.onended = () => {
         URL.revokeObjectURL(got.url);
+        state.debugCache.delete(chunk.text);
+        _ttsScheduleCacheDebug();
         if (stale()) return;
         _ttsNeural = null;
         _ttsUtterance = null;
@@ -14221,8 +14313,9 @@
         if (waitFrom) { _ttsPerfSilence(state, now - waitFrom, 'stall'); _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate); waitFrom = 0; }
       });
       audio.addEventListener('waiting', () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); });
-      audio.onerror = () => { URL.revokeObjectURL(got.url); fallBack(_TTS_FAIL_COOL_MS); };
-      audio.play().catch(() => fallBack(0));
+      const releaseDebug = () => { state.debugCache.delete(chunk.text); _ttsScheduleCacheDebug(); };
+      audio.onerror = () => { URL.revokeObjectURL(got.url); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS); };
+      audio.play().catch(() => { releaseDebug(); fallBack(0); });
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
   }
 
@@ -14260,6 +14353,7 @@
     _ttsShowVoice('');
     _ttsPerfFlush(_ttsChunkState);
     _ttsChunkState = null;
+    _ttsScheduleCacheDebug();
     if (window.speechSynthesis) {
       _ttsEngineCancel();
     }
@@ -14674,6 +14768,7 @@
     // Starting a fresh read supersedes any prior utterance.
     if (_ttsActive || _ttsPaused || _ttsUtterance) {
       _ttsChunkState = null;
+      _ttsScheduleCacheDebug();
       try { _ttsEngineCancel(); } catch (_) {}
     }
     _setTtsDirectBtnState(sourceBtn || null, sourceBtn ? 'speaking' : null);
@@ -14737,6 +14832,7 @@
       // Fresh selection present — drop the paused utterance and fall through
       // to the start path below, which reads selectedConversationTtsData first.
       _ttsChunkState = null;
+      _ttsScheduleCacheDebug();
       try { _ttsEngineCancel(); } catch (_) {}
       clearTtsHighlight();
       _ttsActive = false;
@@ -15070,6 +15166,7 @@
     const wasPaused = _ttsPaused;
     _ttsKeepVoice = (_ttsChunkState && _ttsChunkState.geminiVoice) || '';
     _ttsChunkState = null;
+    _ttsScheduleCacheDebug();
     try { _ttsEngineCancel(); } catch (_) {}
     // Keep _ttsBoundUtteranceText pointing at the full text so subsequent
     // changes continue to use global offsets for captions/highlights.

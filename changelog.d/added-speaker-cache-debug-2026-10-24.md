@@ -1,0 +1,1 @@
+- Add a Speaker cache debug switch in Settings → Appearance: amber highlights show text sent for audio preparation, green shows fully downloaded clips, and highlights follow browser cache removal and conversation rerenders.

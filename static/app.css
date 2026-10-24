@@ -21652,6 +21652,12 @@ body.status-pos-right #convToolbar {
   pointer-events: none;
 }
 
+/* Debug backgrounds coexist with the active spoken word's foreground color. */
+::highlight(tts-cache-sent) { background-color: rgba(245, 158, 11, 0.32); }
+::highlight(tts-cache-ready) { background-color: rgba(34, 197, 94, 0.30); }
+.tts-cache-debug-sent { background-color: rgba(245, 158, 11, 0.32); }
+.tts-cache-debug-ready { background-color: rgba(34, 197, 94, 0.30); }
+
 /* TTS Word Highlighting */
 ::highlight(tts-highlight) {
   color: #eab308;

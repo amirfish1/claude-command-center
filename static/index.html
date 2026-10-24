@@ -2693,6 +2693,22 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="tts speaker voice speech cache debug highlight ready">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Speaker cache debug</div>
+                <div class="settings-row-desc">Highlight conversation text currently in this browser’s audio cache:
+                  <span class="tts-cache-debug-sent">amber = sent to TTS</span>,
+                  <span class="tts-cache-debug-ready">green = audio ready</span>.
+                  Highlights disappear when clips are used, evicted, or fail. Clips can split sentences.
+                  Prepared audio may still exist in the server’s disk cache after the browser releases it.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsTtsCacheDebugToggle" role="switch" aria-checked="false" aria-label="Speaker cache debug">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
             <div class="settings-row" data-keywords="debug diagnostics activity stats traffic fleet pulse interrupt">
               <div class="settings-row-main">
                 <div class="settings-row-label">Debug mode</div>
