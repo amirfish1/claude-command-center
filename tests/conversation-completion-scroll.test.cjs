@@ -37,6 +37,10 @@ async function fixture(width) {
   </div>`);
   await page.evaluate(({ decision, scrollHelper, oldHelper }) => {
     window.updateConversationEndAffordance = () => {};
+    // The slice ends with the TTS prefetch hook (f2147144); it is not under test.
+    window.paneId = 'test-pane';
+    window.activePaneId = () => 'test-pane';
+    window.scheduleTtsPrefetch = () => {};
     window._convScrollByConv = {};
     window.currentConversation = 'test-conversation';
     window.complete = new Function('$view', 'events', 'opts', 'wasAtBottom',

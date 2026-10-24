@@ -20,7 +20,7 @@ test('logbar fills the column bottom by default and only a drag pins it', () => 
 });
 
 test('setLogbarHeight marks the band sized; reset paths clear it', () => {
-  const start = q2js.indexOf('  function setLogbarHeight(px, persist) {');
+  const start = q2js.indexOf('  function setLogbarHeight(px, persist');
   const end = q2js.indexOf('\n  (function initLogbarHeight()', start);
   assert.ok(start >= 0 && end > start, 'setLogbarHeight found');
   const fn = q2js.slice(start, end);

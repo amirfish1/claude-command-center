@@ -31,11 +31,13 @@ test('archive returns to the list only after successful persistence', async () =
   const pending = new Promise(r => { resolve = r; });
   const f = fixture(pending);
   const done = f.run('archive');
-  assert.deepEqual(f.calls, []);
+  // af8451a1: the row moves optimistically with a progress toast, but the
+  // reader stays open until the archive is persisted.
+  assert.deepEqual(f.calls, ['Archiving…']);
   resolve({ ok: true, archived: true });
   await done;
   assert.equal(f.row.archived, true);
-  assert.equal(f.calls[0], 'list');
+  assert.equal(f.calls[1], 'list');
 });
 
 test('archive failure preserves the open conversation', async () => {
@@ -43,7 +45,8 @@ test('archive failure preserves the open conversation', async () => {
   await f.run('archive');
   assert.equal(f.context.currentConversation, 'conversation-test');
   assert.equal(f.calls.includes('list'), false);
-  assert.match(f.calls[0], /Archive failed/);
+  assert.equal(f.row.archived, false, 'the optimistic archive is rolled back');
+  assert.match(f.calls.at(-1), /Archive failed/);
 });
 
 test('a delayed archive does not navigate away from another conversation', async () => {
