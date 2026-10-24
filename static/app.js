@@ -2059,6 +2059,160 @@
     } catch (_) {}
   }
 
+  // ── Connection-slot gate (CCC-159) ──────────────────────────────────────
+  // Chrome opens at most 6 HTTP/1.1 connections per host. Every EventSource
+  // pins one for its lifetime (events, ultra-fresh, conversation stream, ...)
+  // and ~30 status polls fight over the rest, so a click's POST queued in the
+  // browser behind them: an Unarchive took >18s while curl answered in 0.25s.
+  // Automatic same-origin /api reads now share a pool sized to whatever the
+  // open streams leave minus one slot, which stays free for user actions.
+  // Installed first on the native fetch, so every later wrapper (and the
+  // backgroundApiFetch pool) funnels through it. No-op over HTTP/2+.
+  (function installConnectionSlotGate() {
+    const HOST_CONNECTION_LIMIT = 6;
+    const RESERVED_FOR_USER = 1;
+    const USER_GESTURE_WINDOW_MS = 1500;
+    const BACKGROUND_POSTS = ['/api/client-log', '/api/free-runtime/tts-log'];
+    try {
+      const nav = performance.getEntriesByType('navigation')[0];
+      if (nav && /^h[23]/.test(nav.nextHopProtocol || '')) return;
+    } catch (_) {}
+    const nativeFetch = window.fetch.bind(window);
+    const NativeEventSource = window.EventSource;
+    const queue = [];
+    const stats = { openStreams: 0, active: 0, queued: 0, maxWaitMs: 0, pooled: 0, direct: 0, directActive: 0 };
+    let lastGestureAt = 0;
+    ['pointerdown', 'keydown'].forEach((type) => {
+      window.addEventListener(type, () => { lastGestureAt = performance.now(); }, { capture: true, passive: true });
+    });
+
+    if (NativeEventSource) {
+      const CountedEventSource = function (url, config) {
+        const es = new NativeEventSource(url, config);
+        let sameOrigin = false;
+        try { sameOrigin = new URL(String(url), window.location.href).origin === window.location.origin; } catch (_) {}
+        if (!sameOrigin) return es;
+        stats.openStreams += 1;
+        let counted = true;
+        const release = () => {
+          if (!counted) return;
+          counted = false;
+          stats.openStreams = Math.max(0, stats.openStreams - 1);
+          drain();
+        };
+        const nativeClose = es.close.bind(es);
+        es.close = function () { release(); return nativeClose(); };
+        // 'error' also fires on auto-reconnect (CONNECTING still holds a
+        // slot); only a CLOSED source has given its connection back.
+        es.addEventListener('error', () => { if (es.readyState === NativeEventSource.CLOSED) release(); });
+        return es;
+      };
+      CountedEventSource.prototype = NativeEventSource.prototype;
+      ['CONNECTING', 'OPEN', 'CLOSED'].forEach((k) => { CountedEventSource[k] = NativeEventSource[k]; });
+      window.EventSource = CountedEventSource;
+    }
+
+    function poolLimit() {
+      // In-flight user requests already hold slots; shrink the pool so the
+      // reserved one is still free for the next click.
+      return Math.max(1, HOST_CONNECTION_LIMIT - RESERVED_FOR_USER - stats.openStreams - stats.directActive);
+    }
+
+    function isBackground(input, init) {
+      if (init && init.cccPriority === 'user') return false;
+      const rawUrl = typeof input === 'string' ? input : (input && input.url) || String(input || '');
+      let url;
+      try { url = new URL(rawUrl, window.location.href); } catch (_) { return false; }
+      if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/')) return false;
+      const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        return BACKGROUND_POSTS.some((p) => url.pathname === p);
+      }
+      // Fetch-based streams hold their connection indefinitely; never park
+      // one in a pool slot.
+      if (/\/(stream|events)$/.test(url.pathname) || url.pathname === '/api/sessions/ultra-fresh') return false;
+      // Reads a click or keypress just started are the user's.
+      if (performance.now() - lastGestureAt < USER_GESTURE_WINDOW_MS) return false;
+      return true;
+    }
+
+    function drain() {
+      while (stats.active < poolLimit() && queue.length) {
+        const task = queue.shift();
+        stats.queued = queue.length;
+        if (task.signal && task.signal.aborted) {
+          task.reject(task.signal.reason || new DOMException('Aborted', 'AbortError'));
+          continue;
+        }
+        if (task.signal) task.signal.removeEventListener('abort', task.onAbort);
+        stats.active += 1;
+        stats.maxWaitMs = Math.max(stats.maxWaitMs, Math.round(performance.now() - task.queuedAt));
+        let released = false;
+        const release = () => {
+          if (released) return;
+          released = true;
+          stats.active -= 1;
+          drain();
+        };
+        // Hold the slot until the body is read: the connection stays busy
+        // while it streams, not just until headers arrive.
+        nativeFetch(task.input, task.init).then(async (response) => {
+          if (!response || response.status === 204 || response.status === 304 || !response.body) {
+            release();
+            return response;
+          }
+          try {
+            const body = await response.arrayBuffer();
+            const buffered = new Response(body, {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            });
+            try { Object.defineProperty(buffered, 'url', { value: response.url }); } catch (_) {}
+            try { Object.defineProperty(buffered, 'redirected', { value: response.redirected }); } catch (_) {}
+            return buffered;
+          } finally {
+            release();
+          }
+        }).then(task.resolve, (err) => { release(); task.reject(err); });
+      }
+    }
+
+    window.fetch = function connectionSlotGatedFetch(input, init) {
+      if (!isBackground(input, init)) {
+        stats.direct += 1;
+        stats.directActive += 1;
+        const settle = () => { stats.directActive = Math.max(0, stats.directActive - 1); drain(); };
+        const pending = nativeFetch(input, init);
+        pending.then(settle, settle);
+        return pending;
+      }
+      stats.pooled += 1;
+      return new Promise((resolve, reject) => {
+        const signal = (init && init.signal) || (input && input.signal) || null;
+        const task = { input, init, resolve, reject, signal, queuedAt: performance.now(), onAbort: null };
+        if (signal) {
+          if (signal.aborted) {
+            reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+            return;
+          }
+          task.onAbort = () => {
+            const i = queue.indexOf(task);
+            if (i === -1) return;
+            queue.splice(i, 1);
+            stats.queued = queue.length;
+            reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+          };
+          signal.addEventListener('abort', task.onAbort, { once: true });
+        }
+        queue.push(task);
+        stats.queued = queue.length;
+        drain();
+      });
+    };
+    window.__cccConnectionGate = stats;
+  })();
+
   // ── Demo mode (GH Pages, issue #49) ─────────────────────────────────────
   // When the demo flag is set, every `fetch('/api/...')` and `new EventSource(
   // '/api/...')` is routed to a static JSON fixture under ./api/<path>.json
