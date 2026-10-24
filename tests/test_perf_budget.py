@@ -4942,8 +4942,17 @@ def test_restart_recovery_reads_only_window_tails_once_per_boot(monkeypatch, tmp
     real_tail = rr._read_tail
     monkeypatch.setattr(rr, "_read_tail", lambda path, size: opened.append(path) or real_tail(path, size))
     monkeypatch.setattr(rr, "_MEMO", None)
+    # Codex / ACP stores: a stat per file, tails only in the window.
+    acp = tmp_path / "acp" / "kimi"
+    acp.mkdir(parents=True)
+    for i in range(100):
+        p = acp / ("session_old-%03d.jsonl" % i)
+        p.write_text(_json.dumps({"type": "user_text", "text": "go"}) + "\n")
+        old = down - 30 * 86400
+        os.utime(p, (old, old))
     kw = dict(projects_root=tmp_path / "projects", state_file=tmp_path / "rr.json",
-              boot=boot, now=boot + 60, shutdowns=[down])
+              boot=boot, now=boot + 60, shutdowns=[down],
+              codex_root=tmp_path / "codex", acp_root=tmp_path / "acp")
     assert [s["session_id"] for s in rr.state(**kw)["sessions"]] == ["near"]
     assert len(opened) == 1
     monkeypatch.setattr(rr, "_MEMO", None)

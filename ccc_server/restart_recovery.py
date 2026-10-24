@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
-"""Restart recovery: find Claude sessions a machine restart cut off mid-turn.
+"""Restart recovery: find sessions a machine restart cut off mid-turn.
 
 A reboot (a laptop update, a crash, a preempted cloud VM) SIGTERMs every
 `claude` process. The transcript simply stops, so afterwards the session looks
@@ -24,7 +24,13 @@ install), the boot time stands in and the result is marked approximate.
 The scan runs once per boot and is persisted to disk keyed by boot time, so
 the per-request cost is one small JSON read (see the perf gates in CLAUDE.md).
 
-Stdlib-only. Claude transcripts only for now.
+Engines: Claude (~/.claude/projects), Codex (rollouts under
+$CODEX_HOME/sessions/YYYY/MM/DD, only the day dirs inside the window are
+listed) and the ACP engines CCC drives (Kimi, Devin: CCC's own normalized
+transcript cache). Every entry carries `engine`; its `session_id` is the id
+CCC's inject endpoint takes for that engine.
+
+Stdlib-only.
 """
 
 from __future__ import annotations
@@ -41,6 +47,12 @@ from pathlib import Path
 
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 STATE_DIR = Path.home() / ".claude" / "command-center"
+CODEX_ROOT = (Path(os.path.expanduser(os.environ["CODEX_HOME"])) if os.environ.get("CODEX_HOME")
+              else Path.home() / ".codex") / "sessions"
+ACP_ROOT = STATE_DIR / "acp"
+# ACP harness -> prefix of the CCC session id (Devin's conversation row is
+# `devincli-<slug>` while the transcript file is named by the raw slug).
+ACP_ENGINES = {"kimi": "", "devin": "devincli-"}
 STATE_FILE = STATE_DIR / "restart-recovery.json"
 HEARTBEAT_FILE = STATE_DIR / "restart-recovery-heartbeat"
 SHUTDOWNS_FILE = STATE_DIR / "restart-recovery-shutdowns.json"
@@ -57,7 +69,7 @@ SLACK_S = 2 * HEARTBEAT_S
 MAX_AGE_S = 7 * 24 * 3600
 TAIL_BYTES = 256 * 1024
 HEAD_BYTES = 64 * 1024
-_SCHEMA = 2
+_SCHEMA = 3
 
 _LOCK = threading.Lock()
 _BOOT_TIME = None
@@ -206,6 +218,7 @@ def inspect(path, mtime, size):
             break
     return {
         "session_id": Path(path).stem,
+        "engine": "claude",
         "path": str(path),
         "cwd": cwd,
         "title": _title(path, records),
@@ -315,41 +328,202 @@ def known_shutdowns(boot, now, shutdowns_file=None, journal=None):
     return out
 
 
+def _codex_detail(payload):
+    raw = payload.get("arguments") if payload.get("type") == "function_call" else payload.get("input")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            raw = parsed
+    if isinstance(raw, dict):
+        for key in ("description", "cmd", "command", "path", "prompt"):
+            if raw.get(key):
+                value = raw[key]
+                return " ".join(value) if isinstance(value, list) else str(value)
+        return ""
+    return " ".join(str(raw or "").split())
+
+
+def codex_open_turn(records):
+    """Codex rollout: the turn is open when the last task_started has no later
+    task_complete / turn_aborted. A tail with no task boundary at all is
+    treated as closed (never guess)."""
+    step = None
+    for rec in records:
+        payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+        kind, ptype = rec.get("type"), payload.get("type")
+        if kind == "event_msg":
+            if ptype == "task_started":
+                step = {"kind": "prompt_unanswered", "tool": "", "detail": "", "at": rec.get("timestamp")}
+            elif ptype in ("task_complete", "turn_aborted"):
+                step = None
+            continue
+        if kind != "response_item" or step is None:
+            continue
+        if ptype in ("function_call", "custom_tool_call"):
+            step = {"kind": "tool_running", "tool": str(payload.get("name") or "tool"),
+                    "detail": _codex_detail(payload)[:160], "at": rec.get("timestamp")}
+        elif ptype in ("function_call_output", "custom_tool_call_output"):
+            step = {"kind": "awaiting_model", "tool": "", "detail": "", "at": rec.get("timestamp")}
+        elif ptype == "message" and payload.get("role") == "assistant":
+            # Commentary between tool calls; the model still owes the turn end.
+            step = {"kind": "awaiting_model", "tool": "", "detail": "", "at": rec.get("timestamp")}
+    return step
+
+
+def acp_open_turn(records):
+    """CCC's ACP transcript cache (Kimi, Devin): every prompt (`user_text`)
+    ends with a `result` record; a prompt without one was cut off."""
+    step = None
+    for rec in records:
+        kind = rec.get("type")
+        if kind == "user_text":
+            step = {"kind": "prompt_unanswered", "tool": "", "detail": "", "at": rec.get("ts")}
+        elif kind == "result":
+            step = None
+        elif kind == "assistant" and step is not None:
+            tools = [b for b in rec.get("blocks") or [] if isinstance(b, dict) and b.get("kind") == "tool_use"]
+            if tools:
+                detail = tools[-1].get("detail") or tools[-1].get("title") or ""
+                step = {"kind": "tool_running", "tool": str(tools[-1].get("name") or "tool"),
+                        "detail": " ".join(str(detail).split())[:160], "at": rec.get("ts")}
+            else:
+                step = {"kind": "awaiting_model", "tool": "", "detail": "", "at": rec.get("ts")}
+    return step
+
+
+def _codex_inspect(path, mtime, size):
+    try:
+        records = list(_records(_read_tail(path, size)))
+    except OSError:
+        return None
+    step = codex_open_turn(records)
+    if step is None:
+        return None
+    sid, cwd, title = "", "", ""
+    try:
+        with open(path, "rb") as fh:
+            head = list(_records(fh.read(HEAD_BYTES)))
+    except OSError:
+        head = []
+    for rec in head:
+        payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+        if rec.get("type") == "session_meta":
+            sid = str(payload.get("id") or payload.get("session_id") or "")
+            cwd = str(payload.get("cwd") or "")
+        elif rec.get("type") == "event_msg" and payload.get("type") == "user_message" and not title:
+            title = " ".join(str(payload.get("message") or "").split())[:120]
+        elif (rec.get("type") == "response_item" and payload.get("type") == "message"
+              and payload.get("role") == "user" and not title):
+            for part in payload.get("content") or []:
+                text = str(part.get("text") or "").strip() if isinstance(part, dict) else ""
+                if text and not text.startswith(("<", "# AGENTS.md")):  # injected context, not the prompt
+                    title = " ".join(text.split())[:120]
+                    break
+    if not sid:
+        match = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$", str(path))
+        sid = match.group(1) if match else ""
+    if not _sid_ok(sid):
+        return None
+    return {"session_id": sid, "engine": "codex", "path": str(path), "cwd": cwd, "title": title,
+            "last_activity": mtime, "size": size, "step": step}
+
+
+def _acp_inspector(engine, prefix):
+    def inspect_acp(path, mtime, size):
+        try:
+            records = list(_records(_read_tail(path, size)))
+        except OSError:
+            return None
+        step = acp_open_turn(records)
+        if step is None:
+            return None
+        sid = prefix + Path(path).stem
+        if not _sid_ok(sid):
+            return None
+        title = ""
+        try:
+            with open(path, "rb") as fh:
+                head = list(_records(fh.read(HEAD_BYTES)))
+        except OSError:
+            head = []
+        for rec in head:
+            if rec.get("type") == "user_text" and str(rec.get("text") or "").strip():
+                title = " ".join(str(rec["text"]).split())[:120]
+                break
+        return {"session_id": sid, "engine": engine, "path": str(path), "cwd": "", "title": title,
+                "last_activity": mtime, "size": size, "step": step}
+    return inspect_acp
+
+
+def _claude_files(projects_root):
+    try:
+        project_dirs = list(os.scandir(projects_root))
+    except OSError:
+        return
+    for project in project_dirs:
+        if project.is_dir(follow_symlinks=False):
+            yield from _jsonl_entries(project.path)
+
+
+def _jsonl_entries(directory):
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name.endswith(".jsonl"):
+            yield entry
+
+
+def _codex_files(codex_root, lower, upper):
+    """Only the YYYY/MM/DD dirs that can hold a rollout written in
+    [lower, upper): a rollout lives in the dir of the day it started, so
+    look back up to LONG_WINDOW_S + a day before `lower` too."""
+    seen = set()
+    t = lower - 86400
+    while t <= upper + 86400:
+        for stamp in {time.strftime("%Y/%m/%d", time.localtime(t)),
+                      time.strftime("%Y/%m/%d", time.gmtime(t))}:
+            if stamp not in seen:
+                seen.add(stamp)
+                yield from (e for e in _jsonl_entries(os.path.join(codex_root, stamp))
+                            if e.name.startswith("rollout-"))
+        t += 86400
+
+
 def _window(step):
     if step.get("kind") == "tool_running" and step.get("tool") in _LONG_TOOLS:
         return LONG_WINDOW_S
     return SHORT_WINDOW_S
 
 
-def scan(projects_root, boot, shutdowns):
+def scan(projects_root, boot, shutdowns, codex_root=None, acp_root=None):
     """Transcripts left mid-turn that went quiet just before a shutdown. One
-    stat per transcript; tails are read only for those in the window."""
+    stat per transcript; tails are read only for those in the window.
+    `codex_root` / `acp_root` None skips that engine."""
     approximate = not shutdowns
     cutoffs = shutdowns or [boot]
     lower = min(cutoffs) - (UNKNOWN_WINDOW_S if approximate else LONG_WINDOW_S)
+    sources = [(_claude_files(projects_root), inspect)]
+    if codex_root is not None:
+        sources.append((_codex_files(codex_root, lower, boot), _codex_inspect))
+    if acp_root is not None:
+        for engine, prefix in ACP_ENGINES.items():
+            sources.append((_jsonl_entries(os.path.join(acp_root, engine)), _acp_inspector(engine, prefix)))
     found = []
-    try:
-        project_dirs = list(os.scandir(projects_root))
-    except OSError:
-        return found
-    for project in project_dirs:
-        if not project.is_dir(follow_symlinks=False):
-            continue
-        try:
-            entries = list(os.scandir(project.path))
-        except OSError:
-            continue
+    for entries, inspector in sources:
         for entry in entries:
-            if not entry.name.endswith(".jsonl"):
-                continue
             try:
                 st = entry.stat()
             except OSError:
                 continue
             if not (lower <= st.st_mtime < boot):
                 continue
-            item = inspect(entry.path, st.st_mtime, st.st_size)
-            if not item:
+            item = inspector(entry.path, st.st_mtime, st.st_size)
+            if not item or not item.get("session_id"):
                 continue
             window = UNKNOWN_WINDOW_S if approximate else _window(item["step"])
             # The first shutdown at or after the last write is the one that
@@ -372,10 +546,13 @@ def _untouched(entry):
     return st.st_mtime == entry.get("last_activity") and st.st_size == entry.get("size")
 
 
-def state(projects_root=None, state_file=None, boot=None, now=None, shutdowns=None):
+def state(projects_root=None, state_file=None, boot=None, now=None, shutdowns=None,
+          codex_root=None, acp_root=None):
     """Current list, scanning only when the boot changed since the last scan."""
     global _MEMO
     projects_root = projects_root or PROJECTS_ROOT
+    codex_root = codex_root or CODEX_ROOT
+    acp_root = acp_root or ACP_ROOT
     state_file = state_file or STATE_FILE
     boot = boot if boot is not None else boot_time()
     now = now if now is not None else time.time()
@@ -392,7 +569,7 @@ def state(projects_root=None, state_file=None, boot=None, now=None, shutdowns=No
                 if shutdowns is None:
                     shutdowns = known_shutdowns(boot, now)
                 dismissed = set(data.get("dismissed") or [])
-                fresh = scan(projects_root, boot, shutdowns)
+                fresh = scan(projects_root, boot, shutdowns, codex_root, acp_root)
                 seen = {e["session_id"] for e in fresh}
                 # Entries from an earlier boot that nobody dismissed or resumed.
                 carried = [e for e in data.get("sessions") or []

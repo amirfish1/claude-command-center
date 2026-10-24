@@ -72,7 +72,7 @@
         var sid = esc(s.session_id), working = busy[s.session_id];
         return '<li class="rr-row" data-sid="' + sid + '">' +
           '<div class="rr-text"><span class="rr-name">' + esc(s.title || s.session_id.slice(0, 8)) + '</span>' +
-          '<span class="rr-sub">' + esc([project(s.cwd), stepText(s.step)].filter(Boolean).join(' · ')) + '</span></div>' +
+          '<span class="rr-sub">' + esc([project(s.cwd), s.engine && s.engine !== 'claude' ? s.engine.charAt(0).toUpperCase() + s.engine.slice(1) : '', stepText(s.step)].filter(Boolean).join(' · ')) + '</span></div>' +
           '<div class="rr-actions">' +
           '<button type="button" class="rr-btn" data-rr="open">Open</button>' +
           '<button type="button" class="rr-btn rr-primary" data-rr="resume"' + (working ? ' disabled' : '') + '>' + (working ? 'Resuming…' : 'Resume') + '</button>' +

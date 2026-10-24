@@ -17,8 +17,11 @@ DOWN = BOOT - 3600  # machine went down an hour before it came back
 
 
 @pytest.fixture(autouse=True)
-def _fresh_memo():
+def _fresh_memo(tmp_path, monkeypatch):
     rr._MEMO = None
+    # Never let a test see this machine's real Codex / ACP transcripts.
+    monkeypatch.setattr(rr, "CODEX_ROOT", tmp_path / "codex")
+    monkeypatch.setattr(rr, "ACP_ROOT", tmp_path / "acp")
     yield
     rr._MEMO = None
 
@@ -162,3 +165,96 @@ def test_resume_prompt_names_the_unfinished_step():
     text = rr.resume_prompt({"kind": "tool_running", "tool": "Bash", "detail": "Run tests"}, DOWN)
     assert "Bash" in text and "Run tests" in text and "before redoing" in text
     assert "never" not in rr.resume_prompt({"kind": "awaiting_model"}, None)
+
+
+# --- RESIL-3: Codex rollouts and ACP engines (Kimi, Devin) ---
+
+CODEX_SID = "01a16bbc-f43e-7ac0-a141-6e15345f2fd2"
+
+
+def _ev(ptype, **extra):
+    return {"type": "event_msg", "payload": {"type": ptype, **extra}}
+
+
+def _ri(ptype, **extra):
+    return {"type": "response_item", "payload": {"type": ptype, **extra}}
+
+
+def _codex_write(tmp_path, records, mtime, sid=CODEX_SID):
+    day = tmp_path / "codex" / time.strftime("%Y/%m/%d", time.localtime(mtime))
+    day.mkdir(parents=True, exist_ok=True)
+    p = day / ("rollout-2027-01-15T08-00-00-%s.jsonl" % sid)
+    meta = {"type": "session_meta", "payload": {"id": sid, "cwd": "/w/codex-app"}}
+    p.write_text("".join(json.dumps(r) + "\n" for r in [meta] + records))
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def _acp_write(tmp_path, engine, stem, records, mtime):
+    d = tmp_path / "acp" / engine
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / (stem + ".jsonl")
+    p.write_text("".join(json.dumps(r) + "\n" for r in records))
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def test_codex_open_turn_kinds():
+    start, done = _ev("task_started"), _ev("task_complete")
+    user = _ri("message", role="user", content=[])
+    assert rr.codex_open_turn([start, user, _ri("message", role="assistant"), done]) is None
+    assert rr.codex_open_turn([start, _ev("turn_aborted")]) is None
+    assert rr.codex_open_turn([user]) is None  # no task boundary in the tail: never guess
+    step = rr.codex_open_turn([start, user, _ri("function_call", name="shell",
+                                                 arguments=json.dumps({"command": ["pytest", "-q"]}))])
+    assert step["kind"] == "tool_running" and step["tool"] == "shell" and step["detail"] == "pytest -q"
+    assert rr.codex_open_turn([start, _ri("custom_tool_call", name="exec", input="x"),
+                               _ri("custom_tool_call_output")])["kind"] == "awaiting_model"
+    assert rr.codex_open_turn([done, start, user])["kind"] == "prompt_unanswered"
+
+
+def test_acp_open_turn_kinds():
+    assert rr.acp_open_turn([{"type": "user_text", "text": "go"}, {"type": "result", "subtype": "end_turn"}]) is None
+    assert rr.acp_open_turn([{"type": "user_text", "text": "go"}])["kind"] == "prompt_unanswered"
+    step = rr.acp_open_turn([{"type": "user_text", "text": "go"}, {"type": "assistant", "blocks": [
+        {"kind": "thinking", "text": "hm"}, {"kind": "tool_use", "name": "Bash", "detail": "make test"}]}])
+    assert step["kind"] == "tool_running" and step["tool"] == "Bash" and step["detail"] == "make test"
+    assert rr.acp_open_turn([{"type": "user_text"}, {"type": "assistant", "blocks": [
+        {"kind": "text", "text": "ok"}]}])["kind"] == "awaiting_model"
+
+
+def test_codex_kimi_and_devin_sessions_cut_off_by_the_restart(tmp_path):
+    _write(tmp_path / "projects", "aaaaaaaa-claude", [_user("go"), _tool_use(command="make")], DOWN - 100)
+    _codex_write(tmp_path, [_ev("task_started"), _ev("user_message", message="fix the build"),
+                            _ri("function_call", name="shell", arguments="{}")], DOWN - 200)
+    _acp_write(tmp_path, "kimi", "session_11111111-2222", [{"type": "user_text", "text": "kimi task"}], DOWN - 300)
+    _acp_write(tmp_path, "devin", "cookie-college", [{"type": "user_text", "text": "devin task"}], DOWN - 400)
+    # Finished, or went quiet long before the shutdown: not the restart's fault.
+    _acp_write(tmp_path, "kimi", "session_33333333-done",
+               [{"type": "user_text", "text": "x"}, {"type": "result", "subtype": "end_turn"}], DOWN - 60)
+    _acp_write(tmp_path, "devin", "long-ago", [{"type": "user_text", "text": "x"}], DOWN - 5 * 3600)
+    got = {s["session_id"]: s for s in _state(tmp_path)["sessions"]}
+    assert set(got) == {"aaaaaaaa-claude", CODEX_SID, "session_11111111-2222", "devincli-cookie-college"}
+    assert [got[k]["engine"] for k in ("aaaaaaaa-claude", CODEX_SID, "session_11111111-2222",
+                                      "devincli-cookie-college")] == ["claude", "codex", "kimi", "devin"]
+    assert got[CODEX_SID]["cwd"] == "/w/codex-app" and got[CODEX_SID]["title"] == "fix the build"
+    assert got[CODEX_SID]["step"]["kind"] == "tool_running"
+    assert got["devincli-cookie-college"]["title"] == "devin task"
+
+
+def test_resumed_codex_session_drops_off(tmp_path):
+    p = _codex_write(tmp_path, [_ev("task_started")], DOWN - 60)
+    assert [s["session_id"] for s in _state(tmp_path)["sessions"]] == [CODEX_SID]
+    with open(p, "a") as fh:
+        fh.write(json.dumps(_ev("task_complete")) + "\n")
+    rr._MEMO = None
+    assert _state(tmp_path)["sessions"] == []
+
+
+def test_codex_scan_lists_only_day_dirs_in_the_window(tmp_path, monkeypatch):
+    listed = []
+    real = rr._jsonl_entries
+    monkeypatch.setattr(rr, "_jsonl_entries", lambda d: listed.append(str(d)) or real(d))
+    _state(tmp_path)
+    codex_dirs = [d for d in listed if "/codex/" in d]
+    assert codex_dirs and len(codex_dirs) <= 8
