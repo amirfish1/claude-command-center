@@ -1,0 +1,1 @@
+- The restart card now says how the machine went down: shut down cleanly, preempted by the cloud provider (GCP), or crashed / lost power.

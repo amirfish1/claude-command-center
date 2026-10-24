@@ -43518,6 +43518,11 @@ def main():
             _unregister_self()
         except Exception:
             pass
+        try:  # restart recovery: this stop was on purpose, not a crash
+            from ccc_server import restart_recovery as _rr_stop
+            _rr_stop.record_clean_stop()
+        except Exception:
+            pass
         try:
             voice_shutdown()
         except Exception:

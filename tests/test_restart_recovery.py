@@ -258,3 +258,33 @@ def test_codex_scan_lists_only_day_dirs_in_the_window(tmp_path, monkeypatch):
     _state(tmp_path)
     codex_dirs = [d for d in listed if "/codex/" in d]
     assert codex_dirs and len(codex_dirs) <= 8
+
+
+# --- RESIL-8: clean stop vs preemption vs crash ---
+
+def test_shutdown_is_classified_clean_preempted_or_crashed(tmp_path):
+    marker = tmp_path / "stop.json"
+    assert rr.classify_shutdown(DOWN, BOOT, {}) == "crashed"
+    rr.record_clean_stop(now=DOWN + 20, marker_file=marker, preempted=False)
+    assert rr.classify_shutdown(DOWN, BOOT, json.loads(marker.read_text())) == "clean"
+    assert rr.classify_shutdown(DOWN, BOOT, {"at": DOWN + 20, "preempted": True}) == "preempted"
+    # A marker from an earlier dashboard restart in that boot proves nothing.
+    assert rr.classify_shutdown(DOWN, BOOT, {"at": DOWN - 3 * 3600, "preempted": False}) == "crashed"
+
+
+def test_heartbeat_shutdown_records_its_kind_and_state_reports_it(tmp_path):
+    hb, log, kinds, marker = (tmp_path / n for n in ("hb", "shutdowns.json", "kinds.json", "stop.json"))
+    hb.touch()
+    os.utime(hb, (DOWN, DOWN))
+    rr.record_clean_stop(now=DOWN + 5, marker_file=marker, preempted=True)
+    assert rr.record_heartbeat_shutdown(BOOT, hb, log, marker, kinds) == DOWN
+    assert rr.shutdown_kinds(kinds) == [(DOWN, "preempted")]
+    _write(tmp_path / "projects", "aaaaaaaa-cut", [_user("go"), _tool_use(command="make")], DOWN - 60)
+    got = rr.state(projects_root=tmp_path / "projects", state_file=tmp_path / "state.json",
+                   boot=BOOT, now=BOOT + 60, shutdowns=[DOWN + 90], kinds_file=kinds)["sessions"]
+    assert [s["shutdown_kind"] for s in got] == ["preempted"]
+
+
+def test_preempted_flag_is_none_off_gcp(monkeypatch):
+    monkeypatch.setattr(rr, "_on_gcp", lambda: False)
+    assert rr.gcp_preempted() is None

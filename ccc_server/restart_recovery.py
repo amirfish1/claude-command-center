@@ -56,6 +56,12 @@ ACP_ENGINES = {"kimi": "", "devin": "devincli-"}
 STATE_FILE = STATE_DIR / "restart-recovery.json"
 HEARTBEAT_FILE = STATE_DIR / "restart-recovery-heartbeat"
 SHUTDOWNS_FILE = STATE_DIR / "restart-recovery-shutdowns.json"
+# Written by the dashboard's SIGTERM handler: {"at", "preempted"}.
+STOP_MARKER_FILE = STATE_DIR / "restart-recovery-stop.json"
+# [[shutdown_time, kind], ...], kind in SHUTDOWN_KINDS.
+SHUTDOWN_KINDS_FILE = STATE_DIR / "restart-recovery-shutdown-kinds.json"
+SHUTDOWN_KINDS = ("clean", "preempted", "crashed")
+GCP_PREEMPTED_URL = "http://metadata.google.internal/computeMetadata/v1/instance/preempted"
 
 HEARTBEAT_S = 60
 SHORT_WINDOW_S = 12 * 60
@@ -246,11 +252,76 @@ def _write_json(path, data):
         pass
 
 
-def record_heartbeat_shutdown(boot, heartbeat_file=None, shutdowns_file=None):
+def _on_gcp():
+    try:
+        with open("/sys/class/dmi/id/product_name", encoding="utf-8") as fh:
+            return "Google" in fh.read()
+    except OSError:
+        return False
+
+
+def gcp_preempted(timeout=1.0):
+    """True/False on a GCE VM (the flag reads TRUE while a preemption is
+    shutting it down), None anywhere else or when the metadata server is
+    unreachable. Bounded: it runs inside the SIGTERM handler."""
+    if not _on_gcp():
+        return None
+    try:
+        from urllib.request import Request, urlopen
+        req = Request(GCP_PREEMPTED_URL, headers={"Metadata-Flavor": "Google"})
+        with urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed link-local URL
+            return resp.read(16).strip().upper() == b"TRUE"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def record_clean_stop(now=None, marker_file=None, preempted=None):
+    """SIGTERM handler hook: CCC is being stopped on purpose (systemd /
+    launchd stop, OS shutdown). A later boot whose last heartbeat matches
+    this marker went down cleanly; no marker means it crashed or lost power."""
+    data = {"at": time.time() if now is None else float(now),
+            "preempted": gcp_preempted() if preempted is None else bool(preempted)}
+    _write_json(marker_file or STOP_MARKER_FILE, data)
+    return data
+
+
+def classify_shutdown(last_heartbeat, boot, marker):
+    """clean / preempted / crashed for the boot whose last heartbeat was
+    `last_heartbeat`. A clean stop writes its marker after (or within a
+    heartbeat of) the last touch; an older marker is from an earlier
+    dashboard restart in the same boot and proves nothing."""
+    at = marker.get("at") if isinstance(marker, dict) else None
+    if not isinstance(at, (int, float)) or at >= boot or at < last_heartbeat - SLACK_S:
+        return "crashed"
+    return "preempted" if marker.get("preempted") else "clean"
+
+
+def shutdown_kinds(kinds_file=None):
+    out = []
+    for row in _read_json(kinds_file or SHUTDOWN_KINDS_FILE, []):
+        if (isinstance(row, list) and len(row) == 2 and isinstance(row[0], (int, float))
+                and row[1] in SHUTDOWN_KINDS):
+            out.append((float(row[0]), row[1]))
+    return out
+
+
+def kind_for(shutdown_at, kinds):
+    """Kind of the recorded shutdown nearest `shutdown_at` (journal and
+    heartbeat times for one shutdown differ by up to a few minutes)."""
+    if not shutdown_at:
+        return ""
+    near = [(abs(t - shutdown_at), k) for t, k in kinds if abs(t - shutdown_at) < 5 * 60]
+    return min(near)[1] if near else ""
+
+
+def record_heartbeat_shutdown(boot, heartbeat_file=None, shutdowns_file=None,
+                              marker_file=None, kinds_file=None):
     """At dashboard start: a heartbeat last touched before this boot marks
-    when the previous boot went down. Remember it before overwriting."""
+    when the previous boot went down. Remember it (and whether it was a
+    clean stop, a preemption or a crash) before overwriting."""
     heartbeat_file = Path(heartbeat_file or HEARTBEAT_FILE)
     shutdowns_file = shutdowns_file or SHUTDOWNS_FILE
+    kinds_file = kinds_file or SHUTDOWN_KINDS_FILE
     try:
         last = heartbeat_file.stat().st_mtime
     except OSError:
@@ -261,6 +332,9 @@ def record_heartbeat_shutdown(boot, heartbeat_file=None, shutdowns_file=None):
     if not any(abs(t - last) < 1 for t in known):
         known = sorted(known + [last])[-50:]
         _write_json(shutdowns_file, known)
+        kind = classify_shutdown(last, boot, _read_json(marker_file or STOP_MARKER_FILE, {}))
+        kinds = [(t, k) for t, k in shutdown_kinds(kinds_file) if abs(t - last) >= 1]
+        _write_json(kinds_file, [list(r) for r in sorted(kinds + [(last, kind)])[-50:]])
     return last
 
 
@@ -547,7 +621,7 @@ def _untouched(entry):
 
 
 def state(projects_root=None, state_file=None, boot=None, now=None, shutdowns=None,
-          codex_root=None, acp_root=None):
+          codex_root=None, acp_root=None, kinds_file=None):
     """Current list, scanning only when the boot changed since the last scan."""
     global _MEMO
     projects_root = projects_root or PROJECTS_ROOT
@@ -586,9 +660,11 @@ def state(projects_root=None, state_file=None, boot=None, now=None, shutdowns=No
         # A session that was resumed (written since) is no longer cut off.
         live = [dict(e) for e in data.get("sessions") or []
                 if e["session_id"] not in dismissed and _untouched(e)]
+    kinds = shutdown_kinds(kinds_file) if live else []
     for e in live:
         e.pop("path", None)
         e.pop("size", None)
+        e["shutdown_kind"] = kind_for(e.get("shutdown_at"), kinds)
     return {"boot_time": boot, "sessions": live}
 
 

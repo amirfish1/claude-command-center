@@ -37,6 +37,13 @@
     if (step.kind === 'awaiting_model') return 'A tool had just finished; the model never replied';
     return 'Your last message was never answered';
   }
+  function downText(list) {
+    var kind = (list.filter(function (s) { return s.shutdown_kind; })[0] || {}).shutdown_kind;
+    if (kind === 'preempted') return 'The cloud provider preempted the machine at ';
+    if (kind === 'crashed') return 'Machine crashed or lost power at ';
+    if (kind === 'clean') return 'Machine shut down cleanly at ';
+    return 'Machine went down at ';
+  }
   function project(cwd) {
     var parts = String(cwd || '').split('/').filter(Boolean);
     return parts.length ? parts[parts.length - 1] : '';
@@ -67,7 +74,7 @@
       '<div class="rr-head"><span class="rr-eyebrow"><span class="rr-dot"></span>Restart</span>' +
       '<button type="button" class="rr-close" data-rr="dismiss-all" title="Dismiss all" aria-label="Dismiss all">×</button></div>' +
       '<p class="rr-title">A machine restart cut off ' + n + ' session' + (n === 1 ? '' : 's') + ' mid-turn</p>' +
-      (latest ? '<p class="rr-meta">' + (approx ? 'Machine restarted around ' : 'Machine went down at ') + esc(clock(latest)) + '</p>' : '') +
+      (latest ? '<p class="rr-meta">' + (approx ? 'Machine restarted around ' : downText(sessions)) + esc(clock(latest)) + '</p>' : '') +
       '<ul class="rr-list">' + sessions.map(function (s) {
         var sid = esc(s.session_id), working = busy[s.session_id];
         return '<li class="rr-row" data-sid="' + sid + '">' +
