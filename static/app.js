@@ -13904,7 +13904,10 @@
     _ttsCacheDebug = !!enabled;
     try { localStorage.setItem('ccc-tts-cache-debug', enabled ? '1' : '0'); } catch (_) {}
     const btn = document.getElementById('settingsTtsCacheDebugToggle');
-    if (btn) btn.setAttribute('aria-checked', String(_ttsCacheDebug));
+    if (btn) {
+      btn.setAttribute('aria-checked', String(_ttsCacheDebug));
+      btn.classList.toggle('is-on', _ttsCacheDebug);
+    }
     if (_ttsCacheDebugObserver) _ttsCacheDebugObserver.disconnect();
     if (_ttsCacheDebug) {
       _ttsCacheDebugObserver = _ttsCacheDebugObserver || new MutationObserver(_ttsScheduleCacheDebug);
