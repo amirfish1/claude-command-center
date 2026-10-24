@@ -5,6 +5,7 @@ const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
 const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'));
+const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
 
 // Use the actual shipped controller and CSS in Chromium. SSE frames are
 // delivered explicitly so no timing/list-poll coincidence can pass this test.
@@ -39,6 +40,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
         + '<span class="conv-row-break"></span><span class="conv-meta-col"><code>'+c.id+'</code></span><span class="conv-row-end"></span></div></div><button data-role="archive">Archive</button></div>').join('');
       document.querySelector('#convList').innerHTML = rows();
       ${app.slice(app.indexOf('  function readyToCloseArchiveHtml('), app.indexOf('  function _trackedRowStatus('))}
+      ${rowActions}
       ${block}
       window.uf = { sync:_ultraFreshSync, accept:_ultraFreshAccept, feed:_ultraFreshFeed,
         spawn:_ultraFreshSpawnFeed, current:_ultraFreshCurrent, state:_ultraFresh,
