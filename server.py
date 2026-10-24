@@ -43590,6 +43590,21 @@ def main():
     # and hold the Python GIL long enough to make the whole app feel stuck.
     if _env_truthy("CCC_WARM_CACHE_ON_STARTUP"):
         threading.Thread(target=_warm_cache, daemon=True).start()
+    # CCC-142: the ACP registry load (counts every ACP transcript's lines,
+    # ~135MB here) runs once per process under _ACP_LOCK. Left to the first
+    # caller it landed on a request thread (live_build ~30s after a restart).
+    # It is not extra work, only moved: list/live polls take a lock-free
+    # copy while this holds the lock; conversation opens still wait for it.
+    if _ACP_HARNESSES and not os.environ.get("CCC_EPHEMERAL"):
+        def _warm_acp_state():
+            try:
+                with _ACP_LOCK:
+                    for harness in list(_ACP_HARNESSES):
+                        if _acp_harness_enabled(harness):
+                            _acp_load_state(harness)
+            except Exception:
+                pass
+        threading.Thread(target=_warm_acp_state, name="ccc-acp-state-load", daemon=True).start()
     # `ccc recall` / /api/memory/recall memory index: unconditional, unlike
     # the opt-in cache warmup above. On a cold process the first search over
     # ~/.claude/projects would otherwise re-parse the whole transcript corpus
