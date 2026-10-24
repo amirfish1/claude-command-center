@@ -15886,17 +15886,11 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     except Exception:
         idea_tickets_by_sid = {}
 
-    def _open_idea(row):
-        t = idea_tickets_by_sid.get(row.get("session_id") or row.get("id"))
-        return bool(t) and not t.get("closed")
-
-    # An open idea ticket outlives the window: the Ideas tab lists tickets,
-    # not recent sessions (bounded by the number of open tickets).
     projected = [
         _archive_list_project_row(row, resumes=resumes, parents=parents)
         for row in (rows or [])
         if isinstance(row, dict)
-        and (_archive_list_window_allows_row(row, cutoff) or _open_idea(row))
+        and _archive_list_window_allows_row(row, cutoff)
     ]
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.

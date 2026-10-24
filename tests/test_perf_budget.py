@@ -228,21 +228,21 @@ def test_archive_list_window_filters_old_rows_but_keeps_pinned_and_hermes():
     assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="all", now=now)] == ["recent", "week-old", "old", "pinned-old", "hermes-old"]
 
 
-def test_archive_list_window_keeps_open_idea_ticket_rows(monkeypatch):
+def test_archive_list_window_filters_open_idea_ticket_rows(monkeypatch):
     now = 2_000_000.0
-    monkeypatch.setattr(server._idea_tickets, "idea_ticket_rows_map", lambda: {
-        "idea-old": {"ref": "IDEAS-1", "queue": "IDEAS", "sessions": 1, "closed": False},
-        "closed-old": {"ref": "IDEAS-2", "queue": "IDEAS", "sessions": 1, "closed": True},
-    })
-    monkeypatch.setattr(server._idea_tickets, "sweep_rows", lambda rows: None)
-    rows = [
-        {"session_id": "recent", "engine": "claude", "mtime": now - 60},
-        {"session_id": "idea-old", "engine": "claude", "mtime": now - 8 * 86400},
-        {"session_id": "closed-old", "engine": "claude", "mtime": now - 8 * 86400},
-    ]
-    out = server._archive_list_project_rows(rows, window="1d", now=now)
-    assert [row["session_id"] for row in out] == ["recent", "idea-old"]
-    assert out[1]["idea_ticket"]["ref"] == "IDEAS-1"
+    ages = {"now": 60, "day": 12 * 3600, "week": 2 * 86400, "old": 8 * 86400}
+    for queue in ("IDEAS", "SMALL-BUGS"):
+        tickets = {sid: {"ref": f"EXAMPLE-{i}", "queue": queue, "sessions": 1, "closed": False}
+                   for i, sid in enumerate(ages, 1)}
+        monkeypatch.setattr(server._idea_tickets, "idea_ticket_rows_map", lambda: tickets)
+        monkeypatch.setattr(server._idea_tickets, "sweep_rows", lambda rows: None)
+        rows = [{"session_id": sid, "engine": "claude", "mtime": now - age}
+                for sid, age in ages.items()]
+        for window, expected in (("8h", ["now"]), ("1d", ["now", "day"]),
+                                 ("7d", ["now", "day", "week"]), ("all", list(ages))):
+            out = server._archive_list_project_rows(rows, window=window, now=now)
+            assert [row["session_id"] for row in out] == expected
+            assert all(row["idea_ticket"] == tickets[row["session_id"]] for row in out)
 
 
 def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):

@@ -8,11 +8,16 @@ const app = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 const start = app.indexOf("    const _ideaTicketRows = (lane, bucket = 'active') => {");
 const end = app.indexOf('    const _allTabIdeaConvs =', start);
 assert.ok(start >= 0 && end > start);
-const source = app.slice(start, end) + '\nthis.ticketRows = _ideaTicketRows;';
+const timeHelpers = app.slice(app.indexOf('  function _archiveWindow()'), app.indexOf('  const OPEN_ASK_RECENT_S'));
+const source = timeHelpers + '\nconst _ipWindowCutoff = _archiveWindowCutoff();\n'
+  + app.slice(start, end) + '\nthis.ticketRows = _ideaTicketRows;';
 
-function representatives(rows, lane = 'ideas', bucket = 'active', trash = []) {
+function representatives(rows, lane = 'ideas', bucket = 'active', trash = [], window = 'all', query = '') {
   const ctx = {
-    _allTabConvs: rows, _allTabTrashConvs: trash,
+    _allTabConvs: rows, _allTabTrashConvs: trash, _qActive: query,
+    ARCHIVE_WINDOW_KEY: 'ccc-archive-window',
+    localStorage: {getItem: () => window},
+    Date: class extends Date { static now() { return 2_000_000_000 * 1000; } },
     _allTabSessionId: r => r.session_id || r.id || '',
     _allTabLaneFor: r => r.idea_ticket?.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas',
   };
@@ -75,4 +80,30 @@ test('a child inheriting the Ideas lane without ticket metadata does not break r
   const rows = [row('active', 'EXAMPLE-1', 20), { session_id: 'child', modified: 30, idea_ticket: null }];
   assert.deepEqual(representatives(rows), ['active']);
   assert.deepEqual(representatives(rows, 'ideas', 'archived'), []);
+});
+
+
+test('ticket rows follow Now, 1d, 7d and All in both ticket lanes', () => {
+  const now = 2_000_000_000;
+  for (const lane of ['ideas', 'smallbugs']) {
+    const rows = [row('hour', 'EXAMPLE-1', now - 3600), row('day', 'EXAMPLE-2', now - 12 * 3600),
+      row('week', 'EXAMPLE-3', now - 2 * 86400), row('old', 'EXAMPLE-4', now - 8 * 86400)];
+    if (lane === 'smallbugs') rows.forEach(r => { r.idea_ticket.queue = 'SMALL-BUGS'; });
+    for (const [window, expected] of [['8h', ['hour']], ['1d', ['hour', 'day']],
+      ['7d', ['hour', 'day', 'week']], ['all', ['hour', 'day', 'week', 'old']]]) {
+      assert.deepEqual(representatives(rows, lane, 'active', [], window), expected);
+    }
+    assert.deepEqual(representatives(rows, lane, 'active', [], '8h', 'search'),
+      ['hour', 'day', 'week', 'old'], 'explicit searches still span all history');
+  }
+});
+
+test('ticket archive and trash respect the same window', () => {
+  const now = 2_000_000_000;
+  const rows = [row('recent', 'EXAMPLE-1', now - 60, {archived:true}),
+    row('old', 'EXAMPLE-2', now - 8 * 86400, {archived:true})];
+  assert.deepEqual(representatives(rows, 'ideas', 'archived', [], '1d'), ['recent']);
+  const trash = rows.map(r => ({...r, trashed:true}));
+  assert.deepEqual(representatives([], 'ideas', 'trash', trash, '1d'), ['recent']);
+  assert.deepEqual(representatives(rows, 'ideas', 'archived'), ['recent', 'old']);
 });

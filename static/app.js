@@ -3137,8 +3137,6 @@
   function _archiveWindowAllowsRow(row, cutoff = _archiveWindowCutoff()) {
     if (!cutoff) return true;
     if (row && (row.pinned || row.source === 'hermes' || row.engine === 'hermes')) return true;
-    // An open idea ticket is the work item; its session stays listed however old.
-    if (row && row.idea_ticket && !row.idea_ticket.closed) return true;
     return _archiveWindowRowTs(row) >= cutoff;
   }
   const OPEN_ASK_RECENT_S = 48 * 3600;
@@ -41685,15 +41683,16 @@
     // with a session-id tie-break so input/bucket order cannot flip the row.
     const _ideaTicketRows = (lane, bucket = 'active') => {
       const best = new Map();
+      const inWindow = c => !!_qActive || _archiveWindowAllowsRow(c, _ipWindowCutoff);
       const byRecency = (x, y) => (
         Number(y.mtime || y.modified || 0) - Number(x.mtime || x.modified || 0)
         || _allTabSessionId(x).localeCompare(_allTabSessionId(y))
       );
       const activeRefs = new Set(_allTabConvs.filter(c => _allTabLaneFor(c) === lane
-        && c.idea_ticket && !c.archived && !c.trashed && !c.idea_ticket.closed).map(c => c.idea_ticket.ref));
+        && inWindow(c) && c.idea_ticket && !c.archived && !c.trashed && !c.idea_ticket.closed).map(c => c.idea_ticket.ref));
       const candidates = bucket === 'trash' ? _allTabTrashConvs : _allTabConvs;
       candidates.forEach(c => {
-        if (_allTabLaneFor(c) !== lane) return;
+        if (_allTabLaneFor(c) !== lane || !inWindow(c)) return;
         const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
         if (!ref) return;
         if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
