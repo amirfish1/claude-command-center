@@ -111,9 +111,15 @@ def _iso(ts) -> str:
     return ts or ""
 
 
+def _is_injected_context(text: str) -> bool:
+    """Compaction context quotes old turns without supplying a new answer."""
+    return (_INJECTED in text or text.lstrip().startswith(
+        "This session is being continued from a previous conversation"))
+
+
 def _event(role, text, uuid, ts, sid):
-    """One tag event, or None when the text carries no tag / is injected rules."""
-    if not text or not _BARE.search(text) or _INJECTED in text:
+    """One tag event, or None for untagged or synthetic context."""
+    if not text or not _BARE.search(text) or _is_injected_context(text):
         return None
     return {"role": role, "uuid": uuid or "", "ts": _iso(ts), "sid": sid, "text": text[:_TEXT_CAP]}
 
@@ -149,7 +155,8 @@ def scan_file_from(path: str, offset: int) -> tuple[list[dict], int]:
                     continue
                 offset += len(raw)
                 role = obj.get("type")
-                if role not in ("assistant", "user") or obj.get("isSidechain"):
+                if (role not in ("assistant", "user") or obj.get("isSidechain")
+                        or obj.get("isMeta") or obj.get("isCompactSummary")):
                     continue
                 text = _blocks_text((obj.get("message") or {}).get("content"))
                 e = _event(role, text, obj.get("uuid"), obj.get("timestamp"), obj.get("sessionId") or sid)
@@ -383,6 +390,9 @@ def build_index(files: dict | None = None) -> dict:
     question_sessions: dict[int, set] = {}
     for e in events:
         text = e["text"]
+        # Apply to persisted events too, without rescanning old transcripts.
+        if _is_injected_context(text):
+            continue
         if e["role"] == "assistant":
             for m in _TAG.finditer(text):
                 n = int(m.group(1))

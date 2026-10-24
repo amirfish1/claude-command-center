@@ -8,6 +8,36 @@ def ev(role, ts, text, uuid):
 
 
 class BuildIndexTest(unittest.TestCase):
+    def test_cached_compaction_summary_is_not_an_owner_answer(self):
+        ask = ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] OK to publish?", "ask")
+        summary = ev("user", "2026-01-01T00:00:02Z",
+                     "  This session is being continued from a previous conversation that ran out of context.\n"
+                     "Summary: The owner was asked [Q7:publish] OK to publish?", "summary")
+        files = {"a": {"ev": [ask, summary]}}
+        self.assertFalse(qt.build_index(files)["questions"][0]["answered"])
+        files["a"]["ev"].append(ev("user", "2026-01-01T00:00:03Z", "[Q7] no", "answer"))
+        q = qt.build_index(files)["questions"][0]
+        self.assertTrue(q["answered"])
+        self.assertEqual(q["answered_by"], "owner")
+
+    def test_scan_skips_synthetic_metadata_and_summary_prefix(self):
+        import json, tempfile
+        from pathlib import Path
+        lines = [
+            {"type": "assistant", "uuid": "ask", "message": {"content": "[Q7:publish] OK to publish?"}},
+            {"type": "user", "uuid": "meta", "isMeta": True, "message": {"content": "[Q7] yes"}},
+            {"type": "user", "uuid": "summary", "isCompactSummary": True, "message": {"content": "[Q7] yes"}},
+            {"type": "assistant", "uuid": "synthetic-ask", "isMeta": True, "message": {"content": "[Q8:other] OK?"}},
+            {"type": "user", "uuid": "prefix", "message": {"content":
+                "This session is being continued from a previous conversation.\n[Q7] yes"}},
+            {"type": "user", "uuid": "answer", "message": {"content": "[Q7] no"}},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "session.jsonl"
+            target.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+            events = qt.scan_file(str(target))
+        self.assertEqual([event["uuid"] for event in events], ["ask", "answer"])
+
     def test_quoting_question_in_unrelated_session_does_not_answer_it(self):
         ask = ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] OK to publish?", "ask")
         quote = dict(ev("user", "2026-01-01T00:00:02Z", "The original was [Q7:publish] OK to publish?", "quote"), sid="other")
