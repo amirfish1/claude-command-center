@@ -49,6 +49,22 @@ topic goal, labels the latest milestone **Update**, and reports **Open** while
 the topic criteria remain unmet; the closure criteria and evidence are in the
 expanded assessment.
 
+Structured cards show only the update or actual user request, the first planned
+step with its explicit owner, and a short Open/Ready status. One **Details**
+disclosure holds the goal, closure criteria, rationale, all gates and scores,
+caveats, and full remaining-work list. A human-owned first step is not repeated
+when Needs you already shows the request. No empty Needs you line is shown for
+structured reports.
+
+Open work needs a concrete plan even when no human input is required. New
+remaining actions include `owner:"agent"`, `owner:"user"`, or `owner:"external"`,
+and are ordered by what happens next. The card labels these **My next step**,
+**Your next step**, or **Waiting on**. Legacy entries without an owner use
+**Next step**; CCC does not guess the owner. An open report without a plan
+shows **Next step: Not stated**. Guidance asks the model to name an observable
+step and a success check; future validation must name its trigger and check.
+An agent-owned step never becomes an approval chip merely because it is pending.
+
 The originating model carries the goal and criteria across related turns.
 It must keep resolution below 0.9 while the solution or criteria are still
 being explored. Delivery can reach 1 for a shipped milestone while the topic

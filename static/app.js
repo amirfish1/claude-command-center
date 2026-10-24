@@ -16806,6 +16806,33 @@
       && typeof scope.closure_met === 'boolean'
       && ['goal', 'done_when', 'evidence'].every(k => typeof scope[k] === 'string' && scope[k].trim()));
     const openTopic = validScope && scope && scope.closure_met === false;
+    // Historical cards describe this assessment, not the current session's
+    // eligibility: only the live row may offer the manual Close action.
+    const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+    const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
+    const valid = assessment && assessment.version === 1 && validScope && axes.every(k => {
+      const a = assessment[k];
+      return a && numeric(a.score) && typeof a.evidence === 'string' && a.evidence.trim();
+    }) && (assessment.delivery.applicable === undefined || typeof assessment.delivery.applicable === 'boolean')
+      && Array.isArray(assessment.caveats) && assessment.caveats.every(c => c && typeof c.text === 'string'
+        && c.text.trim() && typeof c.blocking === 'boolean')
+      && Array.isArray(assessment.remaining_actions) && assessment.remaining_actions.every(a => a
+        && typeof a.text === 'string' && a.text.trim() && numeric(a.confidence) && numeric(a.downside)
+        && typeof a.reversible === 'boolean' && typeof a.within_scope === 'boolean'
+        && (a.owner === undefined || ['agent', 'user', 'external'].includes(a.owner)));
+    const reasons = [];
+    if (valid) {
+      if (openTopic) reasons.push('topic goal is not yet met');
+      if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
+      if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
+      if (assessment.delivery.applicable !== false && assessment.delivery.score !== 1) reasons.push('delivery incomplete');
+      if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
+      if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
+      if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
+    }
+    const verdict = !valid ? 'Unassessed · invalid assessment'
+      : reasons.length ? (openTopic ? 'Open · ' : 'Next · ') + reasons.join('; ') : 'Close criteria met';
+
     let nextStep = fields.NEXT_STEP_USER || '';
     if (/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)?[.!]?$/i.test(nextStep)
         && assessment && assessment.decision_dependency
@@ -16823,17 +16850,26 @@
         : needsYouActionsHtml(nextStep);
       rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + renderInline(nextStep) + (actions ? ' <span class="ssb-actions">' + actions + '</span>' : '') + '</div>');
     } else if (fields.DID) {
-      rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">' + (openTopic ? 'Update' : 'Done') + '</span>' + escapeHtml(fields.DID) + '</div>');
+      rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">' + (fields.COMPLETION && (!valid || reasons.length) ? 'Update' : 'Done') + '</span>' + escapeHtml(fields.DID) + '</div>');
     }
-    if (!hasUserAction) rows.push('<div class="ssb-row ssb-no-action"><span class="ssb-key">Needs you</span>' + (nextStep ? 'None' : 'Not specified') + '</div>');
-    if (validScope && scope) rows.push('<div class="ssb-row ssb-scope"><span class="ssb-key">Topic</span>' + escapeHtml(scope.goal) + '</div>');
-    if (fields.INSIGHT) {
-      rows.push('<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>');
+    if (!fields.COMPLETION) {
+      if (!hasUserAction) rows.push('<div class="ssb-row ssb-no-action"><span class="ssb-key">Needs you</span>' + (nextStep ? 'None' : 'Not specified') + '</div>');
+      if (fields.INSIGHT) rows.push('<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>');
+    } else {
+      const planned = valid && assessment.remaining_actions[0];
+      if (planned && (!hasUserAction || planned.owner !== 'user')) {
+        const label = planned.owner === 'agent' ? 'My next step' : planned.owner === 'user' ? 'Your next step'
+          : planned.owner === 'external' ? 'Waiting on' : 'Next step';
+        rows.push('<div class="ssb-row ssb-plan"><span class="ssb-key">' + label + '</span>' + escapeHtml(planned.text) + '</div>');
+      } else if (!hasUserAction && (!valid || reasons.length)) {
+        rows.push('<div class="ssb-row ssb-plan"><span class="ssb-key">Next step</span>Not stated.</div>');
+      }
     }
     if (fields.COMPLETION) {
-      let evidence = '';
+      let evidence = fields.INSIGHT ? '<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>' : '';
       if (assessment && assessment.version === 1) {
-        if (validScope && scope) evidence += '<div class="ssb-row"><span class="ssb-key">Done when</span>'
+        if (validScope && scope) evidence += '<div class="ssb-row ssb-scope"><span class="ssb-key">Topic</span>'
+          + escapeHtml(scope.goal) + '</div><div class="ssb-row"><span class="ssb-key">Done when</span>'
           + escapeHtml(scope.done_when) + '</div><div class="ssb-row"><span class="ssb-key">Topic evidence</span>'
           + escapeHtml(scope.evidence) + '</div>';
         for (const [key, label] of [['resolution', 'Resolution'], ['verification', 'Verification'],
@@ -16855,42 +16891,12 @@
             + ' · downside ' + escapeHtml(String(item.downside)) + '</div>';
         }
       }
-      // Historical cards describe this assessment, not the current session's
-      // eligibility: only the live row may offer the manual Close action.
-      const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
-      const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
-      const valid = assessment && assessment.version === 1 && validScope && axes.every(k => {
-        const a = assessment[k];
-        return a && numeric(a.score) && typeof a.evidence === 'string' && a.evidence.trim();
-      }) && (assessment.delivery.applicable === undefined || typeof assessment.delivery.applicable === 'boolean')
-        && Array.isArray(assessment.caveats) && assessment.caveats.every(c => c && typeof c.text === 'string'
-          && c.text.trim() && typeof c.blocking === 'boolean')
-        && Array.isArray(assessment.remaining_actions) && assessment.remaining_actions.every(a => a
-          && typeof a.text === 'string' && a.text.trim() && numeric(a.confidence) && numeric(a.downside)
-          && typeof a.reversible === 'boolean' && typeof a.within_scope === 'boolean');
-      const reasons = [];
-      if (valid) {
-        if (openTopic) reasons.push('topic goal is not yet met');
-        if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
-        if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
-        if (assessment.delivery.applicable !== false && assessment.delivery.score !== 1) reasons.push('delivery incomplete');
-        if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
-        if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
-        if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
-      }
-      const verdict = !valid ? 'Unassessed · invalid assessment'
-        : reasons.length ? (openTopic ? 'Open · ' : 'Next · ') + reasons.join('; ') : 'Close criteria met';
-      rows.push('<div class="ssb-row ssb-verdict"><span class="ssb-key">Assessment</span>'
-        + escapeHtml(verdict) + '</div>');
+      const status = !valid ? 'Unassessed' : reasons.length ? 'Open' : 'Ready to close';
+      rows.push('<div class="ssb-row ssb-status"><span class="ssb-key">Status</span>' + status + '</div>');
       const scores = valid ? '(' + axes.map(k => String(assessment[k].score)).join(', ') + ')' : '(unassessed)';
-      const caveats = valid ? assessment.caveats : [];
-      const firstCaveat = caveats.find(c => c.blocking) || caveats[0];
-      const preview = firstCaveat ? firstCaveat.text.trim().split(/\s+/).slice(0, 7).join(' ') : '';
-      const caveatPreview = preview ? ' · ' + (firstCaveat.blocking ? 'Blocking: ' : 'Caveat: ')
-        + preview.slice(0, 56) + (preview.length < firstCaveat.text.trim().length ? '…' : '')
-        + (caveats.length > 1 ? ' (+' + (caveats.length - 1) + ')' : '') : '';
-      rows.push('<details class="ssb-completion"><summary title="Self-reported scores: resolution, verification, delivery, decision dependency. Delivery may be N/A; expand for evidence."><span class="ssb-key">Assessment</span>'
-        + '<span class="ssb-score">' + escapeHtml(scores) + '</span>' + escapeHtml(caveatPreview) + '</summary>'
+      rows.push('<details class="ssb-completion"><summary title="Expand for the topic goal, completion gates, scores, and evidence.">Details</summary>'
+        + '<div class="ssb-row ssb-verdict"><span class="ssb-key">Assessment</span>' + escapeHtml(verdict) + '</div>'
+        + '<div class="ssb-row ssb-scores"><span class="ssb-key">Scores</span>' + escapeHtml(scores) + '</div>'
         + (evidence || '<div class="ssb-row">Assessment unavailable or invalid.</div>') + '</details>');
     }
     return '<div class="session-state-block">' + rows.concat(otherRows).join('') + '</div>';

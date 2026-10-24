@@ -1206,6 +1206,17 @@ in remaining_actions, without inventing an immediate human action. Routine page
 reloads belong in delivery notes unless they actually block the requested work;
 they must not replace the topic's unresolved goal or become its closure criteria.
 
+An open topic needs a concrete plan, even when NEXT_STEP_USER is None. Order
+remaining_actions by what happens next and give each action an owner: "agent",
+"user", or "external". The first action must name the next observable step
+and its success check, not just "evaluate", "refine", or "continue using".
+For validation that depends on a future event, name that trigger and the check
+to perform then. Do immediately available authorized agent work before ending
+the turn; do not park it in a plan. NEXT_STEP_USER identifies only the user's
+actual required contribution; it must not stand in for the whole plan or invent
+an approval request when the agent owns the next step. Keep DID and INSIGHT to
+one short sentence each; put supporting evidence in COMPLETION.
+
 End your final reply with a compact CCC session-state block:
 <session-state>
 DID: one sentence describing what you changed or learned
@@ -1329,8 +1340,13 @@ def _completion_assessment(value):
                 or type(action.get("reversible")) is not bool
                 or type(action.get("within_scope")) is not bool):
             return invalid
-        result["remaining_actions"].append({key: action[key] for key in
-            ("text", "confidence", "downside", "reversible", "within_scope")})
+        if "owner" in action and action["owner"] not in ("agent", "user", "external"):
+            return invalid
+        parsed_action = {key: action[key] for key in
+            ("text", "confidence", "downside", "reversible", "within_scope")}
+        if "owner" in action:
+            parsed_action["owner"] = action["owner"]
+        result["remaining_actions"].append(parsed_action)
     reasons = []
     if "scope" in result and not result["scope"]["closure_met"]:
         reasons.append("Topic goal is not yet met.")

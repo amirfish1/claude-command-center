@@ -134,6 +134,29 @@ def test_pending_low_downside_work_does_not_become_complete_by_scoring_it_highly
     assert _completion_assessment(assessment)["valid"] is False
 
 
+@pytest.mark.parametrize("owner", ["agent", "user", "external"])
+def test_plan_owner_is_preserved_without_becoming_a_user_approval(owner):
+    assessment = completed()
+    assessment["remaining_actions"] = [{"text": "At the next continuation, compare the restored goal with the saved goal.",
+        "owner": owner, "confidence": 0.9, "downside": 0.05, "within_scope": True, "reversible": True}]
+    state = _parse_session_state(footer(assessment))
+    assert state["completion"]["valid"] is True
+    assert state["completion"]["remaining_actions"][0]["owner"] == owner
+    assert state["completion"]["ready_to_close"] is False
+    assert state["next_step_user"] == "None."
+    assert "next_action" not in state
+
+
+@pytest.mark.parametrize("owner", [None, "", "assistant", False, [], {}])
+def test_malformed_explicit_plan_owner_fails_closed(owner):
+    assessment = completed()
+    assessment["remaining_actions"] = [{"text": "Check the restored goal.", "owner": owner,
+        "confidence": 0.9, "downside": 0.05, "within_scope": True, "reversible": True}]
+    result = _completion_assessment(assessment)
+    assert result["valid"] is False
+    assert result["ready_to_close"] is False
+
+
 @pytest.mark.parametrize("requires_approval", [False, True])
 def test_diagnosed_malfunction_stays_open_until_the_remedy_is_handled(requires_approval):
     assessment = completed()

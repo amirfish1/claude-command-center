@@ -92,7 +92,7 @@ class TestSessionStateCard(unittest.TestCase):
         self.assertIn('<details class="ssb-completion">', html)
         self.assertIn('(0.9, 0.8, 0, 0)', html)
         self.assertNotIn('· self-reported</summary>', html)
-        self.assertIn('Caveat: Optional follow-up TEST-12.', html)
+        self.assertIn('Caveat</span>Optional follow-up TEST-12.', html)
         self.assertIn('Resolution <span class="ssb-score">0.9</span>', html)
         self.assertIn('Delivery <span class="ssb-score">N/A</span>', html)
         self.assertIn('Close criteria met', html)
@@ -143,7 +143,9 @@ class TestSessionStateCard(unittest.TestCase):
         self.assertIn('Topic</span>Reliable &lt;session&gt; tracking.', html)
         self.assertIn('Open · topic goal is not yet met', html)
         self.assertIn('Done when</span>Follow-ups stay accurate.', html)
-        self.assertIn('Needs you</span>None', html)
+        self.assertIn('Next step</span>Not stated.', html)
+        self.assertIn('Status</span>Open', html)
+        self.assertNotIn('Needs you</span>None', html)
         self.assertNotIn('Close criteria met', html)
         self.assertNotIn('ssb-action', html)
         assessment["scope"]["closure_met"] = True
@@ -153,6 +155,69 @@ class TestSessionStateCard(unittest.TestCase):
         html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
         self.assertIn('Unassessed · invalid assessment', html)
         self.assertNotIn('Close criteria met', html)
+
+    def test_compact_default_shows_agent_plan_with_evidence_behind_one_disclosure(self):
+        import json
+        assessment = {"version": 1, **{k: {"score": v, "evidence": "Supporting evidence."}
+            for k, v in [("resolution", 0.5), ("verification", 0.7), ("delivery", 1), ("decision_dependency", 0)]},
+            "scope": {"goal": "Keep the original topic.", "done_when": "Restored topic matches saved topic.",
+                "closure_met": False, "evidence": "Continuation check is pending."},
+            "caveats": [{"text": "Future continuation not yet checked.", "blocking": True}],
+            "remaining_actions": [{"text": "At the next continuation, compare <saved> and restored goals.",
+                "owner": "agent", "confidence": 0.9, "downside": 0.05, "reversible": True, "within_scope": True}]}
+        body = "DID: Shortened the card.\nINSIGHT: Evidence is available in Details.\nNEXT_STEP_USER: None.\nCOMPLETION: "
+        html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+        default, detail = html.split('<details class="ssb-completion">')
+        self.assertIn('Update</span>Shortened the card.', default)
+        self.assertIn('My next step</span>At the next continuation, compare &lt;saved&gt; and restored goals.', default)
+        self.assertIn('Status</span>Open', default)
+        for text in ('Needs you', 'resolution below', 'Supporting evidence.', 'Keep the original topic.', 'Why</span>', '(0.5, 0.7, 1, 0)'):
+            self.assertNotIn(text, default)
+        self.assertNotIn('ssb-action', html)
+        self.assertNotIn('<details class="ssb-completion" open', html)
+        self.assertIn('>Details</summary>', detail)
+        self.assertIn('Topic</span>Keep the original topic.', detail)
+        self.assertIn('Why</span>Evidence is available in Details.', detail)
+        self.assertIn('(0.5, 0.7, 1, 0)', detail)
+        self.assertIn('Future continuation not yet checked.', detail)
+
+    def test_plan_owner_is_explicit_and_legacy_owner_is_not_guessed(self):
+        import json
+        base = {"version": 1, **{k: {"score": v, "evidence": "Checked."}
+            for k, v in [("resolution", 0.5), ("verification", 0.7), ("delivery", 1), ("decision_dependency", 0)]},
+            "caveats": [], "remaining_actions": []}
+        for owner, label in [('agent', 'My next step'), ('user', 'Your next step'),
+                ('external', 'Waiting on'), (None, 'Next step')]:
+            with self.subTest(owner=owner):
+                action = {"text": "Compare the restored goal with the saved goal.",
+                    "confidence": 0.9, "downside": 0.05, "reversible": True, "within_scope": True}
+                if owner is not None:
+                    action["owner"] = owner
+                assessment = dict(base, remaining_actions=[action])
+                html = render_session_state('NEXT_STEP_USER: None.\nCOMPLETION: '
+                    + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+                default = html.split('<details')[0]
+                self.assertIn(label + '</span>Compare the restored goal', default)
+                self.assertNotIn('ssb-action', html)
+                action["owner"] = 'guessed'
+                html = render_session_state('COMPLETION: ' + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+                self.assertIn('Status</span>Unassessed', html)
+                self.assertNotIn('My next step', html)
+
+    def test_user_owned_plan_keeps_one_actual_request_and_its_model_action(self):
+        import json
+        assessment = {"version": 1, **{k: {"score": v, "evidence": "Checked."}
+            for k, v in [("resolution", 0.5), ("verification", 0.8), ("delivery", 1), ("decision_dependency", 1)]},
+            "caveats": [], "remaining_actions": [{"text": "Approve restarting only the dashboard.",
+                "owner": "user", "confidence": 0.9, "downside": 0.1, "reversible": True, "within_scope": False}]}
+        html = render_session_state('NEXT_STEP_USER: Approve restarting only the dashboard.\n'
+            'NEXT_ACTION: {"label":"Restart","reply":"Yes, restart only the dashboard."}\nCOMPLETION: '
+            + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
+        default = html.split('<details')[0]
+        self.assertIn('Needs you</span>Approve restarting only the dashboard.', default)
+        self.assertIn('>Restart</button>', default)
+        self.assertNotIn('Your next step', default)
+        self.assertIn('Status</span>Open', default)
 
     def test_demo_uses_the_same_compact_summary_behavior(self):
         html = render_session_state(

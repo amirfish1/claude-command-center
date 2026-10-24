@@ -1,0 +1,1 @@
+Shorten structured session summary cards to the current update, the next planned step with an explicit owner, and status. Keep grading evidence under one Details disclosure, and make missing plans visible without inventing a user approval.
