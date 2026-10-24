@@ -46344,6 +46344,7 @@
         btn._suppressClick = true;
         setTimeout(() => { btn._suppressClick = false; }, 350);
         btn.classList.remove('is-dragging');
+        if (btn._convTargetView) updateConversationEndAffordance(btn._convTargetView);
       }
       drag = null;
     };
@@ -46411,6 +46412,17 @@
       nextBtn.setAttribute('aria-hidden', showNext ? 'false' : 'true');
       nextBtn.tabIndex = showNext ? 0 : -1;
     }
+    // "Sessions" shows only while the merged view actually holds more than
+    // one session — i.e. at least one continuation seam marker is rendered.
+    const segBtn = view._convSegmentButton;
+    if (segBtn) {
+      const showSeg = !!view.querySelector('.conv-session-boundary');
+      segBtn.classList.toggle('visible', showSeg);
+      segBtn.setAttribute('aria-hidden', showSeg ? 'false' : 'true');
+      segBtn.tabIndex = showSeg ? 0 : -1;
+    }
+    positionConversationEndAffordance(view);
+    // Resolve against the final position after resize or navigation changes.
     const speakBtn = view._convSpeakButton;
     if (speakBtn) {
       speakBtn._speakTarget = _visibleSpeakButton(view);
@@ -46425,16 +46437,6 @@
       speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
       speakBtn.tabIndex = showSpeak ? 0 : -1;
     }
-    // "Sessions" shows only while the merged view actually holds more than
-    // one session — i.e. at least one continuation seam marker is rendered.
-    const segBtn = view._convSegmentButton;
-    if (segBtn) {
-      const showSeg = !!view.querySelector('.conv-session-boundary');
-      segBtn.classList.toggle('visible', showSeg);
-      segBtn.setAttribute('aria-hidden', showSeg ? 'false' : 'true');
-      segBtn.tabIndex = showSeg ? 0 : -1;
-    }
-    positionConversationEndAffordance(view);
   }
 
   // Surface a plain-language banner at the end of the conversation when a
@@ -46837,27 +46839,42 @@
     return true;
   }
 
-  // The per-turn speaker button of the assistant turn that occupies most of
-  // the pane right now (earliest wins ties), or null.
+  // Read the answer underneath the floating speaker, using spoken text
+  // geometry. A large status footer above it must not steal a shorter answer.
   function _visibleSpeakButton(view) {
     if (!view) return null;
     const vr = view.getBoundingClientRect();
-    let best = null, bestVis = 0;
+    const circle = view._convSpeakButton?.getBoundingClientRect();
+    const anchor = Math.max(vr.top, Math.min(vr.bottom,
+      circle && circle.height ? (circle.top + circle.bottom) / 2 : (vr.top + vr.bottom) / 2));
+    let best = null, bestDistance = Infinity, fallback = null, fallbackVis = 0;
     view.querySelectorAll('[data-read-assistant-message], [data-read-agent-answer]').forEach(btn => {
-      const ev = btn.closest('.event.assistant, .event.result, .kimi-answer-meta, .ask-turn-a') || btn;
-      let r = ev.getBoundingClientRect();
-      if (ev.classList.contains('kimi-answer-meta')) {
-        for (let prev = ev.previousElementSibling; prev; prev = prev.previousElementSibling) {
-          if (prev.matches('.kimi-answer-meta, .kimi-marker')) break;
-          if (prev.matches('.assistant-text')) {
-            r = { top: Math.min(r.top, prev.getBoundingClientRect().top), bottom: r.bottom };
-          }
+      const result = btn.closest('.event.result');
+      const node = result ? agentAnswerNodeBeforeResult(result)
+        : btn.closest('.event.assistant, .kimi-answer-meta, .ask-turn-a');
+      const elements = assistantTextElements(node);
+      if (!elements.length) return;
+      const bounds = elements.map(el => el.getBoundingClientRect());
+      const top = Math.min(...bounds.map(r => r.top));
+      const bottom = Math.max(...bounds.map(r => r.bottom));
+      const visible = Math.min(bottom, vr.bottom) - Math.max(top, vr.top);
+      if (visible <= 0) return;
+      if (visible > fallbackVis) { fallback = btn; fallbackVis = visible; }
+      const data = buildTtsDataFromElements(elements);
+      for (const m of data.mapping) {
+        if (!m.node.nodeValue.trim()) continue;
+        const range = new Range();
+        range.setStart(m.node, m.nodeOffsetStart);
+        range.setEnd(m.node, m.nodeOffsetStart + m.end - m.start);
+        for (const r of range.getClientRects()) {
+          const a = Math.max(r.top, vr.top), b = Math.min(r.bottom, vr.bottom);
+          if (b <= a || !r.width) continue;
+          const distance = Math.max(a - anchor, anchor - b, 0);
+          if (distance < bestDistance) { best = btn; bestDistance = distance; }
         }
       }
-      const vis = Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top);
-      if (vis > bestVis + 1) { best = btn; bestVis = vis; }
     });
-    return best;
+    return best || fallback;
   }
 
   function attachConversationEndAffordance(view) {
@@ -46935,7 +46952,7 @@
       updateConversationEndAffordance(v);
     });
     view._convNextButton = nextBtn;
-    // Floating speaker: reads whichever assistant turn is most visible in the
+    // Floating speaker: reads the assistant turn underneath its position in the
     // pane, so the tiny per-turn speaker icons aren't the only way to start a
     // read. Clicking it again on the same turn pauses/resumes (same as the
     // per-turn button, which it delegates to).
@@ -46953,7 +46970,8 @@
     _makeSpeakBtnDraggable(speakBtn, host);
     speakBtn.addEventListener('click', () => {
       const v = speakBtn._convTargetView || view;
-      const target = _visibleSpeakButton(v);
+      const selected = speakBtn._speakTarget;
+      const target = selected?.isConnected && v.contains(selected) ? selected : _visibleSpeakButton(v);
       if (!target) { showOpToast('No assistant message on screen to read', 'error'); return; }
       target.click();
     });

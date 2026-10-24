@@ -266,6 +266,34 @@ const drain = async () => { for(let i=0; i<8; i++) await Promise.resolve(); };
         self.assertEqual(result["cacheSize"], 2)
         self.assertEqual(result["revoked"], ["play-1", "play-2", "play-3", "play-4"])
 
+    def test_floating_speaker_targets_text_near_circle_instead_of_larger_footer(self):
+        selector = function_block(self.source, "_visibleSpeakButton", "attachConversationEndAffordance")
+        result = self.run_node("""
+const rect = (top, bottom) => ({top, bottom, height: bottom-top, width:200});
+let circle = rect(550, 610);
+function answer(id, box, spoken) {
+  const node = {id, elements:[{getBoundingClientRect: () => box}], spoken};
+  return {id, closest: s => s === '.event.result' ? null : node};
+}
+const old = answer('older', rect(0, 500), [rect(20, 80)]);
+const current = answer('current', rect(550, 630), [rect(550, 610)]);
+const assistantTextElements = node => node.elements;
+const buildTtsDataFromElements = elements => {
+  const node = elements === old.closest('').elements ? old.closest('') : current.closest('');
+  return {mapping: node.spoken.map(r => ({node:{nodeValue:'Spoken answer.', rect:r},nodeOffsetStart:0,start:0,end:14}))};
+};
+function Range() { this.setStart = node => {this.node=node}; this.setEnd=()=>{}; this.getClientRects=()=>[this.node.rect]; }
+const view = {getBoundingClientRect:()=>rect(0,700), _convSpeakButton:{getBoundingClientRect:()=>circle}, querySelectorAll:()=>[old,current]};
+""" + selector + """
+const below = _visibleSpeakButton(view).id;
+circle = rect(20,80);
+const above = _visibleSpeakButton(view).id;
+old.closest('').spoken = []; // Only the excluded status footer remains visible.
+const footerExcluded = _visibleSpeakButton(view).id;
+console.log(JSON.stringify({below,above,footerExcluded}));
+""")
+        self.assertEqual(result, {"below":"current", "above":"older", "footerExcluded":"current"})
+
     def test_failed_chunk_advances_queue_and_warns_non_blockingly(self):
         chunker = function_block(
             self.source, "_chunkTtsText", "_ttsBindChunkCompletion"
