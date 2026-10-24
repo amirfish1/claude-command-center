@@ -32892,10 +32892,14 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .repo-avatar-preview .repo-avatar-initials { font-size:18px; }
 .conv-folder-chip .repo-avatar { width:14px; height:14px; flex-basis:14px; border-radius:3px; }
 #repoAvatarControls { flex-wrap:wrap; }
-/* Session portraits inherit the repo image; activity and cost stay separate. */
-:is(.conv-session-icon, .conv-pane-cat-icon).has-repo-avatar > .repo-avatar { width:18px; height:18px; flex-basis:18px; margin:0; filter:none; }
-:is(.conv-session-icon, .conv-pane-cat-icon).has-repo-avatar > .session-tier-cost { left:21px; }
-/* Repo identity remains visible when the sidebar hides engine glyphs. */
-.conv-item:has(.conv-session-icon.has-repo-avatar) { --conv-dot-col:36px; --conv-content-left:calc(var(--conv-icon-left) + var(--conv-dot-col) + 8px); }
-.conv-item .conv-session-icon.has-repo-avatar { display:inline-flex; }
-#convList:is(.workers-icon-narrow, .workers-icon-mid) .conv-item:has(.conv-session-icon.has-repo-avatar) { --conv-dot-col:36px; }
+/* Keep the talking entity: a circle, ticket number and corner model badge.
+   The repository image replaces only the old repo-colored background. */
+.conv-idea-avatar.has-repo-background { background:var(--surface, #161b22); border-radius:50%; overflow:visible; }
+.conv-idea-avatar > .repo-avatar.conv-avatar-background { position:absolute; inset:0; width:100%; height:100%; margin:0; border-radius:50%; overflow:hidden; pointer-events:none; }
+.conv-idea-avatar > .conv-avatar-background img { object-fit:cover; }
+.conv-idea-avatar:has(.conv-avatar-number) > .conv-avatar-background { opacity:0.55; }
+.conv-avatar-background .repo-avatar-initials { display:none; }
+.conv-idea-avatar > .conv-avatar-number { position:relative; z-index:1; text-shadow:0 1px 3px #000, 0 0 5px #000; }
+.conv-idea-avatar > .conv-avatar-model { z-index:2; }
+.conv-repo-portrait { cursor:default; }
+.conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }

@@ -7825,30 +7825,24 @@
 
   function sessionEngineIconHtml(row, options) {
     const opts = options || {};
+    const portrait = _ideaAvatarHtml(row, opts.context === 'pane') || _repoSessionAvatarHtml(row, opts.context === 'pane');
+    if (portrait) return portrait;
     const sid = row && (row.session_id || row.id);
     const optimistic = !!(sid && typeof sessionIsOptimisticallySending === 'function'
       && sessionIsOptimisticallySending(sid));
     const presentation = sessionIconPresentation(row, optimistic);
-    const repoPath = sessionRepoAvatarPath(row);
-    const repoAvatar = repoPath ? repoAvatarHtml(repoPath, row.folder_label_chip || row.folder_label || '') : '';
     const baseClass = opts.context === 'pane' ? 'conv-pane-cat-icon' : 'conv-session-icon';
     const tierClass = presentation.tier ? ' cost-' + presentation.tier : '';
     const activityClass = presentation.working ? ' is-working' : ' is-not-working';
-    const tierDollarCounts = { premium: 3, high: 2, medium: 1, low: 0 };
-    const dollarCount = tierDollarCounts[presentation.tier] || 0;
-    const tierCost = dollarCount
-      ? '<span class="session-tier-cost" aria-hidden="true">' + '<i>$</i>'.repeat(dollarCount) + '</span>'
-      : '';
     // Rows whose engine/tier the banner already states get marked, so the
     // stylesheet can drop just those glyphs and leave the exceptions visible.
-    const hoistClass = (!repoAvatar && _workersHoistState.engine && presentation.engine === _workersHoistState.engine ? ' hoisted-engine' : '')
+    const hoistClass = (_workersHoistState.engine && presentation.engine === _workersHoistState.engine ? ' hoisted-engine' : '')
       + (_workersHoistState.tier && presentation.tier === _workersHoistState.tier ? ' hoisted-cost' : '');
-    return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + hoistClass + (repoAvatar ? ' has-repo-avatar' : '') + '"'
+    return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + hoistClass + '"'
       + ' title="' + escapeAttr(presentation.title) + '"'
       + ' role="img" aria-label="' + escapeAttr(presentation.title) + '">'
-      + (repoAvatar || getEngineSvg(presentation.engine))
+      + getEngineSvg(presentation.engine)
       + '<span class="session-activity-dot" aria-hidden="true"></span>'
-      + tierCost
       + '</span>';
   }
 
@@ -23943,15 +23937,29 @@
   }, true);
 
   function _waAvatarHtml(c, title) {
-    const repoPath = sessionRepoAvatarPath(c);
-    if (repoPath) return repoAvatarHtml(repoPath, c.folder_label, 'wa-avatar wa-av');
     const ideaAvatar = _ideaAvatarHtml(c, true);
     if (ideaAvatar) return ideaAvatar;
+    const repoAvatar = _repoSessionAvatarHtml(c, true);
+    if (repoAvatar) return repoAvatar;
     const cat = _waCategory(c, title);
     const repo = String((c && c.folder_label) || '');
     return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + cat.label) + '" style="background:linear-gradient(135deg,' + cat.bg[0] + ',' + cat.bg[1] + ')">'
       + '<span class="wa-face">' + cat.e + '</span>'
       + '</span>';
+  }
+  function _avatarModelBadgeHtml(presentation) {
+    return '<span class="conv-avatar-model ' + presentation.engine + ' cost-' + presentation.tier + '" title="' + escapeAttr(presentation.title) + '">'
+      + '<span class="conv-avatar-engine" aria-hidden="true">' + getEngineSvg(presentation.engine) + '</span></span>';
+  }
+  function _repoSessionAvatarHtml(c, mobile = false) {
+    const repoPath = sessionRepoAvatarPath(c);
+    if (!repoPath) return '';
+    const presentation = sessionIconPresentation(c, false);
+    return '<span class="conv-idea-avatar conv-repo-portrait has-repo-background' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon')
+      + (presentation.working ? ' is-working' : ' is-not-working') + '" role="img" aria-label="' + escapeAttr(presentation.title) + '">'
+      + repoAvatarHtml(repoPath, c.folder_label_chip || c.folder_label, 'conv-avatar-background')
+      + _avatarModelBadgeHtml(presentation)
+      + '<span class="session-activity-dot" aria-hidden="true"></span></span>';
   }
   function _ideaAvatarHtml(c, mobile = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
@@ -23963,15 +23971,16 @@
     const repo = String(c.folder_label || c.folder_label_chip || c.folder_path || c.session_cwd || '');
     const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
     const presentation = sessionIconPresentation(c, false);
-    return '<button type="button" class="conv-idea-avatar' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
+    const repoPath = sessionRepoAvatarPath(c);
+    const background = repoPath ? repoAvatarHtml(repoPath, repo, 'conv-avatar-background') : '';
+    return '<button type="button" class="conv-idea-avatar' + (background ? ' has-repo-background' : '') + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
       + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
       + ' style="--avatar-hue:' + (hue | 0) + '"'
       + ' title="' + escapeAttr(ref + (repo ? ' · ' + repo : '') + ' · ' + presentation.title) + '"'
       + ' aria-label="Open ' + noun + ' ' + escapeAttr(num) + '">'
+      + background
       + '<span class="conv-avatar-number">' + escapeHtml(num) + '</span>'
-      + '<span class="conv-avatar-model ' + presentation.engine + ' cost-' + presentation.tier + '" title="' + escapeAttr(presentation.title) + '">'
-      + '<span class="conv-avatar-engine" aria-hidden="true">' + getEngineSvg(presentation.engine) + '</span>'
-      + '</span></button>';
+      + _avatarModelBadgeHtml(presentation) + '</button>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with
   // the full reply (per-repo /api/conversations) instead of the preview.
@@ -37680,9 +37689,8 @@
             + '</svg>';
       }
 
-      const useRepoAvatar = sessionRepoAvatarPath(c) && (!iconType || iconType === 'pkood');
-      const ideaAvatarHtml = useRepoAvatar ? '' : _ideaAvatarHtml(c);
-      const sessionIconHtml = useRepoAvatar ? sessionEngineIconHtml(c, { context: 'sidebar' }) : ideaAvatarHtml || (iconType
+      const ideaAvatarHtml = _ideaAvatarHtml(c);
+      const sessionIconHtml = ideaAvatarHtml || (iconType
         ? '<span class="conv-session-icon ' + iconType + ' is-not-working" title="' + escapeAttr(iconTitle) + '" aria-hidden="true">'
             + svgMarkup
             + '</span>'
