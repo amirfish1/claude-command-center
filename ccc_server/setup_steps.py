@@ -45,7 +45,7 @@ from pathlib import Path
 from ccc_server.paths import _iter_common_cli_candidates
 
 NODE_MIN = (20, 18)
-NODE_MAX_EXCLUSIVE = (25, 0)
+NODE_MAX_EXCLUSIVE = (27, 0)
 NODE_DIST_BASE = os.environ.get(
     "CCC_NODE_DIST_BASE", "https://nodejs.org/dist"
 ).rstrip("/")
