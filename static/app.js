@@ -23829,6 +23829,7 @@
       if (currentConversation === placeholderId || currentConversation === defaultPlaceholderId) {
         selectionSwap = { realCard, placeholderId };
       }
+      resolvePlaceholderPanes([placeholderId, defaultPlaceholderId], realCard);
       delete columnOverrides[placeholderId];
       delete columnOverrides[defaultPlaceholderId];
       try {
@@ -23838,6 +23839,32 @@
       pendingSpawns.delete(pid);
     }
     return selectionSwap;
+  }
+
+  // placeholder id -> real conversation id, for placeholders that already
+  // reconciled. The reconcile paths only swap the FOCUSED pane; a placeholder
+  // sitting in another split pane (or restored later) otherwise keeps its
+  // "Thinking..." card forever while the answer lands on the real row
+  // (CCC-165).
+  const _resolvedPlaceholderTargets = new Map();
+
+  function resolvePlaceholderPanes(placeholderIds, real) {
+    const realId = real && (real.id || real.session_id);
+    if (!realId) return;
+    const ids = (placeholderIds || []).filter(Boolean).map(String);
+    ids.forEach(id => _resolvedPlaceholderTargets.set(id, String(realId)));
+    const activeId = activePaneId();
+    const stale = splitState.panes.filter(pane =>
+      pane.id !== activeId && ids.includes(String(pane.conversationId || '')));
+    if (!stale.length) return;
+    // selectConversation focuses the pane it loads; hand focus back after,
+    // the same way restoreSplitState does.
+    (async () => {
+      for (const pane of stale) {
+        try { await selectConversation(String(realId), pane.id); } catch (_) {}
+      }
+      if (paneByPaneId(activeId)) setActivePaneById(activeId);
+    })();
   }
 
   function rebindCurrentSelectionToRealCard(real) {
@@ -24422,6 +24449,7 @@
             if (currentConversation === placeholderId || currentConversation === ('spawning-' + pid)) {
               rebindCurrentSelectionToRealCard(Object.assign({}, ph, { id: expectedSid }));
             }
+            resolvePlaceholderPanes([placeholderId, 'spawning-' + pid], { id: expectedSid });
             renderArchiveList($convSearch ? $convSearch.value : '', { force: true });
           }
         } else {
@@ -24554,6 +24582,7 @@
             if (currentConversation === placeholderId) {
               _selectionSwap = { realCard };
             }
+            resolvePlaceholderPanes([placeholderId, defaultPlaceholderId], realCard);
           }
           delete columnOverrides[placeholderId];
           delete columnOverrides[defaultPlaceholderId];
@@ -58467,6 +58496,12 @@
     // until /api/sessions swaps in the durable transcript row.
     if (id.startsWith('spawning-')) {
       const c = (conversationsData || []).find(x => x.id === id);
+      const resolvedId = _resolvedPlaceholderTargets.get(id);
+      if (resolvedId && !pendingSpawns.has(String(id).replace(/^spawning-/, ''))
+          && !(c && c.spawn_failed)) {
+        selectConversation(resolvedId, fetchPaneId);
+        return;
+      }
       if (!c) return;
       if (c && isSpawnLogPlaceholderSource(c.source) && typeof c.spawn_pid === 'number') {
         await loadCodexLog(c);
