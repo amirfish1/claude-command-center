@@ -3740,6 +3740,20 @@
       color-mix(in srgb, var(--text, #c9d1d9) 14%, transparent) 0);
   }
 
+  .speaker-tools { position: absolute; width: 84px; height: 84px; z-index: 13; pointer-events: none; }
+  .speaker-tools[hidden] { display: none; }
+  .speaker-rate-dial { width: 84px; height: 84px; overflow: visible; touch-action: none; pointer-events: none; }
+  .speaker-rate-track { fill: none; stroke: var(--border, #43545a); stroke-width: 2; }
+  .speaker-rate-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: grab; }
+  .speaker-rate-dial:focus-visible { outline: 2px solid var(--accent, #00cdd6); border-radius: 50%; }
+  .speaker-tools.is-adjusting .speaker-rate-track { stroke: var(--accent, #00cdd6); stroke-width: 4; }
+  .speaker-tools.is-adjusting .speaker-rate-hit { cursor: grabbing; }
+  .speaker-rate-value { position: absolute; top: 72px; left: 14px; width: 56px; text-align: center; border-radius: 8px; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 600 11px/18px ui-monospace, monospace; }
+  .speaker-next-sentence { position: absolute; left: 70px; top: 28px; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border, #43545a); border-radius: 50%; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 24px/1 system-ui, sans-serif; cursor: pointer; pointer-events: auto; touch-action: manipulation; }
+  .speaker-next-sentence:hover { border-color: var(--accent, #00cdd6); color: var(--accent, #00cdd6); }
+  .speaker-next-sentence:disabled { opacity: 0.35; cursor: default; }
+  .conv-pane:has(.conv-scroll-speak-btn) .tts-rate-control { display: none; }
+
   /* Seam marker between two CCC continuation segments in the merged
      conversation view: messages above came from the earlier session,
      messages below are the session that continued from it. */

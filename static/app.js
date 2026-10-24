@@ -14029,6 +14029,7 @@
     document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatPlayback);
   }
   function _syncSpeakFloatPlayback(btn) {
+    _syncSpeakerTools(btn);
     const action = btn.classList.contains('paused') ? 'resume'
       : btn.classList.contains('speaking') ? 'pause' : 'read';
     const streaming = _ttsStreaming && action !== 'read';
@@ -14924,14 +14925,14 @@
         _ttsSetPlay();
       }).catch(() => {});
     };
-    ensure(state.index);
-    state.prefetch[state.index].then((got) => {
-      delete state.prefetch[state.index];
+    const idx = state.index;
+    ensure(idx);
+    state.prefetch[idx].then((got) => {
       if (stale()) { if (!got.blob && got.url) URL.revokeObjectURL(got.url); return; }
+      delete state.prefetch[idx];
       // Start the next clip the moment this one is fully generated, not at
       // onplay. One at a time: the local voice server shares the CPU, so two
       // clips made at once both finish late and playback stalls.
-      const idx = state.index;
       got.done.then(() => { if (!stale()) ensure(idx + 1); }).catch(() => {});
       if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
       // Give each playback its own URL; revoking it must not invalidate the cache.
@@ -14941,6 +14942,7 @@
       const audio = _ttsAudio || (_ttsAudio = new Audio());
       audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
       audio.onplaying = audio.onwaiting = audio.onpause = null;
+      audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = null;
       audio.src = playUrl;
       audio.playbackRate = _ttsRate;
       let wordFrame = null, lastWord = -1, complete = !!got.blob;
@@ -14974,17 +14976,46 @@
         updateWord();
         wordFrame = requestAnimationFrame(trackWord);
       };
-      _ttsNeural = { audio, token, stopHighlight };
-      audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
+      const player = { audio, token, stopHighlight, waitingForSeek: false };
+      const applySeek = () => {
+        if (stale() || state.seekTarget == null) return true;
+        const local = Math.max(0, state.seekTarget - chunk.start);
+        // Full clips use their duration; growing MP3s have no final duration.
+        // The streaming estimate matches word highlighting until timestamps
+        // are available. Never seek beyond bytes the browser has buffered.
+        const time = complete && Number.isFinite(audio.duration)
+          ? local / Math.max(1, chunk.text.length) * audio.duration : local / 15;
+        let buffered = false;
+        for (let i = 0; i < audio.seekable.length; i++) {
+          if (audio.seekable.start(i) <= time && audio.seekable.end(i) >= time) buffered = true;
+        }
+        if (!buffered) return false;
+        audio.currentTime = time;
+        _ttsLastCharIndex = state.seekTarget;
+        state.seekTarget = null;
+        if (player.waitingForSeek && !_ttsPaused) {
+          player.waitingForSeek = false;
+          audio.play().catch(() => {});
+        }
+        return true;
+      };
+      player.seek = target => {
+        state.seekTarget = target;
+        player.waitingForSeek = !_ttsPaused;
+        audio.pause();
+        applySeek();
+      };
+      _ttsNeural = player;
+      audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = () => { applySeek(); };
+      audio.ontimeupdate = () => { if (applySeek() && !audio.paused && !audio.ended) updateWord(); };
       audio.onpause = stopHighlight;
       const label = 'Pause reading (free voice: ' + got.voice + ')';
       audio.onplay = () => {
         if (stale()) return;
-        if (state.seekFrac) {
-          const f = state.seekFrac;
-          state.seekFrac = 0;
-          const t = f * audio.duration;
-          if (isFinite(t) && audio.seekable.length && audio.seekable.end(audio.seekable.length - 1) >= t) audio.currentTime = t;
+        if (!applySeek()) {
+          player.waitingForSeek = true;
+          audio.pause();
+          return;
         }
         setTtsButtonsState(true, false, state.paneId);
         setTtsButtonsBusy(false);
@@ -15015,7 +15046,7 @@
       // inside a clip (the stream ran dry), so slow reads can be measured.
       let waitFrom = 0;
       audio.onplaying = () => {
-        if (stale()) return;
+        if (stale() || state.seekTarget != null) return;
         const now = Date.now();
         stopHighlight();
         trackWord();
@@ -15037,6 +15068,7 @@
         _ttsLog('ERROR', 'clip ' + idx + ' media error ' + (audio.error?.code || 'unknown'));
         URL.revokeObjectURL(playUrl); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS);
       };
+      if (_ttsPaused) { audio.load?.(); return; }
       audio.play().catch((error) => {
         if (stale()) return;
         _ttsLog('ERROR', 'clip ' + idx + ' play rejected: ' + (error?.name || 'unknown'));
@@ -15893,6 +15925,11 @@
     document.querySelectorAll('.tts-rate-label').forEach((el) => {
       el.textContent = _ttsRate.toFixed(2) + '×';
     });
+    document.querySelectorAll('.speaker-rate-value').forEach(el => { el.textContent = _ttsRate.toFixed(2) + '×'; });
+    document.querySelectorAll('.speaker-rate-dial').forEach(el => {
+      el.setAttribute('aria-valuenow', String(_ttsRate));
+      el.setAttribute('aria-valuetext', _ttsRate.toFixed(2) + ' times speed');
+    });
   }
   function _restartTtsAtCurrentPosition() {
     // Only meaningful while playback is active. Cancel the in-flight
@@ -15943,30 +15980,24 @@
   // audio to seek in, so the caller restarts from text.
   function _ttsSeekNeuralTo(target) {
     const st = _ttsChunkState;
-    if (!st || _ttsPaused || !_ttsNeural || !_ttsNeural.audio) return false;
-    let k = st.chunks.findIndex((c) => target < c.start + c.text.length);
-    if (k < 0) return false;
-    const c = st.chunks[k];
-    const frac = Math.max(0, Math.min(1, (target - c.start) / Math.max(1, c.text.length)));
-    if (k === st.index) {
-      const a = _ttsNeural.audio;
-      const t = frac * a.duration;
-      if (!isFinite(t) || !a.seekable.length || a.seekable.end(a.seekable.length - 1) < t) return false;
-      a.currentTime = t;
+    if (!st || st.neuralOk === false) return false;
+    const k = st.chunks.findIndex(c => target < c.start + c.text.length);
+    if (k < st.index || k < 0) return false;
+    if (k === st.index && _ttsNeural?.audio) {
+      _ttsNeural.seek(target);
       return true;
     }
-    if (k < st.index) return false;
-    const old = _ttsNeural.audio;
-    try { old.pause(); URL.revokeObjectURL(old.src); } catch (_) {}
-    _ttsNeural = null;
+    // Keep state.prefetch and the original clip text: re-chunking at the
+    // sentence boundary loses the prepared clip and creates a cold request.
+    _ttsEngineCancel();
     _ttsUtterance = null;
     st.index = k;
-    st.seekFrac = frac;
+    st.seekTarget = target > st.chunks[k].start ? target : null;
     _ttsSpeakNextChunk();
     return true;
   }
-  // Rate is adjusted with − / + buttons (replaced the drag slider). Each click
-  // steps ±0.05 within [MIN, MAX]; persist, relabel, disable at the ends, and
+  // The speaker rim, keyboard and fallback − / + buttons share 0.05 steps.
+  // Clamp within [MIN, MAX]; persist, relabel, disable at the ends, and
   // restart playback (debounced) so an active read picks up the new speed.
   function _refreshTtsRateBtns() {
     document.querySelectorAll('.tts-rate-down').forEach((btn) => { btn.disabled = _ttsRate <= _TTS_RATE_MIN + 1e-9; });
@@ -47108,19 +47139,83 @@
         // Dragged somewhere by the user: keep it there (stored as fractions
         // of the pane so it survives rotation/resizes), clamped on screen.
         const w = speakBtn.offsetWidth || 56, h = speakBtn.offsetHeight || 56;
-        const left = Math.min(Math.max(0, saved.x * hostRect.width), Math.max(0, hostRect.width - w));
-        const top = Math.min(Math.max(0, saved.y * hostRect.height), Math.max(0, hostRect.height - h));
+        const left = Math.min(Math.max(14, saved.x * hostRect.width), Math.max(14, hostRect.width - w - 28));
+        const top = Math.min(Math.max(14, saved.y * hostRect.height), Math.max(14, hostRect.height - h - 24));
         speakBtn.style.left = Math.round(left) + 'px';
         speakBtn.style.top = Math.round(top) + 'px';
         speakBtn.style.right = 'auto';
         speakBtn.style.bottom = 'auto';
       } else {
-        speakBtn.style.right = right + 'px';
+        speakBtn.style.right = (right + 22) + 'px';
         speakBtn.style.left = 'auto';
         speakBtn.style.top = 'auto';
-        speakBtn.style.bottom = (above + 4) + 'px';
+        speakBtn.style.bottom = (above + 28) + 'px';
       }
     }
+    if (speakBtn) _syncSpeakerTools(speakBtn);
+  }
+
+  function _syncSpeakerTools(btn) {
+    const tools = btn._speakerTools;
+    if (!tools) return;
+    tools.hidden = !btn.classList.contains('visible');
+    tools.style.left = (btn.offsetLeft - 14) + 'px';
+    tools.style.top = (btn.offsetTop - 14) + 'px';
+    const current = btn.classList.contains('speaking') || btn.classList.contains('paused');
+    tools.querySelector('.speaker-next-sentence').disabled = !current;
+  }
+  function _attachSpeakerTools(btn, host) {
+    if (btn._speakerTools) return;
+    const tools = document.createElement('div');
+    tools.className = 'speaker-tools';
+    tools.hidden = true;
+    tools.innerHTML = '<svg class="speaker-rate-dial" viewBox="0 0 84 84" role="slider" tabindex="0" aria-label="Speech speed: drag clockwise to speed up, counterclockwise to slow down" aria-valuemin="' + _TTS_RATE_MIN + '" aria-valuemax="' + _TTS_RATE_MAX + '"><circle class="speaker-rate-track" cx="42" cy="42" r="36"/><circle class="speaker-rate-hit" cx="42" cy="42" r="36"/></svg><output class="speaker-rate-value" aria-live="polite"></output><button type="button" class="speaker-next-sentence" title="Next sentence" aria-label="Next sentence">›</button>';
+    host.appendChild(tools);
+    btn._speakerTools = tools;
+    const dial = tools.querySelector('.speaker-rate-dial');
+    let turn = null;
+    const angle = ev => {
+      const r = btn.getBoundingClientRect();
+      return Math.atan2(ev.clientY - r.top - r.height / 2, ev.clientX - r.left - r.width / 2);
+    };
+    const end = ev => {
+      if (!turn || ev.pointerId !== turn.id) return;
+      turn = null;
+      tools.classList.remove('is-adjusting');
+      document.removeEventListener('pointermove', move, true);
+      document.removeEventListener('pointerup', end, true);
+      document.removeEventListener('pointercancel', end, true);
+    };
+    const move = ev => {
+      if (!turn || ev.pointerId !== turn.id) return;
+      ev.preventDefault();
+      const next = angle(ev);
+      turn.delta += Math.atan2(Math.sin(next - turn.angle), Math.cos(next - turn.angle));
+      turn.angle = next;
+      const steps = Math.trunc(turn.delta / (Math.PI / 12));
+      if (steps) { _stepTtsRate(steps * 0.05); turn.delta -= steps * Math.PI / 12; }
+    };
+    dial.addEventListener('pointerdown', ev => {
+      if (ev.button !== undefined && ev.button !== 0) return;
+      ev.preventDefault(); ev.stopPropagation();
+      turn = { id: ev.pointerId, angle: angle(ev), delta: 0 };
+      tools.classList.add('is-adjusting');
+      try { dial.setPointerCapture(ev.pointerId); } catch (_) {}
+      document.addEventListener('pointermove', move, true);
+      document.addEventListener('pointerup', end, true);
+      document.addEventListener('pointercancel', end, true);
+    });
+    dial.addEventListener('keydown', ev => {
+      const delta = { ArrowUp: 0.05, ArrowRight: 0.05, ArrowDown: -0.05, ArrowLeft: -0.05,
+        Home: _TTS_RATE_MIN - _ttsRate, End: _TTS_RATE_MAX - _ttsRate }[ev.key];
+      if (delta === undefined) return;
+      ev.preventDefault(); _stepTtsRate(delta);
+    });
+    tools.querySelector('.speaker-next-sentence').addEventListener('click', ev => {
+      ev.stopPropagation(); _ttsJumpToNextSentence();
+    });
+    _syncTtsRateUi();
+    _syncSpeakerTools(btn);
   }
 
   // Floating speaker drag position, shared by every pane (localStorage).
@@ -47151,12 +47246,13 @@
       }
       ev.preventDefault();
       const hr = host.getBoundingClientRect();
-      const left = Math.min(Math.max(0, drag.left + dx), hr.width - btn.offsetWidth);
-      const top = Math.min(Math.max(0, drag.top + dy), hr.height - btn.offsetHeight);
+      const left = Math.min(Math.max(14, drag.left + dx), hr.width - btn.offsetWidth - 28);
+      const top = Math.min(Math.max(14, drag.top + dy), hr.height - btn.offsetHeight - 24);
       btn.style.left = Math.round(left) + 'px';
       btn.style.top = Math.round(top) + 'px';
       btn.style.right = 'auto';
       btn.style.bottom = 'auto';
+      _syncSpeakerTools(btn);
     };
     const end = (ev) => {
       if (!drag || (ev.pointerId !== undefined && ev.pointerId !== drag.id)) return;
@@ -47281,6 +47377,7 @@
       speakBtn.classList.toggle('visible', showSpeak);
       speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
       speakBtn.tabIndex = showSpeak ? 0 : -1;
+      _syncSpeakerTools(speakBtn);
     }
   }
 
@@ -47812,6 +47909,7 @@
       host.appendChild(speakBtn);
     }
     speakBtn._convTargetView = view;
+    _attachSpeakerTools(speakBtn, host);
     _makeSpeakBtnDraggable(speakBtn, host);
     speakBtn.addEventListener('click', () => {
       const v = speakBtn._convTargetView || view;
