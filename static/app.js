@@ -3446,7 +3446,8 @@
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(next);
     return working ? { label: 'Working', kind: 'working', text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
       : ready ? { label: 'Close', kind: 'ready', text: summary.did || 'Reviewed as complete; archive when ready.' }
-      : { label: 'Next', kind: 'next', text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
+      : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
+        text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
   }
   function _ultraFreshPaint(sid) {
     const entry = _ultraFresh.entries.get(sid);
@@ -39451,7 +39452,7 @@
       // showed in the transcript pane. In the sidebar hover preview we keep
       // this to DID only so the brief reads cleanly in one focused block.
       let outcomeHtml = '';
-      let _outcomeKind = 'next';
+      let _outcomeKind = 'update';
       let _outcomeText = '';
       const _ss = c.session_state || null;
       // Lead with the session's own next step when it names one: the row's
@@ -39490,7 +39491,7 @@
         const _next = ((_ss && _ss.next_step_user) || '').trim();
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
         // One label carries the state (no separate status column):
-        // Working + current activity, Next + remaining work, or Close
+        // Working + current activity, Next + user action, Update + summary, or Close
         // after an explicit review or passing completion assessment.
         let _label, _kind, _stepText;
         if (_outWorking) {
@@ -39506,9 +39507,9 @@
           _label = 'Next'; _kind = 'next';
           _stepText = _next;
         } else {
-          _label = 'Next'; _kind = 'next'; _stepText = _did || _latest || 'Completion assessment pending.';
+          _label = 'Update'; _kind = 'update'; _stepText = _did || _latest || 'Completion assessment pending.';
         }
-        _outcomeKind = _kind || 'next';
+        _outcomeKind = _kind || 'update';
         _outcomeText = _stepText || _did;
         const _assessment = _ss && _ss.completion;
         const _assessmentTip = _assessment
@@ -39584,7 +39585,8 @@
       // The avatar already says what kind of session this is; drop the
       // decorative leading glyphs (🪄 ✏️ 🧵 ⤴ …) from the name.
       const _waTitle = String(title || '').replace(/^(?:[\p{Extended_Pictographic}\uFE0F\u200d›⤴]\s*)+/u, '') || title;
-      const _waExplanationLabel = ({ working: 'Working', ready: 'Close', next: 'Next' }[_outcomeKind] || 'Next');
+      const _waExplanationLabel = (_needsYouRow && c.question_text && _outcomeKind !== 'working') ? 'Next'
+        : ({ working: 'Working', ready: 'Close', next: 'Next', update: 'Update' }[_outcomeKind] || 'Update');
       const _waPreview = (_needsYouRow && c.question_text && _outcomeKind !== 'working') ? String(c.question_text)
         : (_outcomeText || c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
           || _waPreviewText(c.session_state && c.session_state.did)
