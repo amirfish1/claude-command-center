@@ -3649,6 +3649,7 @@
     background: conic-gradient(
       var(--green) calc(var(--tts-ring-f, 0) * 1turn),
       #d29922 0 calc(var(--tts-ring-sent-f, 0) * 1turn),
+      #a855f7 0 calc(var(--tts-ring-cancelled-f, 0) * 1turn),
       transparent 0);
   }
   .conv-scroll-speak-btn.speaking::before {
@@ -3657,6 +3658,7 @@
       var(--accent, var(--cyan)) calc(var(--tts-play, 0) * 1turn),
       var(--green) 0 calc(max(var(--tts-play, 0), var(--tts-ring-f, 0)) * 1turn),
       #d29922 0 calc(max(var(--tts-play, 0), var(--tts-ring-sent-f, 0)) * 1turn),
+      #a855f7 0 calc(max(var(--tts-play, 0), var(--tts-ring-cancelled-f, 0)) * 1turn),
       color-mix(in srgb, var(--text, #c9d1d9) 14%, transparent) 0);
   }
 
@@ -32910,3 +32912,19 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-idea-avatar > .conv-avatar-model { z-index:2; }
 .conv-repo-portrait { cursor:default; }
 .conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }
+
+/* Optional TTS scheduler inspector; kept outside transcript text and copying. */
+::highlight(tts-cache-cancelled) { background-color: rgba(168, 85, 247, 0.32); }
+#ttsCacheDebugQueue {
+  position: fixed; top: 74px; left: 12px; z-index: 100100;
+  max-width: min(360px, calc(100vw - 24px)); color: #e6edf3;
+  background: #161b22; border: 1px solid #59636e; border-radius: 8px;
+  font-size: 12px; box-shadow: 0 2px 10px #0008;
+}
+#ttsCacheDebugQueue summary { padding: 7px 10px; cursor: pointer; }
+#ttsCacheDebugQueue > div { max-height: 32vh; overflow: auto; padding: 0 10px 8px; }
+#ttsCacheDebugQueue p { margin: 4px 0 8px; }
+#ttsCacheDebugQueue [data-status] { padding: 5px; margin: 3px 0; overflow-wrap: anywhere; }
+#ttsCacheDebugQueue [data-status="processing"] { background: #f59e0b52; }
+#ttsCacheDebugQueue [data-status="ready"] { background: #22c55e4d; }
+#ttsCacheDebugQueue [data-status="cancelled"] { background: #a855f752; }

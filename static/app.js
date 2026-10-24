@@ -13930,16 +13930,82 @@
   try { _ttsCacheDebug = localStorage.getItem('ccc-tts-cache-debug') === '1'; } catch (_) {}
   let _ttsCacheDebugFrame = null;
   let _ttsCacheDebugObserver = null;
+  // This is the browser scheduler's queue, not the engine's internal queue.
+  // Sent requests run to completion; only unsent continuation work is dropped.
+  const _ttsDebugJobs = [];
+  const _ttsPrefetchTargets = new Map();
+  function _ttsDebugJob(text, status, owner) {
+    const job = { text, status, owner };
+    _ttsDebugJobs.push(job);
+    while (_ttsDebugJobs.length > 120) {
+      const i = _ttsDebugJobs.findIndex(j => !['queued', 'processing'].includes(j.status));
+      if (i < 0) break;
+      _ttsDebugJobs.splice(i, 1);
+    }
+    _ttsScheduleCacheDebug();
+    return job;
+  }
+  function _ttsSelectPrefetchTarget(owner, text) {
+    if (_ttsPrefetchTargets.get(owner) === text) return;
+    _ttsPrefetchTargets.set(owner, text);
+    _ttsChainTokens[owner || ''] = (_ttsChainTokens[owner || ''] || 0) + 1;
+    for (const job of _ttsDebugJobs) {
+      if (job.owner === owner && job.status === 'queued') job.status = 'cancelled';
+    }
+    _ttsScheduleCacheDebug();
+  }
+  function _ttsRenderDebugQueue() {
+    let panel = document.getElementById('ttsCacheDebugQueue');
+    if (!_ttsCacheDebug) { panel?.remove(); return; }
+    if (!panel) {
+      panel = document.createElement('details');
+      panel.id = 'ttsCacheDebugQueue';
+      const summary = document.createElement('summary');
+      summary.textContent = 'TTS queue';
+      panel.append(summary, document.createElement('div'));
+      document.body.appendChild(panel);
+    }
+    const waiting = _ttsDebugJobs.filter(j => j.status === 'queued');
+    const processing = _ttsDebugJobs.filter(j => j.status === 'processing');
+    const title = 'TTS: ' + processing.length + ' sent · ' + waiting.length + ' waiting';
+    if (panel.firstChild.textContent !== title) panel.firstChild.textContent = title;
+    const jobs = _ttsDebugJobs.filter(j => ['queued', 'processing'].includes(j.status))
+      .concat(_ttsDebugJobs.filter(j => !['queued', 'processing'].includes(j.status)).slice(-8));
+    const labels = jobs.map(j => ({ status: j.status, label:
+      (j.status === 'queued' ? '#' + (waiting.indexOf(j) + 1) + ' waiting'
+        : j.status === 'processing' ? 'Sent · engine position unknown'
+        : j.status === 'cancelled' ? 'Cancelled · newer priority (not sent)'
+        : j.status === 'deferred' ? 'Deferred · playback/cooldown' : j.status)
+      + ' — ' + j.text.slice(0, 90) }));
+    const signature = JSON.stringify(labels);
+    if (panel._signature === signature) return;
+    panel._signature = signature;
+    const list = panel.lastChild;
+    list.replaceChildren();
+    const legend = document.createElement('p');
+    legend.textContent = 'Amber: sent · Green: ready · Purple: cancelled before sending. Numbers are browser queue positions.';
+    list.appendChild(legend);
+    for (const item of labels) {
+      const row = document.createElement('div');
+      row.dataset.status = item.status;
+      row.textContent = item.label;
+      list.appendChild(row);
+    }
+  }
   function _ttsRefreshCacheDebug() {
     _ttsCacheDebugFrame = null;
+    _ttsRenderDebugQueue();
     if (!window.CSS || !CSS.highlights || typeof Highlight === 'undefined') return;
     CSS.highlights.delete('tts-cache-sent');
     CSS.highlights.delete('tts-cache-ready');
+    CSS.highlights.delete('tts-cache-cancelled');
     if (!_ttsCacheDebug) return;
-    const sent = new Highlight(), ready = new Highlight();
+    const sent = new Highlight(), ready = new Highlight(), cancelled = new Highlight();
     // Group text exactly as the per-turn reader does, including inline markup
     // and synthetic paragraph separators. Sanitizing preserves these offsets.
-    const clips = new Map(_ttsHeadCache);
+    const latestJobs = new Map(_ttsDebugJobs.map(j => [j.text, j]));
+    const clips = new Map(Array.from(latestJobs.values()).filter(j => j.status === 'cancelled').map(j => [j.text, { cancelled: true }]));
+    for (const [text, entry] of _ttsHeadCache) clips.set(text, entry);
     if (_ttsChunkState && _ttsChunkState.debugCache) {
       for (const [text, entry] of _ttsChunkState.debugCache) clips.set(text, entry);
     }
@@ -13963,12 +14029,13 @@
             const range = new Range();
             range.setStart(m.node, m.nodeOffsetStart + a - m.start);
             range.setEnd(m.node, m.nodeOffsetStart + b - m.start);
-            (entry.debugReady ? ready : sent).add(range);
+            (entry.cancelled ? cancelled : entry.debugReady ? ready : sent).add(range);
           }
           from = end;
         }
       }
     });
+    CSS.highlights.set('tts-cache-cancelled', cancelled);
     CSS.highlights.set('tts-cache-sent', sent);
     CSS.highlights.set('tts-cache-ready', ready);
   }
@@ -13976,19 +14043,21 @@
   // 400-character clips differ greatly). Never call a capped prefetch complete.
   function _ttsTextCacheCoverage(clean) {
     const head = _ttsHeadChunk(clean, 0);
-    if (!head) return { fraction: 0, sentFraction: 0, pending: false };
+    if (!head) return { fraction: 0, sentFraction: 0, cancelledFraction: 0, pending: false };
     const end = head.start + head.text.length;
     const chunks = [head].concat(_chunkTtsText(clean.slice(end), 400, end));
-    let ready = 0, sent = 0, total = 0, pending = false;
+    let ready = 0, sent = 0, cancelled = 0, total = 0, pending = false;
+    const latestJobs = new Map(_ttsDebugJobs.map(j => [j.text, j]));
     for (const c of chunks) {
       total += c.text.length;
       const entry = _ttsHeadCache.get(c.text);
       const active = _ttsChunkState?.debugCache?.get(c.text);
       if (entry || active) sent += c.text.length;
+      else if (_ttsCacheDebug && latestJobs.get(c.text)?.status === 'cancelled') cancelled += c.text.length;
       if (entry?.debugReady || active?.debugReady) ready += c.text.length;
       else if (entry || active) pending = true;
     }
-    return { fraction: total ? ready / total : 0, sentFraction: total ? sent / total : 0, pending };
+    return { fraction: total ? ready / total : 0, sentFraction: total ? sent / total : 0, cancelledFraction: total ? cancelled / total : 0, pending };
   }
   function _ttsRefreshCacheCoverage() {
     const targets = new Set(document.querySelectorAll('.conv-pane [data-tts-head]'));
@@ -13997,15 +14066,17 @@
     targets.forEach(btn => {
       const data = _ttsSpeakButtonData(btn);
       const clean = _sanitizeTtsText(data?.text || '', true);
-      const { fraction, sentFraction, pending } = _ttsTextCacheCoverage(clean);
-      if (fraction || pending) {
+      const { fraction, sentFraction, cancelledFraction, pending } = _ttsTextCacheCoverage(clean);
+      if (fraction || pending || cancelledFraction) {
         btn.dataset.ttsCache = fraction >= 1 ? 'ready' : 'partial';
         btn.style.setProperty('--tts-cache-f', String(fraction));
         btn.style.setProperty('--tts-cache-sent-f', String(sentFraction));
+        btn.style.setProperty('--tts-cache-cancelled-f', String(sentFraction + cancelledFraction));
       } else {
         delete btn.dataset.ttsCache;
         btn.style.removeProperty('--tts-cache-f');
         btn.style.removeProperty('--tts-cache-sent-f');
+        btn.style.removeProperty('--tts-cache-cancelled-f');
       }
     });
     document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
@@ -14037,6 +14108,7 @@
       _ttsCacheDebugObserver = _ttsCacheDebugObserver || new MutationObserver(_ttsScheduleCacheDebug);
       _ttsCacheDebugObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
     }
+    _ttsRefreshCacheCoverage();
     _ttsRefreshCacheDebug();
   }
   document.getElementById('settingsTtsCacheDebugToggle')?.addEventListener('click', () => _ttsSetCacheDebug(!_ttsCacheDebug));
@@ -14077,10 +14149,12 @@
       f.dataset.ttsCache = st;
       f.style.setProperty('--tts-ring-f', t.style.getPropertyValue('--tts-cache-f') || '0');
       f.style.setProperty('--tts-ring-sent-f', t.style.getPropertyValue('--tts-cache-sent-f') || '0');
+      f.style.setProperty('--tts-ring-cancelled-f', t.style.getPropertyValue('--tts-cache-cancelled-f') || '0');
     } else {
       delete f.dataset.ttsCache;
       f.style.removeProperty('--tts-ring-f');
       f.style.removeProperty('--tts-ring-sent-f');
+      f.style.removeProperty('--tts-ring-cancelled-f');
     }
   }
   function _ttsMarkCache(paneId, headText, st, f) {
@@ -14121,6 +14195,7 @@
     if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
+    _ttsSelectPrefetchTarget(mk, head.text);
     if (sourceBtn) sourceBtn.dataset.ttsHead = head.text;
     if (_ttsHeadCache.has(head.text)) {
       const c = _ttsCacheState.get(head.text);
@@ -14177,17 +14252,36 @@
   const _TTS_PREFETCH_CLIPS_QUIET = 1;
   const _ttsChainRunning = new Set();   // head texts whose chain is queued or running
   function _ttsStartChain(clean, head, got, mk) {
+    if (_ttsPrefetchTargets.get(mk) !== head.text) return;
+    const end = head.start + head.text.length;
+    const planned = got.voice && got.voice !== 'MeloTTS'
+      ? _chunkTtsText(clean.slice(end), 400, end).slice(0, mk === '__quiet' ? _TTS_PREFETCH_CLIPS_QUIET : _TTS_PREFETCH_CLIPS) : [];
+    const jobs = planned.map(c => {
+      const entry = _ttsHeadCache.get(c.text);
+      const status = entry ? (entry.debugReady ? 'ready' : 'processing') : 'queued';
+      // A shared in-flight cache entry represents one request, even when
+      // multiple preparation chains reuse it.
+      const existing = entry && Array.from(_ttsDebugJobs).reverse().find(j => j.text === c.text && j.status === status);
+      return existing || _ttsDebugJob(c.text, status, mk);
+    });
     const token = _ttsChainTokens[mk || ''] = (_ttsChainTokens[mk || ''] || 0) + 1;
     _ttsChainRunning.add(head.text);
     // One message's clips at a time, serialized so background prefetch never
     // saturates CPU cores.
     _ttsChainQueue = _ttsChainQueue
-      .then(() => _ttsPrefetchRest(clean, head, got, token, mk))
+      .then(() => _ttsPrefetchRest(clean, head, got, token, mk, jobs))
       .catch(() => {})
-      .then(() => { _ttsChainRunning.delete(head.text); });
+      .then(() => {
+        _ttsChainRunning.delete(head.text);
+        // The user can return while this superseded chain is still draining
+        // its sent request. Retry the visible target once that request settles.
+        if (_ttsPrefetchTargets.get(mk) === head.text && token !== _ttsChainTokens[mk || '']) {
+          setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 0);
+        }
+      });
   }
   const _TTS_PREFETCH_WIDTH = 1;
-  async function _ttsPrefetchRest(clean, head, headGot, token, paneId) {
+  async function _ttsPrefetchRest(clean, head, headGot, token, paneId, jobs) {
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
     await headGot.done;
     const end = head.start + head.text.length;
@@ -14198,12 +14292,16 @@
     const settle = async (i) => {   // clip i fully made; the bar moves past it
       const got = await entries[i].p;
       await got.done;
+      jobs[i].status = 'ready';
+      _ttsScheduleCacheDebug();
       if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'partial', (i + 2) / (rest.length + 1));
     };
     try {
       for (let i = 0; i < rest.length; i++) {
         if (i >= _TTS_PREFETCH_WIDTH) await settle(i - _TTS_PREFETCH_WIDTH);
         if (!live()) {
+          for (const job of jobs) if (job.status === 'queued') job.status = token === _ttsChainTokens[paneId || ''] ? 'deferred' : 'cancelled';
+          _ttsScheduleCacheDebug();
           // Paused by a read or the cooldown, not superseded: nothing else
           // would restart this message, leaving its speaker amber for good.
           if (token === _ttsChainTokens[paneId || '']) setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 20000);
@@ -14213,16 +14311,22 @@
         let entry = _ttsHeadCache.get(c.text);
         if (!entry) {
           entry = { ready: false, got: null, voice: headGot.voice };
-          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg').then((got) => { entry.ready = true; entry.got = got; return got; });
+          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg', jobs[i]).then((got) => { entry.ready = true; entry.got = got; return got; });
           entry.p.catch(() => { if (_ttsHeadCache.get(c.text) === entry) _ttsHeadCache.delete(c.text); });
           _ttsHeadCache.set(c.text, entry);
           _ttsWatchCacheEntry(c.text, entry);
           _ttsEvictCache();
         }
+        if (jobs[i].status === 'queued') jobs[i].status = entry.debugReady ? 'ready' : 'processing';
+        _ttsScheduleCacheDebug();
         entries.push(entry);
       }
       for (let i = Math.max(0, rest.length - _TTS_PREFETCH_WIDTH); i < rest.length; i++) await settle(i);
-    } catch (_) { return; }
+    } catch (_) {
+      for (const job of jobs) if (job.status === 'queued') job.status = 'deferred';
+      _ttsScheduleCacheDebug();
+      return;
+    }
     if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
@@ -14344,7 +14448,10 @@
   const _ttsCanStream = () => typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mpeg');
   // Resolves { url, voice } or rejects with the HTTP status (0 = network).
   // prio 'bg' = prepare-ahead: the local voice makes 'fg' (a read being heard) first.
-  function _ttsFetchNeural(text, voice, prio) {
+  function _ttsFetchNeural(text, voice, prio, debugJob) {
+    const job = debugJob || _ttsDebugJob(text, 'processing', null);
+    job.status = 'processing';
+    _ttsScheduleCacheDebug();
     voice = voice || ttsVoiceForPane(activePaneId());
     let onDone;
     const done = new Promise((r) => { onDone = r; });
@@ -14376,12 +14483,17 @@
       const v = res.headers.get('X-CCC-Voice') || '';
       const model = res.headers.get('X-CCC-Model') || '';
       perfRow(res);
+      done.then(() => { job.status = 'ready'; _ttsScheduleCacheDebug(); });
       if (prio !== 'bg' && res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       onDone();
       return { url, blob, voice: v, model, done: Promise.resolve() };
-    }, () => { throw 0; });
+    }, () => { throw 0; }).catch(error => {
+      job.status = 'failed';
+      _ttsScheduleCacheDebug();
+      throw error;
+    });
   }
   function _ttsSpeakChunkNeural(state, chunk) {
     const token = ++_ttsNeuralToken;

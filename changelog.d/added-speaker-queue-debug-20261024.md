@@ -1,0 +1,1 @@
+- Speaker cache debug now shows numbered browser waiting positions, requests sent to the engine, and purple text/ring coverage for queued work cancelled by newer priority. Sent requests still finish and retain their cached audio; late head completions no longer queue continuations for superseded turns.

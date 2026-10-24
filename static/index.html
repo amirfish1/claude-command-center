@@ -2698,8 +2698,9 @@
                 <div class="settings-row-label">Speaker cache debug</div>
                 <div class="settings-row-desc">Highlight conversation text currently in this browser’s audio cache:
                   <span class="tts-cache-debug-sent">amber = sent to TTS</span>,
-                  <span class="tts-cache-debug-ready">green = audio ready</span>.
-                  Highlights disappear when clips are used, evicted, or fail. Clips can split sentences.
+                  <span class="tts-cache-debug-ready">green = audio ready</span>, purple = cancelled before sending.
+                  Expand the TTS queue to see browser waiting positions.
+                  Requests already sent finish and stay cached. Ready highlights disappear when clips are evicted or fail. Clips can split sentences.
                   Prepared audio may still exist in the server’s disk cache after the browser releases it.</div>
               </div>
               <div class="settings-row-control">

@@ -198,6 +198,8 @@ console.log(JSON.stringify({ requests, whilePlaying }));
 const text = 'a'.repeat(80) + 'b'.repeat(400) + 'c'.repeat(400) + 'd'.repeat(400) + 'e'.repeat(400) + 'f'.repeat(400);
 const _ttsHeadCache = new Map();
 const _ttsChunkState = null;
+const _ttsDebugJobs = [];
+const _ttsCacheDebug = true;
 const _ttsHeadChunk = s => _chunkTtsText(s, 80)[0];
 _ttsHeadCache.set('a'.repeat(80), {debugReady:false});
 for (const letter of 'bcde') _ttsHeadCache.set(letter.repeat(400), {debugReady:false});
@@ -220,7 +222,64 @@ console.log(JSON.stringify({sentOnly, partial, capped, ready}));
         self.assertAlmostEqual(result["capped"]["fraction"], 1680 / 2080)
         self.assertFalse(result["capped"]["pending"])
         self.assertAlmostEqual(result["capped"]["sentFraction"], 1680 / 2080)
-        self.assertEqual(result["ready"], {"fraction": 1, "sentFraction": 1, "pending": False})
+        self.assertEqual(result["ready"], {"fraction": 1, "sentFraction": 1, "cancelledFraction": 0, "pending": False})
+
+    def test_priority_change_cancels_waiting_work_but_keeps_sent_and_ready(self):
+        select = function_block(self.source, "_ttsSelectPrefetchTarget", "_ttsRenderDebugQueue")
+        result = self.run_node("""
+const _ttsPrefetchTargets = new Map([['pane', 'old']]);
+const _ttsChainTokens = {pane: 3};
+const _ttsDebugJobs = [
+  {owner:'pane', status:'queued'}, {owner:'pane', status:'processing'},
+  {owner:'pane', status:'ready'}, {owner:'other', status:'queued'}
+];
+const _ttsScheduleCacheDebug = () => {};
+""" + select + """
+_ttsSelectPrefetchTarget('pane', 'new');
+_ttsSelectPrefetchTarget('pane', 'new');
+console.log(JSON.stringify({statuses:_ttsDebugJobs.map(j => j.status), token:_ttsChainTokens.pane}));
+""")
+        self.assertEqual(result, {"statuses": ["cancelled", "processing", "ready", "queued"], "token": 4})
+
+    def test_superseded_head_completion_does_not_restart_old_chain(self):
+        start = self.source.index("  function _ttsStartChain(")
+        end = self.source.index("  const _TTS_PREFETCH_WIDTH", start)
+        result = self.run_node("""
+const _ttsPrefetchTargets = new Map([['pane', 'new head']]);
+""" + self.source[start:end] + """
+// No scheduler/cache stubs: reaching any scheduling code would fail.
+_ttsStartChain('old head and more text', {text:'old head',start:0}, {voice:'voice'}, 'pane');
+console.log(JSON.stringify({skipped:true}));
+""")
+        self.assertTrue(result["skipped"])
+
+    def test_cancelled_coverage_yields_to_new_requests_and_ready_cache(self):
+        coverage = function_block(self.source, "_ttsTextCacheCoverage", "_ttsRefreshCacheCoverage")
+        chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        result = self.run_node(chunker + """
+const text = 'a'.repeat(80) + 'b'.repeat(400);
+const _ttsHeadCache = new Map([['a'.repeat(80), {debugReady:true}]]);
+const _ttsChunkState = null;
+const _ttsDebugJobs = [{text:'b'.repeat(400),status:'cancelled'}];
+let _ttsCacheDebug = true;
+const _ttsHeadChunk = s => _chunkTtsText(s, 80)[0];
+""" + coverage + """
+const cancelled = _ttsTextCacheCoverage(text);
+_ttsDebugJobs.push({text:'b'.repeat(400),status:'queued'});
+const requeued = _ttsTextCacheCoverage(text);
+_ttsDebugJobs.push({text:'b'.repeat(400),status:'cancelled'});
+_ttsHeadCache.set('b'.repeat(400), {debugReady:true});
+const ready = _ttsTextCacheCoverage(text);
+_ttsHeadCache.delete('b'.repeat(400));
+_ttsCacheDebug = false;
+const disabled = _ttsTextCacheCoverage(text);
+console.log(JSON.stringify({cancelled,requeued,ready,disabled}));
+""")
+        self.assertAlmostEqual(result["cancelled"]["cancelledFraction"], 400 / 480)
+        self.assertEqual(result["requeued"]["cancelledFraction"], 0)
+        self.assertEqual(result["ready"]["fraction"], 1)
+        self.assertEqual(result["ready"]["cancelledFraction"], 0)
+        self.assertEqual(result["disabled"]["cancelledFraction"], 0)
 
     def test_prepared_clips_survive_playback_and_replay_without_fetching(self):
         start = self.source.index("  function _ttsSpeakChunkNeural(")
