@@ -877,6 +877,7 @@ def _set_conversation_trashed(sid, trashed):
 
     with _core._conversation_lifecycle_lock:
         archived_ids, trashed_ids = _core._load_conversation_lifecycle_state()
+        archived_before, trashed_before = set(archived_ids), set(trashed_ids)
         if want_trashed:
             # Write/refresh the sticky marker first so a concurrent archive
             # sweep can never observe this session without its manual grace
@@ -916,9 +917,17 @@ def _set_conversation_trashed(sid, trashed):
         else:
             trashed_ids = [existing for existing in trashed_ids if existing != sid]
 
-        # Persist both lists once after all mutations.
-        _core._save_archived_conversations(archived_ids)
-        _core._save_trashed_conversations(trashed_ids)
+        # Persist both lists once after all mutations, as deltas against a
+        # fresh locked read so a concurrent writer's changes survive (CCC-156).
+        if want_trashed:
+            _core._update_archived_conversations(
+                add=[s for s in archived_ids if s not in archived_before], reason="trash",
+            )
+            _core._update_trashed_conversations(
+                add=[s for s in trashed_ids if s not in trashed_before], reason="trash",
+            )
+        else:
+            _core._update_trashed_conversations(remove=[sid], reason="untrash")
 
         archived_now = sid in archived_ids
         trashed_now = sid in trashed_ids

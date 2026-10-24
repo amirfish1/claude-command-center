@@ -207,13 +207,13 @@ def test_parallel_trash_operations_do_not_lose_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    real_save = server._save_archived_conversations
+    real_save = server._update_archived_conversations
 
-    def delayed_save(rows):
+    def delayed_save(*args, **kwargs):
         time.sleep(0.03)
-        return real_save(rows)
+        return real_save(*args, **kwargs)
 
-    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_archived_conversations", delayed_save)
     start = threading.Event()
 
     def trash(sid):
@@ -237,13 +237,13 @@ def test_parallel_archive_endpoints_do_not_lose_sessions(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    real_save = server._save_archived_conversations
+    real_save = server._update_archived_conversations
 
-    def delayed_save(rows):
+    def delayed_save(*args, **kwargs):
         time.sleep(0.03)
-        return real_save(rows)
+        return real_save(*args, **kwargs)
 
-    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_archived_conversations", delayed_save)
     start = threading.Event()
 
     def archive(sid):
@@ -268,13 +268,13 @@ def test_parallel_bulk_archive_calls_do_not_lose_sessions(tmp_path, monkeypatch)
     monkeypatch.setattr(server, "_archive_grace", {})
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    real_save = server._save_archived_conversations
+    real_save = server._update_archived_conversations
 
-    def delayed_save(rows):
+    def delayed_save(*args, **kwargs):
         time.sleep(0.03)
-        return real_save(rows)
+        return real_save(*args, **kwargs)
 
-    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_archived_conversations", delayed_save)
     start = threading.Event()
 
     def archive(sid):
@@ -343,13 +343,13 @@ def test_unarchive_does_not_erase_concurrent_worker_trash(tmp_path, monkeypatch)
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
     server._save_archived_conversations(["worker-a"])
     server._save_trashed_conversations(["worker-a"])
-    real_save = server._save_trashed_conversations
+    real_save = server._update_trashed_conversations
 
-    def delayed_save(rows):
-        time.sleep(0.05 if not rows else 0.01)
-        return real_save(rows)
+    def delayed_save(add=(), remove=(), **kwargs):
+        time.sleep(0.05 if remove else 0.01)
+        return real_save(add=add, remove=remove, **kwargs)
 
-    monkeypatch.setattr(server, "_save_trashed_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_trashed_conversations", delayed_save)
     start = threading.Event()
 
     def unarchive():
@@ -427,8 +427,8 @@ def test_single_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatc
     server._save_trashed_conversations(["sid-a"])
     monkeypatch.setattr(
         server,
-        "_save_archived_conversations",
-        lambda rows: (_ for _ in ()).throw(OSError("archive write failed")),
+        "_update_archived_conversations",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("archive write failed")),
     )
 
     status, _body = _post_json(
@@ -470,8 +470,8 @@ def test_bulk_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch)
     server._save_trashed_conversations(["sid-a"])
     monkeypatch.setattr(
         server,
-        "_save_archived_conversations",
-        lambda rows: (_ for _ in ()).throw(OSError("archive write failed")),
+        "_update_archived_conversations",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("archive write failed")),
     )
 
     status, _body = _post_json(

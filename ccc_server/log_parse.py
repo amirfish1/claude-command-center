@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
+import contextlib
 import json
 import os
 import re
@@ -15,6 +16,11 @@ import sys
 import tempfile
 import threading
 import time
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # Windows: no cross-process lock; delta writes still apply
+    _fcntl = None
 
 from ccc_server import core as _core
 from ccc_server import test_isolation_active as _test_isolation_active
@@ -91,21 +97,149 @@ SESSION_NAMES_FILE = _core.COMMAND_CENTER_STATE_DIR / "session-names.json"  # si
 # 120 matches `summarize_session_title`'s self-cap.
 SESSION_NAME_MAX_CHARS = 120
 CONVERSATION_ORDER_FILE = _core.COMMAND_CENTER_STATE_DIR / "conversation-order.json"  # [session_id,...]
-ARCHIVED_CONVERSATIONS_FILE = _core.COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
-TRASHED_CONVERSATIONS_FILE = _core.COMMAND_CENTER_STATE_DIR / "trashed-conversations.json"  # [session_id,...] — subset of archived
-ARCHIVE_GRACE_FILE = _core.COMMAND_CENTER_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
+if _test_isolation_active():
+    # Tests used to append fixture sids to the live archive-events.log and
+    # overwrite the live archive-sticky.json with a monkeypatched {} grace map
+    # (CCC-156). Per-process paths keep lifecycle sidecars off the real files;
+    # tests that care still monkeypatch ARCHIVED/TRASHED to their tmp_path.
+    _LIFECYCLE_STATE_DIR = Path(tempfile.gettempdir()) / f"ccc-test-lifecycle-{os.getpid()}"
+else:
+    _LIFECYCLE_STATE_DIR = _core.COMMAND_CENTER_STATE_DIR
+ARCHIVED_CONVERSATIONS_FILE = _LIFECYCLE_STATE_DIR / "archived-conversations.json"  # [session_id,...]
+TRASHED_CONVERSATIONS_FILE = _LIFECYCLE_STATE_DIR / "trashed-conversations.json"  # [session_id,...] — subset of archived
+ARCHIVE_GRACE_FILE = _LIFECYCLE_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
 _conversation_lifecycle_lock = threading.RLock()
-ARCHIVE_EVENTS_LOG = _core.COMMAND_CENTER_STATE_DIR / "archive-events.log"  # append-only: every archive/unarchive state change, so "why did X get unarchived" is answerable without re-deriving candidacy internals after the fact (CCC-445)
+ARCHIVE_EVENTS_LOG = _LIFECYCLE_STATE_DIR / "archive-events.log"  # append-only: every archive/unarchive state change, so "why did X get unarchived" is answerable without re-deriving candidacy internals after the fact (CCC-445)
 
 
 def _log_archive_event(action, sid, reason=""):
     try:
-        _core.COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        ARCHIVE_EVENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
         line = f"{datetime.now(timezone.utc).isoformat()} {action} {sid} {reason}".rstrip()
         with ARCHIVE_EVENTS_LOG.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except OSError:
         pass
+
+
+# Archive/Trash/sticky sidecars are rewritten whole by more than one process:
+# the dashboard and ccc-worker (and any ephemeral server on the same HOME)
+# each run the auto-unarchive sweep. An in-process RLock cannot order those,
+# so a writer holding a list read minutes earlier silently dropped every
+# archive made since (CCC-156). Writers now take this flock, re-read the file
+# inside it, apply only their own add/remove delta, and replace atomically.
+_LIFECYCLE_FLOCK_TIMEOUT_S = 5.0
+_lifecycle_flock_depth = 0
+_lifecycle_flock_fh = None
+
+
+@contextlib.contextmanager
+def _lifecycle_file_lock():
+    """Cross-process exclusion for lifecycle read-modify-writes (reentrant)."""
+    global _lifecycle_flock_depth, _lifecycle_flock_fh
+    with _conversation_lifecycle_lock:
+        if _lifecycle_flock_depth == 0 and _fcntl is not None:
+            path = Path(str(_core.ARCHIVED_CONVERSATIONS_FILE) + ".lock")
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                fh = open(path, "a")
+            except OSError:
+                fh = None
+            if fh is not None:
+                deadline = time.monotonic() + _LIFECYCLE_FLOCK_TIMEOUT_S
+                while True:
+                    try:
+                        _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                        _lifecycle_flock_fh = fh
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            # A wedged peer must not freeze archive actions;
+                            # proceed unlocked (the delta write still re-reads).
+                            fh.close()
+                            _core._log_archive_event("lock-timeout", "-", f"pid={os.getpid()}")
+                            break
+                        time.sleep(0.02)
+        _lifecycle_flock_depth += 1
+        try:
+            yield
+        finally:
+            _lifecycle_flock_depth -= 1
+            if _lifecycle_flock_depth == 0 and _lifecycle_flock_fh is not None:
+                fh, _lifecycle_flock_fh = _lifecycle_flock_fh, None
+                try:
+                    fh.close()  # releases the flock
+                except OSError:
+                    pass
+
+
+def _lifecycle_sidecar(name):
+    """Sticky-map path next to the archive list, so tests that redirect
+    ARCHIVED_CONVERSATIONS_FILE to a tmp dir also redirect the sticky map."""
+    archived = Path(_core.ARCHIVED_CONVERSATIONS_FILE)
+    if archived == ARCHIVED_CONVERSATIONS_FILE:
+        return ARCHIVE_GRACE_FILE
+    return archived.with_name(name)
+
+
+def _atomic_write_json(path, data):
+    """Write JSON via tmp+rename; returns the written file's stat (same inode
+    after the rename, so caching it can't capture a concurrent writer's file)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2))
+        st = tmp.stat()
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    return st
+
+
+def _read_lifecycle_list(path, cache=None):
+    """Current contents of a [sid,...] sidecar for a locked delta write.
+
+    `cache` is served only when (path, mtime_ns, size, inode) still matches:
+    every writer replaces the file atomically, so any other process's write
+    changes the inode. Missing → []. Corrupt → raise, so a writer never turns
+    an unreadable file into an empty archive."""
+    path = Path(path)
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return []
+    sig = (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
+    if cache is not None and cache.get("mtime") == sig:
+        return list(cache["data"])
+    data = json.loads(path.read_text())
+    if not isinstance(data, list):
+        raise ValueError(f"{path} is not a JSON list")
+    rows = [sid for sid in data if isinstance(sid, str)]
+    if cache is not None:
+        cache["mtime"], cache["size"], cache["data"] = sig, st.st_size, list(rows)
+    return rows
+
+
+def _log_lifecycle_save(kind, before, after, reason):
+    """One line per sidecar save so the next lost archive is attributable:
+    which process wrote, why, and exactly which sids it dropped."""
+    before_set, after_set = set(before), set(after)
+    added = [sid for sid in after if sid not in before_set]
+    dropped = [sid for sid in before if sid not in after_set]
+    if not added and not dropped:
+        return
+    detail = (
+        f"file={kind} pid={os.getpid()} proc={os.path.basename(sys.argv[0] or '?')} "
+        f"why={reason or '?'} n={len(after)} +{len(added)} -{len(dropped)}"
+    )
+    if dropped:
+        detail += " drop=" + ",".join(dropped[:20]) + ("..." if len(dropped) > 20 else "")
+    _core._log_archive_event("save", "-", detail)
 VERIFIED_CONVERSATIONS_FILE = _core.COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
 SESSION_LANE_OVERRIDES_FILE = _core.COMMAND_CENTER_STATE_DIR / "session-lane-overrides.json"  # {session_id: coding|workers|messages}
 # {session_id: epoch_seconds} — last time the user interacted with this card
@@ -1561,25 +1695,63 @@ def _load_archive_grace() -> dict:
     stickiness survives a server restart ("archive refuses to work" on live
     rows — CCC-149 follow-up).
     """
+    return _read_archive_grace_file(ARCHIVE_GRACE_FILE) or {}
+
+
+def _read_archive_grace_file(path):
     try:
-        data = json.loads(ARCHIVE_GRACE_FILE.read_text())
+        data = json.loads(Path(path).read_text())
         if isinstance(data, dict):
             return {str(k): float(v) for k, v in data.items()
                     if isinstance(k, str) and isinstance(v, (int, float))}
     except (OSError, ValueError, TypeError):
         pass
-    return {}
+    return None
 
 
 def _save_archive_grace() -> None:
+    """Merge this process's sticky map into the file instead of overwriting it.
+
+    Each process loads the map once at import; a whole-dict write from the
+    worker used to erase every manual archive the dashboard recorded since
+    the worker started (CCC-156). Explicit removals ride in
+    _archive_grace_removed."""
+    path = _lifecycle_sidecar("archive-sticky.json")
     try:
-        _core.LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        ARCHIVE_GRACE_FILE.write_text(json.dumps(_core._archive_grace, indent=2))
+        with _lifecycle_file_lock():
+            merged = _read_archive_grace_file(path) or {}
+            merged.update(_core._archive_grace)
+            for sid in _archive_grace_removed:
+                merged.pop(sid, None)
+            _archive_grace_removed.clear()
+            st = _atomic_write_json(path, merged)
+            _core._archive_grace.update(merged)
+            _archive_grace_file_sig[path] = (st.st_mtime_ns, st.st_size, st.st_ino)
     except OSError:
         pass
 
 
+def _refresh_archive_grace() -> None:
+    """Pull sticky markers another process wrote (stat-gated, ~free)."""
+    path = _lifecycle_sidecar("archive-sticky.json")
+    try:
+        st = path.stat()
+    except OSError:
+        return
+    sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+    if _archive_grace_file_sig.get(path) == sig:
+        return
+    _archive_grace_file_sig[path] = sig
+    disk = _read_archive_grace_file(path)
+    if disk:
+        for sid, ts in disk.items():
+            if sid not in _archive_grace_removed:
+                _core._archive_grace.setdefault(sid, ts)
+
+
 _archive_grace: dict = _load_archive_grace()  # sid → epoch; manual archives, sticky vs auto-unarchive
+_archive_grace_removed: set = set()  # popped since the last save; never re-merged from disk
+_archive_grace_file_sig: dict = {}  # path → (mtime_ns, size, ino) last seen/written
 
 
 _codex_pool_candidates_cache = {"ts": 0.0, "sids": frozenset()}
@@ -1658,8 +1830,9 @@ def _auto_unarchive_live_sessions(archived):
     #   - _codex_pool_candidate_sids(): pool-model Codex.app threads the
     #     resume-arg scan can never see (CCC-435), via one cached bulk query.
     candidates = _core._discover_live_session_ids() | _core._codex_pool_candidate_sids(now)
+    _refresh_archive_grace()
     keep = []
-    changed = False
+    unarchived = []
     for sid in archived:
         fresh = False
         # Sticky manual archives are exempt: a session the user deliberately
@@ -1678,7 +1851,7 @@ def _auto_unarchive_live_sessions(archived):
                 except (OSError, Exception):
                     fresh = False
         if fresh:
-            changed = True
+            unarchived.append(sid)
             _recently_auto_unarchived[sid] = now
             _core._log_archive_event(
                 "auto-unarchive", sid,
@@ -1686,12 +1859,15 @@ def _auto_unarchive_live_sessions(archived):
             )
             continue
         keep.append(sid)
-    if changed:
+    if unarchived:
         for stale_sid, ts in list(_recently_auto_unarchived.items()):
             if now - ts >= _RECENTLY_UNARCHIVED_WINDOW_S:
                 del _recently_auto_unarchived[stale_sid]
         try:
-            _core._save_archived_conversations(keep)
+            # Remove only what this sweep un-archived from a fresh, locked
+            # read: `archived` may predate archives other processes made
+            # while the candidacy probes ran (CCC-156).
+            _core._update_archived_conversations(remove=unarchived, reason="auto-unarchive")
         except Exception:
             return archived
     return keep
@@ -1706,12 +1882,13 @@ def _load_archived_conversations(*, sweep=True):
     with _conversation_lifecycle_lock:
         try:
             st = _core.ARCHIVED_CONVERSATIONS_FILE.stat()
-            if st.st_mtime == _archived_conversations_cache["mtime"] and st.st_size == _archived_conversations_cache["size"]:
+            sig = (str(_core.ARCHIVED_CONVERSATIONS_FILE), st.st_mtime_ns, st.st_size, st.st_ino)
+            if sig == _archived_conversations_cache["mtime"]:
                 archived = list(_archived_conversations_cache["data"])
             else:
                 data = json.loads(_core.ARCHIVED_CONVERSATIONS_FILE.read_text())
                 archived = [s for s in data if isinstance(s, str)] if isinstance(data, list) else []
-                _archived_conversations_cache["mtime"] = st.st_mtime
+                _archived_conversations_cache["mtime"] = sig
                 _archived_conversations_cache["size"] = st.st_size
                 _archived_conversations_cache["data"] = list(archived)
         except (OSError, json.JSONDecodeError):
@@ -1724,9 +1901,10 @@ def _load_archived_conversations(*, sweep=True):
         archived_set = set(archived)
         missing = [sid for sid in trashed if sid not in archived_set]
         if missing:
-            repaired = archived + missing
-            _write_archived_conversations(repaired)
-            archived = repaired
+            try:
+                archived = _core._update_archived_conversations(add=missing, reason="trash-repair")
+            except (OSError, ValueError):
+                archived = archived + missing
         if not sweep:
             return archived
         trashed_set = set(trashed)
@@ -1736,30 +1914,60 @@ def _load_archived_conversations(*, sweep=True):
         return [sid for sid in archived if sid in trashed_set or sid in swept_set]
 
 
-def _write_archived_conversations(archived):
-    """Write an already-normalized archive list while the lifecycle lock is held."""
-    _core.LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    _core.ARCHIVED_CONVERSATIONS_FILE.write_text(json.dumps(archived, indent=2))
-    try:
-        st = _core.ARCHIVED_CONVERSATIONS_FILE.stat()
-        _archived_conversations_cache["mtime"] = st.st_mtime
-        _archived_conversations_cache["size"] = st.st_size
-        _archived_conversations_cache["data"] = list(archived)
-    except OSError:
-        pass
+def _write_archived_conversations(archived, *, before=None, reason=""):
+    """Write an already-normalized archive list while the file lock is held."""
+    path = _core.ARCHIVED_CONVERSATIONS_FILE
+    st = _atomic_write_json(path, archived)
+    _archived_conversations_cache["mtime"] = (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
+    _archived_conversations_cache["size"] = st.st_size
+    _archived_conversations_cache["data"] = list(archived)
+    if before is not None:
+        _log_lifecycle_save("archived", before, archived, reason)
     return archived
 
 
-def _save_archived_conversations(archived):
-    """Persist list of archived session_ids."""
-    with _conversation_lifecycle_lock:
+def _with_trash_subset(archived):
+    """Trash ⊆ Archive: append trashed sids the archive list is missing."""
+    trashed = _read_lifecycle_list(_core.TRASHED_CONVERSATIONS_FILE, _trashed_conversations_cache)
+    archived_set = set(archived)
+    return archived + [sid for sid in trashed if sid not in archived_set]
+
+
+def _update_archived_conversations(add=(), remove=(), *, reason=""):
+    """Apply an add/remove delta to the on-disk archive list, cross-process safe.
+
+    Callers pass what THEY changed, never a whole list: the file is re-read
+    under the flock, so archives other processes made in the meantime survive.
+    """
+    remove = {sid for sid in remove if isinstance(sid, str)}
+    with _lifecycle_file_lock():
+        before = _read_lifecycle_list(_core.ARCHIVED_CONVERSATIONS_FILE, _archived_conversations_cache)
+        seen = set()
+        new = []
+        for sid in [*before, *add]:
+            if isinstance(sid, str) and sid not in remove and sid not in seen:
+                seen.add(sid)
+                new.append(sid)
+        new = _with_trash_subset(new)
+        if new == before:
+            return new
+        return _write_archived_conversations(new, before=before, reason=reason)
+
+
+def _save_archived_conversations(archived, *, reason="replace"):
+    """Replace the archive list wholesale (tests/legacy). Production writers
+    use _update_archived_conversations so a stale list can't drop archives."""
+    with _lifecycle_file_lock():
         if not isinstance(archived, list):
             archived = []
         archived = [sid for sid in archived if isinstance(sid, str)]
-        trashed = _core._load_trashed_conversations(sweep=False)
-        archived_set = set(archived)
-        normalized = archived + [sid for sid in trashed if sid not in archived_set]
-        return _write_archived_conversations(normalized)
+        try:
+            before = _read_lifecycle_list(_core.ARCHIVED_CONVERSATIONS_FILE, _archived_conversations_cache)
+        except (OSError, ValueError):
+            before = []
+        return _write_archived_conversations(
+            _with_trash_subset(archived), before=before, reason=reason,
+        )
 
 
 def _load_trashed_conversations(*, sweep=True):
@@ -1767,12 +1975,13 @@ def _load_trashed_conversations(*, sweep=True):
     with _conversation_lifecycle_lock:
         try:
             st = _core.TRASHED_CONVERSATIONS_FILE.stat()
-            if st.st_mtime == _trashed_conversations_cache["mtime"] and st.st_size == _trashed_conversations_cache["size"]:
+            sig = (str(_core.TRASHED_CONVERSATIONS_FILE), st.st_mtime_ns, st.st_size, st.st_ino)
+            if sig == _trashed_conversations_cache["mtime"]:
                 return list(_trashed_conversations_cache["data"])
             data = json.loads(_core.TRASHED_CONVERSATIONS_FILE.read_text())
             if isinstance(data, list):
                 res = [sid for sid in data if isinstance(sid, str)]
-                _trashed_conversations_cache["mtime"] = st.st_mtime
+                _trashed_conversations_cache["mtime"] = sig
                 _trashed_conversations_cache["size"] = st.st_size
                 _trashed_conversations_cache["data"] = list(res)
                 return res
@@ -1781,21 +1990,43 @@ def _load_trashed_conversations(*, sweep=True):
         return []
 
 
-def _save_trashed_conversations(trashed):
-    """Persist trashed session ids."""
-    with _conversation_lifecycle_lock:
-        _core.LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+def _write_trashed_conversations(trashed, *, before=None, reason=""):
+    path = _core.TRASHED_CONVERSATIONS_FILE
+    st = _atomic_write_json(path, trashed)
+    _trashed_conversations_cache["mtime"] = (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
+    _trashed_conversations_cache["size"] = st.st_size
+    _trashed_conversations_cache["data"] = list(trashed)
+    if before is not None:
+        _log_lifecycle_save("trashed", before, trashed, reason)
+    return trashed
+
+
+def _update_trashed_conversations(add=(), remove=(), *, reason=""):
+    """Delta write for Trash; same cross-process contract as the archive list."""
+    remove = {sid for sid in remove if isinstance(sid, str)}
+    with _lifecycle_file_lock():
+        before = _read_lifecycle_list(_core.TRASHED_CONVERSATIONS_FILE, _trashed_conversations_cache)
+        seen = set()
+        new = []
+        for sid in [*before, *add]:
+            if isinstance(sid, str) and sid not in remove and sid not in seen:
+                seen.add(sid)
+                new.append(sid)
+        if new == before:
+            return new
+        return _write_trashed_conversations(new, before=before, reason=reason)
+
+
+def _save_trashed_conversations(trashed, *, reason="replace"):
+    """Replace the Trash list wholesale (tests/legacy)."""
+    with _lifecycle_file_lock():
         if not isinstance(trashed, list):
             trashed = []
-        _core.TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
         try:
-            st = _core.TRASHED_CONVERSATIONS_FILE.stat()
-            _trashed_conversations_cache["mtime"] = st.st_mtime
-            _trashed_conversations_cache["size"] = st.st_size
-            _trashed_conversations_cache["data"] = list(trashed)
-        except OSError:
-            pass
-        return trashed
+            before = _read_lifecycle_list(_core.TRASHED_CONVERSATIONS_FILE, _trashed_conversations_cache)
+        except (OSError, ValueError):
+            before = []
+        return _write_trashed_conversations(trashed, before=before, reason=reason)
 
 
 def _load_conversation_lifecycle_state():
@@ -1827,9 +2058,8 @@ def _clear_trashed_on_unarchive_many(session_ids):
         return
     with _conversation_lifecycle_lock:
         trashed = _core._load_trashed_conversations(sweep=False)
-        remaining = [sid for sid in trashed if sid not in remove]
-        if remaining != trashed:
-            _core._save_trashed_conversations(remaining)
+        if any(sid in remove for sid in trashed):
+            _core._update_trashed_conversations(remove=remove, reason="untrash")
 
 
 def _conversation_archive_group(session_ids):
@@ -1893,15 +2123,16 @@ def _set_conversations_archived(session_ids, want_archived, *, source="bulk"):
             else:
                 _clear_trashed_on_unarchive_many(session_ids)
         if changed:
-            new_list = [sid for sid in archived if sid not in to_remove] + to_add
             now = time.time()
             for sid in to_add:
                 _core._archive_grace[sid] = now
+                _archive_grace_removed.discard(sid)
                 _core._log_archive_event("archive", sid, source)
             for sid in to_remove:
                 _core._archive_grace.pop(sid, None)
+                _archive_grace_removed.add(sid)
                 _core._log_archive_event("unarchive", sid, source)
-            _core._save_archived_conversations(new_list)
+            _core._update_archived_conversations(add=to_add, remove=to_remove, reason=source)
             _core._save_archive_grace()
             for sid in to_add:
                 _idea_tickets_on_archive(sid, True)
