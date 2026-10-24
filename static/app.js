@@ -13913,18 +13913,19 @@
   // 400-character clips differ greatly). Never call a capped prefetch complete.
   function _ttsTextCacheCoverage(clean) {
     const head = _ttsHeadChunk(clean, 0);
-    if (!head) return { fraction: 0, pending: false };
+    if (!head) return { fraction: 0, sentFraction: 0, pending: false };
     const end = head.start + head.text.length;
     const chunks = [head].concat(_chunkTtsText(clean.slice(end), 400, end));
-    let ready = 0, total = 0, pending = false;
+    let ready = 0, sent = 0, total = 0, pending = false;
     for (const c of chunks) {
       total += c.text.length;
       const entry = _ttsHeadCache.get(c.text);
       const active = _ttsChunkState?.debugCache?.get(c.text);
+      if (entry || active) sent += c.text.length;
       if (entry?.debugReady || active?.debugReady) ready += c.text.length;
       else if (entry || active) pending = true;
     }
-    return { fraction: total ? ready / total : 0, pending };
+    return { fraction: total ? ready / total : 0, sentFraction: total ? sent / total : 0, pending };
   }
   function _ttsRefreshCacheCoverage() {
     const targets = new Set(document.querySelectorAll('.conv-pane [data-tts-head]'));
@@ -13933,13 +13934,15 @@
     targets.forEach(btn => {
       const data = _ttsSpeakButtonData(btn);
       const clean = _sanitizeTtsText(data?.text || '', true);
-      const { fraction, pending } = _ttsTextCacheCoverage(clean);
+      const { fraction, sentFraction, pending } = _ttsTextCacheCoverage(clean);
       if (fraction || pending) {
         btn.dataset.ttsCache = fraction >= 1 ? 'ready' : 'partial';
         btn.style.setProperty('--tts-cache-f', String(fraction));
+        btn.style.setProperty('--tts-cache-sent-f', String(sentFraction));
       } else {
         delete btn.dataset.ttsCache;
         btn.style.removeProperty('--tts-cache-f');
+        btn.style.removeProperty('--tts-cache-sent-f');
       }
     });
     document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
@@ -14009,10 +14012,12 @@
     const st = t && t.isConnected ? t.dataset.ttsCache : '';
     if (st) {
       f.dataset.ttsCache = st;
-      f.style.setProperty('--tts-ring-f', t.style.getPropertyValue('--tts-cache-f') || '1');
+      f.style.setProperty('--tts-ring-f', t.style.getPropertyValue('--tts-cache-f') || '0');
+      f.style.setProperty('--tts-ring-sent-f', t.style.getPropertyValue('--tts-cache-sent-f') || '0');
     } else {
       delete f.dataset.ttsCache;
       f.style.removeProperty('--tts-ring-f');
+      f.style.removeProperty('--tts-ring-sent-f');
     }
   }
   function _ttsMarkCache(paneId, headText, st, f) {

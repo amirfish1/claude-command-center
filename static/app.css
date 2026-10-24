@@ -3628,12 +3628,12 @@
   }
   .conv-scroll-speak-btn.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
   .conv-scroll-speak-btn:hover { border-color: var(--accent); background: var(--surface-2); }
-  .conv-scroll-speak-btn.speaking { border-color: var(--accent); color: var(--accent); }
+  .conv-scroll-speak-btn.speaking { border-color: var(--accent, var(--cyan)); color: var(--accent, var(--cyan)); }
   .conv-scroll-speak-btn.speaking.paused { opacity: 0.8; }
   /* Progress ring around the floating speaker, the round version of the
      composer Speak bar. Idle: amber/green arc = share of the on-screen turn's
-     audio already made. Reading: accent = read, white = made ahead, dim =
-     not made yet. */
+     audio sent to processing and ready. Reading: accent = read, green =
+     ready, amber = processing, dim = not sent yet. */
   .conv-scroll-speak-btn::before {
     content: '';
     position: absolute;
@@ -3646,17 +3646,18 @@
   }
   .conv-scroll-speak-btn[data-tts-cache]::before {
     display: block;
-    background: conic-gradient(var(--green) calc(var(--tts-ring-f, 1) * 1turn), transparent 0);
-  }
-  .conv-scroll-speak-btn[data-tts-cache="partial"]::before {
-    background: conic-gradient(#d29922 calc(var(--tts-ring-f, 1) * 1turn), transparent 0);
+    background: conic-gradient(
+      var(--green) calc(var(--tts-ring-f, 0) * 1turn),
+      #d29922 0 calc(var(--tts-ring-sent-f, 0) * 1turn),
+      transparent 0);
   }
   .conv-scroll-speak-btn.speaking::before {
     display: block;
     background: conic-gradient(
-      var(--accent) calc(var(--tts-play, 0) * 1turn),
-      #ffffff 0 calc(var(--tts-cache-f, 0) * 1turn),
-      color-mix(in srgb, var(--text) 14%, transparent) 0);
+      var(--accent, var(--cyan)) calc(var(--tts-play, 0) * 1turn),
+      var(--green) 0 calc(max(var(--tts-play, 0), var(--tts-ring-f, 0)) * 1turn),
+      #d29922 0 calc(max(var(--tts-play, 0), var(--tts-ring-sent-f, 0)) * 1turn),
+      color-mix(in srgb, var(--text, #c9d1d9) 14%, transparent) 0);
   }
 
   /* Seam marker between two CCC continuation segments in the merged

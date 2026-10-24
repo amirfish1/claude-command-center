@@ -1,0 +1,1 @@
+- Show speech chunks still processing as amber coverage in the floating speaker ring, alongside green coverage for ready audio. The processing arc remains visible during playback and follows the selected answer.

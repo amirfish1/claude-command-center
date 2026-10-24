@@ -199,21 +199,28 @@ const text = 'a'.repeat(80) + 'b'.repeat(400) + 'c'.repeat(400) + 'd'.repeat(400
 const _ttsHeadCache = new Map();
 const _ttsChunkState = null;
 const _ttsHeadChunk = s => _chunkTtsText(s, 80)[0];
-_ttsHeadCache.set('a'.repeat(80), {debugReady:true});
+_ttsHeadCache.set('a'.repeat(80), {debugReady:false});
 for (const letter of 'bcde') _ttsHeadCache.set(letter.repeat(400), {debugReady:false});
 """ + coverage + """
+const sentOnly = _ttsTextCacheCoverage(text);
+_ttsHeadCache.get('a'.repeat(80)).debugReady = true;
 const partial = _ttsTextCacheCoverage(text);
 for (const entry of _ttsHeadCache.values()) entry.debugReady = true;
 const capped = _ttsTextCacheCoverage(text);
 _ttsHeadCache.set('f'.repeat(400), {debugReady:true});
 const ready = _ttsTextCacheCoverage(text);
-console.log(JSON.stringify({partial, capped, ready}));
+console.log(JSON.stringify({sentOnly, partial, capped, ready}));
 """)
+        self.assertEqual(result["sentOnly"]["fraction"], 0)
+        self.assertAlmostEqual(result["sentOnly"]["sentFraction"], 1680 / 2080)
+        self.assertTrue(result["sentOnly"]["pending"])
         self.assertAlmostEqual(result["partial"]["fraction"], 80 / 2080)
         self.assertTrue(result["partial"]["pending"])
+        self.assertAlmostEqual(result["partial"]["sentFraction"], 1680 / 2080)
         self.assertAlmostEqual(result["capped"]["fraction"], 1680 / 2080)
         self.assertFalse(result["capped"]["pending"])
-        self.assertEqual(result["ready"], {"fraction": 1, "pending": False})
+        self.assertAlmostEqual(result["capped"]["sentFraction"], 1680 / 2080)
+        self.assertEqual(result["ready"], {"fraction": 1, "sentFraction": 1, "pending": False})
 
     def test_prepared_clips_survive_playback_and_replay_without_fetching(self):
         start = self.source.index("  function _ttsSpeakChunkNeural(")
