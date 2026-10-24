@@ -1180,6 +1180,15 @@ malfunction ready to close merely because its cause has been explained.
 For a genuinely explanation-only request, an evidence-backed answer may be
 complete without implementation or a fabricated approval request.
 
+Keep the footer scoped to the ongoing requested task across informational
+follow-ups. A side question such as "which folder are you using?" must not
+replace the task summary with "clarified paths" or erase its still-pending
+repair, verification, or user action. Answer the side question in the prose;
+retain the task's current outcome and unresolved actions in the footer.
+Remove an earlier action only when evidence shows it was performed, superseded,
+or no longer needed. Do not carry obsolete actions forward or treat an unrelated
+new task as a continuation when the user clearly changes scope.
+
 End your final reply with a compact CCC session-state block:
 <session-state>
 DID: one sentence describing what you changed or learned
