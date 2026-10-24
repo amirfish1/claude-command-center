@@ -93,6 +93,41 @@ def test_pending_low_downside_work_does_not_become_complete_by_scoring_it_highly
     assert _completion_assessment(assessment)["valid"] is False
 
 
+@pytest.mark.parametrize("requires_approval", [False, True])
+def test_diagnosed_malfunction_stays_open_until_the_remedy_is_handled(requires_approval):
+    assessment = completed()
+    assessment["resolution"] = {"score": 0.5, "evidence": "Found a disabled integration; it still fails."}
+    assessment["decision_dependency"] = {"score": 1 if requires_approval else 0,
+        "evidence": "Repair needs new authorization." if requires_approval else "Repair already authorized."}
+    assessment["remaining_actions"] = [{"text": "Connect the existing integration and verify the original failure.",
+        "confidence": 0.95, "downside": 0.1, "within_scope": not requires_approval, "reversible": True}]
+    text = footer(assessment)
+    if requires_approval:
+        text = text.replace("NEXT_STEP_USER: None.",
+            'NEXT_STEP_USER: Approve connecting the disabled integration.\n'
+            'NEXT_ACTION: {"label":"Connect","reply":"Connect the disabled integration and verify it."}')
+    state = _parse_session_state(text)
+    assert state["completion"]["ready_to_close"] is False
+    assert "Unfinished actions remain." in state["completion"]["reasons"]
+    if requires_approval:
+        assert state["next_action"]["label"] == "Connect"
+        assert "A user decision remains." in state["completion"]["reasons"]
+    else:
+        assert state["next_step_user"] == "None."
+        assert "next_action" not in state
+
+
+def test_explicit_explanation_only_can_finish_without_fabricated_approval():
+    assessment = completed()
+    assessment["resolution"]["evidence"] = "Answered the explicit explanation-only request with the verified cause."
+    assessment["delivery"] = {"applicable": False, "score": 0,
+        "evidence": "User explicitly requested an explanation without changes."}
+    state = _parse_session_state(footer(assessment))
+    assert state["completion"]["ready_to_close"] is True
+    assert state["next_step_user"] == "None."
+    assert "next_action" not in state
+
+
 @pytest.mark.parametrize("raw", ["not JSON", '{"version":1}', 'null', '[]', 'true'])
 def test_invalid_json_does_not_erase_the_legacy_summary_or_recommend_close(raw):
     text = '<session-state>\nDID: Partial work.\nCOMPLETION: ' + raw + '\n</session-state>'

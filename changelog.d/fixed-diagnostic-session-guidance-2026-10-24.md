@@ -1,0 +1,1 @@
+- Session guidance now distinguishes diagnosing a malfunction from resolving it, surfaces repairs that need authorization, and preserves explicitly explanation-only requests. Refresh cached session rows so existing short action labels appear after upgrading.
