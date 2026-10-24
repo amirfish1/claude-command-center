@@ -73,6 +73,21 @@ def test_profile_names_rejected_and_empty_profile_supported(isolated):
     assert server._save_spawn_defaults({"model_profiles": {"standard": {"models": []}}})["ok"]
 
 
+def test_profile_keeps_distinct_models_on_one_engine(isolated, monkeypatch):
+    """A deep profile of opus then sonnet must survive load and unrelated saves;
+    worker fallback stays one entry per engine."""
+    monkeypatch.setattr(server, "_worker_fallback_catalog_models", lambda engine: [
+        {"id": "claude-opus-5-5"}, {"id": "claude-sonnet-5-5"}] if engine == "claude" else [])
+    rows = [{"engine": "claude", "model": "claude-opus-5-5", "effort": "high"},
+            {"engine": "claude", "model": "claude-sonnet-5-5", "effort": "high"}]
+    assert server._save_spawn_defaults({"model_profiles": {"deep": {"models": rows}}})["ok"]
+    assert server._save_spawn_defaults({"auto_compact_k": 300})["ok"]
+    assert server._load_spawn_defaults()["model_profiles"]["deep"]["models"] == rows
+    assert json.loads(isolated.read_text())["model_profiles"]["deep"]["models"] == rows
+    assert not server._save_spawn_defaults({"model_profiles": {"deep": {"models": rows + rows[:1]}}})["ok"]
+    assert not server._save_spawn_defaults({"worker_fallback": {"enabled": True, "models": rows}})["ok"]
+
+
 def test_http_save_then_reload_persists(isolated):
     httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)

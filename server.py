@@ -9573,8 +9573,13 @@ def _worker_fallback_catalog_models(engine):
     return rows
 
 
-def _validate_worker_fallback(value, *, strict=False):
-    """Ordered provider alternatives for workers and managed model runs."""
+def _validate_worker_fallback(value, *, strict=False, distinct_engines=True):
+    """Ordered provider alternatives for workers and managed model runs.
+
+    Worker fallback is one entry per engine (an exhausted account cannot
+    recover on its own provider). Model profiles pass distinct_engines=False:
+    WatchTower's runner falls back across models on one engine for transient
+    faults and skips same-engine entries after a quota failure."""
     def invalid(message):
         if strict:
             raise ValueError(message)
@@ -9590,8 +9595,10 @@ def _validate_worker_fallback(value, *, strict=False):
             return invalid("worker_fallback model entries must be objects")
         engine = str(row.get("engine") or "").strip()
         model = _clean_spawn_default_model(row.get("model"))
-        if engine not in _WORKER_FALLBACK_ENGINES or engine in seen:
-            return invalid("Each fallback engine must be supported and appear only once")
+        key = engine if distinct_engines else (engine, model)
+        if engine not in _WORKER_FALLBACK_ENGINES or key in seen:
+            return invalid("Each fallback engine must be supported and appear only once"
+                           if distinct_engines else "Each profile model must be supported and appear only once")
         if not model or len(model) > 200:
             return invalid("Each fallback entry needs an explicit model")
         effort = _validate_reasoning_effort(row.get("effort"), engine, strict=True)
@@ -9604,7 +9611,7 @@ def _validate_worker_fallback(value, *, strict=False):
             if _model_policy_blocks(model):
                 return invalid(f"Fallback model {model} is blocked by model policy")
         models.append({"engine": engine, "model": model, "effort": effort})
-        seen.add(engine)
+        seen.add(key)
     if value["enabled"] and not models:
         return invalid("Add at least one fallback model before enabling fallback")
     return {"enabled": value["enabled"], "models": models}
@@ -9627,6 +9634,7 @@ def _validate_model_profiles(value, *, strict=False):
                 raise ValueError("Managed model profiles currently require Claude for schema and no-tools guarantees; Codex remains supported for worker fallback")
         result[name] = {"models": _validate_worker_fallback(
             {"enabled": False, "models": profile.get("models")}, strict=strict,
+            distinct_engines=False,
         )["models"]}
     return result
 
