@@ -32928,18 +32928,22 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     height: 46px;
   }
   #convList#convList .conv-item .conv-main-row.has-inline-step .conv-avatar-number { font-size: 18px; }
+  /* CCC-155: right edge, vertically centred in the row (was the avatar's
+     top corner); the preview line leaves room so the dot never covers it. */
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-working-dot {
     display: block;
     position: absolute;
-    left: calc(var(--conv-icon-left) + 38px);
-    top: 8px;
+    left: auto;
+    right: 12px;
+    top: 50%;
     width: 8px;
     height: 8px;
     margin: 0;
-    transform: none;
+    transform: translateY(-50%);
     background: var(--green, #3fb950);
     z-index: 4;
   }
+  #convList#convList .conv-item .conv-main-row.has-inline-step:has(> .conv-working-dot) > .conv-outcome.is-inline { margin-right: 18px; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-working-dot::after { background: var(--green, #3fb950); }
   #convList#convList .conv-gap-separator { display: none; }
 }
