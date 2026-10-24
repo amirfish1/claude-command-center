@@ -24106,6 +24106,12 @@ _CONV_PARSE_CACHE_MAX = 96
 
 _CONV_PATH_CACHE = {}
 _CONV_PATH_CACHE_LOCK = threading.Lock()
+# Codex reader resolution opens the Codex state DB (and may glob rollouts),
+# and live pollers stat a codex transcript several times a second (CCC-152).
+# Short TTL, not forever: a stub rollout resolves to the exec log until the
+# real rollout fills in.
+_CODEX_READER_PATH_CACHE = {}
+_CODEX_READER_PATH_TTL = 2.0
 
 
 def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
@@ -24123,7 +24129,18 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         if engine == "antigravity":
             return _antigravity_reader_cache_key(conversation_id)
         if engine == "codex":
-            resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
+            cache_key = (conversation_id, repo_path)
+            now = time.monotonic()
+            with _CONV_PATH_CACHE_LOCK:
+                hit = _CODEX_READER_PATH_CACHE.get(cache_key)
+            if hit is not None and now < hit[1]:
+                resolved = hit[0]
+            else:
+                resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
+                with _CONV_PATH_CACHE_LOCK:
+                    if len(_CODEX_READER_PATH_CACHE) > 512:
+                        _CODEX_READER_PATH_CACHE.clear()
+                    _CODEX_READER_PATH_CACHE[cache_key] = (resolved, now + _CODEX_READER_PATH_TTL)
             st = Path(resolved).stat()
             return (st.st_mtime_ns, st.st_size)
         with _CONV_PATH_CACHE_LOCK:

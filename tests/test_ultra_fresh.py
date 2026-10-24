@@ -2,8 +2,17 @@
 import json
 from unittest import mock
 
+import pytest
+
 import server
+from ccc_server import ultra_fresh
 from ccc_server.ultra_fresh import FreshSession, message_text, session_ids
+
+
+@pytest.fixture(autouse=True)
+def _no_transcript_throttle(monkeypatch):
+    # Tests drive read() back to back; the production throttle is covered below.
+    monkeypatch.setattr(ultra_fresh, "TRANSCRIPT_CHECK_S", 0)
 
 
 def event(text, line=2, ts="2026-10-23T10:00:02Z", **kw):
@@ -145,3 +154,37 @@ def test_spawn_user_tool_result_cannot_clear_message_explanation(tmp_path):
             "role": "user", "content": [{"type": "tool_result", "content": "tool output", "tool_use_id": "tool-1"}]}}) + "\n")
         assert reader.read() == []
         assert reader.last_text == "Keep the agent explanation"
+
+
+def test_transcript_source_key_is_throttled_between_loop_ticks(monkeypatch):
+    # CCC-152: per-tick source-key resolution (Codex SQLite, Hermes/Devin DB
+    # keys) across every open stream starved the GIL and stalled /list.
+    monkeypatch.setattr(ultra_fresh, "TRANSCRIPT_CHECK_S", 0.5)
+    clock = [100.0]
+    monkeypatch.setattr(ultra_fresh.time, "monotonic", lambda: clock[0])
+    reader = FreshSession("test-session")
+    with mock.patch.object(server, "_conv_parse_jsonl_mtime", return_value=(1, 1)) as key, \
+         mock.patch.object(server, "parse_conversation", return_value={"events": [], "last_line": 0}), \
+         mock.patch.object(server, "_resolve_spawn_log_for_session", return_value=(None, False)), \
+         mock.patch.object(server, "_detect_session_engine", return_value="claude"):
+        for _ in range(5):
+            reader.read()
+            clock[0] += 0.1
+        assert key.call_count == 1
+        clock[0] += 0.5
+        reader.read()
+        assert key.call_count == 2
+
+
+def test_codex_source_key_reuses_resolved_reader_path(tmp_path, monkeypatch):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("{}\n")
+    monkeypatch.setattr(server, "_CODEX_READER_PATH_CACHE", {})
+    with mock.patch.object(server, "_detect_session_engine", return_value="codex"), \
+         mock.patch.object(server, "_resolve_conversation_reader",
+                           return_value=(rollout, None)) as resolve:
+        first = server._conv_parse_jsonl_mtime("codex-thread")
+        rollout.write_text("{}\n{}\n")
+        second = server._conv_parse_jsonl_mtime("codex-thread")
+    assert resolve.call_count == 1
+    assert first != second
