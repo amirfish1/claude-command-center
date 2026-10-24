@@ -62,6 +62,9 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
       const t = originalRow.querySelector('.conv-title').getBoundingClientRect();
       return { x: t.x, width:t.width, h:r.height, scroll:document.querySelector('#convList').scrollTop };
     });
+    // CCC-143: the stream opens only after the visible set settles.
+    assert.equal(await page.evaluate(() => sources.length), 0);
+    await page.waitForFunction(() => sources.length === 1, { timeout: 3000 });
     await page.evaluate(() => {
       sources.at(-1).onmessage({ data:JSON.stringify({updates:[{session_id:'s0', text:'I found the message stream.', ts:'2099-01-01T00:00:00Z'}]}) });
     });

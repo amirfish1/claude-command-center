@@ -313,7 +313,7 @@
   // server's error payload); the prefetch path drops them.
   function _fetchConvJsonTimed(url, init, keepErrors) {
     const t0 = performance.now();
-    return fetch(url, init).then(r => {
+    const pending = fetch(url, init).then(r => {
       if (!r.ok && !keepErrors) return null;
       const tResp = performance.now();
       const st = r.headers.get('Server-Timing') || '';
@@ -333,6 +333,9 @@
         return d;
       });
     });
+    // A conversation tail in flight holds the startup read gate (CCC-143).
+    if (typeof window.__cccStartupHoldForOpen === 'function') window.__cccStartupHoldForOpen(pending);
+    return pending;
   }
   // Catch-all for client-side jank that no single poller owns (render/reshuffle
   // thrash, GC pauses): any main-thread block >= 200ms surfaces once per 5s.
@@ -2423,9 +2426,38 @@
     });
   }
 
+  // CCC-143: the gate used to release when the first rows painted or on the
+  // first click, i.e. exactly while the restored or clicked conversation's
+  // tail fetch was in flight. ~30 queued status reads (plus their server
+  // GIL time) then landed on top of it: opens in the first minutes after a
+  // page load measured p95 2.5-6s vs ~1s later. Keep the queue parked until
+  // in-flight conversation tails settle, capped so a hung read can't starve
+  // the dashboard.
+  const STARTUP_OPEN_HOLD_MAX_MS = 5000;
+  const STARTUP_ROW_PRESS_GRACE_MS = 400;
+  const _startupOpenFetches = new Set();
+  let _startupReleaseRequestedAt = 0;
+  window.__cccStartupHoldForOpen = function (pending) {
+    if (_startupApiReadsReleased || !pending || typeof pending.finally !== 'function') return;
+    _startupOpenFetches.add(pending);
+    const settle = () => {
+      _startupOpenFetches.delete(pending);
+      if (_startupReleaseRequestedAt && !_startupOpenFetches.size) _releaseStartupApiReads();
+    };
+    pending.then(settle, settle);
+  };
   function _releaseStartupApiReads() {
     if (_startupApiReadsReleased) return;
+    const now = performance.now();
+    if (!_startupReleaseRequestedAt) _startupReleaseRequestedAt = now;
+    const held = now - _startupReleaseRequestedAt;
+    if (_startupOpenFetches.size && held < STARTUP_OPEN_HOLD_MAX_MS) {
+      clearTimeout(_startupApiReleaseTimer);
+      _startupApiReleaseTimer = setTimeout(_releaseStartupApiReads, STARTUP_OPEN_HOLD_MAX_MS - held);
+      return;
+    }
     _startupApiReadsReleased = true;
+    _startupOpenFetches.clear();
     clearTimeout(_startupApiReleaseTimer);
     const queued = _startupDeferredApiReads.splice(0);
     queued.forEach(task => {
@@ -2436,8 +2468,15 @@
 
   window.fetch = startupBudgetedFetch;
   _startupApiReleaseTimer = setTimeout(_releaseStartupApiReads, 20 * 1000);
-  window.addEventListener('pointerdown', _releaseStartupApiReads, { capture: true, once: true });
-  window.addEventListener('keydown', _releaseStartupApiReads, { capture: true, once: true });
+  // A press on a session row is about to start that row's tail fetch (on
+  // click, after pointerup): give it a moment to register before releasing.
+  window.addEventListener('pointerdown', (e) => {
+    const row = e && e.target && e.target.closest
+      && e.target.closest('.conv-item[data-id], .kanban-card[data-id], tr[data-id]');
+    if (row) setTimeout(_releaseStartupApiReads, STARTUP_ROW_PRESS_GRACE_MS);
+    else _releaseStartupApiReads();
+  }, { capture: true, once: true });
+  window.addEventListener('keydown', () => _releaseStartupApiReads(), { capture: true, once: true });
 
   function abortBackgroundApiReadsForSpawn() {
     for (const controller of _backgroundApiReadControllers) {
@@ -3148,7 +3187,13 @@
   // Ultra-fresh: one bounded stream for the first four sessions intersecting
   // the list viewport. Message updates touch only the existing explanation
   // slots; row identity, ordering, selection and scroll stay under list control.
-  const _ultraFresh = { entries: new Map(), source: null, ids: '', generation: 0, queued: false };
+  const _ultraFresh = { entries: new Map(), source: null, ids: '', generation: 0, queued: false, connectTimer: null };
+  // Each connect re-parses the transcript tail of every watched row on the
+  // server, and boot/list refreshes reshuffle the top rows many times a
+  // second: 65-72 reconnects/min cost ~30s of server CPU per minute right
+  // when the first conversation opens were waiting on the GIL (CCC-143).
+  // Open the stream only once the visible set has held still.
+  const ULTRA_FRESH_CONNECT_SETTLE_MS = 1200;
   function _ultraFreshRow(sid) {
     return conversationsData.find(c => String(c.session_id || c.id) === sid)
       || archiveData.find(c => String(c.session_id || c.id) === sid);
@@ -3367,14 +3412,20 @@
       for (const sid of _ultraFresh.entries.keys()) if (!ids.includes(sid)) _ultraFresh.entries.delete(sid);
       for (const sid of ids) if (!_ultraFresh.entries.has(sid)) _ultraFresh.entries.set(sid,
         { at: 0, userAt: 0, text: '', sessionState: null, sendAt: 0, preSend: null });
+      clearTimeout(_ultraFresh.connectTimer);
+      _ultraFresh.connectTimer = null;
       if (key && typeof EventSource === 'function') {
         const generation = _ultraFresh.generation;
-        const source = new EventSource('/api/sessions/ultra-fresh?sessions=' + encodeURIComponent(key));
-        _ultraFresh.source = source;
-        source.onmessage = ev => {
-          if (_ultraFresh.source !== source) return;
-          try { for (const update of JSON.parse(ev.data).updates || []) _ultraFreshAccept(update, generation); } catch (_) {}
-        };
+        _ultraFresh.connectTimer = setTimeout(() => {
+          _ultraFresh.connectTimer = null;
+          if (_ultraFresh.generation !== generation || _ultraFresh.source) return;
+          const source = new EventSource('/api/sessions/ultra-fresh?sessions=' + encodeURIComponent(key));
+          _ultraFresh.source = source;
+          source.onmessage = ev => {
+            if (_ultraFresh.source !== source) return;
+            try { for (const update of JSON.parse(ev.data).updates || []) _ultraFreshAccept(update, generation); } catch (_) {}
+          };
+        }, ULTRA_FRESH_CONNECT_SETTLE_MS);
       }
     }
     // Ordinary list snapshots may lag this stream. Restore the four text
