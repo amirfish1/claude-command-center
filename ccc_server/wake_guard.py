@@ -147,11 +147,11 @@ def request(sid, *, source, incident="", transcript_path=None, now=None, path=No
 
     action, reason, newly_escalated, count = _mutate(path, fn)
     if newly_escalated:
-        _escalate(sid, source, reason, count, notify)
+        _escalate(sid, source, reason, count, notify, alert=notify is None)
     return action == ALLOW, reason
 
 
-def _escalate(sid, source, reason, count, notify=None):
+def _escalate(sid, source, reason, count, notify=None, alert=True):
     why = ("the last automatic wake made no progress" if reason == "no_progress"
            else f"it was already woken {count} times in 24h")
     data = {
@@ -168,6 +168,12 @@ def _escalate(sid, source, reason, count, notify=None):
         notify(data)
     except Exception:
         pass
+    if alert:  # RESIL-6: the owner's phone too, when CCC_ALERT_COMMAND is set
+        try:
+            from ccc_server import notify as _notify
+            _notify._alert_off_dashboard(f"wake:{sid}:{reason}:{int(time.time())}", data)
+        except Exception:
+            pass
 
 
 def get(sid, path=None):

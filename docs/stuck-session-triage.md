@@ -47,5 +47,16 @@ Facts that trip people up:
   same for a child whose log is silent, bounded to one recovery per message and
   2 per session per 30 min, then marks the session `inject_stuck`
   (`inject-recovery.json`). Disable with `CCC_INJECT_AUTORECOVER=0`.
+- Every automatic wake (this recovery, the approved limit-reset "continue")
+  also goes through the wake ledger (`session-wakes.json`, `wake_guard.py`):
+  at most 2 per session per 24h, and no second wake unless the first one made
+  progress (transcript grew and the turn closed). A refusal logs
+  `RECOVER_GUARDED` / `AUTO_RESUME_GUARDED` and asks the owner instead; Force
+  restart clears it. Disable all automatic wakes with `CCC_AUTO_WAKE=0`.
+- Off-dashboard alerts: set `CCC_ALERT_COMMAND` (e.g. in
+  `~/.claude/command-center/config.local.env`) to a command that reads the
+  message on stdin. CCC runs it for dead sessions and refused wakes, once per
+  incident, at most 10 per hour (`alert-hook.json`; `ALERT_HOOK` in
+  `activity.log`).
 - Never kill a child that is mid-turn or running a tool: confirm the spawn log
   has been silent for minutes and it has no child process first.

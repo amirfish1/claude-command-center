@@ -665,7 +665,26 @@ def _emit_session_deaths(current, now_epoch, publish=None):
         if _dedupe_hit(item, now_epoch):
             continue
         out.append(_emit(item, publish=publish))
+        _alert_off_dashboard(f"death:{sid}:{inc.get('size')}", item)
     return out
+
+
+def _alert_off_dashboard(key, item):
+    """RESIL-6: also reach the owner's phone via CCC_ALERT_COMMAND (off unless
+    set). Once per incident key, rate-capped; never raises."""
+    try:
+        from ccc_server import alert_hook
+        from ccc_server.activity_log import _log_activity
+
+        def log(outcome):
+            _log_activity("ALERT_HOOK", "RAN", f"key={key[:60]} {outcome}")
+
+        result = alert_hook.send(key, item.get("title"), item.get("body"),
+                                 alert_hook.dashboard_link(item.get("url")), log=log)
+        if result != alert_hook.OFF:
+            _log_activity("ALERT_HOOK", result.upper(), f"key={key[:60]}")
+    except Exception:
+        pass
 
 
 # ── scheduled items: daily digest + savings milestones ───────────────────
