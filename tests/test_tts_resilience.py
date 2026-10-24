@@ -281,6 +281,26 @@ console.log(JSON.stringify({cancelled,requeued,ready,disabled}));
         self.assertEqual(result["ready"]["cancelledFraction"], 0)
         self.assertEqual(result["disabled"]["cancelledFraction"], 0)
 
+    def test_neural_word_progress_uses_audio_time_and_whole_utf16_words(self):
+        helper = function_block(self.source, "_ttsWordAtProgress", "_ttsSpeakChunkNeural")
+        result = self.run_node(helper + """
+const text = '  Hello,  🌍 world!';
+console.log(JSON.stringify({
+  first:_ttsWordAtProgress(text, 0, 10),
+  whitespace:_ttsWordAtProgress(text, 4.5, 10),
+  unicode:_ttsWordAtProgress(text, 6, 10),
+  last:_ttsWordAtProgress(text, 10, 10),
+  streaming:_ttsWordAtProgress(text, 0.9, Infinity),
+  empty:_ttsWordAtProgress('   ', 2, 10)
+}));
+""")
+        self.assertEqual(result["first"], {"start": 2, "length": 6})
+        self.assertEqual(result["whitespace"], {"start": 2, "length": 6})
+        self.assertEqual(result["unicode"], {"start": 10, "length": 2})
+        self.assertEqual(result["last"], {"start": 13, "length": 6})
+        self.assertEqual(result["streaming"], {"start": 13, "length": 6})
+        self.assertIsNone(result["empty"])
+
     def test_prepared_clips_survive_playback_and_replay_without_fetching(self):
         start = self.source.index("  function _ttsSpeakChunkNeural(")
         end = self.source.index("  // One-time iOS-Safari", start)
@@ -295,6 +315,7 @@ const revoked = [], audios = [], _ttsHeadCache = new Map();
 const window = {};
 const URL = {createObjectURL: () => 'play-' + (++urls), revokeObjectURL: u => revoked.push(u)};
 const _ttsScheduleCacheDebug = () => {}, _ttsSetPlay = () => {};
+const clearTtsHighlight = () => {}, clearTtsCaption = () => {};
 const _ttsFetchNeural = () => { fetches++; throw Error('Unexpected cache miss'); };
 const setTtsButtonsState = () => {}, setTtsButtonsBusy = () => {};
 const ttsButtons = () => [], _ttsShowVoice = () => {}, _ttsLog = () => {};

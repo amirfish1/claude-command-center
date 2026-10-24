@@ -13860,8 +13860,8 @@
   // through /api/free-runtime/tts with a random Gemini voice per read (the
   // server falls back to Cloudflare MeloTTS on a Google rate limit); a full
   // outage (cool-down) or no router falls back to the browser voice. The next
-  // chunk is fetched while the current one plays. No word highlight here: the
-  // audio carries no boundaries.
+  // chunk is fetched while the current one plays. Audio has no word timestamps;
+  // neural word highlighting estimates boundaries from the playback clock.
   let _ttsAudio = null;           // reuse the gesture-authorized player across clips
   let _ttsNeural = null;          // { audio, token } while a neural chunk plays
   let _ttsNeuralToken = 0;
@@ -13888,6 +13888,7 @@
   function _ttsEngineCancel() {
     _ttsNeuralToken += 1;
     if (_ttsNeural && _ttsNeural.audio) {
+      _ttsNeural.stopHighlight?.();
       try { _ttsNeural.audio.pause(); URL.revokeObjectURL(_ttsNeural.audio.src); } catch (_) {}
     }
     _ttsNeural = null;
@@ -14571,6 +14572,23 @@
       throw error;
     });
   }
+  // Whole-word ranges retain UTF-16 offsets used by the DOM text mapping.
+  // These are estimates until the audio service supplies alignment timestamps.
+  function _ttsWordAtProgress(text, time, duration, words) {
+    words = words || Array.from(text.matchAll(/\S+/g), m => ({ start: m.index, length: m[0].length }));
+    if (!words.length) return null;
+    const elapsed = Math.max(0, Number(time) || 0);
+    const offset = Number.isFinite(duration) && duration > 0
+      ? Math.min(1, elapsed / duration) * text.length
+      : Math.min(text.length - 1, elapsed * 15);
+    let lo = 0, hi = words.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (words[mid].start <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return words[lo];
+  }
   function _ttsSpeakChunkNeural(state, chunk) {
     const token = ++_ttsNeuralToken;
     _ttsUtterance = { neural: true };   // keeps the "is a read active" checks true
@@ -14639,20 +14657,37 @@
       // can leave an already prepared continuation blocked after the first.
       const audio = _ttsAudio || (_ttsAudio = new Audio());
       audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
-      audio.onplaying = audio.onwaiting = null;
+      audio.onplaying = audio.onwaiting = audio.onpause = null;
       audio.src = playUrl;
       audio.playbackRate = _ttsRate;
-      _ttsNeural = { audio, token };
-      // No word boundaries from an audio file: estimate the read position from
-      // playback progress so skip and rate changes continue from here.
-      audio.ontimeupdate = () => {
-        if (stale() || !chunk.text.length) return;
-        const d = audio.duration;
-        const frac = (isFinite(d) && d > 0) ? audio.currentTime / d
-          : Math.min(0.95, audio.currentTime * 15 / chunk.text.length);
-        _ttsLastCharIndex = chunk.start + Math.floor(Math.min(1, frac) * chunk.text.length);
-        _ttsSetPlay();
+      let wordFrame = null, lastWord = -1, complete = !!got.blob;
+      const words = Array.from(chunk.text.matchAll(/\S+/g), m => ({ start: m.index, length: m[0].length }));
+      got.done.then(() => { complete = true; });
+      const stopHighlight = () => {
+        if (wordFrame != null) cancelAnimationFrame(wordFrame);
+        wordFrame = null;
       };
+      const updateWord = () => {
+        if (stale()) return;
+        // A growing stream's duration is only its buffered portion. Use the
+        // clock estimate until generation finishes, then the full duration.
+        const word = _ttsWordAtProgress(chunk.text, audio.currentTime, complete ? audio.duration : NaN, words);
+        if (!word || word.start === lastWord) return;
+        lastWord = word.start;
+        _ttsLastCharIndex = chunk.start + word.start;
+        _ttsSetPlay();
+        highlightTtsWord(_ttsLastCharIndex, word.length);
+        updateTtsCaption(_ttsLastCharIndex, word.length, _ttsBoundUtteranceText);
+      };
+      const trackWord = () => {
+        wordFrame = null;
+        if (stale() || audio.paused || audio.ended) return;
+        updateWord();
+        wordFrame = requestAnimationFrame(trackWord);
+      };
+      _ttsNeural = { audio, token, stopHighlight };
+      audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
+      audio.onpause = stopHighlight;
       const label = 'Pause reading (free voice: ' + got.voice + ')';
       audio.onplay = () => {
         if (stale()) return;
@@ -14671,6 +14706,9 @@
       };
       audio.onended = () => {
         if (stale()) return;
+        stopHighlight();
+        clearTtsHighlight();
+        clearTtsCaption();
         _ttsLog('ENDED', 'clip ' + idx);
         URL.revokeObjectURL(playUrl);
         state.debugCache.delete(chunk.text);
@@ -14689,6 +14727,8 @@
       audio.onplaying = () => {
         if (stale()) return;
         const now = Date.now();
+        stopHighlight();
+        trackWord();
         _ttsLog('PLAY', 'clip ' + idx + ' (' + chunk.text.length + ' chars)');
         _ttsPerfStart(state, { engine: 'neural', voice: got.voice });
         if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, performance.now() - state.perf.gapT0, 'gap'); state.perf.gapT0 = 0; }
@@ -14701,6 +14741,9 @@
       const releaseDebug = () => { state.debugCache.delete(chunk.text); _ttsScheduleCacheDebug(); };
       audio.onerror = () => {
         if (stale()) return;
+        stopHighlight();
+        clearTtsHighlight();
+        clearTtsCaption();
         _ttsLog('ERROR', 'clip ' + idx + ' media error ' + (audio.error?.code || 'unknown'));
         URL.revokeObjectURL(playUrl); releaseDebug(); fallBack(_TTS_FAIL_COOL_MS);
       };
@@ -14717,6 +14760,9 @@
           showOpToast('Tap the speaker to resume audio.', 'info');
           return;
         }
+        stopHighlight();
+        clearTtsHighlight();
+        clearTtsCaption();
         releaseDebug(); fallBack(0);
       });
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
