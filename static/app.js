@@ -47100,7 +47100,9 @@
     // The floating speaker tops the same right-hand column, so every floating
     // control covers one narrow strip instead of a second one on the left.
     const speakBtn = view._convSpeakButton;
-    if (speakBtn) {
+    // Mid-drag the pointer owns the speaker: a scroll/poll re-layout here
+    // would yank it back to its old slot under the user's finger.
+    if (speakBtn && !speakBtn.classList.contains('is-dragging')) {
       const saved = _speakBtnSavedPos();
       if (saved) {
         // Dragged somewhere by the user: keep it there (stored as fractions
@@ -47131,23 +47133,20 @@
     return null;
   }
   // Press and drag moves the floating speaker; a plain tap still reads.
+  // Moves and the release are tracked on the document, not the 56px button:
+  // a fast trackpad flick outruns the button, and when the release landed
+  // off it the drop was never saved and the next layout snapped it back.
   function _makeSpeakBtnDraggable(btn, host) {
     if (!btn || btn._dragBound) return;
     btn._dragBound = true;
     btn.style.touchAction = 'none';
     let drag = null;
-    btn.addEventListener('pointerdown', (ev) => {
-      if (ev.button !== undefined && ev.button !== 0) return;
-      const hr = host.getBoundingClientRect(), r = btn.getBoundingClientRect();
-      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: r.left - hr.left, top: r.top - hr.top, moved: false };
-    });
-    btn.addEventListener('pointermove', (ev) => {
+    const move = (ev) => {
       if (!drag || ev.pointerId !== drag.id) return;
       const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
       if (!drag.moved) {
         if (Math.hypot(dx, dy) < 8) return;
         drag.moved = true;
-        try { btn.setPointerCapture(ev.pointerId); } catch (_) {}
         btn.classList.add('is-dragging');
       }
       ev.preventDefault();
@@ -47158,28 +47157,43 @@
       btn.style.top = Math.round(top) + 'px';
       btn.style.right = 'auto';
       btn.style.bottom = 'auto';
-    });
-    const end = (ev) => {
-      if (!drag || ev.pointerId !== drag.id) return;
-      if (drag.moved) {
-        const hr = host.getBoundingClientRect();
-        try {
-          localStorage.setItem(SPEAK_BTN_POS_KEY, JSON.stringify({
-            x: (parseFloat(btn.style.left) || 0) / (hr.width || 1),
-            y: (parseFloat(btn.style.top) || 0) / (hr.height || 1),
-          }));
-        } catch (_) {}
-        // Swallow only a click fired by this same gesture (mouse drags emit
-        // one; touch drags don't), so the next real tap still reads.
-        btn._suppressClick = true;
-        setTimeout(() => { btn._suppressClick = false; }, 350);
-        btn.classList.remove('is-dragging');
-        if (btn._convTargetView) updateConversationEndAffordance(btn._convTargetView);
-      }
-      drag = null;
     };
-    btn.addEventListener('pointerup', end);
-    btn.addEventListener('pointercancel', end);
+    const end = (ev) => {
+      if (!drag || (ev.pointerId !== undefined && ev.pointerId !== drag.id)) return;
+      const moved = drag.moved;
+      drag = null;
+      document.removeEventListener('pointermove', move, true);
+      document.removeEventListener('pointerup', end, true);
+      document.removeEventListener('pointercancel', end, true);
+      btn.removeEventListener('lostpointercapture', end);
+      if (!moved) return;
+      const hr = host.getBoundingClientRect();
+      try {
+        localStorage.setItem(SPEAK_BTN_POS_KEY, JSON.stringify({
+          x: (parseFloat(btn.style.left) || 0) / (hr.width || 1),
+          y: (parseFloat(btn.style.top) || 0) / (hr.height || 1),
+        }));
+      } catch (_) {}
+      // Swallow only a click fired by this same gesture (mouse drags emit
+      // one; touch drags don't), so the next real tap still reads.
+      btn._suppressClick = true;
+      setTimeout(() => { btn._suppressClick = false; }, 350);
+      btn.classList.remove('is-dragging');
+      if (btn._convTargetView) updateConversationEndAffordance(btn._convTargetView);
+    };
+    btn.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== undefined && ev.button !== 0) return;
+      if (drag) end({ pointerId: drag.id });
+      const hr = host.getBoundingClientRect(), r = btn.getBoundingClientRect();
+      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: r.left - hr.left, top: r.top - hr.top, moved: false };
+      // No text selection while the pointer sweeps across the transcript.
+      if (ev.pointerType === 'mouse') ev.preventDefault();
+      try { btn.setPointerCapture(ev.pointerId); } catch (_) {}
+      document.addEventListener('pointermove', move, true);
+      document.addEventListener('pointerup', end, true);
+      document.addEventListener('pointercancel', end, true);
+      btn.addEventListener('lostpointercapture', end);
+    });
     // The click that follows a drag must not start a read.
     btn.addEventListener('click', (ev) => {
       if (!btn._suppressClick) return;

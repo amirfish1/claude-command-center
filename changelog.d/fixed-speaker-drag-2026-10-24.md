@@ -1,0 +1,1 @@
+- The floating speaker now stays where you drop it: quick flicks grab it, and releasing off the button or mid-scroll no longer snaps it back.
