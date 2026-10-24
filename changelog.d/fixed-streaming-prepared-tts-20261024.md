@@ -1,0 +1,1 @@
+- Stream speech from clips that are still being prepared when the speaker is clicked, without waiting for the complete MP3 or generating it again. Keep completed clips available for replay and preserve pause, word highlighting, and automatic continuation.

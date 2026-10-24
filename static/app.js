@@ -14290,7 +14290,10 @@
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
     entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '', 'bg').then((got) => {
-      entry.ready = true; entry.got = got; entry.voice = got.voice;
+      entry.got = got; entry.voice = got.voice;
+      got.done.then(() => { entry.ready = true; }).catch(() => {
+        if (_ttsHeadCache.get(head.text) === entry) _ttsHeadCache.delete(head.text);
+      });
       _ttsMarkCache(mk, head.text, 'partial', 0.1);
       Promise.resolve(got.done).then(() => {
         _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
@@ -14311,7 +14314,7 @@
     while (_ttsHeadCache.size > 24) {
       const oldest = _ttsHeadCache.keys().next().value;
       const old = _ttsHeadCache.get(oldest);
-      if (old && old.got) URL.revokeObjectURL(old.got.url);
+      if (old && old.got && old.got.url) URL.revokeObjectURL(old.got.url);
       _ttsHeadCache.delete(oldest);
       _ttsScheduleCacheDebug();
     }
@@ -14388,7 +14391,13 @@
         let entry = _ttsHeadCache.get(c.text);
         if (!entry) {
           entry = { ready: false, got: null, voice: headGot.voice };
-          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg', jobs[i]).then((got) => { entry.ready = true; entry.got = got; return got; });
+          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg', jobs[i]).then((got) => {
+            entry.got = got;
+            got.done.then(() => { entry.ready = true; }).catch(() => {
+              if (_ttsHeadCache.get(c.text) === entry) _ttsHeadCache.delete(c.text);
+            });
+            return got;
+          });
           entry.p.catch(() => { if (_ttsHeadCache.get(c.text) === entry) _ttsHeadCache.delete(c.text); });
           _ttsHeadCache.set(c.text, entry);
           _ttsWatchCacheEntry(c.text, entry);
@@ -14523,15 +14532,63 @@
     return url;
   }
   const _ttsCanStream = () => typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mpeg');
-  // Resolves { url, voice } or rejects with the HTTP status (0 = network).
+  // Drain preparation immediately, retaining bytes for both an early click and
+  // later replay. Each player gets its own stream; stopping one cannot discard
+  // the shared request or its completed cache blob. No audio starts here.
+  function _ttsStreamClip(res, done, onDone, onError) {
+    const chunks = [], listeners = new Set();
+    let finished = false, failed = null;
+    const clip = { blob: null, done, createUrl: () => {
+      if (clip.blob) return URL.createObjectURL(clip.blob);
+      let listener;
+      const body = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk);
+          if (failed) { controller.error(failed); return; }
+          if (finished) { controller.close(); return; }
+          listener = controller;
+          listeners.add(controller);
+        },
+        cancel() { listeners.delete(listener); },
+      });
+      return _ttsStreamUrl(new Response(body));
+    } };
+    (async () => {
+      try {
+        const reader = res.body.getReader();
+        for (;;) {
+          const { value, done: ended } = await reader.read();
+          if (ended) break;
+          chunks.push(value);
+          for (const listener of listeners) listener.enqueue(value);
+        }
+        clip.blob = new Blob(chunks, { type: 'audio/mpeg' });
+        chunks.length = 0;
+        finished = true;
+        for (const listener of listeners) listener.close();
+        listeners.clear();
+        onDone();
+      } catch (error) {
+        failed = error;
+        chunks.length = 0;
+        for (const listener of listeners) listener.error(error);
+        listeners.clear();
+        onError(error);
+      }
+    })();
+    return clip;
+  }
+  // Resolves a replayable clip (or a complete blob on non-streaming browsers).
   // prio 'bg' = prepare-ahead: the local voice makes 'fg' (a read being heard) first.
   function _ttsFetchNeural(text, voice, prio, debugJob) {
     const job = debugJob || _ttsDebugJob(text, 'processing', null);
     job.status = 'processing';
     _ttsScheduleCacheDebug();
     voice = voice || ttsVoiceForPane(activePaneId());
-    let onDone;
-    const done = new Promise((r) => { onDone = r; });
+    let onDone, onError;
+    const done = new Promise((resolve, reject) => { onDone = resolve; onError = reject; });
+    // A failed generation is observed even if no one has clicked its cache entry.
+    done.catch(() => {});
     const t0 = performance.now();
     // Perf pane "speaker cache" column: one row per clip read, saying
     // whether the server replayed it from its clip cache or made it now.
@@ -14549,24 +14606,29 @@
               + ' · first bytes ' + first + 'ms · whole clip ' + ms + 'ms\n' + String(text || '').slice(0, 120),
           });
         } catch (_) {}
-      });
+      }).catch(() => {});
     };
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: voice || '', stream: prio !== 'bg' && _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
+      body: JSON.stringify({ text, voice: voice || '', stream: _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
       const model = res.headers.get('X-CCC-Model') || '';
       perfRow(res);
-      done.then(() => { job.status = 'ready'; _ttsScheduleCacheDebug(); });
-      if (prio !== 'bg' && res.headers.get('X-CCC-Stream') === '1') return { url: _ttsStreamUrl(res, onDone), voice: v, model, done };
+      done.then(() => { job.status = 'ready'; _ttsScheduleCacheDebug(); }).catch(() => {
+        job.status = 'failed'; _ttsScheduleCacheDebug();
+      });
+      if (_ttsCanStream() && res.headers.get('X-CCC-Stream') === '1') {
+        return Object.assign(_ttsStreamClip(res, done, onDone, onError), { voice: v, model });
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       onDone();
       return { url, blob, voice: v, model, done: Promise.resolve() };
     }, () => { throw 0; }).catch(error => {
+      onError(error);
       job.status = 'failed';
       _ttsScheduleCacheDebug();
       throw error;
@@ -14594,9 +14656,15 @@
     _ttsUtterance = { neural: true };   // keeps the "is a read active" checks true
     const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
     const fallBack = (cooldownMs) => {
+      if (stale()) return;
+      // A failed body can reject completion and raise a media error. Settle
+      // this player once, so the two signals cannot start overlapping reads.
+      _ttsNeuralToken += 1;
+      _ttsNeural?.stopHighlight?.();
+      try { _ttsNeural?.audio.pause(); } catch (_) {}
+      _ttsNeural = null;
       if (cooldownMs) _ttsCool(cooldownMs, 'playback-fail');
       state.neuralOk = false;
-      if (stale()) return;
       _ttsUtterance = null;
       _ttsSpeakNextChunk();
     };
@@ -14644,15 +14712,15 @@
     ensure(state.index);
     state.prefetch[state.index].then((got) => {
       delete state.prefetch[state.index];
-      if (stale()) { if (!got.blob) URL.revokeObjectURL(got.url); return; }
+      if (stale()) { if (!got.blob && got.url) URL.revokeObjectURL(got.url); return; }
       // Start the next clip the moment this one is fully generated, not at
       // onplay. One at a time: the local voice server shares the CPU, so two
       // clips made at once both finish late and playback stalls.
       const idx = state.index;
-      got.done.then(() => { if (!stale()) ensure(idx + 1); });
+      got.done.then(() => { if (!stale()) ensure(idx + 1); }).catch(() => {});
       if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
       // Give each playback its own URL; revoking it must not invalidate the cache.
-      const playUrl = got.blob ? URL.createObjectURL(got.blob) : got.url;
+      const playUrl = got.createUrl ? got.createUrl() : got.blob ? URL.createObjectURL(got.blob) : got.url;
       // Safari authorizes playback per element. A new Audio for every clip
       // can leave an already prepared continuation blocked after the first.
       const audio = _ttsAudio || (_ttsAudio = new Audio());
@@ -14662,7 +14730,9 @@
       audio.playbackRate = _ttsRate;
       let wordFrame = null, lastWord = -1, complete = !!got.blob;
       const words = Array.from(chunk.text.matchAll(/\S+/g), m => ({ start: m.index, length: m[0].length }));
-      got.done.then(() => { complete = true; });
+      got.done.then(() => { complete = true; }).catch(() => {
+        if (!stale()) audio.onerror?.();
+      });
       const stopHighlight = () => {
         if (wordFrame != null) cancelAnimationFrame(wordFrame);
         wordFrame = null;
