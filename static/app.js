@@ -19720,6 +19720,25 @@
     if (!row) { showOpToast('No open task', 'error'); return; }
     const convId = row.id;
     const sessionId = row.session_id || row.id;
+    const lists = [conversationsData, archiveData, currentRepoBacklogData];
+    const applyPatch = (group, patch) => {
+      lists.forEach(rows => {
+        if (!Array.isArray(rows)) return;
+        for (const r of rows) {
+          if (r && (r.id === convId || group.has(r.session_id || r.id))) Object.assign(r, patch);
+        }
+      });
+      for (const member of group) setOptimisticOverride(member, patch);
+      updateInputBar();
+      renderSidebar(filterConversations($convSearch.value), { force: true });
+    };
+    // Move the row now: the POST can queue for seconds behind in-flight polls,
+    // and a menu click that changes nothing reads as "it didn't work".
+    const prior = { archived: !!row.archived, trashed: !!row.trashed };
+    const optimistic = kind === 'untrash' ? { archived: true, trashed: false }
+      : (kind === 'archive' ? { archived: true } : { archived: false, trashed: false });
+    applyPatch(new Set([sessionId]), optimistic);
+    showOpToast(kind === 'untrash' ? 'Untrashing…' : (kind === 'archive' ? 'Archiving…' : 'Unarchiving…'));
     try {
       const data = kind === 'untrash'
         ? await ccPostJson('/api/conversations/' + encodeURIComponent(convId) + '/trash', {
@@ -19731,24 +19750,16 @@
       const patch = kind === 'untrash'
         ? { archived: !!data.archived, trashed: false }
         : { archived: !!data.archived, ...(!data.archived ? { trashed: false } : {}) };
-      const group = new Set(data.session_ids || [sessionId]);
-      [conversationsData, archiveData, currentRepoBacklogData].forEach(rows => {
-        if (!Array.isArray(rows)) return;
-        for (const r of rows) {
-          if (r && (r.id === convId || group.has(r.session_id || r.id))) Object.assign(r, patch);
-        }
-      });
-      for (const member of group) setOptimisticOverride(member, patch);
+      applyPatch(new Set(data.session_ids || [sessionId]), patch);
       // A slow archive must not navigate away from another conversation.
       if (kind === 'archive' && data.archived
           && (currentConversation === convId || currentConversation === sessionId)) {
         returnToConversationList();
       }
-      updateInputBar();
-      renderSidebar(filterConversations($convSearch.value), { force: true });
       showOpToast(kind === 'untrash' ? 'Untrashed to Archived'
         : (data.archived ? 'Archived' : 'Restored to Active'));
     } catch (err) {
+      applyPatch(new Set([sessionId]), prior);
       const label = kind === 'untrash' ? 'Untrash' : (kind === 'archive' ? 'Archive' : 'Unarchive');
       showOpToast(label + ' failed (' + err.message + ')', 'error');
     }
