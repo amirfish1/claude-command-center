@@ -1,0 +1,1 @@
+- The queue panel's + (and the Triggered Workers + on a queue header) now show a Queue picker preselected to the scoped queue, so a ticket no longer files silently into whatever queue the panel happened to be showing.

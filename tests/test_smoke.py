@@ -6131,7 +6131,7 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function openQueueTicketComposer(opts)", app_js)
-        self.assertIn("const note = await openQueueTicketComposer();", app_js)
+        self.assertIn("const note = await openQueueTicketComposer(names.length ? { queues: names, defaultQueue: scoped } : {});", app_js)
         self.assertNotIn("window.prompt('New queue ticket", app_js)
         self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
         self.assertGreater(
@@ -6144,6 +6144,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".fq-ticket-textarea", app_css)
         self.assertIn("min-height: 150px;", app_css)
         self.assertIn("resize: vertical;", app_css)
+
+    def test_queue_panel_add_shows_queue_picker_and_honors_pick(self):
+        """CCC-163: the panel "+" must show which queue it files into and use the user's pick."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        add_start = app_js.index("async function _addQueueTicket()")
+        add_body = app_js[add_start:app_js.index("async function _newGlobalTicket()", add_start)]
+        self.assertIn("queues: names, defaultQueue: scoped", add_body)
+        self.assertIn("const proj = openQueueTicketComposer.lastQueue || scoped;", add_body)
+        ceq_start = app_js.index("data-ceq-add-queue') || '';")
+        ceq_body = app_js[ceq_start:ceq_start + 600]
+        self.assertIn("queues: names, defaultQueue: scopedQueue", ceq_body)
+        self.assertIn("openQueueTicketComposer.lastQueue || scopedQueue", ceq_body)
 
     def test_queue_header_add_opens_queue_manager_not_ticket_composer(self):
         """The header plus creates a queue; the lower add row creates tickets."""

@@ -44600,9 +44600,11 @@
         if (!btn) return;
         ev.stopImmediatePropagation();
         ev.preventDefault();
-        const queueName = btn.getAttribute('data-ceq-add-queue') || '';
-        const note = await openQueueTicketComposer();
+        const scopedQueue = btn.getAttribute('data-ceq-add-queue') || '';
+        const names = await _ticketQueueNames();
+        const note = await openQueueTicketComposer(names.length ? { queues: names, defaultQueue: scopedQueue } : {});
         if (!note) return;
+        const queueName = openQueueTicketComposer.lastQueue || scopedQueue;
         const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(queueName)] || queueName;
         try {
           const res = await fetch('/api/ux-fixes/enqueue', {
@@ -55762,10 +55764,24 @@
       row.scrollIntoView({ block: 'center' });
     }
   }
+  // Queue names for the composer's Queue picker (cached health, else one fetch).
+  async function _ticketQueueNames() {
+    let health = _uxqHealthCache;
+    if (!(health.queues || []).length) {
+      try { health = await _fetchUxqHealth(false); } catch (_) {}
+    }
+    return Array.from(new Set(((health && health.queues) || [])
+      .map(q => String((q && q.queue) || '').trim()).filter(Boolean)));
+  }
+  // CCC-163: the panel "+" used to file silently into whatever queue the panel
+  // was scoped to (e.g. BECKY) with no queue shown; it now shows the Queue
+  // picker preselected to that scope and files where the user picks.
   async function _addQueueTicket() {
-    const note = await openQueueTicketComposer();
+    const scoped = _uxqLastResolvedProject || _uxqWorkerProject();
+    const names = await _ticketQueueNames();
+    const note = await openQueueTicketComposer(names.length ? { queues: names, defaultQueue: scoped } : {});
     if (!note) return;
-    const proj = _uxqLastResolvedProject || _uxqWorkerProject();
+    const proj = openQueueTicketComposer.lastQueue || scoped;
     // A family root ("WT") isn't a real sub-queue — route the add to its
     // fix-now child ("WT-BUGS") so it lands somewhere drainable.
     const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(proj)] || proj;
@@ -55805,12 +55821,7 @@
   // Top-level "+ Ticket" (sidebar): file into any queue without first
   // opening it. Reuses the queue ticket composer with its Queue picker.
   async function _newGlobalTicket() {
-    let health = _uxqHealthCache;
-    if (!(health.queues || []).length) {
-      try { health = await _fetchUxqHealth(false); } catch (_) {}
-    }
-    const names = Array.from(new Set(((health && health.queues) || [])
-      .map(q => String((q && q.queue) || '').trim()).filter(Boolean)));
+    const names = await _ticketQueueNames();
     if (!names.length) { showOpToast('No queues yet - create one from the Queue tab', 'error'); return; }
     const railOnQueue = !!document.querySelector('.status-rail-tab.is-active[data-rail-tab="queue"]');
     const scoped = railOnQueue ? String(_uxqLastResolvedProject || '').trim() : '';
