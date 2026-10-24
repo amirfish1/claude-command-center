@@ -7803,12 +7803,34 @@
   // already spoken for. Set once per render, before any row is built.
   let _workersHoistState = { engine: '', tier: '' };
 
+  function sessionRepoAvatarPath(row) {
+    const candidate = row && [row.folder_path, row.repo_path, row.spawn_cwd, row.session_cwd, row.cwd]
+      .find(value => typeof value === 'string' && value.startsWith('/'));
+    if (typeof candidate !== 'string' || !candidate.startsWith('/')) return '';
+    const folder = candidate.replace(/\/+$/, '') || '/';
+    // Prefer the closest registered repo, including nested repos. A slash
+    // boundary prevents a sibling such as project-tools matching project.
+    const repos = repoListState.repos;
+    const suggested = repoListState.suggested;
+    let cache = sessionRepoAvatarPath.cache;
+    if (!cache || cache.repos !== repos || cache.suggested !== suggested) {
+      const roots = [...(repos || []), ...(suggested || [])]
+        .map(repo => String(repo.path || '').replace(/\/+$/, '')).filter(Boolean)
+        .sort((a, b) => b.length - a.length);
+      cache = sessionRepoAvatarPath.cache = { repos, suggested, roots };
+    }
+    return cache.roots.find(root => folder === root || folder.startsWith(root + '/')) || folder;
+  }
+  // end sessionRepoAvatarPath
+
   function sessionEngineIconHtml(row, options) {
     const opts = options || {};
     const sid = row && (row.session_id || row.id);
     const optimistic = !!(sid && typeof sessionIsOptimisticallySending === 'function'
       && sessionIsOptimisticallySending(sid));
     const presentation = sessionIconPresentation(row, optimistic);
+    const repoPath = sessionRepoAvatarPath(row);
+    const repoAvatar = repoPath ? repoAvatarHtml(repoPath, row.folder_label_chip || row.folder_label || '') : '';
     const baseClass = opts.context === 'pane' ? 'conv-pane-cat-icon' : 'conv-session-icon';
     const tierClass = presentation.tier ? ' cost-' + presentation.tier : '';
     const activityClass = presentation.working ? ' is-working' : ' is-not-working';
@@ -7819,12 +7841,12 @@
       : '';
     // Rows whose engine/tier the banner already states get marked, so the
     // stylesheet can drop just those glyphs and leave the exceptions visible.
-    const hoistClass = (_workersHoistState.engine && presentation.engine === _workersHoistState.engine ? ' hoisted-engine' : '')
+    const hoistClass = (!repoAvatar && _workersHoistState.engine && presentation.engine === _workersHoistState.engine ? ' hoisted-engine' : '')
       + (_workersHoistState.tier && presentation.tier === _workersHoistState.tier ? ' hoisted-cost' : '');
-    return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + hoistClass + '"'
+    return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + hoistClass + (repoAvatar ? ' has-repo-avatar' : '') + '"'
       + ' title="' + escapeAttr(presentation.title) + '"'
       + ' role="img" aria-label="' + escapeAttr(presentation.title) + '">'
-      + getEngineSvg(presentation.engine)
+      + (repoAvatar || getEngineSvg(presentation.engine))
       + '<span class="session-activity-dot" aria-hidden="true"></span>'
       + tierCost
       + '</span>';
@@ -23921,10 +23943,10 @@
   }, true);
 
   function _waAvatarHtml(c, title) {
+    const repoPath = sessionRepoAvatarPath(c);
+    if (repoPath) return repoAvatarHtml(repoPath, c.folder_label, 'wa-avatar wa-av');
     const ideaAvatar = _ideaAvatarHtml(c, true);
     if (ideaAvatar) return ideaAvatar;
-    const repoPath = c && (c.folder_path || c.repo_path || c.session_cwd);
-    if (repoPath) return repoAvatarHtml(repoPath, c.folder_label, 'wa-avatar wa-av');
     const cat = _waCategory(c, title);
     const repo = String((c && c.folder_label) || '');
     return '<span class="wa-avatar wa-av" aria-hidden="true" title="' + escapeAttr((repo ? repo + ' · ' : '') + cat.label) + '" style="background:linear-gradient(135deg,' + cat.bg[0] + ',' + cat.bg[1] + ')">'
@@ -37658,8 +37680,9 @@
             + '</svg>';
       }
 
-      const ideaAvatarHtml = _ideaAvatarHtml(c);
-      const sessionIconHtml = ideaAvatarHtml || (iconType
+      const useRepoAvatar = sessionRepoAvatarPath(c) && (!iconType || iconType === 'pkood');
+      const ideaAvatarHtml = useRepoAvatar ? '' : _ideaAvatarHtml(c);
+      const sessionIconHtml = useRepoAvatar ? sessionEngineIconHtml(c, { context: 'sidebar' }) : ideaAvatarHtml || (iconType
         ? '<span class="conv-session-icon ' + iconType + ' is-not-working" title="' + escapeAttr(iconTitle) + '" aria-hidden="true">'
             + svgMarkup
             + '</span>'
