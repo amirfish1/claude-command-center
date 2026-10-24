@@ -21711,9 +21711,7 @@ body.status-pos-right #convToolbar {
   pointer-events: none;
 }
 
-/* Debug backgrounds coexist with the active spoken word's foreground color. */
-::highlight(tts-cache-sent) { background-color: rgba(245, 158, 11, 0.32); }
-::highlight(tts-cache-ready) { background-color: rgba(34, 197, 94, 0.30); }
+/* Cache-state swatches in settings. */
 .tts-cache-debug-sent { background-color: rgba(245, 158, 11, 0.32); }
 .tts-cache-debug-ready { background-color: rgba(34, 197, 94, 0.30); }
 
@@ -33005,7 +33003,6 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }
 
 /* Optional TTS scheduler inspector; kept outside transcript text and copying. */
-::highlight(tts-cache-cancelled) { background-color: rgba(168, 85, 247, 0.32); }
 #ttsCacheDebugQueue {
   position: fixed; top: 74px; left: 12px; z-index: 100100;
   max-width: min(360px, calc(100vw - 24px)); color: #e6edf3;
@@ -33020,3 +33017,10 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 #ttsCacheDebugQueue [data-status="processing"] { background: #f59e0b52; }
 #ttsCacheDebugQueue [data-status="ready"] { background: #22c55e4d; }
 #ttsCacheDebugQueue [data-status="cancelled"] { background: #a855f752; }
+
+/* TTS cache states occupy the gutter, leaving conversation text unpainted. */
+#ttsCacheDebugLines { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
+#ttsCacheDebugLines > i { position: absolute; width: 3px; border-radius: 2px; pointer-events: none; }
+#ttsCacheDebugLines [data-tts-state="sent"] { background: #f59e0b; }
+#ttsCacheDebugLines [data-tts-state="ready"] { background: #22c55e; }
+#ttsCacheDebugLines [data-tts-state="cancelled"] { background: #a855f7; }

@@ -13941,11 +13941,12 @@
   let _ttsPrefetchTimer = null;
   let _ttsPrefetchTarget = null;
   // Diagnostic paint follows the live cache, never transcript markup. Rebuild
-  // ranges after renders so replacing text nodes cannot leave stale highlights.
+  // line geometry after renders so wrapping and scrolling keep markers aligned.
   let _ttsCacheDebug = false;
   try { _ttsCacheDebug = localStorage.getItem('ccc-tts-cache-debug') === '1'; } catch (_) {}
   let _ttsCacheDebugFrame = null;
   let _ttsCacheDebugObserver = null;
+  let _ttsCacheDebugResizeObserver = null;
   // This is the browser scheduler's queue, not the engine's internal queue.
   // Sent requests run to completion; only unsent continuation work is dropped.
   const _ttsDebugJobs = [];
@@ -14026,12 +14027,17 @@
   function _ttsRefreshCacheDebug() {
     _ttsCacheDebugFrame = null;
     _ttsRenderDebugQueue();
-    if (!window.CSS || !CSS.highlights || typeof Highlight === 'undefined') return;
-    CSS.highlights.delete('tts-cache-sent');
-    CSS.highlights.delete('tts-cache-ready');
-    CSS.highlights.delete('tts-cache-cancelled');
-    if (!_ttsCacheDebug) return;
-    const sent = new Highlight(), ready = new Highlight(), cancelled = new Highlight();
+    // Clear paint left by the earlier background-highlighting implementation.
+    for (const name of ['tts-cache-sent', 'tts-cache-ready', 'tts-cache-cancelled']) window.CSS?.highlights?.delete(name);
+    let layer = document.getElementById('ttsCacheDebugLines');
+    if (!_ttsCacheDebug) { layer?.remove(); _ttsCacheDebugResizeObserver?.disconnect(); return; }
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.id = 'ttsCacheDebugLines';
+      layer.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(layer);
+    }
+    const marks = [];
     // Group text exactly as the per-turn reader does, including inline markup
     // and synthetic paragraph separators. Sanitizing preserves these offsets.
     const latestJobs = new Map(_ttsDebugJobs.map(j => [j.text, j]));
@@ -14047,28 +14053,64 @@
         : el.matches('.assistant') ? Array.from(el.querySelectorAll('.assistant-text'))
         : el.matches('.user_text:not(.pending)') ? [el.querySelector('.user-msg')].filter(Boolean) : [];
       if (!elements.length) return;
+      const bounds = el.getBoundingClientRect();
+      const view = el.closest('.conversations-view, .gc-reader');
+      if (typeof ResizeObserver !== 'undefined') {
+        _ttsCacheDebugResizeObserver = _ttsCacheDebugResizeObserver || new ResizeObserver(_ttsScheduleCacheDebug);
+        _ttsCacheDebugResizeObserver.observe(view || el);
+      }
+      const viewport = view ? view.getBoundingClientRect() : { top: 0, bottom: innerHeight, left: 0, right: innerWidth };
+      const clip = { top: Math.max(0, viewport.top), bottom: Math.min(innerHeight, viewport.bottom),
+        left: Math.max(0, viewport.left), right: Math.min(innerWidth, viewport.right) };
+      if (bounds.bottom <= clip.top || bounds.top >= clip.bottom || !el.getClientRects().length) return;
+      const left = Math.max(clip.left + 1, Math.min(...elements.map(e => e.getBoundingClientRect().left)) - 12);
+      const rows = [];
       const data = buildTtsDataFromElements(elements);
       const clean = _sanitizeTtsText(data.text, true);
       for (const [text, entry] of clips) {
         let from = 0, start;
         while ((start = clean.indexOf(text, from)) !== -1) {
           const end = start + text.length;
-          // Separate ranges per node avoid painting excluded footer text.
+          // Measure only spoken text nodes, leaving excluded footers unmarked.
           for (const m of data.mapping) {
             const a = Math.max(start, m.start), b = Math.min(end, m.end);
             if (a >= b) continue;
             const range = new Range();
             range.setStart(m.node, m.nodeOffsetStart + a - m.start);
             range.setEnd(m.node, m.nodeOffsetStart + b - m.start);
-            (entry.cancelled ? cancelled : entry.debugReady ? ready : sent).add(range);
+            const state = entry.cancelled ? 'cancelled' : entry.debugReady ? 'ready' : 'sent';
+            for (const rect of range.getClientRects()) {
+              if (!rect.width || !rect.height || rect.bottom <= clip.top || rect.top >= clip.bottom
+                  || rect.right <= clip.left || rect.left >= clip.right) continue;
+              const top = Math.max(rect.top, clip.top), bottom = Math.min(rect.bottom, clip.bottom);
+              // Inline markup and chunk boundaries can yield several rects on
+              // one rendered row. Merge them, keeping every state on that row.
+              const row = rows.find(r => Math.min(r.bottom, bottom) - Math.max(r.top, top)
+                >= Math.min(r.bottom - r.top, bottom - top) * 0.5);
+              if (row) {
+                row.top = Math.min(row.top, top); row.bottom = Math.max(row.bottom, bottom);
+                row.states.add(state);
+              } else rows.push({ top, bottom, states: new Set([state]) });
+            }
           }
           from = end;
         }
       }
+      for (const row of rows) {
+        const states = ['ready', 'sent', 'cancelled'].filter(state => row.states.has(state));
+        states.forEach((state, i) => marks.push({ state, left: left + i * 4,
+          top: row.top + 1, height: Math.max(1, row.bottom - row.top - 2) }));
+      }
     });
-    CSS.highlights.set('tts-cache-cancelled', cancelled);
-    CSS.highlights.set('tts-cache-sent', sent);
-    CSS.highlights.set('tts-cache-ready', ready);
+    const signature = JSON.stringify(marks);
+    if (layer._signature === signature) return;
+    layer._signature = signature;
+    layer.replaceChildren(...marks.map(mark => {
+      const line = document.createElement('i');
+      line.dataset.ttsState = mark.state;
+      line.style.cssText = 'left:' + mark.left + 'px;top:' + mark.top + 'px;height:' + mark.height + 'px';
+      return line;
+    }));
   }
   // Measure text coverage, not number of clips (the short head and the
   // 400-character clips differ greatly). Never call a capped prefetch complete.
@@ -14142,6 +14184,9 @@
     _ttsRefreshCacheCoverage();
     _ttsRefreshCacheDebug();
   }
+  document.addEventListener('scroll', () => { if (_ttsCacheDebug) _ttsScheduleCacheDebug(); }, true);
+  window.addEventListener('resize', () => { if (_ttsCacheDebug) _ttsScheduleCacheDebug(); });
+  window.visualViewport?.addEventListener('resize', () => { if (_ttsCacheDebug) _ttsScheduleCacheDebug(); });
   document.getElementById('settingsTtsCacheDebugToggle')?.addEventListener('click', () => _ttsSetCacheDebug(!_ttsCacheDebug));
   _ttsSetCacheDebug(_ttsCacheDebug);
 
@@ -22090,6 +22135,7 @@
   function applyConvFontScale() {
     if ($conversationsView) $conversationsView.style.zoom = convFontScale;
     if ($convPanelView) $convPanelView.style.zoom = convFontScale;
+    if (_ttsCacheDebug) _ttsScheduleCacheDebug();
   }
   applyConvFontScale();
 

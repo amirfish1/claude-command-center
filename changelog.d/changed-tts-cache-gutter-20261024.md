@@ -1,0 +1,1 @@
+- Speaker cache debug now marks each rendered text row with slim colored lines in the left gutter instead of coloring the text background. Rows containing multiple cache states show their colors side by side; markers follow scrolling and text wrapping.
