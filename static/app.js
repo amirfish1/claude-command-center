@@ -9804,12 +9804,38 @@
     return Array.from(node.querySelectorAll('.assistant-text'));
   }
 
+  // Begin at the selected paragraph, then keep reading assistant prose across
+  // tool activity until the next real user message (or the loaded transcript end).
+  // Keep assistantTextElements local for copy actions and floating-button geometry.
+  function _ttsPlaybackElements(node) {
+    const local = node?.matches('.assistant-text') ? [node] : assistantTextElements(node);
+    const view = node?.closest('.conversations-view, .gc-reader');
+    if (!local.length || !view || node.closest('.ask-turn-a')) return local;
+    const rows = Array.from(view.querySelectorAll(
+      '.assistant-text, .stream-bubble-blocks, .event.user_text, .ask-turn-u'
+    ));
+    const start = rows.indexOf(local[0]);
+    if (start < 0) return local;
+    const elements = [];
+    for (const row of rows.slice(start)) {
+      if (row.matches('.event.user_text, .ask-turn-u')) {
+        if (row.matches('.task-notification-event, .peer-message, .skill-loaded-event')
+            || isPendingSendEchoElement(row)) continue;
+        break;
+      }
+      if (row.closest('.conv-sticky-header, .kimi-tool, .tool-result, .event.tool_use, .event.user_text')) continue;
+      // A stream wrapper can contain assistant-text children; include it once.
+      if (!elements.some(el => el.contains(row))) elements.push(row);
+    }
+    return elements;
+  }
+
   function _ttsSpeakButtonData(btn) {
     if (!btn) return null;
     const result = btn.closest('.event.result');
     const node = result ? agentAnswerNodeBeforeResult(result)
       : btn.closest('.event.assistant, .kimi-answer-meta, .ask-turn-a');
-    const els = assistantTextElements(node);
+    const els = _ttsPlaybackElements(node);
     const data = els.length ? buildTtsDataFromElements(els) : null;
     return data && data.text.trim() ? data : { text: assistantNodeTextForCopy(node) };
   }
@@ -10123,7 +10149,7 @@
     const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
     const paneState = paneId && typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
     const convId = (paneState && paneState.conversationId) || currentConversation || '';
-    const ok = speakTextDirect(text, convId, paneId, btn, assistantTextElements(agentAnswerNodeBeforeResult(resultEl)));
+    const ok = speakTextDirect(text, convId, paneId, btn, _ttsPlaybackElements(agentAnswerNodeBeforeResult(resultEl)));
     if (!ok) showOpToast('Your browser does not support text-to-speech.', 'error');
   });
 
@@ -10345,7 +10371,7 @@
     const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
     const paneState = paneId && typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
     const convId = (paneState && paneState.conversationId) || currentConversation || '';
-    const ok = speakTextDirect(text, convId, paneId, btn, assistantTextElements(eventEl));
+    const ok = speakTextDirect(text, convId, paneId, btn, _ttsPlaybackElements(eventEl));
     if (!ok) showOpToast('Your browser does not support text-to-speech.', 'error');
   });
 
@@ -14258,14 +14284,15 @@
     if (_ttsChunkState && _ttsChunkState.debugCache) {
       for (const [text, entry] of _ttsChunkState.debugCache) clips.set(text, entry);
     }
+    const paintedElements = new Set();
     document.querySelectorAll('.conv-pane .event, .conv-pane .stream-bubble, .conv-pane .assistant-text, .gc-reader .event, .gc-reader .assistant-text').forEach(el => {
       if (el.matches('.assistant-text') && el.closest('.event, .stream-bubble')) return;
-      const elements = el.matches('.assistant-text') ? [el]
+      const elements = el.matches('.assistant-text') ? _ttsPlaybackElements(el)
         : el.matches('.stream-bubble') ? [el.querySelector('.stream-bubble-blocks')].filter(Boolean)
-        : el.matches('.assistant') ? Array.from(el.querySelectorAll('.assistant-text'))
+        : el.matches('.assistant') ? _ttsPlaybackElements(el)
         : el.matches('.user_text:not(.pending)') ? [el.querySelector('.user-msg')].filter(Boolean) : [];
-      if (!elements.length) return;
-      const bounds = el.getBoundingClientRect();
+      if (!elements.length || paintedElements.has(elements[0])) return;
+      elements.forEach(element => paintedElements.add(element));
       const view = el.closest('.conversations-view, .gc-reader');
       if (typeof ResizeObserver !== 'undefined') {
         _ttsCacheDebugResizeObserver = _ttsCacheDebugResizeObserver || new ResizeObserver(_ttsScheduleCacheDebug);
@@ -14274,7 +14301,6 @@
       const viewport = view ? view.getBoundingClientRect() : { top: 0, bottom: innerHeight, left: 0, right: innerWidth };
       const clip = { top: Math.max(0, viewport.top), bottom: Math.min(innerHeight, viewport.bottom),
         left: Math.max(0, viewport.left), right: Math.min(innerWidth, viewport.right) };
-      if (bounds.bottom <= clip.top || bounds.top >= clip.bottom || !el.getClientRects().length) return;
       const left = Math.max(clip.left + 1, Math.min(...elements.map(e => e.getBoundingClientRect().left)) - 12);
       const rows = [];
       const data = buildTtsDataFromElements(elements);
@@ -15929,6 +15955,16 @@
     document.querySelectorAll('.speaker-rate-dial').forEach(el => {
       el.setAttribute('aria-valuenow', String(_ttsRate));
       el.setAttribute('aria-valuetext', _ttsRate.toFixed(2) + ' times speed');
+      const fraction = Math.max(0, Math.min(1, (_ttsRate - _TTS_RATE_MIN) / (_TTS_RATE_MAX - _TTS_RATE_MIN)));
+      const arc = el.querySelector('.speaker-rate-arc');
+      const thumb = el.querySelector('.speaker-rate-thumb');
+      // A 270 degree sweep leaves a gap below the dial for the numeric label.
+      if (arc) arc.setAttribute('stroke-dasharray', (fraction * 75) + ' 100');
+      const angle = (135 + fraction * 270) * Math.PI / 180;
+      if (thumb) {
+        thumb.setAttribute('cx', String(42 + 36 * Math.cos(angle)));
+        thumb.setAttribute('cy', String(42 + 36 * Math.sin(angle)));
+      }
     });
   }
   function _restartTtsAtCurrentPosition() {
@@ -47169,7 +47205,7 @@
     const tools = document.createElement('div');
     tools.className = 'speaker-tools';
     tools.hidden = true;
-    tools.innerHTML = '<svg class="speaker-rate-dial" viewBox="0 0 84 84" role="slider" tabindex="0" aria-label="Speech speed: drag clockwise to speed up, counterclockwise to slow down" aria-valuemin="' + _TTS_RATE_MIN + '" aria-valuemax="' + _TTS_RATE_MAX + '"><circle class="speaker-rate-track" cx="42" cy="42" r="36"/><circle class="speaker-rate-hit" cx="42" cy="42" r="36"/></svg><output class="speaker-rate-value" aria-live="polite"></output><button type="button" class="speaker-next-sentence" title="Next sentence" aria-label="Next sentence">›</button>';
+    tools.innerHTML = '<svg class="speaker-rate-dial" viewBox="0 0 84 84" role="slider" tabindex="0" aria-label="Speech speed: drag clockwise to speed up, counterclockwise to slow down" aria-valuemin="' + _TTS_RATE_MIN + '" aria-valuemax="' + _TTS_RATE_MAX + '"><circle class="speaker-rate-track" cx="42" cy="42" r="36"/><circle class="speaker-rate-arc" cx="42" cy="42" r="36" pathLength="100" transform="rotate(135 42 42)"/><circle class="speaker-rate-thumb" r="4"/><circle class="speaker-rate-hit" cx="42" cy="42" r="36"/></svg><output class="speaker-rate-value" aria-live="polite"></output><button type="button" class="speaker-next-sentence" title="Next sentence" aria-label="Next sentence">›</button>';
     host.appendChild(tools);
     btn._speakerTools = tools;
     const dial = tools.querySelector('.speaker-rate-dial');

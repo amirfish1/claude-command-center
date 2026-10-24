@@ -1,0 +1,1 @@
+Read-aloud now continues from the selected assistant paragraph across tool calls until the next user message or the loaded conversation end. Preparation and cache gutters use the same prose grouping. The speaker speed rim now shows a blue circular slider arc and position marker that update while adjusting speed.
