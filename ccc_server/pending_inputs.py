@@ -5111,6 +5111,27 @@ def _maybe_recover_stuck_hold(sid, reason, held_s, now):
         return False
     if action != ir.RECOVER:
         return False
+    # RESIL-5: shared wake ledger (cap per session, no second wake without
+    # progress from the first). A refusal parks the session for a human.
+    from ccc_server import wake_guard
+    try:
+        transcript = _core._usage_limit_session_path("claude", sid)
+    except Exception:
+        transcript = None
+    allowed, guard_why = wake_guard.request(
+        sid, source="inject-recovery", incident=msg_hash,
+        transcript_path=str(transcript) if transcript else None, now=now,
+        path=str(_core.COMMAND_CENTER_STATE_DIR / "session-wakes.json"),
+    )
+    if not allowed:
+        if guard_why != "disabled":
+            ir.mark_stuck(sid, f"wake_guard:{guard_why}", now=now, path=path)
+        _core._log_activity(
+            "inject", "RECOVER_GUARDED",
+            f"session={sid} reason={guard_why} — wake ledger refused another "
+            "automatic recovery; needs a manual force-restart",
+        )
+        return False
     ir.record_attempt(sid, msg_hash, now=now, path=path)
     transaction = _core._apply_pending_input_operations(sid, [{
         "field": "terminal", "action": "pop_head",
@@ -5156,6 +5177,8 @@ def _force_restart_session(sid):
     if spawn is None:
         return {"ok": False, "error": "no live CCC-owned Claude process for this session"}
     ir.clear_stuck(sid, _inject_recovery_state_path())
+    from ccc_server import wake_guard
+    wake_guard.clear(sid, str(_core.COMMAND_CENTER_STATE_DIR / "session-wakes.json"))
     transaction = _core._apply_pending_input_operations(sid, [{
         "field": "terminal", "action": "pop_head",
     }])
