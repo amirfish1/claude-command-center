@@ -63,3 +63,29 @@ def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch):
         thread.join(timeout=5)
     assert len(etags) == 4 and len(set(etags)) == 1
     assert len(builds) == 1
+
+
+def test_list_and_live_paths_do_not_wait_on_a_held_acp_lock():
+    # Boot loads ACP state under _ACP_LOCK for ~18-30s; /list's overlay and
+    # live discovery used to queue behind it.
+    server = importlib.import_module('server')
+    if not server._ACP_HARNESSES:
+        return
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with server._ACP_LOCK:
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    held.wait(2)
+    try:
+        start = time.monotonic()
+        server._archive_overlay_acp_sessions([])
+        server._discover_live_session_ids()
+        assert time.monotonic() - start < 4
+    finally:
+        release.set()
+        t.join(timeout=5)

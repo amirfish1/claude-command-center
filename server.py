@@ -10569,8 +10569,16 @@ def _discover_live_session_ids():
             try:
                 if not _acp_harness_enabled(harness):
                     continue
-                with _ACP_LOCK:
-                    _acp_load_state(harness)
+                # CCC-142: a busy lock means another thread is loading or
+                # mutating ACP state (~18-30s at boot); take a lock-free
+                # copy and let a later poll load, instead of stalling here.
+                if _ACP_LOCK.acquire(timeout=0.05):
+                    try:
+                        _acp_load_state(harness)
+                        acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+                    finally:
+                        _ACP_LOCK.release()
+                else:
                     acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
             except Exception:
                 continue
@@ -16208,7 +16216,15 @@ def _archive_overlay_acp_sessions(rows):
         # the durable row and renders the same session twice (CCC-1176).
         if not (_ACP_HARNESSES.get(harness) or {}).get("archive_overlay", True):
             continue
-        with _ACP_LOCK:
+        # CCC-142: never queue a sidebar poll behind _ACP_LOCK (held ~18s
+        # while ACP state loads at boot). The overlay is a best-effort gap
+        # filler; a lock-free shallow copy (atomic under the GIL) is enough.
+        if _ACP_LOCK.acquire(timeout=0.05):
+            try:
+                sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+            finally:
+                _ACP_LOCK.release()
+        else:
             sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
         if not sessions:
             continue
