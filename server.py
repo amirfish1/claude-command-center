@@ -15470,6 +15470,7 @@ _archive_serve_version = 0       # monotonic per store; tags prebuilt response b
 _ARCHIVE_LIST_BODY_CACHE = {}  # (cache_key, window, from_cache) -> {"ver", "raw", "gzip", "etag"}
 _ARCHIVE_LIST_BODY_LOCK = threading.Lock()
 _ARCHIVE_LIST_BODY_CACHE_MAX = 24
+_ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
 
 def _archive_refresh_slot_available(key, now):
@@ -15846,12 +15847,20 @@ def _archive_list_project_row(row, *, resumes=None, parents=None):
     # fields × every row was the single largest slice of
     # /api/conversations/list CPU time. Deep-copy only dicts/lists; scalars
     # are immutable and pass straight through.
-    out = {}
-    for key in _ARCHIVE_LIST_FIELDS:
-        if key not in row:
-            continue
-        v = row[key]
-        out[key] = copy.deepcopy(v) if isinstance(v, (dict, list)) else v
+    # CCC-142: a dict comprehension plus a C-level copy of flat containers
+    # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
+    # runs only for the rare container that nests another container.
+    out = {key: row[key] for key in _ARCHIVE_LIST_FIELDS if key in row}
+    for key, v in out.items():
+        t = type(v)
+        if t is dict:
+            out[key] = (copy.deepcopy(v) if any(type(x) in (dict, list) for x in v.values())
+                        else dict(v))
+        elif t is list:
+            out[key] = (copy.deepcopy(v) if any(type(x) in (dict, list) for x in v)
+                        else list(v))
+        elif isinstance(v, (dict, list)):
+            out[key] = copy.deepcopy(v)
     # Chat-list preview line (phone sidebar). The full reply text is too big
     # to ship for every row; a short derived preview is not.
     preview = _archive_list_preview(row.get("last_assistant_text"))
@@ -40925,30 +40934,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # the archive snapshot are unchanged. Preserve replay until it does.
         body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision())
         raw = gzip_body = etag_val = None
-        if snap_ver:
+
+        def _cached_body():
             with _ARCHIVE_LIST_BODY_LOCK:
                 entry = _ARCHIVE_LIST_BODY_CACHE.get(body_key)
                 if entry is not None and entry.get("ver") == snap_ver:
-                    raw = entry["raw"]
-                    gzip_body = entry.get("gzip")
-                    etag_val = entry.get("etag")
-        if raw is None:
-            raw = json.dumps(build_payload()).encode()
-            etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
-            gzip_body = (
-                gzip.compress(raw, compresslevel=5)
-                if len(raw) >= self._GZIP_MIN_BYTES else None
-            )
-            if snap_ver:
+                    return entry["raw"], entry.get("gzip"), entry.get("etag")
+            return None, None, None
+
+        build_lock = None
+        if snap_ver:
+            raw, gzip_body, etag_val = _cached_body()
+            if raw is None:
+                # CCC-142: single-flight per body key. Tabs polling the same
+                # window after a snapshot change each built the same ~11MB
+                # body at once, multiplying the GIL-bound work; the waiters
+                # now replay the first builder's bytes.
                 with _ARCHIVE_LIST_BODY_LOCK:
-                    if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
-                        _ARCHIVE_LIST_BODY_CACHE.clear()
-                    _ARCHIVE_LIST_BODY_CACHE[body_key] = {
-                        "ver": snap_ver,
-                        "raw": raw,
-                        "gzip": gzip_body,
-                        "etag": etag_val,
-                    }
+                    build_lock = _ARCHIVE_LIST_BODY_BUILD_LOCKS.setdefault(body_key, threading.Lock())
+                build_lock.acquire()
+                raw, gzip_body, etag_val = _cached_body()
+        try:
+            if raw is None:
+                raw = json.dumps(build_payload()).encode()
+                etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
+                # Level 1 halves compression time on the multi-MB 7d body
+                # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
+                gzip_body = (
+                    gzip.compress(raw, compresslevel=1)
+                    if len(raw) >= self._GZIP_MIN_BYTES else None
+                )
+                if snap_ver:
+                    with _ARCHIVE_LIST_BODY_LOCK:
+                        if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
+                            _ARCHIVE_LIST_BODY_CACHE.clear()
+                        _ARCHIVE_LIST_BODY_CACHE[body_key] = {
+                            "ver": snap_ver,
+                            "raw": raw,
+                            "gzip": gzip_body,
+                            "etag": etag_val,
+                        }
+        finally:
+            if build_lock is not None:
+                build_lock.release()
+                with _ARCHIVE_LIST_BODY_LOCK:
+                    if len(_ARCHIVE_LIST_BODY_BUILD_LOCKS) > 4 * _ARCHIVE_LIST_BODY_CACHE_MAX:
+                        _ARCHIVE_LIST_BODY_BUILD_LOCKS.clear()
         if self.headers.get("If-None-Match") == etag_val:
             self.send_response(304)
             self.send_header("ETag", etag_val)
