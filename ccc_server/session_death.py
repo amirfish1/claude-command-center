@@ -42,6 +42,8 @@ else:
 STATE_FILE = STATE_DIR / "session-death.json"
 STOPS_FILE = STATE_DIR / "session-stops.json"
 WT_WORKERS_FILE = Path.home() / ".watchtower" / "workers.json"
+# Every session WatchTower ever ran as a worker; workers.json drops reaped ones.
+WT_SESSIONS_FILE = Path.home() / ".watchtower" / "worker-sessions.json"
 
 GRACE_S = 90.0
 TAIL_BYTES = 64 * 1024
@@ -199,7 +201,9 @@ def _stopped_on_purpose(sid, since):
 def _watchtower_owned(sid):
     data = _read_json(WT_WORKERS_FILE, {})
     workers = data.get("workers") if isinstance(data, dict) else None
-    return any(isinstance(w, dict) and w.get("session_id") == sid for w in workers or [])
+    if any(isinstance(w, dict) and w.get("session_id") == sid for w in workers or []):
+        return True
+    return sid in (_read_json(WT_SESSIONS_FILE, {}).get("session_ids") or [])
 
 
 # ── the dashboard tick hooks ─────────────────────────────────────────────
@@ -233,7 +237,7 @@ def consider(sid, cur_state, now=None, find_path=None):
             return True
         st["pending"][sid] = {"since": now, "size": size, "path": str(path),
                               "verdict": verdict, "state": cur_state,
-                              "cwd": _cwd(records)}
+                              "cwd": _cwd(records), "title": _rr._title(path, records)}
         _save()
     return True
 

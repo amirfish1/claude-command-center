@@ -46,6 +46,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(sd, "STATE_FILE", tmp_path / "death.json")
     monkeypatch.setattr(sd, "STOPS_FILE", tmp_path / "stops.json")
     monkeypatch.setattr(sd, "WT_WORKERS_FILE", tmp_path / "workers.json")
+    monkeypatch.setattr(sd, "WT_SESSIONS_FILE", tmp_path / "worker-sessions.json")
     monkeypatch.setattr(notify, "STATE_FILE", tmp_path / "notify-state.json")
     monkeypatch.setattr(notify, "LOG_FILE", tmp_path / "notify-log.json")
     monkeypatch.setattr(notify, "_session_identity", lambda sid: {"name": "Steward"})
@@ -136,7 +137,7 @@ def test_open_turn_on_a_live_idle_process_is_not_a_death(env):
     assert _tick({}, {"s1": {"state": "idle"}}, NOW + sd.GRACE_S + 1) == []
 
 
-@pytest.mark.parametrize("case", ["resumed", "back", "stopped", "watchtower", "reboot"])
+@pytest.mark.parametrize("case", ["resumed", "back", "stopped", "watchtower", "wt_reaped", "reboot"])
 def test_false_positive_guards(env, case, tmp_path):
     p = env("s1", [_user("go"), _tool_use()], mtime=BOOT - 60 if case == "reboot" else NOW - 5)
     _tick(None, {"s1": {"state": "working"}}, NOW)
@@ -151,6 +152,8 @@ def test_false_positive_guards(env, case, tmp_path):
         sd.note_stop("s1", "force_restart", now=NOW)
     elif case == "watchtower":
         (tmp_path / "workers.json").write_text(json.dumps({"workers": [{"session_id": "s1"}]}))
+    elif case == "wt_reaped":
+        (tmp_path / "worker-sessions.json").write_text(json.dumps({"session_ids": ["s1"]}))
     assert _tick({}, cur, NOW + sd.GRACE_S + 1) == []
 
 
@@ -172,3 +175,12 @@ def test_unapproved_popup_stays_silent(env, monkeypatch):
     _tick({"s1": {"state": "working"}}, {}, NOW)
     got = _tick({}, {}, NOW + sd.GRACE_S + 1)
     assert got and got[0].get("held") is True
+
+
+def test_unnamed_session_is_titled_from_its_first_prompt(env, monkeypatch):
+    monkeypatch.setattr(notify, "_session_identity", lambda sid: {})
+    env("s1", [_user("# BYM outreach steward\nYou are the steward"), _tool_use()])
+    _tick(None, {"s1": {"state": "working"}}, NOW)
+    _tick({"s1": {"state": "working"}}, {}, NOW)
+    got = _tick({}, {}, NOW + sd.GRACE_S + 1)
+    assert got[0]["title"].startswith("BYM outreach steward") and "stopped mid-turn" in got[0]["title"]

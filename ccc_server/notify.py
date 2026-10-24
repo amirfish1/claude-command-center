@@ -648,7 +648,10 @@ def _emit_session_deaths(current, now_epoch, publish=None):
     out = []
     for inc in incidents:
         sid = inc["session_id"]
-        name = _display_name(sid, _session_identity(sid))
+        ident = _session_identity(sid) or {}
+        if not str(ident.get("name") or "").strip() and inc.get("title"):
+            ident = dict(ident, name=" ".join(str(inc["title"]).lstrip("# ").split())[:50])
+        name = _display_name(sid, ident)
         suffix, body = _session_death.describe(inc)
         item = {
             "id": "ntf_" + uuid.uuid4().hex[:16],
