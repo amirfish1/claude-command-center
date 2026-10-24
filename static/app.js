@@ -83629,8 +83629,20 @@
     enabled.checked = policy.enabled;
     renderFallbackList(policy, host, document.getElementById('workerFallbackAdd'), 'workerFallbackSettings', renderWorkerFallback);
   }
+  // Model profiles dedupe on engine+model (opus then sonnet is a valid
+  // route); worker fallback keeps one entry per engine, matching the server
+  // validators.
+  function fallbackModelChoices(engine) {
+    return modelOptionsForSpawnEngine(engine, '', false).filter(item => item.id && !item.disabled && item.id !== SPAWN_DEFAULT_OTHER);
+  }
+  function fallbackUnusedModels(policy, engine, sectionId, skipIndex) {
+    const taken = (item, i) => i !== skipIndex && item.engine === engine;
+    if (sectionId !== 'modelProfilesSettings') return policy.models.some(taken) ? [] : fallbackModelChoices(engine);
+    return fallbackModelChoices(engine).filter(choice => !policy.models.some((item, i) => taken(item, i) && item.model === choice.id));
+  }
   function renderFallbackList(policy, host, addButton, sectionId, render) {
     const engines = sectionId === 'modelProfilesSettings' ? spawnDefaultsState.model_profile_engines : spawnDefaultsState.worker_fallback_engines;
+    const perModel = sectionId === 'modelProfilesSettings';
     host.replaceChildren();
     policy.models.forEach((entry, index) => {
       const row = document.createElement('div');
@@ -83639,18 +83651,18 @@
       const engine = document.createElement('select'); engine.className = 'bug-input'; engine.style.width = '130px'; engine.setAttribute('aria-label', 'Fallback engine ' + (index + 1));
       engines.forEach(id => {
         const option = document.createElement('option'); option.value = id; option.textContent = spawnEngineLabel(id);
-        option.disabled = policy.models.some((item, i) => i !== index && item.engine === id); engine.appendChild(option);
+        option.disabled = id !== entry.engine && !fallbackUnusedModels(policy, id, sectionId, index).length; engine.appendChild(option);
       });
       if (!engines.includes(entry.engine)) { const option = document.createElement('option'); option.value = entry.engine; option.textContent = spawnEngineLabel(entry.engine) + ' (unsupported for managed runs)'; option.disabled = true; engine.appendChild(option); }
       engine.value = entry.engine; row.appendChild(engine);
       const model = document.createElement('select'); model.className = 'bug-input'; model.style.width = '260px'; model.setAttribute('aria-label', 'Fallback model ' + (index + 1));
       const choices = modelOptionsForSpawnEngine(entry.engine, '', false).filter(item => item.id && item.id !== SPAWN_DEFAULT_OTHER);
-      choices.forEach(item => { const option = document.createElement('option'); option.value = item.id; option.textContent = item.label || item.id; option.disabled = !!item.disabled; model.appendChild(option); });
+      choices.forEach(item => { const option = document.createElement('option'); option.value = item.id; option.textContent = item.label || item.id; option.disabled = !!item.disabled || (perModel && item.id !== entry.model && policy.models.some((other, i) => i !== index && other.engine === entry.engine && other.model === item.id)); model.appendChild(option); });
       if (!choices.some(item => item.id === entry.model)) { const option = document.createElement('option'); option.value = entry.model; option.textContent = entry.model + ' (unavailable)'; option.disabled = true; model.appendChild(option); }
       model.value = entry.model; row.appendChild(model);
       const effort = document.createElement('select'); effort.className = 'bug-input'; effort.style.width = '140px'; effort.setAttribute('aria-label', 'Fallback effort ' + (index + 1)); renderEffortOptions(effort, effortLevelsForEngine(entry.engine), entry.effort, 'Engine default'); row.appendChild(effort);
       const save = () => persistSpawnDefaults(document.getElementById(sectionId));
-      engine.addEventListener('change', () => { entry.engine = engine.value; entry.model = modelOptionsForSpawnEngine(entry.engine, '', false).find(item => item.id && !item.disabled)?.id || ''; entry.effort = effortLevelsForEngine(entry.engine).some(item => item.id === 'medium') ? 'medium' : ''; render(); save(); });
+      engine.addEventListener('change', () => { entry.engine = engine.value; entry.model = fallbackUnusedModels(policy, entry.engine, sectionId, index)[0]?.id || ''; entry.effort = effortLevelsForEngine(entry.engine).some(item => item.id === 'medium') ? 'medium' : ''; render(); save(); });
       model.addEventListener('change', () => { entry.model = model.value; save(); });
       effort.addEventListener('change', () => { entry.effort = effort.value; save(); });
       const button = (label, action, disabled) => { const el = document.createElement('button'); el.type = 'button'; el.className = 'settings-action-btn'; el.textContent = label; el.disabled = !!disabled; el.addEventListener('click', action); row.appendChild(el); };
@@ -83660,7 +83672,7 @@
       button('Remove', () => { policy.models.splice(index, 1); if (!policy.models.length) policy.enabled = false; render(); save(); });
       host.appendChild(row);
     });
-    addButton.disabled = policy.models.length >= engines.length;
+    addButton.disabled = !engines.some(id => fallbackUnusedModels(policy, id, sectionId, -1).length);
   }
   document.getElementById('workerFallbackEnabled')?.addEventListener('change', event => {
     spawnDefaultsState.worker_fallback.enabled = event.target.checked;
@@ -83668,11 +83680,14 @@
   });
   function addFallbackModel(policy, render, sectionId) {
     const engines = sectionId === 'modelProfilesSettings' ? spawnDefaultsState.model_profile_engines : spawnDefaultsState.worker_fallback_engines;
-    const engine = [...(engines.includes('codex') ? ['codex'] : []), ...engines].find(id => !policy.models.some(item => item.engine === id));
-    if (!engine) return;
-    const choices = modelOptionsForSpawnEngine(engine, '', false).filter(item => item.id && !item.disabled && item.id !== SPAWN_DEFAULT_OTHER);
+    // Prefer an engine the route doesn't use yet; profiles then fall back to
+    // another model on an engine already in the route.
+    const ordered = [...(engines.includes('codex') ? ['codex'] : []), ...engines];
+    const engine = ordered.find(id => !policy.models.some(item => item.engine === id) && fallbackModelChoices(id).length)
+      || ordered.find(id => fallbackUnusedModels(policy, id, sectionId, -1).length);
+    if (!engine) { spawnDefaultsInlineError('No other available model to add to this route.'); return; }
+    const choices = fallbackUnusedModels(policy, engine, sectionId, -1);
     const model = choices.find(item => item.id === 'gpt-6.1-sol') || choices[0];
-    if (!model) { spawnDefaultsInlineError('No available catalog models for ' + spawnEngineLabel(engine)); return; }
     policy.models.push({ engine, model: model.id, effort: effortLevelsForEngine(engine).some(item => item.id === 'medium') ? 'medium' : '' });
     render(); persistSpawnDefaults(document.getElementById(sectionId));
   }
