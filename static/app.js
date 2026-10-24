@@ -16526,6 +16526,7 @@
   // Row actions are model-authored replies supplied in the answer footer.
   // Rendering a chip never asks another model to interpret the answer.
   const _rowQuickActionSending = new Set();
+  const _rowQuickActionFeedback = new Map();
   function sessionQuickAction(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || typeof value.label !== 'string' || value.label.length > 24 || !/^\p{L}+(?: \p{L}+){0,2}$/u.test(value.label)
@@ -16543,8 +16544,7 @@
     const next = String((c.session_state || {}).next_step_user || '').trim();
     const action = sessionQuickAction((c.session_state || {}).next_action);
     if (!action || !next || info.kind !== 'next' || info.text !== next) return null;
-    const replyText = String(c.last_assistant_text || c.last_assistant_preview || '').slice(0, 4000);
-    return { sid, action, key: JSON.stringify([sid, next, action, replyText]) };
+    return { sid, action, key: JSON.stringify([sid, next, action]) };
   }
   function currentRowQuickActionSource(sid) {
     const base = _ultraFreshRow(sid);
@@ -16553,6 +16553,7 @@
   function paintRowQuickAction(slot, source) {
     if (slot.dataset.quickActionKey === source.key && slot.firstElementChild) return;
     slot.replaceChildren();
+    delete slot.dataset.feedbackState;
     slot.dataset.quickActionKey = source.key;
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -16568,6 +16569,27 @@
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
     document.querySelectorAll(selector).forEach(row => {
       const source = currentRowQuickActionSource(row.dataset.sessionId);
+      const feedback = _rowQuickActionFeedback.get(row.dataset.sessionId);
+      if (feedback && (!source || source.key === feedback.key || feedback.state === 'sending')) {
+        [row.querySelector('.conv-outcome'), row.querySelector('.wa-line2')].filter(Boolean).forEach(host => {
+          let slot = host.querySelector('.conv-quick-action-slot');
+          if (!slot) {
+            slot = document.createElement('span');
+            slot.className = 'conv-quick-action-slot';
+            host.appendChild(slot);
+          }
+          delete slot.dataset.quickActionKey;
+          if (slot.dataset.feedbackState === feedback.state) return;
+          slot.dataset.feedbackState = feedback.state;
+          const status = document.createElement('span');
+          status.className = 'conv-quick-action-status';
+          status.setAttribute('role', 'status');
+          status.textContent = feedback.state === 'sending' ? 'Sending…' : feedback.state === 'queued' ? 'Queued' : 'Sent';
+          status.title = feedback.action.label + ': ' + feedback.action.reply;
+          slot.replaceChildren(status);
+        });
+        return;
+      }
       const outcome = row.querySelector('.conv-outcome.is-next');
       if (!source || !outcome) {
         row.querySelectorAll('.conv-quick-action-slot').forEach(slot => slot.remove());
@@ -16591,21 +16613,40 @@
     ev.preventDefault(); ev.stopImmediatePropagation();
     const row = btn.closest('.conv-item[data-session-id]');
     const current = row && currentRowQuickActionSource(row.dataset.sessionId);
-    if (!current || current.key !== btn.dataset.quickActionKey) { btn.remove(); return; }
+    if (!current || current.key !== btn.dataset.quickActionKey) {
+      if (row) syncRowQuickActions(row.dataset.sessionId);
+      showOpToast('This action changed. Review the updated row before sending.', 'error');
+      return;
+    }
     const { sid, action } = current;
+    const feedback = { key: current.key, action, state: 'sending' };
+    _rowQuickActionFeedback.set(sid, feedback);
     _rowQuickActionSending.add(sid);
-    btn.disabled = true; btn.textContent = 'Sending…';
+    syncRowQuickActions(sid);
+    let accepted = false;
     try {
       const data = await postInjectInput(sid, action.reply, 'send');
       if (!data.ok) throw new Error(data.error || 'Send failed');
+      accepted = true;
+      feedback.state = data.queued ? 'queued' : 'sent';
       markSessionSending(sid);
-      showOpToast('Sent: ' + action.reply);
+      showOpToast((data.queued ? 'Queued: ' : 'Sent: ') + action.label);
       refreshConversationList();
     } catch (error) {
-      btn.disabled = false; btn.textContent = action.label;
-      showOpToast(String(error.message || error), 'error');
+      if (!accepted) {
+        _rowQuickActionFeedback.delete(sid);
+        showOpToast('Could not send ' + action.label + ': ' + String(error.message || error), 'error');
+      } else {
+        showOpToast('Sent: ' + action.label + '. Refresh the row to see progress.');
+      }
     } finally {
       _rowQuickActionSending.delete(sid);
+      syncRowQuickActions(sid);
+      if (accepted) setTimeout(() => {
+        if (_rowQuickActionFeedback.get(sid) !== feedback) return;
+        _rowQuickActionFeedback.delete(sid);
+        syncRowQuickActions(sid);
+      }, 8000);
     }
   }, true);
 

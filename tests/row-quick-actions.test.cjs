@@ -25,14 +25,14 @@ test('row action replies, stale state, failure recovery and responsive rendering
     await page.addScriptTag({ content: `
       window.row = {session_id:'restart-session', state:'idle', last_event_type:'assistant',
         session_state:{next_step_user:'Say yes to a dashboard and worker restart.',next_action:{label:'Restart',reply:'Yes, restart the dashboard and worker.'}}};
-      window.sent = []; window.inferences = 0; window.sendFails = false;
+      window.sent = []; window.inferences = 0; window.sendFails = false; window.sendQueued = false; window.toasts = [];
       const _ultraFreshRow = () => window.row;
       const _ultraFreshCurrent = c => c;
       const _applyLiveOverlayToRow = c => c;
       const _ultraFreshExplanation = c => ({kind:c.state === 'working' ? 'working' : 'next', text:c.session_state.next_step_user});
-      const postInjectInput = async (...args) => { sent.push(args); await new Promise(r => setTimeout(r, 30)); return sendFails ? {ok:false,error:'Offline'} : {ok:true}; };
+      const postInjectInput = async (...args) => { sent.push(args); await new Promise(r => setTimeout(r, 120)); return sendFails ? {ok:false,error:'Offline'} : {ok:true,queued:sendQueued}; };
       const markSessionSending = () => { row.state = 'working'; syncRowQuickActions(); };
-      const showOpToast = () => {};
+      const showOpToast = (...args) => toasts.push(args);
       const refreshConversationList = () => {};
       window.fetch = async () => { inferences++; throw new Error('Unexpected model request'); };
       ${helpers}
@@ -65,10 +65,12 @@ test('row action replies, stale state, failure recovery and responsive rendering
     assert.ok(mobile.right <= mobile.rowRight + 1, 'phone chip stays inside row');
 
     // Failure restores the chip, leaving the user able to retry.
-    await page.evaluate(() => { sendFails = true; document.querySelector('.wa-line2 .conv-quick-action').click(); });
-    await page.waitForFunction(() => !document.querySelector('.wa-line2 .conv-quick-action').disabled);
+    await page.evaluate(() => { sendFails = true; document.querySelector('.wa-line2 .conv-quick-action').click(); syncActions(); });
+    assert.deepEqual(await page.$$eval('.conv-quick-action-status', els=>els.map(el=>el.textContent)), ['Sending…','Sending…']);
+    await page.waitForFunction(() => { const b = document.querySelector('.wa-line2 .conv-quick-action'); return b && !b.disabled; });
     assert.equal(await page.evaluate(() => sent.length), 1);
     assert.match(await visibleButton(), />Restart</);
+    assert.match(await page.evaluate(() => toasts.at(-1)[0]), /Could not send Restart: Offline/);
     await page.evaluate(() => {
       sendFails = false;
       const b = document.querySelector('.wa-line2 .conv-quick-action'); b.click(); b.click();
@@ -77,6 +79,9 @@ test('row action replies, stale state, failure recovery and responsive rendering
     assert.deepEqual(await page.evaluate(() => sent[1]), ['restart-session', 'Yes, restart the dashboard and worker.', 'send']);
     assert.equal(await page.evaluate(() => sent.length), 2, 'double tap sends only once');
     assert.equal(await page.evaluate(() => document.querySelectorAll('.conv-quick-action').length), 0);
+    assert.deepEqual(await page.$$eval('.conv-quick-action-status', els=>els.map(el=>el.textContent)), ['Sent','Sent']);
+    await page.evaluate(() => syncActions());
+    assert.equal(await page.$eval('.wa-line2 .conv-quick-action-status',el=>el.textContent),'Sent', 'successful send feedback survives refresh');
 
     // Old replies without metadata keep their text without model fallback.
     await page.evaluate(() => {
@@ -118,6 +123,20 @@ test('row action replies, stale state, failure recovery and responsive rendering
       document.querySelector('.wa-line2 .conv-quick-action').click();
     });
     assert.equal(await page.evaluate(() => sent.length), 3, 'stale click is rejected');
+    assert.match(await page.evaluate(() => toasts.at(-1)[0]), /action changed/i);
+    assert.equal(await page.evaluate(() => toasts.at(-1)[1]), 'error', 'changed action must be visible without debug mode');
+    // Stream enrichment must not invalidate a still-identical authored action.
+    await page.evaluate(() => {
+      row.last_assistant_preview = 'A short archive preview.'; syncActions();
+      row.last_assistant_text = 'The full live answer arrived, with exactly the same action.';
+      sendQueued = true;
+      document.querySelector('.wa-line2 .conv-quick-action').click();
+      syncActions();
+    });
+    await page.waitForFunction(() => document.querySelector('.wa-line2 .conv-quick-action-status')?.textContent === 'Queued');
+    assert.equal(await page.evaluate(() => sent.length), 4);
+    assert.deepEqual(await page.evaluate(() => sent[3]), ['restart-session','Restart only the dashboard.','send']);
+    assert.equal(await page.$$eval('.conv-quick-action',els=>els.length),0);
     assert.equal(await page.evaluate(() => inferences), 0, 'no inference request in any state');
   } finally {
     await browser.close();

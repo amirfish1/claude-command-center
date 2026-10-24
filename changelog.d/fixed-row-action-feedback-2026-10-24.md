@@ -1,0 +1,1 @@
+- Row action chips now show Sending, Sent, or Queued feedback through list refreshes, restore failed actions for retry, and explain changed actions instead of silently disappearing.

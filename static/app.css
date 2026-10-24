@@ -32812,12 +32812,12 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-item .conv-outcome .conv-ready-close { min-height: 24px; padding: 2px 10px; }
 .conv-item .conv-ready-close:hover { color: var(--text); border-color: var(--text); }
 /* The pending request remains readable beside its scoped one-tap reply. */
-#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action) {
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action, .conv-quick-action-status) {
   display: flex !important;
   align-items: flex-end;
   gap: 8px;
 }
-#convList#convList .conv-item .conv-outcome:has(.conv-quick-action) .conv-outcome-step {
+#convList#convList .conv-item .conv-outcome:has(.conv-quick-action, .conv-quick-action-status) .conv-outcome-step {
   flex: 1 1 auto;
   min-width: 0;
   width: auto;
@@ -32839,6 +32839,12 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 }
 .conv-quick-action:hover, .conv-quick-action:focus-visible { color: var(--text); border-color: var(--text); }
 .conv-quick-action:disabled { opacity: .6; cursor: default; }
+.conv-quick-action-status {
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
 @media (max-width: 600px) {
   .conv-quick-action { min-height: 32px; }
 }
