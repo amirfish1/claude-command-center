@@ -16600,144 +16600,8 @@
     });
   }
 
-  setInterval(() => { if (_rowAuditWatchOn()) _rowAuditVisible(true); }, 30000);
-
   // Row actions are model-authored replies supplied in the answer footer.
   // Rendering a chip never asks another model to interpret the answer.
-  const _rowAudits = new Map();
-  let _rowAuditDialog = null;
-  let _rowAuditBatch = false;
-  let _rowAuditShowRequest = 0;
-  function _rowAuditWatchOn() {
-    try { return localStorage.getItem('ccc-row-audit-watch') === '1'; } catch (_) { return false; }
-  }
-  function _rowAuditToolsHtml() {
-    return '<button type="button" class="conv-row-audit-tool" data-role="row-audit-visible" title="Compare visible rows with their latest answers; no model calls">Check rows</button>'
-      + '<button type="button" class="conv-row-audit-tool" data-role="row-audit-watch" aria-pressed="' + _rowAuditWatchOn()
-      + '" title="Check up to six visible rows every 30 seconds; no model calls">Watch rows</button>';
-  }
-  function _rowAuditFingerprint(row) {
-    const live = _applyLiveOverlayToRow(row);
-    return JSON.stringify([row.modified, row.mtime, row.last_event_type, row.session_state,
-      row.last_assistant_preview, row.last_assistant_text, live.state, live.codex_state, live.sidecar_in_flight]);
-  }
-  function _rowAuditPaint(sid) {
-    const cached = _rowAudits.get(sid);
-    const current = _ultraFreshRow(sid);
-    const valid = cached && current && cached.fingerprint === _rowAuditFingerprint(_ultraFreshCurrent(current));
-    document.querySelectorAll('#convList .conv-item[data-session-id="' + CSS.escape(sid) + '"] [data-role="row-audit"]').forEach(btn => {
-      btn.textContent = valid ? (cached.result.status === 'warning' ? 'Check !' : cached.result.status === 'consistent' ? 'Checked' : 'Check ?') : 'Check';
-      btn.dataset.auditStatus = valid ? cached.result.status : '';
-      btn.title = valid ? cached.result.findings.map(x => x.text).join('\n') + '\nClick for evidence.' : 'Check this row against its latest answer';
-    });
-  }
-  function _rowAuditShow(sid, result) {
-    if (!_rowAuditDialog) {
-      _rowAuditDialog = document.createElement('dialog');
-      _rowAuditDialog.className = 'row-audit-dialog';
-      document.body.appendChild(_rowAuditDialog);
-      _rowAuditDialog.addEventListener('click', ev => {
-        if (ev.target.closest('[data-audit-dismiss]')) _rowAuditDialog.close();
-        if (ev.target.closest('[data-audit-recheck]')) _rowAuditRun(_rowAuditDialog.dataset.sid, true).catch(error => showOpToast(error.message, 'error'));
-        const question = ev.target.closest('[data-audit-question]');
-        if (question && window.cccQuestionTags) {
-          _rowAuditDialog.close();
-          window.cccQuestionTags.open(Number(question.dataset.auditQuestion), _rowAuditDialog.dataset.sid);
-        }
-      });
-    }
-    const escape = escapeHtml;
-    const body = result.source;
-    _rowAuditDialog.dataset.sid = sid;
-    _rowAuditDialog.innerHTML = '<div class="row-audit-head"><strong>Row check</strong><button type="button" data-audit-dismiss aria-label="Close row check">×</button></div>'
-      + '<p class="row-audit-limit">Compared with the latest transcript window at ' + escape(new Date(result.checkedAt).toLocaleTimeString())
-      + '. These are consistency checks, not an independent judgment of the solution.</p>'
-      + '<ul>' + result.findings.map(x => '<li data-kind="' + x.kind + '">' + escape(x.text) + '</li>').join('') + '</ul>'
-      + '<strong>Last paragraph</strong><p class="row-audit-evidence">' + escape(body.paragraph || 'No answer available in this window.') + '</p>'
-      + '<strong>Latest next step</strong><p class="row-audit-evidence">' + escape(body.fields.NEXT_STEP_USER || 'Not stated.') + '</p>'
-      + result.questions.map(q => '<button type="button" data-audit-question="' + q.n + '">View Q' + q.n + '</button>').join(' ')
-      + '<details><summary>Full latest answer and assessment</summary><pre>' + escape(body.answer) + '</pre></details>'
-      + '<p><button type="button" data-audit-recheck>Check again</button></p>';
-    if (!_rowAuditDialog.open) _rowAuditDialog.showModal();
-  }
-  async function _rowAuditRun(sid, show) {
-    const showRequest = show ? ++_rowAuditShowRequest : 0;
-    const base = _ultraFreshRow(sid);
-    if (!base || base.pending_spawn) return;
-    const fingerprint = _rowAuditFingerprint(_ultraFreshCurrent(base));
-    const res = await fetch('/api/conversations/' + encodeURIComponent(sid) + '?tail=120', {cache: 'no-store'});
-    if (!res.ok) throw new Error('Could not check the latest answer');
-    const data = await res.json();
-    const current = _ultraFreshRow(sid);
-    if (!current) return;
-    const fresh = _ultraFreshCurrent(current);
-    // A moving row must not acquire a check badge for an older snapshot.
-    if (fingerprint !== _rowAuditFingerprint(fresh)) {
-      if (show) showOpToast('The row changed during the check. Check again after it settles.', 'info');
-      return;
-    }
-    const rows = [...document.querySelectorAll('#convList .conv-item[data-session-id="' + CSS.escape(sid) + '"]')];
-    const row = rows.find(r => r.getBoundingClientRect().width > 0) || rows[0];
-    const preview = row && [...row.querySelectorAll('.conv-outcome-step, .wa-preview')].find(x => x.getBoundingClientRect().width > 0);
-    const action = row?.querySelector('[data-role="quick-action"]');
-    let renderedAction = null;
-    try { renderedAction = action && JSON.parse(action.dataset.quickActionKey)[2]; } catch (_) {}
-    const previewCopy = preview?.cloneNode(true);
-    previewCopy?.querySelectorAll('.qtag-chip').forEach(chip => chip.replaceWith(chip.title.split(' —')[0]));
-    const result = window.cccRowAudit.inspect(fresh, data.events, {
-      working: sidebarSessionWorking(fresh, _applyLiveOverlayToRow(fresh)),
-      text: previewCopy?.textContent.replace(/^(?:Working|Next|Update|Close):\s*/i, '') || '',
-      action: action && renderedAction ? {label: action.textContent, reply: renderedAction.reply} : null,
-      questions: !!row?.querySelector('.qtag-chip'), close: !!row?.querySelector('.conv-ready-close'),
-    });
-    _rowAudits.set(sid, {result, fingerprint});
-    while (_rowAudits.size > 100) _rowAudits.delete(_rowAudits.keys().next().value);
-    _rowAuditPaint(sid);
-    if (show && showRequest === _rowAuditShowRequest) _rowAuditShow(sid, result);
-    return result;
-  }
-  async function _rowAuditVisible(automatic) {
-    if (_rowAuditBatch || document.hidden) return;
-    _rowAuditBatch = true;
-    try {
-      const bounds = document.querySelector('#convList')?.getBoundingClientRect();
-      const ids = [...new Set([...document.querySelectorAll('#convList .conv-item[data-session-id]')].filter(row => {
-        const r = row.getBoundingClientRect();
-        return r.width && r.height && r.bottom > Math.max(0, bounds?.top || 0) && r.top < Math.min(innerHeight, bounds?.bottom || innerHeight);
-      }).map(row => row.dataset.sessionId))].filter(sid => {
-        const row = _ultraFreshRow(sid);
-        return row && !row.pending_spawn && row.source !== 'backlog' && row.source !== 'github_pr';
-      }).slice(0, automatic ? 6 : 12);
-      let warnings = 0, failed = 0, checked = 0;
-      for (let i = 0; i < ids.length; i += 2) {
-        const results = await Promise.allSettled(ids.slice(i, i + 2).map(sid => _rowAuditRun(sid, false)));
-        results.forEach(r => {
-          if (r.status === 'rejected') failed++;
-          else if (r.value) { checked++; if (r.value.status === 'warning') warnings++; }
-        });
-      }
-      if (!automatic) showOpToast('Checked ' + checked + ' visible rows: ' + warnings + ' need review'
-        + (failed ? ', ' + failed + ' unavailable' : '')
-        + (ids.length - checked - failed ? ', others changed during the check' : '') + '.', failed ? 'error' : 'info');
-    } finally { _rowAuditBatch = false; }
-  }
-  document.addEventListener('click', ev => {
-    const btn = ev.target.closest?.('[data-role="row-audit"], [data-role="row-audit-visible"], [data-role="row-audit-watch"]');
-    if (!btn) return;
-    ev.preventDefault(); ev.stopImmediatePropagation();
-    if (btn.dataset.role === 'row-audit-watch') {
-      const enabled = !_rowAuditWatchOn();
-      try { localStorage.setItem('ccc-row-audit-watch', enabled ? '1' : '0'); } catch (_) {}
-      document.querySelectorAll('[data-role="row-audit-watch"]').forEach(b => b.setAttribute('aria-pressed', String(enabled)));
-      if (enabled) _rowAuditVisible(true);
-    } else if (btn.dataset.role === 'row-audit-visible') _rowAuditVisible(false);
-    else {
-      const sid = btn.closest('.conv-item')?.dataset.sessionId;
-      if (!sid || btn.disabled) return;
-      btn.disabled = true;
-      _rowAuditRun(sid, true).catch(error => showOpToast(error.message, 'error')).finally(() => { btn.disabled = false; });
-    }
-  }, true);
   function syncRowAnswerAudio(sid) {
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
     document.querySelectorAll(selector).forEach(row => {
@@ -16755,13 +16619,7 @@
         btn.setAttribute('aria-label', btn.title);
         btn.textContent = '\u{1F50A}';
         host.appendChild(btn);
-        const check = document.createElement('button');
-        check.type = 'button'; check.className = 'conv-row-check';
-        check.dataset.role = 'row-audit'; check.textContent = 'Check';
-        check.title = 'Check this row against its latest answer';
-        host.appendChild(check);
       });
-      _rowAuditPaint(id);
     });
   }
   document.addEventListener('click', async ev => {
@@ -31197,7 +31055,6 @@
     '[data-role="move-idea"]',
     '[data-role="idea-ticket"]',
     '[data-role="read-row-answer"]',
-    '[data-role="row-audit"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
     '.conv-chain-badge[data-parent-sid]',
@@ -42008,7 +41865,7 @@
       const _ipDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
           + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
         + '</span>';
-      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + _ipDetailsToggle + _trackedTableToggleHtml() + _rowAuditToolsHtml() + '</span>';
+      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + _ipDetailsToggle + _trackedTableToggleHtml() + '</span>';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
         : '';
@@ -43102,7 +42959,6 @@
           + ' role="menuitemcheckbox" aria-checked="' + (_showOtherMachines() ? 'true' : 'false') + '">'
           + '<span class="conv-check" aria-hidden="true">' + (_showOtherMachines() ? '&#10003;' : '') + '</span>Show other machines</button>';
       const _arcDisplayControls = _arcGroupingToggle
-        + _rowAuditToolsHtml()
         + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle)
         + _arcWindowToggle.replace('class="conv-grouping-toggle conv-window-toggle"', 'class="conv-grouping-toggle conv-window-toggle is-phone-menu-only"')
         + _arcEngineMenuRow
@@ -43116,7 +42972,7 @@
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
-            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _trackedTableToggleHtml() + _rowAuditToolsHtml() + _arcOverflow + '</span>'
+            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _trackedTableToggleHtml() + _arcOverflow + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'

@@ -1,0 +1,1 @@
+- Removed row Check buttons, Check rows, and Watch rows so the session list stays focused on actions and question details.
