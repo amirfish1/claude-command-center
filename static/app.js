@@ -3496,7 +3496,13 @@
         if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.prepend(step); }
         if (closeBtn) delete step.dataset.label;
         else step.dataset.label = info.label;
-        if (step.textContent !== info.text) step.textContent = info.text;
+        // Compare against the text we last painted, not textContent:
+        // question-tags.js chipifies [Q<n>:slug] to "Q<n>", so textContent
+        // never matches and every tick re-wrote the raw tag (CCC-167 flicker).
+        if (step.dataset.ultraFreshText !== info.text || !step.textContent) {
+          step.textContent = info.text;
+          step.dataset.ultraFreshText = info.text;
+        }
         main.classList.add('has-inline-step');
       }
       const preview = row.querySelector('.wa-preview');

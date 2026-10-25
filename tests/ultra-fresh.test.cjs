@@ -109,7 +109,8 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
     await page.waitForFunction(() => document.querySelector('[data-id="s0"] .conv-outcome-step').textContent.includes('New message while hovered'));
     await page.evaluate(() => {
       const step = document.querySelector('[data-id="s0"] .conv-outcome-step');
-      step.innerHTML = 'New message while hovered <button class="qtag-chip">[Q1:example]</button>';
+      // Real sidebar chips read "Q1", not the raw tag (CCC-167).
+      step.innerHTML = 'New message while hovered <button class="qtag-chip">Q1</button>';
       window.originalQuestionChip = step.querySelector('.qtag-chip');
       uf.sync();
     });
