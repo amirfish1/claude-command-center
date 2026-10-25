@@ -32855,6 +32855,11 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 #convList#convList .conv-item .conv-outcome:has(.conv-row-read) .conv-outcome-step {
   flex: 1 1 auto; min-width: 0; width: auto;
 }
+/* The inline step clamps at two lines; reserve both so a streamed message
+   that wraps does not grow the row under the pointer. */
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) .conv-outcome-step {
+  min-height: 2lh;
+}
 .conv-quick-action {
   border: 1px solid var(--accent);
   border-radius: 999px;
