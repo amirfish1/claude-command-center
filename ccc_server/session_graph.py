@@ -3004,13 +3004,11 @@ def pick_headless_exec_owner(candidates, session_started_at, etimes, now,
     """Choose the single `codex exec` process that owns a rollout.
 
     candidates: process dicts already filtered to exec commands in the
-    session's cwd. A lone candidate is the owner; several are separated by
-    process start time vs the rollout's session start (exec creates the
+    session's cwd. Every candidate must match the rollout's session start
+    by process start time (exec creates the
     rollout moments after launch). Returns a dict or None when ambiguous."""
     if not candidates:
         return None
-    if len(candidates) == 1:
-        return candidates[0]
     if session_started_at is None:
         return None
     close = []
@@ -3073,7 +3071,7 @@ def find_headless_codex_exec_owner(session_id, session_cwd=None):
         if session_cwd and p.get("cwd") == session_cwd:
             candidates.append(p)
     etimes = {}
-    if len(candidates) > 1:
+    if candidates:
         etimes = _ps_etimes([p["pid"] for p in candidates])
     return pick_headless_exec_owner(
         candidates, meta.get("started_at"), etimes, time.time())
