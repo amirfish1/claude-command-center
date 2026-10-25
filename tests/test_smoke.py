@@ -47,6 +47,33 @@ def _hold_session_overrides_mutation(path, session_id, entered, release):
     server._mutate_session_overrides(mutate)
 
 
+_CODEX_BACKGROUND_THREAD_PREFIXES = ("codex-queue-pump-", "ccc-codex-wake-confirm-")
+
+
+def _drain_codex_background_threads(timeout=5.0):
+    """Stop a test's Codex queue pumps / wake confirmers before teardown.
+
+    Queueing or a turn-completion notification spawns a pump thread and can
+    arm a 2s retry timer. Left running, they outlive the test's mocks, HOME
+    and server module: they scanned the host's real ~/.codex during a later
+    test and raised AttributeError mid-reimport (CCC-181).
+    """
+    pending_inputs = sys.modules.get("ccc_server.pending_inputs")
+    timers = getattr(pending_inputs, "_codex_queue_retry_timers", None)
+    lock = getattr(pending_inputs, "_codex_queue_retry_timers_lock", None)
+    if timers is not None and lock is not None:
+        with lock:
+            armed = list(timers.values())
+            timers.clear()
+        for timer in armed:
+            timer.cancel()
+            timer.join(timeout)
+    deadline = time.monotonic() + timeout
+    for thread in threading.enumerate():
+        if thread.name.startswith(_CODEX_BACKGROUND_THREAD_PREFIXES):
+            thread.join(max(0.0, deadline - time.monotonic()))
+
+
 class TestSpawnWorktreeCreation(unittest.TestCase):
     def test_cleanup_deletes_the_reserved_branch_without_a_worktree_directory(self):
         server = importlib.import_module("server")
@@ -7724,6 +7751,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         (self.repo / ".git").mkdir()
 
     def tearDown(self):
+        _drain_codex_background_threads()
         if self._prev_home is None:
             os.environ.pop("HOME", None)
         else:
@@ -17836,6 +17864,7 @@ class TestPendingInputs(unittest.TestCase):
             self.server._pending_terminal_input_queue.clear()
 
     def tearDown(self):
+        _drain_codex_background_threads()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue.clear()
@@ -17905,9 +17934,11 @@ class TestPendingInputs(unittest.TestCase):
         """A slow-to-confirm delivery must not accumulate duplicate copies of the
         same verifier report (or any other injected text) for one session."""
         sid = "sid-dedupe"
-        self.server._queue_codex_resume(sid, "verifier report")
-        self.server._queue_codex_resume(sid, "verifier report")
-        self.server._queue_codex_resume(sid, "different message")
+        # Only the queue contents matter here; a real pump would probe ~/.codex.
+        with mock.patch.object(self.server, "_schedule_codex_queue_pump"):
+            self.server._queue_codex_resume(sid, "verifier report")
+            self.server._queue_codex_resume(sid, "verifier report")
+            self.server._queue_codex_resume(sid, "different message")
         with self.server._pending_resume_lock:
             self.assertEqual(
                 self.server._pending_resume_queue.get(sid),
@@ -18983,6 +19014,7 @@ class TestQuestionRelay(unittest.TestCase):
         self.server = importlib.import_module("server")
 
     def tearDown(self):
+        _drain_codex_background_threads()
         if self._prev_home is None:
             os.environ.pop("HOME", None)
         else:
