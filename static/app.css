@@ -33049,10 +33049,10 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .repo-avatar-preview .repo-avatar-initials { font-size:18px; }
 .conv-folder-chip .repo-avatar { width:14px; height:14px; flex-basis:14px; border-radius:3px; }
 #repoAvatarControls { flex-wrap:wrap; }
-/* Repo color stays visible beneath the logo, ticket number and model badge. */
+/* The logo leads; a narrow repo-colored rim keeps repository identity visible. */
 .conv-idea-avatar.has-repo-background { border-radius:50%; overflow:visible; }
-.conv-idea-avatar > .repo-avatar.conv-avatar-background { position:absolute; inset:0; width:100%; height:100%; margin:0; border-radius:50%; overflow:hidden; pointer-events:none; background:transparent; }
-.conv-idea-avatar > .conv-avatar-background img { object-fit:cover; background:transparent; opacity:0.25; }
+.conv-idea-avatar > .repo-avatar.conv-avatar-background { position:absolute; inset:2px; width:calc(100% - 4px); height:calc(100% - 4px); margin:0; border-radius:50%; overflow:hidden; pointer-events:none; background:transparent; }
+.conv-idea-avatar > .conv-avatar-background img { object-fit:cover; background:transparent; opacity:1; }
 .conv-avatar-background .repo-avatar-initials { display:none; }
 .conv-idea-avatar > .conv-avatar-number { position:relative; z-index:1; text-shadow:0 1px 3px #000, 0 0 5px #000; }
 .conv-idea-avatar > .conv-avatar-model { z-index:2; }
