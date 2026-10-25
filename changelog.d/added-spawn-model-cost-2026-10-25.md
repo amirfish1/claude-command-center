@@ -1,0 +1,1 @@
+- The new-session model picker now shows each model's cost next to its name (Devin's free SWE-2 models read "Free"; Claude and Codex show their $ in/out rate per 1M tokens).

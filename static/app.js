@@ -77386,6 +77386,42 @@
     return { engine: eng, model: String(_defaultModelsByEngine[eng] || '').trim(), effort };
   }
 
+  // Cost tier shown beside each model in the new-session picker (CCC-182).
+  // Catalog variants carry the CLI's own cost_tier ('Free', 'Low cost', ...);
+  // curated family rows (Devin 'swe-2', 'glm-5.2') don't, so they borrow the
+  // tier their effort variants agree on ('swe-2-high' etc.). Engines with no
+  // catalog tier fall back to the client cost classifier.
+  const _EFFORT_SUFFIX_RE = /^-(none|low|medium|high|xhigh|max)$/;
+  function spawnModelCostTier(engine, id) {
+    const opts = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+    const norm = _normalizeModelId(id);
+    if (!norm) return '';
+    const own = opts.find(o => _normalizeModelId(o.id) === norm);
+    if (own && own.cost_tier) {
+      // Claude/Codex catalogs send a numeric tier (in+out $/1M); show their
+      // in/out rate instead, e.g. '$4/$20' from '$4.00 in / 1M, $20.00 out / 1M'.
+      if (!/^[\d.]+$/.test(String(own.cost_tier).trim())) return String(own.cost_tier);
+      const m = String(own.cost_summary || '').match(/\$([\d.]+) in\b.*?\$([\d.]+) out\b/);
+      if (m) return '$' + Number(m[1]) + '/$' + Number(m[2]);
+    }
+    const fam = norm.replace(/\./g, '-');
+    const tiers = new Set();
+    opts.forEach(o => {
+      if (!o.cost_tier) return;
+      const oid = _normalizeModelId(o.id).replace(/\./g, '-');
+      if (oid === fam || (oid.startsWith(fam) && _EFFORT_SUFFIX_RE.test(oid.slice(fam.length)))) tiers.add(String(o.cost_tier));
+    });
+    if (tiers.size) return Array.from(tiers).join(' / ');
+    const tier = sessionCostTier(engine, id);
+    return tier === 'premium' ? '$$$' : tier === 'high' ? '$$' : tier === 'medium' ? '$' : tier === 'low' ? 'Low cost' : '';
+  }
+
+  function spawnModelCostSummary(engine, id) {
+    const norm = _normalizeModelId(id);
+    const own = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => _normalizeModelId(o.id) === norm);
+    return own ? String(own.cost_summary || own.entitlement_summary || '') : '';
+  }
+
   function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
     engine = normalizeSpawnDefaultEngine(engine);
     const base = MODEL_OPTIONS_BY_ENGINE[engine] || [];
@@ -77616,7 +77652,10 @@
         allModels.forEach(opt => {
           const el = document.createElement('option');
           el.value = opt.id;
-          el.textContent = opt.label || opt.id;
+          const costTier = opt.id === SPAWN_DEFAULT_OTHER ? '' : spawnModelCostTier(engine, opt.id);
+          el.textContent = (opt.label || opt.id) + (costTier ? ' · ' + costTier : '');
+          const costSummary = costTier ? spawnModelCostSummary(engine, opt.id) : '';
+          if (costSummary) el.title = costSummary;
           if (opt.disabled) {
             el.disabled = true;
             if (opt.reason) el.title = opt.reason;
