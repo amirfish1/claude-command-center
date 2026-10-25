@@ -8,8 +8,12 @@ const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const audit = require('../static/row-audit.js');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex').slice(0, 20);
-function incident(result, sid) {
+// The /all?stale_ok rows and a freshly booted page can trail the transcript by up to ~5 min,
+// so a just-finished turn renders its previous row state (CCC-200). Next hourly run rechecks it.
+const SETTLE_MS = 6 * 60 * 1000;
+function incident(result, sid, now = Date.now()) {
   if (result.findings.some(x => x.kind === 'pending') || !result.source.answer) return null;
+  if (result.source.answeredAt && now - result.source.answeredAt < SETTLE_MS) return null;
   const failures = result.findings.filter(x => x.code);
   if (!failures.length) return null;
   return {sid, turn: digest(result.source.answer), failures};

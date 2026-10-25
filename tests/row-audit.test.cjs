@@ -98,6 +98,14 @@ test('incident identity stays stable across viewports and excludes unfinished tu
   assert.equal(incident(result,'example-session').turn,incident(result,'example-session').turn);
   assert.equal(incident(audit.inspect(row(),events(),{working:true,checked:true}),'example-session'),null);
 });
+test('a just-finished turn is not ticketed until the row has had time to catch up', () => {
+  const {incident}=require('../scripts/audit-session-rows.cjs');
+  const data=events(); data[0].ts='2026-10-25T20:13:00.000Z';
+  const result=audit.inspect(row('Mid-turn update'),data,{checked:true});
+  assert(result.findings.some(f=>f.code==='missing_close'));
+  assert.equal(incident(result,'example-session',Date.parse('2026-10-25T20:15:36Z')),null);
+  assert.equal(incident(result,'example-session',Date.parse('2026-10-25T21:13:00Z')).failures[0].code,'missing_close');
+});
 test('footerless questions require explicit end-turn evidence before filing', () => {
   const question={type:'assistant',blocks:[{kind:'text',text:'Draft ready.\n\nWant me to send it privately first, or to the group?'}]};
   const ended={type:'result',subtype:'end_turn'};

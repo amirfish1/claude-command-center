@@ -8,12 +8,12 @@
   const none = value => !String(value || '').trim() || /^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(String(value).trim());
   const norm = value => String(value || '').replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim();
   function latest(events) {
-    let answer = '', index = -1;
+    let answer = '', index = -1, answeredAt = null;
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
       if (event.type !== 'assistant' || !Array.isArray(event.blocks)) continue;
       const text = event.blocks.filter(b => b.kind === 'text').map(b => b.text || '').join('\n\n').trim();
-      if (text) { answer = text; index = i; break; }
+      if (text) { answer = text; index = i; answeredAt = Date.parse(event.ts || event.timestamp || '') || null; break; }
     }
     const fields = {};
     const footers = [...answer.matchAll(/<session-state>([\s\S]*?)<\/session-state>/gi)];
@@ -25,7 +25,7 @@
     const prose = answer.replace(/<session-state>[\s\S]*$/i, '').trim();
     const paragraph = prose.split(/\n\s*\n/).filter(Boolean).pop() || '';
     const explicitQuestion = paragraph.match(/\b(?:want me to|do you want me to|would you like me to|should I|shall I|can I)[\s\S]*\?\s*$/i)?.[0] || '';
-    return {answer, fields, prose, paragraph, explicitQuestion,
+    return {answer, answeredAt, fields, prose, paragraph, explicitQuestion,
       endedAfter: index >= 0 && events.slice(index + 1).some(e => e.type === 'result' && e.subtype === 'end_turn'),
       userAfter: index >= 0 && events.slice(index + 1).some(e => !e.bookkeeping && ['user', 'user_text'].includes(e.type))};
   }
