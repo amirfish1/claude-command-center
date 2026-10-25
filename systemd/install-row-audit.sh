@@ -23,10 +23,11 @@ WorkingDirectory={repo}
 ExecStart={node} {script} --file --queue {queue}
 TimeoutStartSec=20min
 Nice=10
-'''.format(repo=quote(repo),node=quote(node),script=quote(repo+'/scripts/audit-session-rows.cjs'),queue=quote(queue))
+'''.format(repo=repo.replace('%','%%'),node=quote(node),script=quote(repo+'/scripts/audit-session-rows.cjs'),queue=quote(queue))
 pathlib.Path(units,'ccc-row-audit.service').write_text(service)
 pathlib.Path(units,'ccc-row-audit.timer').write_text(pathlib.Path(repo,'systemd/ccc-row-audit.timer').read_text())
 PY
+systemd-analyze --user verify "$UNIT_DIR/ccc-row-audit.service" "$UNIT_DIR/ccc-row-audit.timer"
 systemctl --user daemon-reload
 systemctl --user enable --now ccc-row-audit.timer
 systemctl --user start --no-block ccc-row-audit.service
