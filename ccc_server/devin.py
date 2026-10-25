@@ -39,6 +39,14 @@ from pathlib import Path
 from ccc_server import core as _core
 
 
+def _devin_session_state_prompt(text):
+    """Devin has no system-instruction flag; preserve the visible retry text."""
+    visible = _core._strip_ccc_session_state_instruction(text)
+    return (visible + "\n\n<ccc-session-state-instructions>\n"
+            + _core._CCC_SESSION_STATE_SYSTEM_PROMPT
+            + "\n</ccc-session-state-instructions>")
+
+
 # `devin acp`, `devin -p`, and `devin --resume` watchdog WINDSURF_EXT_HOST_PID
 # and self-terminate when that pid exits — the Windsurf/Devin IDE uses it to
 # reap CLI children when its extension host dies ("Parent process exited;
@@ -1479,7 +1487,9 @@ def _devin_cli_row_fields_for_session(con, raw_id, prev):
             gm = meta.get("generation_model")
             if gm:
                 out["model"] = str(gm)
-            out["last_assistant_text"] = str(msg.get("content") or "").strip()[:2000]
+            answer = str(msg.get("content") or "").strip()
+            out["last_assistant_text"] = answer[:2000]
+            out["session_state"] = _core._parse_session_state(answer)
             metrics = meta.get("metrics") or {}
             if isinstance(metrics, dict):
                 try:
@@ -2455,6 +2465,7 @@ def _find_devin_cli_conversations_locked(
                         str(fields.get("last_assistant_text") or "")
                     ).strip()[:2000]
                 )
+                r["session_state"] = fields.get("session_state")
                 flags = fields.get("ship") or {}
                 r["has_commit"] = bool(flags.get("has_commit"))
                 r["has_push"] = bool(flags.get("has_push"))
@@ -2737,6 +2748,7 @@ def _devin_cli_parse_message_row(chat_message, created_at, seen, sidekick_key):
     text = str(msg.get("content") or "").strip()
 
     if role == "user":
+        text = _core._strip_ccc_session_state_instruction(text)
         # Skip system-injected user messages (context rebuilds, sidekick
         # handoffs) — only keep actual user input.
         if not meta.get("is_user_input") or not text:
@@ -3699,5 +3711,6 @@ def _devin_cli_session_detail(session_id):
         "question_text": "",
         "soft_block": None,
         "last_assistant_text": (last_assistant_text or "")[:2000],
+        "session_state": _core._parse_session_state(last_assistant_text),
         "turns": turns,
     }, 200

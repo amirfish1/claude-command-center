@@ -98,3 +98,13 @@ test('incident identity stays stable across viewports and excludes unfinished tu
   assert.equal(incident(result,'example-session').turn,incident(result,'example-session').turn);
   assert.equal(incident(audit.inspect(row(),events(),{working:true,checked:true}),'example-session'),null);
 });
+test('footerless questions require explicit end-turn evidence before filing', () => {
+  const question={type:'assistant',blocks:[{kind:'text',text:'Draft ready.\n\nWant me to send it privately first, or to the group?'}]};
+  const ended={type:'result',subtype:'end_turn'};
+  assert(audit.inspect({},[question,ended],{checked:true}).findings.some(f=>f.code==='missing_question'));
+  assert(!audit.inspect({},[question],{checked:true}).findings.some(f=>f.code));
+  assert(!audit.inspect({state:'working'},[question,ended],{checked:true}).findings.some(f=>f.code));
+  assert(!audit.inspect({},[question,ended,{type:'user_text',text:'Change the draft'}],{checked:true}).findings.some(f=>f.code));
+  assert(!audit.inspect({},[{type:'assistant',blocks:[{kind:'text',text:'Waiting for the external deployment.'}]},ended],{checked:true}).findings.some(f=>f.code));
+  assert(!audit.inspect({},[question,ended],{checked:true,questions:true}).findings.some(f=>f.code));
+});

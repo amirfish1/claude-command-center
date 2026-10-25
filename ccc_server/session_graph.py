@@ -1413,7 +1413,8 @@ def _strip_ccc_session_state_instruction(text):
     """
     if text is None:
         return ""
-    return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", str(text)).rstrip()
+    text = re.sub(r"\n*<ccc-session-state-instructions>.*?</ccc-session-state-instructions>\s*$", "", str(text), flags=re.DOTALL)
+    return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", text).rstrip()
 
 
 def _strip_f2_retrieval_prompt(text):

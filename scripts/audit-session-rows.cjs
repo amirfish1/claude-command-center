@@ -90,7 +90,7 @@ async function main() {
     const source = audit.latest(data.events || []);
     if (source.userAfter || digest(source.answer) !== entry.turn) continue;
     const key = `ccc-row-audit:${digest(os.hostname())}:${entry.sid}:${entry.turn}`;
-    const text = `Hourly rendered-row audit found a finished turn without its expected control.\n\nSession: ${entry.sid}\nURL: ${base}\nTurn digest: ${entry.turn}\nObserved: ${new Date().toISOString()}\n\n${entry.views.map(view => `${view.viewport}: ${view.failures.map(f => f.text).join(' ')}`).join('\n')}\n\nEvidence screenshots: ${out}/${entry.sid}-<viewport>.png\nVerify the current transcript and rendered controls before repairing. Active or newer-request turns were excluded; completion claims are self-reported.`;
+    const text = `Hourly rendered-row audit found an explicitly finished turn without its expected control.\n\nSession: ${entry.sid}\nURL: ${base}\nTurn digest: ${entry.turn}\nObserved: ${new Date().toISOString()}\n\n${entry.views.map(view => `${view.viewport}: ${view.failures.map(f => f.text).join(' ')}`).join('\n')}\n\nEvidence screenshots: ${out}/${entry.sid}-<viewport>.png\nVerify the current transcript and rendered controls before repairing. Active or newer-request turns were excluded; completion claims are self-reported.`;
     let ticket = null;
     if (args.includes('--file')) ticket = execFileSync('wt',['add','-q',queue,'--title',`Session row missing control: ${entry.title}`.slice(0,150),'--text',text,'--type','bug','--dedupe-key',key],{encoding:'utf8',timeout:30000}).trim();
     report.incidents.push({...entry,dedupeKey:key,ticket});
