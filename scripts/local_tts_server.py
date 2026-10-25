@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOME = os.path.expanduser(os.environ.get("CCC_LOCAL_TTS_DIR", os.path.join(os.path.expanduser("~"), ".ccc", "local-tts")))
@@ -31,7 +32,7 @@ MAX_CHARS = 2000
 
 # Bumped when the process's runtime contract changes (priority, threads), so
 # CCC replaces an older process left running from before an upgrade.
-SERVER_REV = 3
+SERVER_REV = 4
 # Normal priority: at nice 10 a loaded machine starved the voice for tens of
 # seconds. Background work is kept polite by the fg-first lock instead.
 
@@ -192,7 +193,12 @@ class Handler(BaseHTTPRequestHandler):
         return text, voice
 
     def _stream(self):
-        """mp3 frames per piece, written as each piece is made (close-delimited body)."""
+        """mp3 frames per piece, written as each piece is made.
+
+        Chunked, so the reader can tell a finished clip (terminating 0 chunk)
+        from one cut short by a failed piece: a close-delimited body ended
+        cleanly either way and CCC cached the truncated clip (CCC-173).
+        """
         try:
             text, voice = self._request()
         except (ValueError, OSError):
@@ -205,23 +211,35 @@ class Handler(BaseHTTPRequestHandler):
         enc.set_in_sample_rate(24000)
         enc.set_channels(1)
         enc.set_quality(5)
+        self.protocol_version = "HTTP/1.1"   # chunked needs a 1.1 status line
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+
+        def chunk(data):
+            if data:
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
+                self.wfile.flush()
+
         t0 = time.time()
         try:
             for i, piece in enumerate(split_for_stream(text)):
                 samples, _rate = _synth(piece, voice, self._fg)
                 pcm = (samples.clip(-1.0, 1.0) * 32767).astype("<i2").tobytes()
-                self.wfile.write(bytes(enc.encode(pcm)))
-                self.wfile.flush()
+                chunk(bytes(enc.encode(pcm)))
                 if i == 0:
                     sys.stderr.write("stream first piece %d chars in %dms\n" % (len(piece), (time.time() - t0) * 1000))
-            self.wfile.write(bytes(enc.flush()))
+            chunk(bytes(enc.flush()))
+            self.wfile.write(b"0\r\n\r\n")
         except (BrokenPipeError, ConnectionResetError):
             pass  # the reader stopped (Stop / skip); drop the rest
+        except Exception:
+            # No terminating chunk: the reader sees a truncated stream.
+            sys.stderr.write("stream failed after %dms (%d chars)\n" % ((time.time() - t0) * 1000, len(text)))
+            traceback.print_exc()
 
     def do_POST(self):
         if self.path == "/stream" and lameenc is not None:

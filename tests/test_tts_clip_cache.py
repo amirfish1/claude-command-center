@@ -4,6 +4,9 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
+from http.client import IncompleteRead
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from ccc_server import free_runtime as fr
@@ -82,6 +85,81 @@ def _load_priority_lock():
     namespace = {"threading": threading}
     exec(compile(ast.Module(body=[node], type_ignores=[]), "local_tts_server.py", "exec"), namespace)
     return namespace["_PriorityLock"]
+
+
+class _StreamHandler(BaseHTTPRequestHandler):
+    """Voice-server stand-in: /done, /cut (a piece failed), /close-delimited."""
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        if self.path == "/close-delimited":
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b"abcdef")
+            return
+        self.protocol_version = "HTTP/1.1"
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        self.wfile.write(b"3\r\nabc\r\n")
+        if self.path == "/done":
+            self.wfile.write(b"3\r\ndef\r\n0\r\n\r\n")
+
+
+class TruncatedStreamTests(unittest.TestCase):
+    """CCC-173: a clip cut short by a failed Kokoro piece must not be cached."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _StreamHandler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def setUp(self):
+        fr._CLIP_CACHE.clear()
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old_dir = fr._LOCAL_TTS_DIR
+        fr._LOCAL_TTS_DIR = Path(self._tmp.name)
+
+    def tearDown(self):
+        fr._LOCAL_TTS_DIR = self._old_dir
+        fr._CLIP_CACHE.clear()
+        self._tmp.cleanup()
+
+    def _drain(self, path):
+        key = (path, "af_heart")
+        url = "http://127.0.0.1:%d%s" % (self.server.server_address[1], path)
+        got = b""
+        with fr._TeeClip(urllib.request.urlopen(url, timeout=5), key) as tee:
+            while True:
+                buf = tee.read(4096)
+                if not buf:
+                    break
+                got += buf
+        return key, got
+
+    def test_finished_chunked_stream_is_cached(self):
+        key, got = self._drain("/done")
+        self.assertEqual(got, b"abcdef")
+        self.assertEqual(fr._clip_cache_get(key), b"abcdef")
+
+    def test_stream_cut_mid_clip_raises_and_is_not_cached(self):
+        with self.assertRaises(IncompleteRead):
+            self._drain("/cut")
+        self.assertIsNone(fr._clip_cache_get(("/cut", "af_heart")))
+
+    def test_close_delimited_stream_is_never_cached(self):
+        key, got = self._drain("/close-delimited")
+        self.assertEqual(got, b"abcdef")
+        self.assertIsNone(fr._clip_cache_get(key))
 
 
 class PriorityLockTests(unittest.TestCase):

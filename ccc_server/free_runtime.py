@@ -461,8 +461,9 @@ def _local_tts_health():
 
 # The local voice server's runtime contract (scripts/local_tts_server.py
 # SERVER_REV). An older process (nice 10, no fg/bg priority; rev 2's 300-char
-# pieces ran at half real time) is replaced.
-_LOCAL_TTS_REV = 3
+# pieces ran at half real time; rev 3's close-delimited stream hid mid-clip
+# failures) is replaced.
+_LOCAL_TTS_REV = 4
 
 
 def _local_tts_current(health):
@@ -563,9 +564,10 @@ def _local_tts_start():
         weight = _local_tts_weight_prefix()
         # Weighted first; if systemd-run can't make the scope, run it plain.
         for attempt in ([weight + cmd, cmd] if weight else [cmd]):
-            _LOCAL_TTS_PROCESS = subprocess.Popen(
-                attempt, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True)
+            with _local_tts_log() as log:
+                _LOCAL_TTS_PROCESS = subprocess.Popen(
+                    attempt, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=log, start_new_session=True)
             for _ in range(120):
                 if _LOCAL_TTS_PROCESS.poll() is not None:
                     break
@@ -576,6 +578,23 @@ def _local_tts_start():
             else:
                 return False   # still loading after 30 s; leave it be
         return False
+
+
+_LOCAL_TTS_LOG_MAX_BYTES = 1024 * 1024
+
+
+def _local_tts_log():
+    """Append handle for the voice server's stderr (server.log), so a failed
+    piece's traceback survives (CCC-173). Restarted fresh past 1 MB."""
+    path = _LOCAL_TTS_DIR / "server.log"
+    try:
+        mode = "wb" if path.stat().st_size > _LOCAL_TTS_LOG_MAX_BYTES else "ab"
+    except OSError:
+        mode = "ab"
+    try:
+        return open(path, mode)
+    except OSError:
+        return open(os.devnull, "wb")
 
 
 def _local_tts_threads():
@@ -784,10 +803,17 @@ class _CachedClip:
 
 
 class _TeeClip:
-    """Passes the live stream through and caches it once it ends cleanly."""
+    """Passes the live stream through and caches it once it ends cleanly.
+
+    The voice server's stream is chunked, so a clip cut short by a failed
+    piece raises IncompleteRead instead of a clean EOF. A close-delimited
+    response (an older server) can't prove it finished, so it is never
+    cached (CCC-173).
+    """
 
     def __init__(self, resp, key):
         self._resp, self._key, self._parts, self._done = resp, key, [], False
+        self._cacheable = getattr(resp, "chunked", True) is not False
 
     def read(self, n=-1):
         chunk = self._resp.read(n)
@@ -805,7 +831,7 @@ class _TeeClip:
         try:
             return self._resp.__exit__(*exc)
         finally:
-            if self._done and exc[0] is None:
+            if self._done and self._cacheable and exc[0] is None:
                 _clip_cache_put(self._key, b"".join(self._parts))
 
 
