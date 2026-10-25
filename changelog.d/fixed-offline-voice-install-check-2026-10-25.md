@@ -1,0 +1,1 @@
+- Offline voice install no longer reports 'failed (AttributeError)' after a successful install.

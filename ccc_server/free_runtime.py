@@ -787,7 +787,10 @@ class _CachedClip:
     """Response-shaped reader over a cached clip."""
 
     def __init__(self, data):
+        import email.message
         self._data, self._pos = data, 0
+        self.headers = email.message.Message()
+        self.headers["Content-Type"] = "audio/mpeg"
 
     def read(self, n=-1):
         end = len(self._data) if n is None or n < 0 else self._pos + n
@@ -814,6 +817,7 @@ class _TeeClip:
     def __init__(self, resp, key):
         self._resp, self._key, self._parts, self._done = resp, key, [], False
         self._cacheable = getattr(resp, "chunked", True) is not False
+        self.headers = getattr(resp, "headers", None)
 
     def read(self, n=-1):
         chunk = self._resp.read(n)

@@ -36,6 +36,12 @@ class ClipCacheTests(unittest.TestCase):
         with fr._CachedClip(fr._clip_cache_get(key)) as clip:
             self.assertEqual(clip.read(4) + clip.read(4) + clip.read(4), b"abcdef")
 
+    def test_cached_clip_reports_mp3_content_type(self):
+        # local_speech's install check reads headers off whatever
+        # local_tts_open returns (CCC-174).
+        with fr._CachedClip(b"abc") as clip:
+            self.assertEqual(clip.headers.get_content_type(), "audio/mpeg")
+
     def test_abandoned_stream_is_not_cached(self):
         key = ("hello", "af_nicole")
         tee = fr._TeeClip(io.BytesIO(b"abcdef"), key)
@@ -101,6 +107,7 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"abcdef")
             return
         self.protocol_version = "HTTP/1.1"
+        self.send_header("Content-Type", "audio/mpeg")
         self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Connection", "close")
         self.end_headers()
@@ -150,6 +157,12 @@ class TruncatedStreamTests(unittest.TestCase):
         key, got = self._drain("/done")
         self.assertEqual(got, b"abcdef")
         self.assertEqual(fr._clip_cache_get(key), b"abcdef")
+
+    def test_tee_passes_response_headers_through(self):
+        url = "http://127.0.0.1:%d/done" % self.server.server_address[1]
+        with fr._TeeClip(urllib.request.urlopen(url, timeout=5), ("h", "af_heart")) as tee:
+            self.assertEqual(tee.headers.get_content_type(), "audio/mpeg")
+            tee.read()
 
     def test_stream_cut_mid_clip_raises_and_is_not_cached(self):
         with self.assertRaises(IncompleteRead):
