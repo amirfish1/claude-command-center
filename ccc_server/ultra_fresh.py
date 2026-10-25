@@ -12,6 +12,7 @@ from datetime import datetime
 from ccc_server import core
 from ccc_server.morning_launch import _SpawnEventNormalizer
 from ccc_server.session_graph import _parse_session_state
+from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
 
 MAX_SESSIONS = 4
 MAX_TEXT = 40000
@@ -98,7 +99,8 @@ class FreshSession:
                 if not initial and int(ev.get("line") or 0) <= previous_line:
                     continue
                 ts = str(ev.get("ts") or "")
-                if ev.get("type") in ("user_text", "user") and not ev.get("pending"):
+                if (ev.get("type") in ("user_text", "user") and not ev.get("pending")
+                        and not is_compaction_bookkeeping(ev)):
                     if ts and event_time(ts) >= event_time(self.user_ts):
                         self.user_ts = ts
                         self.last_ts = max(self.last_ts, event_time(ts))
@@ -146,7 +148,8 @@ class FreshSession:
                 if isinstance(content, list):
                     user_text = "".join(str(block.get("text") or "") for block in content
                                         if isinstance(block, dict) and block.get("type") == "text").strip()
-                if user_text and original.get("type") == "user" and not original.get("parent_tool_use_id"):
+                if (user_text and original.get("type") == "user" and not original.get("parent_tool_use_id")
+                        and not is_compaction_bookkeeping(original)):
                     ts = original.get("timestamp") or datetime.now().astimezone().isoformat()
                     if event_time(ts) > event_time(self.user_ts):
                         self.user_ts = str(ts)
@@ -193,6 +196,12 @@ class FreshSession:
         if not updates:
             return []
         last = updates[-1]
+        # The list can retain a pre-fix user tail from compaction. Prove which
+        # transcript snapshot this frame read so the browser can supersede it
+        # without allowing a delayed reply to cross a genuinely newer request.
+        if (isinstance(self.key, tuple) and len(self.key) == 2
+                and isinstance(self.key[0], (int, float)) and self.key[0] > 1e15):
+            last["source_mtime"] = self.key[0] / 1e9
         if last.get("clear"):
             return [last]
         # Every text frame carries the current user watermark, so intermediate

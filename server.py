@@ -26938,13 +26938,18 @@ def _parse_conversation_event(ev, line_num):
                 # the goal text after "/goal" vanished from the transcript).
                 full_cmd = _extract_command_invocation_text(head)
                 if full_cmd:
-                    return {"line": line_num, "ts": ts, "type": "user_text", "text": full_cmd, "images": []}
+                    from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
+                    return {"line": line_num, "ts": ts, "type": "user_text", "text": full_cmd, "images": [],
+                            "bookkeeping": is_compaction_bookkeeping(ev)}
             return None
         images = _extract_images_from_content(content, line=line_num)
         if text or images:
             # Preview placeholder "[image]" shouldn't leak into the rendered message.
             display_text = "" if (text == "[image]" and images) else text
             out_ev = {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
+            from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
+            if is_compaction_bookkeeping(ev):
+                out_ev["bookkeeping"] = True
             if msg.get("model"):
                 out_ev["model"] = msg.get("model")
             return out_ev

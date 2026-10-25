@@ -24,6 +24,7 @@ except ImportError:  # Windows: no cross-process lock; delta writes still apply
 
 from ccc_server import core as _core
 from ccc_server import test_isolation_active as _test_isolation_active
+from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
 
 # ---------------------------------------------------------------------------
 # Log parsing (mirrors the bash viewer filter logic)
@@ -1184,7 +1185,11 @@ def _extract_tail_meta(path):
     except OSError:
         return {}
     cached = _core._conv_meta_cache.get(str(path))
-    if cached and cached.get("cache_key") == cache_key:
+    # Revisit only old user tails once; keep the rest of the persisted cache
+    # hot rather than forcing every transcript to be rescanned on upgrade.
+    if (cached and cached.get("cache_key") == cache_key
+            and (cached.get("last_event_type") != "user"
+                 or cached.get("bookkeeping_filtered") == 1)):
         # Emit interrupts from cached meta (Change 1: emit-on-cache-hit).
         # Without this, an interrupt whose transcript was cached by a
         # non-emitting process (archive worker) would never be emitted by
@@ -1192,6 +1197,7 @@ def _extract_tail_meta(path):
         _core._emit_interrupts_from_meta(cached, path.stem)
         return cached
     meta = {
+        "bookkeeping_filtered": 1,
         "mtime": mtime,
         # last_meaningful_ts: timestamp of the most recent user/assistant/result
         # event. Administrative writes (custom-title, agent-name, etc.) don't
@@ -1302,6 +1308,8 @@ def _extract_tail_meta(path):
                 except json.JSONDecodeError:
                     continue
                 t = ev.get("type", "")
+                if t == "user" and is_compaction_bookkeeping(ev):
+                    continue
                 # Track last event type for activity detection
                 if t in ("assistant", "result", "user"):
                     meta["last_event_type"] = t

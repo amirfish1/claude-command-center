@@ -188,3 +188,43 @@ def test_codex_source_key_reuses_resolved_reader_path(tmp_path, monkeypatch):
         second = server._conv_parse_jsonl_mtime("codex-thread")
     assert resolve.call_count == 1
     assert first != second
+
+
+@pytest.mark.parametrize('record', [
+    {'isCompactSummary': True, 'message': {'content': 'Saved context'}},
+    {'message': {'content': 'This session is being continued from a previous conversation. Summary: old work'}},
+    {'message': {'content': '<command-name>/compact</command-name><command-args></command-args>'}},
+    {'message': {'content': '<local-command-stdout>Compacted</local-command-stdout>'}},
+])
+def test_compaction_preserves_explanation_in_archive_and_live_feed(tmp_path, record):
+    old = {'type': 'assistant', 'timestamp': '2026-10-23T10:00:02Z',
+           'message': {'content': [{'type': 'text', 'text': 'Video delivered; ready to watch.'}]}}
+    record = dict(record, type='user', timestamp='2026-10-23T10:01:00Z')
+    transcript = tmp_path / 'session.jsonl'
+    transcript.write_text('\n'.join(json.dumps(row, separators=(',', ':')) for row in [old, record]) + '\n')
+    meta = server._extract_tail_meta(transcript)
+    assert meta['last_event_type'] == 'assistant'
+    assert meta['last_assistant_text'] == 'Video delivered; ready to watch.'
+    # Old persisted user tails migrate once, then the cache stays hot.
+    meta['bookkeeping_filtered'] = 0
+    meta['last_event_type'] = 'user'
+    meta = server._extract_tail_meta(transcript)
+    assert meta['last_event_type'] == 'assistant'
+    assert server._extract_tail_meta(transcript) is meta
+    parsed = [server._parse_conversation_event(row, i) for i, row in enumerate([old, record], 1)]
+    parsed = [row for row in parsed if row]
+    log = tmp_path / 'spawn.log'
+    log.write_text('')
+    reader = FreshSession('test-session')
+    with mock.patch.object(server, '_conv_parse_jsonl_mtime', return_value=(1, 1)), \
+         mock.patch.object(server, 'parse_conversation', return_value={'events': parsed, 'last_line': 2}), \
+         mock.patch.object(server, '_resolve_spawn_log_for_session', return_value=(log, True)), \
+         mock.patch.object(server, '_detect_session_engine', return_value='claude'):
+        assert reader.read()[-1]['text'] == 'Video delivered; ready to watch.'
+        log.write_text(json.dumps(record) + '\n')
+        assert reader.read() == []
+        assert reader.last_text == 'Video delivered; ready to watch.'
+        with log.open('a') as handle:
+            handle.write(json.dumps({'type': 'user', 'timestamp': '2026-10-23T10:02:00Z',
+                                     'message': {'content': 'Please revise the video.'}}) + '\n')
+        assert reader.read()[-1]['clear'] is True

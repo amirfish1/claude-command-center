@@ -83,3 +83,13 @@ test('a new incomplete assessment takes precedence over an older review', () => 
   assert.equal(ready({ ...completed, modified: 100, idea_ticket: { ready_to_close_reviewed_at: 110 },
     session_state: { completion: { version: 1, valid: true, ready_to_close: false } } }), false);
 });
+
+test('a pending user review overrides completion scores after compaction', () => {
+  const row = {state:'idle', last_event_type:'assistant', session_state:{
+    next_step_user:'Watch the delivered video and say what to change.',
+    completion:{version:1,valid:true,ready_to_close:true}}};
+  assert.equal(ready(row), false);
+  for (const next_step_user of ['None.', 'No action needed.', '']) {
+    assert.equal(ready({...row,session_state:{...row.session_state,next_step_user}}), true);
+  }
+});

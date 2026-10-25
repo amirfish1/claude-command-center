@@ -117,6 +117,23 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
     assert.equal(await page.evaluate(() => originalQuestionChip === document.querySelector('[data-id="s0"] .conv-outcome-step .qtag-chip')), true,
       'status refresh must retain the existing question chip');
     assert.equal(await page.evaluate(() => originalRow === document.querySelector('[data-id="s0"]')), true);
+    await page.evaluate(() => {
+      const row = uf.rows()[0];
+      row.last_event_type = 'user';
+      row.modified = Date.parse('2099-01-01T12:30:00Z') / 1000;
+      uf.accept({session_id:'s0', text:'Reply before compaction',ts:'2099-01-01T12:01:00Z',
+        user_ts:'2099-01-01T11:00:00Z',source_mtime:row.modified});
+    });
+    await page.waitForFunction(() => document.querySelector('[data-id="s0"] .conv-outcome-step').textContent === 'Reply before compaction');
+    assert.equal(await page.evaluate(() => {
+      const row = uf.rows()[0];
+      row.modified += 60; // A genuine newer request still wins over this snapshot.
+      const unchanged = uf.current(row) === row;
+      uf.accept({session_id:'s0',text:'Delayed stale reply',ts:'2099-01-01T12:02:00Z',
+        source_mtime:row.modified - 60});
+      row.last_event_type = 'assistant';
+      return unchanged && uf.state.entries.get('s0').text === 'Reply before compaction';
+    }), true);
     // An informational DID is an update, never a fabricated next action,
     // even when a malformed/missing assessment prevents a Close button.
     await page.evaluate(() => {
@@ -131,6 +148,9 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
     await page.evaluate(() => uf.accept({session_id:'s0', text:'Playback is fixed.', ts:'2099-01-01T14:00:00Z',
       session_state:{did:'Fixed playback.',next_step_user:'Reload the dashboard page.'}}));
     await page.waitForFunction(() => document.querySelector('[data-id="s0"] .wa-explanation-label').textContent === 'Next:');
+    assert.equal(await page.$eval('[data-id="s0"] .conv-outcome-step',el=>el.textContent),'Reload the dashboard page.');
+    await page.evaluate(() => uf.feed('s0', [{type:'user_text', bookkeeping:true,
+      text:'Saved compaction context',ts:'2099-01-01T15:00:00Z'}]));
     assert.equal(await page.$eval('[data-id="s0"] .conv-outcome-step',el=>el.textContent),'Reload the dashboard page.');
     // A final assessment arriving on an existing row must create the action,
     // without relying on a future full-list render. A new turn removes it.

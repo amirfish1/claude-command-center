@@ -3428,7 +3428,8 @@
     if (!entry.text) return c;
     if (sessionIsOptimisticallySending(c.session_id || c.id) && entry.at <= entry.sendAt) return c;
     // A newer user event from the ordinary list also invalidates a live reply.
-    if (c.last_event_type === 'user' && _ultraFreshTime(c.modified || c.mtime) > entry.at) return c;
+    if (c.last_event_type === 'user'
+        && _ultraFreshTime(c.modified || c.mtime) > Math.max(entry.at, entry.sourceAt || 0)) return c;
     return Object.assign({}, c, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
       session_state: entry.sessionState, last_event_type: 'assistant',
       modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
@@ -3565,10 +3566,13 @@
     // Sending is a barrier, including when an older stream frame was queued
     // before the send. Untimestamped snapshots cannot cross this barrier.
     if (_ultraFreshSendBarrier(entry, sid) && (!update.ts || at <= entry.sendAt)) return;
-    if (base.last_event_type === 'user' && at < _ultraFreshTime(base.modified || base.mtime)) return;
+    const sourceAt = _ultraFreshTime(update.source_mtime);
+    if (base.last_event_type === 'user'
+        && Math.max(at, sourceAt) < _ultraFreshTime(base.modified || base.mtime)) return;
     if (text === entry.text && at === entry.at && !enrich) return;
     if (line) entry.line = line;
-    entry.text = text; entry.at = Math.max(entry.at, at); entry.sessionState = update.session_state || entry.sessionState;
+    entry.text = text; entry.at = Math.max(entry.at, at); entry.sourceAt = sourceAt;
+    entry.sessionState = update.session_state || entry.sessionState;
     if (!enrich) entry.sessionState = update.session_state || null;
     if (!entry.paintQueued) {
       entry.paintQueued = true;
@@ -3594,7 +3598,7 @@
   function _ultraFreshFeed(sid, events) {
     if (!_ultraFresh.entries.has(String(sid))) return;
     for (const ev of events || []) {
-      if (ev.type === 'user_text' && ev.ts) {
+      if (ev.type === 'user_text' && ev.ts && !ev.bookkeeping) {
         _ultraFreshAccept({ session_id: sid, user_ts: ev.ts, clear: true });
       }
       if (ev.type !== 'assistant' || ev.parent_tool_use_id) continue;
@@ -3678,6 +3682,8 @@
   // Existing explicit reviews remain valid until new transcript activity.
   function sessionReadyToClose(c, live = c) {
     if (!c || c.archived || c.trashed || c.stale_tool_call || c.last_event_type === 'user') return false;
+    const next = String(c.session_state?.next_step_user || '').trim();
+    if (next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(next)) return false;
     if ([c, live].some(r => r && (r.state === 'working' || r.codex_state === 'working'
         || r.pending_spawn || r.pending_tool || r.needs_approval || r.question_waiting
         || r.last_event_type === 'user' || r.stale_tool_call
