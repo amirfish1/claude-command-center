@@ -3601,6 +3601,7 @@ def _isolate_hermes_search_channel(monkeypatch):
     # and the harvested dir leak host transcripts into the index.
     monkeypatch.setenv("CCC_SANDBOX_SCAN_ROOT", "/nonexistent/ccc-test-sandbox")
     monkeypatch.setenv("CCC_HARVESTED_ROOT", "/nonexistent/ccc-test-harvested")
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", "/nonexistent/ccc-test-devin")
 
 
 def test_session_fts_second_search_does_no_reparse(tmp_path, monkeypatch):
@@ -4206,6 +4207,7 @@ def test_recall_path_search_does_not_block_on_document_embedding(tmp_path, monke
     embedding (a side effect of sync) must be handed to a background thread,
     never awaited inline, or every recall() call after a restart eats the
     full cold-load time."""
+    _isolate_hermes_search_channel(monkeypatch)
     from ccc_server import session_fts
 
     db_path = tmp_path / "session_fts.sqlite"
