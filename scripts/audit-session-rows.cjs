@@ -14,6 +14,19 @@ function incident(result, sid) {
   if (!failures.length) return null;
   return {sid, turn: digest(result.source.answer), failures};
 }
+// The dashboard restarts many times a day; ride out the brief outage instead of failing the hourly run.
+async function fetchJson(url, {attempts = 8, delayMs = 5000, fetchImpl = fetch} = {}) {
+  for (let attempt = 1; ; attempt++) {
+    let response;
+    try {response = await fetchImpl(url, {signal:AbortSignal.timeout(30000)});}
+    catch (error) {if (attempt >= attempts) throw error;}
+    if (response) {
+      if (response.ok) return response.json();
+      if (response.status < 500 || attempt >= attempts) throw Error(`${url.pathname || url}: HTTP ${response.status}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+}
 async function main() {
   const args = process.argv.slice(2);
   const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
@@ -23,11 +36,7 @@ async function main() {
   const out = option('--output', path.join(home, 'row-audit'));
   fs.mkdirSync(out, {recursive:true});
   const report = {started:new Date().toISOString(), url:base, queue, scope:'Features and Small bugs, last 7 days, desktop and mobile', checked:[], incidents:[], errors:[]};
-  const get = async endpoint => {
-    const response = await fetch(new URL(endpoint, base), {signal:AbortSignal.timeout(30000)});
-    if (!response.ok) throw Error(`${endpoint}: HTTP ${response.status}`);
-    return response.json();
-  };
+  const get = endpoint => fetchJson(new URL(endpoint, base));
   const sessions = new Map((await get('/api/conversations/all?stale_ok=1')).conversations.map(row => [row.session_id,row]));
   const puppeteer = require('../require-puppeteer');
   const {findChromePath} = require('../puppeteer-browser-config');
@@ -100,5 +109,5 @@ async function main() {
   console.log(JSON.stringify({checked:report.checked.length,incidents:report.incidents.length,errors:report.errors.length,report:path.join(out,'last-run.json')}));
   if (report.errors.length) process.exitCode=1;
 }
-module.exports = {incident,digest};
+module.exports = {incident,digest,fetchJson};
 if (require.main === module) main().catch(error => {console.error(error); process.exitCode=1;});

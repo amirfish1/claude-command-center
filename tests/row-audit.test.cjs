@@ -108,3 +108,13 @@ test('footerless questions require explicit end-turn evidence before filing', ()
   assert(!audit.inspect({},[{type:'assistant',blocks:[{kind:'text',text:'Waiting for the external deployment.'}]},ended],{checked:true}).findings.some(f=>f.code));
   assert(!audit.inspect({},[question,ended],{checked:true,questions:true}).findings.some(f=>f.code));
 });
+
+test('dashboard fetches survive a restart but still fail on client errors and persistent outages', async () => {
+  const {fetchJson}=require('../scripts/audit-session-rows.cjs');
+  const url=new URL('http://127.0.0.1:1/api/x');
+  const scripted=steps => async () => {const step=steps.shift(); if (step instanceof Error) throw step; return step;};
+  const ok={ok:true,status:200,json:async () => ({fine:true})};
+  assert.deepEqual(await fetchJson(url,{delayMs:0,fetchImpl:scripted([new TypeError('fetch failed'),{ok:false,status:502},ok])}),{fine:true});
+  await assert.rejects(fetchJson(url,{delayMs:0,fetchImpl:scripted([{ok:false,status:404},ok])}),/HTTP 404/);
+  await assert.rejects(fetchJson(url,{attempts:2,delayMs:0,fetchImpl:scripted([new TypeError('fetch failed'),new TypeError('fetch failed'),ok])}),/fetch failed/);
+});
