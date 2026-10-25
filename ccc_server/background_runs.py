@@ -24,7 +24,8 @@ _TEMP_SLUG_PREFIXES = ("-private-var-folders-", "-var-folders-", "-private-tmp",
 _HOUR = 3600
 _DAY = 86400
 _CACHE = {"ts": 0.0, "payload": None}
-_CACHE_TTL = 15
+_CACHE_TTL = 60
+_TOKEN_MEMO = {}
 
 
 def is_temp_project_slug(name):
@@ -60,7 +61,11 @@ def _estimate_cost(model, tin, tcache, tout):
     return (tin * w["rate_in"] + tcache * w["rate_cache_read"] + tout * w["rate_out"]) / 1_000_000
 
 
-def _tokens(path):
+def _tokens(path, mtime=None):
+    if mtime is not None:
+        cached = _TOKEN_MEMO.get(path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
     agg = _core._stats_get_file_agg(path) or {}
     total = {"in": 0, "cache": 0, "out": 0, "messages": 0, "cost": 0.0}
     models = {}
@@ -74,6 +79,10 @@ def _tokens(path):
         total["messages"] += day.get("messages", 0)
     top = max(models, key=models.get) if models else ""
     total["cost"] = _estimate_cost(top, total["in"], total["cache"], total["out"])
+    if mtime is not None:
+        if len(_TOKEN_MEMO) > 20000:
+            _TOKEN_MEMO.clear()
+        _TOKEN_MEMO[path] = (mtime, total)
     return total
 
 
@@ -186,7 +195,7 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
             "out_tokens": 0, "tokens_last_day": 0, "cost_usd": 0.0,
             "cost_usd_last_day": 0.0, "last_run_ts": 0.0,
         })
-        t = _tokens(path)
+        t = _tokens(path, mtime=mtime)
         age = now - mtime
         g["runs"] += 1
         g["in_tokens"] += t["in"]

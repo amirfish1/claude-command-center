@@ -45,6 +45,21 @@ class PieceSplitTests(unittest.TestCase):
         rev = int(re.search(r"^SERVER_REV = (\d+)", SCRIPT.read_text(), re.M).group(1))
         self.assertEqual(rev, free_runtime._LOCAL_TTS_REV)
 
+    def test_synth_caches_repeated_pieces_in_ram(self):
+        import os
+        import threading
+        src = SCRIPT.read_text(encoding="utf-8")
+        fake_kokoro = mock.MagicMock()
+        fake_kokoro.create.return_value = ([0.1, 0.2, 0.3], 24000)
+        ns = {"re": re, "os": os, "threading": threading, "_kokoro": fake_kokoro}
+        exec(src[src.index("class _PriorityLock:"):src.index("class Handler(")], ns)
+        synth = ns["_synth"]
+        s1, r1 = synth("Repeated sentence.", "af_heart")
+        s2, r2 = synth("Repeated sentence.", "af_heart")
+        self.assertEqual((s1, r1), (s2, r2))
+        fake_kokoro.create.assert_called_once()
+
+
 
 class VoicePriorityTests(unittest.TestCase):
     def test_threads_scale_with_cores(self):

@@ -105,6 +105,9 @@ class _PriorityLock:
 
 
 _SYNTH_LOCK = _PriorityLock()
+_SYNTH_CACHE = {}  # (text, voice) -> (samples, rate, nbytes), LRU order
+_SYNTH_CACHE_LOCK = threading.Lock()
+_SYNTH_CACHE_MAX_BYTES = int(os.environ.get("CCC_TTS_SYNTH_CACHE_MB", "256")) * 1024 * 1024
 try:
     import lameenc
 except ImportError:  # /speak still works; /stream answers 404 and CCC uses /speak
@@ -157,11 +160,28 @@ def split_for_stream(text):
 
 
 def _synth(text, voice, fg=True):
+    key = (text, voice)
+    with _SYNTH_CACHE_LOCK:
+        hit = _SYNTH_CACHE.pop(key, None)
+        if hit is not None:
+            _SYNTH_CACHE[key] = hit
+            return hit[0], hit[1]
     _SYNTH_LOCK.acquire(fg)
     try:
-        return _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
+        samples, rate = _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
     finally:
         _SYNTH_LOCK.release()
+    nbytes = int(getattr(samples, "nbytes", len(samples) * 4))
+    if 0 < nbytes <= _SYNTH_CACHE_MAX_BYTES:
+        with _SYNTH_CACHE_LOCK:
+            _SYNTH_CACHE.pop(key, None)
+            _SYNTH_CACHE[key] = (samples, rate, nbytes)
+            total = sum(v[2] for v in _SYNTH_CACHE.values())
+            for old in list(_SYNTH_CACHE):
+                if total <= _SYNTH_CACHE_MAX_BYTES or old == key:
+                    break
+                total -= _SYNTH_CACHE.pop(old)[2]
+    return samples, rate
 
 
 class Handler(BaseHTTPRequestHandler):

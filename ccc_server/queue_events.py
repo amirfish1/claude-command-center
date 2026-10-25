@@ -1243,11 +1243,22 @@ def _gh_queue_poll_once():
     except Exception:
         return False
 
-    items = with_stages(with_waiting_on(items))
-    with _ux_fixes_list_cache_lock:
-        _ux_fixes_list_cache[("", "")] = {"ts": time.time(), "items": items}
-
     sig = _gh_queue_signature(items)
+    all_sig = tuple(
+        (str(it.get("ref") or ""), str(it.get("status") or ""), str(it.get("updated_at") or ""))
+        for it in items if isinstance(it, dict)
+    )
+    with _ux_fixes_list_cache_lock:
+        existing = _ux_fixes_list_cache.get(("", ""))
+        if existing is not None and existing.get("all_sig") == all_sig:
+            existing["ts"] = time.time()
+            items = existing["items"]
+        else:
+            items = with_stages(with_waiting_on(items))
+            _ux_fixes_list_cache[("", "")] = {
+                "ts": time.time(), "items": items, "all_sig": all_sig,
+            }
+
     with _gh_watch_lock:
         first = _gh_watch["sig"] is None
         changed = (not first) and sig != _gh_watch["sig"]

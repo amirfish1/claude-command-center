@@ -2967,6 +2967,8 @@ def _wt_live_worker_guard():
     heuristics to them."""
     pids, sids = set(), set()
     for w in _wt_read_workers():
+        if isinstance(w, dict) and w.get("released_at"):
+            continue
         try:
             pid = int(w.get("pid", 0) or 0)
         except (TypeError, ValueError):
@@ -12023,30 +12025,50 @@ def _sys_parse_cputime(s):
 
 
 def _sys_launchd_jobs():
-    """pid -> launchd label for every job launchd itself is supervising.
+    """pid -> service label for every job launchd / systemd --user is supervising.
 
     On macOS a PPID of 1 means either 'launchd started this on purpose' or
-    'the real parent died and launchd adopted it'. `launchctl list` is the
-    only cheap way to tell those apart, and it is one subprocess per snapshot
-    rather than one per row."""
-    out = _sys_run(["/bin/launchctl", "list"], timeout=3) if platform.system() == "Darwin" else ""
+    'the real parent died and launchd adopted it'. On Linux `systemd --user`
+    is the subreaper that both starts user services and adopts orphaned user
+    processes. One subprocess per snapshot (`launchctl list` or
+    `systemctl --user show`) tells supervised jobs apart from orphans."""
+    sys_name = platform.system()
     jobs = {}
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        try:
-            jobs[int(parts[0])] = parts[2].strip()
-        except ValueError:
-            continue
+    if sys_name == "Darwin":
+        out = _sys_run(["/bin/launchctl", "list"], timeout=3)
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            try:
+                jobs[int(parts[0])] = parts[2].strip()
+            except ValueError:
+                continue
+    elif sys_name == "Linux":
+        out = _sys_run(["systemctl", "--user", "show", "--property=Id,MainPID", "*.service"], timeout=3)
+        cur_pid = 0
+        cur_id = ""
+        for line in (out + "\n").splitlines():
+            if not line.strip():
+                if cur_pid > 0 and cur_id:
+                    jobs[cur_pid] = cur_id
+                cur_pid, cur_id = 0, ""
+            elif line.startswith("MainPID="):
+                try:
+                    cur_pid = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    cur_pid = 0
+            elif line.startswith("Id="):
+                cur_id = line.split("=", 1)[1].strip()
     return jobs
 
 
 def _sys_ccc_session_pids():
     """PIDs of sessions CCC itself spawned (spawn registry on disk + this
-    process's in-memory list). A `claude -p` reparented to launchd because the
-    worker restarted is still a live, tracked session — an anchor, not an
-    orphan root. Cheap: one small JSON read per snapshot, no RPC."""
+    process's in-memory list + live WatchTower workers). A `claude -p`
+    reparented to launchd / systemd --user because the worker restarted is
+    still a live, tracked session — an anchor, not an orphan root. Cheap:
+    small JSON reads per snapshot, no RPC."""
     pids = set()
     try:
         for entry in _load_spawn_registry():
@@ -12061,6 +12083,17 @@ def _sys_ccc_session_pids():
             pid = entry.get("pid") if isinstance(entry, dict) else None
             if pid:
                 pids.add(int(pid))
+    except Exception:
+        pass
+    try:
+        wt_pids, _ = _wt_live_worker_guard()
+        pids.update(wt_pids)
+    except Exception:
+        pass
+    try:
+        for data in _load_session_registry().values():
+            if isinstance(data, dict) and data.get("pid"):
+                pids.add(int(data["pid"]))
     except Exception:
         pass
     pids.discard(0)
@@ -12107,11 +12140,15 @@ def _sys_worktree_gitdir_missing(cwd, _memo):
 def _build_system_processes_uncached():
     now = time.time()
     uid = os.getuid() if hasattr(os, "getuid") else None
+    sys_name = platform.system()
 
     ps_fmt = "pid=,ppid=,rss=,pcpu=,etime=,time=,stat=,tty=,command="
     ps_cmd = [_SYS_PS, "-axo", ps_fmt]
-    if uid is not None and platform.system() == "Darwin":
-        ps_cmd = [_SYS_PS, "-u", str(uid), "-o", ps_fmt]
+    if uid is not None:
+        if sys_name == "Darwin":
+            ps_cmd = [_SYS_PS, "-u", str(uid), "-o", ps_fmt]
+        elif sys_name == "Linux":
+            ps_cmd = [_SYS_PS, "-U", str(uid), "-u", str(uid), "-o", ps_fmt]
 
     ps_out = _sys_run(ps_cmd, timeout=5)
 
@@ -12150,22 +12187,36 @@ def _build_system_processes_uncached():
                 cur_type = val
             elif tag == "n":
                 if cur_fd == "cwd":
-                    pid_files[cur_pid]["cwd"] = val
-                    pid_files[cur_pid]["cwd_exists"] = os.path.exists(val)
+                    if cur_type == "unknown" or "(readlink:" in val:
+                        pid_files[cur_pid]["cwd"] = None
+                        pid_files[cur_pid]["cwd_exists"] = True
+                    elif val.endswith(" (deleted)"):
+                        pid_files[cur_pid]["cwd"] = val[:-10]
+                        pid_files[cur_pid]["cwd_exists"] = False
+                    else:
+                        pid_files[cur_pid]["cwd"] = val
+                        pid_files[cur_pid]["cwd_exists"] = os.path.exists(val)
                 elif cur_fd == "0":
                     pid_files[cur_pid]["fd0"] = val
                     pid_files[cur_pid]["fd0_type"] = cur_type
                     if cur_type == "FIFO":
-                        pid_files[cur_pid]["fd0_exists"] = os.path.exists(val)
+                        if val.endswith(" (deleted)"):
+                            pid_files[cur_pid]["fd0_exists"] = False
+                        elif val.startswith("/") and "(readlink:" not in val:
+                            pid_files[cur_pid]["fd0_exists"] = os.path.exists(val)
+                        else:
+                            pid_files[cur_pid]["fd0_exists"] = True
 
     my_pid = os.getpid()
     parent_pid = os.getppid()
     ccc_server_path = os.path.join(_CCC_SOURCE_DIR, "server.py")
     ccc_worker_path = os.path.join(_CCC_SOURCE_DIR, "ccc_worker.py")
+    ccc_tts_path = os.path.join(_CCC_SOURCE_DIR, "scripts", "local_tts_server.py")
     empty_files = {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True}
 
     # ── pass 1: parse + classify every row (no scoring yet) ──────────────
     rows = {}
+    reaper_pids = {1}
     for line in ps_out.splitlines():
         parts = line.strip().split(None, 8)
         if len(parts) < 9:
@@ -12180,9 +12231,12 @@ def _build_system_processes_uncached():
         etime_str, cputime_str, stat, tty, cmd = parts[4], parts[5], parts[6], parts[7], parts[8]
         cmd_base = cmd.split(None, 1)[0].rsplit("/", 1)[-1]
         label = launchd_jobs.get(pid)
+        if cmd_base == "systemd" and "--user" in cmd:
+            reaper_pids.add(pid)
 
         is_system_daemon = (
-            cmd.startswith(("/usr/libexec/", "/usr/sbin/", "/System/", "/Library/"))
+            cmd.startswith(("/usr/libexec/", "/usr/sbin/", "/System/", "/Library/", "/lib/systemd/", "/usr/lib/systemd/", "/sbin/", "sshd:"))
+            or cmd_base in ("systemd", "(sd-pam)", "sshd", "sshd:")
             or "LAUNCHED_BY_LAUNCHD" in cmd
             or "/System/Library/" in cmd
         )
@@ -12193,19 +12247,14 @@ def _build_system_processes_uncached():
         is_dev_server = bool(_PROC_DEV_SERVER_RE.search(cmd))
         is_mp_worker = bool(_PROC_MP_WORKER_RE.search(cmd))
         is_gui = ("/Applications/" in cmd or "Contents/MacOS" in cmd)
-        # A GUI path is only a shield while the app that owns it is alive.
-        # Automation browsers (Puppeteer/Playwright/chrome-devtools) and any
-        # app *helper* / LSP / MCP that has been reparented to launchd are the
-        # leak we are hunting, not a desktop app.
-        if is_automation or (ppid == 1 and (is_helper or is_lsp or is_mcp)):
-            is_gui = False
         is_ccc = (
             pid in (my_pid, parent_pid)
             or ccc_server_path in cmd
             or ccc_worker_path in cmd
+            or ccc_tts_path in cmd
             or cmd_base == "ccc_worker.py"
             or "watchtower.cli" in cmd
-            or (label or "").startswith(("com.github.claude-command-center", "ai.watchtower"))
+            or (label or "").startswith(("com.github.claude-command-center", "ai.watchtower", "ccc.", "ccc-", "watchtower."))
         )
         is_known_daemon = (
             cmd_base in _PROC_KNOWN_DAEMON_BASES
@@ -12214,10 +12263,6 @@ def _build_system_processes_uncached():
         )
         has_tty = bool(tty) and tty not in ("??", "?", "-", "")
         is_ccc_session = pid in ccc_session_pids
-        # Anchored = something is deliberately keeping this alive; an orphan
-        # tree never roots at an anchored process.
-        anchored = (bool(label) or is_system_daemon or is_gui or is_ccc or is_known_daemon
-                    or has_tty or is_ccc_session)
 
         rows[pid] = {
             "pid": pid, "ppid": ppid, "cmd": cmd, "cmd_base": cmd_base, "cpu": cpu, "rss_mb": rss_mb,
@@ -12228,19 +12273,33 @@ def _build_system_processes_uncached():
             "is_automation": is_automation, "is_helper": is_helper, "is_lsp": is_lsp,
             "is_mcp": is_mcp, "is_dev_server": is_dev_server, "is_mp_worker": is_mp_worker,
             "is_ccc_session": is_ccc_session,
-            "anchored": anchored, "files": pid_files.get(pid, empty_files),
+            "anchored": False, "files": pid_files.get(pid, empty_files),
         }
 
+    for r in rows.values():
+        # A GUI path is only a shield while the app that owns it is alive.
+        # Automation browsers (Puppeteer/Playwright/chrome-devtools) and any
+        # app *helper* / LSP / MCP that has been reparented to launchd or
+        # systemd --user are the leak we are hunting, not a desktop app.
+        if r["is_automation"] or (r["ppid"] in reaper_pids and (r["is_helper"] or r["is_lsp"] or r["is_mcp"])):
+            r["is_gui"] = False
+        # Anchored = something is deliberately keeping this alive; an orphan
+        # tree never roots at an anchored process.
+        r["anchored"] = (
+            bool(r["label"]) or r["is_system_daemon"] or r["is_gui"] or r["is_ccc"]
+            or r["is_known_daemon"] or r["has_tty"] or r["is_ccc_session"]
+        )
+
     # ── pass 2: orphan trees ─────────────────────────────────────────────
-    # A row whose ancestry ends at an un-anchored PPID-1 process inherits
-    # that process's "launcher is gone" status: `npm exec next dev` (PPID 1)
+    # A row whose ancestry ends at an un-anchored reaper-parented process
+    # inherits that process's "launcher is gone" status: `npm exec next dev`
     # -> `next dev` -> `next-server` at 90% CPU is one leak, not three rows.
     def _orphan_root(pid):
         seen = 0
         cur = rows.get(pid)
         while cur is not None and seen < 64:
             seen += 1
-            if cur["ppid"] == 1:
+            if cur["ppid"] in reaper_pids:
                 return cur["pid"] if not cur["anchored"] else None
             if cur["anchored"]:
                 return None
@@ -12261,7 +12320,7 @@ def _build_system_processes_uncached():
         files = r["files"]
         etime_min = r["etime_min"]
         has_tty = r["has_tty"]
-        is_orphan = ppid == 1 and not r["anchored"]
+        is_orphan = ppid in reaper_pids and not r["anchored"]
         tree_orphan = r["tree_orphan"]
         detached = is_orphan or tree_orphan
         score = 0.0
@@ -12304,7 +12363,7 @@ def _build_system_processes_uncached():
         m = _PROC_PARENT_PID_RE.search(cmd)
         if m:
             declared = int(m.group(1))
-            if declared not in rows and declared != 1:
+            if declared not in rows and declared not in reaper_pids:
                 score += 4.0
                 reasons.append("Declared parent pid %d is gone" % declared)
 
@@ -12324,7 +12383,7 @@ def _build_system_processes_uncached():
         elif r["is_automation"] and r["is_helper"] and detached:
             score += 3.0
             reasons.append("Helper of leaked headless browser (root pid %s)" % r["tree_root"])
-        elif r["is_helper"] and ppid == 1:
+        elif r["is_helper"] and ppid in reaper_pids:
             score += 4.0
             reasons.append("Orphaned app helper (main app gone)")
 
@@ -12492,8 +12551,9 @@ def _reap_orphaned_automation_browsers():
             continue
         pid = process.get("pid")
         age_min = float(process.get("etime_min") or 0)
+        reasons = process.get("reasons") or ()
         exact = (
-            process.get("ppid") == 1
+            (process.get("ppid") == 1 or "Leaked headless browser (launcher gone)" in reasons)
             and not process.get("has_tty")
             and age_min > 60
         )
@@ -15774,7 +15834,7 @@ _archive_serve_version = 0       # monotonic per store; tags prebuilt response b
 # content change always misses and rebuilds.
 _ARCHIVE_LIST_BODY_CACHE = {}  # (cache_key, window, from_cache) -> {"ver", "raw", "gzip", "etag"}
 _ARCHIVE_LIST_BODY_LOCK = threading.Lock()
-_ARCHIVE_LIST_BODY_CACHE_MAX = 24
+_ARCHIVE_LIST_BODY_CACHE_MAX = 96
 _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
 
@@ -17228,8 +17288,9 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     exit instead of permanently raising the daemon's RSS. The parent only
     decodes the completed row snapshot and publishes it atomically.
     """
+    _shm_dir = "/dev/shm" if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK) else None
     output_fd, output_name = tempfile.mkstemp(
-        prefix="ccc-archive-refresh-", suffix=".json",
+        prefix="ccc-archive-refresh-", suffix=".json", dir=_shm_dir,
     )
     os.close(output_fd)
     encoded_options = base64.urlsafe_b64encode(
@@ -24597,7 +24658,7 @@ def _registry_only_conversation_stub(conversation_id, after_line=0):
 # session of clicking around different convs doesn't grow unbounded.
 _CONV_PARSE_CACHE = {}
 _CONV_PARSE_CACHE_LOCK = threading.Lock()
-_CONV_PARSE_CACHE_MAX = 96
+_CONV_PARSE_CACHE_MAX = 512
 
 
 _CONV_PATH_CACHE = {}
@@ -24703,7 +24764,7 @@ _CONV_TAIL_DEFAULT = 150  # lines pulled for the initial tail window on open
 # only: it is stateless per line; the codex parser threads running usage.
 _WINDOW_PARSE_MEMO = {}
 _WINDOW_PARSE_MEMO_LOCK = threading.Lock()
-_WINDOW_PARSE_MEMO_MAX_FILES = 24
+_WINDOW_PARSE_MEMO_MAX_FILES = 128
 _WINDOW_PARSE_SKIP = object()
 
 
@@ -24712,7 +24773,7 @@ _WINDOW_PARSE_SKIP = object()
 # only (bytes.count, C speed); a shrink or inode change recounts from zero.
 _LINE_COUNT_CACHE = {}
 _LINE_COUNT_LOCK = threading.Lock()
-_LINE_COUNT_CACHE_MAX = 512
+_LINE_COUNT_CACHE_MAX = 2048
 _TAIL_READ_CHUNK = 256 * 1024
 
 
@@ -24795,7 +24856,7 @@ def _read_tail_lines(filepath, n):
 
 _TS_RUNS_CACHE = {}
 _TS_RUNS_LOCK = threading.Lock()
-_TS_RUNS_CACHE_MAX = 128
+_TS_RUNS_CACHE_MAX = 512
 _TS_RUN_EXTRA_CAP = 2000
 _TS_RE = re.compile(rb'"timestamp": ?"([0-9T:.+\-Z]+)"')
 
@@ -25420,7 +25481,7 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
 # "gzip": bytes|None}. Bounded so memory doesn't blow up.
 _CONV_BYTES_CACHE = {}
 _CONV_BYTES_CACHE_LOCK = threading.Lock()
-_CONV_BYTES_CACHE_MAX = 96
+_CONV_BYTES_CACHE_MAX = 512
 
 
 def _session_has_pending_input(session_id):

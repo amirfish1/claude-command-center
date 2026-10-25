@@ -674,8 +674,8 @@ def local_tts_open(text, voice="", prio="fg"):
 # and replayed instantly. Bounded by bytes; only fully-made clips are stored.
 # Clips are also written to disk (one file per clip, oldest-used evicted), so
 # a dashboard restart does not throw away audio already made.
-_CLIP_CACHE_MAX_BYTES = 48 * 1024 * 1024
-_CLIP_DISK_MAX_BYTES = 256 * 1024 * 1024
+_CLIP_CACHE_MAX_BYTES = 256 * 1024 * 1024
+_CLIP_DISK_MAX_BYTES = 512 * 1024 * 1024
 _CLIP_CACHE = {}   # (text, voice) -> mp3 bytes, oldest first
 _CLIP_CACHE_LOCK = threading.Lock()
 
