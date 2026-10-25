@@ -39,6 +39,7 @@ import uuid
 from ccc_server import antigravity_ls
 from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
 
@@ -7528,6 +7529,26 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
         pass
 
 
+def _proc_less_entry_poll(entry):
+    """None while a proc-less entry's pid is alive, else -1.
+
+    No waitpid here: the same pid may belong to a real Popen in another entry,
+    and reaping it would steal that handle's exit status.
+    """
+    pid = entry.get("pid") if isinstance(entry, dict) else None
+    if pid is None:
+        return -1
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return -1
+    if pid <= 0 or not _paths_is_pid_alive(pid, perm_alive=True):
+        return -1
+    if _core._pid_is_zombie(pid):
+        return -1
+    return None
+
+
 def _poll_spawn_entry(entry):
     """Poll a tracked spawned child and clean transient handles once it exits."""
     if isinstance(entry, dict) and entry.get("app_server_spawn"):
@@ -7545,7 +7566,14 @@ def _poll_spawn_entry(entry):
     else:
         proc = entry.get("proc") if isinstance(entry, dict) else None
         try:
-            poll = proc.poll() if proc is not None else -1
+            if proc is not None:
+                poll = proc.poll()
+            else:
+                # Proc-less entries with a pid (raw spawn-registry rows merged in
+                # by the Antigravity/Devin sid lookups) must not read as exited
+                # while the child runs, or the registry row is dropped early
+                # and the live row turns "(external)" (CCC-166).
+                poll = _proc_less_entry_poll(entry)
         except Exception:
             poll = -1
     # Devin's CLI wrapper can exit while the real agent child (recorded in
