@@ -1,0 +1,1 @@
+**Collapse project groups in Features sidebar**: Ensure session rows and child elements properly fold and hide when project groups are collapsed via chevron or "Collapse all", across both desktop and responsive layouts.

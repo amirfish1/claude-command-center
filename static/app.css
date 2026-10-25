@@ -15225,21 +15225,25 @@
   .ship-act-approve:hover:not(:disabled) { background: rgba(63,185,80,0.16); color: #56d364; }
   .ship-act-reject:hover:not(:disabled) { background: rgba(139,148,158,0.14); color: var(--text); }
   .ship-act-approve:disabled, .ship-act-reject:disabled { opacity: 0.4; cursor: default; }
-  #convList .conv-folder-group.collapsed > .conv-item,
-  #convList .conv-folder-group.collapsed > .conv-subagent-cluster,
-  #convList .conv-folder-group.collapsed > .conv-repeat-group,
-  #convList .conv-folder-group.collapsed > .conv-gap-separator,
-  #convList .conv-folder-group.collapsed > .conv-draft-row,
-  #convList .conv-folder-group.collapsed > .conv-object-empty-hint,
-  #convList .conv-folder-group.collapsed > .conv-ghissues-more { display: none; }
-  .conv-folder-group.is-subtree-hidden { display: none; }
-  #convList .conv-folder-group.sessions-collapsed > .conv-item,
-  #convList .conv-folder-group.sessions-collapsed > .conv-subagent-cluster,
-  #convList .conv-folder-group.sessions-collapsed > .conv-repeat-group,
-  #convList .conv-folder-group.sessions-collapsed > .conv-gap-separator,
-  #convList .conv-folder-group.sessions-collapsed > .conv-draft-row,
-  #convList .conv-folder-group.sessions-collapsed > .conv-object-empty-hint,
-  #convList .conv-folder-group.sessions-collapsed > .conv-ghissues-more { display: none; }
+  #convList#convList .conv-folder-group.collapsed > :not(.conv-folder-group-header),
+  #convList#convList .conv-folder-group.sessions-collapsed > :not(.conv-folder-group-header),
+  #convList#convList .conv-folder-group.collapsed > .conv-item,
+  #convList#convList .conv-folder-group.collapsed > .conv-subagent-cluster,
+  #convList#convList .conv-folder-group.collapsed > .conv-repeat-group,
+  #convList#convList .conv-folder-group.collapsed > .conv-gap-separator,
+  #convList#convList .conv-folder-group.collapsed > .conv-draft-row,
+  #convList#convList .conv-folder-group.collapsed > .conv-object-empty-hint,
+  #convList#convList .conv-folder-group.collapsed > .conv-ghissues-more,
+  #convList#convList .conv-folder-group.collapsed > .conv-nya-row-block,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-item,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-subagent-cluster,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-repeat-group,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-gap-separator,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-draft-row,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-object-empty-hint,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-ghissues-more,
+  #convList#convList .conv-folder-group.sessions-collapsed > .conv-nya-row-block { display: none !important; }
+  #convList#convList .conv-folder-group.is-subtree-hidden { display: none !important; }
   .conv-ghissues-more {
     display: flex;
     padding: 2px 10px 3px calc(10px + var(--conv-dot-col, 9px) + var(--conv-time-col, 43px) + 6px);

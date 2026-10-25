@@ -45127,6 +45127,18 @@
         const arrowEl = hdr.querySelector('.conv-folder-group-arrow');
         if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         hdr.setAttribute('aria-expanded', String(!wasCollapsed));
+        const section = group.closest('[data-role="archived-section"]');
+        if (section) {
+          const expandAllBtn = section.querySelector('[data-role="archived-expand-all"]');
+          if (expandAllBtn) {
+            const anyCollapsed = !!section.querySelector('.conv-folder-group.collapsed');
+            const verb = anyCollapsed ? 'Expand all' : 'Collapse all';
+            const dir = anyCollapsed ? 'expand' : 'collapse';
+            expandAllBtn.setAttribute('data-dir', dir);
+            expandAllBtn.textContent = verb;
+            expandAllBtn.setAttribute('title', verb + ' project groups');
+          }
+        }
         if (objNodeForToggle) {
           renderArchiveList(document.getElementById('convSearch')?.value || '');
         }
