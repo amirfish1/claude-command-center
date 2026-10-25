@@ -1,0 +1,1 @@
+- Sidebar polls now fetch only the conversations that changed since the last poll instead of the whole list, and a background refresh that changed nothing no longer forces the list to be rebuilt.

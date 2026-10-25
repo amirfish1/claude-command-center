@@ -15843,12 +15843,178 @@ def _archive_serve_cache_store(key, rows, generation, ts=None):
     with _archive_serve_lock:
         if generation != _archive_serve_generation:
             return False
+        prev = _archive_serve_cache.get(key)
+    # CCC-142: diff against the previous snapshot outside the lock. Rows that
+    # compare equal keep the previous dict (so derived caches keyed by row
+    # identity stay warm) and a refresh that changed nothing keeps the old
+    # version, so the prebuilt /list body still replays (~356 rebuilds/day,
+    # most of them no-ops, used to force a full 11MB body rebuild each).
+    diff = _archive_serve_diff(prev, rows) if prev is not None else None
+    with _archive_serve_lock:
+        if generation != _archive_serve_generation:
+            return False
+        if _archive_serve_cache.get(key) is not prev:
+            prev, diff = _archive_serve_cache.get(key), None
+        stamp = ts if ts is not None else time.time()
+        if diff is not None and isinstance(rows, list):
+            # Keep the caller's list object (identity-keyed version lookups
+            # on the rows it just built) but with the reused row dicts.
+            rows[:] = diff["rows"]
+            diff["rows"] = rows
+        if diff is not None and diff["identical"]:
+            prev["ts"] = stamp
+            prev["rows"] = diff["rows"]
+            return True
         _archive_serve_version += 1
-        _archive_serve_cache[key] = {
-            "ts": ts if ts is not None else time.time(),
-            "rows": rows, "ver": _archive_serve_version,
-        }
+        ver = _archive_serve_version
+        # row_rev: session id -> version its row last changed (absent = at or
+        # before track_since). Feeds the ?since= delta /list.
+        entry = {"ts": stamp, "rows": rows, "ver": ver, "track_since": ver, "row_rev": {}}
+        if diff is not None:
+            entry["rows"] = diff["rows"]
+            if prev.get("track_since") and prev.get("row_rev") is not None and not diff["untracked"]:
+                row_rev = dict(prev["row_rev"])
+                for sid in diff["changed"]:
+                    row_rev[sid] = ver
+                for sid in diff["removed"]:
+                    row_rev.pop(sid, None)
+                entry.update(track_since=prev["track_since"], row_rev=row_rev)
+        _archive_serve_cache[key] = entry
         return True
+
+
+# Delta tokens are only meaningful within one process: versions restart at 0.
+_ARCHIVE_DELTA_NONCE = os.urandom(4).hex()
+
+
+def _archive_row_sid(row):
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("session_id") or row.get("id") or "")
+
+
+def _archive_serve_diff(prev, rows):
+    """Row-level diff of a new snapshot against the stored one."""
+    old_rows = prev.get("rows") or []
+    old_by = {}
+    for r in old_rows:
+        sid = _archive_row_sid(r)
+        if sid:
+            old_by[sid] = r
+    out, changed, seen, untracked = [], [], set(), False
+    for r in rows or []:
+        sid = _archive_row_sid(r)
+        o = old_by.get(sid) if sid else None
+        if o is not None and o == r:
+            out.append(o)
+        else:
+            out.append(r)
+            if sid:
+                changed.append(sid)
+            else:
+                untracked = True
+        if sid:
+            # A repeated id can't be merged by id on the client.
+            untracked = untracked or sid in seen
+            seen.add(sid)
+    removed = [sid for sid in old_by if sid not in seen]
+    identical = (not changed and not removed and not untracked
+                 and len(out) == len(old_rows)
+                 and all(a is b for a, b in zip(out, old_rows)))
+    return {"rows": out, "changed": changed, "removed": removed,
+            "untracked": untracked, "identical": identical}
+
+
+def _archive_list_delta_state(key, rows, window, from_cache):
+    """Current delta token for a /list response, plus what a ?since= delta
+    needs. None when this response can't be expressed as a delta (rows are
+    not the stored snapshot plus appended overlay rows)."""
+    with _archive_serve_lock:
+        sc = _archive_serve_cache.get(key)
+        if sc is None or not sc.get("track_since") or sc.get("row_rev") is None:
+            return None
+        base = sc.get("rows") or []
+        ver, track_since, row_rev = sc.get("ver", 0), sc["track_since"], sc["row_rev"]
+    rows = rows or []
+    if len(rows) < len(base) or (rows is not base and any(a is not b for a, b in zip(rows, base))):
+        return None
+    extra = rows[len(base):]
+    try:
+        resumes = _load_usage_limit_resumes()
+    except Exception:
+        resumes = None
+    try:
+        ideas = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        ideas = None
+    # Inputs of the row projection that are not part of the row itself: any
+    # change invalidates every older token (the client gets a full body).
+    ctx = hashlib.sha1(json.dumps(
+        [key, window, _session_graph.parent_revision(), resumes, ideas,
+         [_archive_row_sid(r) for r in extra]],
+        sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()).hexdigest()[:12]
+    ovl = hashlib.sha1(json.dumps(
+        extra, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()).hexdigest()[:8] if extra else "0"
+    return {
+        "token": f"{_ARCHIVE_DELTA_NONCE}.{ver}.{ctx}.{ovl}",
+        "nonce": _ARCHIVE_DELTA_NONCE, "ver": ver, "ctx": ctx,
+        "track_since": track_since, "row_rev": row_rev,
+        "base": base, "extra": extra,
+    }
+
+
+def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None):
+    """Rows changed after token `since`, plus the window's full ordered id
+    list so the client can drop/reorder exactly. None = send a full body."""
+    try:
+        nonce, ver_s, ctx, _ovl = str(since).split(".")
+        since_ver = int(ver_s)
+    except (ValueError, TypeError):
+        return None
+    if nonce != state["nonce"] or ctx != state["ctx"]:
+        return None
+    if not (state["track_since"] <= since_ver <= state["ver"]):
+        return None
+    window = _archive_list_window(window)
+    cutoff = _archive_list_window_cutoff(window, now=now)
+    row_rev, track_since = state["row_rev"], state["track_since"]
+    ids, changed = [], []
+    for r in state["base"]:
+        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff):
+            continue
+        sid = _archive_row_sid(r)
+        if not sid:
+            return None
+        ids.append(sid)
+        if row_rev.get(sid, track_since) > since_ver:
+            changed.append(r)
+    seen = set(ids)
+    for r in state["extra"]:
+        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff):
+            continue
+        sid = _archive_row_sid(r)
+        if not sid or sid in seen:
+            return None
+        ids.append(sid)
+        changed.append(r)
+    projected = _archive_list_project_rows(changed, window="all", now=now)
+    payload = {
+        "ok": True,
+        "delta": True,
+        "since": since,
+        "conversations": projected,
+        "ids": ids,
+        "count": len(ids),
+        "total_count": sum(isinstance(row, dict) for row in (rows or [])),
+        "window": window,
+        "fields": list(_ARCHIVE_LIST_FIELDS),
+        "queue_health": _queue_health_stats(rows, now=now),
+    }
+    if cached is not None:
+        payload["cached"] = bool(cached)
+    return payload
 
 
 def _archive_serve_ver_for_rows(key, rows):
@@ -15901,6 +16067,8 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                             row["archived"] = sid in arch_set
                         if trashed_set is not None:
                             row["trashed"] = sid in tr_set
+                        if entry.get("row_rev") is not None:
+                            entry["row_rev"][sid] = _archive_serve_version
                 entry["ts"] = 0.0
                 entry["ver"] = _archive_serve_version
             _archive_serve_refreshing.clear()
@@ -31466,17 +31634,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _lt1 = time.perf_counter()
             list_cache_key = _archive_response_cache_key(**cache_options)
             _payload_ms = []
+            # CCC-142: ?since=<delta_token> asks for only the rows that changed
+            # after the client's last body. Anything the token can't vouch for
+            # (restart, projection inputs moved, history trimmed) gets a full
+            # body, which carries the next token.
+            _delta = None
+            if body_ver:
+                try:
+                    _delta = _archive_list_delta_state(list_cache_key, rows, window, from_cache)
+                except Exception:
+                    _delta = None
+            since = (qs.get("since", [""])[0] or "").strip()
+            _status = None
+            if _delta is not None and since:
+                if since == _delta["token"]:
+                    self.send_response(304)
+                    self.send_header("ETag", '"d-' + _delta["token"] + '"')
+                    self.end_headers()
+                    _status = 304
+                else:
+                    _pt0 = time.perf_counter()
+                    _dp = _archive_list_delta_payload(
+                        _delta, since, rows, window=window, cached=from_cache,
+                    )
+                    if _dp is not None:
+                        _dp["delta_token"] = _delta["token"]
+                        _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
+                        self.send_json(_dp)
+                        _status = "delta"
 
             def _timed_payload():
                 _pt0 = time.perf_counter()
                 try:
-                    return _archive_list_payload(rows, window=window, cached=from_cache)
+                    payload = _archive_list_payload(rows, window=window, cached=from_cache)
+                    if _delta is not None:
+                        payload["delta_token"] = _delta["token"]
+                    return payload
                 finally:
                     _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
 
-            _status = self._send_archive_list_json(
-                list_cache_key, window, from_cache, _timed_payload, body_ver,
-            )
+            if _status is None:
+                # The token's projection-context hash joins the body version so
+                # a replayed body never carries a token for other inputs.
+                _status = self._send_archive_list_json(
+                    list_cache_key, window, from_cache, _timed_payload,
+                    (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
+                )
             _lt2 = time.perf_counter()
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
                 "window": window,
@@ -31487,6 +31690,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "send_ms": round((_lt2 - _lt1) * 1000.0, 1),
                 "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
                 "body_hit": not _payload_ms,
+                "delta": _status == "delta",
                 "from_cache": bool(from_cache),
                 "stale_ok": stale_ok,
                 "refreshing": bool(_archive_serve_refreshing),

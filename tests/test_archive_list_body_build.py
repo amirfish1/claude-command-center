@@ -1,6 +1,8 @@
 """CCC-142: the /list body is built once per snapshot, and projected rows
 never share mutable containers with the cached snapshot."""
 import importlib
+import json
+import urllib.error
 import threading
 import time
 import urllib.request
@@ -89,3 +91,81 @@ def test_list_and_live_paths_do_not_wait_on_a_held_acp_lock():
     finally:
         release.set()
         t.join(timeout=5)
+
+
+def _row(sid, title, ts=None):
+    return {'session_id': sid, 'title': title, 'modified': ts or time.time()}
+
+
+def test_identical_refresh_keeps_snapshot_version(monkeypatch):
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    gen = server._archive_serve_generation
+    assert server._archive_serve_cache_store('k', [_row('a', 'A', 1), _row('b', 'B', 2)], gen)
+    first = server._archive_serve_cache['k']
+    ver = first['ver']
+    # A rebuild that produced equal rows (new dicts) is not a new snapshot.
+    assert server._archive_serve_cache_store('k', [_row('a', 'A', 1), _row('b', 'B', 2)], gen)
+    assert server._archive_serve_cache['k'] is first and first['ver'] == ver
+    # One changed row: new version, unchanged rows keep their old dicts.
+    old_a = first['rows'][0]
+    assert server._archive_serve_cache_store('k', [_row('a', 'A', 1), _row('b', 'B2', 2)], gen)
+    entry = server._archive_serve_cache['k']
+    assert entry['ver'] > ver
+    assert entry['rows'][0] is old_a
+    assert entry['track_since'] == ver
+    assert entry['row_rev'] == {'b': entry['ver']}
+    # Removal drops the row's revision; the id list carries the removal.
+    assert server._archive_serve_cache_store('k', [_row('b', 'B2', 2)], gen)
+    assert 'a' not in server._archive_serve_cache['k']['row_rev']
+
+
+def test_delta_list_sends_only_changed_rows(monkeypatch):
+    server = importlib.import_module('server')
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', {})
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_BUILD_LOCKS', {})
+    gen = server._archive_serve_generation
+    now = time.time()
+    server._archive_serve_cache_store(key, [_row('a', 'A', now), _row('b', 'B', now)], gen)
+
+    def source(*a, **kw):
+        sc = server._archive_serve_cache[key]
+        return sc['rows'], True, sc['ver']
+
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached', source)
+    httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f'http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=7d&stale_ok=1'
+
+    def get(url):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as e:
+            return e.code, None
+
+    try:
+        status, full = get(base)
+        assert status == 200 and not full.get('delta')
+        token = full['delta_token']
+        assert [r['session_id'] for r in full['conversations']] == ['a', 'b']
+        # Nothing changed: 304 without a body.
+        assert get(base + '&since=' + token)[0] == 304
+        # One row changed and one appeared: only those two rows ship.
+        server._archive_serve_cache_store(
+            key, [_row('c', 'C', now), _row('a', 'A', now), _row('b', 'B2', now)], gen)
+        status, delta = get(base + '&since=' + token)
+        assert status == 200 and delta['delta'] is True
+        assert delta['ids'] == ['c', 'a', 'b']
+        assert sorted(r['session_id'] for r in delta['conversations']) == ['b', 'c']
+        assert delta['delta_token'] != token
+        # A token from another process (or garbage) gets a full body.
+        status, again = get(base + '&since=deadbeef.1.x.0')
+        assert status == 200 and not again.get('delta') and len(again['conversations']) == 3
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)

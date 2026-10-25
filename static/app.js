@@ -75556,6 +75556,33 @@
   const _archiveAllInflight = new Map();
   const _archiveAllEtag = new Map();  // url -> last ETag from the server
   const _archiveAllData = new Map();  // url -> last conversations[] (reused on 304)
+  // url -> server delta_token for _archiveAllData. With it, polls ask
+  // ?since=<token> and get only the changed rows plus the ordered id list
+  // (CCC-142: the 7d body is ~11MB; most polls change a handful of rows).
+  const _archiveAllDelta = new Map();
+
+  // Apply a ?since= delta onto the rows it was computed against. null when
+  // the delta can't be applied exactly (caller then fetches a full body).
+  function _mergeArchiveListDelta(prev, d) {
+    if (!Array.isArray(prev) || !Array.isArray(d.ids) || !Array.isArray(d.conversations)) return null;
+    const byId = new Map();
+    for (const row of prev) {
+      const id = row && (row.session_id || row.id);
+      if (id) byId.set(String(id), row);
+    }
+    for (const row of d.conversations) {
+      const id = row && (row.session_id || row.id);
+      if (!id) return null;
+      byId.set(String(id), row);
+    }
+    const out = new Array(d.ids.length);
+    for (let i = 0; i < d.ids.length; i++) {
+      const row = byId.get(String(d.ids[i]));
+      if (!row) return null;
+      out[i] = row;
+    }
+    return out;
+  }
   // Generous: cold-cache scans take ~12s; a healthy response is <1s. This only
   // fires when the request is truly wedged.
   const ARCHIVE_ALL_FETCH_TIMEOUT_MS = 45 * 1000;
@@ -75617,6 +75644,7 @@
     const p = (async () => {
       try {
         const prevEtag = _archiveAllEtag.get(url);
+        const deltaToken = Array.isArray(_archiveAllData.get(url)) ? _archiveAllDelta.get(url) : null;
         // Hard timeout: without one, a wedged request (accepted connection,
         // response never arrives) hangs this promise forever — and every
         // caller dedups onto it (_archiveAllInflight, _archiveRefreshPromise),
@@ -75633,7 +75661,10 @@
             _archiveBootstrapConsumed = true;
             r = await _archiveBootstrapFetchPromise;
           }
-          if (!r) r = await backgroundApiFetch(url, init);
+          if (!r) {
+            r = await backgroundApiFetch(
+              deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url, init);
+          }
         } finally {
           clearTimeout(timeoutId);
         }
@@ -75661,9 +75692,27 @@
           _clientLog('[ARCHIVE-DIAG] conversations/list not-ok: HTTP ' + r.status + ' ' + url.split('?')[1]);
           return null;
         }
-        const etag = r.headers.get('ETag');
-        const _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
-        const d = await r.json();
+        let etag = r.headers.get('ETag');
+        let _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
+        let d = await r.json();
+        let _merged = null;
+        if (d && d.delta) {
+          _merged = _mergeArchiveListDelta(_archiveAllData.get(url), d);
+          if (!_merged) {
+            // Ids we never had: resync with one full body.
+            _clientLog('[ARCHIVE-DIAG] conversations/list delta unmergeable; full refetch');
+            _archiveAllDelta.delete(url);
+            _archiveAllEtag.delete(url);
+            const r2 = await backgroundApiFetch(url, { signal: controller.signal });
+            if (!r2.ok) {
+              _perfListLog(0, r2.status, 'err');
+              return null;
+            }
+            etag = r2.headers.get('ETag');
+            _perfLen = parseInt(r2.headers.get('content-length') || '0', 10) || 0;
+            d = await r2.json();
+          }
+        }
         try {
           if (d && d.queue_health && typeof window.__cccPerfQueueHealth === 'function') {
             window.__cccPerfQueueHealth(d.queue_health);
@@ -75680,7 +75729,7 @@
           });
         }
         _perfListLog(_perfLen, r.status, d && Array.isArray(d.conversations)
-          ? d.conversations.length + 'rows'
+          ? (_merged ? 'delta ' + d.conversations.length + '/' + _merged.length : d.conversations.length) + 'rows'
             + ((d.queue_health && d.queue_health.stale_queued_items)
               ? ' stale-steer:' + d.queue_health.stale_queued_items : '')
           : '');
@@ -75691,13 +75740,18 @@
           _clientLog('[ARCHIVE-DIAG] conversations/list missing conversations array');
           return null;
         }
-        const convs = d.conversations;
-        _clientLog('[ARCHIVE-DIAG] conversations/list ok: ' + convs.length + ' rows');
+        const convs = _merged || d.conversations;
+        _clientLog('[ARCHIVE-DIAG] conversations/list ok: ' + convs.length + ' rows' + (_merged ? ' (delta)' : ''));
         // Cache the ETag only after the body parsed and landed — otherwise a
         // truncated/aborted download leaves an ETag whose next 304 replays
         // an empty list.
         _archiveAllData.set(url, convs);
-        if (etag) _archiveAllEtag.set(url, etag);
+        // A merged list matches no full body's ETag; the delta token alone
+        // validates it from here on.
+        if (_merged) _archiveAllEtag.delete(url);
+        else if (etag) _archiveAllEtag.set(url, etag);
+        if (d.delta_token) _archiveAllDelta.set(url, d.delta_token);
+        else _archiveAllDelta.delete(url);
         if (!opts.includePrs) _scheduleArchiveSidebarCache(convs, params.get('window'));
         return convs;
       } catch (e) {
