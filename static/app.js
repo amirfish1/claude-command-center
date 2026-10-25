@@ -10143,6 +10143,7 @@
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
+    if (_ttsReadSelectionIfAny(btn.closest('.conv-pane')?.getAttribute('data-pane-id') || activePaneId())) return;
     if (btn === _ttsDirectBtn && _ttsUtterance) {
       if (_ttsActive && !_ttsPaused) {
         try { _ttsEnginePause(); } catch (_) {}
@@ -10361,6 +10362,7 @@
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
+    if (_ttsReadSelectionIfAny(btn.closest('.conv-pane')?.getAttribute('data-pane-id') || activePaneId())) return;
     // Second click on the SAME speaker button toggles pause/resume on the
     // in-flight utterance instead of restarting the read from the top
     // (CCC-408). A click on a DIFFERENT message's speaker still cancels
@@ -13264,6 +13266,9 @@
   // collapsed by the tap before `click` fires (mobile/touch).
   let _ttsCapturedRange = null;
   let _ttsCapturedAt = 0;
+  // Text of the selection the current read started from, so a second tap with
+  // the same selection still pauses/resumes instead of restarting (CCC-170).
+  let _ttsSelectionReadText = '';
   // Selection-annotate: the Range + owning .event captured when the "+"
   // trigger is shown, so its click handler doesn't need to re-read a
   // possibly-already-collapsed selection.
@@ -15569,6 +15574,7 @@
   function speakTextDirect(text, convId, paneId, sourceBtn, domElements) {
     if (sourceBtn && window.cccLocalSpeech) window.cccLocalSpeech.offer();
     if (!window.speechSynthesis) return false;
+    _ttsSelectionReadText = '';
     let domData = null;
     if (domElements && domElements.length) {
       domData = buildTtsDataFromElements(domElements);
@@ -15599,6 +15605,28 @@
     return true;
   }
 
+  // A conversation selection the current read did not start from.
+  function _ttsFreshSelection(paneId) {
+    const sel = selectedConversationTtsData(paneId);
+    const text = sel && sel.text ? sel.text.trim() : '';
+    if (!text) return null;
+    if ((_ttsActive || _ttsPaused) && text === _ttsSelectionReadText) return null;
+    return sel;
+  }
+
+  // CCC-170: with text selected in the conversation, every speaker (floating,
+  // per-message, composer) reads just the selection.
+  function _ttsReadSelectionIfAny(paneId) {
+    const sel = selectedConversationTtsData(paneId);
+    if (!sel || !sel.text || !sel.text.trim()) return false;
+    if ((_ttsActive || _ttsPaused) && sel.text.trim() === _ttsSelectionReadText) {
+      readLastMessageAloud(_ttsActivePaneId || paneId);  // same selection: pause/resume
+      return true;
+    }
+    readLastMessageAloud(paneId);
+    return true;
+  }
+
   async function readLastMessageAloud(paneId) {
     if (window.cccLocalSpeech) window.cccLocalSpeech.offer();
     if (!window.speechSynthesis) {
@@ -15609,6 +15637,18 @@
     // Play/pause toggle: button cycles play → pause → play → ... on the
     // SAME utterance. Reset happens automatically when a new turn lands
     // (see resetTtsOnNewTurn). No rate cycling any more — always 1.25x.
+    // A selection made since this read started wins over pause/resume: drop
+    // the current utterance and read the selection (CCC-37, CCC-170).
+    const _freshSel = (_ttsActive || _ttsPaused) ? _ttsFreshSelection(paneId || activePaneId()) : null;
+    if (_freshSel) {
+      _ttsChunkState = null;
+      _ttsScheduleCacheDebug();
+      try { _ttsEngineCancel(); } catch (_) {}
+      clearTtsHighlight();
+      _ttsActive = false;
+      _ttsPaused = false;
+      _ttsUtterance = null;
+    }
     if (_ttsActive && !_ttsPaused) {
       try { _ttsEnginePause(); } catch (_) {}
       _ttsPaused = true;
@@ -15625,32 +15665,18 @@
       return;
     }
     if (_ttsPaused && _ttsUtterance) {
-      // If the user selected a fresh paragraph while paused, speak THAT
-      // instead of resuming the old utterance (CCC-37). Otherwise resume.
-      const _freshSel = selectedConversationTtsData(paneId || activePaneId());
-      if (!_freshSel || !_freshSel.text.trim()) {
-        try { _ttsEngineResume(); } catch (_) {}
-        _ttsPaused = false;
-        ttsButtons().forEach(btn => {
-          if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
-            btn.classList.remove('paused');
-            btn.title = 'Pause reading';
-            btn.setAttribute('aria-label', 'Pause reading');
-          }
-        });
-        if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'speaking');
-        updateTtsFloatingControl();
-        return;
-      }
-      // Fresh selection present — drop the paused utterance and fall through
-      // to the start path below, which reads selectedConversationTtsData first.
-      _ttsChunkState = null;
-      _ttsScheduleCacheDebug();
-      try { _ttsEngineCancel(); } catch (_) {}
-      clearTtsHighlight();
-      _ttsActive = false;
+      try { _ttsEngineResume(); } catch (_) {}
       _ttsPaused = false;
-      _ttsUtterance = null;
+      ttsButtons().forEach(btn => {
+        if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
+          btn.classList.remove('paused');
+          btn.title = 'Pause reading';
+          btn.setAttribute('aria-label', 'Pause reading');
+        }
+      });
+      if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'speaking');
+      updateTtsFloatingControl();
+      return;
     }
 
     _ttsLastCharIndex = 0;
@@ -15683,6 +15709,7 @@
     _ttsTextMapping = mappingToUse;
     _ttsBoundUtteranceText = textToSpeak;
     _ttsPerfTarget = _ttsSel ? 'selection' : 'last';
+    _ttsSelectionReadText = _ttsSel ? data.text.trim() : '';
     _ttsStartChunkedSpeech(textToSpeak, paneId, 0, false);
   }
 
@@ -15941,7 +15968,7 @@
   // falling back to the last message. Delegated so it covers every .tts-btn
   // (conv panes, group-chat reader) and survives innerHTML rebuilds.
   document.addEventListener('pointerdown', (ev) => {
-    if (!ev.target || !ev.target.closest || !ev.target.closest('.tts-btn')) return;
+    if (!ev.target || !ev.target.closest || !ev.target.closest('.tts-btn, .conv-scroll-speak-btn, [data-read-assistant-message], [data-read-agent-answer]')) return;
     const sel = window.getSelection && window.getSelection();
     if (sel && !sel.isCollapsed && sel.rangeCount && String(sel).trim()) {
       try { _ttsCapturedRange = sel.getRangeAt(0).cloneRange(); _ttsCapturedAt = Date.now(); }
@@ -48082,6 +48109,7 @@
     _makeSpeakBtnDraggable(speakBtn, host);
     speakBtn.addEventListener('click', () => {
       const v = speakBtn._convTargetView || view;
+      if (_ttsReadSelectionIfAny(v.closest('.conv-pane')?.getAttribute('data-pane-id') || activePaneId())) return;
       const selected = speakBtn._speakTarget;
       const target = selected?.isConnected && v.contains(selected) ? selected : _visibleSpeakButton(v);
       if (!target) { showOpToast('No assistant message on screen to read', 'error'); return; }

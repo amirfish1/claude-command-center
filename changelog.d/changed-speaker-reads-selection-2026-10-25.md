@@ -1,0 +1,1 @@
+- With text selected in a conversation, every speaker button (floating, per-message, and composer) now reads just the selection; tapping again with the same selection pauses and resumes.
