@@ -161,6 +161,11 @@ def _escalate(sid, source, reason, count, notify=None, alert=True):
                 "Look at the session and restart it by hand if it should keep going.",
         "url": f"/?session={sid}",
     }
+    if sid.startswith("rule:"):  # auto_rerun.py: a scheduled job, not one session
+        data.update(title=f"Auto-rerun stopped for {sid[5:]}",
+                    body=f"CCC refused another automatic rerun ({source}): {why}. Check the job; "
+                         "re-save its rule in auto-rerun.json to allow reruns again.",
+                    url="/")
     try:
         if notify is None:
             from ccc_server import notify as _notify

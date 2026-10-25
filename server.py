@@ -28043,6 +28043,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/leftover/proposals":
             from ccc_server import leftover
             leftover.handle_api_get(self, parsed)
+        elif path == "/api/auto-rerun":
+            # RESIL-9: opt-in "rerun once" for dead sessions / scheduled jobs.
+            from ccc_server import auto_rerun
+            auto_rerun.handle_api_get(self)
         elif path == "/api/restart-recovery":
             # Sessions a machine restart cut off mid-turn (scanned once per boot).
             from ccc_server import restart_recovery
@@ -28653,6 +28657,37 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             local_speech.handle_api(self)
         elif path == "/api/free-runtime/tts-voices":
             self.send_json({"ok": True, "voices": _free_runtime.tts_voice_options()})
+        elif path.startswith("/api/free-runtime/tts-session/"):
+            # Continuous read (CCC-144): <id> is one mp3 stream for the whole
+            # message, played by a plain <audio src>; <id>/marks says where
+            # each clip starts, for word highlighting. The unguessable id is
+            # the capability; sessions are created by a same-origin POST.
+            rest = path[len("/api/free-runtime/tts-session/"):]
+            sid, _, sub = rest.partition("/")
+            session = _free_runtime.tts_session_get(sid)
+            if session is None:
+                self.send_json({"ok": False, "error": "unknown session"}, 404)
+            elif sub == "marks":
+                self.send_json(dict(session.info(), ok=True))
+            elif sub:
+                self.send_json({"ok": False, "error": "not found"}, 404)
+            else:
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/mpeg")
+                    self.send_header("X-CCC-Voice", session.voice)
+                    # Length is unknown while it is made: close-delimited,
+                    # no ranges (Safari then plays it like a radio stream).
+                    self.send_header("Accept-Ranges", "none")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.close_connection = True
+                    for _buf in session.iter_bytes():
+                        self.wfile.write(_buf)
+                        self.wfile.flush()
+                except Exception:
+                    pass
         elif path == "/api/free-runtime/status":
             # $0 spawn runtime readiness for the UI's Free chip. Cheap: one
             # state-file read + one loopback TCP probe (400ms cap). Never
@@ -32197,6 +32232,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                               str(payload.get("detail") or "")[:300])
             self.send_json({"ok": True})
             return
+        if path == "/api/free-runtime/tts-session":
+            # Continuous read for browsers without MediaSource (CCC-144):
+            # {texts: [clip, ...], voice} -> {id}; GET .../<id> plays it.
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                payload = json.loads(self.rfile.read(length)) if 0 < length <= 256 * 1024 else None
+            except (ValueError, OSError):
+                payload = None
+            texts = payload.get("texts") if isinstance(payload, dict) else None
+            if not isinstance(texts, list):
+                self.send_json({"ok": False, "error": "bad request"}, 400)
+                return
+            sid = _free_runtime.tts_session_create(texts, str(payload.get("voice") or ""))
+            if not sid:
+                self.send_json({"ok": False, "error": "local voice cannot stream"}, 503)
+                return
+            _log_activity("tts", "SESSION", "clips=%d chars=%d voice=%s" % (
+                len(texts), sum(len(str(t or "")) for t in texts), str(payload.get("voice") or "-")))
+            self.send_json({"ok": True, "id": sid})
+            return
+        if path.startswith("/api/free-runtime/tts-session/") and path.endswith("/cancel"):
+            sid = path[len("/api/free-runtime/tts-session/"):-len("/cancel")]
+            self.send_json({"ok": _free_runtime.tts_session_cancel(sid)})
+            return
         if path == "/api/free-runtime/tts":
             # Speak button: text -> free neural voice via the router. The
             # router key never leaves the server; the browser gets audio only.
@@ -32280,6 +32339,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import free_router
             if free_router.handle_api_post(self, path):
                 return
+        if path == "/api/auto-rerun":
+            # Toggle a session's "rerun once if it dies" opt-in (same-origin
+            # enforced at the top of do_POST; rules are host-file only).
+            from ccc_server import auto_rerun
+            auto_rerun.handle_api_post(self)
+            return
         if path.startswith("/api/restart-recovery/"):
             # Dismiss / resume-prompt for sessions a restart cut off mid-turn.
             # Same-origin was already enforced at the top of do_POST.

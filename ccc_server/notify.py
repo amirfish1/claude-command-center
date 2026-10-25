@@ -639,7 +639,8 @@ def observe_session_states(previous, current, publish=None, now=None):
 
 
 def _emit_session_deaths(current, now_epoch, publish=None):
-    """Toast sessions whose death outlived the grace period (notify-only)."""
+    """Toast sessions whose death outlived the grace period. Notify-only
+    unless the session opted in to a rerun (auto_rerun.py)."""
     try:
         _session_death.track_working(current)
         incidents = _session_death.due(current, now=now_epoch)
@@ -653,6 +654,10 @@ def _emit_session_deaths(current, now_epoch, publish=None):
             ident = dict(ident, name=" ".join(str(inc["title"]).lstrip("# ").split())[:50])
         name = _display_name(sid, ident)
         suffix, body = _session_death.describe(inc)
+        rerun = _plan_rerun(inc)
+        if rerun:
+            from ccc_server import auto_rerun
+            body = body.replace(" Nothing will restart it on its own.", "") + auto_rerun.note_for(rerun)
         item = {
             "id": "ntf_" + uuid.uuid4().hex[:16],
             "kind": "session_died",
@@ -662,11 +667,24 @@ def _emit_session_deaths(current, now_epoch, publish=None):
             "session_id": sid,
             "ts": now_epoch,
         }
+        if rerun and rerun.get("allowed"):  # already in the wake ledger: always carry it out
+            from ccc_server import auto_rerun
+            auto_rerun.execute_async(rerun, inc)
         if _dedupe_hit(item, now_epoch):
             continue
         out.append(_emit(item, publish=publish))
         _alert_off_dashboard(f"death:{sid}:{inc.get('size')}", item)
     return out
+
+
+def _plan_rerun(inc):
+    """RESIL-9: notify-only unless the session (or a host rule for its job)
+    opted in to one automatic rerun, gated by the wake guard. Never raises."""
+    try:
+        from ccc_server import auto_rerun
+        return auto_rerun.plan(inc)
+    except Exception:
+        return None
 
 
 def _alert_off_dashboard(key, item):

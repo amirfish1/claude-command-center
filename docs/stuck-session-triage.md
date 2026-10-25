@@ -58,5 +58,12 @@ Facts that trip people up:
   message on stdin. CCC runs it for dead sessions and refused wakes, once per
   incident, at most 10 per hour (`alert-hook.json`; `ALERT_HOOK` in
   `activity.log`).
+- Dead sessions are notify-only by default. A session can opt in to one
+  automatic rerun (`POST /api/auto-rerun {"session_id", "enabled"}`); a
+  scheduled job that starts a fresh session each run gets a host-only rule in
+  `auto-rerun.json` (cwd + first-prompt prefix + the job's command). Every
+  rerun goes through the wake ledger; a rule's second death inside 24h is
+  refused as no progress until the rule is re-saved. `auto-rerun` lines in
+  `activity.log` (`RERUN`, `RERUN_GUARDED`, `RERUN_FAIL`).
 - Never kill a child that is mid-turn or running a tool: confirm the spawn log
   has been silent for minutes and it has no child process first.

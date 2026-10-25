@@ -1,0 +1,1 @@
+- Dead sessions can opt in to one automatic rerun (`/api/auto-rerun`, or a host rule for scheduled jobs that reruns the job's command). Every rerun goes through the wake guard; without an opt-in, dead sessions stay notify-only.

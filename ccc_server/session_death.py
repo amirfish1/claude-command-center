@@ -5,7 +5,8 @@ permission, a turn that never started) or its last turn is an API error.
 Without this, the dashboard's leave-"working" diff toasts "X finished" for a
 session that never finished anything.
 
-Notify-only. Nothing here wakes or resumes a session.
+Notify-only. Nothing here wakes or resumes a session; an opted-in rerun
+(auto_rerun.py, through the wake guard) is decided by notify's emitter.
 
 False positives are the expensive mistake, so a death is only reported when:
   * the transcript tail is dead-shaped: an open turn, or an API error that is
