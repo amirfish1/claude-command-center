@@ -292,6 +292,16 @@
       <button id="pwaInstallBtn" class="pwa-install-banner__cta" type="button" hidden>Install</button>
     </div>
   </div>
+  <!-- Idea tickets intro banner: idea_tickets defaults on for everyone, so
+       the Active/Coding tabs swapping to Ideas/Small bugs needs an explainer
+       with an easy way back the first time someone sees it. Shown once;
+       dismissal/revert is persisted in localStorage. -->
+  <div id="ideaTicketsIntroBanner" class="idea-tickets-intro-banner" hidden role="status" aria-live="polite">
+    <span class="idea-tickets-intro-banner__icon" aria-hidden="true">&#128161;</span>
+    <span class="idea-tickets-intro-banner__text" id="ideaTicketsIntroBannerText">Coding is now Ideas / Small bugs — every session you start gets filed onto one of those tickets.</span>
+    <button type="button" class="idea-tickets-intro-banner__revert" id="ideaTicketsIntroRevertBtn">Revert</button>
+    <button type="button" class="idea-tickets-intro-banner__dismiss" id="ideaTicketsIntroDismissBtn">Dismiss</button>
+  </div>
   <!-- FOIT guard: read the persisted layout choice synchronously and apply
        the body class BEFORE any layout paint. Without this, the sidebar
        briefly renders for kanban-split users (whose sidebar is display:none)

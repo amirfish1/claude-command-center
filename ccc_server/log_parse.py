@@ -311,7 +311,7 @@ _PREVIEW_FLAGS = {
                 "Claude Code login on that node (local or paired peer) from the browser.",
     },
     "idea_tickets": {
-        "default": False,
+        "default": True,
         "label": "Idea tickets",
         "desc": "Give every session you start from the UI a WatchTower ticket "
                 "(Jev labels it an idea or a small bug), log continuations and "

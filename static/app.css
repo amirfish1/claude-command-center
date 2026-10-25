@@ -21412,6 +21412,45 @@ body.status-pos-right #convToolbar {
   font-family: inherit;
 }
 .drain-paused-banner__details:hover { background: rgba(255,255,255,0.15); }
+/* Idea tickets intro banner: same fixed-top pattern, indigo instead of
+   amber/red -- this is an informational heads-up, not a warning. Stacks
+   below the health/drain banners when they're also up. */
+.idea-tickets-intro-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 10000;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px;
+  background: #3730a3;
+  color: #fff;
+  font-size: 12.5px;
+  font-family: inherit;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  animation: injection-health-slide-down 0.25s ease-out;
+}
+@media (prefers-color-scheme: light) {
+  .idea-tickets-intro-banner { background: #4338ca; }
+}
+:root[data-theme="light"] .idea-tickets-intro-banner { background: #4338ca; }
+:root[data-theme="dark"] .idea-tickets-intro-banner { background: #3730a3; }
+#injectionHealthBanner:not([hidden]) ~ .idea-tickets-intro-banner,
+.drain-paused-banner:not([hidden]) ~ .idea-tickets-intro-banner { top: 39px; }
+.idea-tickets-intro-banner__icon { font-size: 15px; flex: 0 0 auto; }
+.idea-tickets-intro-banner__text { flex: 1 1 auto; line-height: 1.4; }
+.idea-tickets-intro-banner__revert,
+.idea-tickets-intro-banner__dismiss {
+  flex: 0 0 auto;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit;
+}
+.idea-tickets-intro-banner__dismiss { background: transparent; }
+.idea-tickets-intro-banner__revert:hover,
+.idea-tickets-intro-banner__dismiss:hover { background: rgba(255,255,255,0.25); }
 .injection-health-banner-details {
   position: fixed;
   /* 39px is the desktop one-line banner height. On a narrow viewport the copy

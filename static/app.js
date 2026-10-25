@@ -90581,6 +90581,71 @@
   window.addEventListener('ccc:flags', renderExperimentalFlags);
   renderExperimentalFlags();
 
+  // ── Idea tickets intro banner ───────────────────────────────────────
+  // idea_tickets defaults on for everyone (v6), so the first time a
+  // browser sees it with the flag on, explain the tab swap and offer an
+  // immediate way back. Shown once per browser; Dismiss and Revert both
+  // suppress it for good, matching the "you can still do X later" copy.
+  const IDEA_TICKETS_INTRO_SEEN_KEY = 'ccc-idea-tickets-intro-seen';
+  function _ideaTicketsIntroSeen() {
+    try { return !!localStorage.getItem(IDEA_TICKETS_INTRO_SEEN_KEY); } catch (_) { return false; }
+  }
+  function _markIdeaTicketsIntroSeen() {
+    try { localStorage.setItem(IDEA_TICKETS_INTRO_SEEN_KEY, '1'); } catch (_) {}
+  }
+  function maybeShowIdeaTicketsIntroBanner() {
+    const banner = document.getElementById('ideaTicketsIntroBanner');
+    if (!banner) return;
+    if (!ideaTicketsOn() || _ideaTicketsIntroSeen()) { banner.hidden = true; return; }
+    banner.hidden = false;
+  }
+  window.addEventListener('ccc:flags', maybeShowIdeaTicketsIntroBanner);
+  maybeShowIdeaTicketsIntroBanner();
+
+  (function _wireIdeaTicketsIntroBanner() {
+    const banner = document.getElementById('ideaTicketsIntroBanner');
+    const text = document.getElementById('ideaTicketsIntroBannerText');
+    const revertBtn = document.getElementById('ideaTicketsIntroRevertBtn');
+    const dismissBtn = document.getElementById('ideaTicketsIntroDismissBtn');
+    if (!banner || !text || !revertBtn || !dismissBtn) return;
+    function _closeAfter(message, ms) {
+      revertBtn.hidden = true;
+      dismissBtn.hidden = true;
+      text.textContent = message;
+      _markIdeaTicketsIntroSeen();
+      setTimeout(() => { banner.hidden = true; }, ms);
+    }
+    dismissBtn.addEventListener('click', () => {
+      _closeAfter('Got it — you can turn Ideas / Small bugs off anytime from Settings → Experimental.', 4000);
+    });
+    revertBtn.addEventListener('click', () => {
+      text.textContent = 'Reverting to Coding…';
+      revertBtn.disabled = true;
+      dismissBtn.disabled = true;
+      fetch('/api/features/flag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'idea_tickets', on: false }),
+      }).then(r => r.json()).then(res => {
+        _markIdeaTicketsIntroSeen();
+        if (res && res.ok) {
+          text.textContent = 'Switched back to Coding — turn Ideas / Small bugs on again anytime from Settings → Experimental. Reloading…';
+          setTimeout(() => { window.location.reload(); }, 1800);
+        } else {
+          text.textContent = 'Could not revert — try Settings → Experimental instead.';
+          revertBtn.hidden = true;
+          dismissBtn.hidden = true;
+          setTimeout(() => { banner.hidden = true; }, 4000);
+        }
+      }).catch(() => {
+        text.textContent = 'Could not revert — try Settings → Experimental instead.';
+        revertBtn.hidden = true;
+        dismissBtn.hidden = true;
+        setTimeout(() => { banner.hidden = true; }, 4000);
+      });
+    });
+  })();
+
   async function refreshRepoAvatarSettings() {
     const select = document.getElementById('repoAvatarSelect');
     if (!select) return;

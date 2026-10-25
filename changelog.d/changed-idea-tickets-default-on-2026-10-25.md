@@ -1,0 +1,1 @@
+- Idea tickets now defaults on: new sessions get filed onto an Ideas or Small bugs ticket, and the sidebar's Active/Coding tabs become Ideas/Small bugs (desktop and mobile). A one-time banner explains the change with a Revert button; existing sessions are untouched unless backfilled.
