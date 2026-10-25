@@ -25476,8 +25476,10 @@
     const repoPath = sessionRepoAvatarPath(c);
     if (!repoPath) return '';
     const presentation = sessionIconPresentation(c, false);
+    const repo = String(c.folder_label || c.folder_label_chip || repoPath);
+    const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
     return '<span class="conv-idea-avatar conv-repo-portrait has-repo-background' + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon')
-      + (presentation.working ? ' is-working' : ' is-not-working') + '" role="img" aria-label="' + escapeAttr(presentation.title) + '">'
+      + (presentation.working ? ' is-working' : ' is-not-working') + '" style="--avatar-hue:' + (hue | 0) + '" role="img" aria-label="' + escapeAttr(presentation.title) + '">'
       + repoAvatarHtml(repoPath, c.folder_label_chip || c.folder_label, 'conv-avatar-background')
       + _avatarModelBadgeHtml(presentation)
       + '<span class="session-activity-dot" aria-hidden="true"></span></span>';
