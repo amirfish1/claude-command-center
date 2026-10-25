@@ -1841,7 +1841,7 @@
       _perfPaneRow('open', {
         at: Date.now(),
         text: '→ ' + String(id).slice(0, 8) + ' opening…',
-        title: 'click — ' + id,
+        title: 'click: ' + id,
         pending: true,
       });
     } catch (_) {}
@@ -14290,7 +14290,7 @@
         : j.status === 'processing' ? 'Sent · engine position unknown'
         : j.status === 'cancelled' ? 'Cancelled · newer priority (not sent)'
         : j.status === 'deferred' ? 'Deferred · playback/cooldown' : j.status)
-      + ' — ' + j.text.slice(0, 90) }));
+      + ': ' + j.text.slice(0, 90) }));
     const signature = JSON.stringify(labels);
     if (panel._signature === signature) return;
     panel._signature = signature;
@@ -40078,7 +40078,7 @@
         const _assessmentTip = _assessment
           ? (_assessment.valid ? '\nCompletion assessment (self-reported): '
             + ['resolution', 'verification', 'delivery', 'decision_dependency'].map(key =>
-              key.replace(/_/g, ' ') + ': ' + _assessment[key].score + ' — ' + _assessment[key].evidence).join('\n')
+              key.replace(/_/g, ' ') + ': ' + _assessment[key].score + ': ' + _assessment[key].evidence).join('\n')
             + (_assessment.reasons.length ? '\nNot close: ' + _assessment.reasons.join(' ') : '\nAll completion gates passed.')
             + _assessment.caveats.map(item => '\nCaveat: ' + item.text).join('')
             : '\nCompletion assessment is invalid; readiness is unassessed.')
@@ -49672,7 +49672,7 @@
         window.__cccPerfRow('open', {
           at: Date.now(),
           text: '→ ' + String(id).slice(0, 8) + ' opening…',
-          title: 'selectConversation — ' + id,
+          title: 'selectConversation: ' + id,
           pending: true,
         });
       }
@@ -59014,7 +59014,7 @@
                   title: 'click→render ' + Math.round(_perfWall) + 'ms wall, '
                     + Math.round(_perfActive) + 'ms active'
                     + (_perfPrefetchHit ? ' (prefetch hit)' : '')
-                    + ' — ' + id,
+                    + ' · ' + id,
                 });
                 if (window.__cccPerfClick) window.__cccPerfClick.delete(String(id));
               }
@@ -59036,7 +59036,7 @@
                     at: Date.now(),
                     text: '✓ ' + _ms + 'ms ' + String(id).slice(0, 8),
                     ms: _ms,
-                    title: 'click→render ' + _ms + 'ms — ' + id,
+                    title: 'click→render ' + _ms + 'ms · ' + id,
                   });
                 }
               }
@@ -90623,7 +90623,7 @@
       setTimeout(() => { banner.hidden = true; }, ms);
     }
     dismissBtn.addEventListener('click', () => {
-      _closeAfter('Got it — you can turn Features / Small bugs off anytime from Settings → Experimental.', 4000);
+      _closeAfter('Got it. You can turn Features / Small bugs off anytime from Settings → Experimental.', 4000);
     });
     revertBtn.addEventListener('click', () => {
       text.textContent = 'Reverting to Coding…';
@@ -90636,16 +90636,16 @@
       }).then(r => r.json()).then(res => {
         _markIdeaTicketsIntroSeen();
         if (res && res.ok) {
-          text.textContent = 'Switched back to Coding — turn Features / Small bugs on again anytime from Settings → Experimental. Reloading…';
+          text.textContent = 'Switched back to Coding. Turn Features / Small bugs on again anytime from Settings → Experimental. Reloading…';
           setTimeout(() => { window.location.reload(); }, 1800);
         } else {
-          text.textContent = 'Could not revert — try Settings → Experimental instead.';
+          text.textContent = 'Could not revert. Try Settings → Experimental instead.';
           revertBtn.hidden = true;
           dismissBtn.hidden = true;
           setTimeout(() => { banner.hidden = true; }, 4000);
         }
       }).catch(() => {
-        text.textContent = 'Could not revert — try Settings → Experimental instead.';
+        text.textContent = 'Could not revert. Try Settings → Experimental instead.';
         revertBtn.hidden = true;
         dismissBtn.hidden = true;
         setTimeout(() => { banner.hidden = true; }, 4000);

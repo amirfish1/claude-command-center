@@ -1140,24 +1140,28 @@ class DevinListPerfTests(unittest.TestCase):
         server, devin_mod, db_path, now = self._setup()
         held = threading.Event()
         release = threading.Event()
+        # A fresh lock: an earlier test's background rebuild can still hold
+        # the module-wide one for many seconds in a full-suite run.
+        lock = threading.Lock()
 
         def holder():
-            with devin_mod._DEVIN_CLI_LIST_REBUILD_LOCK:
+            with lock:
                 held.set()
                 release.wait(timeout=5)
 
-        worker = threading.Thread(target=holder)
-        worker.start()
-        self.assertTrue(held.wait(timeout=1))
-        try:
-            t0 = time.perf_counter()
-            rows = server._archive_overlay_devin_cli_sessions([])
-            elapsed = time.perf_counter() - t0
-            self.assertEqual(rows, [])
-            self.assertLess(elapsed, 0.5)
-        finally:
-            release.set()
-            worker.join(timeout=2)
+        with mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_REBUILD_LOCK", lock):
+            worker = threading.Thread(target=holder)
+            worker.start()
+            self.assertTrue(held.wait(timeout=1))
+            try:
+                t0 = time.perf_counter()
+                rows = server._archive_overlay_devin_cli_sessions([])
+                elapsed = time.perf_counter() - t0
+                self.assertEqual(rows, [])
+                self.assertLess(elapsed, 0.5)
+            finally:
+                release.set()
+                worker.join(timeout=2)
 
 def _overlay_after_cold_build(server, devin_mod):
     """A cold overlay miss returns [] and builds in the background (CCC-1244);

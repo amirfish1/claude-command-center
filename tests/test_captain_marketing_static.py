@@ -93,7 +93,7 @@ def test_homepage_current_facts_and_campaign_links():
     major, minor = re.search(r'^version = "(\d+)\.(\d+)\.', pyproject, re.M).groups()
     assert f"v{major}.{minor}" in page
     assert "v5.8" not in page
-    assert "eight engines" in page
+    assert "nine engines" in page
     # The homepage must match LICENSE, including its future MIT grant.
     assert "Functional Source License" in (ROOT / "LICENSE").read_text()
     assert "Source-available" in page

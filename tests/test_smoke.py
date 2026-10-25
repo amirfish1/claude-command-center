@@ -1904,9 +1904,11 @@ class TestServerImports(unittest.TestCase):
         self.assertLess(active_pos, issues_pos)
         self.assertLess(issues_pos, queues_pos)
 
-        coding_pos = tab_block.index("['coding', 'Coding'")
-        workers_pos = tab_block.index("['workers', 'Workers'")
-        self.assertLess(active_pos, coding_pos)
+        # The default layout is the last tab list (Features / Small bugs and
+        # the separate-tabs layout come first in the ternary).
+        default_active = tab_block.rindex("['inprogress', 'Active'")
+        coding_pos = tab_block.index("['coding', 'Coding'", default_active)
+        workers_pos = tab_block.index("['workers', 'Workers'", default_active)
         self.assertLess(coding_pos, workers_pos)
 
         # The Other tab (leftover Hermes messages + group chats) is appended
@@ -1942,7 +1944,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="archived-tools"', archived_markup)
         self.assertIn('<div class="conv-archived-list">', archived_markup)
         self.assertIn(
-            "(_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') "
+            "(_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers' "
+            "|| _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs') "
             "? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))",
             app_js,
         )
@@ -2005,12 +2008,14 @@ class TestServerImports(unittest.TestCase):
         # leftover lanes (messages + group chats) together, no nested
         # sub-tab switcher needed anymore.
         self.assertIn(
-            "const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers' : null;",
+            "const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers'\n"
+            "      : (_ideaTicketsOn && (_sidebarTab === 'ideas' || _sidebarTab === 'smallbugs')) ? _sidebarTab : null;",
             app_js,
         )
         self.assertIn("const _allTabView = _topLevelLaneOverride || 'other';", app_js)
         self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
-        self.assertIn("const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length;", app_js)
+        self.assertIn("const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length\n"
+            "      + (_ideaTicketsOn ? _allTabCodingConvs.length : 0);", app_js)
         self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
         self.assertIn("['coding', 'Coding', _allTabCodingConvs.length]", app_js)
         self.assertIn("['workers', 'Workers', _allTabWorkerConvs.length]", app_js)
@@ -3017,7 +3022,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
+        row_start = app_js.index("+ '<div class=\"conv-main-row")
         row_end = app_js.index("// Right-edge slot", row_start)
         self.assertLess(app_js.index("+ sessionIconHtml", row_start, row_end), app_js.index("+ '<div class=\"conv-title '", row_start, row_end))
         self.assertNotIn("+   sessionIconHtml", app_js[app_js.index("+ '<span class=\"conv-row-end\">'", row_start):app_js.index("+ '</span>'", app_js.index("+ '<span class=\"conv-row-end\">'", row_start))])
@@ -3110,10 +3115,10 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-item .conv-outcome-did {\n"
                          "    color: var(--text-muted); opacity: 0.86;\n"
                          "    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", app_css)
-        self.assertIn('content: "DONE";', app_css)
-        self.assertIn("font-size: 10px;", app_css)
-        self.assertIn("border: 1px solid rgba(63,185,80,0.36);", app_css)
-        self.assertIn("if (!isBacklogRow && !isGithubPrRow && _ss && _ss.did)", app_js)
+        # Completed rows were quieted (adabdd4e): no green DONE label.
+        self.assertNotIn(".conv-item .conv-outcome-did::before", app_css)
+        # Since ecf8bda3 the brief leads with the next step when there is one.
+        self.assertIn("if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow))", app_js)
         self.assertNotIn("conv-outcome-next", app_js[app_js.index("// Outcome line (GOAL-1)"):app_js.index("const summaryDetailHtml", app_js.index("// Outcome line (GOAL-1)"))])
 
     def test_code_blocks_keep_readable_contrast_in_light_theme(self):
@@ -3202,13 +3207,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief || _isSearchHit);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
         self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
         self.assertIn("+   hoverMetaRowHtml", app_js)
-        row_start = app_js.index("+ '<div class=\"conv-main-row\">'")
+        row_start = app_js.index("+ '<div class=\"conv-main-row")
         row_end = app_js.index("// Right-edge slot", row_start)
         self.assertNotIn("+ goalChipHtml", app_js[row_start:row_end])
         self.assertIn("+ (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))", app_js[row_start:row_end])
@@ -3252,8 +3257,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-copy-row-session-id", app_js)
         self.assertIn("data-session-id-short", app_js)
         self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
-        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml", app_js)
-        self.assertIn("+ sessionIdChipHtml", app_js)
+        # The id chip lives in the row actions since the d51ee3fa declutter.
+        self.assertIn("'<span class=\"conv-row-actions\">' + sessionIdChipHtml", app_js)
         self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
         self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)
         self.assertIn("Copied session ID", app_js)
@@ -3268,7 +3273,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function flowObjectForConversation(c)", app_js)
         self.assertIn("function flowObjectChipHtml(c)", app_js)
         self.assertIn("const objectChipHtml = flowObjectChipHtml(c);", app_js)
-        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml", app_js)
+        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml", app_js)
         self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
         self.assertIn("Object &middot; ", app_js)
         self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip", app_css)
@@ -4553,7 +4558,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const fallback = _uxqDominantOpenProject(items);", app_js)
         self.assertIn("const proj = _uxqResolvePanelProject(items, requestedProject);", app_js)
         self.assertIn("_uxqLastResolvedProject = proj;", app_js)
-        self.assertIn("const proj = _uxqLastResolvedProject || _uxqWorkerProject();", app_js)
+        self.assertIn("const scoped = _uxqLastResolvedProject || _uxqWorkerProject();", app_js)
 
     def test_queue_scope_normalizes_cc_alias_to_ccc(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -16098,7 +16103,7 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("_restoreConversationListScrollTop($convList, pinScrollTop)", js)
         self.assertNotIn("scrollConversationRowIntoView(convId, data.pinned ? 'start' : 'nearest')", js)
         self.assertIn(".conv-item .conv-pin-btn", css)
-        self.assertIn(".conv-item.is-pinned:not(.active:hover):not(:focus-within):not(.is-actions-open) .conv-row-actions:not(:empty)", css)
+        self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-actions:not(:empty)", css)
         self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within) .conv-pin-btn.is-unpin", css)
         self.assertIn(".conv-item .conv-pin-btn.is-unpin:hover .conv-pin-glyph::before", css)
         self.assertIn(".conv-item .conv-pin-btn.is-unpin:hover .conv-pin-glyph::after", css)

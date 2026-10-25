@@ -258,8 +258,14 @@ class TestQueuePanelLayout(unittest.TestCase):
             app_js.index("const _sidebarTab = (() => {"):
             app_js.index("const _tabEmpty =", app_js.index("const _sidebarTab = (() => {"))
         ]
-        self.assertIn("t === 'queues'", tab_block)
-        self.assertNotIn("t === 'merge'", tab_block)
+        # The saved tab key is validated by normalizeSidebarTabKey().
+        self.assertIn("normalizeSidebarTabKey(t)", tab_block)
+        normalize = app_js[
+            app_js.index("function normalizeSidebarTabKey(t) {"):
+            app_js.index("function ff(name)", app_js.index("function normalizeSidebarTabKey(t) {"))
+        ]
+        self.assertIn("t === 'queues'", normalize)
+        self.assertNotIn("t === 'merge'", normalize)
         self.assertIn("['queues', 'Queues'", tab_block)
         self.assertNotIn("['merge', 'Merge'", tab_block)
         self.assertIn('id="sidebarQueueHost"', app_js)
