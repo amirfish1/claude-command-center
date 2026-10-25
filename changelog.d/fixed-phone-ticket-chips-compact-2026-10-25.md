@@ -1,0 +1,1 @@
+- Phone session rows show worker ticket chips on one compact line instead of three tall wrapped lines.

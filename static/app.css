@@ -32108,6 +32108,25 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
   .sidebar .conv-worker-history { font-size: 14px; }
   .sidebar .conv-worker-history > summary { min-height: 40px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+  /* Ticket refs: one chip run on one line. At 36px/10px padding three refs
+     wrapped to three lines under their own "N recorded tickets" line; the
+     chips (and the +N chip) already carry the count, so the label goes. */
+  .sidebar .conv-worker-history { margin-left: 0; }
+  .sidebar .conv-worker-history-count { display: none; }
+  .sidebar .conv-worker-history > summary { min-height: 0; flex-wrap: nowrap; list-style: none; }
+  /* One disclosure arrow on every browser: Safari keeps its marker on a flex
+     summary, Chrome drops it, and without the label it is the expand target. */
+  .sidebar .conv-worker-history > summary::-webkit-details-marker { display: none; }
+  .sidebar .conv-worker-history > summary::before { content: '\25B8'; padding: 0 6px 0 2px; }
+  .sidebar .conv-worker-history[open] > summary::before { content: '\25BE'; }
+  .sidebar .conv-worker-history-recent { flex-wrap: nowrap; gap: 4px; margin-left: 0; min-width: 0; overflow: hidden; }
+  .sidebar .conv-worker-history-recent .conv-worker-ticket {
+    min-height: 30px;
+    padding-left: 6px;
+    padding-right: 6px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
 }
 
 /* Touch composer: Esc lives in the ⋯ menu, Steer is gone (on a phone you
