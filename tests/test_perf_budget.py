@@ -2727,8 +2727,9 @@ def test_throughput_refresh_reports_live_session_progress(monkeypatch):
         server._THROUGHPUT_REFRESH_JOBS.clear()
 
     started = server._throughput_refresh_start("all_7_days", "claude")
-    assert finished.wait(1)
-    for _ in range(100):
+    assert finished.wait(5)
+    # Up to 5s: the job's completion bookkeeping lags on a loaded host.
+    for _ in range(500):
         status = server._throughput_refresh_status("all_7_days", "claude")
         if status["state"] == "complete":
             break

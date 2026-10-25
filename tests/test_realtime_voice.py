@@ -645,6 +645,8 @@ def test_ccc_session_falls_back_to_archive_row_for_non_claude_ids(monkeypatch):
              "title": "kimi job", "folder_label": "repo",
              "last_assistant_text": "waiting"}]
     monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
+    # This host's live Claude registry would push the row past the limit.
+    monkeypatch.setattr(rv.VoiceSession, "_registry_sessions", lambda self: {})
     vs = object.__new__(rv.VoiceSession)
     out = vs._tool_session({"session_id": "abc"})  # bare uuid still resolves
     assert "engine=kimi" in out and "session_abc" in out and "live" in out

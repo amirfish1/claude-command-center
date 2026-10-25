@@ -9,6 +9,12 @@ re-imports it (`_fresh_server`) to pick up per-test env.
 import os
 import sys
 import tempfile
+import time
+
+# Bound at import: tests monkeypatch time.monotonic/sleep, and fixture
+# teardowns below run before monkeypatch undoes that.
+_real_monotonic = time.monotonic
+_real_sleep = time.sleep
 
 import pytest
 
@@ -32,6 +38,24 @@ def _reset_ccc_ttl_caches():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _drain_recall_background_syncs(monkeypatch):
+    """Let a test's background ship_graph / session_fts sync finish before
+    monkeypatch restores the env. Depending on monkeypatch makes this teardown
+    run first; otherwise the still-running thread re-reads the restored env,
+    walks this host's real transcript corpus while holding the module sync
+    lock, and later tests' non-blocking syncs silently skip.
+    """
+    yield
+    deadline = _real_monotonic() + 15
+    for name, flag in (("ccc_server.ship_graph", "_bg_sync_running"),
+                       ("ccc_server.session_fts", "_bg_sync_running"),
+                       ("ccc_server_session_fts", "_bg_sync_running")):
+        mod = sys.modules.get(name)
+        while mod is not None and getattr(mod, flag, False) and _real_monotonic() < deadline:
+            _real_sleep(0.02)
 
 
 @pytest.fixture(autouse=True)
