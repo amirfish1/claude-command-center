@@ -32956,8 +32956,17 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-item .wa-row-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 @media (max-width: 1200px) {
   .conv-item .wa-body { height: auto; min-height: 96px; }
+  /* The preview and its controls determine this line's height. A zero flex
+     basis clips them when a two-line title and the session footer share it. */
+  .conv-item .wa-line2 { flex: 0 0 auto; flex-wrap: wrap; row-gap: 4px; }
+  .conv-item .wa-preview { flex: 1 1 140px; min-width: min(100%, 140px); }
+  .conv-item .wa-row-footer { flex: 0 0 auto; }
   .conv-item.is-ready-to-close .wa-body { height: auto; min-height: 128px; }
   .conv-item .wa-row-footer .conv-ready-archive { min-height: 32px; }
+}
+
+@media (max-width: 380px) {
+  .conv-item .wa-line2:has(.conv-quick-action, .conv-quick-action-status) .wa-preview { flex-basis: 100%; }
 }
 
 /* Desktop session rows use the phone list's tight avatar/title/preview
