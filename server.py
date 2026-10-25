@@ -3222,6 +3222,29 @@ def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
     return items
 
 
+_wt_snapshot_file_memo = {"mtime": None, "items": []}
+
+
+def _wt_list_items_snapshot_only():
+    """Non-blocking ticket list for census identity: memory memo or disk snapshot only."""
+    with _wt_items_memo_lock:
+        if _wt_items_memo["items"] is not None:
+            return _wt_items_memo["items"]
+    try:
+        mtime = _WT_ITEMS_SNAPSHOT_FILE.stat().st_mtime
+        if _wt_snapshot_file_memo["mtime"] == mtime:
+            return _wt_snapshot_file_memo["items"]
+        with _WT_ITEMS_SNAPSHOT_FILE.open("r") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            _wt_snapshot_file_memo["mtime"] = mtime
+            _wt_snapshot_file_memo["items"] = data["items"]
+            return data["items"]
+    except (OSError, ValueError):
+        pass
+    return _wt_snapshot_file_memo["items"]
+
+
 def _apply_watchtower_worker_display_names(rows):
     """Layer WT ticket names onto live WT worker session rows.
 
@@ -3341,8 +3364,16 @@ def _apply_watchtower_worker_display_names(rows):
             # bootstrapping, or between tickets) — without this a fresh
             # spawn shows whatever generic fallback the row's ai_title/
             # first_message logic produces (WT-104) instead of a name
-            # that actually says what it is.
-            row["display_name"] = _wt_display_name(queue, None)
+            # that actually says what it is. Preserve an existing <QUEUE>#<N>
+            # custom title if the ticket was later re-claimed by another session.
+            raw = str(row.get("display_name") or "").strip()
+            low = raw.lower().lstrip("🧵").strip()
+            qlow = str(queue or "").strip().lower()
+            if qlow and low.startswith(f"{qlow}#"):
+                if not raw.startswith("🧵"):
+                    row["display_name"] = f"🧵 {raw}"
+            else:
+                row["display_name"] = _wt_display_name(queue, None)
     return rows
 
 
@@ -12617,6 +12648,121 @@ def _sessions_state_snapshot():
 
 _CENSUS_IDENTITY_CACHE_LOCK = threading.Lock()
 _CENSUS_IDENTITY_CACHE = {"token": None, "map": {}}
+_CONTINUATION_BOILERPLATE_PREFIX = "you are continuing a task from an earlier "
+
+
+def _is_continuation_boilerplate_title(text):
+    if not isinstance(text, str):
+        return False
+    return text.strip().lower().startswith(_CONTINUATION_BOILERPLATE_PREFIX)
+
+
+def _is_wt_drain_prompt(text):
+    if not isinstance(text, str):
+        return False
+    low = text.strip().lower()
+    return low.startswith("drain the ") and "watchtower queue" in low
+
+
+def _is_empty_wt_worker_poll(ident):
+    if not isinstance(ident, dict) or ident.get("continued_from_session_id"):
+        return False
+    name = str(ident.get("name") or "").strip()
+    low = name.lower().lstrip("🧵").strip()
+    if "#" in low:
+        return False
+    if low.startswith("drain the ") and "watchtower queue" in low:
+        return True
+    if ident.get("wt_drain_prompt"):
+        return True
+    if ident.get("is_watchtower_worker") and low.endswith(" worker"):
+        return True
+    return False
+
+
+def _overlay_wt_worker_display_names_on_census(out):
+    """Overlay WatchTower ticket titles and worker flags onto census identity map
+    without ever blocking on a GitHub `gh` subprocess."""
+    if not out or not any(v.get("has_conversation_row") for v in out.values()):
+        return
+    try:
+        worker_session_ids = set(_wt_read_worker_session_ids())
+    except Exception:
+        worker_session_ids = set()
+    try:
+        workers = _wt_read_workers(include_activity=False) or []
+    except Exception:
+        workers = []
+    try:
+        origins = _wt_read_session_origins() or {}
+    except Exception:
+        origins = {}
+    sid_to_worker = {}
+    worker_ids = {}
+    for w in workers:
+        sid = str(w.get("session_id") or "").strip()
+        wid = str(w.get("worker_id") or "").strip()
+        if sid:
+            sid_to_worker[sid] = w
+        if wid and sid:
+            worker_ids[wid] = sid
+    items = _wt_list_items_snapshot_only()
+    titles_by_sid = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        status = str(it.get("status") or "")
+        if status not in ("in_progress", "in_review", "closed"):
+            continue
+        if str(it.get("project") or "") in _idea_tickets.QUEUE_TYPES:
+            continue
+        sid = str(it.get("claimed_session_id") or "").strip()
+        if not sid:
+            sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
+        if not sid or sid not in out:
+            continue
+        rank = 1 if status == "in_progress" else 0
+        score = (rank, _wt_item_ts(it))
+        prev = titles_by_sid.get(sid)
+        if prev and prev[0] >= score:
+            continue
+        full_context = _wt_ticket_context(it, limit=0)
+        clipped_context = _wt_clip_title(full_context, limit=60)
+        titles_by_sid[sid] = (
+            score,
+            str(it.get("project") or ""),
+            _wt_display_name(it.get("project"), it.get("ref"), clipped_context),
+        )
+    for sid, ident in out.items():
+        origin = origins.get(sid)
+        if origin and (origin.get("role") != "adhoc" or origin.get("parent_worker_id")):
+            if not ident.get("parent_session_id") and origin.get("parent_session_id") \
+                    and origin["parent_session_id"] != sid:
+                ident["parent_session_id"] = origin["parent_session_id"]
+            if not ident.get("continued_from_session_id"):
+                ident["is_watchtower_worker"] = True
+        if sid in worker_session_ids and not ident.get("continued_from_session_id"):
+            ident["is_watchtower_worker"] = True
+        if ident.get("name_overridden"):
+            continue
+        titled = titles_by_sid.get(sid)
+        worker = sid_to_worker.get(sid)
+        if not titled and not worker:
+            continue
+        queue = (worker or {}).get("queue") or (titled[1] if titled else "")
+        if not _wt_row_name_is_generic({"display_name": ident.get("name") or ""}, queue):
+            continue
+        if titled:
+            ident["name"] = titled[2]
+        else:
+            raw = str(ident.get("name") or "").strip()
+            low = raw.lower().lstrip("🧵").strip()
+            qlow = str(queue or "").strip().lower()
+            if qlow and low.startswith(f"{qlow}#"):
+                if not raw.startswith("🧵"):
+                    ident["name"] = f"🧵 {raw}"
+            else:
+                ident["name"] = _wt_display_name(queue, None)
 
 
 def _census_identity_map():
@@ -12643,7 +12789,9 @@ def _census_identity_map():
             (key, float((entry or {}).get("cached_at") or 0))
             for key, entry in _ARCHIVE_RESPONSE_CACHE.items()
         )))
-    if cache_empty:
+    def _kick_cold_archive_refresh():
+        if not cache_empty:
+            return
         try:
             cold_key = _archive_response_cache_key(
                 include_prs=False, resolve_pr_states=False,
@@ -12655,36 +12803,75 @@ def _census_identity_map():
             })
         except Exception:
             pass
+
     with _CENSUS_IDENTITY_CACHE_LOCK:
         if _CENSUS_IDENTITY_CACHE["token"] == token:
-            return _CENSUS_IDENTITY_CACHE["map"]
+            cached_map = _CENSUS_IDENTITY_CACHE["map"]
+            _kick_cold_archive_refresh()
+            return cached_map
     try:
         spawn_markers = _load_spawn_markers()
     except Exception:
         spawn_markers = {}
+    raw_registry = _load_spawn_registry() or []
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        ordered_entries = sorted(
+            _ARCHIVE_RESPONSE_CACHE.values(),
+            key=lambda e: float((e or {}).get("cached_at") or 0),
+            reverse=True,
+        )
+        snapshots = [
+            list((entry or {}).get("conversations") or [])
+            for entry in ordered_entries
+        ]
+    if raw_registry or snapshots:
+        try:
+            name_overrides = _load_session_name_overrides() or {}
+        except Exception:
+            name_overrides = {}
+        try:
+            archived_set, trashed_set = _load_conversation_lifecycle_sets()
+        except Exception:
+            archived_set, trashed_set = set(), set()
+    else:
+        name_overrides = {}
+        archived_set, trashed_set = set(), set()
     out = {}
-    for entry in _load_spawn_registry():
+    for entry in raw_registry:
         if not isinstance(entry, dict):
             continue
+        prompt = str(entry.get("prompt") or entry.get("command_summary") or "").strip()
+        cont = str(
+            entry.get("continued_from_session_id")
+            or _continued_from_session_id_from_text(prompt)
+            or ""
+        ).strip()
+        raw_parent = str(entry.get("parent_session_id") or "").strip() or None
+        if not cont and _is_continuation_boilerplate_title(prompt) and raw_parent:
+            cont = raw_parent
+        if cont and raw_parent == cont:
+            raw_parent = None
         ident = {
             "name": entry.get("name") or entry.get("command_summary") or None,
             "engine": entry.get("engine") or None,
             "model": entry.get("model") or None,
             "effort": entry.get("effort") or entry.get("reasoning_effort") or None,
             "repo_path": entry.get("repo_path") or entry.get("cwd") or None,
-            "parent_session_id": entry.get("parent_session_id") or None,
+            "parent_session_id": raw_parent,
+            "continued_from_session_id": cont or None,
             "spawned_via": _infer_session_spawned_via(entry, markers=spawn_markers),
             "has_conversation_row": False,
+            "archived": False,
+            "trashed": False,
+            "is_watchtower_worker": False,
+            "name_overridden": False,
         }
         for key in ("session_id", "resumed_sid"):
             sid = (entry.get(key) or "").strip()
             if sid:
+                if sid in name_overrides:
+                    ident = dict(ident, name=name_overrides[sid], name_overridden=True)
                 out.setdefault(sid, ident)
-    with _ARCHIVE_RESPONSE_CACHE_LOCK:
-        snapshots = [
-            list((entry or {}).get("conversations") or [])
-            for entry in _ARCHIVE_RESPONSE_CACHE.values()
-        ]
     for rows in snapshots:
         for row in rows:
             if not isinstance(row, dict):
@@ -12695,11 +12882,44 @@ def _census_identity_map():
             existing = out.get(sid) or {}
             if existing.get("has_conversation_row"):
                 continue
-            name = row.get("display_name") or row.get("first_message") or existing.get("name")
+            override = name_overrides.get(sid)
+            disp = str(row.get("display_name") or "").strip()
+            ai = str(row.get("ai_title") or "").strip()
+            fm = str(row.get("first_message") or "").strip()
+            name_overridden = bool(override or (row.get("name_overridden") and disp))
+            if override:
+                name = override
+            elif row.get("name_overridden") and disp:
+                name = disp
+            elif disp and disp != ai and disp != fm and not _is_continuation_boilerplate_title(disp):
+                name = disp
+            elif ai:
+                name = ai
+            else:
+                name = disp or fm or existing.get("name")
             if isinstance(name, str):
                 name = " ".join(name.split())[:120] or None
             else:
                 name = existing.get("name")
+            cont = str(
+                row.get("continued_from_session_id")
+                or _continued_from_session_id_from_text(fm)
+                or existing.get("continued_from_session_id")
+                or ""
+            ).strip()
+            raw_parent = str(
+                row.get("parent_session_id") or existing.get("parent_session_id") or ""
+            ).strip() or None
+            if not cont and (_is_continuation_boilerplate_title(fm) or _is_continuation_boilerplate_title(disp)):
+                if raw_parent:
+                    cont = raw_parent
+                elif row.get("jsonl_path"):
+                    try:
+                        cont = _continued_from_session_id_from_transcript(row.get("jsonl_path")) or ""
+                    except Exception:
+                        cont = ""
+            if cont and raw_parent == cont:
+                raw_parent = None
             resolved_via = (
                 existing.get("spawned_via")
                 or _infer_session_spawned_via(row, sid=sid, markers=spawn_markers)
@@ -12710,11 +12930,17 @@ def _census_identity_map():
                 "model": row.get("model") or existing.get("model"),
                 "effort": row.get("reasoning_effort") or row.get("effort") or existing.get("effort"),
                 "repo_path": row.get("session_cwd") or existing.get("repo_path"),
-                "parent_session_id": row.get("parent_session_id") or existing.get("parent_session_id"),
+                "parent_session_id": raw_parent,
+                "continued_from_session_id": cont or None,
                 "spawned_via": resolved_via,
                 "has_conversation_row": True,
                 "mtime": row.get("mtime") or row.get("modified") or None,
                 "jsonl_path": row.get("jsonl_path") or None,
+                "archived": bool(row.get("archived") or sid in archived_set),
+                "trashed": bool(row.get("trashed") or sid in trashed_set),
+                "is_watchtower_worker": bool(row.get("is_watchtower_worker") or existing.get("is_watchtower_worker")),
+                "wt_drain_prompt": bool(_is_wt_drain_prompt(fm) or _is_wt_drain_prompt(disp)),
+                "name_overridden": name_overridden,
             }
     # Codex pool threads (Codex.app app-server) reach liveness via
     # _codex_pool_candidate_sids but are in neither the spawn registry nor
@@ -12728,7 +12954,19 @@ def _census_identity_map():
             if not isinstance(row, dict):
                 continue
             sid = str(row.get("id") or "").strip()
-            if not sid or sid in out:
+            if not sid:
+                continue
+            if sid in out:
+                existing = out[sid]
+                if existing.get("has_conversation_row") and not existing.get("name_overridden"):
+                    t_title = str(row.get("title") or "").strip()
+                    t_first = str(row.get("first_user_message") or "").strip()
+                    if t_title and t_title != t_first:
+                        clean_t = " ".join(t_title.split())[:120]
+                        cur_name = str(existing.get("name") or "")
+                        clean_first = " ".join(t_first.split())[:120]
+                        if not cur_name or cur_name == clean_first or _is_continuation_boilerplate_title(cur_name):
+                            existing["name"] = clean_t
                 continue
             name = row.get("title") or row.get("first_user_message") or None
             if isinstance(name, str):
@@ -12742,15 +12980,56 @@ def _census_identity_map():
                 "effort": row.get("reasoning_effort") or None,
                 "repo_path": row.get("cwd") or None,
                 "parent_session_id": None,
+                "continued_from_session_id": None,
                 "has_conversation_row": False,
+                "archived": sid in archived_set,
+                "trashed": sid in trashed_set,
+                "is_watchtower_worker": False,
+                "name_overridden": False,
                 "mtime": _codex_ts_seconds(row, prefix="updated")
                 or _codex_ts_seconds(row, prefix="created") or None,
             }
     except Exception:
         pass
+    try:
+        _overlay_wt_worker_display_names_on_census(out)
+    except Exception:
+        pass
+    # Walk continuation chains so sessions whose prompt starts with CCC's
+    # continuation preamble inherit their origin session's resolved title (and
+    # subagent parent link, if the origin was itself a subagent), matching
+    # rowRawTitle / _continuationFoldMaps in static/app.js.
+    for sid, ident in out.items():
+        cont = ident.get("continued_from_session_id")
+        if not cont:
+            continue
+        cur = cont
+        seen = {sid}
+        inherited_name = None
+        inherited_parent = None
+        for _ in range(8):
+            if not cur or cur in seen:
+                break
+            seen.add(cur)
+            anc = out.get(cur)
+            if not anc:
+                break
+            anc_name = anc.get("name")
+            if not inherited_name and anc_name and not _is_continuation_boilerplate_title(anc_name):
+                inherited_name = anc_name
+            if not inherited_parent and anc.get("parent_session_id"):
+                inherited_parent = anc.get("parent_session_id")
+            cur = anc.get("continued_from_session_id")
+        if inherited_name and (not ident.get("name") or _is_continuation_boilerplate_title(ident.get("name"))):
+            ident["name"] = inherited_name
+        if inherited_parent and not ident.get("parent_session_id"):
+            ident["parent_session_id"] = inherited_parent
+    for ident in out.values():
+        ident["empty_worker_poll"] = _is_empty_wt_worker_poll(ident)
     with _CENSUS_IDENTITY_CACHE_LOCK:
         _CENSUS_IDENTITY_CACHE["token"] = token
         _CENSUS_IDENTITY_CACHE["map"] = out
+    _kick_cold_archive_refresh()
     return out
 
 
@@ -12955,11 +13234,6 @@ def build_session_census(since_s=None):
         spawn_markers = _load_spawn_markers()
     except Exception:
         spawn_markers = {}
-    children_of = {}
-    for sid in activity:
-        parent = (identity.get(sid) or {}).get("parent_session_id") or ""
-        if parent:
-            children_of.setdefault(parent, []).append(sid)
     rows = []
     for sid, fields in activity.items():
         entry = dict(fields or {})
@@ -13009,14 +13283,18 @@ def build_session_census(since_s=None):
             "name": ident.get("name"),
             "repo_path": ident.get("repo_path"),
             "parent_session_id": parent,
+            "continued_from_session_id": ident.get("continued_from_session_id") or None,
             "spawned_via": _infer_session_spawned_via(ident, sid=sid, markers=spawn_markers),
-            "children": sorted(children_of.get(sid) or ()),
+            "children": [],
             "last_event_age_s": age,
             "pending_tool": entry.get("pending_tool") or entry.get("sidecar_tool") or None,
             "question_waiting": bool(entry.get("question_waiting")),
             "needs_approval": bool(entry.get("needs_approval")),
             "has_conversation_row": bool(ident.get("has_conversation_row")),
             "helper": helper,
+            "archived": bool(ident.get("archived")),
+            "trashed": bool(ident.get("trashed")),
+            "empty_worker_poll": bool(ident.get("empty_worker_poll")),
             "unanswered_input": False,
             "turn_age_s": entry.get("turn_age_s"),
             "working_since": entry.get("working_since"),
@@ -13047,6 +13325,7 @@ def build_session_census(since_s=None):
                 "name": ident.get("name"),
                 "repo_path": ident.get("repo_path"),
                 "parent_session_id": ident.get("parent_session_id") or None,
+                "continued_from_session_id": ident.get("continued_from_session_id") or None,
                 "spawned_via": _infer_session_spawned_via(ident, sid=sid, markers=spawn_markers),
                 "children": [],
                 "last_event_age_s": max(0.0, now - mtime),
@@ -13055,12 +13334,22 @@ def build_session_census(since_s=None):
                 "needs_approval": False,
                 "has_conversation_row": True,
                 "helper": False,
+                "archived": bool(ident.get("archived")),
+                "trashed": bool(ident.get("trashed")),
+                "empty_worker_poll": bool(ident.get("empty_worker_poll")),
                 "unanswered_input": _census_unanswered_input(sid, ident.get("jsonl_path")),
                 "turn_age_s": None,
                 "working_since": None,
                 "stuck": False,
                 "stuck_age_s": None,
             })
+    children_of = {}
+    for r in rows:
+        parent = r.get("parent_session_id") or ""
+        if parent:
+            children_of.setdefault(parent, []).append(r["session_id"])
+    for r in rows:
+        r["children"] = sorted(children_of.get(r["session_id"]) or ())
     rows.sort(key=lambda r: (
         r["last_event_age_s"] is None,
         r["last_event_age_s"] if r["last_event_age_s"] is not None else 0.0,

@@ -253,6 +253,9 @@ def _fmt_age(age_s):
     return f"{age_s // 86400}d{age_s % 86400 // 3600:02d}h"
 
 
+_DEFAULT_SESSIONS_SINCE_S = 86400  # 24h default window (mirrors Command Center's 1d view)
+
+
 def cmd_sessions(args):
     base = _resolve_server(args.server)
     if not base:
@@ -262,21 +265,28 @@ def cmd_sessions(args):
             file=sys.stderr,
         )
         return 1
+    live_only = bool(getattr(args, "live", False))
+    flat_mode = bool(getattr(args, "flat", False))
+    effective_since = args.since
+    if effective_since is None and not live_only:
+        effective_since = _DEFAULT_SESSIONS_SINCE_S
     try:
         census_path = "/api/sessions/census"
-        if args.since is not None:
+        if effective_since is not None:
             # Server widens the candidate pool with recently-ended sessions in
             # the window; the client-side filter below then applies uniformly.
-            census_path += f"?since={args.since}"
+            census_path += f"?since={effective_since}"
         payload = _get_json(base, census_path)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
     sessions = list(payload.get("sessions") or [])
-    if args.since is not None:
+    if live_only:
+        sessions = [s for s in sessions if s.get("state") != "ended"]
+    if effective_since is not None:
         sessions = [
             s for s in sessions
-            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= args.since
+            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= effective_since
         ]
     if args.json:
         out = dict(payload)
@@ -285,22 +295,103 @@ def cmd_sessions(args):
         return 0
 
     n_helpers = sum(1 for s in sessions if s.get("helper"))
+    n_archived = sum(1 for s in sessions if s.get("archived") or s.get("trashed"))
+    n_empty_polls = sum(
+        1 for s in sessions
+        if s.get("empty_worker_poll") and s.get("state") not in ("working", "waiting")
+    )
     if not args.all:
-        sessions = [s for s in sessions if not s.get("helper")]
-    if args.sort == "status":
-        sessions = sorted(sessions, key=lambda s: _STATUS_RANK.get(s.get("state") or "", 4))
+        sessions = [
+            s for s in sessions
+            if not s.get("helper")
+            and not s.get("archived")
+            and not s.get("trashed")
+            and not (s.get("empty_worker_poll") and s.get("state") not in ("working", "waiting"))
+        ]
+
+    # Fold continuation chains (`continued_from_session_id`) so earlier legs
+    # fold into the chain head, which renders `↱ N earlier` and inherits any
+    # `↳` subagent children from earlier legs (matches _continuationFoldMaps in
+    # static/app.js).
+    by_sid = {s.get("session_id"): s for s in sessions if s.get("session_id")}
+    earlier_count = {}
+    head_of = {}
+    n_folded = 0
+    if not args.all:
+        superseded = set()
+        for s in sessions:
+            sid = s.get("session_id")
+            cont = s.get("continued_from_session_id")
+            if sid and cont and cont != sid and cont in by_sid:
+                superseded.add(cont)
+        folded_out = set()
+        for s in sessions:
+            sid = s.get("session_id")
+            if not sid or sid in superseded:
+                continue
+            cur = s.get("continued_from_session_id")
+            seen = {sid}
+            count = 0
+            while cur and cur not in seen and cur in by_sid:
+                seen.add(cur)
+                folded_out.add(cur)
+                head_of[cur] = sid
+                count += 1
+                cur = by_sid[cur].get("continued_from_session_id")
+            if count > 0:
+                earlier_count[sid] = count
+        n_folded = len(folded_out)
+        if folded_out:
+            sessions = [s for s in sessions if s.get("session_id") not in folded_out]
 
     children_of = {}
     for s in sessions:
-        parent = s.get("parent_session_id") or ""
-        if parent:
+        raw_parent = s.get("parent_session_id") or ""
+        parent = head_of.get(raw_parent, raw_parent)
+        if parent and parent != s.get("session_id"):
             children_of.setdefault(parent, []).append(s)
-    sids = {s.get("session_id") for s in sessions}
-    roots = [s for s in sessions if (s.get("parent_session_id") or "") not in sids]
+    sids = {s.get("session_id") for s in sessions if s.get("session_id")}
+    roots = [
+        s for s in sessions
+        if head_of.get(s.get("parent_session_id") or "", s.get("parent_session_id") or "") not in sids
+    ]
+
+    def _family_nodes(root, _seen=None):
+        if _seen is None:
+            _seen = set()
+        sid = root.get("session_id")
+        if sid in _seen:
+            return [root]
+        if sid:
+            _seen.add(sid)
+        nodes = [root]
+        for c in children_of.get(sid) or ():
+            nodes.extend(_family_nodes(c, _seen))
+        return nodes
+
+    def _family_sort_key(root):
+        fam = _family_nodes(root)
+        ages = [n.get("last_event_age_s") for n in fam if n.get("last_event_age_s") is not None]
+        min_age = min(ages) if ages else float("inf")
+        if args.sort == "status":
+            min_rank = min(_STATUS_RANK.get(n.get("state") or "", 4) for n in fam)
+            return (min_rank, min_age)
+        return (min_age == float("inf"), min_age)
+
+    roots = sorted(roots, key=_family_sort_key)
+    if args.sort == "status":
+        sessions = sorted(
+            sessions,
+            key=lambda s: (
+                _STATUS_RANK.get(s.get("state") or "", 4),
+                s.get("last_event_age_s") if s.get("last_event_age_s") is not None else float("inf"),
+            ),
+        )
 
     home_prefix = os.path.expanduser("~") + os.sep
 
     def _row(s, depth=0, child=False):
+        sid = s.get("session_id") or "?"
         flags = ""
         if s.get("needs_approval"):
             flags += " !approval"
@@ -312,11 +403,20 @@ def cmd_sessions(args):
             flags += " !stuck"
             if s.get("stuck_age_s") is not None:
                 flags += f" {_fmt_age(s['stuck_age_s'])} silent"
+        if earlier_count.get(sid):
+            flags += f"  ↱ {earlier_count[sid]} earlier"
         tool = s.get("pending_tool") or "-"
         if s.get("turn_age_s") is not None and s.get("state") == "working":
             tool = f"{tool} {_fmt_age(s['turn_age_s'])}"
-        name = (s.get("name") or "(no conversation row)")[:44]
+        raw_name = s.get("name") or "(no conversation row)"
+        if depth or child:
+            for pfx in ("↳ ⤴︎ ", "↳ ", "⤴︎ "):
+                if raw_name.startswith(pfx):
+                    raw_name = raw_name[len(pfx):]
+                    break
         marker = ("  " * depth + "↳ ") if (depth or child) else ""
+        avail_w = max(20, 46 - len(marker))
+        name_col = f"{marker}{raw_name[:avail_w]}"
         engine_effort = f"{s.get('engine') or '?'}/{s.get('effort') or '?'}"
         via = s.get("spawned_via") or "terminal"
         if via in ("-", "none", "null", "not-available", "not available"):
@@ -325,57 +425,83 @@ def cmd_sessions(args):
         if path.startswith(home_prefix):
             path = path[len(home_prefix):]
         print(
-            f"{_fmt_age(s.get('last_event_age_s')):>7}  {marker}{name:<44} "
+            f"{_fmt_age(s.get('last_event_age_s')):>7}  {name_col:<46} "
             f"{s.get('state') or '?':<8} {(s.get('model') or '?')[:18]:<18} "
-            f"{s.get('session_id') or '?'}  {engine_effort:<14} "
-            f"via:{via:<6} {path}  {tool}{flags}"
+            f"{sid}  {engine_effort:<14} "
+            f"via:{via:<8} {path}  {tool}{flags}"
         )
 
-    def _walk(s, depth):
+    def _walk(s, depth, _seen=None):
+        if _seen is None:
+            _seen = set()
+        sid = s.get("session_id")
+        if sid and sid in _seen:
+            return
+        if sid:
+            _seen.add(sid)
         _row(s, depth)
-        kids = children_of.get(s.get("session_id")) or ()
+        kids = children_of.get(sid) or ()
         if args.sort == "status":
             kids = sorted(kids, key=lambda c: (
                 _STATUS_RANK.get(c.get("state") or "", 4),
                 c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
             ))
         else:
-            kids = sorted(kids, key=lambda c: c.get("last_event_age_s") or 0)
+            kids = sorted(
+                kids,
+                key=lambda c: c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
+            )
         for child in kids:
-            _walk(child, depth + 1)
+            _walk(child, depth + 1, _seen)
 
-    if args.tree:
+    if not flat_mode:
         for s in roots:
             _walk(s, 0)
     else:
-        # Flat (default): every row in the requested sort order, children
-        # marked ↳ inline. Nesting under parents (--tree) groups families but
-        # breaks the global sort order — the hiding problem in new clothes.
         for s in sessions:
             _row(s, 0, child=bool(s.get("parent_session_id")))
     n = len(sessions)
+    n_roots = len(roots)
+    n_children = n - n_roots
     n_live = sum(1 for s in sessions if s.get("state") != "ended")
     n_ended = n - n_live
     n_orphan = sum(1 for s in sessions if not s.get("has_conversation_row"))
-    counts = f"{n_live} live"
-    if n_ended:
-        counts += f" + {n_ended} ended"
-    suffix = f", {n_orphan} with no conversation row" if n_orphan else ""
-    print(f"\n{counts} session{'s' if n != 1 else ''}{suffix}")
-    if n_helpers and not args.all:
-        print(f"({n_helpers} CCC helper session{'s' if n_helpers != 1 else ''} hidden — auto-title bots; --all to show)")
+    if live_only and args.since is None:
+        header = f"{n_live} live session{'s' if n_live != 1 else ''}"
+    else:
+        win_label = _fmt_age(effective_since) if effective_since else "window"
+        header = f"{n} session{'s' if n != 1 else ''} in last {win_label} ({n_live} live + {n_ended} ended"
+        if n_children:
+            header += f"; {n_roots} root + {n_children} subagent{'s' if n_children != 1 else ''}"
+        header += ")"
+    if n_orphan:
+        header += f", {n_orphan} with no conversation row"
+    print(f"\n{header}")
+    if not args.all:
+        hidden_parts = []
+        if n_folded:
+            hidden_parts.append(f"{n_folded} continuation leg{'s' if n_folded != 1 else ''} folded (↱)")
+        if n_empty_polls:
+            hidden_parts.append(f"{n_empty_polls} empty queue-drain poll{'s' if n_empty_polls != 1 else ''} hidden")
+        if n_archived:
+            hidden_parts.append(f"{n_archived} archived/trashed hidden")
+        if n_helpers:
+            hidden_parts.append(f"{n_helpers} helper{'s' if n_helpers != 1 else ''} hidden")
+        if hidden_parts:
+            print(f"({', '.join(hidden_parts)} — use --all to show)")
     return 0
 
 
 def _resolve_target(base, target):
     """Turn a user-supplied target (session id, unique id prefix, or unique
-    name fragment) into a session id, using the live census. Returns
+    name fragment) into a session id, using the census (including recent
+    ended sessions so `ccc send` / `ccc ask` can wake them up). Returns
     (session_id, error_message) — exactly one is set. An unmatched target
     passes through untouched so server-side aliases (bridge ULIDs, spawn
     prefixes) still work."""
     target = (target or "").strip()
     try:
-        payload = _get_json(base, "/api/sessions/census")
+        payload = _get_json(base, "/api/sessions/census?since=604800")
         sessions = list(payload.get("sessions") or [])
     except OSError:
         return target, None  # census unreachable — let the send itself report
@@ -390,6 +516,20 @@ def _resolve_target(base, target):
         s for s in sessions
         if needle and needle in (s.get("name") or "").lower()
     ]
+    if len(named) > 1:
+        # Prefer non-trashed, non-superseded continuation heads when a name
+        # matches multiple legs of the same continuation chain.
+        superseded = {
+            s.get("continued_from_session_id")
+            for s in sessions
+            if s.get("continued_from_session_id")
+        }
+        preferred = [
+            s for s in named
+            if not s.get("trashed") and s.get("session_id") not in superseded
+        ]
+        if len(preferred) == 1:
+            return preferred[0].get("session_id") or target, None
     if len(named) == 1:
         return named[0].get("session_id") or target, None
     if len(named) > 1:
@@ -2143,17 +2283,22 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name in ("sessions", "session", "list-sessions"):
-        p = sub.add_parser(name, help="live session census (state, age, engine, repo, name)")
+        p = sub.add_parser(name, help="session census (24h window by default; state, age, engine, repo, name)")
         p.add_argument("--since", type=_parse_since,
                        help="show sessions (live + recently-ended) with activity in "
-                            "the window, e.g. 5h / 30m / 2d")
+                            "the window, e.g. 5h / 30m / 2d (default: 24h)")
+        p.add_argument("--live", action="store_true",
+                       help="only sessions with a live/attached OS process (state != ended)")
         p.add_argument("--sort", choices=("recency", "status"), default="recency",
                        help="recency (default): most recent first; status: waiting, "
                             "working, idle, ended — recency within each")
         p.add_argument("--all", action="store_true",
-                       help="include CCC helper sessions (auto-title bots), hidden by default")
+                       help="include helpers, archived/trashed sessions, unfolded continuation legs, "
+                            "and empty queue-drain polls (hidden by default)")
         p.add_argument("--tree", action="store_true",
-                       help="nest children under parents (default: flat, ↳ marks children)")
+                       help="nest ↳ children under parents (default)")
+        p.add_argument("--flat", action="store_true",
+                       help="flat list instead of nesting ↳ children under parents")
         p.add_argument("--json", action="store_true", help="raw census JSON")
         p.set_defaults(func=cmd_sessions)
 
