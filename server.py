@@ -16089,8 +16089,12 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
         refreshed = {}
         for key, entry in _archive_serve_cache.items():
             rows = []
+            row_rev = entry.get("row_rev")
+            tracked = row_rev is not None and bool(entry.get("track_since"))
+            row_rev = dict(row_rev) if tracked else None
             for original in entry.get("rows") or []:
                 if not isinstance(original, dict):
+                    tracked = False
                     continue
                 row = dict(original)
                 sid = row.get("session_id") or row.get("id")
@@ -16098,12 +16102,18 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                     row["archived"] = sid in archived_set
                     row["trashed"] = sid in trashed_set
                     row["all_lane_override"] = lane_overrides.get(str(sid), "")
+                    # CCC-142: only rows whose lifecycle/lane actually moved
+                    # ride the next ?since= delta.
+                    if tracked and row != original:
+                        row_rev[str(sid)] = _archive_serve_version
                 rows.append(row)
             refreshed[key] = {
                 "ts": 0.0,
                 "rows": rows,
                 "ver": _archive_serve_version,
             }
+            if tracked:
+                refreshed[key].update(track_since=entry["track_since"], row_rev=row_rev)
         _archive_serve_cache.clear()
         _archive_serve_cache.update(refreshed)
         # Existing workers are for the previous generation. Their finally

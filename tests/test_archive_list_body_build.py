@@ -191,3 +191,21 @@ def test_delta_list_survives_overlay_rows_coming_and_going(monkeypatch):
     dup = base + [_row('a', 'Dup', now)]
     state = server._archive_list_delta_state(key, dup, '7d', True)
     assert server._archive_list_delta_payload(state, token, dup, window='7d') is None
+
+
+def test_lifecycle_restamp_keeps_delta_tracking(monkeypatch):
+    # Archive/trash/lane mutations rebuild the snapshot from sidecars; that
+    # used to drop delta tracking, so every client got a full body.
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_load_conversation_lifecycle_sets', lambda: ({'b'}, set()))
+    monkeypatch.setattr(server, '_load_session_lane_overrides', lambda: {})
+    gen = server._archive_serve_generation
+    rows = [dict(_row('a', 'A', 1), archived=False, trashed=False, all_lane_override=''),
+            dict(_row('b', 'B', 2), archived=False, trashed=False, all_lane_override='')]
+    server._archive_serve_cache_store('k', rows, gen)
+    since = server._archive_serve_cache['k']['ver']
+    server._restamp_archive_serve_cache_after_mutation()
+    entry = server._archive_serve_cache['k']
+    assert entry['track_since'] == since
+    assert entry['row_rev'] == {'b': entry['ver']}
