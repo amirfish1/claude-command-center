@@ -14148,6 +14148,8 @@
     if (_ttsNeural && _ttsNeural.audio) {
       _ttsNeural.stopHighlight?.();
       try { _ttsNeural.audio.pause(); URL.revokeObjectURL(_ttsNeural.audio.src); } catch (_) {}
+      // A continuous read also stops its server stream and download.
+      try { _ttsNeural.cancel?.(); } catch (_) {}
     }
     _ttsNeural = null;
     if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -14872,7 +14874,9 @@
     return fetch('/api/free-runtime/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: voice || '', stream: _ttsCanStream(), prio: prio === 'bg' ? 'bg' : 'fg' }),
+      // Always the streamed mp3: a browser without MediaSource reads it as one
+      // blob, and the server keeps the finished clip for a continuous read.
+      body: JSON.stringify({ text, voice: voice || '', stream: true, prio: prio === 'bg' ? 'bg' : 'fg' }),
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
@@ -14912,7 +14916,224 @@
     }
     return words[lo];
   }
+  // Continuous read (CCC-144): without MediaSource (iPhone Safari) each clip
+  // is a whole blob, and chaining them in JS pauses 20-45 s mid-read: the next
+  // clip is made only after the last one, and iOS suspends the page between
+  // clips while it is backgrounded. There the server makes the remaining clips
+  // into ONE mp3 stream that a single <audio src> plays with no JS between
+  // clips. localStorage ccc-tts-continuous = '1' forces it, '0' turns it off.
+  function _ttsContinuousOk(state) {
+    let pref = '';
+    try { pref = localStorage.getItem('ccc-tts-continuous') || ''; } catch (_) {}
+    if (pref === '0' || state.noContinuous || state.neuralOk === false) return false;
+    if (state.geminiVoice && !state.geminiVoice.startsWith('Kokoro')) return false;
+    return pref === '1' || !_ttsCanStream();
+  }
+  function _ttsSpeakContinuous(state) {
+    const token = ++_ttsNeuralToken;
+    _ttsUtterance = { neural: true };
+    const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
+    const from = state.index;
+    const clips = state.chunks.slice(from);
+    const hit = _ttsHeadCache.get(clips[0].text);
+    const voice = state.geminiVoice || (hit && hit.voice && hit.voice.startsWith('Kokoro') ? hit.voice : '')
+      || ttsVoiceForPane(state.paneId) || '';
+    // A seek target inside the first clip restarts at that clip's start.
+    state.seekTarget = null;
+    if (state.perf) state.perf.mode = 'continuous';
+    let sid = '', audio = null, wordFrame = null, lastWord = -1, pollTimer = null;
+    const info = { marks: [0], done: false, failed: null, seconds: 0 };
+    const cancelSession = (id) => {
+      if (id) fetch('/api/free-runtime/tts-session/' + id + '/cancel', { method: 'POST' }).catch(() => {});
+    };
+    const stopHighlight = () => {
+      if (wordFrame != null) cancelAnimationFrame(wordFrame);
+      wordFrame = null;
+    };
+    const release = () => {
+      stopHighlight();
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = null;
+      if (!info.done) cancelSession(sid);
+    };
+    // Per-clip playback from the clip being heard (session refused, a clip
+    // failed, or the stream broke off early).
+    const toClips = (why) => {
+      if (stale()) return;
+      _ttsLog('CONT', 'per-clip from clip ' + state.index + ': ' + why);
+      release();
+      _ttsNeuralToken += 1;
+      try { audio && audio.pause(); } catch (_) {}
+      _ttsNeural = null;
+      _ttsUtterance = null;
+      _ttsSetStreaming(false);
+      state.noContinuous = true;
+      _ttsSpeakNextChunk();
+    };
+    const pollMarks = () => {
+      pollTimer = null;
+      if (stale() || !sid) return Promise.resolve();
+      return fetch('/api/free-runtime/tts-session/' + sid + '/marks', { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null).then((j) => {
+          if (!j || stale()) return;
+          Object.assign(info, { marks: j.marks && j.marks.length ? j.marks : [0], done: !!j.done, failed: j.failed, cancelled: !!j.cancelled, seconds: j.seconds || 0 });
+          if (j.voice && j.voice.startsWith('Kokoro')) state.geminiVoice = j.voice;
+          const made = info.done && info.failed == null && !info.cancelled ? info.marks.length : info.marks.length - 1;
+          if (made > 0) {
+            const c = clips[Math.min(made, clips.length) - 1];
+            state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
+            _ttsSetPlay();
+          }
+          if (info.done) _ttsSetStreaming(false);
+          else pollTimer = setTimeout(pollMarks, 1000);
+        }).catch(() => { if (!stale()) pollTimer = setTimeout(pollMarks, 2000); });
+    };
+    // Stream time -> (clip, time inside it, its length or NaN while being made).
+    const clipAt = (t) => {
+      const m = info.marks;
+      let j = 0;
+      while (j + 1 < m.length && m[j + 1] <= t) j += 1;
+      const end = j + 1 < m.length ? m[j + 1] : info.done && info.failed == null && !info.cancelled ? info.seconds : NaN;
+      return { j: Math.min(j, clips.length - 1), local: Math.max(0, t - m[j]), dur: end - m[j] };
+    };
+    const updateWord = () => {
+      if (stale() || !audio) return;
+      const at = clipAt(audio.currentTime);
+      const chunk = clips[at.j];
+      state.index = from + at.j;
+      const word = _ttsWordAtProgress(chunk.text, at.local, at.dur);
+      if (!word || chunk.start + word.start === lastWord) return;
+      lastWord = chunk.start + word.start;
+      _ttsLastCharIndex = lastWord;
+      _ttsSetPlay();
+      highlightTtsWord(_ttsLastCharIndex, word.length);
+      updateTtsCaption(_ttsLastCharIndex, word.length, _ttsBoundUtteranceText);
+    };
+    const trackWord = () => {
+      wordFrame = null;
+      if (stale() || !audio || audio.paused || audio.ended) return;
+      updateWord();
+      wordFrame = requestAnimationFrame(trackWord);
+    };
+    const start = () => {
+      audio = _ttsAudio || (_ttsAudio = new Audio());
+      audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
+      audio.onplaying = audio.onwaiting = audio.onpause = null;
+      audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = null;
+      audio.src = '/api/free-runtime/tts-session/' + sid;
+      audio.playbackRate = _ttsRate;
+      _ttsSetStreaming(true);
+      pollMarks();
+      const player = { audio, token, stopHighlight, continuous: true };
+      player.cancel = () => {
+        release();
+        try { audio.removeAttribute('src'); audio.load(); } catch (_) {}
+      };
+      // Seek inside audio already made; anything else restarts the stream at
+      // the target's clip (made clips replay from the server's clip cache).
+      player.seek = (target) => {
+        const k = clips.findIndex(c => target < c.start + c.text.length);
+        if (k >= 0 && k < info.marks.length) {
+          const c = clips[k];
+          const at = clipAt(info.marks[k]);
+          const frac = (target - c.start) / Math.max(1, c.text.length);
+          const t = info.marks[k] + (Number.isFinite(at.dur) ? frac * at.dur : (target - c.start) / 15);
+          for (let i = 0; i < audio.seekable.length; i++) {
+            if (audio.seekable.start(i) <= t && audio.seekable.end(i) >= t) {
+              audio.currentTime = t;
+              _ttsLastCharIndex = target;
+              return;
+            }
+          }
+        }
+        _ttsEngineCancel();
+        _ttsUtterance = null;
+        state.index = from + Math.max(0, k);
+        _ttsSpeakNextChunk();
+      };
+      _ttsNeural = player;
+      audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
+      audio.onpause = stopHighlight;
+      audio.onplay = () => {
+        if (stale()) return;
+        setTtsButtonsState(true, false, state.paneId);
+        setTtsButtonsBusy(false);
+        const label = 'Pause reading (free voice: ' + (state.geminiVoice || voice || 'Kokoro') + ')';
+        ttsButtons().forEach(btn => {
+          if (ttsButtonPaneId(btn) === _ttsActivePaneId) { btn.classList.remove('paused'); btn.title = label; }
+        });
+        _ttsShowVoice((state.geminiVoice || voice || 'Kokoro') + ' · continuous');
+      };
+      let waitFrom = 0;
+      audio.onplaying = () => {
+        if (stale()) return;
+        const now = Date.now();
+        stopHighlight();
+        trackWord();
+        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice || voice });
+        if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms (continuous)'); state.t0 = 0; }
+        if (waitFrom) {
+          _ttsPerfSilence(state, now - waitFrom, 'stall');
+          _ttsLog('STALL', (now - waitFrom) + 'ms in continuous read at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate);
+          waitFrom = 0;
+        }
+      };
+      audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
+      audio.onended = () => {
+        if (stale()) return;
+        // Whole stream heard, a clip failed, or the connection broke off.
+        pollMarks().then(() => {
+          if (stale()) return;
+          if (!info.done || info.failed != null || info.cancelled) {
+            state.index = from + (info.failed != null ? info.failed : clipAt(audio.currentTime).j);
+            toClips(info.failed != null ? 'clip ' + info.failed + ' failed' : 'stream ended early');
+            return;
+          }
+          release();
+          clearTtsHighlight();
+          clearTtsCaption();
+          _ttsSetStreaming(false);
+          _ttsLog('ENDED', 'continuous read, ' + clips.length + ' clips');
+          _ttsNeural = null;
+          _ttsUtterance = null;
+          state.index = state.chunks.length;
+          _ttsSpeakNextChunk();
+        });
+      };
+      audio.onerror = () => {
+        if (stale()) return;
+        _ttsLog('ERROR', 'continuous media error ' + (audio.error?.code || 'unknown'));
+        state.index = from + clipAt(audio.currentTime || 0).j;
+        toClips('media error');
+      };
+      if (_ttsPaused) { audio.load?.(); return; }
+      audio.play().catch((error) => {
+        if (stale()) return;
+        _ttsLog('ERROR', 'continuous play rejected: ' + (error?.name || 'unknown'));
+        if (error?.name === 'NotAllowedError') {
+          _ttsPaused = true;
+          setTtsButtonsBusy(false);
+          if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
+          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
+          showOpToast('Tap the speaker to resume audio.', 'info');
+          return;
+        }
+        toClips('play rejected');
+      });
+    };
+    fetch('/api/free-runtime/tts-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: clips.map(c => c.text), voice }),
+    }).then(r => r.ok ? r.json() : Promise.reject(r.status)).then((j) => {
+      if (stale()) { cancelSession(j && j.id); return; }
+      sid = j.id;
+      _ttsLog('CONT', 'stream ' + clips.length + ' clips from clip ' + from + (hit ? ' (head prepared)' : ''));
+      start();
+    }).catch((status) => toClips('session ' + status));
+  }
   function _ttsSpeakChunkNeural(state, chunk) {
+    if (_ttsContinuousOk(state)) { _ttsSpeakContinuous(state); return; }
     const token = ++_ttsNeuralToken;
     _ttsUtterance = { neural: true };   // keeps the "is a read active" checks true
     const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
@@ -15410,7 +15631,7 @@
     _perfEvent('tts_start', _perfActiveElapsed(p.t0, end), { detail: {
       engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
       chars: p.chars, clips: p.clips, target: p.target, rate: _ttsRate,
-      wall_ms: Math.round(end - p.t0),
+      wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips',
     } });
   }
   function _ttsPerfSilence(state, ms, kind) {
@@ -15423,12 +15644,16 @@
     const p = state && state.perf;
     if (!p || p.flushed) return;
     p.flushed = true;
-    if (!p.gaps && !p.stalls) return;
+    // A continuous read has no clip gaps: a smooth multi-clip one still
+    // reports its 0 ms, or the gate would only ever see the stalled reads.
+    const smoothContinuous = p.mode === 'continuous' && p.started && p.clips > 1;
+    if (!p.gaps && !p.stalls && !smoothContinuous) return;
     _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
       max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
       max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
       voice: state.geminiVoice || '', cache: p.cache, chars: p.chars,
       clips: p.clips, played: state.index, target: p.target, rate: _ttsRate,
+      mode: p.mode || 'clips',
     } });
   }
   // A read paused and left (tab closed, reload) still reports its gaps.

@@ -317,6 +317,7 @@ const URL = {createObjectURL: () => 'play-' + (++urls), revokeObjectURL: u => re
 const _ttsScheduleCacheDebug = () => {}, _ttsSetPlay = () => {}, _ttsSetStreaming = () => {};
 const clearTtsHighlight = () => {}, clearTtsCaption = () => {};
 const _ttsFetchNeural = () => { fetches++; throw Error('Unexpected cache miss'); };
+const _ttsContinuousOk = () => false;
 const setTtsButtonsState = () => {}, setTtsButtonsBusy = () => {};
 const ttsButtons = () => [], _ttsShowVoice = () => {}, _ttsLog = () => {};
 const _ttsPerfStart = () => {}, _ttsPerfSilence = () => {};

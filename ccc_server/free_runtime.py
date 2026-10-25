@@ -809,6 +809,139 @@ class _TeeClip:
                 _clip_cache_put(self._key, b"".join(self._parts))
 
 
+# Continuous read: one mp3 stream for a whole message, for browsers without
+# MediaSource (iPhone Safari). Chaining clips in JS there waits for each whole
+# clip, and iOS suspends the page between clips while it is backgrounded, so a
+# read paused 20-45 s mid-message (CCC-144). Here the server makes the clips in
+# order (one at a time, clip cache first) into a shared buffer; a plain
+# <audio src> GET plays it progressively. Every GET replays the buffer from the
+# start, so Safari's probe and retry requests never make a clip twice.
+_TTS_SESSION_BYTES_PER_S = 8000   # lameenc CBR 64 kbps (scripts/local_tts_server.py)
+_TTS_SESSION_IDLE_S = 90          # nobody reading: stop making audio
+_TTS_SESSION_TTL_S = 15 * 60
+_TTS_SESSIONS = {}
+_TTS_SESSIONS_LOCK = threading.Lock()
+
+
+class _TtsSession:
+    def __init__(self, texts, voice):
+        import time
+        self.texts, self.voice = texts, voice
+        self.parts, self.size = [], 0
+        self.marks = []      # seconds where each clip starts in the stream
+        self.done = False
+        self.failed = None   # index of the clip that could not be made
+        self.cancelled = False
+        self.readers = 0     # open GETs; a paused listener still holds one
+        self.created = self.touched = time.time()
+        self.cond = threading.Condition()
+
+    def run(self):
+        import time
+        try:
+            for i, text in enumerate(self.texts):
+                if self.cancelled:
+                    break
+                resp, label = local_tts_open(text, self.voice, "fg")
+                if resp is None:
+                    with self.cond:
+                        self.failed = i
+                    break
+                if label.startswith(_KOKORO_LABEL):
+                    self.voice = label   # later clips keep the first clip's voice
+                with self.cond:
+                    self.marks.append(self.size / _TTS_SESSION_BYTES_PER_S)
+                    self.cond.notify_all()
+                with resp:
+                    while not self.cancelled:
+                        buf = resp.read(4096)
+                        if not buf:
+                            break
+                        with self.cond:
+                            self.parts.append(buf)
+                            self.size += len(buf)
+                            self.cond.notify_all()
+                        if not self.readers and time.time() - self.touched > _TTS_SESSION_IDLE_S:
+                            self.cancelled = True
+        except Exception:
+            with self.cond:
+                if self.failed is None:
+                    self.failed = len(self.marks)
+        finally:
+            with self.cond:
+                self.done = True
+                self.cond.notify_all()
+
+    def info(self):
+        with self.cond:
+            # cancelled = stopped before the end: the client must not treat
+            # the stream's end as the end of the message.
+            return {"marks": list(self.marks), "done": self.done, "failed": self.failed,
+                    "cancelled": self.cancelled,
+                    "clips": len(self.texts), "voice": self.voice,
+                    "seconds": self.size / _TTS_SESSION_BYTES_PER_S}
+
+    def iter_bytes(self, timeout=60.0):
+        """Yield the stream from the start, following it until it is made."""
+        import time
+        i = 0
+        with self.cond:
+            self.readers += 1
+        try:
+            while True:
+                with self.cond:
+                    while i >= len(self.parts) and not self.done and not self.cancelled:
+                        self.touched = time.time()
+                        if not self.cond.wait(timeout):
+                            return
+                    if i >= len(self.parts):
+                        return
+                    chunk, i = self.parts[i], i + 1
+                    self.touched = time.time()
+                yield chunk
+        finally:
+            with self.cond:
+                self.readers -= 1
+                self.touched = time.time()
+
+
+def tts_session_create(texts, voice=""):
+    """Start a continuous read of ``texts`` (one clip each). Returns the session
+    id, or "" when the local voice cannot stream. A new read cancels older ones:
+    one listener, one voice process."""
+    import secrets
+    import time
+    texts = [str(t or "").strip()[:TTS_MAX_CHARS] for t in (texts or [])]
+    texts = [t for t in texts if t][:64]
+    if not texts or not local_tts_installed() or not _local_tts_start():
+        return ""
+    session = _TtsSession(texts, str(voice or ""))
+    sid = secrets.token_urlsafe(18)
+    now = time.time()
+    with _TTS_SESSIONS_LOCK:
+        for old_id, old in list(_TTS_SESSIONS.items()):
+            old.cancelled = True
+            if now - old.created > _TTS_SESSION_TTL_S:
+                _TTS_SESSIONS.pop(old_id, None)
+        _TTS_SESSIONS[sid] = session
+    threading.Thread(target=session.run, name="tts-session", daemon=True).start()
+    return sid
+
+
+def tts_session_get(sid):
+    with _TTS_SESSIONS_LOCK:
+        return _TTS_SESSIONS.get(str(sid or ""))
+
+
+def tts_session_cancel(sid):
+    session = tts_session_get(sid)
+    if session is not None:
+        session.cancelled = True
+        with session.cond:
+            session.cond.notify_all()
+    return session is not None
+
+
 def local_tts_keepalive(interval=60.0):
     """Keep the installed local voice up: start it at boot, restart it after a
     crash, so the first Speak never pays the ~30 s model load. Runs forever."""
