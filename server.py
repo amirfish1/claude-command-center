@@ -12643,11 +12643,15 @@ def build_live_sessions_activity():
         # Time the REAL build — this is the truest health signal for the hot
         # path, and the only place an actual (non-cached) build happens.
         _t0 = time.perf_counter()
+        _c0 = time.thread_time()
         data = _build_live_sessions_activity_uncached()
         _build_ms = (time.perf_counter() - _t0) * 1000.0
+        # Thread CPU next to wall time: cpu << ms means the build was waiting
+        # (GIL convoy, saturated host, subprocess), not computing (CCC-168).
+        _cpu_ms = (time.thread_time() - _c0) * 1000.0
         _record_live_build_ms(_build_ms)
         try:
-            record_event("live_build", _build_ms)
+            record_event("live_build", _build_ms, detail={"cpu_ms": int(round(_cpu_ms)), "rows": len(data or {})})
         except Exception:
             pass
         snap["data"] = data
