@@ -37,7 +37,7 @@ async function main() {
     for (const viewport of [{name:'desktop',width:1280,height:900},{name:'mobile',width:390,height:844}]) {
       const page = await browser.newPage();
       await page.setViewport(viewport);
-      await page.evaluateOnNewDocument(() => {localStorage.setItem('ccc-tour-done','skipped'); localStorage.setItem('ccc-onboarded','1'); localStorage.setItem('ccc-engines-first-run-done','1'); localStorage.setItem('ccc-archive-window','7d'); localStorage.setItem('ccc-archive-engine-filter','');});
+      await page.evaluateOnNewDocument(() => {localStorage.setItem('ccc-pwa-install-dismissed','1'); localStorage.setItem('ccc-tour-done','skipped'); localStorage.setItem('ccc-onboarded','1'); localStorage.setItem('ccc-engines-first-run-done','1'); localStorage.setItem('ccc-archive-window','7d'); localStorage.setItem('ccc-archive-engine-filter','');});
       await page.goto(base, {waitUntil:'domcontentloaded',timeout:60000});
       await page.waitForSelector('[data-conv-tab="ideas"]',{timeout:60000});
       await page.evaluate(() => {for (const id of ['etsLater','updLaterBtn']) document.getElementById(id)?.click();});
@@ -89,7 +89,7 @@ async function main() {
     if (!row || ['working','running'].includes(row.state) || row.codex_state === 'working' || row.pending_spawn) continue;
     const source = audit.latest(data.events || []);
     if (source.userAfter || digest(source.answer) !== entry.turn) continue;
-    const key = `ccc-row-audit:${digest(base)}:${entry.sid}:${entry.turn}`;
+    const key = `ccc-row-audit:${digest(os.hostname())}:${entry.sid}:${entry.turn}`;
     const text = `Hourly rendered-row audit found a finished turn without its expected control.\n\nSession: ${entry.sid}\nURL: ${base}\nTurn digest: ${entry.turn}\nObserved: ${new Date().toISOString()}\n\n${entry.views.map(view => `${view.viewport}: ${view.failures.map(f => f.text).join(' ')}`).join('\n')}\n\nEvidence screenshots: ${out}/${entry.sid}-<viewport>.png\nVerify the current transcript and rendered controls before repairing. Active or newer-request turns were excluded; completion claims are self-reported.`;
     let ticket = null;
     if (args.includes('--file')) ticket = execFileSync('wt',['add','-q',queue,'--title',`Session row missing control: ${entry.title}`.slice(0,150),'--text',text,'--type','bug','--dedupe-key',key],{encoding:'utf8',timeout:30000}).trim();
