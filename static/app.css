@@ -19430,6 +19430,10 @@ body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   padding: 1px 4px;
   outline: none;
 }
+/* CCC-177: the same input renames from the pane header's session name. */
+.conv-pane-title .status-rail-title-input {
+  min-width: 24ch;
+}
 /* Transcript size (CCC-475) — session metadata, moved here from the pane
    titlebar. Filled by updatePaneHeader for the active pane. */
 .status-rail-size {

@@ -1,0 +1,1 @@
+- Rename a session straight from its conversation header: double-click the session name, or choose ⋮ → Rename.

@@ -19732,8 +19732,16 @@
     if (!el || el.hidden) return;
     togglePaneHeaderTextExpand(el);
   });
+  // CCC-177: double-click the pane header's session name to rename it.
+  document.addEventListener('dblclick', (ev) => {
+    const el = ev.target && ev.target.closest && ev.target.closest('.conv-pane-title');
+    if (!el || el.hidden || !el._cccRenameRow) return;
+    ev.preventDefault();
+    startStatusRailTitleRename({ titleEl: el, row: el._cccRenameRow });
+  });
   document.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    if (ev.target && ev.target.tagName === 'INPUT') return;
     const el = ev.target && ev.target.closest && ev.target.closest('.conv-pane-title, .conv-pane-last-user-message');
     if (!el || el.hidden) return;
     ev.preventDefault();
@@ -20595,6 +20603,14 @@
         const row = _openConversationRow();
         const sid = row && (row.session_id || row.id);
         if (sid) moveSessionIdeaTicket(sid, action.slice(5));
+      } else if (action === 'rename') {
+        const pane = item.closest('.conv-pane');
+        const titleEl = pane && pane.querySelector('[data-role="pane-title"]');
+        if (titleEl && titleEl._cccRenameRow) {
+          startStatusRailTitleRename({ titleEl, row: titleEl._cccRenameRow });
+        } else {
+          startStatusRailTitleRename();
+        }
       }
     });
     document.addEventListener('keydown', (ev) => {
@@ -47142,11 +47158,14 @@
   // kept in sync by updatePaneHeader so the rail's pencil button knows which
   // conversation to rename without re-deriving "the active session".
   let _statusRailActiveRow = null;
-  function startStatusRailTitleRename() {
-    const row = _statusRailActiveRow;
+  // CCC-177: also renames in place from the pane header (double-click the
+  // session name, or ⋮ → Rename) — opts.titleEl/opts.row target that pane.
+  function startStatusRailTitleRename(opts = {}) {
+    const row = opts.row || _statusRailActiveRow;
     if (!row || !row.id) return;
-    const titleEl = document.getElementById('statusRailTitle');
+    const titleEl = opts.titleEl || document.getElementById('statusRailTitle');
     if (!titleEl || titleEl.querySelector('input')) return;
+    titleEl.classList.remove('is-expanded');
     const currentText = titleEl.textContent;
     const input = document.createElement('input');
     input.type = 'text';
@@ -47196,6 +47215,10 @@
         }
       }
       titleEl.textContent = finalText;
+      if (opts.titleEl) titleEl.title = finalText;
+      const _railTitleEl = document.getElementById('statusRailTitle');
+      if (_railTitleEl && _railTitleEl !== titleEl && _statusRailActiveRow
+          && _statusRailActiveRow.id === row.id) _railTitleEl.textContent = finalText;
       // Force: the pointer is often still hovering a sidebar row (or focus
       // is in a text control) right after commit, and the pause guard would
       // defer this exact paint — the rename the user is watching for.
@@ -47252,7 +47275,9 @@
     } else {
       categoryEl.textContent = category || '';
     }
-    titleEl.textContent = headerTitle;
+    titleEl._cccRenameRow = (opts.category === undefined && fullRow && fullRow.id) ? fullRow : null;
+    // Don't clobber an in-progress header rename (CCC-177).
+    if (!titleEl.querySelector('input')) titleEl.textContent = headerTitle;
     // CCC-1172: the ellipsized title stays readable in full — hover carries
     // it in the tooltip, click/Enter toggles .is-expanded inline (delegated
     // next to the mobile-original-ask listener). role/tabindex make the
