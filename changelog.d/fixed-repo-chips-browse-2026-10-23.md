@@ -1,1 +1,0 @@
-- Distinguish hovered repo chips from the selected folder in New session, and add a final “Browse folders…” chip so the machine's folder picker is available in compact layouts and with no recent repos.

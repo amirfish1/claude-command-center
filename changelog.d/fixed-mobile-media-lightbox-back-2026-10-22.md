@@ -1,1 +1,0 @@
-- Fixed opening `.png` and other media/document links on mobile and standalone PWA mode so they open in an in-app media lightbox with a **← Back** toolbar and browser history support instead of replacing the main CCC view with a raw `/api/media` page that had no way back.

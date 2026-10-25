@@ -1,1 +1,0 @@
-- The TTS debug log follows new entries at the bottom, including when reopened. Browser waiting positions stay visible above the scrolling log, with an explicit empty-queue message when no requests are waiting.

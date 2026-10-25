@@ -1,1 +1,0 @@
-- Phone composer no longer collapses into a tall, zero-width text box when a session shows the "Large and stale" notice.

@@ -1,1 +1,0 @@
-- The one-line installer no longer fails with "Failed to connect to bus" on Linux machines without a systemd user session (containers, plain SSH logins, some WSL setups): it skips the background-service question there and starts CCC in the window, and falls back to that if the service does not start.

@@ -1,1 +1,0 @@
-Automatic session wakes (limit-reset "continue", stuck-inject recovery) now share one ledger: at most 2 per session per 24h, never a second without progress from the first, and CCC asks you instead of waking again. `CCC_AUTO_WAKE=0` turns them off.

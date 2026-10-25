@@ -1,1 +1,0 @@
-- Session view turns `[Q<n>:slug]` owner-question tags into tappable chips that open the first full explanation, plus an open-questions pill and panel (mobile-friendly).

@@ -1,1 +1,0 @@
-- A finished session row now ends its explanation with a Close button (it archives the session); the separate "CLOSE" label and Archive chip are gone.

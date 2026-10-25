@@ -1,1 +1,0 @@
-- The sidebar list and live-session chips no longer stall for 20-30 seconds right after the dashboard restarts, and session-list refreshes do less repeated work when several tabs are open.

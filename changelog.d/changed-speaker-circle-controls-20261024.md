@@ -1,2 +1,0 @@
-- Keep speech controls with the floating speaker: drag the outer rim clockwise or counterclockwise to change speed, read the speed underneath, and use the small button at 3 o’clock to skip to the next sentence. Dragging the center still moves the whole control; arrow keys also adjust speed.
-- Skip sentences using existing prepared or streaming audio instead of restarting synthesis. Preserve paused playback and wait for buffered audio when a streaming seek is not ready yet.

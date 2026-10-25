@@ -1,1 +1,0 @@
-- Perf watchdog: session-list read times and server-side list builds now feed the same breach evaluation as archive loads and conversation opens; self-filed WatchTower tickets are opt-in via CCC_PERF_TICKETS=1 (off by default on regular installs), still capped at one ticket per day per regression.

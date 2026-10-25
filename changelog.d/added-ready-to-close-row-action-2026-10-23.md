@@ -1,1 +1,0 @@
-- Completed sessions with only a reload or no-action next step now show “Ready to close” with an always-visible Archive button in desktop and phone rows. Active work, approvals, questions, and unfinished delivery keep their existing attention state.

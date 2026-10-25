@@ -1,1 +1,0 @@
-- A new session opened in a split pane that wasn't focused now switches to its real conversation when the answer arrives, instead of showing "Thinking…" forever while the reply appears in a separate sidebar row.

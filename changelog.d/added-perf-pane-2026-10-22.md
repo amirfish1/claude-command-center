@@ -1,1 +1,0 @@
-- Added a collapsible `perf` strip above the sidebar footer: the left column logs every `/api/conversations/list` read (time, duration, size), the right column logs each conversation open's click→render time — useful for spotting index-refresh jank.

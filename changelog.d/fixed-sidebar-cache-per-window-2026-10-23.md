@@ -1,1 +1,0 @@
-- Reloading a tab no longer waits on the full session list when another tab uses a different time window; each window now keeps its own cached sidebar snapshot.

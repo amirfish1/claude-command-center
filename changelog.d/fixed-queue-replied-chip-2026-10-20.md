@@ -1,1 +1,0 @@
-- Queue rows now show a "replied" chip instead of "needs input" when the owner commented after the worker's question but the ticket has not been formally answered.

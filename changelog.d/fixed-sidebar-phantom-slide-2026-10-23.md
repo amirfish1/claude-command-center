@@ -1,1 +1,0 @@
-- Sidebar rows no longer slide down and back when a row above changes height (Close button, overlay text) without any actual reorder.

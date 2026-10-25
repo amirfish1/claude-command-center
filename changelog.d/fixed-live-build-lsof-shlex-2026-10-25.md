@@ -1,1 +1,0 @@
-- Live session status rebuilds no longer fork a host-wide `lsof` or re-tokenize process command lines on every build, cutting warm rebuilds from ~2s to ~0.3s on a busy host.

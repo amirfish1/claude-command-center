@@ -1,1 +1,0 @@
-- The session menu's Archive / Unarchive / Untrash now moves the session straight away and undoes the move if the server request fails. Before, a click could look like it did nothing while the request waited behind background refreshes.

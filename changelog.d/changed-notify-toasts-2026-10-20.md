@@ -1,1 +1,0 @@
-- Notification toasts now appear top-right, are skipped for the session already in front, and every notification attempt is logged to activity.log (NOTIFY lines) with its outcome.

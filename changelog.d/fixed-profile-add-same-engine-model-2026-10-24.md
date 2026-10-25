@@ -1,1 +1,0 @@
-- Settings model profiles can now add a second model on an engine already in the route (for example Opus then Sonnet); worker fallback stays one model per engine.

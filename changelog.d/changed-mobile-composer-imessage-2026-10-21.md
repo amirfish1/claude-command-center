@@ -1,2 +1,0 @@
-- Phones: the composer puts + outside the text card, tucks expand and Send/mic into the card's corner, and grows with your text up to about a third of the screen.
-- The floating read-aloud button can be dragged anywhere in the conversation; its spot is remembered.

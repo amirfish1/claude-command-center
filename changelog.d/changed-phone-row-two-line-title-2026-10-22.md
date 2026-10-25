@@ -1,1 +1,0 @@
-- Phone session list: titles wrap to two lines instead of cutting off, the time is shorter (11:42, Mon, 10/19), and the engine mark only shows for non-Claude sessions.

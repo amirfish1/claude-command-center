@@ -1,1 +1,0 @@
-- Perf pane's session-opens column now logs reliably: opens are captured both at `selectConversation` and via a delegated click listener on sidebar/kanban/table rows, and fresh-load renders close the timer even when the strict `conv_open` metric doesn't match.

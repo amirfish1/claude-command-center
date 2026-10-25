@@ -1,1 +1,0 @@
-- Phones: the sidebar ⋮ menu now holds just Open questions, the session-list view filters (grouping, density, time window, engines, other machines) and Reload page; the list's second ⋮ row is gone. Restart servers, What's new, Check for updates, Discord and Last updated moved into Settings, which the CCC icon now opens.

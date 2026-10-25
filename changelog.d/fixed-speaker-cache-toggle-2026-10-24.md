@@ -1,1 +1,0 @@
-- Fix the Speaker cache debug switch so its knob visibly reflects the enabled setting, including after a reload.

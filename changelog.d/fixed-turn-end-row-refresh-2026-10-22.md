@@ -1,1 +1,0 @@
-- A sidebar row now shows a session's final NEXT STEP within a few seconds of its turn ending, instead of keeping the mid-turn LATEST text until the next slow list refresh.

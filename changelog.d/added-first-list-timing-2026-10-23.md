@@ -1,1 +1,0 @@
-- Perf pane logs time from page load to the first conversation list response as a first-list row in the list column.

@@ -1,1 +1,0 @@
-- A still-running Antigravity or Devin child is no longer marked exited (and dropped to spawn history as "(external)") when a session-id lookup polls its raw spawn-registry row.

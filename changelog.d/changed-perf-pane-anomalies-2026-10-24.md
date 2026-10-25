@@ -1,1 +1,0 @@
-- The sidebar perf pane now lists only anomalies (slow or failed list reads, opens over ~1s, speaker clips not prepared at read time); normal samples show as a per-column "✓ N ok" count. Every sample is still logged to `service.out.log`.

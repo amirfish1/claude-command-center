@@ -1,1 +1,0 @@
-- Sidebar WORKING rows now show the tool the session is running right now (for example "Bash command: …"), refreshed every few seconds, instead of a bare "Working…" or the previous turn's text.

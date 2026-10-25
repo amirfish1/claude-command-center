@@ -1,1 +1,0 @@
-- Use small engine-icon and cost badges, remove leading title chevrons, and require an explicit review before marking an unchanged session ready to close.

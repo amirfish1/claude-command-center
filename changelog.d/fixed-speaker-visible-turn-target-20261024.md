@@ -1,1 +1,0 @@
-- Make the floating speaker read the answer nearest its position, so a large earlier status footer cannot steal a click from the answer underneath the circle. Cache coverage and clicks share the selected answer, and moving the circle updates its target.

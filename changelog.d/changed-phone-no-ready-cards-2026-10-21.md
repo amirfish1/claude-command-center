@@ -1,1 +1,0 @@
-- On phones, "ready for your input" and task-finished cards no longer pile up over the screen; the "? N" pill shows how many sessions are waiting and jumps to the first one.

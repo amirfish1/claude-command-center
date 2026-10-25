@@ -1,2 +1,0 @@
-- With detailed rows, a session's next step now sits to the right of its title, with the badges on a second line.
-- `[Qn:slug]` tags in a sidebar next step are now chips that open the same explanation sheet as in the conversation pane.

@@ -1,1 +1,0 @@
-Show latest replies and user prompts from current Codex rollout messages in the session sidebar. Codex sessions started or resumed through CCC now receive the same structured end-of-turn summary reminder as Claude sessions, enabling next-step summaries.

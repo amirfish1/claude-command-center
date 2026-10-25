@@ -1,1 +1,0 @@
-- Sidebar rows no longer grow taller when a live message wraps to a second line beside the read-aloud button.

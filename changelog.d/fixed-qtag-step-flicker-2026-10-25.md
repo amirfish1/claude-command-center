@@ -1,1 +1,0 @@
-- Sidebar rows whose next step carries a question tag no longer flicker between the raw [Q<n>:slug] text and the Q<n> chip.

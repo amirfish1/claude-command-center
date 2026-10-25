@@ -1,1 +1,0 @@
-- The composer no longer shows a Speak button on desktop (the floating speaker reads the on-screen turn), and the floating speaker's ring now shows cached audio and read progress like the old Speak bar.

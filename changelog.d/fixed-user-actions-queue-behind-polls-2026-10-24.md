@@ -1,1 +1,0 @@
-- Clicks and sends no longer wait behind background polls when the dashboard runs over HTTP/1.1. Background reads now share the connections the live streams leave free, and one connection always stays reserved for user actions.

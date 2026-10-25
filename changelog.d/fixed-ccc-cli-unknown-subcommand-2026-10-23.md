@@ -1,1 +1,0 @@
-- `ccc` CLI no longer falls through to `run.sh` (and attempts to start a second server) when given a mistyped subcommand; added `ccc session` as an alias for `ccc sessions`.

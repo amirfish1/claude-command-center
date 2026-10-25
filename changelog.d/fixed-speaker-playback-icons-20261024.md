@@ -1,1 +1,0 @@
-- The floating speaker shows a pause icon while its selected turn is playing and a resume icon when paused. Selecting another turn by scrolling restores the speaker icon and read action.

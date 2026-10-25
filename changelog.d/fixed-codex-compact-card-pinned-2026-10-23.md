@@ -1,1 +1,0 @@
-- A finished /compact card on a Codex session no longer stays pinned to the bottom of the transcript under every new turn.

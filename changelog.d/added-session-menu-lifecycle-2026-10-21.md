@@ -1,1 +1,0 @@
-- Phone ⋮ menu on an open session now has Unarchive, Untrash, Move to Ideas and Move to Small bugs (files the idea ticket if the session has none); each shows only when it applies.

@@ -1,1 +1,0 @@
-- Remove stale queued-message cards when Codex records several submitted messages together in one transcript entry. Match complete paragraph boundaries and consume each delivery receipt once, preserving newer and repeated submissions.

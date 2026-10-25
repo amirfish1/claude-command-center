@@ -1,1 +1,0 @@
-- Sidebar rows: the green working dot now sits at the right edge, centred in the row, instead of on the avatar's corner.

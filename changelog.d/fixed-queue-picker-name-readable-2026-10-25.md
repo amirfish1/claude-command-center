@@ -1,1 +1,0 @@
-- The queue picker keeps the selected queue's name readable. The repo label and the sub-queue chip now give up space first, so a short name like BECKY is no longer cut to "BE…".

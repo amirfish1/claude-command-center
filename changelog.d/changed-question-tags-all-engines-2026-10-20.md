@@ -1,1 +1,0 @@
-- Question tags `[Q<n>:slug]` are now indexed from Codex, Kimi, Hermes and Devin transcripts as well as Claude's.

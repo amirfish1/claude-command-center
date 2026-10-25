@@ -1,1 +1,0 @@
-- Opening a Devin (or Gemini, Antigravity, Kilo, OpenCode, Aider, Copilot) session now loads only the latest window of the conversation instead of the whole transcript, so long sessions open much faster; scrolling up still loads earlier history.

@@ -1,1 +1,0 @@
-- Sidebar renders with the archive window set to "all" are much cheaper: archive rows are shaped as one plain object (V8 kept them in slow dictionary mode before), and row time labels reuse their date formatters instead of building new ones per row.

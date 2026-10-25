@@ -1,1 +1,0 @@
-- The idea-tickets "Ideas" tab, mobile nav button, intro banner, and file/move toasts are now labeled "Features" (the underlying ticket queue is unchanged).

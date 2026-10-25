@@ -1,1 +1,0 @@
-- Perf pane now has a third "speaker cache" column: one row per read-aloud clip, showing whether it was replayed from the clip cache (HIT), made fresh (miss), or reused from audio prepared before the click, with timing.

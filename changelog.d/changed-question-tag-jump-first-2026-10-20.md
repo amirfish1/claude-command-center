@@ -1,1 +1,0 @@
-- 'Jump to original' on a question tag loads earlier history as needed and scrolls to the first message that carried the tag, even when it is above the loaded window.

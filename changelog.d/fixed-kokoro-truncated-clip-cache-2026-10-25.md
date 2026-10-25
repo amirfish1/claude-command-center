@@ -1,1 +1,0 @@
-- A local-voice clip that fails partway through is no longer cached as finished, so replaying that text no longer stops short. The voice server now logs the failure to `~/.ccc/local-tts/server.log`.

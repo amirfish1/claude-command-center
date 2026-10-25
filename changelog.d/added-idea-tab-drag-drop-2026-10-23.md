@@ -1,1 +1,0 @@
-- Drag a session onto the Ideas, Small bugs or Other tab to move it there (Other detaches and closes its idea ticket).

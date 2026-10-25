@@ -1,1 +1,0 @@
-- Search for several ticket IDs separated by spaces to find sessions containing every ID, without adding quotes or AND operators.

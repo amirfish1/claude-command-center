@@ -1,1 +1,0 @@
-- Stop incremental polls on tail-windowed Devin CLI conversations from re-emitting every historical ACP `result` row (`DONE` / `STOPPED - ERROR`) at the bottom of the transcript, and keep same-second microsecond ACP result events ordered after the assistant reply they close.

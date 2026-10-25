@@ -1,1 +1,0 @@
-- Read-aloud on iPhone (and other browsers without MediaSource) now plays a whole message as one continuous stream, so it no longer pauses for 20-45 seconds between chunks or when the phone is locked.

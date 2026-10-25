@@ -1,1 +1,0 @@
-- Ideas and Small bugs now have collapsible Archived and Trash sections with restore actions. Explicit completion reviews show “Ready to close” until newer transcript activity arrives; closing remains a manual Archive action.

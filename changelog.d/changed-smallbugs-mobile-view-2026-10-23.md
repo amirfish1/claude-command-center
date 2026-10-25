@@ -1,1 +1,0 @@
-- Small bugs tab now opens in Mobile view by default (its own setting, still toggleable) and shows the numbered ticket avatars Ideas uses.

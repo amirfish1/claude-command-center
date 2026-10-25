@@ -1,1 +1,0 @@
-- Session rows label informational summaries as “Update” when there is no user action, reserving “Next” for an actual requested next step, including live row updates.

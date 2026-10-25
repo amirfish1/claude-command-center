@@ -1,1 +1,0 @@
-- Idea tickets: in Ideas / Small bugs rows the title gets the full first line; the ticket chip moves to the line below, and the goal and queue-progress chips plus a "1 recorded ticket" line that only repeated the idea ticket are gone.

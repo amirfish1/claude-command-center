@@ -1,1 +1,0 @@
-- Bring back the A-/A+ font-size buttons beside the session background color picker in the status rail.

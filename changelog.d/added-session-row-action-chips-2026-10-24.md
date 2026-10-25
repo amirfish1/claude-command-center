@@ -1,1 +1,0 @@
-Session rows can offer a one-word, AI-written action chip for a clearly scoped go-ahead, such as Restart. Hover to see the exact reply; click to send it to that session without opening the conversation.

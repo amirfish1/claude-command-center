@@ -1,1 +1,0 @@
-- The floating read-aloud button now sits in the right-hand column with Last/End instead of covering the transcript, and the composer's duplicate Speak button is gone on phones.

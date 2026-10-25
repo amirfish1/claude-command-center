@@ -1,1 +1,0 @@
-- The sidebar list no longer stalls for seconds while several live-row (ultra-fresh) streams are open: transcript checks are rate-limited and Codex transcript paths are cached briefly instead of re-querying the Codex state DB on every tick.

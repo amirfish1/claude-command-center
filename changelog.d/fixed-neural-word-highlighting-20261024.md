@@ -1,1 +1,0 @@
-- Restore word-by-word text highlighting during neural TTS playback, including prepared clips, pause/resume, and clip handoffs. Highlights follow the audio clock independently of cache-debug gutter marks; neural timing is estimated because audio responses do not include word timestamps.

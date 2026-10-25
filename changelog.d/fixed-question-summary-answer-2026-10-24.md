@@ -1,1 +1,0 @@
-- Question chips no longer treat compaction summaries or injected metadata as owner answers, including previously cached summary text.

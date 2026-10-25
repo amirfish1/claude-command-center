@@ -1,1 +1,0 @@
-- A red toast now appears when a session stops mid-turn or hits an API error, instead of a misleading "finished" toast. CCC waits 90 seconds and checks that nothing restarted the session before alerting. It ignores Esc and Stop, usage limits, WatchTower-owned sessions and machine restarts. Each incident alerts once, and the toast stays until dismissed.

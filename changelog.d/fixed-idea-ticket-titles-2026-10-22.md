@@ -1,1 +1,0 @@
-- Idea tickets no longer rename their session to "🧵 IDEAS#N: <first line>"; the session keeps its own title, and the ticket takes that title once the session has one.

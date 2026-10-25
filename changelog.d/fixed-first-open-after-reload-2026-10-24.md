@@ -1,1 +1,0 @@
-- Opening a session right after a page load no longer waits behind the dashboard's deferred startup reads or a burst of sidebar live-preview reconnects.

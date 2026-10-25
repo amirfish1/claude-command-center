@@ -1,1 +1,0 @@
-- Devin sessions now show the model and context pills promptly; usage is read incrementally instead of re-decoding the whole session on every poll.

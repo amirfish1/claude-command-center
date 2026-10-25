@@ -1,1 +1,0 @@
-- The phone ⋮ menu now shows the open session's id and repo path (tap to copy), and the text-size A−/A+ buttons sit on one row and keep the menu open between taps.

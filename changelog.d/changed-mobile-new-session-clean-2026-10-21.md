@@ -1,1 +1,0 @@
-- Phones: the New session screen is just a row of folder chips, a row of model chips and the composer; the intro copy, price table, fresh-folder form, folder path box, worktree toggle and floating scroll buttons are hidden.

@@ -1,1 +1,0 @@
-- Workers table: session titles now wrap to up to three lines instead of being cut off after a few words.

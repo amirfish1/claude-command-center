@@ -1,1 +1,0 @@
-- Claude sessions that CCC restarts from cold now keep your autocompact threshold instead of falling back to Claude Code's default, and pick up a changed Settings value on that restart.

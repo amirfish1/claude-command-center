@@ -1,1 +1,0 @@
-- Continued sessions show the topic directly, without arrows or stacked “Cont’d” prefixes; session history remains available under Earlier.

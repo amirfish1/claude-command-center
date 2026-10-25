@@ -1,1 +1,0 @@
-Keep ongoing topic goals separate from shipped milestones in completion assessments. Explicitly unmet topic criteria block Close regardless of scores; the transcript shows the topic and an Open assessment without inventing a user action.

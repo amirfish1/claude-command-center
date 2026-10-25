@@ -1,1 +1,0 @@
-- Split view: the focused pane's header is highlighted, and the sidebar marks the other pane's session row in blue. Desktop pane headers now lead with the session name in large bold text, as on phones. The New ticket composer opens on the left with a light dim, so the conversation stays visible.

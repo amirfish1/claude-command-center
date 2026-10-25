@@ -1,1 +1,0 @@
-Session action chips now use the label and reply supplied by the model writing the original answer. Removed the separate Haiku inference call; older answers without action metadata keep their summary text.

@@ -1,1 +1,0 @@
-- Question-tag chips no longer misresolve a panel row tap to Q0, and the open-questions index refreshes in the background instead of blocking requests or showing a false 'still indexing' message.

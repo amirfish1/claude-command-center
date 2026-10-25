@@ -1,1 +1,0 @@
-- Repeated `SIGUSR2` stack dumps no longer crash the dashboard. New local-only `GET /api/debug/stacks?samples=N&interval=S` takes repeated all-thread stack samples safely.

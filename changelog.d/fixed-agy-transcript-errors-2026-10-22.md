@@ -1,1 +1,0 @@
-Show Antigravity CLI errors and live tool activity when its transcript still contains only the starting prompt. Refresh the reader when CLI logs or conversation storage change, including quota errors that leave the transcript untouched.

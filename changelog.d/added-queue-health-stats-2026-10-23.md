@@ -1,1 +1,0 @@
-Perf pane now shows queue health on each session-list read: sessions with a turn still in flight, durable queued inputs, and how long queued messages have been waiting for sessions whose turn already finished.

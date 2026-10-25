@@ -1,2 +1,0 @@
-- Sidebar briefs flip to WORKING the moment you send, drop the old next step, and pick up the reply's opening line about 8 seconds later instead of at the next sweep.
-- The brief's separate status column is gone: one label (WORKING, NEXT STEP in green, NEEDS YOU, LATEST) now carries the state, leaving more room for the text.

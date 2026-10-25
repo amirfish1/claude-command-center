@@ -1,1 +1,0 @@
-- Session-list rows now bound `last_assistant_text` at the serve boundary even when the emitting path skipped the cap, keeping multi-KB previews out of `/api/conversations/list` responses.

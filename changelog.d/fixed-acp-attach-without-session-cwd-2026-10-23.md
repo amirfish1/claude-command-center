@@ -1,1 +1,0 @@
-- A Devin session whose ACP state lost its working directory (for example after a worker restart) can be attached again: the directory supplied by the caller is now used instead of failing with "session cwd unknown". That failure sent queued messages down the slower one-shot path, which delivered them twice.

@@ -1,1 +1,0 @@
-- Settings → Layout has a new "Floating call button" toggle (default on) to hide the floating CALL button.

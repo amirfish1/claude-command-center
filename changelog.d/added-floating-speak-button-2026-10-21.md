@@ -1,1 +1,0 @@
-- A large floating speaker button now reads whichever assistant message is on screen; tap again to pause/resume. The tiny per-turn speaker icons still work.

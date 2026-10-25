@@ -1,1 +1,0 @@
-- Docs: Grok is listed as a spawnable, steerable engine (ACP); it is no longer described as read-only.

@@ -1,1 +1,0 @@
-- The mobile Coding tab no longer shows only a couple of sessions while thousands sit behind "Show more"; the row budget now goes to rows the open tab and window actually display.

@@ -1,1 +1,0 @@
-Add transcript-backed row checks for stale summaries, missing action or question controls, contradictory user steps, open topics without a plan, and invalid Close suggestions. Inspect evidence without opening a session; optionally watch visible rows without additional model calls.

@@ -1,1 +1,0 @@
-- A blocked ticket's detail view keeps its "open in CCC" link to the session that parked it, instead of showing "unassigned" with no link.

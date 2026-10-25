@@ -1,1 +1,0 @@
-Mute ready-to-close explanations and Archive actions, shorten the action label to Next, remove the done chip, show session IDs with lower-row metadata, and move Archive below explanations. Numbered avatars use a bottom-right engine icon whose brightness reflects cost tier.

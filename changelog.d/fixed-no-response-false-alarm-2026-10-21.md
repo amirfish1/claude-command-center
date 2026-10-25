@@ -1,1 +1,0 @@
-- The "No response" banner no longer appears on finished sessions or while a tool is running, and waits 3 minutes of real silence instead of 30 seconds.

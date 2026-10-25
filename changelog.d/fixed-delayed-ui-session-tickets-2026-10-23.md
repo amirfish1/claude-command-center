@@ -1,1 +1,0 @@
-CCC-launched sessions whose native ID arrives after the spawn response now receive their Ideas or Small bugs ticket. Manual filing also reads Antigravity's opening request instead of creating an untitled ticket.

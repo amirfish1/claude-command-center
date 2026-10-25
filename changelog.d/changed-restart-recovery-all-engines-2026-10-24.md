@@ -1,1 +1,0 @@
-- The "a machine restart cut off N sessions" banner now also finds Codex, Kimi and Devin sessions that a reboot stopped mid-turn, not just Claude ones, and labels each with its engine.

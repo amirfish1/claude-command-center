@@ -1,1 +1,0 @@
-- Cap Kokoro local TTS ONNX threads (`CCC_KOKORO_THREADS=2`), disable per-thread CPU memory arena bloat, serialize synthesis requests, and wait for stream completion before chaining TTS prefetches; use file-offset seeking in `/api/conversations/stream`, memoize usage snapshot ISO timestamp parsing, and bound ACP diff payloads to 64 KiB.
