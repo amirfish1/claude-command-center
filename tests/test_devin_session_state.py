@@ -58,3 +58,26 @@ def test_devin_delivery_proof_accepts_wrapped_prompt(monkeypatch,tmp_path):
     con.commit();con.close()
     monkeypatch.setenv('CCC_DEVIN_DB',str(db))
     assert server._devin_cli_prompt_history_count('example','Check build.',99)==1
+
+
+def test_acp_row_overlay_updates_cached_db_rows_without_mutating_them(monkeypatch,tmp_path):
+    import server
+    from ccc_server import devin
+    path=tmp_path/'sample.jsonl'
+    monkeypatch.setattr(server,'_acp_transcript_path',lambda *_:path)
+    row={'session_id':'devincli-sample','modified':100,'last_assistant_text':'Old DB answer','session_state':None}
+    monkeypatch.setattr(devin,'_find_devin_cli_db_conversations',lambda *a,**kw:[row])
+    answer='Build succeeded.\n<session-state>\nDID: Built.\nINSIGHT: Compiles.\nNEXT_STEP_USER: None\nNEXT_ACTION: null\n</session-state>'
+    path.write_text(json.dumps({'type':'assistant','ts':200,'blocks':[{'kind':'text','text':answer}]})+'\n')
+    current=devin.find_devin_cli_conversations()[0]
+    assert current['session_state']['did']=='Built.'
+    assert current['modified']==200
+    assert row['last_assistant_text']=='Old DB answer'
+    # New real request clears the prior footer even though SQLite has not flushed.
+    with path.open('a') as f:f.write(json.dumps({'type':'user_text','ts':201,'text':'Do more'})+'\n')
+    current=devin.find_devin_cli_conversations()[0]
+    assert current['session_state'] is None
+    assert current['last_assistant_text']==''
+    # A newer DB request must also defeat an older ACP answer.
+    row['modified']=202
+    assert devin.find_devin_cli_conversations()[0] is row

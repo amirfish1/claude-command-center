@@ -2068,7 +2068,66 @@ def _devin_cli_start_bg_rebuild(**kwargs):
     return True
 
 
-def find_devin_cli_conversations(
+_DEVIN_ACP_ROW_TAIL_CACHE = {}
+_DEVIN_ACP_ROW_TAIL_LOCK = threading.Lock()
+
+
+def _devin_acp_row_tail(raw_id):
+    """Read at most 256 KiB of CCC's replay log; ACP may outlive DB flushes."""
+    try:
+        path = _core._acp_transcript_path("devin", raw_id)
+        st = path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+        with _DEVIN_ACP_ROW_TAIL_LOCK:
+            cached = _DEVIN_ACP_ROW_TAIL_CACHE.get(raw_id)
+        if cached and cached[0] == key:
+            return cached[1]
+        with path.open("rb") as handle:
+            start = max(0, st.st_size - 262144)
+            handle.seek(start)
+            if start:
+                handle.readline()
+            lines = handle.read(262144).splitlines()
+    except OSError:
+        return None
+    latest = None
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        kind = event.get("type")
+        if kind in ("user", "user_text"):
+            latest = {"ts": _devin_epoch(event.get("ts")), "text": "", "session_state": None}
+        elif kind == "assistant":
+            text = "\n".join(str(b.get("text") or "") for b in event.get("blocks", [])
+                             if isinstance(b, dict) and b.get("kind") == "text")
+            if not text:
+                text = str(event.get("text") or "")
+            if text:
+                latest = {"ts": _devin_epoch(event.get("ts")), "text": text[:2000],
+                          "session_state": _core._parse_session_state(text)}
+    with _DEVIN_ACP_ROW_TAIL_LOCK:
+        _DEVIN_ACP_ROW_TAIL_CACHE[raw_id] = (key, latest)
+        if len(_DEVIN_ACP_ROW_TAIL_CACHE) > 256:
+            _DEVIN_ACP_ROW_TAIL_CACHE.pop(next(iter(_DEVIN_ACP_ROW_TAIL_CACHE)))
+    return latest
+
+
+def find_devin_cli_conversations(*args, **kwargs):
+    rows = _find_devin_cli_db_conversations(*args, **kwargs)
+    out = []
+    for row in rows:
+        tail = _devin_acp_row_tail(_devin_cli_raw_id(row.get("session_id")))
+        if tail and tail["ts"] > _devin_epoch(row.get("modified")):
+            row = dict(row)
+            row.update(last_assistant_text=tail["text"], session_state=tail["session_state"],
+                       modified=tail["ts"], mtime=tail["ts"])
+        out.append(row)
+    return out
+
+
+def _find_devin_cli_db_conversations(
     repo_path=None,
     include_old=False,
     repo_only=False,
