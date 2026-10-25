@@ -93,3 +93,22 @@ test('a pending user review overrides completion scores after compaction', () =>
     assert.equal(ready({...row,session_state:{...row.session_state,next_step_user}}), true);
   }
 });
+
+test('an explicit no-action value may explain delivered behavior without hiding Close', () => {
+  const row = {state:'idle', last_event_type:'assistant', session_state:{
+    did:'Delivered the requested change.',
+    completion:{version:1,valid:true,ready_to_close:true}}};
+  for (const next_step_user of [
+    'None — change is live; it takes effect on the next scheduled run.',
+    'None – delivered and verified.', 'None - delivered and verified.',
+    'No action needed. — already applied.',
+  ]) {
+    assert.equal(ready({...row,session_state:{...row.session_state,next_step_user}}), true);
+  }
+  for (const next_step_user of ['None until you approve the deployment.',
+    'Watch the delivered video and say what to change.', 'Approve — the change is ready.']) {
+    assert.equal(ready({...row,session_state:{...row.session_state,next_step_user}}), false);
+  }
+  assert.equal(ready({...row,session_state:{...row.session_state,
+    next_step_user:'None — already applied.'}}, {state:'working'}), false);
+});

@@ -3470,7 +3470,7 @@
     const working = sidebarSessionWorking(c, live);
     const ready = !working && !sending && sessionReadyToClose(c, live);
     const next = String(summary.next_step_user || '').trim();
-    const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(next);
+    const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(next);
     return working ? { label: 'Working', kind: 'working', text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
       : ready ? { label: 'Close', kind: 'ready', text: summary.did || 'Reviewed as complete; archive when ready.' }
       : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
@@ -3699,7 +3699,7 @@
   function sessionReadyToClose(c, live = c) {
     if (!c || c.archived || c.trashed || c.stale_tool_call || c.last_event_type === 'user') return false;
     const next = String(c.session_state?.next_step_user || '').trim();
-    if (next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(next)) return false;
+    if (next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(next)) return false;
     if ([c, live].some(r => r && (r.state === 'working' || r.codex_state === 'working'
         || r.pending_spawn || r.pending_tool || r.needs_approval || r.question_waiting
         || r.last_event_type === 'user' || r.stale_tool_call
@@ -17245,13 +17245,13 @@
       : reasons.length ? (openTopic ? 'Open · ' : 'Next · ') + reasons.join('; ') : 'Close criteria met';
 
     let nextStep = fields.NEXT_STEP_USER || '';
-    if (/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)?[.!]?$/i.test(nextStep)
+    if (/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)?[.!]?(?:\s+[—–-]\s+.*)?$/i.test(nextStep)
         && assessment && assessment.decision_dependency
         && typeof assessment.decision_dependency.score === 'number' && assessment.decision_dependency.score > 0
         && typeof assessment.decision_dependency.evidence === 'string' && assessment.decision_dependency.evidence.trim()) {
       nextStep = 'Decision required: ' + assessment.decision_dependency.evidence.trim();
     }
-    const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(nextStep);
+    const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(nextStep);
     if (hasUserAction) {
       let action = null;
       try { action = sessionQuickAction(JSON.parse(fields.NEXT_ACTION || 'null')); } catch (_) {}
@@ -40045,7 +40045,7 @@
       if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow)) {
         const _did = ((_ss && _ss.did) || '').trim();
         const _next = ((_ss && _ss.next_step_user) || '').trim();
-        const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(_next);
+        const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(_next);
         // One label carries the state (no separate status column):
         // Working + current activity, Next + user action, Update + summary, or Close
         // after an explicit review or passing completion assessment.
