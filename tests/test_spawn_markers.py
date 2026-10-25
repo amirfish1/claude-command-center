@@ -279,8 +279,12 @@ def test_settled_marker_dir_is_not_restatted_every_poll(monkeypatch, tmp_path):
 
     scans = []
     real_scandir = server.os.scandir
-    monkeypatch.setattr(server.os, "scandir",
-                        lambda p: scans.append(p) or real_scandir(p))
+    # Count only scans of this dir: os.scandir is process-wide, and a
+    # background thread scanning elsewhere (e.g. ~/.codex) is not a rescan.
+    monkeypatch.setattr(
+        server.os, "scandir",
+        lambda p: (str(p) == str(marker_dir) and scans.append(p))
+        or real_scandir(p))
     # Past the short TTL, dir unchanged: served from memo, no per-file scan.
     server._SPAWN_MARKER_MEMO["ts"] -= server._SPAWN_MARKER_MEMO_TTL_S + 1
     assert server._load_spawn_markers() == {"aaaa": {"lane": "workers"}}
