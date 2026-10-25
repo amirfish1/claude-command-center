@@ -684,6 +684,49 @@ def backfill(session_ids):
     return {"ok": True, "queued": len(todo)}
 
 
+_RECENT_BACKFILL_MARKER_NAME = "idea-tickets-recent-backfill-done"
+_RECENT_BACKFILL_WINDOW_S = 2 * 24 * 3600
+_RECENT_BACKFILL_MAX = 200
+
+
+def _recent_backfill_marker_path():
+    return Path(_core.COMMAND_CENTER_STATE_DIR) / _RECENT_BACKFILL_MARKER_NAME
+
+
+def backfill_recent_once(rows):
+    """First list build after idea_tickets turns on: ticket sessions active
+    in the last 2 days, so upgrading doesn't leave recent work untracked.
+    Reads only the rows the list already built for this call -- no extra
+    scan -- and runs exactly once per machine (a marker file gates it)."""
+    if not _enabled():
+        return
+    marker = _recent_backfill_marker_path()
+    if marker.exists():
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(int(time.time())))
+    except OSError:
+        return
+    cutoff = time.time() - _RECENT_BACKFILL_WINDOW_S
+    dated = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get("session_id") or row.get("id") or "").strip()
+        if not sid or sid.startswith("agent-"):
+            continue
+        ts = row.get("last_interacted") or row.get("mtime") or row.get("modified") or 0
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            continue
+        if ts >= cutoff:
+            dated.append((ts, sid))
+    dated.sort(key=lambda pair: pair[0])
+    backfill([sid for _, sid in dated[:_RECENT_BACKFILL_MAX]])
+
+
 def _restamp_rows():
     # The sidebar serves cached rows; restamp so the new ticket shows at once.
     try:

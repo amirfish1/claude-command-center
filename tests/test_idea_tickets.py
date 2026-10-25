@@ -224,6 +224,27 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.load_state()["pending"], {})
         self.assertEqual(it.backfill(["a", "b", "c"])["queued"], 0)  # idempotent
 
+    def test_backfill_recent_once_tickets_last_two_days_and_runs_once(self):
+        it.classify = lambda text: "idea"
+        now = it.time.time()
+        self.registry["recent"] = {"spawned_via": "terminal"}
+        self.transcripts["recent"] = {"text": "Recent work"}
+        self.registry["old"] = {"spawned_via": "terminal"}
+        self.transcripts["old"] = {"text": "Stale work"}
+        rows = [
+            {"session_id": "recent", "mtime": now - 3600},
+            {"session_id": "old", "mtime": now - (3 * 24 * 3600)},
+            {"session_id": "agent-x", "mtime": now},
+        ]
+        it.backfill_recent_once(rows)
+        self.assertEqual(it.ticket_for_session("recent")["ref"], "IDEAS-1")
+        self.assertIsNone(it.ticket_for_session("old"))
+        # Marker gates re-entry: a second call (even with a fresh candidate)
+        # must not file anything more.
+        rows.append({"session_id": "old", "mtime": now})
+        it.backfill_recent_once(rows)
+        self.assertIsNone(it.ticket_for_session("old"))
+
     def test_late_filer_never_overwrites_a_filed_ticket(self):
         # Two processes sweep the same pending session: the archive-refresh
         # subprocess files it, then the server's thread arrives late.

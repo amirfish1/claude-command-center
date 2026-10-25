@@ -1,0 +1,1 @@
+- Idea tickets backfills the last 2 days of sessions once per machine when the flag turns on, so upgrading doesn't leave recent work untracked; older sessions are left alone.

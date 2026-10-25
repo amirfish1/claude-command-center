@@ -16451,6 +16451,13 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
         _idea_tickets.sweep_rows(projected)
     except Exception:
         pass
+    # One-time catch-up for an install where the flag just turned on: ticket
+    # the last 2 days of sessions from these same rows (marker-gated, so this
+    # body only runs once ever per machine).
+    try:
+        _idea_tickets.backfill_recent_once(projected)
+    except Exception:
+        pass
     if idea_tickets_by_sid:
         for out in projected:
             ticket = idea_tickets_by_sid.get(out.get("session_id") or out.get("id"))
