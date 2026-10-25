@@ -31,6 +31,7 @@ def fts_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
     monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin"))
     # Isolate the Hermes messages_fts channel (S9) -- see test_session_fts.py.
     monkeypatch.setattr(server, "HERMES_STATE_DB", tmp_path / "hermes" / "state.db")
     monkeypatch.setattr(server, "HERMES_PROFILES_DIR", tmp_path / "hermes" / "profiles")

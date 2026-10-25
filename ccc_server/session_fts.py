@@ -786,7 +786,41 @@ def parse_agy(path: str) -> dict | None:
     return _finish(sid, "agy", str(p), cwd, "", users, assists, tools, files, ts0, ts1)
 
 
+def parse_devin(path: str) -> dict | None:
+    """Index visible messages from CCC's persisted Devin ACP transcript."""
+    users, assists, stream = [], [], []
+    turn = 0
+    with open(path, encoding="utf-8", errors="replace") as transcript:
+        for line in transcript:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "user_text":
+                text = event.get("text")
+                if isinstance(text, str) and text.strip():
+                    turn += 1
+                    users.append(text)
+                    stream.append(("u", turn, text))
+            elif event.get("type") == "assistant":
+                text = "\n".join(
+                    block["text"] for block in (event.get("blocks") or [])
+                    if isinstance(block, dict) and block.get("kind") == "text"
+                    and isinstance(block.get("text"), str)
+                )
+                if text.strip():
+                    assists.append(text)
+                    stream.append(("a", turn, text))
+    if not users and not assists:
+        return None
+    return _finish("devincli-" + Path(path).stem, "devin", path, "", "",
+                   users, assists, [], set(), None, None, stream=stream)
+
+
 _PARSERS = {
+    "devin": parse_devin,
     "agy": parse_agy,
     "claude": parse_claude,
     "codex": parse_codex,
@@ -894,6 +928,16 @@ def _candidate_files(days: float | None = None) -> list[tuple[str, str, float, i
                 continue
             if st.st_size > 0 and st.st_mtime >= cutoff:
                 out.append(("cursor", str(p), st.st_mtime, st.st_size))
+
+    devin_dir = Path(os.environ.get("CCC_DEVIN_TRANSCRIPTS_ROOT") or
+                     Path.home() / ".claude" / "command-center" / "acp" / "devin")
+    for p in devin_dir.glob("*.jsonl"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_size > 0 and st.st_mtime >= cutoff:
+            out.append(("devin", str(p), st.st_mtime, st.st_size))
 
     # Harvested worker-sandbox transcripts (multi-machine S8b): copies land
     # here preserving the source's .claude/projects or .codex/sessions
@@ -1714,7 +1758,12 @@ def _literal_phrase_query(q: str) -> str:
     filename, dotted/hyphenated identifier) becomes one quoted FTS5 phrase,
     so it matches that exact token sequence instead of OR-matching its
     pieces -- otherwise ".../paste-123.png" hits every session that ever
-    mentioned any pasted image (CCC-1256). Anything else is returned as-is."""
+    mentioned any pasted image (CCC-1256). A plain whitespace-separated
+    list of ticket IDs requires every ID in the same session. Explicit
+    operators and ordinary prose are returned unchanged."""
+    parts = q.split()
+    if len(parts) > 1 and all(TICKET_RE.fullmatch(part.upper()) for part in parts):
+        return " AND ".join('"' + part + '"' for part in parts)
     if not q or any(ch.isspace() for ch in q) or '"' in q:
         return q
     tokens = _HISTORY_LITERAL_TOKEN_RE.findall(q)
