@@ -1044,6 +1044,47 @@ def _codex_shared_state_db_holders(now=None, force=False):
     return unique
 
 
+_CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+
+
+def _codex_shared_state_db_holders_stale_ok(now=None):
+    """Holder list for read-only status paths: never forks lsof inline once warm.
+
+    lsof scans every process on the host (~1.6s on a busy 16-core box), and the
+    5s TTL always expires between live-activity builds, so every build paid a
+    fresh fork -- 95% of build_live_sessions_activity time (CCC-168). Status
+    rows tolerate a holder list a few seconds old: serve the last sample and
+    refresh it on one background thread. Only the very first call (no sample
+    yet) waits. Spawn/send gates keep calling _codex_shared_state_db_holders.
+    """
+    global _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+    now = time.time() if now is None else float(now)
+    with _CODEX_SHARED_STATE_HOLDER_LOCK:
+        cached = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
+        fresh = now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S
+        kick = cached is not None and not fresh and not _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+        if kick:
+            _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = True
+    if cached is None:
+        return _core._codex_shared_state_db_holders(now)
+    if kick:
+        def _refresh():
+            global _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+            try:
+                _core._codex_shared_state_db_holders(force=True)
+            except Exception:
+                pass
+            finally:
+                with _CODEX_SHARED_STATE_HOLDER_LOCK:
+                    _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+        try:
+            threading.Thread(target=_refresh, name="codex-holder-refresh", daemon=True).start()
+        except Exception:
+            with _CODEX_SHARED_STATE_HOLDER_LOCK:
+                _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+    return list(cached)
+
+
 def _codex_shared_state_conflict(now=None, force=False):
     """Return a human-readable conflict summary if another Codex writer holds the shared DBs."""
     holders = _core._codex_shared_state_db_holders(now, force=force)
@@ -11622,7 +11663,10 @@ def _codex_state_fields(
         # Writer attribution (desktop ↔ CCC coordination): reuses the rollout
         # stat above + the TTL-cached desktop-attachment map. Also feeds the
         # durable external-turn transition events.
-        snap = _core._codex_thread_writer_snapshot(sid, now, app_state=app_state, rollout=rollout)
+        snap = _core._codex_thread_writer_snapshot(
+            sid, now, app_state=app_state, rollout=rollout,
+            holders=_core._codex_shared_state_db_holders_stale_ok(now),
+        )
         if note_writer_transition:
             _core._codex_note_external_writer_transition(sid, snap)
         if snap.get("writer"):

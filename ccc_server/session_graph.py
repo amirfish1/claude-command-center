@@ -7,6 +7,7 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from pathlib import Path
+import functools
 import json
 import os
 import platform
@@ -3156,13 +3157,25 @@ def find_live_antigravity_processes():
     return procs
 
 
+@functools.lru_cache(maxsize=512)
+def _command_tokens(command):
+    # Process argv strings repeat across every live-activity build (one per
+    # session x process); shlex on long `codex exec` prompts was most of a
+    # warm build (CCC-168). Tuples so cached results can't be mutated.
+    try:
+        return tuple(shlex.split(command))
+    except ValueError:
+        return tuple(command.split())
+
+
 def _command_targets_engine_session(command, session_id, engine):
     if not command or not session_id:
         return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    # Every engine below needs a token equal to session_id, so a command that
+    # never mentions it can't match: skip tokenizing.
+    if session_id not in command:
+        return False
+    tokens = list(_command_tokens(command))
     if not tokens:
         return False
     if engine == "codex":
@@ -3209,10 +3222,7 @@ def _command_targets_engine_session(command, session_id, engine):
 def _command_targets_other_session(command, session_id, engine):
     if not command:
         return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    tokens = list(_command_tokens(command))
     if not tokens:
         return False
     uuid_re = re.compile(
