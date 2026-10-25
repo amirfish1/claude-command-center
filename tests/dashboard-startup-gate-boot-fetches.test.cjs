@@ -108,3 +108,18 @@ test('release without a pending open is immediate', async () => {
   await new Promise(r => setTimeout(r, 1));
   assert.ok(urls(ctx).includes('GET /api/vercel-deploy'));
 });
+
+test('sidebar list polls skip a background pool full of slow reads', async () => {
+  const ctx = harness();
+  ctx.release();
+  const slow = [];
+  for (let i = 0; i < 6; i++) slow.push(ctx.window.__cccBackgroundApiFetch('/api/sessions/live-activity?i=' + i));
+  ctx.window.__cccBackgroundApiFetch('/api/conversations/list?window=7d&stale_ok=1');
+  await new Promise(r => setTimeout(r, 1));
+  const started = urls(ctx);
+  // The pool is full (the boot list fetch holds a slot), slow reads queue,
+  // and the poll still starts at once.
+  assert.ok(started.filter(u => u === 'GET /api/sessions/live-activity').length < 6);
+  assert.equal(started.filter(u => u === 'GET /api/conversations/list').length, 2);
+  await Promise.all(slow);
+});

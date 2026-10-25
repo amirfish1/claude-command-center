@@ -15949,9 +15949,9 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         ideas = None
     # Inputs of the row projection that are not part of the row itself: any
     # change invalidates every older token (the client gets a full body).
+    # Overlay rows stay out: every delta resends them whole.
     ctx = hashlib.sha1(json.dumps(
-        [key, window, _session_graph.parent_revision(), resumes, ideas,
-         [_archive_row_sid(r) for r in extra]],
+        [key, window, _session_graph.parent_revision(), resumes, ideas],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
     ovl = hashlib.sha1(json.dumps(

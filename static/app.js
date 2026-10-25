@@ -2491,22 +2491,33 @@
     return buffered;
   }
 
+  function _startBackgroundApiRead(task) {
+    if (task.options.signal.aborted) {
+      task.cleanup();
+      task.reject(task.options.signal.reason || new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    _backgroundApiReadActive += 1;
+    const { input, options } = task;
+    _backgroundApiBaseFetch(input, options).then(_bufferBackgroundApiResponse).then(task.resolve, task.reject).finally(() => {
+      _backgroundApiReadActive -= 1;
+      task.cleanup();
+      _drainBackgroundApiReads();
+    });
+  }
+
   function _drainBackgroundApiReads() {
     while (_backgroundApiReadActive < BACKGROUND_API_READ_LIMIT && _backgroundApiReadQueue.length) {
-      const task = _backgroundApiReadQueue.shift();
-      if (task.options.signal.aborted) {
-        task.cleanup();
-        task.reject(task.options.signal.reason || new DOMException('Aborted', 'AbortError'));
-        continue;
-      }
-      _backgroundApiReadActive += 1;
-      const { input, options } = task;
-      _backgroundApiBaseFetch(input, options).then(_bufferBackgroundApiResponse).then(task.resolve, task.reject).finally(() => {
-        _backgroundApiReadActive -= 1;
-        task.cleanup();
-        _drainBackgroundApiReads();
-      });
+      _startBackgroundApiRead(_backgroundApiReadQueue.shift());
     }
+  }
+
+  // The sidebar list poll is a 304 or a small ?since= delta (CCC-142), but
+  // queued behind four slow reads (a cold live-activity build runs 30-40s
+  // after a restart) it waited that long client-side. It skips the queue.
+  function _backgroundApiReadSkipsQueue(input) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    return url.startsWith('/api/conversations/list');
   }
 
   function backgroundApiFetch(input, init) {
@@ -2538,7 +2549,12 @@
         _backgroundApiReadControllers.delete(controller);
         if (upstreamSignal) upstreamSignal.removeEventListener('abort', forwardAbort);
       };
-      _backgroundApiReadQueue.push({ input, options, resolve, reject, cleanup });
+      const task = { input, options, resolve, reject, cleanup };
+      if (_backgroundApiReadSkipsQueue(input)) {
+        _startBackgroundApiRead(task);
+        return;
+      }
+      _backgroundApiReadQueue.push(task);
       _drainBackgroundApiReads();
     });
   }

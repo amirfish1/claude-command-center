@@ -169,3 +169,25 @@ def test_delta_list_sends_only_changed_rows(monkeypatch):
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+def test_delta_list_survives_overlay_rows_coming_and_going(monkeypatch):
+    server = importlib.import_module('server')
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    gen = server._archive_serve_generation
+    now = time.time()
+    server._archive_serve_cache_store(key, [_row('a', 'A', now)], gen)
+    base = server._archive_serve_cache[key]['rows']
+    token = server._archive_list_delta_state(key, base, '7d', True)['token']
+    # An in-memory ACP session appears: still a delta, carrying that row.
+    rows = base + [_row('acp', 'Live', now)]
+    state = server._archive_list_delta_state(key, rows, '7d', True)
+    assert state['token'] != token
+    delta = server._archive_list_delta_payload(state, token, rows, window='7d')
+    assert delta['ids'] == ['a', 'acp']
+    assert [r['session_id'] for r in delta['conversations']] == ['acp']
+    # An overlay duplicating a snapshot id can't merge by id: full body.
+    dup = base + [_row('a', 'Dup', now)]
+    state = server._archive_list_delta_state(key, dup, '7d', True)
+    assert server._archive_list_delta_payload(state, token, dup, window='7d') is None
