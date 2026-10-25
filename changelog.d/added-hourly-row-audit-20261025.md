@@ -1,0 +1,1 @@
+Optional hourly browser audit checks finished Features and Small bugs rows on desktop and mobile for missing action, question, or Close controls, and files deduplicated WatchTower bugs. Install with `systemd/install-row-audit.sh QUEUE`; reports remain local under the command-center data directory.

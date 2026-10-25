@@ -5,7 +5,7 @@
   else root.cccRowAudit = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
-  const none = value => !String(value || '').trim() || /^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(String(value).trim());
+  const none = value => !String(value || '').trim() || /^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(String(value).trim());
   const norm = value => String(value || '').replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim();
   function latest(events) {
     let answer = '', index = -1;
@@ -24,7 +24,7 @@
     }
     const prose = answer.replace(/<session-state>[\s\S]*$/i, '').trim();
     return {answer, fields, prose, paragraph: prose.split(/\n\s*\n/).filter(Boolean).pop() || '',
-      userAfter: index >= 0 && events.slice(index + 1).some(e => e.type === 'user')};
+      userAfter: index >= 0 && events.slice(index + 1).some(e => !e.bookkeeping && ['user', 'user_text'].includes(e.type))};
   }
   function closeReasons(c) {
     if (!c || c.version !== 1) return ['No completion assessment.'];
@@ -44,8 +44,8 @@
   function inspect(row, events, rendered = {}) {
     const source = latest(Array.isArray(events) ? events : []);
     const findings = [];
-    const add = (kind, text) => findings.push({kind, text});
-    const working = !!rendered.working || source.userAfter;
+    const add = (kind, text, code) => findings.push({kind, text, ...(code ? {code} : {})});
+    const working = !!rendered.working || ['working', 'running'].includes(row.state) || row.codex_state === 'working' || !!row.pending_spawn || source.userAfter;
     let completion = null, action = null;
     try { completion = JSON.parse(source.fields.COMPLETION || 'null'); } catch (_) {}
     try { action = JSON.parse(source.fields.NEXT_ACTION || 'null'); } catch (_) {}
@@ -63,9 +63,9 @@
       const hasAction = action && typeof action.label === 'string' && action.label.trim() && action.label.length <= 24
         && typeof action.reply === 'string' && action.reply.trim() && action.reply.length <= 400;
       if (!none(source.fields.NEXT_STEP_USER)) {
-        if (!hasAction && !questions.length) add('warning', 'A user step is stated, but no model-authored button or question details are supplied.');
-        if (hasAction && (!rendered.action || rendered.action.label !== action.label || rendered.action.reply !== action.reply)) add('warning', 'The latest action button is missing or differs from the model-authored reply.');
-        if (questions.length && !rendered.questions) add('warning', 'The next step references a question without a visible details chip.');
+        if (!hasAction && !questions.length) add('warning', 'A user step is stated, but no model-authored button or question details are supplied.', 'missing_action_spec');
+        if (hasAction && (!rendered.action || rendered.action.label !== action.label || rendered.action.reply !== action.reply)) add('warning', 'The latest action button is missing or differs from the model-authored reply.', 'missing_action');
+        if (questions.length && !rendered.questions) add('warning', 'The next step references a question without a visible details chip.', 'missing_question');
         if (hasAction || questions.length) add('pass', 'The latest answer supplies an action or a question to inspect.');
       } else if (completion?.decision_dependency?.score > 0) add('warning', 'The assessment says a decision remains, but Needs you is empty.');
       if (completion?.scope?.closure_met === false && !completion?.remaining_actions?.length) add('warning', 'The topic is open but has no concrete remaining plan.');
@@ -73,6 +73,7 @@
     const reasons = closeReasons(completion);
     if (working) reasons.unshift('The current turn is not finished.');
     if (rendered.close && reasons.length) add('warning', 'Close is shown despite: ' + reasons.join(' '));
+    else if (rendered.checked && !working && !reasons.length && none(source.fields.NEXT_STEP_USER) && !rendered.close) add('warning', 'All explicit Close gates pass, but the rendered Close button is missing.', 'missing_close');
     else add(reasons.length ? 'info' : 'pass', reasons.length ? 'Keep open: ' + reasons.join(' ') : 'All explicit Close gates pass; the evidence is still self-reported.');
     return {findings, source, questions, completion, action, checkedAt: Date.now(),
       status: findings.some(x => x.kind === 'warning') ? 'warning' : findings.some(x => x.kind === 'unknown' || x.kind === 'pending') ? 'unknown' : 'consistent'};

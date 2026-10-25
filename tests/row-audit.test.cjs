@@ -73,3 +73,21 @@ test('uses latest text answer and latest footer, never an older successful asses
   assert.match(messages(result),/resolution gate is not met/);
   assert(!result.source.paragraph.includes('session-state'));
 });
+test('hourly audit detects a missing Close, accepts explanatory None, and skips real requests', () => {
+  const next='None — deployed and checked.';
+  const data=events({next});
+  const result=audit.inspect(row(undefined,next),data,{checked:true});
+  assert(result.findings.some(x=>x.code==='missing_close'));
+  assert(!result.findings.some(x=>x.code==='missing_action_spec'));
+  const bookkeeping=[...data,{type:'user_text',bookkeeping:true,text:'Compaction context'}];
+  assert(audit.inspect(row(undefined,next),bookkeeping,{checked:true}).findings.some(x=>x.code==='missing_close'));
+  const request=[...data,{type:'user_text',text:'Please change it again'}];
+  assert(!audit.inspect(row(undefined,next),request,{checked:true}).findings.some(x=>x.code));
+  assert(!audit.inspect({...row(),state:'working'},data,{checked:true}).findings.some(x=>x.code));
+});
+test('incident identity stays stable across viewports and excludes unfinished turns', () => {
+  const {incident}=require('../scripts/audit-session-rows.cjs');
+  const result=audit.inspect(row(),events(),{checked:true});
+  assert.equal(incident(result,'example-session').turn,incident(result,'example-session').turn);
+  assert.equal(incident(audit.inspect(row(),events(),{working:true,checked:true}),'example-session'),null);
+});
