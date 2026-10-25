@@ -20087,7 +20087,7 @@
     });
     const _codingNavBtn = nav.querySelector('[data-mobile-nav="coding"]');
     if (_codingNavBtn) {
-      const label = _ideasNav ? 'Ideas' : 'Coding';
+      const label = _ideasNav ? 'Features' : 'Coding';
       const lab = _codingNavBtn.querySelector('.mobile-nav-label');
       const icon = _codingNavBtn.querySelector('.mobile-nav-icon');
       if (lab && lab.textContent !== label) lab.textContent = label;
@@ -20336,7 +20336,7 @@
       _convListRenderSig = null;
       renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       showOpToast(queue === 'OTHER' ? 'Moved to Other' + (fromRef ? ' (closed ' + fromRef + ')' : '')
-        : (fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Ideas' : 'Small bugs') + ' (' + data.ref + ')');
+        : (fromRef ? 'Moved to ' : 'Filed in ') + (queue === 'IDEAS' ? 'Features' : 'Small bugs') + ' (' + data.ref + ')');
       return true;
     } catch (err) {
       showOpToast('Move failed (' + err.message + ')', 'error');
@@ -24838,6 +24838,13 @@
           c.display_name = old.display_name;
           c.name_overridden = true;
         }
+        // Auto-classification can quietly file a session into Small bugs
+        // while the owner expected it in Features — flag the switch for a
+        // few seconds so it doesn't go unnoticed.
+        const wasPending = old && old.idea_ticket && old.idea_ticket.pending;
+        const nowSmallBug = c.idea_ticket && !c.idea_ticket.pending
+          && c.idea_ticket.queue === 'SMALL-BUGS';
+        if (wasPending && nowSmallBug) showConvToast('Filed in Small bugs');
       }
       // Drop pending placeholders whose real session has appeared (matched by spawn_pid).
       // When we do the swap, carry the placeholder's column preference over to
@@ -39640,12 +39647,12 @@
       const currentLane = String(c.all_lane_override || '').trim();
       const _ideaRef = ideaTicketsOn() && c.idea_ticket && c.idea_ticket.ref;
       const _ideaToQueue = c.idea_ticket && c.idea_ticket.queue === 'SMALL-BUGS' ? 'IDEAS' : 'SMALL-BUGS';
-      const _ideaToLabel = _ideaToQueue === 'IDEAS' ? 'Ideas' : 'Small bugs';
+      const _ideaToLabel = _ideaToQueue === 'IDEAS' ? 'Features' : 'Small bugs';
       // A session with no ticket (it predates the flag, or didn't start in
       // the UI) gets both choices; picking one files its ticket there.
       const _ideaFileBtns = (!_ideaRef && ideaTicketsOn() && !isBacklogRow && !isGithubPrRow
         && !c.archived && !c.trashed && (lifecycleContext === 'all-main' || lifecycleContext === 'active'))
-        ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="IDEAS" title="File in Ideas" aria-label="File in Ideas">&#128161;</button>'
+        ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="IDEAS" title="File in Features" aria-label="File in Features">&#128161;</button>'
           + '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="SMALL-BUGS" title="File in Small bugs" aria-label="File in Small bugs">&#128027;</button>'
         : '';
       const moveLaneBtn = _ideaRef
@@ -43340,7 +43347,7 @@
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
     const _tabDefs = _ideaTicketsOn
       ? [
-        ['ideas', 'Ideas', _allTabIdeaConvs.length],
+        ['ideas', 'Features', _allTabIdeaConvs.length],
         ['smallbugs', 'Small bugs', _allTabSmallBugConvs.length],
         ['workers', 'Workers', _allTabWorkerConvs.length],
         ['jobs', 'Jobs', _jobsTabCount()],
@@ -90616,7 +90623,7 @@
       setTimeout(() => { banner.hidden = true; }, ms);
     }
     dismissBtn.addEventListener('click', () => {
-      _closeAfter('Got it — you can turn Ideas / Small bugs off anytime from Settings → Experimental.', 4000);
+      _closeAfter('Got it — you can turn Features / Small bugs off anytime from Settings → Experimental.', 4000);
     });
     revertBtn.addEventListener('click', () => {
       text.textContent = 'Reverting to Coding…';
@@ -90629,7 +90636,7 @@
       }).then(r => r.json()).then(res => {
         _markIdeaTicketsIntroSeen();
         if (res && res.ok) {
-          text.textContent = 'Switched back to Coding — turn Ideas / Small bugs on again anytime from Settings → Experimental. Reloading…';
+          text.textContent = 'Switched back to Coding — turn Features / Small bugs on again anytime from Settings → Experimental. Reloading…';
           setTimeout(() => { window.location.reload(); }, 1800);
         } else {
           text.textContent = 'Could not revert — try Settings → Experimental instead.';

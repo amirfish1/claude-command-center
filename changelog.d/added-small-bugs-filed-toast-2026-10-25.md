@@ -1,0 +1,1 @@
+- A brief toast now confirms when auto-classification files a new session into Small bugs, so it's not easy to miss.
