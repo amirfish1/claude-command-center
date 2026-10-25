@@ -1,0 +1,1 @@
+- The conversation header now shows just the session's name: the repo label beside the engine icon and the latest-ask line are gone, so the name gets the room.

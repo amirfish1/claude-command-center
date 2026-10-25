@@ -2929,16 +2929,10 @@
   .conv-pane.has-last-user-message > .conv-pane-header {
     display: flex;
   }
-  .conv-pane-last-user-message {
-    min-width: 0;
-    flex: 0 1 50%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text);
-    font-size: 13px;
-    font-weight: 600;
-  }
+  /* CCC-172: the header shows the session name only. The latest-ask span
+     stays in the DOM (its has-last-user-message class still gates header
+     visibility) but never renders. */
+  .conv-pane-last-user-message { display: none !important; }
   .conv-pane-titlebar {
     flex: 1 1 50%;
     display: flex;
@@ -2952,7 +2946,7 @@
     text-overflow: ellipsis;
   }
   /* CCC-129: desktop headers lead with the session name, like the phone
-     toolbar title; the latest user message steps back to secondary text. */
+     toolbar title. */
   @media (min-width: 1201px) {
     .conv-pane-titlebar { flex: 1 1 auto; }
     .conv-pane-titlebar .conv-pane-title {
@@ -2960,14 +2954,6 @@
       font-weight: 700;
       line-height: 1.3;
     }
-    .conv-pane-last-user-message {
-      flex: 0 8 auto;
-      max-width: 32%;
-      color: var(--text-muted);
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .conv-split[data-orientation="vertical"] .conv-pane-last-user-message { max-width: 24%; }
   }
   /* CCC-149: a single desktop conversation gets the phone's clean session
      header: the sidebar row's avatar and the session name, nothing else.

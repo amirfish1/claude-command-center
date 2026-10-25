@@ -47011,12 +47011,13 @@
     }
     // Engine rows render an icon chip (CCC-475) instead of the engine word;
     // explicit opts.category (popouts, issues) and non-engine sources keep
-    // the plain-text chip.
+    // the plain-text chip. No repo label beside the icon: it crowded the
+    // session name out of the header (CCC-172).
     const engineIconHtml = opts.category === undefined ? paneEngineIconHtml(row) : '';
     if (engineIconHtml) {
-      const folder = row.folder_label_chip || row.folder_label || '';
-      categoryEl.innerHTML = engineIconHtml
-        + (folder ? '<span class="conv-pane-cat-label">' + escapeHtml(folder) + '</span>' : '');
+      categoryEl.innerHTML = engineIconHtml;
+    } else if (opts.category === undefined && row) {
+      categoryEl.textContent = sourceLabelForPane(row) || '';
     } else {
       categoryEl.textContent = category || '';
     }

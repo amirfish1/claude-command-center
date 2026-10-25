@@ -280,20 +280,14 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
             r"\.conv-input-buttons\s*\{[^}]*min-width:\s*0;[^}]*flex-wrap:\s*wrap;",
         )
 
-    def test_desktop_pane_header_reserves_half_its_space_for_session_title(self):
-        """The latest prompt must not squeeze the session identity out of view."""
+    def test_pane_header_shows_session_name_without_latest_ask(self):
+        """CCC-172: the header is the session name; no latest-ask line or repo label."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        titlebar_css = app_css[
-            app_css.index(".conv-pane-titlebar {"):
-            app_css.index(".conv-pane-popout {", app_css.index(".conv-pane-titlebar {"))
-        ]
-        last_message_css = app_css[
-            app_css.index(".conv-pane-last-user-message {"):
-            app_css.index(".conv-pane-titlebar {", app_css.index(".conv-pane-last-user-message {"))
-        ]
-        self.assertIn("flex: 1 1 50%;", titlebar_css)
-        self.assertIn("flex: 0 1 50%;", last_message_css)
+        self.assertIn(".conv-pane-last-user-message { display: none !important; }", app_css)
+        header_js = app_js[app_js.index("function updatePaneHeader("):app_js.index("titleEl.textContent = headerTitle;")]
+        self.assertNotIn("conv-pane-cat-label", header_js)
 
     def test_narrow_split_panes_keep_their_session_title_headers(self):
         """The single-pane mobile hide rule must not win in a split layout."""
