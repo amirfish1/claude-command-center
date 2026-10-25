@@ -23,7 +23,10 @@
       for (const match of body.matchAll(re)) fields[match[1]] = match[2].trim();
     }
     const prose = answer.replace(/<session-state>[\s\S]*$/i, '').trim();
-    return {answer, fields, prose, paragraph: prose.split(/\n\s*\n/).filter(Boolean).pop() || '',
+    const paragraph = prose.split(/\n\s*\n/).filter(Boolean).pop() || '';
+    const explicitQuestion = paragraph.match(/\b(?:want me to|do you want me to|would you like me to|should I|shall I|can I)[\s\S]*\?\s*$/i)?.[0] || '';
+    return {answer, fields, prose, paragraph, explicitQuestion,
+      endedAfter: index >= 0 && events.slice(index + 1).some(e => e.type === 'result' && e.subtype === 'end_turn'),
       userAfter: index >= 0 && events.slice(index + 1).some(e => !e.bookkeeping && ['user', 'user_text'].includes(e.type))};
   }
   function closeReasons(c) {
@@ -72,6 +75,7 @@
       } else if (completion?.decision_dependency?.score > 0) add('warning', 'The assessment says a decision remains, but Needs you is empty.');
       if (completion?.scope?.closure_met === false && !completion?.remaining_actions?.length) add('warning', 'The topic is open but has no concrete remaining plan.');
     }
+    if (rendered.checked && !working && source.endedAfter && source.explicitQuestion && !Object.keys(source.fields).length && !rendered.questions && !rendered.action) add('warning', 'The completed turn ends with an explicit question, but no question control exposes it: ' + source.explicitQuestion, 'missing_question');
     const reasons = closeReasons(completion);
     if (working) reasons.unshift('The current turn is not finished.');
     if (rendered.close && reasons.length) add('warning', 'Close is shown despite: ' + reasons.join(' '));

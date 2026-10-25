@@ -3187,7 +3187,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     ]
     if model_to_use:
         cmd.extend(["--model", model_to_use])
-    cmd.extend(["-p", prompt])
+    cmd.extend(["-p", _core._devin_session_state_prompt(prompt)])
     log_fh = open(log_path, "w")
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
@@ -3352,8 +3352,8 @@ def _devin_cli_prompt_history_count(raw_id, text, since_ts):
     try:
         row = con.execute(
             "SELECT COUNT(*) AS n FROM prompt_history "
-            "WHERE session_id = ? AND content = ? AND timestamp >= ?",
-            (raw_id, text, int(since_ts)),
+            "WHERE session_id = ? AND content IN (?, ?) AND timestamp >= ?",
+            (raw_id, text, _core._devin_session_state_prompt(text), int(since_ts)),
         ).fetchone()
         count = int(row["n"]) if row else 0
         if count:
@@ -3369,8 +3369,8 @@ def _devin_cli_prompt_history_count(raw_id, text, since_ts):
             " SELECT chat_message, created_at FROM message_nodes"
             " WHERE session_id = ? ORDER BY row_id DESC LIMIT 60"
             ") WHERE created_at >= ? AND json_extract(chat_message, '$.role') = 'user'"
-            " AND json_extract(chat_message, '$.content') = ?",
-            (raw_id, int(since_ts), text),
+            " AND json_extract(chat_message, '$.content') IN (?, ?)",
+            (raw_id, int(since_ts), text, _core._devin_session_state_prompt(text)),
         ).fetchone()
         return int(row["n"]) if row else 0
     except sqlite3.Error:
@@ -3566,7 +3566,7 @@ def resume_session_devin(session_id, text, _delivery_slot="resume", model=None):
         model = os.environ.get("CCC_DEVIN_MODEL")
     if model:
         cmd.extend(["--model", model])
-    cmd.extend(["-p", text])
+    cmd.extend(["-p", _core._devin_session_state_prompt(text)])
     log_fh = open(log_path, "w")
     try:
         proc = subprocess.Popen(

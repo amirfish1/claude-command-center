@@ -792,7 +792,7 @@ def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None,
     if _core._control_plane_routes_engines():
         routed = _core._control_plane_engine_call(
             "devin", "acp_spawn", {
-                "prompt": prompt, "cwd": cwd, "model": model,
+                "prompt": _core._devin_session_state_prompt(prompt), "cwd": cwd, "model": model,
                 "permission_mode": permission_mode,
                 "reasoning_effort": reasoning_effort,
             },
@@ -2536,7 +2536,7 @@ def _acp_prompt(
         routed = _core._control_plane_engine_call(
             harness, "prompt", {
                 "session_id": sid,
-                "text": text,
+                "text": _core._devin_session_state_prompt(text) if harness == "devin" else text,
                 "mode": mode,
                 "from_queue": bool(from_queue),
                 "cwd": cwd or "",
@@ -2560,7 +2560,11 @@ def _acp_prompt(
     if not text:
         return {"ok": False, "error": "empty prompt"}
     text = _core._strip_lone_surrogates(str(text))
+    if harness == "devin":
+        text = _core._strip_ccc_session_state_instruction(text)
     visible_text = text
+    if harness == "devin":
+        text = _core._devin_session_state_prompt(text)
     if harness == "kimi":
         text = _core._kimi_goal_prompt_text(text)
     if harness in ("kimi", "grok") and re.match(r"^\s*/context(\s|$)", text, re.IGNORECASE):
