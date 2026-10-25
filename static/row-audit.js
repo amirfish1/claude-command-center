@@ -63,7 +63,9 @@
       const hasAction = action && typeof action.label === 'string' && action.label.trim() && action.label.length <= 24
         && typeof action.reply === 'string' && action.reply.trim() && action.reply.length <= 400;
       if (!none(source.fields.NEXT_STEP_USER)) {
-        if (!hasAction && !questions.length) add('warning', 'A user step is stated, but no model-authored button or question details are supplied.', 'missing_action_spec');
+        // NEXT_ACTION is null by contract for check/review/choice steps, so its absence is a
+        // review hint, not an incident (CCC-187: every hourly ticket was this false positive).
+        if (!hasAction && !questions.length) add('warning', 'A user step is stated, but no model-authored button or question details are supplied.');
         if (hasAction && (!rendered.action || rendered.action.label !== action.label || rendered.action.reply !== action.reply)) add('warning', 'The latest action button is missing or differs from the model-authored reply.', 'missing_action');
         if (questions.length && !rendered.questions) add('warning', 'The next step references a question without a visible details chip.', 'missing_question');
         if (hasAction || questions.length) add('pass', 'The latest answer supplies an action or a question to inspect.');

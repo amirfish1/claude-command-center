@@ -85,6 +85,13 @@ test('hourly audit detects a missing Close, accepts explanatory None, and skips 
   assert(!audit.inspect(row(undefined,next),request,{checked:true}).findings.some(x=>x.code));
   assert(!audit.inspect({...row(),state:'working'},data,{checked:true}).findings.some(x=>x.code));
 });
+test('a user step without a button is a review hint, never an incident', () => {
+  const {incident}=require('../scripts/audit-session-rows.cjs');
+  const next='Check the release log after 07:00 UTC tomorrow.';
+  const result=audit.inspect(row(undefined,next),events({next}),{checked:true});
+  assert.match(messages(result),/no model-authored button or question/);
+  assert.equal(incident(result,'example-session'),null);
+});
 test('incident identity stays stable across viewports and excludes unfinished turns', () => {
   const {incident}=require('../scripts/audit-session-rows.cjs');
   const result=audit.inspect(row(),events(),{checked:true});
