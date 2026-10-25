@@ -1372,26 +1372,18 @@ def _sync_index(conn: sqlite3.Connection, force: bool = False) -> None:
 
         _init_db(conn)
 
+        # A large corpus needs a directory walk even when only one file
+        # changed. Keep that scan off request threads on every expired
+        # refresh, not just the first search after a restart. Count before
+        # loading the cache rows: that too scales with the whole corpus.
+        if not force:
+            existing = conn.execute("SELECT COUNT(*) FROM file_cache").fetchone()[0]
+            if existing > _BG_SYNC_THRESHOLD:
+                _start_background_sync()
+                return
+
         cur = conn.execute("SELECT path, sid, mtime, size, indexed FROM file_cache")
         have = {r[0]: (r[1], r[2], r[3], r[4]) for r in cur.fetchall()}
-
-        # MEMO-FIX-14: `_candidate_files()` below walks and stat()s every
-        # transcript on disk, whether or not anything actually changed --
-        # cheap when `have` (the already-indexed corpus) is small, but on a
-        # real restart with thousands of prior sessions it's an O(corpus)
-        # filesystem scan against a cold OS metadata cache, measured at
-        # 20-45s wall clock for a single `recall()` even though the eventual
-        # diff (`todo`) turns out small. `len(todo) > _BG_SYNC_THRESHOLD`
-        # below can't catch this case -- it only sees the diff *after*
-        # paying for the scan. Use the existing corpus size as a cheap
-        # (indexed COUNT, no filesystem I/O) proxy instead: a process's
-        # first sync (`_last_sync_ts == 0.0`) against an already-large corpus
-        # is exactly the cold-restart shape, so hand it to the background
-        # sync before ever touching the filesystem. A small/fresh corpus
-        # (tests, a new install) still gets the fast inline path below.
-        if not force and _last_sync_ts == 0.0 and len(have) > _BG_SYNC_THRESHOLD:
-            _start_background_sync()
-            return
 
         # MEMO-FIX-21: one-time section rebuild of already-indexed long
         # transcripts. Only ever done by a force=True (background) sync; a

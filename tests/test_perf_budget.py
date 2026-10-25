@@ -4668,16 +4668,10 @@ def test_ship_graph_reader_not_blocked_by_open_writer(tmp_path, monkeypatch):
     )
 
 
-def test_session_fts_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch):
-    """MEMO-FIX-14 root cause: `_candidate_files()` walks and stat()s every
-    transcript on disk, unconditionally, on every non-forced sync -- cheap
-    against a small corpus (why unit tests never caught this) but on a real
-    restart, with a large already-indexed corpus and a cold OS metadata
-    cache, that single scan measured 20-45s wall clock for one `recall()`
-    call, racing warm_start()'s own background sync for who does it first.
-    A process's first sync (`_last_sync_ts == 0.0`) against an already-large
-    `file_cache` must defer to the background sync without ever calling
-    `_candidate_files()`."""
+@pytest.mark.parametrize("previous_sync", [0.0, 1.0], ids=["cold", "expired-warm"])
+def test_session_fts_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch, previous_sync):
+    """Cold and expired warm searches must use the index without walking
+    the transcript corpus on the request thread."""
     from ccc_server import session_fts
 
     db_path = tmp_path / "session_fts.sqlite"
@@ -4687,7 +4681,7 @@ def test_session_fts_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path,
     if getattr(session_fts._tls, "conn", None):
         session_fts._tls.conn.close()
     session_fts._tls.conn = None
-    session_fts._last_sync_ts = 0.0
+    monkeypatch.setattr(session_fts, "_last_sync_ts", previous_sync)
 
     conn = session_fts._get_connection()
     session_fts._init_db(conn)
@@ -4708,11 +4702,12 @@ def test_session_fts_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path,
 
     session_fts._sync_index(conn, force=False)
 
-    assert scan_calls == [], "cold-start sync with a large existing corpus scanned the filesystem inline"
-    assert bg_calls == [1], "cold-start sync with a large existing corpus did not defer to the background sync"
+    assert scan_calls == [], "large-corpus refresh scanned the filesystem inline"
+    assert bg_calls == [1], "large-corpus refresh did not defer to the background sync"
 
 
-def test_ship_graph_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch):
+@pytest.mark.parametrize("previous_sync", [0.0, 1.0], ids=["cold", "expired-warm"])
+def test_ship_graph_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch, previous_sync):
     """MEMO-FIX-14: the ship_graph analog of the session_fts test above --
     `_count_pending_transcripts()` calls `_candidate_transcript_files()`,
     which is the same O(corpus) filesystem walk/stat, unconditionally."""
@@ -4724,10 +4719,14 @@ def test_ship_graph_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, 
     if getattr(ship_graph._tls, "conn", None):
         ship_graph._tls.conn.close()
     ship_graph._tls.conn = None
-    ship_graph._last_sync_ts = 0.0
+    monkeypatch.setattr(ship_graph, "_last_sync_ts", previous_sync)
 
     conn = ship_graph._get_connection()
     ship_graph._init_db(conn)
+    # Finish fresh-database migrations before seeding transcripts, so the
+    # test exercises the size guard rather than the migration deferral.
+    assert not ship_graph._session_files_migration_pending(conn)
+    assert not ship_graph._continuation_origin_migration_pending(conn)
     rows = [
         (f"/fake/path-{i}.jsonl", f"sid-{i}", float(i), 100, 1)
         for i in range(ship_graph._BG_SYNC_THRESHOLD + 5)
@@ -4747,8 +4746,8 @@ def test_ship_graph_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, 
 
     ship_graph._sync_all(conn, force=False)
 
-    assert scan_calls == [], "cold-start sync with a large existing corpus scanned the filesystem inline"
-    assert bg_calls == [1], "cold-start sync with a large existing corpus did not defer to the background sync"
+    assert scan_calls == [], "large-corpus refresh scanned the filesystem inline"
+    assert bg_calls == [1], "large-corpus refresh did not defer to the background sync"
 
 
 def test_sandbox_harvest_warm_tick_copies_nothing(monkeypatch, tmp_path):

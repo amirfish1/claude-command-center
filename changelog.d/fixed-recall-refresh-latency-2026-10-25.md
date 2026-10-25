@@ -1,0 +1,1 @@
+- Show text-search matches across sidebar tabs, so the selected Ideas or Workers tab no longer hides matching sessions. Keep large Recall index refreshes in the background after cache expiry.

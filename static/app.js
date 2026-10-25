@@ -38247,6 +38247,7 @@
     const _readyToMergeByPr = new Map();   // pr_num -> { idx, conv }
     const _archivedConvs = [];
     const _idSearchConvs = [];
+    const _textSearchConvs = [];
     // "Open asks" includes a session with a formal unresolved tool approval,
     // plus a session that ENDED while still blocked on the human
     // (state==='ended' && ended_blocked). Both are pulled OUT of the
@@ -38363,6 +38364,9 @@
         _idSearchConvs.push(c);
         continue;
       }
+      // Text searches span lanes; preserve every match before the normal
+      // Ideas/Workers/Coding classification and ticket grouping can hide it.
+      if (_ipSearchActive) _textSearchConvs.push(c);
       // An unresolved formal approval is actionable regardless of lifecycle
       // classification. In particular, worker-owned Codex app-server turns can
       // look ended to the dashboard process while still holding an approval
@@ -40609,6 +40613,15 @@
         + '</div>'
         + '</div>'
       : '';
+    const _textSearchRowsHtml = _textSearchConvs.length
+      ? '<div class="conv-repo-search-section" data-role="text-search-section">'
+        + '<div class="conv-repo-search-header">'
+        + '<span class="conv-repo-search-label">Search results</span>'
+        + '<span class="conv-repo-search-hint">' + _textSearchConvs.length + ' matches across all tabs</span>'
+        + '</div><div class="conv-repo-search-list">'
+        + _textSearchConvs.map(c => _renderRow(c)).join('')
+        + '</div></div>'
+      : '';
     const _repoSearchRowsHtml = (() => {
       if (!_repoSearchActive) return '';
       const cards = _repoSearchActive.order
@@ -42367,7 +42380,7 @@
     // above the list and drop the per-row glyph, which hands the reclaimed
     // icon column back to the title. Display only: no row is filtered, and a
     // column that actually varies is left alone and stays per-row.
-    const _workersHoist = _workersUniformColumns(_allTabView === 'workers' ? _allTabMainConvs : []);
+    const _workersHoist = _workersUniformColumns(!_ipSearchActive && _allTabView === 'workers' ? _allTabMainConvs : []);
     _workersHoistState = { engine: _workersHoist.engine, tier: _workersHoist.tier };
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
@@ -43089,13 +43102,14 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && _sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs')
+    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs')))
       ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
         + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
         + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
       : '';
-    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody + _showMoreRowsHtml;
-    const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
+    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml
+      + (_ipSearchActive ? _textSearchRowsHtml : _tabBody) + _showMoreRowsHtml;
+    const _objectsSplitActive = !_ipSearchActive && _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
     // Hoist classes ride on $convList, like .compact-rows and .workers-dense:
     // a class on the section wrapper does not survive every render path (that

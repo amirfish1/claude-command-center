@@ -1382,24 +1382,13 @@ def _sync_all(conn: sqlite3.Connection, force: bool = False) -> None:
                 _migrate_continuation_origin(conn)
 
         if not force:
-            # MEMO-FIX-14: `_count_pending_transcripts()` calls
-            # `_candidate_transcript_files()`, which walks and stat()s every
-            # transcript on disk regardless of how many actually changed --
-            # cheap against a small corpus, but on a real restart with
-            # thousands of prior sessions it's an O(corpus) scan against a
-            # cold OS metadata cache, measured at 20-45s wall clock for a
-            # single `recall()` even when the eventual pending count is
-            # small. `_last_sync_ts == 0.0` (this process's first sync) plus
-            # an already-large `transcripts` table (a fast indexed COUNT, no
-            # filesystem I/O) is the cold-restart shape: hand it to the
-            # background sync before ever touching the filesystem. A
-            # small/fresh corpus (tests, a new install) still gets the fast
-            # inline path below.
-            if _last_sync_ts == 0.0:
-                existing = conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0]
-                if existing > _BG_SYNC_THRESHOLD:
-                    _start_background_sync()
-                    return
+            # Counting changed transcripts still walks the entire corpus.
+            # Defer every large-corpus refresh, including warm processes
+            # whose TTL expired, so recall never waits for that scan.
+            existing = conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0]
+            if existing > _BG_SYNC_THRESHOLD:
+                _start_background_sync()
+                return
 
             pending = _count_pending_transcripts(conn, days)
             if pending > _BG_SYNC_THRESHOLD:
