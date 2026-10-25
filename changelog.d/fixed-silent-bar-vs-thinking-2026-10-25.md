@@ -1,0 +1,1 @@
+- The "No response for Xm" stall bar no longer appears next to a contradictory "Thinking…" card, and Codex app-server activity now counts as a response.

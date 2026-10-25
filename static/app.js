@@ -48065,7 +48065,9 @@
     // flagged the call as stale.
     if (ls.sidecarInFlight && !ls.staleToolCall) { clear(); return; }
     const toMs = (t) => { const n = Number(t) || 0; return n > 1e12 ? n : n * 1000; };
-    let freshest = Math.max(toMs(ls.sidecarTs), toMs(ls.transcriptMtime));
+    // Codex app-server turns stream reasoning as events, not transcript
+    // writes; that activity counts as a response too.
+    let freshest = Math.max(toMs(ls.sidecarTs), toMs(ls.transcriptMtime), toMs(ls.codexAppServerLastActivityAt));
     const stamped = view.querySelectorAll('[data-ts-epoch]');
     for (let i = 0; i < stamped.length; i++) {
       const ep = Number(stamped[i].dataset.tsEpoch);

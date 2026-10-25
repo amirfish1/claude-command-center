@@ -1101,6 +1101,12 @@
      harness resume nudges. Hidden: zero signal, clutters the transcript. */
   .event.assistant.is-noop-ack { display: none; }
 
+  /* CCC-199: once the "No response for Xm" bar is up, a generic
+     "Thinking…/Generating…" card beside it contradicts it. The bar owns the
+     message; a card naming a real in-flight item (.in-flight) stays. */
+  :has(> .conv-silent-bar) > .conv-live-tool-inline.is-generating:not(.in-flight),
+  :has(> .conv-silent-bar) > .conv-live-tool-inline.optimistic.is-thinking { display: none; }
+
   /* End-of-session outcome banner: tells the user what happened when a
      session ended badly (error) or just stopped mid-action with no answer. */
   .conv-outcome-banner {
