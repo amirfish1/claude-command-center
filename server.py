@@ -16029,18 +16029,31 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     }
 
 
-def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None):
-    """Rows changed after token `since`, plus the window's full ordered id
-    list so the client can drop/reorder exactly. None = send a full body."""
+def _archive_list_delta_reject(state, since):
+    """Why token `since` can't be answered with a delta, or None if it can.
+    Logged on list_server diag rows so repeat full bodies are attributable
+    (CCC-201): restart (nonce), projection inputs moved (ctx), or snapshot
+    tracking reset/trimmed (range)."""
     try:
         nonce, ver_s, ctx, _ovl = str(since).split(".")
         since_ver = int(ver_s)
     except (ValueError, TypeError):
-        return None
-    if nonce != state["nonce"] or ctx != state["ctx"]:
-        return None
+        return "malformed"
+    if nonce != state["nonce"]:
+        return "nonce"
+    if ctx != state["ctx"]:
+        return "ctx"
     if not (state["track_since"] <= since_ver <= state["ver"]):
+        return "range"
+    return None
+
+
+def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None):
+    """Rows changed after token `since`, plus the window's full ordered id
+    list so the client can drop/reorder exactly. None = send a full body."""
+    if _archive_list_delta_reject(state, since) is not None:
         return None
+    since_ver = int(str(since).split(".")[1])
     window = _archive_list_window(window)
     cutoff = _archive_list_window_cutoff(window, now=now)
     row_rev, track_since = state["row_rev"], state["track_since"]
@@ -31728,6 +31741,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _delta = None
             since = (qs.get("since", [""])[0] or "").strip()
             _status = None
+            # CCC-201: why a client holding a token still got a full body.
+            if not since:
+                _since_diag = "none"
+            elif _delta is None:
+                _since_diag = "no_state"
+            elif since == _delta["token"]:
+                _since_diag = "current"
+            else:
+                _since_diag = _archive_list_delta_reject(_delta, since) or "ok"
             if _delta is not None and since:
                 if since == _delta["token"]:
                     self.send_response(304)
@@ -31744,6 +31766,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
                         self.send_json(_dp)
                         _status = "delta"
+                    elif _since_diag == "ok":
+                        _since_diag = "unmergeable"
 
             def _timed_payload():
                 _pt0 = time.perf_counter()
@@ -31773,6 +31797,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
                 "body_hit": not _payload_ms,
                 "delta": _status == "delta",
+                "since": _since_diag,
                 "from_cache": bool(from_cache),
                 "stale_ok": stale_ok,
                 "refreshing": bool(_archive_serve_refreshing),

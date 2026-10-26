@@ -209,3 +209,22 @@ def test_lifecycle_restamp_keeps_delta_tracking(monkeypatch):
     entry = server._archive_serve_cache['k']
     assert entry['track_since'] == since
     assert entry['row_rev'] == {'b': entry['ver']}
+
+
+def test_delta_reject_reason_names_why_a_token_gets_a_full_body(monkeypatch):
+    # CCC-201: list_server diag logs this so repeat full bodies (the slow
+    # list_read tail) can be attributed to restart / ctx churn / tracking.
+    server = importlib.import_module('server')
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    gen = server._archive_serve_generation
+    server._archive_serve_cache_store(key, [_row('a', 'A', time.time())], gen)
+    base = server._archive_serve_cache[key]['rows']
+    state = server._archive_list_delta_state(key, base, '7d', True)
+    nonce, ver, ctx, ovl = state['token'].split('.')
+    reject = server._archive_list_delta_reject
+    assert reject(state, state['token']) is None
+    assert reject(state, 'garbage') == 'malformed'
+    assert reject(state, '.'.join(['ffffffff', ver, ctx, ovl])) == 'nonce'
+    assert reject(state, '.'.join([nonce, ver, 'x' * 12, ovl])) == 'ctx'
+    assert reject(state, '.'.join([nonce, str(int(ver) + 5), ctx, ovl])) == 'range'
