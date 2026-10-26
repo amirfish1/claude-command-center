@@ -252,7 +252,7 @@ remove_watchtower_skill_links
 
 # 7. CCC-managed WatchTower clone.
 if [ -d "$WATCHTOWER_DIR" ]; then
-  if [ -f "$WATCHTOWER_DIR/pyproject.toml" ] || [ -d "$WATCHTOWER_DIR/watchtower" ]; then
+  if [ -f "$WATCHTOWER_DIR/pyproject.toml" ] && [ -f "$WATCHTOWER_DIR/watchtower/cli.py" ]; then
     rm -rf "$WATCHTOWER_DIR"
     echo "✓ Removed $WATCHTOWER_DIR"
   else
