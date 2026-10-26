@@ -737,6 +737,7 @@ class ProductivityStore:
         # A read-only state dir (sandboxed import) must not break importing
         # the server; the store degrades to "no cache, no writes".
         self.available = True
+        self._memory_payload = None
         try:
             self._ensure_schema()
         except (OSError, sqlite3.Error):
@@ -795,6 +796,10 @@ class ProductivityStore:
         generated_at = float(time.time() if generated_at is None else generated_at)
         encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         if not self.available:
+            # Retain a completed refresh even when disk persistence is unavailable.
+            # Keep serialized bytes so callers cannot mutate the cached snapshot.
+            with self._lock:
+                self._memory_payload = (generated_at, encoded)
             return
         with self._lock, self._connect() as conn:
             conn.execute(
@@ -804,6 +809,12 @@ class ProductivityStore:
             )
 
     def load_payload(self) -> dict | None:
+        if not self.available:
+            with self._lock:
+                if self._memory_payload is None:
+                    return None
+                generated_at, encoded = self._memory_payload
+            return {"generated_at": generated_at, "payload": json.loads(encoded)}
         try:
             with self._lock, self._connect() as conn:
                 row = conn.execute(

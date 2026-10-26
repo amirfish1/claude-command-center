@@ -504,8 +504,34 @@ def test_build_snapshot_caps_repository_warning_details(monkeypatch):
 
 
 def test_productivity_route_is_additive_and_range_limited():
-    source = inspect.getsource(server.CommandCenterHandler.do_GET)
+    source = inspect.getsource(server.CommandCenterHandler._do_GET)
     assert 'path == "/api/productivity"' in source
     assert "(6, 8, 12, 16)" in source
     assert 'path == "/productivity.html"' in source
     assert 'STATIC_DIR / "productivity.html"' in source
+
+
+def test_readonly_store_reuses_completed_snapshot(monkeypatch, tmp_path):
+    from productivity import ProductivityStore
+
+    blocker = tmp_path / "state"
+    blocker.write_text("not a directory")
+    store = ProductivityStore(blocker / "productivity.db")
+    snapshot = {
+        "schema": server._PRODUCTIVITY_SCHEMA,
+        "datasets": {"8": {"ok": True, "summary": {"features": 2}}},
+        "coverage": {},
+    }
+    store.save_payload(snapshot, generated_at=time.time())
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", store)
+    monkeypatch.setattr(server, "_productivity_refresh_public", lambda: {"state": "complete"})
+
+    def rebuild():
+        raise AssertionError("a completed read-only snapshot must not rebuild on polling")
+
+    monkeypatch.setattr(server, "_productivity_refresh_start", rebuild)
+    for _ in range(3):
+        payload, status = server._productivity_payload(weeks=8)
+        assert status == 200
+        assert payload["summary"]["features"] == 2
+        assert payload["refresh"]["cached"] is True
