@@ -1,0 +1,1 @@
+- Show saved search suggestions only while typing a nonempty query, so clearing, dismissing, or refocusing search does not reopen the browser dropdown.

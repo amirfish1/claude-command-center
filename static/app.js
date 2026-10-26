@@ -19484,6 +19484,9 @@
   }
 
   function rememberConversationSearchQuery(query) {
+    // Updating a connected datalist can reopen the native popup, including
+    // on change/blur in WebKit. Reconnect only on the next nonempty input.
+    $convSearch.removeAttribute('list');
     const q = String(query || '').trim();
     if (!q) return;
     const seen = new Set();
@@ -72600,6 +72603,8 @@
     }, 70);
   }
   $convSearch.addEventListener('input', () => {
+    if ($convSearch.value.trim()) $convSearch.setAttribute('list', 'convSearchHistoryList');
+    else $convSearch.removeAttribute('list');
     updateConversationSearchClear();
     // Filter render is debounced (see _scheduleConvSearchRender) so fast typing
     // doesn't block the paint; the input field itself updates natively/instantly.
@@ -72627,11 +72632,13 @@
   });
   $convSearch.addEventListener('keydown', (ev) => {
     if (isImeKey(ev)) return;
+    if (ev.key === 'Escape') $convSearch.removeAttribute('list');
     if (ev.key === 'Enter') rememberConversationSearchQuery($convSearch.value);
   });
   $convSearch.addEventListener('change', () => rememberConversationSearchQuery($convSearch.value));
   if ($convSearch) {
     $convSearch.addEventListener('blur', () => {
+      $convSearch.removeAttribute('list');
       try { _flushDeferredSidebarRenderIfAny(); } catch (_) {}
     });
   }
