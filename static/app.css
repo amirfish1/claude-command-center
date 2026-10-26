@@ -31003,6 +31003,9 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .ns-model-details:not([open]) > summary { margin-bottom: 0; }
 .ns-model-details[open] .ns-model-compare-hint { display: none; }
 
+.ns-model-rank { font-size: 11px; color: var(--text-muted); }
+.ns-model-manual { border: 0; background: transparent; color: var(--text-muted); font: inherit; cursor: pointer; white-space: nowrap; padding: 3px 7px; order: 2; }
+.is-depth-ranked > .ccc-free-pill { order: 1; }
 .ns-advisor { width: 100%; max-width: 800px; box-sizing: border-box; padding: 18px; margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); text-align: left; font-size: 13px; line-height: 1.5; }
 .ns-advisor-top, .ns-advisor-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .ns-advisor-top > strong { font-size: 14px; }
@@ -32237,7 +32240,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
    Folder and model become one swipeable row of chips each; the folder path
    input, worktree toggle, group labels and the Free pill are dropped. */
 @media (max-width: 1200px) {
-  .conv-pane.has-new-session-context .ns-hero-quiet > :not(.ns-advisor),
+  .conv-pane.has-new-session-context .ns-hero-quiet > :not(.ns-advisor):not(.ns-model-comparison.is-manual-expanded),
   .conv-pane.has-new-session-context .conv-last-written,
   .conv-pane.has-new-session-context .conv-scroll-end-btn,
   .conv-pane.has-new-session-context .conv-scroll-last-btn,

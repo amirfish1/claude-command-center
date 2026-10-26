@@ -88217,62 +88217,98 @@
     recordSpawnChoice(eng, model || _defaultModelsByEngine[eng] || '', $convInputEffortSelect ? $convInputEffortSelect.value : '');
   }
 
+  function nsAdvisorRanksPicker() {
+    return currentConversation === '__new__' && !!nsAdvisor?.data?.config?.enabled;
+  }
+
+  function showNsManualModelCatalog() {
+    _nsModelComparisonOpen = true;
+    renderNsModelComparison();
+    const host = getConvView()?.querySelector('.ns-model-comparison');
+    if (!host) return;
+    host.classList.add('is-manual-expanded');
+    const details = host.querySelector('details');
+    if (details) details.open = true;
+    host.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
   function renderNsModelPickerPills(paneId) {
     const container = document.getElementById('nsModelPickerPills');
     if (!container) return;
 
-    const doRender = (picks) => {
+    const doRender = (picks, ranked = false) => {
       if (!Array.isArray(picks)) return;
       const currentEngine = getSpawnEngine();
       const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
         ? $convInputModelSelect.value
         : (_defaultModelsByEngine[currentEngine] || '');
-      // A selection updates the usage-ranked history. Keep models already
-      // visible in their existing positions, appending newly chosen models.
-      const previousOrder = new Map(Array.from(container.querySelectorAll('.orch-tier-chip'), (chip, index) => [
-        JSON.stringify([chip.getAttribute('data-engine'), chip.getAttribute('data-model') || '']), index,
-      ]));
-      picks = getTopSpawnPicks(picks).sort((a, b) => {
-        const rank = p => previousOrder.get(JSON.stringify([p.engine, p.model || ''])) ?? Infinity;
-        return rank(a) - rank(b);
-      });
-
-      container.innerHTML = picks.map(p => {
-        const isSel = (p.engine === currentEngine && p.model === currentModel);
-        const label = getModelPillLabel(p.engine, p.model);
+      const currentEffort = $convInputEffortSelect?.value || '';
+      if (!ranked) {
+        // Keep history shortcuts stable; the advisor's order comes from its
+        // task-depth ranking and must never inherit this history ordering.
+        const previousOrder = new Map(Array.from(container.querySelectorAll('.orch-tier-chip'), (chip, index) => [
+          JSON.stringify([chip.getAttribute('data-engine'), chip.getAttribute('data-model') || '']), index,
+        ]));
+        picks = getTopSpawnPicks(picks).sort((a, b) => {
+          const rank = p => previousOrder.get(JSON.stringify([p.engine, p.model || ''])) ?? Infinity;
+          return rank(a) - rank(b);
+        });
+      }
+      container.classList.toggle('is-depth-ranked', ranked);
+      container.setAttribute('aria-label', ranked ? (nsAdvisor.depth === 'deep' ? 'Deep' : 'Routine') + ' models, ranked' : 'Model shortcuts');
+      const labelHost = container.closest('.conv-model-picker-inner')?.querySelector('.conv-model-picker-label');
+      if (labelHost) labelHost.textContent = ranked ? (nsAdvisor.depth === 'deep' ? 'Deep rank' : 'Routine rank') : 'Model';
+      container.innerHTML = picks.map((p, index) => {
+        const isSel = p.engine === currentEngine && p.model === currentModel && (!ranked || (p.effort || '') === currentEffort);
+        const label = getModelPillLabel(p.engine, p.model, ranked ? p.effort : '');
         const badge = MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?';
         const badgeClass = 'orch-glyph orch-glyph-' + p.engine;
-        const title = p.engine + ' · ' + p.model;
-
+        const title = [ranked ? '#' + (index + 1) : '', p.engine, p.model, ranked ? p.effort : '', ranked ? p.reason : ''].filter(Boolean).join(' · ');
         return '<button type="button" class="orch-tier-chip' + (isSel ? ' is-selected' : '') + '"'
           + ' role="radio" aria-checked="' + (isSel ? 'true' : 'false') + '"'
           + ' data-engine="' + escapeAttr(p.engine) + '"'
           + ' data-model="' + escapeAttr(p.model) + '"'
+          + (ranked ? ' data-effort="' + escapeAttr(p.effort || '') + '" data-rank="' + (index + 1) + '"' : '')
           + ' title="' + escapeAttr(title) + '">'
+          + (ranked ? '<span class="ns-model-rank">#' + (index + 1) + '</span>' : '')
           + '<span class="' + badgeClass + '">' + escapeHtml(badge) + '</span>'
-          + escapeHtml(label)
-          + '</button>';
+          + escapeHtml(label) + '</button>';
       }).join('');
-
-      container.querySelectorAll('.orch-tier-chip').forEach(chip => {
+      container.querySelectorAll('.orch-tier-chip').forEach((chip, index) => {
         chip.addEventListener('click', () => {
-          const eng = chip.getAttribute('data-engine');
-          const mod = chip.getAttribute('data-model');
-          selectSpawnPick(eng, mod);
+          if (ranked) {
+            markNsAdvisorManual();
+            applyNsAdvisorChoice(picks[index]);
+            renderNsAdvisor();
+          } else selectSpawnPick(chip.getAttribute('data-engine'), chip.getAttribute('data-model'));
         });
       });
-      // The "$0 Free" pill lives first in this row (static/free-runtime.js).
+      if (ranked) {
+        const manual = document.createElement('button');
+        manual.type = 'button';
+        manual.className = 'ns-model-manual';
+        manual.textContent = 'All models…';
+        manual.title = 'Open the full model catalog for a manual override';
+        manual.addEventListener('click', showNsManualModelCatalog);
+        container.appendChild(manual);
+      }
       if (window.CCCFreeRuntime && typeof CCCFreeRuntime.sync === 'function') CCCFreeRuntime.sync(currentEngine);
     };
 
-    const picks = getTopSpawnPicks();
-    if (picks.length > 0) {
-      doRender(picks);
+    if (nsAdvisorRanksPicker()) {
+      doRender(nsAdvisorChoices().filter(choice => !choice.unavailable), true);
+      return;
     }
-    // Cached picks paint immediately, but must not freeze first-launch
-    // defaults forever after history becomes available on the server.
+    // Don't flash unrelated history models while preferences are loading.
+    if (currentConversation === '__new__' && !nsAdvisor?.data && !nsAdvisor?.error) {
+      doRender([], true);
+      return;
+    }
+    const picks = getTopSpawnPicks();
+    doRender(picks);
     fetchModelPickerPicksFromServer(true).then(fetched => {
-      if (currentConversation === '__new__') doRender(fetched);
+      // An in-flight history response must not overwrite a depth ranking.
+      if (currentConversation === '__new__' && !nsAdvisorRanksPicker()) doRender(fetched);
     });
   }
 
@@ -88287,7 +88323,8 @@
     pillsContainer.querySelectorAll('.orch-tier-chip').forEach(chip => {
       const cEngine = chip.getAttribute('data-engine');
       const cModel = chip.getAttribute('data-model');
-      const isSel = (cEngine === currentEngine && cModel === currentModel);
+      const isSel = cEngine === currentEngine && cModel === currentModel
+        && (!pillsContainer.classList.contains('is-depth-ranked') || (chip.getAttribute('data-effort') || '') === ($convInputEffortSelect?.value || ''));
       chip.classList.toggle('is-selected', isSel);
       chip.setAttribute('aria-checked', isSel ? 'true' : 'false');
     });
@@ -88345,7 +88382,7 @@
     // price; the full table is one click away for when you want to compare.
     const markup = '<details class="ns-model-details"' + (_nsModelComparisonOpen ? ' open' : '') + '>'
       + '<summary class="ns-model-selected">Model: ' + escapeHtml(selectedOption?.label || selected || 'Engine default') + ' · ' + escapeHtml(selectedOption?.cost_summary || 'Price not reported')
-      + ' <span class="ns-model-compare-hint">Compare models</span></summary>'
+      + ' <span class="ns-model-compare-hint">All models · manual override</span></summary>'
       + '<div class="ns-model-heading"><label>Engine <select aria-label="Compare models for engine">'
       + engineOptions + '</select></label></div>'
       + '<p class="ns-model-note">Catalog token rates: USD per 1 million tokens where quoted. Subscription charges and quota usage differ; caching, effort, and service tiers can change cost.</p>'
@@ -88542,6 +88579,7 @@
     }));
     host.querySelector('[data-advisor-use]')?.addEventListener('click', () => { nsAdvisor.manual = false; renderNsAdvisor(); });
     host.querySelectorAll('[data-advisor-refresh]').forEach(button => button.addEventListener('click', () => loadNsAdvisor(true)));
+    renderNsModelPickerPills();
     host.querySelector('[data-advisor-edit]')?.addEventListener('click', () => {
       if (!config) { loadNsAdvisor(true); return; }
       nsAdvisor.editing = true;

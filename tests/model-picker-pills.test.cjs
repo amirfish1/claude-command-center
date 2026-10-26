@@ -17,7 +17,7 @@ async function pickerPage(picks, fetched = []) {
     window._defaultModelsByEngine = { codex: 'model-a' };
     window.spawnDefaultsState = { engine: 'codex', models: {} };
     window.spawnEffortChoiceDirty = true;
-    window.nsAdvisor = { manual: false, applying: false };
+    window.nsAdvisor = { manual: false, applying: false, data: {config: {enabled: false}} };
     window.$convInputEffortSelect = { value: 'high' };
     window.$convInputModelSelect = { value: 'model-a', style: { display: 'none' } };
     window.$convInputEngineSelect = null;
@@ -99,5 +99,68 @@ test('unnamed picks become a named model or drop; labels never say default', asy
       MODEL_OPTIONS_BY_ENGINE.codex = [{ id: 'auto', label: 'Auto (default)' }];
       return getTopSpawnPicks([{ engine: 'codex', model: 'auto' }, { engine: 'codex', model: '' }]);
     }), []);
+  } finally { await page.close(); }
+});
+
+async function enableRankedPicker(page) {
+  await page.evaluate(() => {
+    currentConversation = '__new__';
+    nsAdvisor = {depth: 'routine', manual: false, applying: false, data: {config: {enabled: true}}};
+    window.nsAdvisorChoices = () => nsAdvisor.depth === 'deep'
+      ? [{engine: 'codex', model: 'deep-model', effort: 'medium', unavailable: ''}]
+      : [{engine: 'codex', model: 'routine-first', effort: 'medium', unavailable: ''},
+         {engine: 'codex', model: 'routine-next', effort: 'low', unavailable: ''},
+         {engine: 'codex', model: 'unavailable-model', effort: 'low', unavailable: 'Engine unavailable'}];
+    window.currentSpawnChoice = () => ({engine: getSpawnEngine(), model: _defaultModelsByEngine.codex, effort: $convInputEffortSelect.value});
+    window.getConvView = () => null;
+    window.updateInputBar = () => {};
+    renderNsModelPickerPills();
+  });
+}
+
+test('advisor replaces unrelated history with numbered depth rankings and explicit thinking', async () => {
+  const page = await pickerPage([pick('unrelated-expensive-model')]);
+  try {
+    await enableRankedPicker(page);
+    assert.deepEqual(await page.$$eval('.orch-tier-chip', buttons => buttons.map(b => b.dataset.model)), ['routine-first', 'routine-next']);
+    assert.deepEqual(await page.$$eval('[data-rank]', buttons => buttons.map(b => [b.dataset.rank, b.dataset.model, b.dataset.effort])),
+      [['1', 'routine-first', 'medium'], ['2', 'routine-next', 'low']]);
+    assert.match(await page.$eval('[data-rank="1"]', el => el.textContent), /Medium/);
+    await page.evaluate(() => { nsAdvisor.depth = 'deep'; renderNsModelPickerPills(); });
+    assert.deepEqual(await page.$$eval('[data-rank]', buttons => buttons.map(b => b.dataset.model)), ['deep-model']);
+    assert.match(await page.$eval('#nsModelPickerPills', el => el.getAttribute('aria-label')), /Deep/);
+    await page.evaluate(() => { nsAdvisor.depth = 'routine'; renderNsModelPickerPills(); });
+    assert.deepEqual(await page.$$eval('[data-rank]', buttons => buttons.map(b => b.dataset.model)), ['routine-first', 'routine-next']);
+  } finally { await page.close(); }
+});
+
+test('ranked click applies that model and thinking instead of inheriting the previous thinking', async () => {
+  const page = await pickerPage([pick('unrelated-expensive-model')]);
+  try {
+    await enableRankedPicker(page);
+    await page.click('[data-rank="2"]');
+    assert.deepEqual(await page.evaluate(() => currentSpawnChoice()), {engine:'codex', model:'routine-next', effort:'low'});
+    assert.equal(await page.evaluate(() => nsAdvisor.manual), true);
+    await page.evaluate(() => renderNsModelPickerPills());
+    assert.equal(await page.$eval('[aria-checked="true"]', el => el.dataset.rank), '2');
+    await page.evaluate(() => { $convInputEffortSelect.value = 'high'; syncNsModelPickerPillsSelection(); });
+    assert.equal(await page.$$eval('[data-rank][aria-checked="true"]', buttons => buttons.length), 0);
+  } finally { await page.close(); }
+});
+
+test('a late history response cannot overwrite the active advisor ranking', async () => {
+  const page = await pickerPage([pick('historical-model')]);
+  try {
+    await page.evaluate(() => {
+      currentConversation = '__new__';
+      window.fetch = () => new Promise(resolve => { window.resolveHistory = resolve; });
+      renderNsModelPickerPills();
+    });
+    await enableRankedPicker(page);
+    await page.evaluate(async () => {
+      resolveHistory({ok:true,json:async()=>({ok:true,picks:[{engine:'codex',model:'late-history-model'}]})});
+      await _fetchServerModelPicksPromise;
+    });
+    assert.deepEqual(await page.$$eval('[data-rank]', buttons => buttons.map(b => b.dataset.model)), ['routine-first', 'routine-next']);
   } finally { await page.close(); }
 });

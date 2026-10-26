@@ -167,7 +167,8 @@
     pill.classList.toggle('is-selected', on);
     pill.classList.toggle('is-setup', notReady);
     pill.setAttribute('aria-checked', on ? 'true' : 'false');
-    pill.querySelector('.ccc-free-pill-label').textContent = notReady ? 'Set up free models' : 'Free';
+    var ranked = pill.parentNode && pill.parentNode.classList.contains('is-depth-ranked');
+    pill.querySelector('.ccc-free-pill-label').textContent = notReady ? 'Set up free models' : (ranked ? 'Free · manual' : 'Free');
     pill.title = notReady
       ? 'Free models are not set up yet. Click to set them up.'
       : 'Runs on your free router. Costs $0.';
