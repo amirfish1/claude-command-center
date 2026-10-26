@@ -14350,6 +14350,25 @@
       const rows = [];
       const data = buildTtsDataFromElements(elements);
       const clean = _sanitizeTtsText(data.text, true);
+      // Range rects ignore overflow clipping: a long pinned ask in the sticky
+      // header (a fixed-height scroll box) reports every hidden line, which
+      // then painted a stray column down the conversation (CCC-203). Clip
+      // each text node to its scrolling/clipping ancestors.
+      const clipFor = new Map();
+      const nodeClip = (node) => {
+        const parent = node.parentElement;
+        if (clipFor.has(parent)) return clipFor.get(parent);
+        let c = { ...clip };
+        for (let a = parent; a && a !== view && a !== document.body; a = a.parentElement) {
+          const cs = getComputedStyle(a);
+          if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+          const r = a.getBoundingClientRect();
+          c = { top: Math.max(c.top, r.top), bottom: Math.min(c.bottom, r.bottom),
+            left: Math.max(c.left, r.left), right: Math.min(c.right, r.right) };
+        }
+        clipFor.set(parent, c);
+        return c;
+      };
       for (const [text, entry] of clips) {
         let from = 0, start;
         while ((start = clean.indexOf(text, from)) !== -1) {
@@ -14362,10 +14381,11 @@
             range.setStart(m.node, m.nodeOffsetStart + a - m.start);
             range.setEnd(m.node, m.nodeOffsetStart + b - m.start);
             const state = entry.cancelled ? 'cancelled' : entry.debugReady ? 'ready' : 'sent';
+            const nc = nodeClip(m.node);
             for (const rect of range.getClientRects()) {
-              if (!rect.width || !rect.height || rect.bottom <= clip.top || rect.top >= clip.bottom
-                  || rect.right <= clip.left || rect.left >= clip.right) continue;
-              const top = Math.max(rect.top, clip.top), bottom = Math.min(rect.bottom, clip.bottom);
+              if (!rect.width || !rect.height || rect.bottom <= nc.top || rect.top >= nc.bottom
+                  || rect.right <= nc.left || rect.left >= nc.right) continue;
+              const top = Math.max(rect.top, nc.top), bottom = Math.min(rect.bottom, nc.bottom);
               // Inline markup and chunk boundaries can yield several rects on
               // one rendered row. Merge them, keeping every state on that row.
               const row = rows.find(r => Math.min(r.bottom, bottom) - Math.max(r.top, top)
