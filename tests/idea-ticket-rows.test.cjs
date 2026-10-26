@@ -54,6 +54,20 @@ test('a newer spawned subagent never takes over its parent ticket row (CCC-220)'
   assert.deepEqual(representatives(rows), ['successor', 'parent', 'orphan']);
 });
 
+test('archive shaping preserves continuation identity for ticket representatives', () => {
+  const shapingStart = app.indexOf('        goal: c.goal');
+  const shapingEnd = app.indexOf('        runtime: c.runtime', shapingStart);
+  assert.ok(shapingStart >= 0 && shapingEnd > shapingStart);
+  const continuation = row('successor', 'EXAMPLE-1', 30, {
+    parent_session_id: 'origin', continued_from_session_id: 'origin',
+    first_message: 'Continue the earlier discussion.',
+  });
+  const shaped = vm.runInNewContext('({' + app.slice(shapingStart, shapingEnd) + '})', {c: continuation});
+  assert.equal(shaped.continued_from_session_id, 'origin');
+  assert.deepEqual(representatives([row('origin', 'EXAMPLE-1', 20),
+    {...shaped, session_id: 'successor', modified: 30}]), ['successor']);
+});
+
 test('equal timestamps remain stable across bucket/input order', () => {
   const rows = [row('session-b', 'EXAMPLE-1', 20), row('session-a', 'EXAMPLE-1', 20),
     row('session-c', 'EXAMPLE-2', 20)];

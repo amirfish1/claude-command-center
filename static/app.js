@@ -77060,6 +77060,7 @@
         goal: c.goal || '',
         goal_status: c.goal_status || '',
         parent_session_id: c.parent_session_id || '',
+        continued_from_session_id: c.continued_from_session_id || '',
         // Same allowlist trap as goal/parent_session_id above: silently
         // dropped (and the rail chip never renders) if not named here.
         spawned_via: c.spawned_via || '',
