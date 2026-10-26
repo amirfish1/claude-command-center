@@ -17,6 +17,7 @@ async function pickerPage(picks, fetched = []) {
     window._defaultModelsByEngine = { codex: 'model-a' };
     window.spawnDefaultsState = { engine: 'codex', models: {} };
     window.spawnEffortChoiceDirty = true;
+    window.nsAdvisor = { manual: false, applying: false };
     window.$convInputEffortSelect = { value: 'high' };
     window.$convInputModelSelect = { value: 'model-a', style: { display: 'none' } };
     window.$convInputEngineSelect = null;

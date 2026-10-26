@@ -132,6 +132,7 @@ from ccc_server import conv_reader as _conv_reader
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
+from ccc_server import spawn_advisor as _spawn_advisor
 from ccc_server import approval_evidence as _approval_evidence
 # Namespace import (not adopted): the $0 spawn runtime's helpers stay behind
 # one name so its spawn_env/readiness don't collide with engine globals.
@@ -31696,6 +31697,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 },
                 "tailnet": tailnet,
             })
+        elif path == "/api/spawn-advisor":
+            try:
+                config = _spawn_advisor.load(COMMAND_CENTER_STATE_DIR, _ORCHESTRATION_SPAWN_ENGINES)
+                self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
+            except (OSError, ValueError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/spawn-defaults":
             defaults = _load_spawn_defaults()
             self.send_json({
@@ -34092,6 +34099,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
             _schedule_restart()
+            return
+        if path == "/api/spawn-advisor":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 65536:
+                    raise ValueError("Expected a preferences object of at most 64 KiB")
+                config = _spawn_advisor.save(COMMAND_CENTER_STATE_DIR,
+                    json.loads(self.rfile.read(length)), _ORCHESTRATION_SPAWN_ENGINES)
+                self.send_json({"ok": True, "config": config})
+            except (ValueError, TypeError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path == "/api/spawn-defaults":
             length = int(self.headers.get("Content-Length", "0"))

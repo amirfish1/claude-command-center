@@ -145,8 +145,10 @@
   }
 
   function setEnabled(on) {
+    var changed = state.enabled !== !!on;
     state.enabled = !!on;
     try { localStorage.setItem(LS_KEY, state.enabled ? '1' : '0'); } catch (_) {}
+    if (changed) window.dispatchEvent(new CustomEvent('ccc-runtime-change', {detail: {enabled: state.enabled}}));
   }
 
   function useClaudeEngine() {
@@ -254,6 +256,7 @@
   window.CCCFreeRuntime = {
     ENGINES: ENGINES,
     supports: supports,
+    setEnabled: setEnabled,
     sync: sync,
     refreshStatus: refreshStatus,
     readyFor: readyFor,

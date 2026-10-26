@@ -1,0 +1,1 @@
+Add Routine and Deep new-session recommendations using configurable model rankings, thinking levels, fresh usage, reset times, and locally stored subscription or credit preferences. Manual choices remain selected until recommendations are resumed.

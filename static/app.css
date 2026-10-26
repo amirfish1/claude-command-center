@@ -31003,6 +31003,41 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .ns-model-details:not([open]) > summary { margin-bottom: 0; }
 .ns-model-details[open] .ns-model-compare-hint { display: none; }
 
+.ns-advisor { width: 100%; max-width: 800px; box-sizing: border-box; padding: 18px; margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); text-align: left; font-size: 13px; line-height: 1.5; }
+.ns-advisor-top, .ns-advisor-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.ns-advisor-top > strong { font-size: 14px; }
+.ns-advisor button, .ns-advisor input, .ns-advisor select { font: inherit; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 5px 9px; }
+.ns-advisor button { cursor: pointer; }
+.ns-advisor button:disabled { opacity: .5; cursor: default; }
+.ns-advisor button:focus-visible, .ns-advisor input:focus-visible, .ns-advisor select:focus-visible { outline: 2px solid var(--accent, #58a6ff); outline-offset: 2px; }
+.ns-advisor-depth { display: flex; gap: 4px; }
+.ns-advisor-depth button[aria-pressed="true"], .ns-advisor [data-advisor-use], .ns-advisor [data-advisor-save] { border-color: var(--accent, #58a6ff); background: color-mix(in srgb, var(--accent, #58a6ff) 12%, var(--bg)); }
+.ns-advisor-caption, .ns-advisor small, .ns-advisor-actions > span { color: var(--text-muted); font-size: 12px; }
+.ns-advisor-result { display: flex; flex-direction: column; gap: 6px; margin: 16px 0; }
+.ns-advisor-result > strong { font-size: 17px; overflow-wrap: anywhere; }
+.ns-advisor-result small { line-height: 1.6; }
+.ns-advisor-preferences { margin-top: 14px; }
+.ns-advisor-alternatives { margin-top: 14px; }
+.ns-advisor-alternatives summary { cursor: pointer; }
+.ns-advisor-alternatives li { margin: 10px 0; }
+.ns-advisor-alternatives small { display: block; }
+.ns-advisor h4 { margin: 18px 0 8px; font-size: 13px; }
+.ns-advisor-edit-list { padding-left: 22px; }
+.ns-advisor-edit-list li { padding: 4px 0; }
+.ns-advisor-edit-list li > span { display: inline-block; width: calc(100% - 120px); vertical-align: middle; overflow-wrap: anywhere; }
+.ns-advisor-edit-list button { padding: 2px 7px; margin-left: 3px; }
+.ns-advisor-resource { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.ns-advisor-resource legend { padding: 0 6px; }
+.ns-advisor-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.ns-advisor-fields label { display: flex; flex-direction: column; gap: 3px; color: var(--text-muted); font-size: 11px; }
+.ns-advisor-fields input, .ns-advisor-fields select { min-width: 0; width: 100%; box-sizing: border-box; }
+.ns-advisor-error { color: var(--danger, #f87171); }
+@media (max-width: 600px) {
+  .ns-advisor { padding: 12px; }
+  .ns-advisor-fields { grid-template-columns: minmax(0, 1fr); }
+  .ns-advisor-result > strong { font-size: 15px; }
+}
+
 /* Codex reader: quiet message chrome, readable actions, bounded attachments. */
 .conv-pane.is-codex-session .kimi-turn .assistant-text {
   line-height: 1.7;
@@ -32202,7 +32237,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
    Folder and model become one swipeable row of chips each; the folder path
    input, worktree toggle, group labels and the Free pill are dropped. */
 @media (max-width: 1200px) {
-  .conv-pane.has-new-session-context .ns-stage,
+  .conv-pane.has-new-session-context .ns-hero-quiet > :not(.ns-advisor),
   .conv-pane.has-new-session-context .conv-last-written,
   .conv-pane.has-new-session-context .conv-scroll-end-btn,
   .conv-pane.has-new-session-context .conv-scroll-last-btn,
