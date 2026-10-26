@@ -429,6 +429,16 @@ for (const incomingText of ['Again', 'Older different message']) {
   });
 }
 
+test('a whole-second durable timestamp acknowledges a send made later in that second', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('what is the status', 'session', 'main');
+    pending.entry.ts = Math.floor(pending.entry.ts / 1000) * 1000 + 900;
+    reconcileUserEvent({ text: 'what is the status', ts: new Date(Math.floor(pending.entry.ts / 1000) * 1000).toISOString().replace(/\.\d+Z$/, 'Z') }, 'main', getConvView());
+    return { connected: pending.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { connected: false, tracked: 0 });
+});
+
 test('a late original queue ACK preserves the optimistic steering presentation', async () => {
   const result = await fixture(() => {
     const pending = appendPendingSendEcho('Steering fixture', 'session', 'main');

@@ -12275,6 +12275,7 @@
       : engine === 'cursor' ? 'Cursor'
       : engine === 'antigravity' ? 'Antigravity'
       : engine === 'hermes' ? 'Hermes'
+      : engine.indexOf('devin') === 0 ? 'Devin'
       : 'Claude';
     const steered = !!(data && data.via === 'codex-steer');
     note.textContent = steered
@@ -67449,9 +67450,13 @@
         // transcript event may acknowledge and remove the injected echo.
         const _authoritativeUserEvent = !ev.peer && !ev.skill && !ev.pending && !ev.provisional;
         const sendEventEpoch = ev.ts ? Date.parse(ev.ts) : NaN;
+        // devin-cli truncates event timestamps to the whole second, so the
+        // event that delivers a send can read up to ~1s before the echo's
+        // Date.now() stamp; without slack that echo never clears (CCC-205).
+        const sendAckClockSlackMs = 2000;
         const canAcknowledgeSend = pending => !Number.isFinite(sendEventEpoch)
           || !Number(pending && pending.ts)
-          || sendEventEpoch >= Number(pending.ts);
+          || sendEventEpoch + sendAckClockSlackMs >= Number(pending.ts);
         // Peer (cross-session) messages are not the operator's own sends:
         // never let one clear a pending echo, exact or FIFO.
         // A synthetic queue overlay is still awaiting delivery. It must not
