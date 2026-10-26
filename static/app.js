@@ -41033,13 +41033,27 @@
         + '</div>'
         + '</div>'
       : '';
-    const _textSearchRowsHtml = _textSearchConvs.length
+    // CCC-211: an idea ticket is one row in Features, so it is one row in
+    // search too. Keep the first (most relevant) matching session, which
+    // carries the match snippet, at its relevance position.
+    const _textSearchRows = (() => {
+      if (!ideaTicketsOn()) return _textSearchConvs;
+      const seenRefs = new Set();
+      return _textSearchConvs.filter(c => {
+        const ref = c && c.idea_ticket && c.idea_ticket.ref;
+        if (!ref) return true;
+        if (seenRefs.has(ref)) return false;
+        seenRefs.add(ref);
+        return true;
+      });
+    })();
+    const _textSearchRowsHtml = _textSearchRows.length
       ? '<div class="conv-repo-search-section" data-role="text-search-section">'
         + '<div class="conv-repo-search-header">'
         + '<span class="conv-repo-search-label">Search results</span>'
-        + '<span class="conv-repo-search-hint">' + _textSearchConvs.length + ' matches across all tabs</span>'
+        + '<span class="conv-repo-search-hint">' + _textSearchRows.length + ' matches across all tabs</span>'
         + '</div><div class="conv-repo-search-list">'
-        + _textSearchConvs.map(c => _renderRow(c)).join('')
+        + _textSearchRows.map(c => _renderRow(c)).join('')
         + '</div></div>'
       : '';
     const _repoSearchRowsHtml = (() => {
