@@ -72,6 +72,7 @@ class UninstallScriptTests(unittest.TestCase):
         (self.watchtower / "pyproject.toml").write_text(
             "[project]\nname='watchtower'\n", encoding="utf-8"
         )
+        (self.watchtower / "watchtower" / "cli.py").write_text("# fake CLI\n", encoding="utf-8")
         skill_src = self.watchtower / "watchtower" / "skills" / "watchtower"
         skill_src.mkdir(parents=True)
         (skill_src / "SKILL.md").write_text("# wt\n", encoding="utf-8")
@@ -188,6 +189,12 @@ class UninstallScriptTests(unittest.TestCase):
         self.assertEqual(len(commands), 1)
         self.assertIn("boost-sync.sh", commands[0])
         self.assertTrue(all("command-center/hooks/" not in c for c in commands))
+
+    def test_keeps_unrelated_python_checkout(self):
+        (self.watchtower / "watchtower" / "cli.py").unlink()
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.watchtower / "pyproject.toml").is_file())
 
     def test_without_purge_keeps_state_dirs(self):
         result = self._run()
