@@ -1711,7 +1711,9 @@ class TestServerImports(unittest.TestCase):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('list="convSearchHistoryList"', index_html)
+        search_input = index_html.split('id="convSearch"', 1)[1].split('>', 1)[0]
+        self.assertNotIn('list=', search_input)
+        self.assertIn("$convSearch.setAttribute('list', 'convSearchHistoryList')", app_js)
         self.assertIn('<datalist id="convSearchHistoryList"></datalist>', index_html)
         self.assertIn("const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';", app_js)
         self.assertIn("function readConversationSearchHistory()", app_js)
