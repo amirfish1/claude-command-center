@@ -123,3 +123,16 @@ test('sidebar list polls skip a background pool full of slow reads', async () =>
   assert.equal(started.filter(u => u === 'GET /api/conversations/list').length, 2);
   await Promise.all(slow);
 });
+
+
+test('new-session recommendations bypass the startup queue and survive a pool abort', async () => {
+  const ctx = harness();
+  const advisor = ctx.fetchViaGate('/api/spawn-advisor', {cccPriority:'user'});
+  const installed = ctx.fetchViaGate('/api/engines/installed', {cccPriority:'user'});
+  ctx.abortPool();
+  const responses = await Promise.all([advisor, installed]);
+  assert.deepEqual(responses.map(r => r.status), [200, 200]);
+  assert.ok(urls(ctx).includes('GET /api/spawn-advisor'));
+  assert.ok(urls(ctx).includes('GET /api/engines/installed'));
+  ctx.release();
+});

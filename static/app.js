@@ -2623,6 +2623,7 @@
     return prefixes.some(prefix => pathname === prefix || pathname.startsWith(prefix + '/'));
   }
   function _startupCriticalApiRead(input, init) {
+    if (init && init.cccPriority === 'user') return true;
     const req = _startupApiPath(input, init);
     if (!req) return true;
     if (req.method !== 'GET') return !_startupPathMatches(req.pathname, _startupDeferrableBeacons);
@@ -88491,7 +88492,7 @@
     if (nsAdvisor.loading || !force && nsAdvisor.data && Date.now() - nsAdvisor.loadedAt < 60000) return;
     nsAdvisor.loading = true;
     try {
-      const response = await fetch('/api/spawn-advisor', { cache: 'no-store' });
+      const response = await fetch('/api/spawn-advisor', { cache: 'no-store', cccPriority: 'user' });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || 'Recommendations unavailable');
       nsAdvisor.data = data;
@@ -88987,7 +88988,8 @@
   }
   async function refreshEngineMissingNotice(opts) {
     try {
-      const r = await fetch('/api/engines/installed' + (opts && opts.fresh ? '?fresh=1' : ''));
+      const r = await fetch('/api/engines/installed' + (opts && opts.fresh ? '?fresh=1' : ''),
+        currentConversation === '__new__' ? {cccPriority: 'user'} : undefined);
       const d = await r.json();
       const map = {};
       (d.engines || []).forEach(e => { if (e.kind === 'spawn') map[e.engine] = !!e.installed; });
