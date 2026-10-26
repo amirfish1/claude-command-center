@@ -53,6 +53,13 @@ NODE_LTS_LINE = "latest-v22.x"
 CLAUDE_INSTALL_URL = os.environ.get(
     "CCC_CLAUDE_INSTALL_URL", "https://claude.ai/install.sh"
 )
+GH_DIST_BASE = os.environ.get(
+    "CCC_GH_DIST_BASE", "https://github.com/cli/cli/releases/download"
+).rstrip("/")
+GH_LATEST_RELEASE_URL = os.environ.get(
+    "CCC_GH_LATEST_RELEASE_URL", "https://github.com/cli/cli/releases/latest"
+)
+GH_DEFAULT_VERSION = "2.67.0"
 FREE_ROUTER_STATE = "free-router.json"
 FREE_ROUTER_PORT = 3017
 
@@ -88,6 +95,10 @@ def _which(cmd):
     found = shutil.which(cmd)
     if found:
         return found
+    if cmd == "gh":
+        r = _runtime_gh_bin()
+        if r:
+            return r
     try:
         for candidate in _iter_common_cli_candidates(cmd):
             try:
@@ -107,6 +118,11 @@ def _ccc_dir():
 def _runtime_node_bin():
     node = _ccc_dir() / "runtime" / "node" / "bin" / "node"
     return str(node) if node.is_file() and os.access(node, os.X_OK) else None
+
+
+def _runtime_gh_bin():
+    gh = _ccc_dir() / "runtime" / "gh" / "bin" / "gh"
+    return str(gh) if gh.is_file() and os.access(gh, os.X_OK) else None
 
 
 def _is_macos():
@@ -137,7 +153,7 @@ def _clt_present():
 
 def _detect_clt():
     if not _is_macos():
-        return "ok", "Only needed on a Mac"
+        return "not_applicable", "Only needed on a Mac"
     if _clt_present():
         return "ok", "Installed"
     return "missing", "macOS needs these before it can build software"
@@ -552,19 +568,188 @@ def _install_claude_cli(job):
     )
 
 
+def _gh_platform():
+    """GitHub CLI tarball platform token (e.g. linux_amd64), or None."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system != "linux":
+        return None
+    if machine in ("x86_64", "amd64"):
+        arch = "amd64"
+    elif machine in ("arm64", "aarch64"):
+        arch = "arm64"
+    elif machine in ("i386", "i686"):
+        arch = "386"
+    elif machine == "armv6l":
+        arch = "armv6"
+    elif machine == "armv7l":
+        arch = "armv7"
+    else:
+        return None
+    return f"linux_{arch}"
+
+
+def _resolve_gh_version(fetch=_fetch_text):
+    """Try resolving the latest GitHub CLI release version, falling back to GH_DEFAULT_VERSION."""
+    try:
+        req = urllib.request.Request(GH_LATEST_RELEASE_URL, headers={"User-Agent": "ccc-setup/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            final_url = resp.geturl()
+            tag = final_url.rstrip("/").split("/")[-1]
+            ver = tag.lstrip("v")
+            if ver and ver[0].isdigit():
+                return ver
+    except Exception:
+        pass
+    return GH_DEFAULT_VERSION
+
+
+def _resolve_gh_tarball(plat, version=None, fetch=_fetch_text):
+    """Pick the tarball for plat and extract its sha256 checksum from checksums.txt.
+
+    Returns (version_str, filename, sha256).
+    """
+    ver = version or _resolve_gh_version(fetch=fetch)
+    sums = fetch(f"{GH_DIST_BASE}/v{ver}/gh_{ver}_checksums.txt")
+    target_name = f"gh_{ver}_{plat}.tar.gz"
+    for line in sums.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) == 2:
+            sha, name = parts
+            if name == target_name:
+                return ver, name, sha
+    raise RuntimeError(f"Couldn't find GitHub CLI build {target_name} in release checksums.")
+
+
 def _install_gh(job):
     if _which("gh"):
         job.emit("GitHub CLI is already here.")
         return True
+
+    # 1. Try Homebrew if available
     brew = _which("brew")
-    if not brew:
-        job.emit("GitHub CLI is optional · you can add it later from cli.github.com.")
-        return False
-    rc = job.run_cmd([brew, "install", "gh"], timeout_s=900)
-    if rc == 0 and _which("gh"):
-        job.emit("GitHub CLI is ready.")
-        return True
-    raise RuntimeError("Homebrew couldn't install GitHub CLI · its log above has the details.")
+    if brew:
+        job.emit("Installing GitHub CLI via Homebrew…")
+        rc = job.run_cmd([brew, "install", "gh"], timeout_s=900)
+        if rc == 0 and _which("gh"):
+            job.emit("GitHub CLI is ready.")
+            return True
+        job.emit("Homebrew couldn't install GitHub CLI · trying alternative methods…")
+
+    # 2. On Linux: try passwordless sudo with apt/dnf
+    if platform.system() == "Linux":
+        can_sudo = False
+        try:
+            rc, _ = _run_capture(["sudo", "-n", "true"], timeout=5)
+            can_sudo = (rc == 0)
+        except Exception:
+            can_sudo = False
+
+        if can_sudo:
+            apt = _which("apt-get")
+            dnf = _which("dnf")
+            if apt:
+                job.emit("Installing GitHub CLI via apt…")
+                rc = job.run_cmd(["sudo", "-n", "apt-get", "install", "-y", "gh"], timeout_s=300)
+                if rc == 0 and _which("gh"):
+                    job.emit("GitHub CLI is ready.")
+                    return True
+            elif dnf:
+                job.emit("Installing GitHub CLI via dnf…")
+                rc = job.run_cmd(["sudo", "-n", "dnf", "install", "-y", "gh"], timeout_s=300)
+                if rc == 0 and _which("gh"):
+                    job.emit("GitHub CLI is ready.")
+                    return True
+
+        # 3. On Linux: download official release tarball into ~/.ccc/runtime/gh
+        plat = _gh_platform()
+        if plat:
+            try:
+                job.emit("Checking the official GitHub CLI release for the right build…")
+                ver_str, filename, sha = _resolve_gh_tarball(plat)
+                job.emit(f"Found GitHub CLI v{ver_str} for your computer.")
+                runtime = _ccc_dir() / "runtime"
+                tarball = runtime / "downloads" / filename
+                job.download(
+                    f"{GH_DIST_BASE}/v{ver_str}/{filename}",
+                    tarball,
+                    label="Downloading GitHub CLI",
+                )
+                job.progress_line("Checking the download is safe…")
+                if not _verify_sha256(tarball, sha):
+                    try:
+                        tarball.unlink()
+                    except OSError:
+                        pass
+                    raise RuntimeError(
+                        "The GitHub CLI download didn't match its checksum, so it was "
+                        "deleted. Run this step again to retry."
+                    )
+                job.emit("Verified safe. Unpacking…")
+                job.set_step_progress(0.92)
+                target = runtime / f"gh-v{ver_str}-{plat}"
+                tmp_extract = runtime / f".extracting-gh-{ver_str}"
+                try:
+                    if tmp_extract.exists():
+                        shutil.rmtree(tmp_extract, ignore_errors=True)
+                    tmp_extract.mkdir(parents=True, exist_ok=True)
+                    with tarfile.open(tarball, "r:gz") as tf:
+                        if sys.version_info >= (3, 12):
+                            tf.extractall(tmp_extract, filter="data")
+                        else:
+                            tf.extractall(tmp_extract)
+                    inner = tmp_extract / filename[: -len(".tar.gz")]
+                    if target.exists():
+                        shutil.rmtree(target, ignore_errors=True)
+                    inner.rename(target)
+                finally:
+                    shutil.rmtree(tmp_extract, ignore_errors=True)
+                link = runtime / "gh"
+                tmp_link = runtime / ".gh-link"
+                try:
+                    if tmp_link.exists() or tmp_link.is_symlink():
+                        tmp_link.unlink()
+                    tmp_link.symlink_to(target)
+                    tmp_link.replace(link)
+                except OSError:
+                    if link.exists():
+                        shutil.rmtree(link, ignore_errors=True)
+                    shutil.copytree(target, link)
+                gh_bin = _runtime_gh_bin()
+                if not gh_bin:
+                    raise RuntimeError("GitHub CLI unpacked but its binary is missing · try again.")
+                rc, out = _run_capture([gh_bin, "--version"], timeout=10)
+                if rc != 0:
+                    raise RuntimeError("GitHub CLI was installed but won't run · try again.")
+                try:
+                    local_bin = Path.home() / ".local" / "bin"
+                    local_bin.mkdir(parents=True, exist_ok=True)
+                    local_gh = local_bin / "gh"
+                    if not local_gh.exists() and not local_gh.is_symlink():
+                        local_gh.symlink_to(gh_bin)
+                except OSError:
+                    pass
+                job.emit(f"GitHub CLI {out.strip().split(chr(10))[0]} is ready.")
+                job.set_step_progress(1.0)
+                try:
+                    tarball.unlink()
+                except OSError:
+                    pass
+                return True
+            except Exception as exc:
+                job.emit(f"Could not install GitHub CLI from release archive: {exc}")
+                raise RuntimeError(
+                    f"Couldn't install GitHub CLI automatically: {exc}. "
+                    "You can install it manually from cli.github.com or skip this step."
+                )
+
+    raise RuntimeError(
+        "GitHub CLI couldn't be installed automatically on this system. "
+        "Install it from cli.github.com or skip this step."
+    )
 
 
 # ---------------------------------------------------------------- registry
@@ -627,7 +812,7 @@ STEPS = [
         "est_seconds": 90,
         "needs_consent": True,
         "optional": True,
-        "consent_label": "Installs through Homebrew when available",
+        "consent_label": "Downloads the official CLI from GitHub",
         "detect": _detect_gh,
         "install": _install_gh,
     },
@@ -714,9 +899,11 @@ def build_plan(force=False):
         }
         if step.get("consent_label"):
             entry["consent_label"] = step["consent_label"]
+        if step.get("mac_only"):
+            entry["mac_only"] = True
         if step.get("mac_only") and not _is_macos():
             entry["applies"] = False
-            entry["status"] = "ok"
+            entry["status"] = "not_applicable"
             entry["detail"] = "Only needed on a Mac"
         if entry["external"] and entry["status"] != "ok" and step.get("external_hint"):
             # External steps report where they run instead of duplicating `why`.
@@ -724,15 +911,19 @@ def build_plan(force=False):
         steps.append(entry)
         if entry["status"] == "ok":
             ready += 1
-        else:
+        elif entry.get("applies", True) and entry["status"] not in ("not_applicable", "skipped"):
             pending_est += entry["est_seconds"]
     payload = {
         "steps": steps,
-        "machine": {"os": platform.system(), "arch": platform.machine()},
+        "machine": {
+            "os": platform.system(),
+            "arch": platform.machine(),
+            "hostname": socket.gethostname(),
+        },
         "summary": {
             "total": len(steps),
             "ready": ready,
-            "pending": len(steps) - ready,
+            "pending": len([s for s in steps if s.get("applies", True) and s["status"] not in ("ok", "not_applicable", "skipped")]),
             "est_seconds": pending_est,
         },
     }
