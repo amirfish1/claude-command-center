@@ -22792,6 +22792,11 @@
       if (r.type !== CSSRule.STYLE_RULE) continue;
       const sels = _splitSelectorList(r.selectorText)
         .filter(sel => !/^(html|body|:root)\b/.test(sel))
+        // #convList sits inside .sidebar, so a twin of `.sidebar X` scoped
+        // as `#convList .sidebar X` never matches; scope X directly instead
+        // (CCC-202: the phone ticket-chip condensing was dead in Mobile view).
+        .map(sel => sel.replace(/^\.sidebar\s+/, ''))
+        .filter(sel => sel && sel !== '.sidebar')
         .map(sel => (/^#convList\b/.test(sel)
           ? ':where(html.' + _MOBILE_LIST_CLASS + ') '
           : ':where(html.' + _MOBILE_LIST_CLASS + ' #convList) ') + sel);
