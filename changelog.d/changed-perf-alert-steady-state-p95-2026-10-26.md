@@ -1,0 +1,1 @@
+- Self-filed perf tickets now compute p95 over steady-state samples only (outside warmup, load1 at or below the core count, at least 30 minutes after a dashboard boot) and report the excluded samples' count and p95 separately, so host overload and restart churn no longer read as a CCC regression.

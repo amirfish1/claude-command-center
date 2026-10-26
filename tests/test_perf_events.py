@@ -409,6 +409,64 @@ class TestWarmupSuppression(PerfEventsTestBase):
         self.assertIsNone(pe.evaluate_breach_pattern([row]))
 
 
+class TestSteadyStateTicketStats(PerfEventsTestBase):
+    """CCC-168: the filed p95 counts only warmup=false, load1<=ncpu samples
+    taken >= BOOT_EXCLUDE_S after a dashboard boot; the rest are reported."""
+
+    def _live(self, ms, ts, **extra):
+        row = _row("live_build", ms, ts, pe.LIVE_BUILD_MS)
+        row.update({"warmup": False, "load1": 4.0, "ncpu": 16, "up_s": 7200})
+        row.update(extra)
+        return row
+
+    def test_record_event_stamps_uptime(self):
+        pe.record_event("live_build", 100)
+        row = json.loads(self.events_path().read_text().strip())
+        self.assertGreaterEqual(row["up_s"], pe.WARMUP_S)
+
+    def test_hot_and_near_boot_breaches_do_not_file(self):
+        now = time.time()
+        path = self.events_path()
+        for i in range(20):
+            _append_raw(path, self._live(1000, now - 300 - i))
+        for i in range(10):
+            _append_raw(path, self._live(7000, now - 60 - i, load1=20.0))
+            _append_raw(path, self._live(7000, now - 30 - i, up_s=600))
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        result = pe.perf_ticket_check_once(now=now)
+        self.assertFalse(result.startswith("filed:"), result)
+        self.assertFalse(any(call[0] == "add" for call in fake.calls))
+
+    def test_steady_breach_files_with_excluded_summary(self):
+        now = time.time()
+        path = self.events_path()
+        for i in range(10):
+            _append_raw(path, self._live(5000, now - 60 - i))
+        for i in range(4):
+            _append_raw(path, self._live(9000, now - 30 - i, load1=20.0))
+        _append_raw(path, self._live(8000, now - 20, up_s=60))
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now=now), "filed:CCC-501")
+        add = [c for c in fake.calls if c[0] == "add"][0]
+        title = add[add.index("--title") + 1]
+        note = add[add.index("--note") + 1]
+        self.assertIn("p95 5000ms over 10 samples", title)
+        self.assertIn("Excluded: 5 samples, p95=9000ms", note)
+        self.assertIn("load1>ncpu=4 near-boot=1", note)
+
+    def test_extreme_sample_still_files(self):
+        now = time.time()
+        path = self.events_path()
+        for i in range(20):
+            _append_raw(path, self._live(500, now - 300 - i))
+        _append_raw(path, self._live(pe.LIVE_BUILD_MS * 4, now - 30))
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now=now), "filed:CCC-501")
+
+
 if __name__ == "__main__":
     unittest.main()
 

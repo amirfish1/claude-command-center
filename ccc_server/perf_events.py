@@ -98,6 +98,11 @@ WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 # startup stalls from alerting. Conversation opens retain warmup suppression.
 _PROCESS_STARTED_AT = time.time()
 WARMUP_S = _env_int("CCC_PERF_WARMUP_S", 300)
+# Ticket stats (CCC-168): the filed p95 counts only steady-state samples --
+# warmup=false, load1 <= ncpu, and >= this long after the dashboard booted.
+# Frequent sibling restarts plus an overloaded host otherwise dominate the
+# p95; excluded samples are reported separately in the ticket body.
+BOOT_EXCLUDE_S = _env_int("CCC_PERF_BOOT_EXCLUDE_S", 1800)
 
 # Machine-saturation attribution (CCC-1154 option B). The recurring p1 "slow
 # archive load" stream (CCC-1128/1138/1159) was whole-machine saturation, not
@@ -314,6 +319,9 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         "conv_id": str(conv_id or ""),
         "warm": warm,
         "warmup": warmup,
+        # Seconds since this server process booted; ticket stats drop samples
+        # inside BOOT_EXCLUDE_S of a restart.
+        "up_s": int(max(0.0, now - _PROCESS_STARTED_AT)),
         "load1": load1,
         "ncpu": ncpu,
         "threshold_ms": threshold_ms,
@@ -537,6 +545,39 @@ def _alert_rows(events):
     return rows
 
 
+def _exclusion_reason(row):
+    """Why a row is left out of the filed p95, or '' when it counts.
+    Rows predating the load/up_s fields count (fail toward filing)."""
+    if row.get("warmup"):
+        return "warmup"
+    try:
+        load1, ncpu = row.get("load1"), row.get("ncpu")
+        if load1 is not None and ncpu is not None and float(load1) > float(ncpu):
+            return "load"
+    except (TypeError, ValueError):
+        pass
+    try:
+        up_s = row.get("up_s")
+        if up_s is not None and float(up_s) < BOOT_EXCLUDE_S:
+            return "boot"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
+def _steady_split(rows):
+    """(kept, excluded, reason_counts) for the filed ticket stats."""
+    kept, excluded, reasons = [], [], {}
+    for row in rows:
+        reason = _exclusion_reason(row)
+        if reason:
+            excluded.append(row)
+            reasons[reason] = reasons.get(reason, 0) + 1
+        else:
+            kept.append(row)
+    return kept, excluded, reasons
+
+
 def evaluate_breach_pattern(events):
     """Pick the worst kind that looks like a real regression, or None.
 
@@ -742,6 +783,16 @@ def _build_note(pattern, state):
         % (ARCHIVE_COLD_MS, ARCHIVE_WARM_MS, CONV_OPEN_MS, LIST_READ_MS, LIVE_BUILD_MS),
         "kind=%s count=%d p50=%sms p95=%sms max=%sms"
         % (pattern["kind"], pattern["count"], pattern["p50"], pattern["p95"], pattern["max"]),
+        "Stats count steady-state samples only: warmup=false, load1<=ncpu, >=%dmin after a dashboard boot."
+        % (BOOT_EXCLUDE_S // 60),
+        "Excluded: %d samples, p95=%sms (warmup=%d load1>ncpu=%d near-boot=%d)"
+        % (
+            pattern.get("excluded_count", 0),
+            pattern.get("excluded_p95", 0),
+            (pattern.get("excluded_reasons") or {}).get("warmup", 0),
+            (pattern.get("excluded_reasons") or {}).get("load", 0),
+            (pattern.get("excluded_reasons") or {}).get("boot", 0),
+        ),
         "Startup archive loads use the cold-load budget (including persisted warm caches).",
         "",
         "Worst samples (ts  ms  warm/cold  conv_id):",
@@ -915,8 +966,27 @@ def perf_ticket_check_once(now=None):
         ]
         if not rows:
             return "ok"
-        pattern = {"kind": recent_pattern["kind"], **_kind_stats(rows)}
+        kept, excluded, reasons = _steady_split(rows)
+        # Lowest budget for the kind (archive: warm) -- fail toward filing.
+        threshold = _threshold_for(recent_pattern["kind"], True)
+        steady_p95 = _kind_stats(kept)["p95"]
+        # One extreme sample still files (startup archive stalls included);
+        # otherwise a p95 that is only over budget because of warmup, an
+        # overloaded host, or restart churn is not a CCC regression.
+        extreme = any(
+            (r.get("ms") or 0)
+            >= _SINGLE_SAMPLE_BREACH_FACTOR * (r.get("threshold_ms") or 1)
+            and not _row_grossly_saturated(r)
+            for r in _alert_rows(recent_events)
+            if r.get("kind") == recent_pattern["kind"]
+        )
+        if not extreme and (not kept or steady_p95 < threshold):
+            return _saturation_ticket_check(recent_events, now)
+        pattern = {"kind": recent_pattern["kind"], **_kind_stats(kept or rows)}
         pattern.pop("breaches", None)
+        pattern["excluded_count"] = len(excluded)
+        pattern["excluded_p95"] = _kind_stats(excluded)["p95"]
+        pattern["excluded_reasons"] = reasons
 
         state = _load_ticket_state()
         state = refresh_ticket_status(state)
