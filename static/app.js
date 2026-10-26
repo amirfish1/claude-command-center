@@ -47467,6 +47467,30 @@
     titleEl._cccRenameRow = (opts.category === undefined && fullRow && fullRow.id) ? fullRow : null;
     // Don't clobber an in-progress header rename (CCC-177).
     if (!titleEl.querySelector('input')) titleEl.textContent = headerTitle;
+    // CCC-213: "(abcd1234)" after the name, click copies the full id
+    // (handleSidebarSessionIdCopyClick, delegated globally). CSS drops it
+    // when the name needs the room.
+    const sidEl = pane.querySelector('[data-role="pane-session-id"]');
+    if (sidEl) {
+      const sidRow = opts.category === undefined ? fullRow : null;
+      const sid = (sidRow && sidRow.source !== 'backlog' && sidRow.source !== 'github_pr'
+        && sidRow.backlog_type !== 'github') ? String(sidRow.session_id || sidRow.id || '').trim() : '';
+      if (sid && headerTitle) {
+        if (sidEl.dataset.copyRowSessionId !== sid) {
+          const shortId = shortSessionId(sid);
+          sidEl.dataset.copyRowSessionId = sid;
+          sidEl.dataset.sessionIdShort = shortId;
+          sidEl.title = 'Copy session ID: ' + sid;
+          sidEl.setAttribute('aria-label', 'Copy session ID ' + shortId);
+          sidEl.innerHTML = '(<code>' + escapeHtml(shortId) + '</code>)';
+        }
+        sidEl.hidden = false;
+      } else {
+        sidEl.hidden = true;
+        delete sidEl.dataset.copyRowSessionId;
+        sidEl.innerHTML = '';
+      }
+    }
     // CCC-1172: the ellipsized title stays readable in full — hover carries
     // it in the tooltip, click/Enter toggles .is-expanded inline (delegated
     // next to the mobile-original-ask listener). role/tabindex make the
@@ -48902,6 +48926,8 @@
     const paneTitle = clone.querySelector('[data-role="pane-title"]');
     if (paneCat) paneCat.textContent = '';
     if (paneTitle) paneTitle.textContent = '';
+    const paneSid = clone.querySelector('[data-role="pane-session-id"]');
+    if (paneSid) { paneSid.hidden = true; paneSid.innerHTML = ''; delete paneSid.dataset.copyRowSessionId; }
     const paneAvatar = clone.querySelector('[data-role="pane-avatar"]');
     if (paneAvatar) paneAvatar.innerHTML = '';
     const bgPalette = clone.querySelector('[data-role="conv-bg-palette"]');

@@ -2942,11 +2942,42 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* CCC-213: name + "(short id)". flex-wrap pushes the id onto a second
+     line (clipped by the 1-line height) whenever the name alone fills the
+     row, so the id shows only when there's room and never squeezes it. */
+  .conv-pane-title-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 6px;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.3;
+    max-height: 1lh;
+    overflow: hidden;
+  }
+  .conv-pane-title-wrap > .conv-pane-title { flex: 0 1 auto; }
+  .conv-pane-title-wrap:has(> .conv-pane-title.is-expanded) { max-height: none; }
+  .conv-pane-session-id {
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-weight: 400;
+    white-space: nowrap;
+    cursor: copy;
+  }
+  .conv-pane-session-id[hidden] { display: none; }
+  .conv-pane-session-id code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
+  .conv-pane-session-id:hover { color: var(--text); }
+  .conv-pane-session-id.copied { color: var(--green); }
   /* CCC-129: desktop headers lead with the session name, like the phone
      toolbar title. */
   @media (min-width: 1201px) {
     .conv-pane-titlebar { flex: 1 1 auto; }
-    .conv-pane-titlebar .conv-pane-title {
+    .conv-pane-titlebar :is(.conv-pane-title, .conv-pane-title-wrap) {
       font-size: 15px;
       font-weight: 700;
       line-height: 1.3;
@@ -2970,7 +3001,7 @@
     body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) :is(.conv-pane-category, .conv-pane-last-user-message) {
       display: none;
     }
-    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar .conv-pane-title {
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar :is(.conv-pane-title, .conv-pane-title-wrap) {
       font-size: 19px;
       line-height: 1.25;
       white-space: nowrap;

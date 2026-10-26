@@ -1256,7 +1256,12 @@
                  by the popout's dedicated poll (_popoutProcPills), which has no
                  rail; empty spans are display:none. -->
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
-            <span class="conv-pane-title" data-role="pane-title"></span>
+            <!-- CCC-213: the short session id rides after the name only
+                 while both fit; the wrapper wraps it onto a clipped 2nd line. -->
+            <span class="conv-pane-title-wrap">
+              <span class="conv-pane-title" data-role="pane-title"></span>
+              <button type="button" class="conv-pane-session-id" data-role="pane-session-id" hidden></button>
+            </span>
           </div>
           <span class="conv-pane-last-user-message" data-role="pane-last-user-message" hidden></span>
           <button type="button" class="conv-pane-popout" data-role="pane-popout ccc-breadcrumb-popout"

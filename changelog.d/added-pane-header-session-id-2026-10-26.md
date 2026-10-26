@@ -1,0 +1,1 @@
+- The conversation header now shows the short session ID in parentheses after the session name when there is room; click it to copy the full ID.
