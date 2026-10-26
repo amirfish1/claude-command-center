@@ -16337,16 +16337,17 @@
       }
     });
   }
-  function _restartTtsAtCurrentPosition() {
+  function _restartTtsAtCurrentPosition(voice) {
     // Only meaningful while playback is active. Cancel the in-flight
     // chunk queue and re-speak from the most recent word boundary with the
-    // new rate.
-    if (!_ttsBoundUtteranceText) return;
+    // new rate, or in `voice` when a voice switch asked for one.
+    if (!_ttsBoundUtteranceText) return false;
     const offset = _ttsLastCharIndex || 0;
     const rest = _ttsBoundUtteranceText.slice(offset);
-    if (!rest.trim()) return;
+    if (!rest.trim()) return false;
     const wasPaused = _ttsPaused;
-    _ttsKeepVoice = (_ttsChunkState && _ttsChunkState.geminiVoice) || '';
+    _ttsKeepVoice = voice !== undefined ? voice
+      : ((_ttsChunkState && _ttsChunkState.geminiVoice) || '');
     _ttsChunkState = null;
     _ttsScheduleCacheDebug();
     try { _ttsEngineCancel(); } catch (_) {}
@@ -16359,6 +16360,30 @@
       wasPaused,
     );
     _ttsKeepVoice = '';
+    return true;
+  }
+  // Mid-read voice switch (CCC-221): remember the pick for the session, then
+  // re-speak the rest of the read from the current word in the new voice. A
+  // read otherwise keeps the voice it started with until it ends.
+  function _ttsSwitchVoice(paneId, voice) {
+    setTtsVoiceForPane(paneId, voice);
+    document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
+    if (!_ttsActive && !_ttsPaused) return false;
+    if (_ttsActivePaneId && paneId && _ttsActivePaneId !== paneId) return false;
+    return _restartTtsAtCurrentPosition(voice);
+  }
+  // Floating speaker's voice button: step through the free voices, starting
+  // from the one actually playing (a "Random voice" read has a concrete one).
+  function _ttsCycleVoice(step) {
+    const paneId = _ttsActivePaneId || activePaneId();
+    const free = _ttsVoiceOptions.filter(o => !o.paid);
+    if (!free.length) return null;
+    const playing = (_ttsChunkState && _ttsChunkState.geminiVoice) || ttsVoiceForPane(paneId);
+    const i = free.findIndex(o => o.id === playing);
+    const from = i < 0 ? (step > 0 ? -1 : 0) : i;
+    const next = free[(from + step + free.length * 2) % free.length];
+    _ttsSwitchVoice(paneId, next.id);
+    return next;
   }
   // ">" button next to the rate knob: skip past the rest of the sentence
   // currently playing and resume from the start of the next one. Sentence
@@ -47890,7 +47915,7 @@
     const tools = document.createElement('div');
     tools.className = 'speaker-tools';
     tools.hidden = true;
-    tools.innerHTML = '<svg class="speaker-rate-dial" viewBox="0 0 84 84" role="slider" tabindex="0" aria-label="Speech speed: drag clockwise to speed up, counterclockwise to slow down" aria-valuemin="' + _TTS_RATE_MIN + '" aria-valuemax="' + _TTS_RATE_MAX + '"><circle class="speaker-rate-track" cx="42" cy="42" r="36"/><circle class="speaker-rate-arc" cx="42" cy="42" r="36" pathLength="100" transform="rotate(135 42 42)"/><circle class="speaker-rate-thumb" r="4"/><circle class="speaker-rate-hit" cx="42" cy="42" r="36"/></svg><output class="speaker-rate-value" aria-live="polite"></output><button type="button" class="speaker-next-sentence" title="Next sentence" aria-label="Next sentence">›</button>';
+    tools.innerHTML = '<svg class="speaker-rate-dial" viewBox="0 0 84 84" role="slider" tabindex="0" aria-label="Speech speed: drag clockwise to speed up, counterclockwise to slow down" aria-valuemin="' + _TTS_RATE_MIN + '" aria-valuemax="' + _TTS_RATE_MAX + '"><circle class="speaker-rate-track" cx="42" cy="42" r="36"/><circle class="speaker-rate-arc" cx="42" cy="42" r="36" pathLength="100" transform="rotate(135 42 42)"/><circle class="speaker-rate-thumb" r="4"/><circle class="speaker-rate-hit" cx="42" cy="42" r="36"/></svg><output class="speaker-rate-value" aria-live="polite"></output><button type="button" class="speaker-next-sentence" title="Next sentence" aria-label="Next sentence">›</button><button type="button" class="speaker-voice-switch" title="Switch voice (Shift: previous)" aria-label="Switch voice">⇄</button><output class="speaker-voice-name" aria-live="polite" hidden></output>';
     host.appendChild(tools);
     btn._speakerTools = tools;
     const dial = tools.querySelector('.speaker-rate-dial');
@@ -47934,6 +47959,17 @@
     });
     tools.querySelector('.speaker-next-sentence').addEventListener('click', ev => {
       ev.stopPropagation(); _ttsJumpToNextSentence();
+    });
+    const voiceName = tools.querySelector('.speaker-voice-name');
+    let voiceNameTimer = null;
+    tools.querySelector('.speaker-voice-switch').addEventListener('click', ev => {
+      ev.stopPropagation();
+      const next = _ttsCycleVoice(ev.shiftKey ? -1 : 1);
+      if (!next) return;
+      voiceName.textContent = String(next.label || next.id).replace(/^Kokoro:\s*/, '').replace(/\s*\(fp\d+\)$/, '');
+      voiceName.hidden = false;
+      clearTimeout(voiceNameTimer);
+      voiceNameTimer = setTimeout(() => { voiceName.hidden = true; }, 2500);
     });
     _syncTtsRateUi();
     _syncSpeakerTools(btn);
@@ -89242,8 +89278,7 @@
     host.querySelectorAll('button').forEach(btn => btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       const i = ids.indexOf(cur) + Number(btn.getAttribute('data-step'));
-      setTtsVoiceForPane(paneId, ids[(i + ids.length) % ids.length]);
-      renderTtsVoiceStepper(pane);
+      _ttsSwitchVoice(paneId, ids[(i + ids.length) % ids.length]);
     }));
   }
   function renderTtsVoiceDefaultSelect() {

@@ -3769,6 +3769,10 @@
   .speaker-next-sentence { position: absolute; left: 70px; top: 28px; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border, #43545a); border-radius: 50%; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 24px/1 system-ui, sans-serif; cursor: pointer; pointer-events: auto; touch-action: manipulation; }
   .speaker-next-sentence:hover { border-color: var(--accent, #00cdd6); color: var(--accent, #00cdd6); }
   .speaker-next-sentence:disabled { opacity: 0.35; cursor: default; }
+  .speaker-voice-switch { position: absolute; left: -14px; top: 28px; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border, #43545a); border-radius: 50%; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 15px/1 system-ui, sans-serif; cursor: pointer; pointer-events: auto; touch-action: manipulation; }
+  .speaker-voice-switch:hover { border-color: var(--accent, #00cdd6); color: var(--accent, #00cdd6); }
+  .speaker-voice-name { position: absolute; bottom: 88px; left: 50%; transform: translateX(-50%); white-space: nowrap; padding: 0 8px; border-radius: 8px; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 600 11px/20px ui-monospace, monospace; }
+  .speaker-voice-name[hidden] { display: none; }
   .conv-pane:has(.conv-scroll-speak-btn) .tts-rate-control { display: none; }
 
   /* Seam marker between two CCC continuation segments in the merged
@@ -17344,6 +17348,8 @@
     .speaker-rate-dial { width: 56px; height: 56px; }
     .speaker-rate-value { top: 48px; left: 8px; width: 40px; font-size: 10px; }
     .speaker-next-sentence { left: 46px; top: 18px; width: 22px; height: 22px; font-size: 17px; }
+    .speaker-voice-switch { left: -12px; top: 18px; width: 22px; height: 22px; font-size: 12px; }
+    .speaker-voice-name { bottom: 60px; }
 
     /* --- Kanban-split --- */
     #kanbanLayout.active { flex-direction: column; }

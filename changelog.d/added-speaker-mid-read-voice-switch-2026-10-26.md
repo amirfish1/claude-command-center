@@ -1,0 +1,1 @@
+- Switch the read-aloud voice mid-read: a new ⇄ button beside the floating speaker (Shift-click for previous) and the rail voice stepper now restart the current read from the same word in the new voice.
