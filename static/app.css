@@ -17287,6 +17287,19 @@
     /* Controls that don't make sense on phones */
     .sh-btn-deploy { display: none !important; }
 
+    /* Headroom-style session-list header: collapses on scroll-down, returns
+       on scroll-up or at the top (app.js toggles .list-scroll-hidden). */
+    .sidebar-header { max-height: 200px;
+      transition: max-height 0.18s ease, opacity 0.15s ease, padding 0.18s ease; }
+    .sidebar-header.list-scroll-hidden {
+      /* overflow:hidden only while collapsed — the header's dropdown menus
+         (.sh-more-menu, .sh-refresh-menu) are absolutely positioned below it
+         and must not be clipped when the header is expanded. */
+      overflow: hidden;
+      max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0;
+      pointer-events: none;
+    }
+
     /* Floating speaker + rate dial: 56/84px is desktop-sized and eats phone
        width; shrink both proportionally. */
     .conv-scroll-speak-btn { width: 40px; height: 40px; right: 14px; font-size: 17px; }

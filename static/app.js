@@ -22715,6 +22715,24 @@
     }, { passive: true, capture: true });
   }
 
+  // Headroom-style auto-collapse of the sidebar header on touch layouts:
+  // scrolling the session list down hides it for more room, scrolling up
+  // (or reaching the top) brings it back. No library — direction deltas.
+  if (isTouchPrimary()) {
+    const _list = document.getElementById('convList');
+    const _hdr = document.querySelector('.sidebar-header');
+    if (_list && _hdr) {
+      let _hrLastY = _list.scrollTop;
+      _list.addEventListener('scroll', () => {
+        const y = _list.scrollTop;
+        const dy = y - _hrLastY;
+        _hrLastY = y;
+        if (y <= 4 || dy < -6) _hdr.classList.remove('list-scroll-hidden');
+        else if (dy > 6 && y > 40) _hdr.classList.add('list-scroll-hidden');
+      }, { passive: true });
+    }
+  }
+
   // Conversation-list collapse (CCC-132). « hides the list to widen the reader;
   // a floating » brings it back. Desktop only — the boot script + CSS gate
   // mobile out. State persists under `ccc-conv-list-collapsed`; boot restores

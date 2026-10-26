@@ -1,0 +1,1 @@
+- Session-list header now auto-collapses while scrolling down on touch layouts and returns on scroll-up or at the top (headroom-style, no library).
