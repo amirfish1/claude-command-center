@@ -2,8 +2,7 @@
 Description=Claude Command Center persistent execution worker
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=5
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

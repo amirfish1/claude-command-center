@@ -2,8 +2,7 @@
 Description=Claude Command Center (port 8091)
 After=network-online.target ccc-worker.service
 Wants=network-online.target ccc-worker.service
-StartLimitIntervalSec=300
-StartLimitBurst=5
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

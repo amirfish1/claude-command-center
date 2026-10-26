@@ -258,11 +258,12 @@ clone_into_install_dir() {
 # finished setup does not replay the tour, while an interrupted setup picks
 # up where it left off.
 dashboard_open_url() {
+  local base="${1:-$DASHBOARD_URL}"
   local state="$HOME/.claude/command-center/onboarding.json"
   if [ -f "$state" ] && grep -Eq '"completed"[[:space:]]*:[[:space:]]*true' "$state" 2>/dev/null; then
-    printf '%s' "$DASHBOARD_URL"
+    printf '%s' "$base"
   else
-    printf '%s/?onboarding=1' "$DASHBOARD_URL"
+    printf '%s/?onboarding=1' "$base"
   fi
 }
 
@@ -272,12 +273,13 @@ open_when_ready() {
   fi
 
   local url="$1"
+  local check_host="${2:-127.0.0.1}"
 
   # Background watcher: poll the port, then `open` the URL.
   # Bounded by ~60 seconds so we never wedge if the server fails to start.
   (
     for _ in $(seq 1 60); do
-      if (echo > "/dev/tcp/127.0.0.1/${PORT}") >/dev/null 2>&1; then
+      if (echo > "/dev/tcp/${check_host}/${PORT}") >/dev/null 2>&1; then
         if command -v open >/dev/null 2>&1; then
           open "$url" >/dev/null 2>&1 || true
         elif command -v xdg-open >/dev/null 2>&1; then
@@ -288,6 +290,174 @@ open_when_ready() {
       sleep 1
     done
   ) &
+}
+
+# ---------------------------------------------------------------------------
+# Tailscale / tailnet support for headless installs
+# ---------------------------------------------------------------------------
+# Resolution order:
+#   1. --tailnet / --tailscale / --no-tailnet / --no-tailscale flag
+#   2. CCC_TAILNET env var (1/true/yes/on vs 0/false/no/off)
+#   3. interactive prompt if tailscale is detected and running, else skip
+parse_tailnet_flag() {
+  local flag=""
+  for arg in "$@"; do
+    case "$arg" in
+      --tailnet|--tailscale) flag="enable" ;;
+      --no-tailnet|--no-tailscale) flag="disable" ;;
+    esac
+  done
+  if [ -n "$flag" ]; then
+    printf '%s' "$flag"
+    return
+  fi
+  local env_val="${CCC_TAILNET:-}"
+  if [ -n "$env_val" ]; then
+    case "$(printf '%s' "$env_val" | tr '[:upper:]' '[:lower:]')" in
+      1|true|yes|on) printf 'enable'; return ;;
+      0|false|no|off) printf 'disable'; return ;;
+    esac
+  fi
+  printf ''
+}
+
+detect_tailscale() {
+  command -v tailscale >/dev/null 2>&1 || return 1
+  "$PYTHON3" -c '
+import subprocess, json, sys
+
+try:
+    proc = subprocess.run(
+        ["tailscale", "status", "--json"],
+        capture_output=True, text=True, timeout=3,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        sys.exit(1)
+    data = json.loads(proc.stdout)
+    if (data.get("BackendState") or "").lower() != "running":
+        sys.exit(1)
+    self_node = data.get("Self") or {}
+    dns = (self_node.get("DNSName") or "").rstrip(".")
+    raw_ips = self_node.get("TailscaleIPs") or data.get("TailscaleIPs") or []
+    ips = [ip for ip in raw_ips if isinstance(ip, str)]
+    ipv4 = next((ip for ip in ips if ":" not in ip), ips[0] if ips else None)
+    if not ipv4:
+        sys.exit(1)
+    print(json.dumps({"ip": ipv4, "ips": ips, "dns": dns}))
+except Exception:
+    sys.exit(1)
+' 2>/dev/null
+}
+
+apply_tailnet_network_config() {
+  local target_port="$1"
+  local ts_info="$2"
+  "$PYTHON3" -c '
+import json, sys
+from pathlib import Path
+
+port = int(sys.argv[1])
+info = json.loads(sys.argv[2])
+ts_ip = info["ip"]
+ts_dns = info.get("dns", "")
+all_ips = info.get("ips") or [ts_ip]
+
+net_path = Path.home() / ".claude" / "command-center" / "network.json"
+data = {"bind_host": None, "allowed_origins": [], "trust_tailnet": False}
+if net_path.exists():
+    try:
+        loaded = json.loads(net_path.read_text())
+        if isinstance(loaded, dict):
+            data.update(loaded)
+    except Exception:
+        pass
+
+data["bind_host"] = ts_ip
+data["trust_tailnet"] = True
+origins = list(data.get("allowed_origins") or [])
+new_origins = []
+if ts_dns:
+    new_origins.extend([f"http://{ts_dns}:{port}", f"https://{ts_dns}:{port}"])
+for ip in all_ips:
+    if ":" in ip:
+        new_origins.extend([f"http://[{ip}]:{port}", f"https://[{ip}]:{port}"])
+    else:
+        new_origins.extend([f"http://{ip}:{port}", f"https://{ip}:{port}"])
+
+for o in new_origins:
+    if o not in origins:
+        origins.append(o)
+
+data["allowed_origins"] = origins
+net_path.parent.mkdir(parents=True, exist_ok=True)
+net_path.write_text(json.dumps(data, indent=2) + "\n")
+' "$target_port" "$ts_info"
+}
+
+ask_tailnet() {
+  local ts_ip="$1"
+  if [ ! -t 1 ] || [ ! -c /dev/tty ]; then
+    return 1
+  fi
+  local choice
+  printf '%s     ?%s Tailscale detected (%s). Enable tailnet access? [y/N] ' "$_C_STEP" "$_C_RESET" "$ts_ip"
+  if read -r choice < /dev/tty; then
+    case "$choice" in
+      [yY][eE][sS]|[yY])
+        return 0
+        ;;
+    esac
+  fi
+  return 1
+}
+
+configure_tailnet() {
+  local target_port="$1"
+  shift
+  local opt
+  opt="$(parse_tailnet_flag "$@")"
+  if [ "$opt" = "disable" ]; then
+    return 0
+  fi
+
+  local ts_info
+  ts_info="$(detect_tailscale || true)"
+
+  if [ "$opt" = "enable" ]; then
+    if [ -z "$ts_info" ]; then
+      note "Tailscale requested (--tailnet) but tailscale CLI not found or not running"
+      return 0
+    fi
+  else
+    # opt is empty (auto)
+    if [ -z "$ts_info" ]; then
+      return 0
+    fi
+    local ts_ip
+    ts_ip="$("$PYTHON3" -c 'import json, sys; print(json.loads(sys.argv[1]).get("ip", ""))' "$ts_info" 2>/dev/null || true)"
+    if ! ask_tailnet "$ts_ip"; then
+      return 0
+    fi
+  fi
+
+  local ts_ip ts_dns
+  ts_ip="$("$PYTHON3" -c 'import json, sys; print(json.loads(sys.argv[1]).get("ip", ""))' "$ts_info" 2>/dev/null || true)"
+  ts_dns="$("$PYTHON3" -c 'import json, sys; print(json.loads(sys.argv[1]).get("dns", ""))' "$ts_info" 2>/dev/null || true)"
+
+  if [ -z "$ts_ip" ]; then
+    return 0
+  fi
+
+  apply_tailnet_network_config "$target_port" "$ts_info"
+  TAILNET_IP="$ts_ip"
+  TAILNET_DNS="$ts_dns"
+  if [ -n "$ts_dns" ]; then
+    TAILNET_URL="http://${ts_dns}:${target_port}"
+  else
+    TAILNET_URL="http://${ts_ip}:${target_port}"
+  fi
+  DASHBOARD_URL="$TAILNET_URL"
+  ok "configured tailnet access (bound to $ts_ip)"
 }
 
 service_supported() {
@@ -350,6 +520,7 @@ launch_server() {
   fi
 
   pick_port
+  configure_tailnet "$PORT" "$@"
 
   local url open_hint
   url="$(dashboard_open_url)"
@@ -360,13 +531,18 @@ launch_server() {
 
   if ask_install_service; then
     note "setting CCC up as a background service"
-    open_when_ready "$url"
+    open_when_ready "$url" "${TAILNET_IP:-127.0.0.1}"
     cd "$INSTALL_DIR"
     if ./run.sh --install-service; then
       printf '\n'
       ok "CCC is installed and running in the background"
       note "$open_hint"
-      note "dashboard: $DASHBOARD_URL"
+      if [ -n "${TAILNET_URL:-}" ]; then
+        note "dashboard (tailnet): $TAILNET_URL"
+        note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
+      else
+        note "dashboard: $DASHBOARD_URL"
+      fi
       exit 0
     fi
     note "the background service did not start; starting CCC in this window instead"
@@ -377,7 +553,13 @@ launch_server() {
     note "keep this window open; stop CCC with Ctrl+C"
     note "tip: ./run.sh --install-service keeps CCC running in the background"
     note "$open_hint"
-    open_when_ready "$url"
+    if [ -n "${TAILNET_URL:-}" ]; then
+      note "dashboard (tailnet): $TAILNET_URL"
+      note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
+    else
+      note "dashboard: $DASHBOARD_URL"
+    fi
+    open_when_ready "$url" "${TAILNET_IP:-127.0.0.1}"
     cd "$INSTALL_DIR"
     exec ./run.sh
   fi
@@ -478,7 +660,7 @@ main() {
   link_ccc_cli        # put `ccc` on PATH
 
   step "Step 4 of 4: starting CCC"
-  launch_server
+  launch_server "$@"
 }
 
 # Only auto-run when executed, not when sourced (tests source us for

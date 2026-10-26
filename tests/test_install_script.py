@@ -368,6 +368,7 @@ class TestPrePushScript(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 env=env,
+                stdin=subprocess.DEVNULL,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pre-push: running perf-budget gate", result.stdout)
@@ -431,10 +432,6 @@ class TestParseChannel(unittest.TestCase):
                 )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PickPortTests(unittest.TestCase):
     """A clean machine can already have another program on 8090."""
 
@@ -469,3 +466,114 @@ class PickPortTests(unittest.TestCase):
             port = busy.getsockname()[1]
             picked, _url = self._pick(port, explicit=True)
         self.assertEqual(int(picked), port)
+
+
+class TailnetInstallTests(unittest.TestCase):
+    """Tailscale integration in scripts/install.sh for headless installs."""
+
+    def _run_parse_tailnet(self, env_extra=None, args=()):
+        env = os.environ.copy()
+        env.pop("CCC_TAILNET", None)
+        if env_extra:
+            for k, v in env_extra.items():
+                if v is None:
+                    env.pop(k, None)
+                else:
+                    env[k] = v
+        bash_program = (
+            f'source "{INSTALL_SCRIPT}"; '
+            'parse_tailnet_flag "$@"'
+        )
+        result = subprocess.run(
+            ["bash", "-c", bash_program, "bash", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_parse_tailnet_flags_and_env(self):
+        self.assertEqual(self._run_parse_tailnet(args=("--tailnet",)), "enable")
+        self.assertEqual(self._run_parse_tailnet(args=("--tailscale",)), "enable")
+        self.assertEqual(self._run_parse_tailnet(args=("--no-tailnet",)), "disable")
+        self.assertEqual(self._run_parse_tailnet(args=("--no-tailscale",)), "disable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "1"}), "enable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "true"}), "enable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "0"}), "disable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "false"}), "disable")
+        self.assertEqual(self._run_parse_tailnet(), "")
+
+    def test_apply_tailnet_network_config_writes_network_json(self):
+        import json
+        with tempfile.TemporaryDirectory() as fake_home:
+            env = os.environ.copy()
+            env["HOME"] = fake_home
+            info_json = json.dumps({
+                "ip": "100.108.91.118",
+                "ips": ["100.108.91.118"],
+                "dns": "hermes-vps.tail1234.ts.net",
+            })
+            bash_program = (
+                f'source "{INSTALL_SCRIPT}"; '
+                f'apply_tailnet_network_config 8090 \'{info_json}\''
+            )
+            result = subprocess.run(
+                ["bash", "-c", bash_program],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            net_json_path = Path(fake_home) / ".claude" / "command-center" / "network.json"
+            self.assertTrue(net_json_path.exists())
+            data = json.loads(net_json_path.read_text())
+            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertTrue(data.get("trust_tailnet"))
+            origins = data.get("allowed_origins", [])
+            self.assertIn("http://hermes-vps.tail1234.ts.net:8090", origins)
+            self.assertIn("https://hermes-vps.tail1234.ts.net:8090", origins)
+            self.assertIn("http://100.108.91.118:8090", origins)
+
+    def test_apply_tailnet_network_config_preserves_existing_origins(self):
+        import json
+        with tempfile.TemporaryDirectory() as fake_home:
+            net_dir = Path(fake_home) / ".claude" / "command-center"
+            net_dir.mkdir(parents=True)
+            net_json_path = net_dir / "network.json"
+            net_json_path.write_text(json.dumps({
+                "bind_host": "127.0.0.1",
+                "allowed_origins": ["http://existing-origin:8090"],
+                "trust_tailnet": False,
+            }))
+
+            env = os.environ.copy()
+            env["HOME"] = fake_home
+            info_json = json.dumps({
+                "ip": "100.108.91.118",
+                "ips": ["100.108.91.118"],
+                "dns": "hermes-vps.tail1234.ts.net",
+            })
+            bash_program = (
+                f'source "{INSTALL_SCRIPT}"; '
+                f'apply_tailnet_network_config 8090 \'{info_json}\''
+            )
+            result = subprocess.run(
+                ["bash", "-c", bash_program],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            data = json.loads(net_json_path.read_text())
+            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertTrue(data.get("trust_tailnet"))
+            origins = data.get("allowed_origins", [])
+            self.assertIn("http://existing-origin:8090", origins)
+            self.assertIn("http://hermes-vps.tail1234.ts.net:8090", origins)
+
+
+if __name__ == "__main__":
+    unittest.main()

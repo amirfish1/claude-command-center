@@ -27,6 +27,7 @@ import html
 import hashlib
 import collections
 import contextlib
+import errno
 import http.server
 import ipaddress
 import json
@@ -44342,7 +44343,30 @@ def main():
     global RUNTIME_NETWORK_INFO, BIND_HOST
     RUNTIME_NETWORK_INFO = network_info
     BIND_HOST = bind_host
-    server = ThreadedHTTPServer((bind_host, port), CommandCenterHandler)
+
+    bind_attempts = 0
+    max_bind_attempts = 30
+    server = None
+    while server is None:
+        try:
+            server = ThreadedHTTPServer((bind_host, port), CommandCenterHandler)
+        except OSError as exc:
+            is_addr_not_avail = getattr(exc, "errno", None) in (errno.EADDRNOTAVAIL, errno.ENETUNREACH) or isinstance(exc, socket.gaierror)
+            if is_addr_not_avail and bind_attempts < max_bind_attempts:
+                bind_attempts += 1
+                if bind_attempts == 1:
+                    print(f"⏳ Address {bind_host} not available yet (waiting for network/tailscale to assign IP, retry {bind_attempts}/{max_bind_attempts})...")
+                time.sleep(1)
+            else:
+                raise
+
+    if bind_attempts > 0 and network_info["trust_tailnet"]:
+        tailnet_info = _detect_tailnet_origins(port)
+        if tailnet_info["running"]:
+            network_info["tailnet"] = tailnet_info
+            for o in tailnet_info["origins"]:
+                if o not in ALLOWED_ORIGINS:
+                    ALLOWED_ORIGINS.append(o)
     if bind_host not in ("127.0.0.1", "localhost", "::1"):
         print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
         print(f"   This server has no auth. Anyone who can reach this port can run")
