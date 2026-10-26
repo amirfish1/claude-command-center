@@ -41037,18 +41037,39 @@
         + '</div>'
       : '';
     // CCC-211: an idea ticket is one row in Features, so it is one row in
-    // search too. Keep the first (most relevant) matching session, which
-    // carries the match snippet, at its relevance position.
+    // search too, at the relevance position of its best match. CCC-216: like
+    // Features, the row is the ticket's newest session (opening an older leg
+    // only showed "Go to newer session"); it borrows the match snippet.
     const _textSearchRows = (() => {
       if (!ideaTicketsOn()) return _textSearchConvs;
+      const refs = new Set(_textSearchConvs.map(c => c && c.idea_ticket && c.idea_ticket.ref).filter(Boolean));
+      if (!refs.size) return _textSearchConvs;
+      const newestByRef = new Map();
+      const rowTs = r => Number(r.mtime || r.modified || 0);
+      [conversationsData, archiveData].forEach(pool => (Array.isArray(pool) ? pool : []).forEach(r => {
+        const ref = r && !r.trashed && r.idea_ticket && r.idea_ticket.ref;
+        if (!ref || !refs.has(ref)) return;
+        const prev = newestByRef.get(ref);
+        if (!prev || rowTs(r) > rowTs(prev)) newestByRef.set(ref, r);
+      }));
       const seenRefs = new Set();
-      return _textSearchConvs.filter(c => {
+      const out = [];
+      _textSearchConvs.forEach(c => {
         const ref = c && c.idea_ticket && c.idea_ticket.ref;
-        if (!ref) return true;
-        if (seenRefs.has(ref)) return false;
+        if (!ref) { out.push(c); return; }
+        if (seenRefs.has(ref)) return;
         seenRefs.add(ref);
-        return true;
+        const newest = newestByRef.get(ref);
+        if (!newest || newest === c || rowTs(newest) <= rowTs(c)) { out.push(c); return; }
+        out.push(Object.assign({}, newest, {
+          _historyMatch: c._historyMatch,
+          _historySnippet: c._historySnippet,
+          _historySource: c._historySource,
+          _historyChainCollapsed: c._historyChainCollapsed,
+          _historyChainCollapsedSids: c._historyChainCollapsedSids,
+        }));
       });
+      return out;
     })();
     const _textSearchRowsHtml = _textSearchRows.length
       ? '<div class="conv-repo-search-section" data-role="text-search-section">'
