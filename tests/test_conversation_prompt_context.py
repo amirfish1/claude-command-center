@@ -41,3 +41,20 @@ def test_lookback_uses_new_snapshot_cursor_when_transcript_grows(tmp_path):
         result = server._parse_conversation_windowed("test-thread", tmp_path / "unused.jsonl", 2, None, server._parse_codex_event)
     assert result["last_line"] == 7
     assert result["events"][-1]["line"] == 7
+
+
+def test_codex_window_inherits_turn_id_from_turn_context_before_window(tmp_path):
+    # CCC-219: turn_context precedes the prompt, so a window that starts at
+    # the prompt (or mid-turn) must still stamp the turn's rows with turn_id,
+    # or the client re-appends that turn's live app-server overlay.
+    transcript = tmp_path / "rollout.jsonl"
+    rows = [{"type": "turn_context", "payload": {"turn_id": "turn-1", "model": "example"}},
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "first ask"}}]
+    rows += [{"type": "event_msg", "payload": {"type": "agent_message", "message": f"work {i}"}} for i in range(10)]
+    rows += [{"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "last_agent_message": "done"}}]
+    transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    tail = server._parse_conversation_windowed("test-thread", transcript, 5, None, server._parse_codex_event)
+    assert tail["first_line"] == 2
+    assert tail["events"] and all(e.get("turn_id") == "turn-1" for e in tail["events"])
+    earlier = server._parse_conversation_windowed("test-thread", transcript, 3, 8, server._parse_codex_event)
+    assert earlier["events"] and all(e.get("turn_id") == "turn-1" for e in earlier["events"])

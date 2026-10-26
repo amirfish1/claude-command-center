@@ -1,0 +1,1 @@
+- Codex conversations no longer repeat an earlier turn at the bottom of the transcript when its start falls just outside the initially loaded window.

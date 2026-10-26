@@ -24815,6 +24815,29 @@ def _count_newlines(f, start, end):
     return n
 
 
+def _codex_turn_meta_before_line(filepath, first_line, total, lookback=1024):
+    """Turn meta from the nearest Codex turn_context before ``first_line``.
+
+    Bounded: scans at most ``lookback`` lines above the window, decoding only
+    rows that mention turn_context. None when there is none in range.
+    """
+    if first_line <= 1 or total < first_line:
+        return None
+    loaded = _read_tail_lines(filepath, (total - first_line + 1) + lookback)
+    if loaded is None:
+        return None
+    for number, raw in reversed(loaded[1]):
+        if number >= first_line or '"turn_context"' not in raw:
+            continue
+        try:
+            meta = _codex_turn_meta_from_event(json.loads(raw))
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if meta:
+            return meta
+    return None
+
+
 def _read_tail_lines(filepath, n):
     """(total_lines, [(line_no, text), ...]) for the last ``n`` lines of a file.
 
@@ -25068,6 +25091,12 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     events = []
     codex_token_usage = None
     codex_turn_meta = None
+    if is_codex and buf and buf[0][0] > 1:
+        # The turn_context that stamps turn_id on a turn's rows precedes its
+        # user prompt, so a window starting mid-file can miss it. Without a
+        # turn_id the client can't tell the live app-server overlay for that
+        # turn is already on screen and appends it again (CCC-219).
+        codex_turn_meta = _codex_turn_meta_before_line(filepath, buf[0][0], total)
     memo = None
     new_memo = None
     if not is_codex and before is None:
