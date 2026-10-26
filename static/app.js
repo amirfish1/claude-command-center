@@ -16501,12 +16501,21 @@
     if (el._autosizeRaf) return;
     el._autosizeRaf = requestAnimationFrame(() => {
       el._autosizeRaf = 0;
+      // The 'auto' write briefly collapses a multi-line draft, so the
+      // conversation above grows and the browser clamps its scrollTop down
+      // by the lost rows; once the height is restored the transcript sits
+      // that far above the bottom until something re-pins it, flickering
+      // the tail (status pill, Last/Previous) on every keystroke (CCC-223).
+      const pane = el.closest('.conv-pane');
+      const view = pane && pane.querySelector('.conversations-view');
+      const viewTop = view ? view.scrollTop : 0;
       el.style.height = 'auto';
       const mode = (barEl && barEl.dataset.composerMode) || 'regular';
       const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
         : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
       el.style.height = Math.min(el.scrollHeight, max) + 'px';
+      if (view && view.scrollTop !== viewTop) view.scrollTop = viewTop;
       // A long paste can leave the caret below the capped box (iOS does not
       // re-scroll after the height changes). Typing/pasting at the end is the
       // common case: pin the scroll to the bottom so the caret stays visible.
