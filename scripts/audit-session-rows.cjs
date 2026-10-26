@@ -66,7 +66,7 @@ async function main() {
             const selector = `#convList .conv-item[data-session-id="${sid}"]`;
             await page.$eval(selector, el => el.scrollIntoView({block:'center'}));
             await new Promise(resolve => setTimeout(resolve, 1500));
-            const rendered = await page.$eval(selector, el => {
+            const measure = () => page.$eval(selector, el => {
               const visible = e => !!e && e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().height > 0 && getComputedStyle(e).visibility !== 'hidden';
               const first = query => [...el.querySelectorAll(query)].find(visible);
               const action = first('.conv-quick-action');
@@ -76,8 +76,16 @@ async function main() {
                 working:!!first('.conv-working-dot,.wa-dot'),
                 action:action ? {label:action.textContent.trim(),reply} : null};
             });
+            let rendered = await measure();
             const data = await get(`/api/conversations/${encodeURIComponent(sid)}?tail=80`);
-            const result = audit.inspect(row, data.events || [], rendered);
+            let result = audit.inspect(row, data.events || [], rendered);
+            // A list re-render or ultra-fresh repaint can drop a control for a moment; the
+            // screenshot right after showed it back (CCC-204). File only if it stays missing.
+            if (incident(result,sid)) {
+              await new Promise(resolve => setTimeout(resolve, 4000));
+              rendered = await measure();
+              result = audit.inspect(row, data.events || [], rendered);
+            }
             report.checked.push({sid,tab,viewport:viewport.name,status:result.status,findings:result.findings});
             const issue = incident(result,sid);
             if (issue) {
