@@ -4063,6 +4063,7 @@ def test_memory_recall_warm_call_spawns_no_subprocesses(tmp_path, monkeypatch):
     ]
     session_file.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
 
+    _isolate_hermes_search_channel(monkeypatch)
     monkeypatch.setenv("CCC_SHIP_GRAPH_DB", str(ship_db))
     monkeypatch.setenv("WATCHTOWER_DB", str(wt_db_path))
     monkeypatch.setenv("CCC_PROJECTS_ROOT", str(projects_dir))
