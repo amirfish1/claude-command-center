@@ -13666,7 +13666,54 @@
     return pane && pane.dataset ? pane.dataset.paneId : 'p1';
   }
 
+  let _nativeSttListener = null;
+  async function toggleNativeSpeechRecognition(paneId) {
+    const SR = window.Capacitor.Plugins.SpeechRecognition;
+    if (_sttRecording) { stopSpeechRecognition(); return; }
+    let textarea = null;
+    if (paneId === 'gc') textarea = document.getElementById('gcHumanInput');
+    else if (paneId === 'simple-home') textarea = document.getElementById('simpleComposerInput');
+    else textarea = composerInputForPane(paneId) || $convInput;
+    if (!textarea) { showOpToast('Input target not found.', 'error'); return; }
+    try {
+      const avail = await SR.available();
+      if (!avail || !avail.available) { showOpToast('Speech recognition unavailable on this device.', 'error'); return; }
+      if (SR.requestPermissions) {
+        const p = await SR.requestPermissions();
+        if (p && (p.speechRecognition === 'denied' || p.microphone === 'denied')) {
+          showOpToast('<strong>Speech access blocked.</strong> Allow Microphone and Speech Recognition for CCC in the iPhone Settings app.', 'error');
+          return;
+        }
+      }
+      _sttPreText = (textarea.value || '').slice(0, textarea.selectionStart || 0);
+      _sttPostText = (textarea.value || '').slice(textarea.selectionEnd || 0);
+      if (_nativeSttListener) { try { _nativeSttListener.remove(); } catch (_) {} _nativeSttListener = null; }
+      _nativeSttListener = await SR.addListener('partialResults', (data) => {
+        const matches = (data && (data.matches || data.value)) || [];
+        let t = matches[0] || '';
+        if (_sttPreText && t && !/[\s.,!?;:]$/.test(_sttPreText) && !/^\s/.test(t)) t = ' ' + t;
+        _sttUpdatingText = true;
+        textarea.value = _sttPreText + t + _sttPostText;
+        textarea.selectionStart = textarea.selectionEnd = _sttPreText.length + t.length;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        setTimeout(() => { _sttUpdatingText = false; }, 0);
+      });
+      await SR.start({ language: 'en-US', maxResults: 1, partialResults: true, popup: false });
+      _sttRecording = true;
+      _sttActivePaneId = paneId;
+      updateMicButtonsState();
+    } catch (err) {
+      showOpToast('Speech recognition failed: ' + (err && err.message || err), 'error');
+      _sttRecording = false;
+      updateMicButtonsState();
+    }
+  }
+
   function toggleSpeechRecognition(paneId) {
+    const _nativeSR = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SpeechRecognition;
+    if (_nativeSR && /CCC-iOS/.test(navigator.userAgent)) {
+      return toggleNativeSpeechRecognition(paneId);
+    }
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       // The Web Speech API is the usual culprit on mobile: iOS exposes it only
@@ -13792,6 +13839,12 @@
   }
 
   function stopSpeechRecognition() {
+    if (_nativeSttListener) {
+      const SR = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SpeechRecognition;
+      try { if (SR) SR.stop(); } catch (_) {}
+      try { _nativeSttListener.remove(); } catch (_) {}
+      _nativeSttListener = null;
+    }
     if (_sttRecognition) {
       try {
         _sttRecognition.stop();
@@ -16538,32 +16591,12 @@
     // just the textarea + icon row, not only the textarea itself.
     const pane = bar.closest('.conv-pane');
     if (pane) pane.classList.toggle('is-composer-minimized', mode === 'minimize');
-    const btn = document.getElementById('convExpandBtn');
-    if (btn) {
-      btn.setAttribute('aria-pressed', mode !== 'regular' ? 'true' : 'false');
-      btn.title = mode === 'expand'
-        ? 'Minimize composer'
-        : mode === 'minimize'
-          ? 'Back to normal size'
-          : 'Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)';
-    }
     _autosizeConvInput();
   }
   // Back-compat wrapper — the send/clear hook above calls this by name.
+  // The composer's expand/resize toggle was removed (CCC-207); the mode
+  // plumbing stays so the clear hook still resets any leftover state.
   function setComposerExpanded(on) { setComposerMode(on ? 'expand' : 'regular'); }
-  const _COMPOSER_MODE_CYCLE = { regular: 'expand', expand: 'minimize', minimize: 'regular' };
-  const $convExpandBtn = document.getElementById('convExpandBtn');
-  if ($convExpandBtn) {
-    $convExpandBtn.addEventListener('click', () => {
-      if (!$convInputBar) return;
-      const current = $convInputBar.dataset.composerMode || 'regular';
-      const next = isMobile()
-        ? _COMPOSER_MODE_CYCLE[current]
-        : (current === 'expand' ? 'regular' : 'expand');
-      setComposerMode(next);
-      if (next === 'expand' && $convInput) { $convInput.focus(); }
-    });
-  }
 
   for (const btn of allResumeButtons()) btn.addEventListener('click', copyResumeCommand);
   for (const btn of allJumpButtons()) btn.addEventListener('click', jumpToTerminal);
@@ -22657,10 +22690,14 @@
       kdArmed = false; kdFired = false;
       if (!e.touches || e.touches.length !== 1) return;
       if (!_focusedComposer()) return;                 // keyboard not up → nothing to dismiss
-      // A drag that begins inside the composer is the user working the draft
-      // (selecting text, scrolling a long message) — never dismiss on that.
+      // A drag that begins on an interactive element inside the composer is
+      // the user working the draft (selecting text, scrolling a long message,
+      // tapping a button) — never dismiss on that. Drags starting on the
+      // composer's own chrome (padding, gaps) DO count: that's the "drag the
+      // composer down to drop the keyboard" gesture.
       const t = e.target;
-      if (t && t.closest && t.closest('.conv-input-bar, .conv-panel-input, .gc-reader-input-row')) return;
+      if (t && t.closest && t.closest('.conv-input-bar, .conv-panel-input, .gc-reader-input-row')
+          && t.closest('textarea, input, button, a, select, [contenteditable], [role="button"]')) return;
       kdStartY = e.touches[0].clientY;
       kdArmed = true;
     }, { passive: true, capture: true });
@@ -58818,7 +58855,6 @@
     }
     const row = (conversationsData || []).find(
       (c) => c && (c.id === sid || c.session_id === sid));
-      if (p.server_cache) out.server_cache = p.server_cache;
     return (row && (row.first_message || row.prompt)) || '';
   }
 
@@ -58839,6 +58875,7 @@
       out.bytes = p.bytes;
       if (p.server_ms !== null) out.server_ms = p.server_ms;
       if (p.server_cpu_ms !== null) out.server_cpu_ms = p.server_cpu_ms;
+      if (p.server_cache) out.server_cache = p.server_cache;
     }
     return out;
   }

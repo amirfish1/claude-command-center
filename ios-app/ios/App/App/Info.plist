@@ -5,7 +5,11 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>CCC</string>
+        <string>CCC for Mobile</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Voice input dictates into the composer.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Voice input transcribes your speech into the composer.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
