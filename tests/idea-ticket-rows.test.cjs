@@ -20,6 +20,7 @@ function representatives(rows, lane = 'ideas', bucket = 'active', trash = [], wi
     Date: class extends Date { static now() { return 2_000_000_000 * 1000; } },
     _allTabSessionId: r => r.session_id || r.id || '',
     _allTabLaneFor: r => r.idea_ticket?.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas',
+    continuationParentId: r => r.continued_from_session_id || '',
   };
   vm.runInNewContext(source, ctx);
   return Array.from(ctx.ticketRows(lane, bucket), r => r.session_id);
@@ -42,6 +43,15 @@ test('live overlays cannot replace a ticket card or reorder tickets', () => {
     rows[1].modified = 30;
     assert.deepEqual(representatives(rows, lane), ['child', 'other']);
   }
+});
+
+test('a newer spawned subagent never takes over its parent ticket row (CCC-220)', () => {
+  const rows = [row('parent', 'EXAMPLE-1', 20),
+    row('child', 'EXAMPLE-1', 30, { parent_session_id: 'parent' }),
+    row('successor', 'EXAMPLE-2', 40, { parent_session_id: 'prior', continued_from_session_id: 'prior' }),
+    row('prior', 'EXAMPLE-2', 10),
+    row('orphan', 'EXAMPLE-3', 5, { parent_session_id: 'not-in-group' })];
+  assert.deepEqual(representatives(rows), ['successor', 'parent', 'orphan']);
 });
 
 test('equal timestamps remain stable across bucket/input order', () => {

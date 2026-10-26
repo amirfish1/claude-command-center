@@ -42812,6 +42812,7 @@
       const activeRefs = new Set(_allTabConvs.filter(c => _allTabLaneFor(c) === lane
         && inWindow(c) && c.idea_ticket && !c.archived && !c.trashed && !c.idea_ticket.closed).map(c => c.idea_ticket.ref));
       const candidates = bucket === 'trash' ? _allTabTrashConvs : _allTabConvs;
+      const members = new Map();
       candidates.forEach(c => {
         if (_allTabLaneFor(c) !== lane || !inWindow(c)) return;
         const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
@@ -42820,8 +42821,22 @@
         if (bucket === 'archived' && (c.trashed || activeRefs.has(ref)
           || (!c.archived && !c.idea_ticket.closed))) return;
         if (bucket === 'trash' && !c.trashed) return;
-        const prev = best.get(ref);
-        if (!prev || byRecency(c, prev) < 0) best.set(ref, c);
+        if (!members.has(ref)) members.set(ref, []);
+        members.get(ref).push(c);
+      });
+      // CCC-220: a spawned subagent inherits its parent's ticket and is often
+      // the newer transcript while it works, so it took over as the row lead.
+      // Children whose spawning parent is in the same group never lead;
+      // continuations still do (they replace the earlier session).
+      members.forEach((rows, ref) => {
+        const ids = new Set(rows.map(_allTabSessionId));
+        const spawnParent = c => (continuationParentId(c) ? ''
+          : String(c.parent_session_id || c.hermes_parent_session_id || ''));
+        const leads = rows.filter(c => !ids.has(spawnParent(c)));
+        (leads.length ? leads : rows).forEach(c => {
+          const prev = best.get(ref);
+          if (!prev || byRecency(c, prev) < 0) best.set(ref, c);
+        });
       });
       return Array.from(best.values()).sort(byRecency);
     };
