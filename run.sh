@@ -52,6 +52,10 @@ KIMI_WEB_SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${KIM
 
 is_port_bound() {
   local p="$1"
+  local explicit_host="${2:-}"
+  if [ -n "$explicit_host" ]; then
+    (echo > "/dev/tcp/$explicit_host/$p") >/dev/null 2>&1 && return 0
+  fi
   if (echo > "/dev/tcp/127.0.0.1/$p") >/dev/null 2>&1; then
     return 0
   fi
@@ -511,7 +515,7 @@ EOF
     systemctl --user enable --now "$KIMI_WEB_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
   fi
 
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 40); do
     sleep 0.5
     if is_port_bound "$target_port"; then
       local display_host="localhost"
@@ -534,9 +538,10 @@ EOF
       echo "  sudo loginctl enable-linger $USER"
       return 0
     fi
+    systemctl --user is-failed --quiet "$SYSTEMD_UNIT_NAME" 2>/dev/null && break
   done
 
-  echo "⚠ Unit started but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Unit didn't bind port $target_port within 20s." >&2
   echo "  Check: journalctl --user -u $SYSTEMD_UNIT_NAME" >&2
   exit 1
 }
@@ -630,7 +635,7 @@ EOF
     load_kimi_web_service
   fi
 
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 40); do
     sleep 0.5
     if is_port_bound "$target_port"; then
       local display_host="localhost"
@@ -647,9 +652,12 @@ EOF
       echo "  Uninstall: ./run.sh --uninstall-service"
       return 0
     fi
+    if ! launchctl print "$(service_target)" >/dev/null 2>&1; then
+      break
+    fi
   done
 
-  echo "⚠ Plist loaded but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Plist loaded but port $target_port didn't bind within 20s." >&2
   echo "  Check: $SERVICE_LOG_DIR/service.err.log" >&2
   exit 1
 }

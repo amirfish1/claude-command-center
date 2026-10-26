@@ -575,5 +575,37 @@ class TailnetInstallTests(unittest.TestCase):
             self.assertIn("http://hermes-vps.tail1234.ts.net:8090", origins)
 
 
+class ServiceInstallWaitTests(unittest.TestCase):
+    def test_run_sh_waits_20s_and_detects_systemd_failure(self):
+        run_sh = Path(__file__).resolve().parent.parent / "run.sh"
+        content = run_sh.read_text(encoding="utf-8")
+        self.assertIn("seq 1 40", content)
+        self.assertIn("within 20s", content)
+        self.assertIn("systemctl --user is-failed --quiet", content)
+        self.assertIn("is_port_bound", content)
+
+    def test_install_sh_checks_active_systemd_before_foreground_exec(self):
+        content = Path(INSTALL_SCRIPT).read_text(encoding="utf-8")
+        self.assertIn("systemctl --user is-active --quiet ccc.service", content)
+        self.assertIn("CCC is running in the background (it was slow to start)", content)
+
+    def test_run_sh_is_port_bound_accepts_explicit_host(self):
+        run_sh = Path(__file__).resolve().parent.parent / "run.sh"
+        content = run_sh.read_text(encoding="utf-8")
+        # Extract is_port_bound definition
+        self.assertIn("explicit_host", content)
+        bash_program = (
+            f'eval "$(sed -n \'/^is_port_bound()/,/^}}/p\' "{run_sh}")"; '
+            'type is_port_bound'
+        )
+        result = subprocess.run(
+            ["bash", "-c", bash_program],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("explicit_host", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

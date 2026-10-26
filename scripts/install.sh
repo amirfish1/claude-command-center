@@ -545,6 +545,34 @@ launch_server() {
       fi
       exit 0
     fi
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet ccc.service 2>/dev/null; then
+      printf '\n'
+      ok "CCC is running in the background (it was slow to start)"
+      note "$open_hint"
+      if [ -n "${TAILNET_URL:-}" ]; then
+        note "dashboard (tailnet): $TAILNET_URL"
+        note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
+      else
+        note "dashboard: $DASHBOARD_URL"
+      fi
+      exit 0
+    fi
+    if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+      local service_label="com.github.claude-command-center"
+      local service_target="gui/$(id -u)/$service_label"
+      if launchctl print "$service_target" >/dev/null 2>&1 || launchctl list 2>/dev/null | grep -q "$service_label"; then
+        printf '\n'
+        ok "CCC is running in the background (it was slow to start)"
+        note "$open_hint"
+        if [ -n "${TAILNET_URL:-}" ]; then
+          note "dashboard (tailnet): $TAILNET_URL"
+          note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
+        else
+          note "dashboard: $DASHBOARD_URL"
+        fi
+        exit 0
+      fi
+    fi
     note "the background service did not start; starting CCC in this window instead"
     note "keep this window open; stop CCC with Ctrl+C"
     exec ./run.sh
