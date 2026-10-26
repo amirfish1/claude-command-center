@@ -2654,6 +2654,7 @@
     min-height: 30vh !important;
     max-height: 70vh !important;
   }
+  .expand-btn[aria-pressed="true"] { color: var(--green); }
 
   /* Minimized composer (mobile tri-state 3rd step): pins the textarea to
      the same 24px it already renders at in the empty "regular" state (see
@@ -2665,6 +2666,7 @@
     max-height: 24px !important;
     overflow-y: auto !important;
   }
+  .conv-input-bar[data-composer-mode="minimize"] .expand-btn { color: var(--accent); }
   /* Minimize collapses the whole composer area, not just the textarea: the
      stale-session rail/panel (children of the bar) and the Goal pill (a
      sibling before the bar, reached via the shared .conv-pane parent). */
@@ -2676,7 +2678,10 @@
     display: none !important;
   }
   /* Minimize also merges the textarea row and the button row into one line
-     — "as short as it gets" means one row, not two. */
+     — "as short as it gets" means one row, not two. The expand-toggle
+     stops floating over the textarea (it joins the same row as the other
+     icon buttons instead) so the textarea reclaims the padding it used to
+     reserve for the toggle. */
   .conv-input-bar.visible.is-composer-minimized {
     flex-direction: row;
     align-items: center;
@@ -2691,6 +2696,10 @@
     width: auto;
     flex: 0 0 auto;
     margin-top: 0;
+  }
+  .conv-input-bar.is-composer-minimized > .expand-btn {
+    order: 2;
+    position: static;
   }
   .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
     padding-right: 4px;
@@ -9147,11 +9156,23 @@
      surfaces feel consistent. */
   .conv-input-bar {
     display: none; /* shown via JS when live */
-    position: relative;
+    position: relative; /* anchors the top-right expand toggle */
     padding: 10px 20px 14px;
     border-top: 1px solid var(--border);
     background: var(--surface);
   }
+  /* Composer expand toggle — a quiet icon pinned to the bar's top-right
+     corner. The textarea reserves room for it via padding-right. */
+  .conv-input-bar > .expand-btn {
+    position: absolute; top: 8px; right: 10px; z-index: 3;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0;
+    background: none; border: none; border-radius: 6px;
+    color: var(--text-muted); cursor: pointer;
+  }
+  .conv-input-bar > .expand-btn:hover { color: var(--text); background: var(--surface-2); }
+  .conv-input-bar > .expand-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .conv-input-bar .conv-input-row-top textarea { padding-right: 36px; }
   .conv-input-bar.visible {
     display: flex;
     flex-direction: column;
@@ -31751,9 +31772,13 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
     flex-wrap: wrap;
   }
+  .conv-input-bar.is-composer-minimized > .expand-btn {
+    position: absolute;
+  }
   .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
     min-height: 44px;
     max-height: 44px !important;
+    padding-right: 36px;
   }
   .conv-input-bar .conv-input-row-top textarea {
     min-width: 0;
@@ -31986,6 +32011,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     height: 52px;
   }
   .conv-input-bar .conv-input-row-bottom svg { width: 22px; height: 22px; }
+  .conv-input-bar .expand-btn { min-width: 40px; min-height: 40px; }
 
   /* iMessage-style: an empty composer shows the mic in Send's slot; the
      first character swaps Send back in. A recording mic stays put so it can
@@ -32256,6 +32282,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   html body .conv-split .conv-pane .conv-input-bar .conv-actions-btn svg,
   html body .conv-split .conv-pane .conv-input-bar .mic-btn svg,
   html body .conv-split .conv-pane .conv-input-bar .send-btn svg { width: 22px; height: 22px; }
+  html body .conv-split .conv-pane .conv-input-bar .expand-btn { top: 8px; right: 8px; }
 }
 /* Cache-adjusted turn total: just the number, at the end of the raw
    in/cached/out chip row (label + math in its tooltip). */
@@ -32385,6 +32412,15 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
   html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn svg,
   html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn svg { width: 20px; height: 20px; }
+  html body .conv-split .conv-pane .conv-input-bar > .expand-btn {
+    top: auto;
+    bottom: 14px;
+    right: 52px;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+  }
   /* Cold-session gate ("Large and stale" rail + Continue new pill): the rail
      needs its own full-width row, or auto-placement drops it into the narrow
      `auto` column, widens that column to the rail's text and shoves the card

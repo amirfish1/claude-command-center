@@ -337,6 +337,7 @@
             Object.defineProperty(d, '__perf', { value: {
               t0, tResp, tBody, tParse, bytes: txt.length,
               server_ms: num('app'), server_cpu_ms: num('cpu'),
+              server_cache: ((st.match(/cache;desc="([^"]+)"/) || [])[1] || null),
             }, enumerable: false, configurable: true });
           }
         } catch (_) {}
@@ -16537,12 +16538,32 @@
     // just the textarea + icon row, not only the textarea itself.
     const pane = bar.closest('.conv-pane');
     if (pane) pane.classList.toggle('is-composer-minimized', mode === 'minimize');
+    const btn = document.getElementById('convExpandBtn');
+    if (btn) {
+      btn.setAttribute('aria-pressed', mode !== 'regular' ? 'true' : 'false');
+      btn.title = mode === 'expand'
+        ? 'Minimize composer'
+        : mode === 'minimize'
+          ? 'Back to normal size'
+          : 'Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)';
+    }
     _autosizeConvInput();
   }
   // Back-compat wrapper — the send/clear hook above calls this by name.
-  // The composer's expand/resize toggle was removed (CCC-207); the mode
-  // plumbing stays so the clear hook still resets any leftover state.
   function setComposerExpanded(on) { setComposerMode(on ? 'expand' : 'regular'); }
+  const _COMPOSER_MODE_CYCLE = { regular: 'expand', expand: 'minimize', minimize: 'regular' };
+  const $convExpandBtn = document.getElementById('convExpandBtn');
+  if ($convExpandBtn) {
+    $convExpandBtn.addEventListener('click', () => {
+      if (!$convInputBar) return;
+      const current = $convInputBar.dataset.composerMode || 'regular';
+      const next = isMobile()
+        ? _COMPOSER_MODE_CYCLE[current]
+        : (current === 'expand' ? 'regular' : 'expand');
+      setComposerMode(next);
+      if (next === 'expand' && $convInput) { $convInput.focus(); }
+    });
+  }
 
   for (const btn of allResumeButtons()) btn.addEventListener('click', copyResumeCommand);
   for (const btn of allJumpButtons()) btn.addEventListener('click', jumpToTerminal);
@@ -58797,6 +58818,7 @@
     }
     const row = (conversationsData || []).find(
       (c) => c && (c.id === sid || c.session_id === sid));
+      if (p.server_cache) out.server_cache = p.server_cache;
     return (row && (row.first_message || row.prompt)) || '';
   }
 

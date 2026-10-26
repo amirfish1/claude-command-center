@@ -1698,6 +1698,12 @@
         </div>
         <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
           <div class="engine-missing-notice" id="engineMissingNotice" role="status" hidden></div>
+          <!-- Composer expand toggle — pinned to the bar's top-right corner. -->
+          <button class="expand-btn" id="convExpandBtn" title="Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)" aria-label="Expand composer" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+            </svg>
+          </button>
           <!-- F2 cold-session composer. Both slots are hidden until
                f2RenderComposer() decides the gate is hot (250k+ tokens AND
                idle past the engine's cache-decay line). The rail needs only

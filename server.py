@@ -127,6 +127,7 @@ from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
 from ccc_server import cpu_accounting as _cpu_accounting
+from ccc_server import conv_reader as _conv_reader
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -25616,6 +25617,104 @@ def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
         _CONV_BYTES_CACHE[key] = {"raw": raw, "gzip": gz}
 
 
+
+_CONV_OPEN_GZIP_MIN_BYTES = 1024
+
+
+def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False):
+    """Body for GET /api/conversations/<id> as {body, encoding, cache}.
+
+    Shared by the dashboard handler and the conversation-reader process
+    (ccc_server/conv_reader.py). In the reader, returns None for sessions
+    whose response depends on state only the dashboard holds: ACP sessions
+    (attach-on-view drives the dashboard's ACP clients) and Codex sessions
+    when engines are not routed to the worker (live thread state then lives
+    only in dashboard memory).
+    """
+    qs = urllib.parse.parse_qs(query or "")
+    after_line = int(qs.get("after", ["0"])[0])
+    # Windowed open: ?tail=N loads only the last N lines (fast first
+    # open of a long file); ?before=L loads the earlier window.
+    _tail_raw = (qs.get("tail", [""])[0] or "")
+    tail = int(_tail_raw) if _tail_raw.isdigit() else None
+    _before_raw = (qs.get("before", [""])[0] or "")
+    before = int(_before_raw) if _before_raw.isdigit() else None
+    windowed = bool(tail) or (before is not None)
+    acp_harness = _session_acp_harness(conv_id)
+    is_acp_conv = acp_harness is not None
+    if in_reader:
+        if is_acp_conv:
+            return None
+        if (not _control_plane_routes_engines()
+                and _detect_session_engine(conv_id) == "codex"):
+            return None
+        # The dashboard and worker change queued inputs in the durable file;
+        # pick that up before the overlay fingerprint keys the cache.
+        _refresh_queued_view_if_file_changed(conv_id)
+    if acp_harness:
+        # A TUI-launched ACP session has no CCC transcript until it
+        # is attached — attach on view (throttled) so the pane
+        # backfills instead of showing empty.
+        try:
+            _acp_maybe_attach_on_view(acp_harness, conv_id)
+        except Exception:
+            pass
+        if acp_harness == "kimi":
+            # A session last attached over ACP sits on the virtual
+            # acp:<sid> runtime (no fs/process capabilities) for every
+            # other consumer until rebound. Viewing is when a poisoned
+            # session gets noticed — heal it to local in the
+            # background (threaded + throttled in kap.py).
+            try:
+                from ccc_server import kap as _kap
+                _kap.kap_heal_binding_on_view(conv_id)
+            except Exception:
+                pass
+    want_gzip = "gzip" in (accept_encoding or "").lower()
+    # Look for a fully-baked response (JSON-encoded body + matching
+    # gzip variant) in the conv-bytes cache. On a hit we skip
+    # parse_conversation, json.dumps, AND gzip — the click→render
+    # path collapses to a hashmap lookup + socket write. ACP convs
+    # bypass: an attach can change the content at any time, with no
+    # file mtime to invalidate on.
+    _win_key = (tail, before) if windowed else None
+    cached_bytes = None if is_acp_conv else _conv_response_bytes_get(conv_id, after_line, window=_win_key)
+    if cached_bytes is not None:
+        if want_gzip and cached_bytes.get("gzip"):
+            return {"body": cached_bytes["gzip"], "encoding": "gzip", "cache": "hit"}
+        return {"body": cached_bytes["raw"], "encoding": None, "cache": "hit"}
+    result = parse_conversation(conv_id, after_line, tail=tail, before=before)
+    # Advertise the detected engine so view paths that opened the
+    # conversation without a row (e.g. a popout URL missing `source`)
+    # can still pick the right renderer (webui panes for kimi/codex).
+    try:
+        result["engine"] = _detect_session_engine(conv_id)
+    except Exception:
+        pass
+    # Continuation origin ("Origin session id:" marker in the first
+    # prompt) so the viewer can seamlessly load the previous session
+    # when the reader scrolls past the top of this one.
+    try:
+        _cont_fp = _resolve_conversation_path(conv_id)
+        result["continued_from_session_id"] = (
+            _continued_from_session_id_from_transcript(_cont_fp)
+            if _cont_fp and _cont_fp.is_file() else ""
+        )
+    except Exception:
+        result["continued_from_session_id"] = ""
+    raw = json.dumps(result).encode()
+    gz = None
+    if len(raw) >= _CONV_OPEN_GZIP_MIN_BYTES:
+        try:
+            gz = gzip.compress(raw, compresslevel=5)
+        except Exception:
+            gz = None
+    if not is_acp_conv:
+        _conv_response_bytes_put(conv_id, after_line, raw, gz, window=_win_key)
+    if want_gzip and gz:
+        return {"body": gz, "encoding": "gzip", "cache": "miss"}
+    return {"body": raw, "encoding": None, "cache": "miss"}
+
 # Regex for files-from-conversation extraction. Two patterns: HTTP(S)
 # URLs, and absolute Unix paths anchored to whitespace/quote/paren so
 # we don't pull tokens out of the middle of code identifiers.
@@ -30357,103 +30456,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self._stream_spawn_deltas(sid, replay=replay)
         elif re.match(r"^/api/conversations/(?!all$|list$|order$)[^/]+$", path):
             conv_id = path.split("/")[-1]
-            qs = urllib.parse.parse_qs(parsed.query)
-            after_line = int(qs.get("after", ["0"])[0])
-            # Windowed open: ?tail=N loads only the last N lines (fast first
-            # open of a long file); ?before=L loads the earlier window. These
-            # bypass the baked-bytes cache (keyed on after_line); a windowed
-            # parse is already cheap.
-            _tail_raw = (qs.get("tail", [""])[0] or "")
-            tail = int(_tail_raw) if _tail_raw.isdigit() else None
-            _before_raw = (qs.get("before", [""])[0] or "")
-            before = int(_before_raw) if _before_raw.isdigit() else None
-            windowed = bool(tail) or (before is not None)
-            acp_harness = _session_acp_harness(conv_id)
-            is_kimi_conv = acp_harness == "kimi"
-            is_acp_conv = acp_harness is not None
-            if acp_harness:
-                # A TUI-launched ACP session has no CCC transcript until it
-                # is attached — attach on view (throttled) so the pane
-                # backfills instead of showing empty.
-                try:
-                    _acp_maybe_attach_on_view(acp_harness, conv_id)
-                except Exception:
-                    pass
-                if is_kimi_conv:
-                    # A session last attached over ACP sits on the virtual
-                    # acp:<sid> runtime (no fs/process capabilities) for every
-                    # other consumer until rebound. Viewing is when a poisoned
-                    # session gets noticed — heal it to local in the
-                    # background (threaded + throttled in kap.py).
-                    try:
-                        from ccc_server import kap as _kap
-                        _kap.kap_heal_binding_on_view(conv_id)
-                    except Exception:
-                        pass
-            # Look for a fully-baked response (JSON-encoded body + matching
-            # gzip variant) in the conv-bytes cache. On a hit we skip
-            # parse_conversation, json.dumps, AND gzip — the click→render
-            # path collapses to a hashmap lookup + socket write. Kimi convs
-            # bypass: an attach can change the content at any time, with no
-            # file mtime to invalidate on.
-            _win_key = (tail, before) if windowed else None
-            cached_bytes = None if is_acp_conv else _conv_response_bytes_get(conv_id, after_line, window=_win_key)
-            if cached_bytes is not None:
-                accept = self.headers.get("Accept-Encoding", "") or ""
-                want_gzip = "gzip" in accept.lower()
-                body = cached_bytes["gzip"] if want_gzip and cached_bytes.get("gzip") else cached_bytes["raw"]
-                enc = "gzip" if (want_gzip and cached_bytes.get("gzip") and body is cached_bytes["gzip"]) else None
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self._send_server_timing(cache="hit")
-                if enc:
-                    self.send_header("Content-Encoding", enc)
-                    self.send_header("Vary", "Accept-Encoding")
-                self.end_headers()
-                try:
-                    self.wfile.write(body)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-                return
-            result = parse_conversation(conv_id, after_line, tail=tail, before=before)
-            # Advertise the detected engine so view paths that opened the
-            # conversation without a row (e.g. a popout URL missing `source`)
-            # can still pick the right renderer (webui panes for kimi/codex).
-            try:
-                result["engine"] = _detect_session_engine(conv_id)
-            except Exception:
-                pass
-            # Continuation origin ("Origin session id:" marker in the first
-            # prompt) so the viewer can seamlessly load the previous session
-            # when the reader scrolls past the top of this one.
-            try:
-                _cont_fp = _resolve_conversation_path(conv_id)
-                result["continued_from_session_id"] = (
-                    _continued_from_session_id_from_transcript(_cont_fp)
-                    if _cont_fp and _cont_fp.is_file() else ""
-                )
-            except Exception:
-                result["continued_from_session_id"] = ""
-            raw = json.dumps(result).encode()
-            gz = None
-            if len(raw) >= self._GZIP_MIN_BYTES:
-                try:
-                    gz = gzip.compress(raw, compresslevel=5)
-                except Exception:
-                    gz = None
-            if not is_acp_conv:
-                _conv_response_bytes_put(conv_id, after_line, raw, gz, window=_win_key)
             accept = self.headers.get("Accept-Encoding", "") or ""
-            want_gzip = "gzip" in accept.lower()
-            body = gz if (want_gzip and gz) else raw
-            enc = "gzip" if (want_gzip and gz) else None
+            # Serve from the conversation-reader process when it is up: its
+            # own GIL keeps an open from queueing behind this process's
+            # background work (CCC-143). None = not served there; build here.
+            out = _conv_reader.forward(conv_id, parsed.query, accept)
+            if out is None:
+                out = _conversation_open_response(conv_id, parsed.query, accept)
+            body = out["body"]
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            self._send_server_timing(cache="miss")
-            if enc:
-                self.send_header("Content-Encoding", enc)
+            self._send_server_timing(cache=out.get("cache"))
+            if out.get("encoding"):
+                self.send_header("Content-Encoding", out["encoding"])
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             try:
@@ -44076,6 +44092,9 @@ def main():
     migrate_state_dir()
     _seed_model_policy_once()
     _install_python_stack_dump_handler()
+    # Conversation opens get their own process (and GIL) so background work
+    # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
+    _conv_reader.start()
     # Keep spawn stats across a dashboard restart -- otherwise restarting
     # mid-investigation throws away the evidence you restarted to look at.
     _spawn_timeline_load()
