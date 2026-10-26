@@ -37,6 +37,19 @@ class UninstallScriptTests(unittest.TestCase):
         self.claude_skills = self.home / ".claude" / "skills"
         self.codex_skills = self.home / ".codex" / "skills"
         self._seed()
+        # Never let cleanup tests invoke host service/process commands. A fake
+        # macOS surface exercises LaunchAgent cleanup on every test platform.
+        self.command_bin = self.home / "test-bin"
+        self.command_bin.mkdir()
+        for name, body in {
+            "uname": "echo Darwin",
+            "launchctl": "exit 0",
+            "wt": "exit 0",
+            "pkill": "exit 0",
+        }.items():
+            command = self.command_bin / name
+            command.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+            command.chmod(0o755)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -123,6 +136,7 @@ class UninstallScriptTests(unittest.TestCase):
     def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["HOME"] = str(self.home)
+        env["PATH"] = str(self.command_bin) + os.pathsep + env.get("PATH", "")
         env["CCC_INSTALL_DIR"] = str(self.install)
         env["WATCHTOWER_INSTALL_DIR"] = str(self.watchtower)
         # Avoid inheriting a real CCC_* that could widen the blast radius.
