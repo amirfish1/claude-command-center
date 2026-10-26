@@ -1,0 +1,1 @@
+- Fixed the iOS conversation view sliding under the status bar (fixed panes now add safe-area-inset-top) and made the composer snap above the keyboard instantly instead of settling over 1-2s (Keyboard plugin keyboardWillShow drives --app-vh).

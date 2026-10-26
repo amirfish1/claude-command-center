@@ -49317,6 +49317,19 @@
     if (_cccNativeShell) {
       const kb = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Keyboard;
       if (kb && kb.setAccessoryBarVisible) kb.setAccessoryBarVisible({ isVisible: false });
+      // WKWebView's visualViewport doesn't shrink for the keyboard, so the
+      // vv-driven path below can't lift the composer. The plugin reports the
+      // keyboard's final height at animation start — set --app-vh once there
+      // instead of re-laying out on every resize tick.
+      if (kb && kb.addListener) {
+        kb.addListener('keyboardWillShow', (info) => {
+          const kh = (info && info.keyboardHeight) || 0;
+          document.documentElement.style.setProperty('--app-vh', (window.innerHeight - kh) + 'px');
+        });
+        kb.addListener('keyboardWillHide', () => {
+          document.documentElement.style.setProperty('--app-vh', vv.height + 'px');
+        });
+      }
     }
     // iOS Safari can report a bogus/stale visualViewport.height on the very
     // first read (e.g. mid-way through the address-bar collapse animation on

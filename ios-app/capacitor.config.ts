@@ -31,12 +31,11 @@ const config: CapacitorConfig = {
   },
   plugins: {
     Keyboard: {
-      // WKWebView does NOT shrink visualViewport when the keyboard opens
-      // (Safari does), so app.js's --app-vh tracking never fires and the
-      // composer hides under the keyboard. 'native' resizes the webview
-      // itself, which makes visualViewport shrink and drives the existing
-      // app.js path unchanged.
-      resize: 'native',
+      // Don't let Capacitor resize the webview: WKWebView never shrinks
+      // visualViewport for the keyboard anyway, so app.js drives --app-vh
+      // from the plugin's keyboardWillShow keyboardHeight instead — one
+      // discrete jump rather than re-laying out through the animation.
+      resize: 'none',
     },
   },
 };
