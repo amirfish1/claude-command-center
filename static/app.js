@@ -46116,7 +46116,7 @@
   }
 
   function rememberExternalDragScreenPoint(ev) {
-    if (!_externalDragState) return;
+    if (!_externalDragState || !dragEventHasPoint(ev)) return;
     const point = screenPointFromDragEvent(ev);
     if (point) _externalDragState.screenPoint = point;
   }
@@ -46389,11 +46389,22 @@
     openGroupChatPopout(_gcReaderId, _gcReaderPath, _gcReaderTopic, _gcReaderMode, null);
   });
 
-  function pointOutsideViewport(ev) {
+  // Chrome fires a synthetic dragleave (and sometimes dragend) at exactly
+  // (0,0) when a drag is released over a non-drop target. That is "position
+  // unknown", not "left through the top-left corner" — treating it as outside
+  // popped the conversation out on every abandoned drag (CCC-210).
+  function dragEventHasPoint(ev) {
     if (!ev) return false;
     const x = Number(ev.clientX);
     const y = Number(ev.clientY);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    return !(x === 0 && y === 0);
+  }
+
+  function pointOutsideViewport(ev) {
+    if (!dragEventHasPoint(ev)) return false;
+    const x = Number(ev.clientX);
+    const y = Number(ev.clientY);
     return x <= 0 || y <= 0 || x >= window.innerWidth - 1 || y >= window.innerHeight - 1;
   }
 
@@ -46532,6 +46543,9 @@
     _externalDragState = null;
     document.body.classList.remove('conversation-external-dragging');
     if (!st || st.droppedInside || st.cancelled) return;
+    // A drag released inside the window is abandoned, not a pop-out — even
+    // if an earlier dragleave flagged leftWindow (CCC-210).
+    if (dragEventHasPoint(ev) && !pointOutsideViewport(ev)) return;
     if (st.leftWindow || pointOutsideViewport(ev)) {
       openConversationPopout(st.convId, st.repoPath, st.screenPoint || screenPointFromDragEvent(ev));
       // Same advance as the breadcrumb popout button (CCC-118) — but only
