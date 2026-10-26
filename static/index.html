@@ -528,6 +528,13 @@
             document.body.classList.add('conv-list-collapsed');
           }
         } catch (_) {}
+        // Floating voice call button on mobile view. Persisted as
+        // `ccc-voice-mobile-btn` ('0' = hidden, '1'/unset = shown).
+        try {
+          if (localStorage.getItem('ccc-voice-mobile-btn') === '0') {
+            document.body.classList.add('hide-voice-mobile-btn');
+          }
+        } catch (_) {}
       } catch (_) {}
     })();
   </script>
@@ -748,6 +755,14 @@
           <div class="simple-chip-row" id="simpleMemoryBannerRow" role="group" aria-label="Memory banner visibility">
             <button type="button" class="simple-chip" data-simple-memory-banner="on"><span class="simple-chip-name">Show</span></button>
             <button type="button" class="simple-chip" data-simple-memory-banner="off"><span class="simple-chip-name">Hide</span></button>
+          </div>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Voice call button</div>
+          <div class="simple-settings-desc">The floating green "CALL" button on mobile.</div>
+          <div class="simple-chip-row" id="simpleVoiceMobileRow" role="group" aria-label="Voice call button visibility">
+            <button type="button" class="simple-chip" data-simple-voice-mobile="on"><span class="simple-chip-name">Show</span></button>
+            <button type="button" class="simple-chip" data-simple-voice-mobile="off"><span class="simple-chip-name">Hide</span></button>
           </div>
         </div>
         <div class="simple-card simple-settings-row">
@@ -2858,6 +2873,18 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="voice call mobile phone icon button hide remove show">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Show voice call button on mobile</div>
+                <div class="settings-row-desc">Show the floating "CALL" button on mobile view to start or return to voice sessions.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle is-on" id="settingsVoiceMobileToggle" data-voice-mobile-toggle role="switch" aria-checked="true" aria-label="Show voice call button on mobile">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
             <div class="settings-row" data-debug-hide data-keywords="fleet pulse hero health strip repos nodes show">
               <div class="settings-row-main">
                 <div class="settings-row-label">Fleet Pulse</div>
@@ -3762,6 +3789,10 @@
             <input type="number" id="voiceIdleSeconds" class="bug-input" min="15" max="1800" step="5">
           </div>
         </div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
+          <input type="checkbox" id="voiceShowMobileBtn">
+          Show Call button on mobile view
+        </label>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
           <input type="checkbox" id="voiceSaveTranscripts">
           Save transcripts to disk (off by default; they stay in memory otherwise)
