@@ -24396,6 +24396,13 @@ body.has-gc-reader .pwa-install-banner {
   justify-content: space-between;
   gap: 12px;
 }
+/* CCC-214: the ticket composer moves by dragging its header. */
+.fq-ticket-composer .fq-ticket-header {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.fq-ticket-composer .fq-ticket-close { cursor: pointer; }
 .fq-ticket-close {
   width: 28px;
   height: 28px;

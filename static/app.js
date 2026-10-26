@@ -55953,12 +55953,48 @@
         openQueueTicketComposer.lastQueue = qSel ? qSel.value : '';
         if (note) close(note);
       };
+      // CCC-214: a stray click outside the dialog or Esc must not throw away
+      // a typed draft. Cancel and × are deliberate and close at once.
+      const dismiss = () => {
+        const draft = textarea ? (textarea.value || '').trim() : '';
+        if (draft && !confirm('Discard this ticket draft?')) {
+          if (textarea) textarea.focus();
+          return;
+        }
+        close('');
+      };
       function onKey(ev) {
         if (isImeKey(ev)) return;
-        if (ev.key === 'Escape') close('');
+        if (ev.key === 'Escape') dismiss();
       }
-      modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click', () => close('')));
+      modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click',
+        () => (el.classList.contains('upd-backdrop') ? dismiss() : close(''))));
       if (submitBtn) submitBtn.addEventListener('click', submit);
+      // CCC-214: drag the header to move the dialog off the part of the page
+      // it covers.
+      const dialog = modal.querySelector('.fq-ticket-dialog');
+      const header = modal.querySelector('.fq-ticket-header');
+      if (dialog && header) {
+        let offX = 0, offY = 0, drag = null;
+        header.addEventListener('pointerdown', (ev) => {
+          if (ev.button !== 0 || (ev.target.closest && ev.target.closest('button'))) return;
+          drag = { id: ev.pointerId, x: ev.clientX - offX, y: ev.clientY - offY };
+          try { header.setPointerCapture(ev.pointerId); } catch (_) {}
+          ev.preventDefault();
+        });
+        header.addEventListener('pointermove', (ev) => {
+          if (!drag || ev.pointerId !== drag.id) return;
+          const r = dialog.getBoundingClientRect();
+          const baseL = r.left - offX, baseT = r.top - offY;
+          // Keep at least 60px of the dialog (and all of its header) on screen.
+          offX = Math.min(window.innerWidth - 60 - baseL, Math.max(60 - r.width - baseL, ev.clientX - drag.x));
+          offY = Math.min(window.innerHeight - header.offsetHeight - baseT, Math.max(-baseT, ev.clientY - drag.y));
+          dialog.style.transform = 'translate(' + offX + 'px,' + offY + 'px)';
+        });
+        const endDrag = (ev) => { if (drag && ev.pointerId === drag.id) drag = null; };
+        header.addEventListener('pointerup', endDrag);
+        header.addEventListener('pointercancel', endDrag);
+      }
       if (textarea) {
         textarea.addEventListener('input', refresh);
         textarea.addEventListener('keydown', (ev) => {
