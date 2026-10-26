@@ -1,0 +1,1 @@
+- Removed the expand/resize toggle from the conversation composer; the textarea still auto-grows with its content.
