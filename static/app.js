@@ -23466,6 +23466,18 @@
           || (Array.isArray(archiveData) ? archiveData.find(x => x && ((x.id || x.session_id) === convId)) : null))
         : null;
       if (convId || row) updatePaneHeader(paneId, row || { id: convId, session_id: convId });
+      // CCC-215: the rail's session-id chip and Codex diagnostics are
+      // singletons last written for whichever pane loaded most recently;
+      // repaint them for the newly focused pane.
+      const cs = pane && pane.currentSession;
+      const csId = (cs && cs.id) || '';
+      if (typeof setCopyableSessionId === 'function') {
+        setCopyableSessionId($convSessionId, csId, (row && row.jsonl_path) || '');
+      }
+      if (typeof fetchCodexDiagnostics === 'function') {
+        if (csId && cs.source === 'codex') fetchCodexDiagnostics(csId, paneId);
+        else _codexDiagHidePanel();
+      }
       if (typeof updateInputBar === 'function') updateInputBar();
       if (typeof updateResumeButton === 'function') updateResumeButton();
       if (typeof updateAnnounceButton === 'function') updateAnnounceButton();
@@ -60016,13 +60028,18 @@
     return !!(sess && sess.source === 'codex');
   }
 
+  function _codexDiagHidePanel() {
+    const el = document.getElementById('codexDiagPanel');
+    if (el) { el.hidden = true; el.innerHTML = ''; }
+  }
+
   function _codexDiagStop(pid) {
     if (_codexDiagTimerByPane[pid]) {
       clearInterval(_codexDiagTimerByPane[pid]);
       delete _codexDiagTimerByPane[pid];
     }
-    const el = document.getElementById('codexDiagPanel');
-    if (el) { el.hidden = true; el.innerHTML = ''; }
+    // The panel is a rail singleton: only the focused pane may clear it.
+    if (pid === activePaneId()) _codexDiagHidePanel();
   }
 
   async function fetchCodexDiagnostics(sid, paneId) {
@@ -60043,6 +60060,7 @@
           return;
         }
         if (!_codexDiagMetadataTabActive()) return;
+        if (pid !== activePaneId()) return;
         fetchCodexDiagnostics(expected, pid);
       }, 5000);
     }
@@ -60051,6 +60069,8 @@
       const data = await res.json();
       if (_codexDiagSessionIdByPane[pid] !== sid) return;
       if (pane && pane.currentSession && pane.currentSession.source !== 'codex') { _codexDiagStop(pid); return; }
+      // CCC-215: a background pane must not paint the focused pane's rail.
+      if (pid !== activePaneId()) return;
       renderCodexDiagnostics(data);
     } catch (_) {}
   }
@@ -71238,20 +71258,49 @@
     // rebuild path.
     const stickyOrig = sticky ? sticky.querySelector('.csh-ask-original') : null;
     const stickyAct = sticky ? sticky.querySelector('.csh-col-activity') : null;
-    const liveOrig = stickyOrig || rail.querySelector('.csh-ask-original');
-    const liveAct = stickyAct || rail.querySelector('.csh-col-activity');
+    // CCC-215: a rail node is only a valid fallback for the sticky it came
+    // from. In split view the rail last held the OTHER pane's nodes, and
+    // reusing them showed that pane's ask/session details under this one.
+    const _ownedRailNode = (n) => (n && (!n._cccHomeSticky || n._cccHomeSticky === sticky)) ? n : null;
+    const liveOrig = stickyOrig || _ownedRailNode(rail.querySelector('.csh-ask-original'));
+    const liveAct = stickyAct || _ownedRailNode(rail.querySelector('.csh-col-activity'));
+
+    // Put a node back in a sticky header's own (non-rail) slot.
+    const _placeInSticky = (st, n) => {
+      if (!st || !n) return false;
+      if (n.classList.contains('csh-ask-original')) {
+        const askCol = st.querySelector('.csh-col-ask');
+        if (!askCol) return false;
+        const earlier = askCol.querySelector('.csh-ask-earlier');
+        if (earlier) askCol.insertBefore(n, earlier);
+        else askCol.appendChild(n);
+      } else {
+        const row = st.querySelector('.csh-row');
+        if (!row) return false;
+        row.appendChild(n);
+      }
+      delete n._cccHomeSticky;
+      return true;
+    };
 
     // Drop every other copy in the document — these are orphans left
     // over from previous conversations whose sticky was rebuilt while
     // we were in rail mode.
     // Other panes' own sticky headers keep their nodes; only rail copies and
-    // nodes in the active pane's host are orphans.
+    // nodes in the active pane's host are orphans. A rail copy whose home
+    // pane is still open goes back to that pane's sticky instead of being
+    // dropped, so focusing that pane again finds its own nodes (CCC-215).
     const _isOtherPaneNode = (n) => {
       const st = n.closest('.conv-sticky-header');
       return !!st && st !== sticky;
     };
-    document.querySelectorAll('.csh-ask-original').forEach(n => { if (n !== liveOrig && !_isOtherPaneNode(n)) n.remove(); });
-    document.querySelectorAll('.csh-col-activity').forEach(n => { if (n !== liveAct && !_isOtherPaneNode(n)) n.remove(); });
+    const _retireNode = (n) => {
+      const home = n._cccHomeSticky;
+      if (home && home !== sticky && home.isConnected && _placeInSticky(home, n)) return;
+      n.remove();
+    };
+    document.querySelectorAll('.csh-ask-original').forEach(n => { if (n !== liveOrig && !_isOtherPaneNode(n)) _retireNode(n); });
+    document.querySelectorAll('.csh-col-activity').forEach(n => { if (n !== liveAct && !_isOtherPaneNode(n)) _retireNode(n); });
 
     // Place the live nodes in the target slot for the current mode.
     if (inRail) {
@@ -71259,6 +71308,10 @@
       // — above the rail-actions buttons in the Metadata tab. Activity
       // now lives in Metadata too; Queue is the only separate utility tab.
       const railActions = rail.querySelector('#railActions');
+      if (sticky) {
+        if (liveOrig) liveOrig._cccHomeSticky = sticky;
+        if (liveAct) liveAct._cccHomeSticky = sticky;
+      }
       if (liveOrig) {
         if (railActions && railActions.parentNode && liveOrig !== railActions) {
           railActions.parentNode.insertBefore(liveOrig, railActions);
@@ -71268,16 +71321,8 @@
       }
       if (liveAct) metadataPane.appendChild(liveAct);
     } else if (sticky) {
-      const askCol = sticky.querySelector('.csh-col-ask');
-      const row = sticky.querySelector('.csh-row');
-      if (liveOrig && askCol) {
-        const earlier = askCol.querySelector('.csh-ask-earlier');
-        if (earlier) askCol.insertBefore(liveOrig, earlier);
-        else askCol.appendChild(liveOrig);
-      }
-      if (liveAct && row) {
-        row.appendChild(liveAct);
-      }
+      _placeInSticky(sticky, liveOrig);
+      _placeInSticky(sticky, liveAct);
     }
     // Original ask is now mounted in its slot — re-hide the duplicate
     // in-conversation bubble for the active pane (toggle-without-rebuild path).

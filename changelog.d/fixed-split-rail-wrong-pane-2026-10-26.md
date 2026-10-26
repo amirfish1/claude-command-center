@@ -1,0 +1,1 @@
+- In split view, the right rail's Original ask, session activity, session ID and Codex diagnostics now follow the focused pane instead of showing the other pane's details.
