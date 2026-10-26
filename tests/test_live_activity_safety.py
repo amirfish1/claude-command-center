@@ -22,6 +22,15 @@ def test_live_activity_owner_skips_hidden_pages():
 
 def test_attention_refresh_skips_hidden_pages():
     source = APP_JS.read_text(encoding="utf-8")
-    owner = source[source.index("async function loadAttentionList()"):
+    owner = source[source.index("async function loadAttentionList(opts)"):
                    source.index("function focusCardOnBoard")]
     assert "document.hidden" in owner
+
+
+def test_attention_refresh_backs_off_and_skips_without_consumer():
+    source = APP_JS.read_text(encoding="utf-8")
+    owner = source[source.index("async function loadAttentionList(opts)"):
+                   source.index("function focusCardOnBoard")]
+    assert "if (!_ipNyaDetailsOn()) return;" in owner
+    assert "Date.now() < _nyaNextFetchAt" in owner
+    assert "Math.min(_nyaPollGapMs * 2, _NYA_POLL_MAX_MS)" in owner

@@ -29,17 +29,20 @@ const root = path.resolve(__dirname, '..');
     await gotoAndSettle(page, `http://127.0.0.1:${server.address().port}/static/index.html?demo=1`, { settleMs: 1000 });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    const rows = await page.$$eval('#convList .conv-item', elements => elements.slice(0, 3).map(row => {
+    const measureRows = () => page.$$eval('#convList .conv-item', elements => elements.slice(0, 3).map(row => {
       const box = row.querySelector('.conv-session-icon').getBoundingClientRect();
       return { id: row.dataset.id, x: box.x + box.width / 2, y: box.y + box.height / 2 };
     }));
+    const rows = await measureRows();
     assert.equal(rows.length, 3);
     const selected = () => page.$$eval('#convList .list-selected', elements => elements.map(row => row.dataset.id));
-    async function drag(from, to) {
+    async function drag(from, to, modifier = 'Shift') {
+      if (modifier) await page.keyboard.down(modifier);
       await page.mouse.move(from.x, from.y);
       await page.mouse.down();
       await page.mouse.move(to.x, to.y, { steps: 12 });
       await page.mouse.up();
+      if (modifier) await page.keyboard.up(modifier);
     }
 
     // A plain row-body click still opens the conversation.
@@ -93,8 +96,14 @@ const root = path.resolve(__dirname, '..');
     await page.waitForFunction(() => window.trashRequests.length === 4 && !document.getElementById('coordTrashBtn').disabled);
     assert.deepEqual(await selected(), []);
     assert.equal(await page.evaluate(() => window.trashRequests[3].session_id), rows[1].id);
+    // CCC-212: a plain drag is reserved for moving a row (e.g. into a split
+    // pane); it never range-selects. Last, since the native drag it starts
+    // leaves Puppeteer's mouse in a drag session.
+    await drag(rows[0], rows[2], null);
+    assert.deepEqual(await selected(), []);
+    assert.equal(await page.$eval('#convList', el => el.classList.contains('is-drag-selecting')), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: row clicks, range/additive selection, clear, cancel, partial trash failure, and retry.');
+    console.log('PASS: row clicks, plain drag not selecting, Shift range/additive selection, clear, cancel, partial trash failure, and retry.');
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

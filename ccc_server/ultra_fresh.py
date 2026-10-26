@@ -21,6 +21,11 @@ MAX_TEXT = 40000
 # starved the GIL and stalled /list for seconds (CCC-152). Live spawn-log text
 # still tails every loop tick.
 TRANSCRIPT_CHECK_S = 0.5
+# Loop cadence: 100ms while text is streaming, backing off to 500ms while
+# every watched session is quiet, so idle streams stop costing the dashboard
+# ~1s of CPU per connection (CCC-142). The first update snaps back to 100ms.
+ACTIVE_TICK_S = 0.1
+IDLE_TICK_MAX_S = TRANSCRIPT_CHECK_S
 
 
 def event_time(value):
@@ -220,6 +225,7 @@ def stream(handler, query):
     handler.send_header("X-Accel-Buffering", "no")
     handler.end_headers()
     last_ping = 0
+    tick = ACTIVE_TICK_S
     try:
         # Reconnect periodically so a lost client cannot retain readers forever.
         deadline = time.monotonic() + 300
@@ -230,15 +236,16 @@ def stream(handler, query):
                     updates.extend(reader.read())
                 except (OSError, ValueError, KeyError):
                     continue
+            tick = ACTIVE_TICK_S if updates else min(tick * 1.5, IDLE_TICK_MAX_S)
             if updates:
                 handler.wfile.write(("data: " + json.dumps({"updates": updates}) + "\n\n").encode())
             elif time.monotonic() - last_ping >= 5:
                 handler.wfile.write(b"event: keepalive\ndata: {}\n\n")
             else:
-                time.sleep(0.1)
+                time.sleep(tick)
                 continue
             handler.wfile.flush()
             last_ping = time.monotonic()
-            time.sleep(0.1)
+            time.sleep(tick)
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass

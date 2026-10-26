@@ -2654,7 +2654,6 @@
     min-height: 30vh !important;
     max-height: 70vh !important;
   }
-  .expand-btn[aria-pressed="true"] { color: var(--green); }
 
   /* Minimized composer (mobile tri-state 3rd step): pins the textarea to
      the same 24px it already renders at in the empty "regular" state (see
@@ -2666,7 +2665,6 @@
     max-height: 24px !important;
     overflow-y: auto !important;
   }
-  .conv-input-bar[data-composer-mode="minimize"] .expand-btn { color: var(--accent); }
   /* Minimize collapses the whole composer area, not just the textarea: the
      stale-session rail/panel (children of the bar) and the Goal pill (a
      sibling before the bar, reached via the shared .conv-pane parent). */
@@ -2678,10 +2676,7 @@
     display: none !important;
   }
   /* Minimize also merges the textarea row and the button row into one line
-     — "as short as it gets" means one row, not two. The expand-toggle
-     stops floating over the textarea (it joins the same row as the other
-     icon buttons instead) so the textarea reclaims the padding it used to
-     reserve for the toggle. */
+     — "as short as it gets" means one row, not two. */
   .conv-input-bar.visible.is-composer-minimized {
     flex-direction: row;
     align-items: center;
@@ -2696,10 +2691,6 @@
     width: auto;
     flex: 0 0 auto;
     margin-top: 0;
-  }
-  .conv-input-bar.is-composer-minimized > .expand-btn {
-    order: 2;
-    position: static;
   }
   .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
     padding-right: 4px;
@@ -2951,11 +2942,42 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* CCC-213: name + "(short id)". flex-wrap pushes the id onto a second
+     line (clipped by the 1-line height) whenever the name alone fills the
+     row, so the id shows only when there's room and never squeezes it. */
+  .conv-pane-title-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 6px;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.3;
+    max-height: 1lh;
+    overflow: hidden;
+  }
+  .conv-pane-title-wrap > .conv-pane-title { flex: 0 1 auto; }
+  .conv-pane-title-wrap:has(> .conv-pane-title.is-expanded) { max-height: none; }
+  .conv-pane-session-id {
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-weight: 400;
+    white-space: nowrap;
+    cursor: copy;
+  }
+  .conv-pane-session-id[hidden] { display: none; }
+  .conv-pane-session-id code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
+  .conv-pane-session-id:hover { color: var(--text); }
+  .conv-pane-session-id.copied { color: var(--green); }
   /* CCC-129: desktop headers lead with the session name, like the phone
      toolbar title. */
   @media (min-width: 1201px) {
     .conv-pane-titlebar { flex: 1 1 auto; }
-    .conv-pane-titlebar .conv-pane-title {
+    .conv-pane-titlebar :is(.conv-pane-title, .conv-pane-title-wrap) {
       font-size: 15px;
       font-weight: 700;
       line-height: 1.3;
@@ -2979,7 +3001,7 @@
     body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) :is(.conv-pane-category, .conv-pane-last-user-message) {
       display: none;
     }
-    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar .conv-pane-title {
+    body:not(.conversation-popout) .conv-split:not([data-orientation="vertical"]):not([data-orientation="horizontal"]) .conv-pane-titlebar :is(.conv-pane-title, .conv-pane-title-wrap) {
       font-size: 19px;
       line-height: 1.25;
       white-space: nowrap;
@@ -4581,6 +4603,10 @@
   }
   @container conv-ctx (max-width: 750px) {
     .conv-input-context .wp-antigravity-tokens { display: none; }
+    /* "peak XXk" is secondary to the live Xk / XXk pill: drop it well
+       before the pill itself (≤550px) so a narrow pane never shows the
+       peak without the current count (CCC-217). */
+    .conv-input-context .wp-usage-peak { display: none; }
   }
   @container conv-ctx (max-width: 650px) {
     .conv-input-context .wp-cost-pill { display: none; }
@@ -9156,23 +9182,11 @@
      surfaces feel consistent. */
   .conv-input-bar {
     display: none; /* shown via JS when live */
-    position: relative; /* anchors the top-right expand toggle */
+    position: relative;
     padding: 10px 20px 14px;
     border-top: 1px solid var(--border);
     background: var(--surface);
   }
-  /* Composer expand toggle — a quiet icon pinned to the bar's top-right
-     corner. The textarea reserves room for it via padding-right. */
-  .conv-input-bar > .expand-btn {
-    position: absolute; top: 8px; right: 10px; z-index: 3;
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px; padding: 0;
-    background: none; border: none; border-radius: 6px;
-    color: var(--text-muted); cursor: pointer;
-  }
-  .conv-input-bar > .expand-btn:hover { color: var(--text); background: var(--surface-2); }
-  .conv-input-bar > .expand-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .conv-input-bar .conv-input-row-top textarea { padding-right: 36px; }
   .conv-input-bar.visible {
     display: flex;
     flex-direction: column;
@@ -13115,6 +13129,7 @@
     border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .voice-panel[hidden] { display: none; }
   .voice-mobile-btn { display: none; }
+  body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
   @media (max-width: 1200px) {
     .voice-mobile-btn {
       position: fixed; right: max(16px, env(safe-area-inset-right, 0px));
@@ -13131,7 +13146,8 @@
     }
     .voice-mobile-btn.live { background: #1a6330; }
     .voice-mobile-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
-    body.voice-panel-open .voice-mobile-btn { display: none; }
+    body.voice-panel-open .voice-mobile-btn,
+    body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
     .voice-panel {
       right: max(12px, env(safe-area-inset-right, 0px));
       bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -17307,6 +17323,27 @@
 
     /* Controls that don't make sense on phones */
     .sh-btn-deploy { display: none !important; }
+
+    /* Headroom-style session-list header: collapses on scroll-down, returns
+       on scroll-up or at the top (app.js toggles .list-scroll-hidden). */
+    .sidebar-header { max-height: 200px;
+      transition: max-height 0.18s ease, opacity 0.15s ease, padding 0.18s ease; }
+    .sidebar-header.list-scroll-hidden {
+      /* overflow:hidden only while collapsed — the header's dropdown menus
+         (.sh-more-menu, .sh-refresh-menu) are absolutely positioned below it
+         and must not be clipped when the header is expanded. */
+      overflow: hidden;
+      max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0;
+      pointer-events: none;
+    }
+
+    /* Floating speaker + rate dial: 56/84px is desktop-sized and eats phone
+       width; shrink both proportionally. */
+    .conv-scroll-speak-btn { width: 40px; height: 40px; right: 14px; font-size: 17px; }
+    .speaker-tools { width: 56px; height: 56px; }
+    .speaker-rate-dial { width: 56px; height: 56px; }
+    .speaker-rate-value { top: 48px; left: 8px; width: 40px; font-size: 10px; }
+    .speaker-next-sentence { left: 46px; top: 18px; width: 22px; height: 22px; font-size: 17px; }
 
     /* --- Kanban-split --- */
     #kanbanLayout.active { flex-direction: column; }
@@ -24363,6 +24400,13 @@ body.has-gc-reader .pwa-install-banner {
   justify-content: space-between;
   gap: 12px;
 }
+/* CCC-214: the ticket composer moves by dragging its header. */
+.fq-ticket-composer .fq-ticket-header {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.fq-ticket-composer .fq-ticket-close { cursor: pointer; }
 .fq-ticket-close {
   width: 28px;
   height: 28px;
@@ -28616,7 +28660,9 @@ body.has-mobile-bottom-nav .mobile-bottom-nav {
   display: flex;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  /* Bottom inset is dead space below the icon row — shift the row down into
+     it instead of leaving a tall empty strip under the icons. */
+  padding: 12px 4px calc(2px + env(safe-area-inset-bottom, 0px));
 }
 body.has-mobile-bottom-nav .mobile-nav-btn {
   flex: 1;
@@ -31772,13 +31818,9 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
     flex-wrap: wrap;
   }
-  .conv-input-bar.is-composer-minimized > .expand-btn {
-    position: absolute;
-  }
   .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
     min-height: 44px;
     max-height: 44px !important;
-    padding-right: 36px;
   }
   .conv-input-bar .conv-input-row-top textarea {
     min-width: 0;
@@ -32011,7 +32053,6 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     height: 52px;
   }
   .conv-input-bar .conv-input-row-bottom svg { width: 22px; height: 22px; }
-  .conv-input-bar .expand-btn { min-width: 40px; min-height: 40px; }
 
   /* iMessage-style: an empty composer shows the mic in Send's slot; the
      first character swaps Send back in. A recording mic stays put so it can
@@ -32282,7 +32323,6 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   html body .conv-split .conv-pane .conv-input-bar .conv-actions-btn svg,
   html body .conv-split .conv-pane .conv-input-bar .mic-btn svg,
   html body .conv-split .conv-pane .conv-input-bar .send-btn svg { width: 22px; height: 22px; }
-  html body .conv-split .conv-pane .conv-input-bar .expand-btn { top: 8px; right: 8px; }
 }
 /* Cache-adjusted turn total: just the number, at the end of the raw
    in/cached/out chip row (label + math in its tooltip). */
@@ -32412,15 +32452,6 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
   html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn svg,
   html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn svg { width: 20px; height: 20px; }
-  html body .conv-split .conv-pane .conv-input-bar > .expand-btn {
-    top: auto;
-    bottom: 14px;
-    right: 52px;
-    width: 32px;
-    height: 32px;
-    min-width: 32px;
-    min-height: 32px;
-  }
   /* Cold-session gate ("Large and stale" rail + Continue new pill): the rail
      needs its own full-width row, or auto-placement drops it into the narrow
      `auto` column, widens that column to the rail's text and shoves the card

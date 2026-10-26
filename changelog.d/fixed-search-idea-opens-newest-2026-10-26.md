@@ -1,0 +1,1 @@
+- Searching for an idea now opens that idea's newest session (as the Features tab does), instead of an older session that only pointed onward with "Go to newer session".

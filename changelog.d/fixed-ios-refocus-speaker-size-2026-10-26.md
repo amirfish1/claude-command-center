@@ -1,0 +1,2 @@
+- Fixed the composer refocusing after Send on touch devices, which popped the keyboard back up even when it had been dismissed.
+- Shrunk the floating speaker button and rate dial on phones (56→40px, dial 84→56px).

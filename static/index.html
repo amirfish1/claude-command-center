@@ -528,6 +528,13 @@
             document.body.classList.add('conv-list-collapsed');
           }
         } catch (_) {}
+        // Floating voice call button on mobile view. Persisted as
+        // `ccc-voice-mobile-btn` ('0' = hidden, '1'/unset = shown).
+        try {
+          if (localStorage.getItem('ccc-voice-mobile-btn') === '0') {
+            document.body.classList.add('hide-voice-mobile-btn');
+          }
+        } catch (_) {}
       } catch (_) {}
     })();
   </script>
@@ -748,6 +755,14 @@
           <div class="simple-chip-row" id="simpleMemoryBannerRow" role="group" aria-label="Memory banner visibility">
             <button type="button" class="simple-chip" data-simple-memory-banner="on"><span class="simple-chip-name">Show</span></button>
             <button type="button" class="simple-chip" data-simple-memory-banner="off"><span class="simple-chip-name">Hide</span></button>
+          </div>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Voice call button</div>
+          <div class="simple-settings-desc">The floating green "CALL" button on mobile.</div>
+          <div class="simple-chip-row" id="simpleVoiceMobileRow" role="group" aria-label="Voice call button visibility">
+            <button type="button" class="simple-chip" data-simple-voice-mobile="on"><span class="simple-chip-name">Show</span></button>
+            <button type="button" class="simple-chip" data-simple-voice-mobile="off"><span class="simple-chip-name">Hide</span></button>
           </div>
         </div>
         <div class="simple-card simple-settings-row">
@@ -1241,7 +1256,12 @@
                  by the popout's dedicated poll (_popoutProcPills), which has no
                  rail; empty spans are display:none. -->
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
-            <span class="conv-pane-title" data-role="pane-title"></span>
+            <!-- CCC-213: the short session id rides after the name only
+                 while both fit; the wrapper wraps it onto a clipped 2nd line. -->
+            <span class="conv-pane-title-wrap">
+              <span class="conv-pane-title" data-role="pane-title"></span>
+              <button type="button" class="conv-pane-session-id" data-role="pane-session-id" hidden></button>
+            </span>
           </div>
           <span class="conv-pane-last-user-message" data-role="pane-last-user-message" hidden></span>
           <button type="button" class="conv-pane-popout" data-role="pane-popout ccc-breadcrumb-popout"
@@ -1698,12 +1718,6 @@
         </div>
         <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
           <div class="engine-missing-notice" id="engineMissingNotice" role="status" hidden></div>
-          <!-- Composer expand toggle — pinned to the bar's top-right corner. -->
-          <button class="expand-btn" id="convExpandBtn" title="Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)" aria-label="Expand composer" aria-pressed="false">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
-            </svg>
-          </button>
           <!-- F2 cold-session composer. Both slots are hidden until
                f2RenderComposer() decides the gate is hot (250k+ tokens AND
                idle past the engine's cache-decay line). The rail needs only
@@ -2864,6 +2878,18 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="voice call mobile phone icon button hide remove show">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Show voice call button on mobile</div>
+                <div class="settings-row-desc">Show the floating "CALL" button on mobile view to start or return to voice sessions.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle is-on" id="settingsVoiceMobileToggle" data-voice-mobile-toggle role="switch" aria-checked="true" aria-label="Show voice call button on mobile">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
             <div class="settings-row" data-debug-hide data-keywords="fleet pulse hero health strip repos nodes show">
               <div class="settings-row-main">
                 <div class="settings-row-label">Fleet Pulse</div>
@@ -3768,6 +3794,10 @@
             <input type="number" id="voiceIdleSeconds" class="bug-input" min="15" max="1800" step="5">
           </div>
         </div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
+          <input type="checkbox" id="voiceShowMobileBtn">
+          Show Call button on mobile view
+        </label>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
           <input type="checkbox" id="voiceSaveTranscripts">
           Save transcripts to disk (off by default; they stay in memory otherwise)

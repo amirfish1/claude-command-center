@@ -12767,6 +12767,10 @@
     const $sendBtn = (_paneEl && _paneEl.querySelector('.send-btn')) || $convSendBtn;
     const $steerBtn = (_paneEl && _paneEl.querySelector('.steer-btn')) || $convSteerBtn;
     const $actionBtn = injectMode === 'steer' ? ($steerBtn || $sendBtn) : $sendBtn;
+    // Whether the composer held focus when Send was tapped — on touch devices
+    // that equals "keyboard is up". If it was already dismissed, don't raise
+    // it again at the end of the send.
+    const _composerHadFocus = !!($input && document.activeElement === $input);
     if (!guardComposerSend($input)) return;
     const text = ($input && $input.value || '').trim();
     let announcedFrom = announcedFromForPane(paneId || activePaneId());
@@ -13278,7 +13282,7 @@
       }
     }
     if ($actionBtn) $actionBtn.disabled = false;
-    $input.focus();
+    if (!isTouchPrimary() || _composerHadFocus) $input.focus();
   }
 
   const TTS_TEXT_MAX_CHARS = 12000;
@@ -22121,6 +22125,12 @@
       btn.classList.toggle('is-selected', sel);
       btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
     });
+    const voiceMobileOn = getVoiceMobileBtnPref();
+    document.querySelectorAll('#simpleVoiceMobileRow [data-simple-voice-mobile]').forEach(btn => {
+      const sel = (btn.getAttribute('data-simple-voice-mobile') === 'on') === voiceMobileOn;
+      btn.classList.toggle('is-selected', sel);
+      btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
+    });
   }
   function _wireSimpleScreens() {
     // Back buttons on every depth-3 screen (data-simple-back-to overrides the
@@ -22192,6 +22202,15 @@
         const on = chip.getAttribute('data-simple-memory-banner') === 'on';
         try { localStorage.setItem('ccc-simple-memory-banner', on ? 'on' : 'off'); } catch (_) {}
         _simpleSyncSettingsScreen();
+      });
+    }
+    const voiceMobileRow = document.getElementById('simpleVoiceMobileRow');
+    if (voiceMobileRow) {
+      voiceMobileRow.addEventListener('click', (ev) => {
+        const chip = ev.target.closest('[data-simple-voice-mobile]');
+        if (!chip) return;
+        const on = chip.getAttribute('data-simple-voice-mobile') === 'on';
+        setVoiceMobileBtnPref(on);
       });
     }
     const fwd = (id, targetId) => {
@@ -22709,6 +22728,24 @@
         if (ae) ae.blur();
       }
     }, { passive: true, capture: true });
+  }
+
+  // Headroom-style auto-collapse of the sidebar header on touch layouts:
+  // scrolling the session list down hides it for more room, scrolling up
+  // (or reaching the top) brings it back. No library — direction deltas.
+  if (isTouchPrimary()) {
+    const _list = document.getElementById('convList');
+    const _hdr = document.querySelector('.sidebar-header');
+    if (_list && _hdr) {
+      let _hrLastY = _list.scrollTop;
+      _list.addEventListener('scroll', () => {
+        const y = _list.scrollTop;
+        const dy = y - _hrLastY;
+        _hrLastY = y;
+        if (y <= 4 || dy < -6) _hdr.classList.remove('list-scroll-hidden');
+        else if (dy > 6 && y > 40) _hdr.classList.add('list-scroll-hidden');
+      }, { passive: true });
+    }
   }
 
   // Conversation-list collapse (CCC-132). « hides the list to widen the reader;
@@ -23429,6 +23466,18 @@
           || (Array.isArray(archiveData) ? archiveData.find(x => x && ((x.id || x.session_id) === convId)) : null))
         : null;
       if (convId || row) updatePaneHeader(paneId, row || { id: convId, session_id: convId });
+      // CCC-215: the rail's session-id chip and Codex diagnostics are
+      // singletons last written for whichever pane loaded most recently;
+      // repaint them for the newly focused pane.
+      const cs = pane && pane.currentSession;
+      const csId = (cs && cs.id) || '';
+      if (typeof setCopyableSessionId === 'function') {
+        setCopyableSessionId($convSessionId, csId, (row && row.jsonl_path) || '');
+      }
+      if (typeof fetchCodexDiagnostics === 'function') {
+        if (csId && cs.source === 'codex') fetchCodexDiagnostics(csId, paneId);
+        else _codexDiagHidePanel();
+      }
       if (typeof updateInputBar === 'function') updateInputBar();
       if (typeof updateResumeButton === 'function') updateResumeButton();
       if (typeof updateAnnounceButton === 'function') updateAnnounceButton();
@@ -25053,12 +25102,26 @@
 
   // ── Attention panel (top-of-kanban "what needs me") ─────────────────────
   let _nyaShowAll = false;
-  async function loadAttentionList() {
+  // Back-off for the attention poll (CCC-142): it piggybacks on every list
+  // refresh at ~310ms of dashboard CPU each, so an unchanged feed doubles the
+  // gap before the next fetch (15s -> 2min); any change resets it.
+  const _NYA_POLL_MIN_MS = 15000;
+  const _NYA_POLL_MAX_MS = 120000;
+  let _nyaPollGapMs = _NYA_POLL_MIN_MS;
+  let _nyaNextFetchAt = 0;
+  let _nyaLastSig = null;
+  async function loadAttentionList(opts) {
     // The visible NYA panel was retired (its list is now inline under each
     // In-progress row). This function survives ONLY to fetch the attention
     // feed and refresh the inline cache (_nyaItemsBySid). The Push-all
     // ship-log feed borrows the same DOM container, so skip while it owns it.
     if (_shipLogActive || document.hidden) return;
+    // _nyaItemsBySid is only rendered when the legacy inline-Details flag is
+    // on; without it the fetch is pure dashboard CPU with no consumer.
+    if (!_ipNyaDetailsOn()) return;
+    const force = !!(opts && opts.force);
+    if (!force && Date.now() < _nyaNextFetchAt) return;
+    _nyaNextFetchAt = Date.now() + _nyaPollGapMs;
     const repoPath = popoutRepoPath();
     // No repo selected → drive NYA off the cross-repo attention feed. The repo
     // dropdown was removed from the UI, so requiring a selection left NYA
@@ -25079,6 +25142,12 @@
       const res = await backgroundApiFetch(url);
       const data = await res.json();
       const allItems = (data && data.items) || [];
+      const sig = JSON.stringify(allItems);
+      _nyaPollGapMs = sig === _nyaLastSig
+        ? Math.min(_nyaPollGapMs * 2, _NYA_POLL_MAX_MS) : _NYA_POLL_MIN_MS;
+      _nyaNextFetchAt = Date.now() + _nyaPollGapMs;
+      if (sig === _nyaLastSig) return;
+      _nyaLastSig = sig;
       // Inline cache: the FULL set so the Details toggle can render a block
       // under every In-progress row that has one. Rebuilt fresh each pass.
       _nyaItemsBySid.clear();
@@ -25197,7 +25266,7 @@
       $seeAll.addEventListener('click', (e) => {
         e.stopPropagation();
         _nyaShowAll = !_nyaShowAll;
-        loadAttentionList();
+        loadAttentionList({ force: true });
       });
     }
     const $refresh = document.getElementById('attentionRefreshBtn');
@@ -25210,7 +25279,7 @@
           // Bust the 60s GH issue-state cache, then re-query so auto-verify
           // can reclassify any closed issues immediately.
           await ccPostJson('/api/bust-issue-state', {}).catch(() => {});
-          await loadAttentionList();
+          await loadAttentionList({ force: true });
           refreshConversationList();
         } finally {
           setTimeout(() => { $refresh.disabled = false; $refresh.style.opacity = ''; }, 400);
@@ -31725,6 +31794,9 @@
       const row = ev.target.closest && ev.target.closest('.conv-item[data-id]');
       if (!row || row.dataset.role === 'archived-gc-row') return;
       if (isActionTarget(ev.target)) return;
+      // CCC-212: a plain drag moves the row (e.g. into a split pane); range
+      // select needs Shift (or Cmd/Ctrl to add to the selection).
+      if (!(ev.shiftKey || ev.metaKey || ev.ctrlKey)) return;
       if (state) endDragSelect();
       state = {
         anchor: row,
@@ -40976,13 +41048,48 @@
         + '</div>'
         + '</div>'
       : '';
-    const _textSearchRowsHtml = _textSearchConvs.length
+    // CCC-211: an idea ticket is one row in Features, so it is one row in
+    // search too, at the relevance position of its best match. CCC-216: like
+    // Features, the row is the ticket's newest session (opening an older leg
+    // only showed "Go to newer session"); it borrows the match snippet.
+    const _textSearchRows = (() => {
+      if (!ideaTicketsOn()) return _textSearchConvs;
+      const refs = new Set(_textSearchConvs.map(c => c && c.idea_ticket && c.idea_ticket.ref).filter(Boolean));
+      if (!refs.size) return _textSearchConvs;
+      const newestByRef = new Map();
+      const rowTs = r => Number(r.mtime || r.modified || 0);
+      [conversationsData, archiveData].forEach(pool => (Array.isArray(pool) ? pool : []).forEach(r => {
+        const ref = r && !r.trashed && r.idea_ticket && r.idea_ticket.ref;
+        if (!ref || !refs.has(ref)) return;
+        const prev = newestByRef.get(ref);
+        if (!prev || rowTs(r) > rowTs(prev)) newestByRef.set(ref, r);
+      }));
+      const seenRefs = new Set();
+      const out = [];
+      _textSearchConvs.forEach(c => {
+        const ref = c && c.idea_ticket && c.idea_ticket.ref;
+        if (!ref) { out.push(c); return; }
+        if (seenRefs.has(ref)) return;
+        seenRefs.add(ref);
+        const newest = newestByRef.get(ref);
+        if (!newest || newest === c || rowTs(newest) <= rowTs(c)) { out.push(c); return; }
+        out.push(Object.assign({}, newest, {
+          _historyMatch: c._historyMatch,
+          _historySnippet: c._historySnippet,
+          _historySource: c._historySource,
+          _historyChainCollapsed: c._historyChainCollapsed,
+          _historyChainCollapsedSids: c._historyChainCollapsedSids,
+        }));
+      });
+      return out;
+    })();
+    const _textSearchRowsHtml = _textSearchRows.length
       ? '<div class="conv-repo-search-section" data-role="text-search-section">'
         + '<div class="conv-repo-search-header">'
         + '<span class="conv-repo-search-label">Search results</span>'
-        + '<span class="conv-repo-search-hint">' + _textSearchConvs.length + ' matches across all tabs</span>'
+        + '<span class="conv-repo-search-hint">' + _textSearchRows.length + ' matches across all tabs</span>'
         + '</div><div class="conv-repo-search-list">'
-        + _textSearchConvs.map(c => _renderRow(c)).join('')
+        + _textSearchRows.map(c => _renderRow(c)).join('')
         + '</div></div>'
       : '';
     const _repoSearchRowsHtml = (() => {
@@ -46045,7 +46152,7 @@
   }
 
   function rememberExternalDragScreenPoint(ev) {
-    if (!_externalDragState) return;
+    if (!_externalDragState || !dragEventHasPoint(ev)) return;
     const point = screenPointFromDragEvent(ev);
     if (point) _externalDragState.screenPoint = point;
   }
@@ -46318,11 +46425,22 @@
     openGroupChatPopout(_gcReaderId, _gcReaderPath, _gcReaderTopic, _gcReaderMode, null);
   });
 
-  function pointOutsideViewport(ev) {
+  // Chrome fires a synthetic dragleave (and sometimes dragend) at exactly
+  // (0,0) when a drag is released over a non-drop target. That is "position
+  // unknown", not "left through the top-left corner" — treating it as outside
+  // popped the conversation out on every abandoned drag (CCC-210).
+  function dragEventHasPoint(ev) {
     if (!ev) return false;
     const x = Number(ev.clientX);
     const y = Number(ev.clientY);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    return !(x === 0 && y === 0);
+  }
+
+  function pointOutsideViewport(ev) {
+    if (!dragEventHasPoint(ev)) return false;
+    const x = Number(ev.clientX);
+    const y = Number(ev.clientY);
     return x <= 0 || y <= 0 || x >= window.innerWidth - 1 || y >= window.innerHeight - 1;
   }
 
@@ -46461,6 +46579,9 @@
     _externalDragState = null;
     document.body.classList.remove('conversation-external-dragging');
     if (!st || st.droppedInside || st.cancelled) return;
+    // A drag released inside the window is abandoned, not a pop-out — even
+    // if an earlier dragleave flagged leftWindow (CCC-210).
+    if (dragEventHasPoint(ev) && !pointOutsideViewport(ev)) return;
     if (st.leftWindow || pointOutsideViewport(ev)) {
       openConversationPopout(st.convId, st.repoPath, st.screenPoint || screenPointFromDragEvent(ev));
       // Same advance as the breadcrumb popout button (CCC-118) — but only
@@ -47379,6 +47500,30 @@
     titleEl._cccRenameRow = (opts.category === undefined && fullRow && fullRow.id) ? fullRow : null;
     // Don't clobber an in-progress header rename (CCC-177).
     if (!titleEl.querySelector('input')) titleEl.textContent = headerTitle;
+    // CCC-213: "(abcd1234)" after the name, click copies the full id
+    // (handleSidebarSessionIdCopyClick, delegated globally). CSS drops it
+    // when the name needs the room.
+    const sidEl = pane.querySelector('[data-role="pane-session-id"]');
+    if (sidEl) {
+      const sidRow = opts.category === undefined ? fullRow : null;
+      const sid = (sidRow && sidRow.source !== 'backlog' && sidRow.source !== 'github_pr'
+        && sidRow.backlog_type !== 'github') ? String(sidRow.session_id || sidRow.id || '').trim() : '';
+      if (sid && headerTitle) {
+        if (sidEl.dataset.copyRowSessionId !== sid) {
+          const shortId = shortSessionId(sid);
+          sidEl.dataset.copyRowSessionId = sid;
+          sidEl.dataset.sessionIdShort = shortId;
+          sidEl.title = 'Copy session ID: ' + sid;
+          sidEl.setAttribute('aria-label', 'Copy session ID ' + shortId);
+          sidEl.innerHTML = '(<code>' + escapeHtml(shortId) + '</code>)';
+        }
+        sidEl.hidden = false;
+      } else {
+        sidEl.hidden = true;
+        delete sidEl.dataset.copyRowSessionId;
+        sidEl.innerHTML = '';
+      }
+    }
     // CCC-1172: the ellipsized title stays readable in full — hover carries
     // it in the tooltip, click/Enter toggles .is-expanded inline (delegated
     // next to the mobile-original-ask listener). role/tabindex make the
@@ -48814,6 +48959,8 @@
     const paneTitle = clone.querySelector('[data-role="pane-title"]');
     if (paneCat) paneCat.textContent = '';
     if (paneTitle) paneTitle.textContent = '';
+    const paneSid = clone.querySelector('[data-role="pane-session-id"]');
+    if (paneSid) { paneSid.hidden = true; paneSid.innerHTML = ''; delete paneSid.dataset.copyRowSessionId; }
     const paneAvatar = clone.querySelector('[data-role="pane-avatar"]');
     if (paneAvatar) paneAvatar.innerHTML = '';
     const bgPalette = clone.querySelector('[data-role="conv-bg-palette"]');
@@ -55839,12 +55986,48 @@
         openQueueTicketComposer.lastQueue = qSel ? qSel.value : '';
         if (note) close(note);
       };
+      // CCC-214: a stray click outside the dialog or Esc must not throw away
+      // a typed draft. Cancel and × are deliberate and close at once.
+      const dismiss = () => {
+        const draft = textarea ? (textarea.value || '').trim() : '';
+        if (draft && !confirm('Discard this ticket draft?')) {
+          if (textarea) textarea.focus();
+          return;
+        }
+        close('');
+      };
       function onKey(ev) {
         if (isImeKey(ev)) return;
-        if (ev.key === 'Escape') close('');
+        if (ev.key === 'Escape') dismiss();
       }
-      modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click', () => close('')));
+      modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click',
+        () => (el.classList.contains('upd-backdrop') ? dismiss() : close(''))));
       if (submitBtn) submitBtn.addEventListener('click', submit);
+      // CCC-214: drag the header to move the dialog off the part of the page
+      // it covers.
+      const dialog = modal.querySelector('.fq-ticket-dialog');
+      const header = modal.querySelector('.fq-ticket-header');
+      if (dialog && header) {
+        let offX = 0, offY = 0, drag = null;
+        header.addEventListener('pointerdown', (ev) => {
+          if (ev.button !== 0 || (ev.target.closest && ev.target.closest('button'))) return;
+          drag = { id: ev.pointerId, x: ev.clientX - offX, y: ev.clientY - offY };
+          try { header.setPointerCapture(ev.pointerId); } catch (_) {}
+          ev.preventDefault();
+        });
+        header.addEventListener('pointermove', (ev) => {
+          if (!drag || ev.pointerId !== drag.id) return;
+          const r = dialog.getBoundingClientRect();
+          const baseL = r.left - offX, baseT = r.top - offY;
+          // Keep at least 60px of the dialog (and all of its header) on screen.
+          offX = Math.min(window.innerWidth - 60 - baseL, Math.max(60 - r.width - baseL, ev.clientX - drag.x));
+          offY = Math.min(window.innerHeight - header.offsetHeight - baseT, Math.max(-baseT, ev.clientY - drag.y));
+          dialog.style.transform = 'translate(' + offX + 'px,' + offY + 'px)';
+        });
+        const endDrag = (ev) => { if (drag && ev.pointerId === drag.id) drag = null; };
+        header.addEventListener('pointerup', endDrag);
+        header.addEventListener('pointercancel', endDrag);
+      }
       if (textarea) {
         textarea.addEventListener('input', refresh);
         textarea.addEventListener('keydown', (ev) => {
@@ -59845,13 +60028,18 @@
     return !!(sess && sess.source === 'codex');
   }
 
+  function _codexDiagHidePanel() {
+    const el = document.getElementById('codexDiagPanel');
+    if (el) { el.hidden = true; el.innerHTML = ''; }
+  }
+
   function _codexDiagStop(pid) {
     if (_codexDiagTimerByPane[pid]) {
       clearInterval(_codexDiagTimerByPane[pid]);
       delete _codexDiagTimerByPane[pid];
     }
-    const el = document.getElementById('codexDiagPanel');
-    if (el) { el.hidden = true; el.innerHTML = ''; }
+    // The panel is a rail singleton: only the focused pane may clear it.
+    if (pid === activePaneId()) _codexDiagHidePanel();
   }
 
   async function fetchCodexDiagnostics(sid, paneId) {
@@ -59872,6 +60060,7 @@
           return;
         }
         if (!_codexDiagMetadataTabActive()) return;
+        if (pid !== activePaneId()) return;
         fetchCodexDiagnostics(expected, pid);
       }, 5000);
     }
@@ -59880,6 +60069,8 @@
       const data = await res.json();
       if (_codexDiagSessionIdByPane[pid] !== sid) return;
       if (pane && pane.currentSession && pane.currentSession.source !== 'codex') { _codexDiagStop(pid); return; }
+      // CCC-215: a background pane must not paint the focused pane's rail.
+      if (pid !== activePaneId()) return;
       renderCodexDiagnostics(data);
     } catch (_) {}
   }
@@ -71067,20 +71258,49 @@
     // rebuild path.
     const stickyOrig = sticky ? sticky.querySelector('.csh-ask-original') : null;
     const stickyAct = sticky ? sticky.querySelector('.csh-col-activity') : null;
-    const liveOrig = stickyOrig || rail.querySelector('.csh-ask-original');
-    const liveAct = stickyAct || rail.querySelector('.csh-col-activity');
+    // CCC-215: a rail node is only a valid fallback for the sticky it came
+    // from. In split view the rail last held the OTHER pane's nodes, and
+    // reusing them showed that pane's ask/session details under this one.
+    const _ownedRailNode = (n) => (n && (!n._cccHomeSticky || n._cccHomeSticky === sticky)) ? n : null;
+    const liveOrig = stickyOrig || _ownedRailNode(rail.querySelector('.csh-ask-original'));
+    const liveAct = stickyAct || _ownedRailNode(rail.querySelector('.csh-col-activity'));
+
+    // Put a node back in a sticky header's own (non-rail) slot.
+    const _placeInSticky = (st, n) => {
+      if (!st || !n) return false;
+      if (n.classList.contains('csh-ask-original')) {
+        const askCol = st.querySelector('.csh-col-ask');
+        if (!askCol) return false;
+        const earlier = askCol.querySelector('.csh-ask-earlier');
+        if (earlier) askCol.insertBefore(n, earlier);
+        else askCol.appendChild(n);
+      } else {
+        const row = st.querySelector('.csh-row');
+        if (!row) return false;
+        row.appendChild(n);
+      }
+      delete n._cccHomeSticky;
+      return true;
+    };
 
     // Drop every other copy in the document — these are orphans left
     // over from previous conversations whose sticky was rebuilt while
     // we were in rail mode.
     // Other panes' own sticky headers keep their nodes; only rail copies and
-    // nodes in the active pane's host are orphans.
+    // nodes in the active pane's host are orphans. A rail copy whose home
+    // pane is still open goes back to that pane's sticky instead of being
+    // dropped, so focusing that pane again finds its own nodes (CCC-215).
     const _isOtherPaneNode = (n) => {
       const st = n.closest('.conv-sticky-header');
       return !!st && st !== sticky;
     };
-    document.querySelectorAll('.csh-ask-original').forEach(n => { if (n !== liveOrig && !_isOtherPaneNode(n)) n.remove(); });
-    document.querySelectorAll('.csh-col-activity').forEach(n => { if (n !== liveAct && !_isOtherPaneNode(n)) n.remove(); });
+    const _retireNode = (n) => {
+      const home = n._cccHomeSticky;
+      if (home && home !== sticky && home.isConnected && _placeInSticky(home, n)) return;
+      n.remove();
+    };
+    document.querySelectorAll('.csh-ask-original').forEach(n => { if (n !== liveOrig && !_isOtherPaneNode(n)) _retireNode(n); });
+    document.querySelectorAll('.csh-col-activity').forEach(n => { if (n !== liveAct && !_isOtherPaneNode(n)) _retireNode(n); });
 
     // Place the live nodes in the target slot for the current mode.
     if (inRail) {
@@ -71088,6 +71308,10 @@
       // — above the rail-actions buttons in the Metadata tab. Activity
       // now lives in Metadata too; Queue is the only separate utility tab.
       const railActions = rail.querySelector('#railActions');
+      if (sticky) {
+        if (liveOrig) liveOrig._cccHomeSticky = sticky;
+        if (liveAct) liveAct._cccHomeSticky = sticky;
+      }
       if (liveOrig) {
         if (railActions && railActions.parentNode && liveOrig !== railActions) {
           railActions.parentNode.insertBefore(liveOrig, railActions);
@@ -71097,16 +71321,8 @@
       }
       if (liveAct) metadataPane.appendChild(liveAct);
     } else if (sticky) {
-      const askCol = sticky.querySelector('.csh-col-ask');
-      const row = sticky.querySelector('.csh-row');
-      if (liveOrig && askCol) {
-        const earlier = askCol.querySelector('.csh-ask-earlier');
-        if (earlier) askCol.insertBefore(liveOrig, earlier);
-        else askCol.appendChild(liveOrig);
-      }
-      if (liveAct && row) {
-        row.appendChild(liveAct);
-      }
+      _placeInSticky(sticky, liveOrig);
+      _placeInSticky(sticky, liveAct);
     }
     // Original ask is now mounted in its slot — re-hide the duplicate
     // in-conversation bubble for the active pane (toggle-without-rebuild path).
@@ -85148,6 +85364,8 @@
       if ($voiceIdleSeconds) $voiceIdleSeconds.value = c.idle_seconds || 120;
       if ($voiceSaveTranscripts) $voiceSaveTranscripts.checked = !!c.save_transcripts;
       if ($voiceAllowFallback) $voiceAllowFallback.checked = c.allow_api_fallback !== false;
+      const $voiceShowMobileBtn = document.getElementById('voiceShowMobileBtn');
+      if ($voiceShowMobileBtn) $voiceShowMobileBtn.checked = getVoiceMobileBtnPref();
     } catch (err) {
       voiceModalError('Could not load voice settings.');
     }
@@ -85159,6 +85377,10 @@
 
   async function saveVoiceConfig() {
     voiceModalError('');
+    const $voiceShowMobileBtn = document.getElementById('voiceShowMobileBtn');
+    if ($voiceShowMobileBtn) {
+      setVoiceMobileBtnPref(!!$voiceShowMobileBtn.checked);
+    }
     const patch = {
       voice: $voiceSelect ? $voiceSelect.value : undefined,
       profile: $voiceProfileSelect ? $voiceProfileSelect.value : undefined,
@@ -85166,6 +85388,7 @@
       idle_seconds: $voiceIdleSeconds ? parseInt($voiceIdleSeconds.value, 10) : undefined,
       save_transcripts: $voiceSaveTranscripts ? !!$voiceSaveTranscripts.checked : undefined,
       allow_api_fallback: $voiceAllowFallback ? !!$voiceAllowFallback.checked : undefined,
+      show_mobile_btn: $voiceShowMobileBtn ? !!$voiceShowMobileBtn.checked : undefined,
     };
     for (const k of Object.keys(patch)) if (patch[k] === undefined || Number.isNaN(patch[k])) delete patch[k];
     try {
@@ -89239,6 +89462,44 @@
   // CCC-781: default OFF — the multi-queue health list (queueHealthStrip) is
   // hidden and a compact single-queue status strip takes its place instead.
   function getQueueRhsListPref() { return localStorage.getItem('ccc-queue-rhs-list') === 'on'; }
+  const VOICE_MOBILE_BTN_STORAGE_KEY = 'ccc-voice-mobile-btn';
+  function getVoiceMobileBtnPref() {
+    try { return localStorage.getItem(VOICE_MOBILE_BTN_STORAGE_KEY) !== '0'; }
+    catch (_) { return true; }
+  }
+
+  function applyVoiceMobileBtn(show) {
+    document.body.classList.toggle('hide-voice-mobile-btn', !show);
+    const $btn = document.getElementById('voiceMobileBtn');
+    if ($btn) {
+      if (!show) {
+        $btn.setAttribute('aria-hidden', 'true');
+        $btn.setAttribute('tabindex', '-1');
+      } else {
+        $btn.removeAttribute('aria-hidden');
+        $btn.removeAttribute('tabindex');
+      }
+    }
+    const $toggle = document.getElementById('settingsVoiceMobileToggle');
+    if ($toggle) {
+      $toggle.classList.toggle('is-on', show);
+      $toggle.setAttribute('aria-checked', String(show));
+    }
+    const $cb = document.getElementById('voiceShowMobileBtn');
+    if ($cb) {
+      $cb.checked = show;
+    }
+    if (typeof _simpleSyncSettingsScreen === 'function') {
+      _simpleSyncSettingsScreen();
+    }
+  }
+
+  function setVoiceMobileBtnPref(show) {
+    try {
+      localStorage.setItem(VOICE_MOBILE_BTN_STORAGE_KEY, show ? '1' : '0');
+    } catch (_) {}
+    applyVoiceMobileBtn(show);
+  }
 
   function applyTheme(pref) {
     let resolved = pref;
@@ -89340,6 +89601,12 @@
       const on = getQueueRhsListPref();
       $queueRhsListToggle.classList.toggle('is-on', on);
       $queueRhsListToggle.setAttribute('aria-checked', String(on));
+    }
+    const $voiceMobileToggle = document.getElementById('settingsVoiceMobileToggle');
+    if ($voiceMobileToggle) {
+      const on = getVoiceMobileBtnPref();
+      $voiceMobileToggle.classList.toggle('is-on', on);
+      $voiceMobileToggle.setAttribute('aria-checked', String(on));
     }
     _syncUiModeBodyClass();
   }
@@ -90658,8 +90925,10 @@
     try {
       localStorage.removeItem('ccc-view-gh');
       localStorage.removeItem('ccc-hero-live-variant');
+      localStorage.removeItem(VOICE_MOBILE_BTN_STORAGE_KEY);
     } catch (_) {}
     applyViewGh(getViewGhPref());
+    applyVoiceMobileBtn(getVoiceMobileBtnPref());
     refreshAppearanceChecks();
   }
 
@@ -91306,6 +91575,14 @@
         showSettingsSavedPulse(uiModeToggle.closest('.settings-row'));
         return;
       }
+      const voiceMobileToggle = e.target.closest('[data-voice-mobile-toggle]');
+      if (voiceMobileToggle) {
+        const next = !getVoiceMobileBtnPref();
+        setVoiceMobileBtnPref(next);
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(voiceMobileToggle.closest('.settings-row'));
+        return;
+      }
       const ffToggle = e.target.closest('[data-ff-toggle]');
       if (ffToggle) {
         const name = ffToggle.getAttribute('data-ff-toggle');
@@ -91415,6 +91692,7 @@
   applyTheme(getThemePref());
   applyFont(getFontPref());
   applyViewGh(getViewGhPref());
+  applyVoiceMobileBtn(getVoiceMobileBtnPref());
 
   // ── ⌘K / ⌘P session search modal ──────────────────────────────
   const $cmdkModal = document.getElementById('cmdkModal');

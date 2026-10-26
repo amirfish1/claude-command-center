@@ -114,6 +114,34 @@ def test_stream_coalesces_messages_and_caps_readers_without_archive_calls():
     assert len(json.loads(handler.wfile.getvalue().decode().split("data: ")[1])["updates"]) == 4
 
 
+def test_idle_stream_backs_off_and_snaps_back_on_update():
+    import io
+    from ccc_server.ultra_fresh import stream
+
+    class Handler:
+        wfile = io.BytesIO()
+        send_response = lambda *args: None
+        send_header = lambda *args: None
+        end_headers = lambda *args: None
+
+    # 6 quiet ticks, one update, then quiet until the test stops the loop.
+    script = iter([[]] * 6 + [[{"session_id": "a", "text": "x"}]] + [[]] * 3)
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(round(seconds, 3))
+        if len(sleeps) >= 10:
+            raise BrokenPipeError()
+
+    with mock.patch.object(FreshSession, "read", autospec=True,
+                           side_effect=lambda reader: next(script)), \
+            mock.patch.object(ultra_fresh.time, "sleep", side_effect=fake_sleep):
+        stream(Handler(), {"sessions": ["a"]})
+    assert sleeps[:6] == [0.15, 0.225, 0.338, 0.5, 0.5, 0.5]
+    assert sleeps[6] == ultra_fresh.ACTIVE_TICK_S
+    assert sleeps[7] == 0.15
+
+
 def test_codex_live_snapshot_only_changes_on_new_message_and_never_replays_retired_turn():
     from ccc_server.codex_conversation import CODEX_CONVERSATIONS
 

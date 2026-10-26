@@ -1,0 +1,1 @@
+- Dragging a session row no longer starts a range selection; hold Shift (or Cmd/Ctrl) while dragging to select a range, so a plain drag can move a session into a pane.

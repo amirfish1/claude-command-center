@@ -131,6 +131,7 @@ function cccSavRangePhrase(range) {
 
   const TICKER_POLL_MS = 60000;       // today's number while the tab is open
   const MISS_POLL_MS = 300000;        // endpoint absent: slow probe until it lands
+  const IDLE_POLL_MAX_MS = 300000;    // unchanged number: back off up to this (CCC-142)
   const ALL_RANGE_EVERY = 5;          // fetch range=all every Nth tick (milestones)
   const LS_TODAY = 'ccc.savings.today.v1';
   const LS_CELEBRATED = 'ccc.savings.celebrated.v1';
@@ -143,6 +144,7 @@ function cccSavRangePhrase(range) {
   let _panel = null;                  // lazily built savings panel overlay
   let _cheer = null;                  // lazily built milestone celebration overlay
   let _tickCount = 0;
+  let _pollMs = TICKER_POLL_MS;       // doubles while today's number is unchanged
   let _apiUp = null;                  // null = unknown, true/false after a fetch
   let _timer = null;
   let _celebrated = null;             // Set of milestone ids already celebrated
@@ -496,7 +498,12 @@ function cccSavRangePhrase(range) {
     fetchSavings('today').then(d => {
       if (d) {
         _apiUp = true;
+        // Each /api/savings costs ~1s of dashboard CPU; an idle day's number
+        // doesn't move, so poll less until it does (CCC-142).
+        const prevUsd = _lastUsd;
         renderTicker(d);
+        _pollMs = prevUsd != null && _lastUsd === prevUsd
+          ? Math.min(_pollMs * 2, IDLE_POLL_MAX_MS) : TICKER_POLL_MS;
       } else {
         _apiUp = false;
         // Endpoint not there yet: keep the pill hidden, probe slowly.
@@ -513,10 +520,10 @@ function cccSavRangePhrase(range) {
 
   function schedule() {
     if (_timer) clearTimeout(_timer);
-    _timer = setTimeout(tick, _apiUp === false ? MISS_POLL_MS : TICKER_POLL_MS);
+    _timer = setTimeout(tick, _apiUp === false ? MISS_POLL_MS : _pollMs);
   }
 
-  function refresh() { tick(); }
+  function refresh() { _pollMs = TICKER_POLL_MS; tick(); }
 
   // Escape closes whichever savings surface is open.
   document.addEventListener('keydown', (e) => {
