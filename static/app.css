@@ -28603,7 +28603,9 @@ body.has-mobile-bottom-nav .mobile-bottom-nav {
   display: flex;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  /* Bottom inset is dead space below the icon row — shift the row down into
+     it instead of leaving a tall empty strip under the icons. */
+  padding: 12px 4px calc(2px + env(safe-area-inset-bottom, 0px));
 }
 body.has-mobile-bottom-nav .mobile-nav-btn {
   flex: 1;
