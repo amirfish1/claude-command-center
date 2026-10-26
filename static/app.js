@@ -12767,6 +12767,10 @@
     const $sendBtn = (_paneEl && _paneEl.querySelector('.send-btn')) || $convSendBtn;
     const $steerBtn = (_paneEl && _paneEl.querySelector('.steer-btn')) || $convSteerBtn;
     const $actionBtn = injectMode === 'steer' ? ($steerBtn || $sendBtn) : $sendBtn;
+    // Whether the composer held focus when Send was tapped — on touch devices
+    // that equals "keyboard is up". If it was already dismissed, don't raise
+    // it again at the end of the send.
+    const _composerHadFocus = !!($input && document.activeElement === $input);
     if (!guardComposerSend($input)) return;
     const text = ($input && $input.value || '').trim();
     let announcedFrom = announcedFromForPane(paneId || activePaneId());
@@ -13278,7 +13282,7 @@
       }
     }
     if ($actionBtn) $actionBtn.disabled = false;
-    $input.focus();
+    if (!isTouchPrimary() || _composerHadFocus) $input.focus();
   }
 
   const TTS_TEXT_MAX_CHARS = 12000;
