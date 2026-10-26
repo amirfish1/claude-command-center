@@ -27718,6 +27718,9 @@
       // clean with no add-to-object affordance here.
       return '';
     }
+    // New sessions auto-file into the default Inbox object; a chip for that
+    // says nothing the user chose and read as jargon (CCC-218).
+    if (obj.id === NEW_SESSION_DEFAULT_OBJECT_ID) return '';
     const title = String(obj.title || '').trim() || 'Object';
     return '<span class="conv-object-chip" title="Object: ' + escapeAttr(title) + '">'
       + 'Object &middot; ' + escapeHtml(title)
@@ -39055,9 +39058,6 @@
           label = 'CCC';
           title = 'Started by CCC; no parent session recorded';
           className = ' is-ccc';
-        } else if (threadSource === 'user') {
-          label = 'user';
-          title = 'Top-level session started by the user; no parent session recorded';
         } else if (threadSource === 'subagent') {
           label = 'subagent';
           title = 'Spawned as a subagent; parent session not recorded';
