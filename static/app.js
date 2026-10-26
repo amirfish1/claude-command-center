@@ -8420,8 +8420,13 @@
     // it re-renders at $view's true tail, which otherwise left this card
     // stranded above it — a jarring reorder mid-render. Reclaim the tail on
     // every poll tick so the card stays pinned below the newest content.
-    if (breakdown !== $view.lastElementChild) {
-      $view.appendChild(breakdown);
+    // The Codex status pill (anchorCodexStateBadge) also claims the very
+    // last slot, so sit just above it: two nodes both taking the tail
+    // swapped places on every poll (CCC-222 flicker).
+    const badge = $view.querySelector(':scope > .conv-codex-state');
+    const target = badge ? badge.previousElementSibling : $view.lastElementChild;
+    if (breakdown !== target) {
+      $view.insertBefore(breakdown, badge || null);
     }
   }
   // Persistent, dismissible inline resume-failure banner — the headline fix.
@@ -8574,6 +8579,13 @@
     } else {
       appendStageRow('Waiting for delivery', false, true);
     }
+    // Before the wake log has any stage, the sent message's own
+    // "✓ Delivered - waiting for Codex" note already says everything this
+    // card would, and its "Waiting for delivery" contradicted it (CCC-222).
+    // Stay hidden until there is real progress or a problem to show.
+    const redundant = !stages.length && !data.warning && !data.outcome_detail
+      && !!$view.querySelector('.send-delivered .send-delivered-note');
+    el.style.display = redundant ? 'none' : '';
     const readout = document.createElement('div');
     readout.className = 'wb-readout';
     const parts = [];
@@ -77608,6 +77620,8 @@
   const $convInputModelSelect = document.getElementById('convInputModelSelect');
   const $convInputEffortSelect = document.getElementById('convInputEffortSelect');
   let spawnEffortChoiceDirty = false;
+  var nsAdvisor = { data: null, error: '', loading: false, loadedAt: 0, manual: false, applying: false, editing: false, draft: null, depth: 'routine' };
+  try { nsAdvisor.depth = localStorage.getItem('ccc-spawn-depth') === 'deep' ? 'deep' : 'routine'; } catch (_) {}
   // Set the moment the user explicitly picks an engine (composer <select> or
   // an nsModelPickerPills chip). Guards the one-time boot loadSpawnDefaults()
   // response against clobbering that pick if it lands after the click —
@@ -77914,6 +77928,7 @@
   // engine/model for a single new session silently overwrites the human's
   // saved default.
   function setSpawnDefaultModel(engine, model) {
+    markNsAdvisorManual();
     engine = normalizeSpawnDefaultEngine(engine);
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
@@ -78098,8 +78113,10 @@
       CCCFreeRuntime.sync(engine);
     }
     renderNsModelComparison();
+    renderNsAdvisor();
   }
   function setSpawnEngine(v, opts) {
+    if (!opts || opts.record !== false) markNsAdvisorManual();
     v = normalizeSpawnDefaultEngine(v);
     if (!SPAWN_DEFAULT_ENGINES.includes(v)) return;
     spawnDefaultsState.engine = v;
@@ -78155,6 +78172,7 @@
   }
   if ($convInputEffortSelect) {
     $convInputEffortSelect.addEventListener('change', () => {
+      markNsAdvisorManual();
       spawnEffortChoiceDirty = true;
       // Effort is part of the prewarm reservation's identity, so a change here
       // has to re-reserve exactly like a model change does — otherwise the
@@ -88156,6 +88174,7 @@
   }
 
   function selectSpawnPick(engine, model) {
+    markNsAdvisorManual();
     const eng = normalizeSpawnDefaultEngine(engine);
     _spawnEngineChosenByUser = true;
     spawnDefaultsState.engine = eng;
@@ -88347,7 +88366,252 @@
     });
   }
 
+  // Rank only explicitly configured task-capable choices. Quota can reorder
+  // a shortlist, but cannot make an unknown or policy-blocked model eligible.
+  function rankNsAdvisorChoices(config, depth, catalog, engines, headroom, now) {
+    const rows = config?.rankings?.[depth] || [];
+    const accounts = headroom?.accounts || [];
+    const result = [];
+    for (const [index, row] of rows.entries()) {
+      const state = engines[row.engine];
+      const model = (catalog[row.engine] || []).find(m => m.id === row.model);
+      let unavailable = !state?.available ? 'Engine is unavailable or disabled' : '';
+      if (!model || model.available === false || model.disabled) unavailable = 'Model is unavailable in the current catalog';
+      if (model?.policy_blocked) unavailable = 'Model is blocked by policy';
+      if (row.effort && (!state?.efforts?.includes(row.effort)
+          || Array.isArray(model?.reasoning_efforts) && !model.reasoning_efforts.includes(row.effort))) {
+        unavailable = 'Requested thinking level is unavailable';
+      }
+      const resource = config.resources?.[row.engine] || {};
+      const live = accounts.find(a => a.engine === row.engine);
+      const stamp = value => { const n = Date.parse(value || ''); return Number.isFinite(n) ? n : null; };
+      const manualReset = stamp(resource.resets_at);
+      const observed = stamp(resource.observed_at);
+      const manualFresh = observed !== null && now >= observed && now - observed <= 86400000
+        && (manualReset === null || manualReset > now);
+      const liveFresh = resource.kind !== 'credits' && resource.kind !== 'metered'
+        && live?.available === true && !live.stale && stamp(live.resets_at) > now;
+      const pct = liveFresh ? live.percent_left : manualFresh ? resource.remaining_pct : null;
+      const reset = liveFresh ? stamp(live.resets_at) : manualFresh ? manualReset : null;
+      const projected = liveFresh && live.forecast_available ? live.expires_unused_pct : null;
+      const source = liveFresh ? 'live' : manualFresh && typeof pct === 'number' ? 'reported' : 'unknown';
+      let score = -index * 6;
+      const notes = [];
+      if (typeof pct === 'number') {
+        notes.push(Math.round(pct) + '% left' + (source === 'reported' ? ' · reported' : ''));
+        if (pct <= 0) unavailable = 'Allowance is exhausted';
+        else if (pct <= 10) { score -= 25; notes.push('Low remaining allowance'); }
+      } else notes.push('Quota unknown');
+      if (liveFresh && (live.windows || []).some(w => w.available && !w.stale && w.percent_left <= 0)) {
+        unavailable = 'A current usage window is exhausted';
+      }
+      if (reset !== null) {
+        const hours = (reset - now) / 3600000;
+        notes.push('Resets in ' + (hours >= 24 ? Math.ceil(hours / 24) + 'd' : Math.ceil(hours) + 'h'));
+        if (typeof pct === 'number' && pct > 0) {
+          const unused = typeof projected === 'number' ? projected : pct;
+          score += Math.min(24, unused / Math.max(hours, 12) * 12);
+          if (projected > 0) notes.push(Math.round(projected) + '% projected unused');
+        }
+      } else if (resource.reset_note) notes.push(resource.reset_note);
+      if (resource.priority === 'early') { score += 5; notes.push('Prefer early use'); }
+      if (resource.priority === 'soon' && (manualReset === null || manualReset > now)) {
+        score += 12; notes.push('Prioritize this allowance');
+      }
+      if (resource.kind === 'credits' || resource.kind === 'metered') {
+        score -= resource.kind === 'metered' ? 10 : 5;
+        notes.push(resource.kind === 'credits' ? 'Uses credits on the configured route' : 'Metered billing');
+        if (typeof resource.balance_usd === 'number') {
+          notes.push('$' + resource.balance_usd.toLocaleString() + ' last reported balance');
+          if (resource.balance_usd <= 0) unavailable = 'Reported balance is exhausted';
+        }
+        const expires = stamp(resource.expires_at);
+        if (expires !== null && expires <= now) unavailable = 'Credits have expired';
+        else if (expires !== null) score += Math.min(24, 168 / Math.max(1, (expires - now) / 3600000));
+      }
+      result.push({ ...row, score, unavailable, notes, funding: resource.label || 'Engine configured billing', source });
+    }
+    return result.sort((a, b) => Number(!!a.unavailable) - Number(!!b.unavailable) || b.score - a.score);
+  }
+
+  function markNsAdvisorManual() {
+    if (!nsAdvisor || nsAdvisor.applying || currentConversation !== '__new__') return;
+    nsAdvisor.manual = true;
+  }
+
+  async function loadNsAdvisor(force) {
+    if (nsAdvisor.loading || !force && nsAdvisor.data && Date.now() - nsAdvisor.loadedAt < 60000) return;
+    nsAdvisor.loading = true;
+    try {
+      const response = await fetch('/api/spawn-advisor', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Recommendations unavailable');
+      nsAdvisor.data = data;
+      nsAdvisor.error = '';
+      nsAdvisor.loadedAt = Date.now();
+    } catch (error) { nsAdvisor.error = error.message; }
+    finally { nsAdvisor.loading = false; renderNsAdvisor(); }
+  }
+
+  function nsAdvisorChoices() {
+    const engines = {};
+    for (const option of Array.from($convInputEngineSelect?.options || [])) {
+      engines[option.value] = {
+        available: !option.disabled && !option.hidden && !spawnDefaultsState.disabled_engines.includes(option.value)
+          && _emnInstalled?.[option.value] === true,
+        efforts: effortLevelsForEngine(option.value).map(x => x.id),
+      };
+    }
+    const catalog = {};
+    for (const [engine, models] of Object.entries(MODEL_OPTIONS_BY_ENGINE)) {
+      catalog[engine] = models.map(m => ({ ...m, policy_blocked: m.policy_blocked
+        || spawnDefaultsState.blockedModels.has(String(m.id).toLowerCase()) }));
+    }
+    return rankNsAdvisorChoices(nsAdvisor.data?.config, nsAdvisor.depth, catalog, engines, nsAdvisor.data?.headroom, Date.now());
+  }
+
+  function applyNsAdvisorChoice(choice) {
+    if (!choice || choice.unavailable || nsAdvisor.applying) return;
+    const held = currentSpawnChoice();
+    if (held.engine === choice.engine && held.model === choice.model && held.effort === choice.effort) return;
+    nsAdvisor.applying = true;
+    try {
+      _spawnEngineChosenByUser = true;
+      _spawnModelChosenByUserForEngine.add(choice.engine);
+      spawnDefaultsState.engine = choice.engine;
+      spawnDefaultsState.models[choice.engine] = choice.model;
+      _defaultModelsByEngine[choice.engine] = choice.model;
+      spawnEffortChoiceDirty = false;
+      for (const select of [$convInputEngineSelect, $kptToolbarEngineSelect]) if (select) select.value = choice.engine;
+      syncSpawnEngineDependentUi();
+      if ($convInputEffortSelect) { $convInputEffortSelect.value = choice.effort; spawnEffortChoiceDirty = true; }
+      updateInputBar();
+      updatePaneHeader(activePaneId(), { source: choice.engine, display_name: 'New session',
+        folder_label_chip: spawnCwdLabel(getSpawnCwd()) }, { category: 'new session', title: 'New session' });
+      if (choice.engine === 'claude') scheduleClaudePrewarm();
+    } finally { nsAdvisor.applying = false; }
+  }
+
+  function renderNsAdvisor() {
+    if (!nsAdvisor || nsAdvisor.applying || currentConversation !== '__new__') return;
+    const host = getConvView()?.querySelector('.ns-advisor');
+    if (!host || nsAdvisor.editing) return;
+    const config = nsAdvisor.data?.config;
+    const choices = nsAdvisorChoices();
+    const best = choices.find(c => !c.unavailable);
+    if (config?.enabled && !nsAdvisor.manual && best) applyNsAdvisorChoice(best);
+    const label = c => spawnEngineLabel(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
+    host.innerHTML = '<div class="ns-advisor-top"><strong>Recommended model</strong><div class="ns-advisor-depth" role="group" aria-label="Task depth">'
+      + ['routine', 'deep'].map(depth => '<button type="button" data-depth="' + depth + '" aria-pressed="' + (nsAdvisor.depth === depth) + '">'
+        + (depth === 'routine' ? 'Routine' : 'Deep') + '</button>').join('') + '</div></div>'
+      + '<p class="ns-advisor-caption">' + (nsAdvisor.depth === 'deep' ? 'Hard debugging, architecture, ambiguous work.' : 'Clear implementation, small fixes, routine edits.') + '</p>'
+      + (nsAdvisor.error ? '<p role="status">' + escapeHtml(nsAdvisor.error) + ' <button type="button" data-advisor-refresh>Retry</button></p>'
+        : !config ? '<p role="status">Loading your preferences…</p>'
+        : !config.enabled ? '<p>Enable recommendations and add your preferred models below.</p>'
+        : best ? '<div class="ns-advisor-result" aria-live="polite"><strong>' + escapeHtml(label(best)) + '</strong>'
+          + '<span>' + escapeHtml(best.reason || 'Your preferred eligible model for this task depth.') + '</span>'
+          + '<small>' + escapeHtml(best.funding + ' · ' + best.notes.join(' · ')) + '</small></div>'
+          + '<div class="ns-advisor-actions"><span>' + (nsAdvisor.manual ? 'Your manual choice is selected.' : 'Selected for your next session.')
+          + '</span><button type="button" data-advisor-use>' + (nsAdvisor.manual ? 'Use recommendation' : 'Using recommendation ✓') + '</button></div>'
+        : '<p role="status">No eligible recommendation. Check engine availability, quotas, or your preferred models. You can still choose manually below.</p>')
+      + (config ? '<details class="ns-advisor-alternatives"><summary>Ranked choices and allowances</summary>'
+        + '<ol>' + choices.map(c => '<li><strong>' + escapeHtml(label(c)) + '</strong><small>'
+          + escapeHtml(c.unavailable || [c.reason, c.funding, ...c.notes].filter(Boolean).join(' · ')) + '</small></li>').join('') + '</ol>'
+        + '<button type="button" data-advisor-refresh>Refresh usage</button></details>' : '')
+      + '<button type="button" class="ns-advisor-preferences" data-advisor-edit>Model &amp; subscription preferences</button>';
+    host.querySelectorAll('[data-depth]').forEach(button => button.addEventListener('click', () => {
+      nsAdvisor.depth = button.dataset.depth;
+      nsAdvisor.manual = false;
+      try { localStorage.setItem('ccc-spawn-depth', nsAdvisor.depth); } catch (_) {}
+      renderNsAdvisor();
+    }));
+    host.querySelector('[data-advisor-use]')?.addEventListener('click', () => { nsAdvisor.manual = false; renderNsAdvisor(); });
+    host.querySelectorAll('[data-advisor-refresh]').forEach(button => button.addEventListener('click', () => loadNsAdvisor(true)));
+    host.querySelector('[data-advisor-edit]')?.addEventListener('click', () => {
+      if (!config) { loadNsAdvisor(true); return; }
+      nsAdvisor.editing = true;
+      nsAdvisor.draft = JSON.parse(JSON.stringify(config));
+      renderNsAdvisorEditor();
+    });
+  }
+
+  function nsAdvisorLocalTime(value) {
+    const date = new Date(value);
+    if (!value || !Number.isFinite(date.getTime())) return '';
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  }
+
+  function renderNsAdvisorEditor() {
+    const host = getConvView()?.querySelector('.ns-advisor');
+    if (!host || !nsAdvisor.draft) return;
+    const draft = nsAdvisor.draft;
+    host.innerHTML = '<strong>Model &amp; subscription preferences</strong><p class="ns-advisor-caption">Saved on this CCC server. Ranked lists define which models are suitable; fresh allowance data can adjust their order.</p>'
+      + '<label><input type="checkbox" data-advisor-enabled' + (draft.enabled ? ' checked' : '') + '> Recommend and select a model for new sessions</label>'
+      + ['routine', 'deep'].map(depth => '<section><h4>' + (depth === 'routine' ? 'Routine' : 'Deep') + ' preferences</h4><ol class="ns-advisor-edit-list">'
+        + draft.rankings[depth].map((row, index) => '<li><span>' + escapeHtml(spawnEngineLabel(row.engine) + ' · ' + getModelPillLabel(row.engine, row.model, row.effort)) + '</span>'
+          + '<button type="button" data-move="' + depth + ':' + index + ':-1" aria-label="Move choice up"' + (!index ? ' disabled' : '') + '>↑</button>'
+          + '<button type="button" data-move="' + depth + ':' + index + ':1" aria-label="Move choice down"' + (index === draft.rankings[depth].length - 1 ? ' disabled' : '') + '>↓</button>'
+          + '<button type="button" data-remove="' + depth + ':' + index + '" aria-label="Remove choice">×</button></li>').join('')
+        + '</ol><button type="button" data-add="' + depth + '">Add current model &amp; thinking selection</button></section>').join('')
+      + '<h4>Allowances &amp; billing</h4><p class="ns-advisor-caption">Describe the billing route already configured in each engine. These settings track funding; they do not change provider credentials. Reported quotas expire after 24 hours or their reset. Enter reset and credit-expiry times in your local timezone.</p>'
+      + Object.entries(draft.resources).map(([engine, resource]) => {
+        const input = (key, label, type = 'text', value = resource[key]) => '<label>' + label + '<input data-resource="' + escapeAttr(engine) + '" data-field="' + key + '" type="' + type + '"'
+          + (type === 'number' ? ' min="0"' + (key === 'remaining_pct' ? ' max="100"' : '') + ' step="any"' : '')
+          + ' value="' + escapeAttr(value == null ? '' : String(value)) + '"></label>';
+        const select = (key, label, options) => '<label>' + label + '<select data-resource="' + escapeAttr(engine) + '" data-field="' + key + '">'
+          + options.map(([value, text]) => '<option value="' + value + '"' + (resource[key] === value ? ' selected' : '') + '>' + text + '</option>').join('') + '</select></label>';
+        return '<fieldset class="ns-advisor-resource"><legend>' + escapeHtml(spawnEngineLabel(engine)) + '</legend><div class="ns-advisor-fields">'
+          + input('label', 'Active billing route')
+          + select('kind', 'Funding', [['subscription', 'Subscription'], ['credits', 'Credits'], ['metered', 'Metered']])
+          + input('remaining_pct', 'Reported quota left (%)', 'number') + input('resets_at', 'Quota resets', 'datetime-local', nsAdvisorLocalTime(resource.resets_at))
+          + input('balance_usd', 'Reported credit balance ($)', 'number') + input('expires_at', 'Credits expire', 'datetime-local', nsAdvisorLocalTime(resource.expires_at))
+          + select('priority', 'Usage preference', [['normal', 'Normal'], ['early', 'Prefer early use'], ['soon', 'Use this allowance soon']])
+          + input('reset_note', 'Reset note') + input('other_allowances', 'Other included allowances')
+          + '</div><small>Last reported: ' + escapeHtml(resource.observed_at ? new Date(resource.observed_at).toLocaleString() : 'Unknown') + '</small></fieldset>';
+      }).join('')
+      + '<p class="ns-advisor-error" role="status"></p><div class="ns-advisor-actions"><button type="button" data-advisor-cancel>Cancel</button><button type="button" data-advisor-save>Save preferences</button></div>';
+    host.querySelector('[data-advisor-enabled]').addEventListener('change', event => { draft.enabled = event.target.checked; });
+    host.querySelectorAll('[data-resource]').forEach(input => input.addEventListener('change', () => {
+      const resource = draft.resources[input.dataset.resource];
+      const field = input.dataset.field;
+      resource[field] = input.type === 'number' ? (input.value === '' ? null : Number(input.value))
+        : input.type === 'datetime-local' ? (input.value ? new Date(input.value).toISOString() : '') : input.value;
+      if (['remaining_pct', 'balance_usd', 'resets_at'].includes(field)) resource.observed_at = new Date().toISOString();
+    }));
+    host.querySelectorAll('[data-move]').forEach(button => button.addEventListener('click', () => {
+      const [depth, raw, delta] = button.dataset.move.split(':');
+      const index = Number(raw), target = index + Number(delta);
+      [draft.rankings[depth][index], draft.rankings[depth][target]] = [draft.rankings[depth][target], draft.rankings[depth][index]];
+      renderNsAdvisorEditor();
+    }));
+    host.querySelectorAll('[data-remove]').forEach(button => button.addEventListener('click', () => {
+      const [depth, index] = button.dataset.remove.split(':'); draft.rankings[depth].splice(Number(index), 1); renderNsAdvisorEditor();
+    }));
+    host.querySelectorAll('[data-add]').forEach(button => button.addEventListener('click', () => {
+      const choice = currentSpawnChoice();
+      if (!choice.model) { host.querySelector('.ns-advisor-error').textContent = 'Choose a named model in the composer first.'; return; }
+      const list = draft.rankings[button.dataset.add];
+      if (!list.some(row => row.engine === choice.engine && row.model === choice.model && row.effort === choice.effort)) list.push({ ...choice, reason: '' });
+      if (!draft.resources[choice.engine]) draft.resources[choice.engine] = { label: '', kind: 'subscription', priority: 'normal' };
+      renderNsAdvisorEditor();
+    }));
+    host.querySelector('[data-advisor-cancel]').addEventListener('click', () => { nsAdvisor.editing = false; renderNsAdvisor(); });
+    host.querySelector('[data-advisor-save]').addEventListener('click', async event => {
+      event.target.disabled = true;
+      try {
+        const response = await fetch('/api/spawn-advisor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Could not save preferences');
+        nsAdvisor.data.config = data.config;
+        nsAdvisor.editing = false;
+        nsAdvisor.manual = false;
+        renderNsAdvisor();
+      } catch (error) { host.querySelector('.ns-advisor-error').textContent = error.message; event.target.disabled = false; }
+    });
+  }
+
   function enterNewSessionMode() {
+    if (currentConversation !== '__new__') { nsAdvisor.manual = false; nsAdvisor.editing = false; }
     ++newSessionComposerRevision;
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
@@ -88410,6 +88674,7 @@
         + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-stage-title">New session</div>'
         + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
+        + '<section class="ns-advisor" aria-label="Model recommendation"></section>'
         + '<section class="ns-model-comparison" aria-label="Compare models"></section>'
         + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
         +   '<summary>Create a fresh folder</summary>'
@@ -88433,6 +88698,7 @@
       _renderNsExtensions($view, paneId);
     }
     if (typeof syncSpawnEngineDependentUi === 'function') syncSpawnEngineDependentUi();
+    loadNsAdvisor();
     updateInputBar();
     // Toggle the context strip into new-session mode so the picker is
     // visible and the workspace pill is hidden (the workspace pill

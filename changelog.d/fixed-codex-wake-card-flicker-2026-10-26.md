@@ -1,0 +1,1 @@
+- Codex sends no longer flicker while waiting: the wake progress card and the Working pill stopped swapping places every poll, and the card stays hidden until it has progress beyond the "Delivered" note (it used to say "Waiting for delivery" right under it).
