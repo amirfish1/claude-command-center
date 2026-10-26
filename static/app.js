@@ -3358,6 +3358,7 @@
       _archiveWindowTsSec(row.last_interacted), _archiveWindowTsSec(row.last_activity),
       _archiveWindowTsSec(row.last_mtime), _archiveWindowTsSec(row.archived_at),
       _archiveWindowTsSec(row.closed_at), _archiveWindowTsSec(row.started_at),
+      _archiveWindowTsSec(row.idea_ticket && row.idea_ticket.moved_at),
     );
   }
   function _archiveWindowAllowsRow(row, cutoff = _archiveWindowCutoff()) {
@@ -20393,6 +20394,9 @@
           row.idea_ticket = Object.assign({}, row.idea_ticket, { ref: data.ref, queue: data.queue });
         } else if (row && !fromRef && (row.session_id === sessionId || row.id === sessionId)) {
           row.idea_ticket = { ref: data.ref, queue: data.queue, sessions: 1, closed: false };
+        }
+        if (row && row.idea_ticket && (row.session_id === sessionId || row.id === sessionId)) {
+          row.idea_ticket.moved_at = data.moved_at || 0;
         }
       }));
       _convListRenderSig = null;
@@ -42809,7 +42813,7 @@
       const best = new Map();
       const inWindow = c => !!_qActive || _archiveWindowAllowsRow(c, _ipWindowCutoff);
       const byRecency = (x, y) => (
-        Number(y.mtime || y.modified || 0) - Number(x.mtime || x.modified || 0)
+        _archiveWindowRowTs(y) - _archiveWindowRowTs(x)
         || _allTabSessionId(x).localeCompare(_allTabSessionId(y))
       );
       const activeRefs = new Set(_allTabConvs.filter(c => _allTabLaneFor(c) === lane

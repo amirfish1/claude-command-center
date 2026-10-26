@@ -16126,10 +16126,11 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
             return None
     window = _archive_list_window(window)
     cutoff = _archive_list_window_cutoff(window, now=now)
+    idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
     row_rev, track_since = state["row_rev"], state["track_since"]
     ids, changed = [], []
     for r in state["base"]:
-        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff):
+        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid):
             continue
         sid = _archive_row_sid(r)
         if not sid:
@@ -16139,7 +16140,7 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
             changed.append(r)
     seen = set(ids)
     for r in state["extra"]:
-        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff):
+        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid):
             continue
         sid = _archive_row_sid(r)
         if not sid or sid in seen:
@@ -16417,6 +16418,7 @@ def _archive_list_window_cutoff(window, now=None):
 
 
 def _archive_list_row_ts(row):
+    newest = 0
     for key in ("modified", "mtime", "last_interacted", "last_activity", "last_mtime",
                 "archived_at", "closed_at", "started_at"):
         try:
@@ -16424,15 +16426,24 @@ def _archive_list_row_ts(row):
         except (TypeError, ValueError):
             continue
         if math.isfinite(ts) and ts > 0:
-            return ts / 1000 if ts > 100000000000 else ts
-    return 0
+            newest = max(newest, ts / 1000 if ts > 100000000000 else ts)
+    try:
+        moved_at = float(((row or {}).get("idea_ticket") or {}).get("moved_at") or 0)
+        if math.isfinite(moved_at):
+            newest = max(newest, moved_at)
+    except (TypeError, ValueError):
+        pass
+    return newest
 
 
-def _archive_list_window_allows_row(row, cutoff):
+def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
     if not cutoff:
         return True
     engine = ((row or {}).get("engine") or (row or {}).get("source") or "").lower()
-    return bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff
+    if bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff:
+        return True
+    ticket = (idea_tickets_by_sid or {}).get(_archive_row_sid(row)) or {}
+    return _archive_list_row_ts({"idea_ticket": ticket}) >= cutoff
 
 
 _PREVIEW_STATE_RE = re.compile(r"<session-state>.*?(</session-state>|$)", re.S)
@@ -16530,7 +16541,7 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
         _archive_list_project_row(row, resumes=resumes, parents=parents)
         for row in (rows or [])
         if isinstance(row, dict)
-        and _archive_list_window_allows_row(row, cutoff)
+        and _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid)
     ]
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
@@ -38246,7 +38257,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             result = _idea_tickets.move_ticket(sid, payload.get("queue"))
             if result.get("ok"):
-                _restamp_archive_serve_cache_after_mutation()
+                if result.get("queue") != "OTHER":
+                    result["moved_at"] = _idea_tickets.note_manual_move(sid)
+                _restamp_archive_serve_cache_after_mutation(mutated_sids=[sid])
             self.send_json(result, 200 if result.get("ok") else 400)
         elif path == "/api/idea-tickets/backfill":
             # Experimental idea tickets: one-off backfill for sessions that

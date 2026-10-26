@@ -117,3 +117,20 @@ test('ticket archive and trash respect the same window', () => {
   assert.deepEqual(representatives([], 'ideas', 'trash', trash, '1d'), ['recent']);
   assert.deepEqual(representatives(rows, 'ideas', 'archived'), ['recent', 'old']);
 });
+
+test('moving an old session makes it visible and selects it in the destination', () => {
+  const now = 2_000_000_000;
+  for (const queue of ['IDEAS', 'SMALL-BUGS']) {
+    const lane = queue === 'IDEAS' ? 'ideas' : 'smallbugs';
+    const moved = row('moved', 'EXAMPLE-1', now - 10 * 86400,
+      {idea_ticket: {ref: 'EXAMPLE-1', queue, moved_at: now}});
+    const recent = row('recent', 'EXAMPLE-2', now - 60,
+      {idea_ticket: {ref: 'EXAMPLE-2', queue}});
+    const sibling = row('sibling', 'EXAMPLE-1', now - 30,
+      {idea_ticket: {ref: 'EXAMPLE-1', queue}});
+    assert.deepEqual(representatives([recent, sibling, moved], lane, 'active', [], '8h'),
+      ['moved', 'recent']);
+    moved.idea_ticket.moved_at = now - 2 * 86400;
+    assert.deepEqual(representatives([moved], lane, 'active', [], '1d'), []);
+  }
+});

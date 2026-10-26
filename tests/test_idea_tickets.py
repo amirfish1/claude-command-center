@@ -201,6 +201,19 @@ class IdeaTicketsTest(unittest.TestCase):
         it.note_ui_spawn("cli1", "cli")
         self.assertNotIn("cli1", it.load_state()["pending"])
 
+    def test_manual_move_persists_recency_on_only_the_moved_session(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        self.transcripts["s2"] = {"text": "cont", "continued_from": "s1"}
+        it.attach_or_file("s2")
+        it.move_ticket("s2", "SMALL-BUGS")
+        moved_at = it.note_manual_move("s2")
+        it._state_cache.update({"key": None, "data": None})
+        rows = it.idea_ticket_rows_map()
+        self.assertGreater(moved_at, 0)
+        self.assertEqual(rows["s2"]["moved_at"], moved_at)
+        self.assertEqual(rows["s1"]["moved_at"], 0)
+
     def test_ticketless_session_files_from_row_menu(self):
         self.registry["old"] = {"spawned_via": "terminal", "cwd": "/tmp"}
         self.transcripts["old"] = {"text": "The list flickers"}

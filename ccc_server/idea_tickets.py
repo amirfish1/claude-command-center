@@ -208,6 +208,7 @@ def idea_ticket_rows_map():
             "queue": ticket.get("queue") or "",
             "sessions": len(ticket.get("sessions") or []),
             "closed": bool(ticket.get("closed")),
+            "moved_at": entry.get("moved_at", 0),
             # A review applies only to this session's existing transcript.
             # The UI invalidates it when newer activity arrives.
             "ready_to_close_reviewed_at": entry.get("ready_to_close_reviewed_at", 0),
@@ -783,6 +784,19 @@ def _archive_worker(sid, ticket, archived):
                 _mutate(lambda d: d["tickets"][ref].__setitem__("closed", False))
     except Exception as exc:
         _core._log_activity("idea", "IDEA_TICKET_ERR", f"archive {sid} {exc}")
+
+
+def note_manual_move(session_id):
+    """Keep an explicitly moved session inside the destination's time window."""
+    moved_at = time.time()
+
+    def record(data):
+        entry = data["sessions"].get(session_id)
+        if isinstance(entry, dict) and entry.get("ref"):
+            entry["moved_at"] = moved_at
+
+    _mutate(record)
+    return moved_at
 
 
 def move_ticket(session_id, queue):

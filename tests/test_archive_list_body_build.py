@@ -211,6 +211,28 @@ def test_lifecycle_restamp_keeps_delta_tracking(monkeypatch):
     assert entry['row_rev'] == {'b': entry['ver']}
 
 
+def test_manual_move_adds_old_session_to_recent_delta(monkeypatch):
+    server = importlib.import_module('server')
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_ARCHIVE_DELTA_CTX_HIST', server.collections.OrderedDict())
+    ideas = {}
+    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: dict(ideas))
+    now = time.time()
+    server._archive_serve_cache_store(
+        key, [_row('old', 'Older topic', now - 10 * 86400)], server._archive_serve_generation)
+    base = server._archive_serve_cache[key]['rows']
+    token = server._archive_list_delta_state(key, base, '7d', True)['token']
+    assert server._archive_list_project_rows(base, window='7d', now=now) == []
+    ideas['old'] = {'ref': 'IDEAS-1', 'queue': 'IDEAS', 'moved_at': now}
+    server._restamp_archive_serve_cache_after_mutation(mutated_sids=['old'])
+    base = server._archive_serve_cache[key]['rows']
+    state = server._archive_list_delta_state(key, base, '7d', True)
+    delta = server._archive_list_delta_payload(state, token, base, window='7d', now=now)
+    assert delta['ids'] == ['old']
+    assert delta['conversations'][0]['idea_ticket']['moved_at'] == now
+
+
 def test_delta_reject_reason_names_why_a_token_gets_a_full_body(monkeypatch):
     # CCC-201: list_server diag logs this so repeat full bodies (the slow
     # list_read tail) can be attributed to restart / ctx churn / tracking.
