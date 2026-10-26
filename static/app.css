@@ -3729,12 +3729,12 @@
   .conv-scroll-speak-btn::before {
     content: '';
     position: absolute;
-    inset: -4px;
+    inset: 2px;
     border-radius: 50%;
     pointer-events: none;
     display: none;
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
   }
   .conv-scroll-speak-btn[data-tts-cache]::before {
     display: block;
@@ -3765,12 +3765,12 @@
   .speaker-tools.is-adjusting .speaker-rate-arc { stroke-width: 5; }
   .speaker-tools.is-adjusting .speaker-rate-thumb { r: 5; fill: #7dd3fc; }
   .speaker-tools.is-adjusting .speaker-rate-hit { cursor: grabbing; }
-  .speaker-rate-value { position: absolute; top: 72px; left: 14px; width: 56px; text-align: center; border-radius: 8px; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 600 11px/18px ui-monospace, monospace; }
-  .speaker-next-sentence { position: absolute; left: 70px; top: 28px; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border, #43545a); border-radius: 50%; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 24px/1 system-ui, sans-serif; cursor: pointer; pointer-events: auto; touch-action: manipulation; }
-  .speaker-next-sentence:hover { border-color: var(--accent, #00cdd6); color: var(--accent, #00cdd6); }
+  .speaker-dock { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 2px 4px; border: 1px solid var(--border, #43545a); border-radius: 12px; background: var(--surface, #161b22); box-shadow: 0 2px 8px rgba(0,0,0,.4); pointer-events: auto; }
+  .speaker-rate-value { min-width: 34px; padding: 0 4px; text-align: center; color: var(--text, #c9d1d9); font: 600 11px/20px ui-monospace, monospace; }
+  .speaker-next-sentence, .speaker-voice-switch { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--text, #c9d1d9); font: 18px/1 system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
+  .speaker-voice-switch { font-size: 13px; }
+  .speaker-next-sentence:hover, .speaker-voice-switch:hover { color: var(--accent, #00cdd6); background: color-mix(in srgb, var(--accent, #00cdd6) 15%, transparent); }
   .speaker-next-sentence:disabled { opacity: 0.35; cursor: default; }
-  .speaker-voice-switch { position: absolute; left: -14px; top: 28px; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border, #43545a); border-radius: 50%; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 15px/1 system-ui, sans-serif; cursor: pointer; pointer-events: auto; touch-action: manipulation; }
-  .speaker-voice-switch:hover { border-color: var(--accent, #00cdd6); color: var(--accent, #00cdd6); }
   .speaker-voice-name { position: absolute; bottom: 88px; left: 50%; transform: translateX(-50%); white-space: nowrap; padding: 0 8px; border-radius: 8px; background: var(--surface, #161b22); color: var(--text, #c9d1d9); font: 600 11px/20px ui-monospace, monospace; }
   .speaker-voice-name[hidden] { display: none; }
   .conv-pane:has(.conv-scroll-speak-btn) .tts-rate-control { display: none; }
@@ -17346,9 +17346,10 @@
     .conv-scroll-speak-btn { width: 40px; height: 40px; right: 14px; font-size: 17px; }
     .speaker-tools { width: 56px; height: 56px; }
     .speaker-rate-dial { width: 56px; height: 56px; }
-    .speaker-rate-value { top: 48px; left: 8px; width: 40px; font-size: 10px; }
-    .speaker-next-sentence { left: 46px; top: 18px; width: 22px; height: 22px; font-size: 17px; }
-    .speaker-voice-switch { left: -12px; top: 18px; width: 22px; height: 22px; font-size: 12px; }
+    .speaker-dock { top: 44px; }
+    .speaker-rate-value { min-width: 30px; font-size: 10px; line-height: 18px; }
+    .speaker-next-sentence, .speaker-voice-switch { width: 18px; height: 18px; font-size: 14px; }
+    .speaker-voice-switch { font-size: 11px; }
     .speaker-voice-name { bottom: 60px; }
 
     /* --- Kanban-split --- */

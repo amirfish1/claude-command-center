@@ -1,0 +1,1 @@
+- Grouped the floating speaker's speed readout, voice switch, and next-sentence buttons into one pill under the rate dial instead of three scattered overlapping controls
