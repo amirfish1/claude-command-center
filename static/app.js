@@ -31782,6 +31782,9 @@
       const row = ev.target.closest && ev.target.closest('.conv-item[data-id]');
       if (!row || row.dataset.role === 'archived-gc-row') return;
       if (isActionTarget(ev.target)) return;
+      // CCC-212: a plain drag moves the row (e.g. into a split pane); range
+      // select needs Shift (or Cmd/Ctrl to add to the selection).
+      if (!(ev.shiftKey || ev.metaKey || ev.ctrlKey)) return;
       if (state) endDragSelect();
       state = {
         anchor: row,
