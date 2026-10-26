@@ -25057,12 +25057,26 @@
 
   // ── Attention panel (top-of-kanban "what needs me") ─────────────────────
   let _nyaShowAll = false;
-  async function loadAttentionList() {
+  // Back-off for the attention poll (CCC-142): it piggybacks on every list
+  // refresh at ~310ms of dashboard CPU each, so an unchanged feed doubles the
+  // gap before the next fetch (15s -> 2min); any change resets it.
+  const _NYA_POLL_MIN_MS = 15000;
+  const _NYA_POLL_MAX_MS = 120000;
+  let _nyaPollGapMs = _NYA_POLL_MIN_MS;
+  let _nyaNextFetchAt = 0;
+  let _nyaLastSig = null;
+  async function loadAttentionList(opts) {
     // The visible NYA panel was retired (its list is now inline under each
     // In-progress row). This function survives ONLY to fetch the attention
     // feed and refresh the inline cache (_nyaItemsBySid). The Push-all
     // ship-log feed borrows the same DOM container, so skip while it owns it.
     if (_shipLogActive || document.hidden) return;
+    // _nyaItemsBySid is only rendered when the legacy inline-Details flag is
+    // on; without it the fetch is pure dashboard CPU with no consumer.
+    if (!_ipNyaDetailsOn()) return;
+    const force = !!(opts && opts.force);
+    if (!force && Date.now() < _nyaNextFetchAt) return;
+    _nyaNextFetchAt = Date.now() + _nyaPollGapMs;
     const repoPath = popoutRepoPath();
     // No repo selected → drive NYA off the cross-repo attention feed. The repo
     // dropdown was removed from the UI, so requiring a selection left NYA
@@ -25083,6 +25097,12 @@
       const res = await backgroundApiFetch(url);
       const data = await res.json();
       const allItems = (data && data.items) || [];
+      const sig = JSON.stringify(allItems);
+      _nyaPollGapMs = sig === _nyaLastSig
+        ? Math.min(_nyaPollGapMs * 2, _NYA_POLL_MAX_MS) : _NYA_POLL_MIN_MS;
+      _nyaNextFetchAt = Date.now() + _nyaPollGapMs;
+      if (sig === _nyaLastSig) return;
+      _nyaLastSig = sig;
       // Inline cache: the FULL set so the Details toggle can render a block
       // under every In-progress row that has one. Rebuilt fresh each pass.
       _nyaItemsBySid.clear();
@@ -25201,7 +25221,7 @@
       $seeAll.addEventListener('click', (e) => {
         e.stopPropagation();
         _nyaShowAll = !_nyaShowAll;
-        loadAttentionList();
+        loadAttentionList({ force: true });
       });
     }
     const $refresh = document.getElementById('attentionRefreshBtn');
@@ -25214,7 +25234,7 @@
           // Bust the 60s GH issue-state cache, then re-query so auto-verify
           // can reclassify any closed issues immediately.
           await ccPostJson('/api/bust-issue-state', {}).catch(() => {});
-          await loadAttentionList();
+          await loadAttentionList({ force: true });
           refreshConversationList();
         } finally {
           setTimeout(() => { $refresh.disabled = false; $refresh.style.opacity = ''; }, 400);
