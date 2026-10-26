@@ -4603,6 +4603,10 @@
   }
   @container conv-ctx (max-width: 750px) {
     .conv-input-context .wp-antigravity-tokens { display: none; }
+    /* "peak XXk" is secondary to the live Xk / XXk pill: drop it well
+       before the pill itself (≤550px) so a narrow pane never shows the
+       peak without the current count (CCC-217). */
+    .conv-input-context .wp-usage-peak { display: none; }
   }
   @container conv-ctx (max-width: 650px) {
     .conv-input-context .wp-cost-pill { display: none; }
