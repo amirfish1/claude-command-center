@@ -321,8 +321,9 @@ def test_parse_version():
 def test_node_supported_bounds():
     assert setup_steps._node_supported((22, 11, 0))
     assert setup_steps._node_supported((20, 18, 0))
+    assert setup_steps._node_supported((26, 12, 0))
     assert not setup_steps._node_supported((20, 17, 9))
-    assert not setup_steps._node_supported((25, 0, 0))
+    assert not setup_steps._node_supported((27, 0, 0))
     assert not setup_steps._node_supported((19, 9, 9))
 
 
