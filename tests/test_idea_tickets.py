@@ -152,19 +152,83 @@ class IdeaTicketsTest(unittest.TestCase):
         # Known sessions never re-run the lookup on later turns.
         self.assertEqual(it.on_turn_end("w1")["reason"], "known")
 
-    def test_archive_latest_closes_earlier_only_logs_unarchive_reopens(self):
+    def test_archive_latest_closes_earlier_is_silent_unarchive_reopens(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")
         self.transcripts["s2"] = {"text": "cont", "continued_from": "s1"}
         it.attach_or_file("s2")
+        self.calls.clear()
         it.on_archive("s1", True)
-        self.assertFalse([c for c in self.calls if c[0] == "close"])
+        self.assertEqual(self.calls, [])
         it.on_archive("s2", True)
         self.assertTrue([c for c in self.calls if c[0] == "close"])
         self.assertTrue(it.ticket_for_session("s2")["closed"])
         it.on_archive("s2", False)
         self.assertTrue([c for c in self.calls if c[0] == "reopen"])
         self.assertFalse(it.ticket_for_session("s2")["closed"])
+
+    def test_group_workers_with_stale_snapshots_transition_only_once(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        for sid in ("s2", "s3"):
+            it.attach_or_file(sid, continued_from_hint="s1")
+        open_snapshot = it.ticket_for_session("s1")
+        self.calls.clear()
+        for sid in ("s1", "s2", "s3", "s3"):
+            it._archive_worker(sid, open_snapshot, True)
+        self.assertEqual([c[0] for c in self.calls], ["close"])
+        closed_snapshot = it.ticket_for_session("s1")
+        for sid in ("s1", "s2", "s3"):
+            it._archive_worker(sid, closed_snapshot, False)
+        self.assertEqual([c[0] for c in self.calls], ["close", "reopen"])
+
+    def test_queued_archive_worker_ignores_superseded_action(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        ticket = it.ticket_for_session("s1")
+        self.core._load_archived_conversations = lambda **kw: []
+        self.calls.clear()
+        it._archive_worker("s1", ticket, True)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(it.ticket_for_session("s1")["closed"])
+
+    def test_parallel_unarchive_workers_reopen_once(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda t: "idea")
+        it._mutate(lambda d: d["tickets"]["IDEAS-1"].update(closed=True))
+        ticket = it.ticket_for_session("s1")
+        entered, release, duplicate, second_started = (it.threading.Event() for _ in range(4))
+        real_wt = it._wt
+
+        def slow_reopen(args, **kw):
+            if args[0] == "reopen":
+                if entered.is_set():
+                    duplicate.set()
+                entered.set()
+                release.wait(2)
+            return real_wt(args, **kw)
+
+        it._wt = slow_reopen
+        self.calls.clear()
+        first = self._orig[2](target=it._archive_worker, args=("s1", ticket, False))
+        def run_second():
+            second_started.set()
+            it._archive_worker("s1", ticket, False)
+        second = self._orig[2](target=run_second)
+        first.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            second.start()
+            self.assertTrue(second_started.wait(1))
+            duplicate.wait(0.1)
+        finally:
+            release.set()
+            first.join(3)
+            if second.ident is not None:
+                second.join(3)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertFalse(duplicate.is_set())
+        self.assertEqual([c[0] for c in self.calls], ["reopen"])
 
     def test_move_rewrites_ref_for_every_session(self):
         self._ui_session("s1")

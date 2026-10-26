@@ -62,6 +62,7 @@ JEV_KEY_ENV = "JEV_API_KEY"
 JEV_TIMEOUT_S = 8
 
 _lock = threading.Lock()
+_archive_lock = threading.Lock()
 _inflight = set()
 _queues_ready = set()
 _state_cache = {"key": None, "data": None}
@@ -755,7 +756,7 @@ def _attach(sid, ref, kind, origin):
 
 def on_archive(session_id, archived):
     """Archiving a ticket's latest session closes it; unarchiving reopens it.
-    Archiving an earlier session only logs it."""
+    Earlier-session archive events stay in CCC's local lifecycle log."""
     sid = str(session_id or "").strip()
     if not sid or not _enabled():
         return
@@ -768,17 +769,49 @@ def on_archive(session_id, archived):
 
 
 def _archive_worker(sid, ticket, archived):
-    ref = ticket["ref"]
-    latest = ticket["sessions"][-1] if ticket["sessions"] else sid
+    # Group archive/unarchive calls arrive once per member and can run in
+    # parallel. Serialize the external transition, then re-read state instead
+    # of trusting the pre-thread snapshot (every unarchive saw closed=True).
+    with _archive_transition_lock():
+        _archive_worker_locked(sid, ticket, archived)
+
+
+@contextmanager
+def _archive_transition_lock():
+    # Separate from the state lock: a slow wt command must not block filing
+    # or state writes. The file lock also covers another dashboard process.
+    with _archive_lock:
+        lock_path = _state_path().with_suffix(".archive.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a") as fh:
+            if fcntl is not None:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _archive_worker_locked(sid, ticket, archived):
+    _state_cache["key"] = None
+    current = ticket_for_session(sid)
+    if not current or current["ref"] != ticket["ref"]:
+        return
+    ref = current["ref"]
+    latest = current["sessions"][-1] if current["sessions"] else sid
     try:
-        if archived and sid == latest and not ticket["closed"]:
+        # A newer action can overtake a queued worker; never apply the stale
+        # action after its session has already changed lifecycle state again.
+        load_archived = getattr(_core, "_load_archived_conversations", None)
+        if callable(load_archived) and (sid in load_archived(sweep=False)) != archived:
+            return
+        if archived and sid == latest and not current["closed"]:
             rc, _ = _wt(["close", ref, "--force", "--no-code",
                          "--summary", f"Session {sid} archived in CCC."])
             if rc == 0:
                 _mutate(lambda d: d["tickets"][ref].__setitem__("closed", True))
-        elif archived:
-            _wt(["comment", ref, f"Session {sid} archived.", "--by", "system"])
-        elif ticket["closed"]:
+        elif not archived and current["closed"]:
             rc, _ = _wt(["reopen", ref, "--reason", f"Session {sid} unarchived in CCC."])
             if rc == 0:
                 _mutate(lambda d: d["tickets"][ref].__setitem__("closed", False))
