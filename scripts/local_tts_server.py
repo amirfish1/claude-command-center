@@ -32,7 +32,7 @@ MAX_CHARS = 2000
 
 # Bumped when the process's runtime contract changes (priority, threads), so
 # CCC replaces an older process left running from before an upgrade.
-SERVER_REV = 4
+SERVER_REV = 5
 # Normal priority: at nice 10 a loaded machine starved the voice for tens of
 # seconds. Background work is kept polite by the fg-first lock instead.
 
@@ -77,12 +77,24 @@ _voices = set(_kokoro.get_voices())
 
 
 class _PriorityLock:
-    """One synthesis at a time; waiting fg requests always go before bg."""
+    """One synthesis at a time; waiting fg requests always go before bg.
+
+    A fg stream releases the lock between its pieces (encode + write), and
+    that instant used to hand the lock to a waiting bg request, so bg and fg
+    pieces alternated and the read being heard made audio at half speed
+    (CCC-144: a 173-char fg clip took 23.6s beside a bg prefetch). bg
+    therefore also waits until fg has been idle for FG_GRACE_S. A time grace,
+    not stream registration, so a stalled fg client cannot starve bg forever.
+    """
+
+    FG_GRACE_S = 0.5
 
     def __init__(self):
         self._cond = threading.Condition()
         self._busy = False
         self._fg_waiting = 0
+        self._fg_released = 0.0
+        self._holder_fg = False
 
     def acquire(self, fg):
         with self._cond:
@@ -94,13 +106,19 @@ class _PriorityLock:
                 finally:
                     self._fg_waiting -= 1
             else:
-                while self._busy or self._fg_waiting:
-                    self._cond.wait()
+                while True:
+                    idle = time.monotonic() - self._fg_released
+                    if not self._busy and not self._fg_waiting and idle >= self.FG_GRACE_S:
+                        break
+                    self._cond.wait(None if self._busy or self._fg_waiting else self.FG_GRACE_S - idle)
             self._busy = True
+            self._holder_fg = fg
 
     def release(self):
         with self._cond:
             self._busy = False
+            if self._holder_fg:
+                self._fg_released = time.monotonic()
             self._cond.notify_all()
 
 

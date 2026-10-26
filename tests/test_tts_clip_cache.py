@@ -88,7 +88,7 @@ def _load_priority_lock():
     source = (ROOT / "scripts" / "local_tts_server.py").read_text()
     tree = ast.parse(source)
     node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "_PriorityLock")
-    namespace = {"threading": threading}
+    namespace = {"threading": threading, "time": time}
     exec(compile(ast.Module(body=[node], type_ignores=[]), "local_tts_server.py", "exec"), namespace)
     return namespace["_PriorityLock"]
 
@@ -196,6 +196,30 @@ class PriorityLockTests(unittest.TestCase):
         bg.join(2)
         fg.join(2)
         self.assertEqual(order, ["fg", "bg"])
+
+    def test_bg_does_not_slip_between_fg_stream_pieces(self):
+        # A fg stream releases the lock between pieces (encode + write); a
+        # waiting bg piece must not take it there (CCC-144).
+        lock = _load_priority_lock()()
+        order = []
+
+        def bg_run():
+            lock.acquire(False)
+            order.append("bg")
+            lock.release()
+
+        lock.acquire(True)
+        bg = threading.Thread(target=bg_run)
+        bg.start()
+        time.sleep(0.05)
+        for i in range(3):
+            lock.release()
+            time.sleep(0.02)      # encode + write the piece
+            lock.acquire(True)
+            order.append("fg%d" % i)
+        lock.release()
+        bg.join(3)
+        self.assertEqual(order, ["fg0", "fg1", "fg2", "bg"])
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ class PieceSplitTests(unittest.TestCase):
         src = SCRIPT.read_text(encoding="utf-8")
         fake_kokoro = mock.MagicMock()
         fake_kokoro.create.return_value = ([0.1, 0.2, 0.3], 24000)
-        ns = {"re": re, "os": os, "threading": threading, "_kokoro": fake_kokoro}
+        ns = {"re": re, "os": os, "threading": threading, "time": __import__("time"), "_kokoro": fake_kokoro}
         exec(src[src.index("class _PriorityLock:"):src.index("class Handler(")], ns)
         synth = ns["_synth"]
         s1, r1 = synth("Repeated sentence.", "af_heart")
