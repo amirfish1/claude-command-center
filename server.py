@@ -16019,6 +16019,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         [key, window, _session_graph.parent_revision(), resumes, ideas],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
+    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas)
     ovl = hashlib.sha1(json.dumps(
         extra, sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:8] if extra else "0"
@@ -16028,6 +16029,68 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "track_since": track_since, "row_rev": row_rev,
         "base": base, "extra": extra,
     }
+
+
+# CCC-201: a ctx change used to invalidate every client token, so each idea
+# ticket / parent link / usage-limit resume change cost every open page a
+# full 3MB /list body. Remember the per-sid projection inputs of the last few
+# ctx states; an older-ctx token then gets a delta that also resends the rows
+# whose inputs differ between its ctx and the current one.
+_ARCHIVE_DELTA_CTX_HIST = collections.OrderedDict()
+_ARCHIVE_DELTA_CTX_HIST_MAX = 8
+_archive_delta_ctx_lock = threading.Lock()
+
+
+def _archive_delta_ctx_fingerprints(mapping):
+    if not isinstance(mapping, dict):
+        return None
+    out = {}
+    for sid, v in mapping.items():
+        out[str(sid)] = json.dumps(v, sort_keys=True, separators=(",", ":"), default=str)
+    return out
+
+
+def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas):
+    with _archive_delta_ctx_lock:
+        if ctx in _ARCHIVE_DELTA_CTX_HIST:
+            _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
+            return
+    entry = {
+        "scope": (key, window),
+        "parents": _session_graph.parent_snapshot(),
+        "resumes": _archive_delta_ctx_fingerprints(resumes),
+        "ideas": _archive_delta_ctx_fingerprints(ideas),
+    }
+    with _archive_delta_ctx_lock:
+        _ARCHIVE_DELTA_CTX_HIST[ctx] = entry
+        _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
+        while len(_ARCHIVE_DELTA_CTX_HIST) > _ARCHIVE_DELTA_CTX_HIST_MAX:
+            _ARCHIVE_DELTA_CTX_HIST.popitem(last=False)
+
+
+def _archive_delta_ctx_changed_sids(old_ctx, new_ctx):
+    """Session ids whose projection inputs differ between two remembered ctx
+    states (both forms of kimi's "session_" prefix), or None if either state
+    is unknown or they belong to different list scopes."""
+    with _archive_delta_ctx_lock:
+        old = _ARCHIVE_DELTA_CTX_HIST.get(old_ctx)
+        new = _ARCHIVE_DELTA_CTX_HIST.get(new_ctx)
+    if old is None or new is None or old["scope"] != new["scope"]:
+        return None
+    changed = set()
+    for field in ("parents", "resumes", "ideas"):
+        a, b = old[field], new[field]
+        if a is None or b is None:
+            if a is not b:
+                return None
+            continue
+        for sid in a.keys() | b.keys():
+            if a.get(sid) != b.get(sid):
+                changed.add(sid)
+    out = set(changed)
+    for sid in changed:
+        out.add(sid[len("session_"):] if sid.startswith("session_") else "session_" + sid)
+    return out
 
 
 def _archive_list_delta_reject(state, since):
@@ -16042,7 +16105,7 @@ def _archive_list_delta_reject(state, since):
         return "malformed"
     if nonce != state["nonce"]:
         return "nonce"
-    if ctx != state["ctx"]:
+    if ctx != state["ctx"] and _archive_delta_ctx_changed_sids(ctx, state["ctx"]) is None:
         return "ctx"
     if not (state["track_since"] <= since_ver <= state["ver"]):
         return "range"
@@ -16055,6 +16118,12 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
     if _archive_list_delta_reject(state, since) is not None:
         return None
     since_ver = int(str(since).split(".")[1])
+    since_ctx = str(since).split(".")[2]
+    ctx_sids = set()
+    if since_ctx != state["ctx"]:
+        ctx_sids = _archive_delta_ctx_changed_sids(since_ctx, state["ctx"])
+        if ctx_sids is None:
+            return None
     window = _archive_list_window(window)
     cutoff = _archive_list_window_cutoff(window, now=now)
     row_rev, track_since = state["row_rev"], state["track_since"]
@@ -16066,7 +16135,7 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
         if not sid:
             return None
         ids.append(sid)
-        if row_rev.get(sid, track_since) > since_ver:
+        if row_rev.get(sid, track_since) > since_ver or sid in ctx_sids:
             changed.append(r)
     seen = set(ids)
     for r in state["extra"]:

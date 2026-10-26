@@ -228,3 +228,41 @@ def test_delta_reject_reason_names_why_a_token_gets_a_full_body(monkeypatch):
     assert reject(state, '.'.join(['ffffffff', ver, ctx, ovl])) == 'nonce'
     assert reject(state, '.'.join([nonce, ver, 'x' * 12, ovl])) == 'ctx'
     assert reject(state, '.'.join([nonce, str(int(ver) + 5), ctx, ovl])) == 'range'
+
+
+def test_ctx_change_resends_only_rows_whose_projection_inputs_moved(monkeypatch):
+    # CCC-201: an idea-ticket / usage-limit-resume change used to reject every
+    # older token ('ctx'), so each open page re-downloaded the full 3MB body.
+    server = importlib.import_module('server')
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_ARCHIVE_DELTA_CTX_HIST', server.collections.OrderedDict())
+    ideas = {'a': {'ref': 'IDEAS-1'}}
+    resumes = {}
+    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: dict(ideas))
+    monkeypatch.setattr(server, '_load_usage_limit_resumes', lambda: dict(resumes))
+    gen = server._archive_serve_generation
+    now = time.time()
+    server._archive_serve_cache_store(
+        key, [_row('a', 'A', now), _row('b', 'B', now), _row('session_k', 'K', now)], gen)
+    base = server._archive_serve_cache[key]['rows']
+    token = server._archive_list_delta_state(key, base, '7d', True)['token']
+
+    ideas['b'] = {'ref': 'IDEAS-2'}
+    resumes['k'] = {'resume_at': now + 600}
+    state = server._archive_list_delta_state(key, base, '7d', True)
+    assert state['ctx'] != token.split('.')[2]
+    assert server._archive_list_delta_reject(state, token) is None
+    delta = server._archive_list_delta_payload(state, token, base, window='7d')
+    assert delta['ids'] == ['a', 'b', 'session_k']
+    assert sorted(r['session_id'] for r in delta['conversations']) == ['b', 'session_k']
+
+    # A ctx this process never remembered (evicted) still gets a full body.
+    nonce, ver, _ctx, ovl = token.split('.')
+    stale = '.'.join([nonce, ver, 'f' * 12, ovl])
+    assert server._archive_list_delta_reject(state, stale) == 'ctx'
+    assert server._archive_list_delta_payload(state, stale, base, window='7d') is None
+    # Another window's ctx never vouches for this one.
+    other = server._archive_list_delta_state(key, base, '1d', True)
+    assert server._archive_list_delta_reject(state, other['token'].replace(
+        other['token'].split('.')[1], ver, 1)) == 'ctx'

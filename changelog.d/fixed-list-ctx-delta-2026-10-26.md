@@ -1,0 +1,1 @@
+- The sidebar no longer re-downloads the whole session list when an idea ticket, parent link, or usage-limit resume changes; open pages get a small delta with just the affected rows.
