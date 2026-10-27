@@ -1222,8 +1222,49 @@ def _gh_queue_signature(items):
     return tuple(rows)
 
 
+def _gh_queue_cheap_probe():
+    """(GitHub rows, local-store stamp) without reading the whole store.
+
+    The full soft list_items() re-reads and re-normalizes every local ticket
+    (~1.7k rows, 0.25-0.5s CPU) on each 5s tick even though this poller only
+    watches GitHub rows; it was the dashboard's largest CPU consumer (CCC-142).
+    Per-project GitHub lists hit the backend's identity memo (~20-80ms) and the
+    store's (mtime, size) stamp is one stat pair. Returns None when the engine
+    lacks either hook (stdlib fallback, test stubs): callers do the full read.
+    """
+    q = _core._q
+    projects_fn = getattr(q, "_github_projects", None)
+    stamp_fn = getattr(q, "_db_stamp", None)
+    path_fn = getattr(q, "_db_path", None)
+    if not (callable(projects_fn) and callable(stamp_fn) and callable(path_fn)):
+        return None
+    try:
+        stamp = stamp_fn(path_fn())
+        rows = []
+        for project in sorted(projects_fn()):
+            rows.extend(q.list_items(project=project) or [])
+    except Exception:
+        return None
+    return rows, stamp
+
+
 def _gh_queue_poll_once():
     """One remote-list read. Warms the list memo, returns True on change."""
+    probe = _gh_queue_cheap_probe()
+    probe_sig = stamp = None
+    if probe is not None:
+        gh_rows, stamp = probe
+        probe_sig = _gh_queue_signature(gh_rows)
+        with _ux_fixes_list_cache_lock:
+            existing = _ux_fixes_list_cache.get(("", ""))
+            if (
+                existing is not None
+                and existing.get("store_stamp") == stamp
+                and existing.get("gh_sig") == probe_sig
+            ):
+                # Nothing moved: keep the board's memo fresh, skip the rebuild.
+                existing["ts"] = time.time()
+                return _gh_queue_note_sig(probe_sig)
     try:
         # Soft read on purpose: the WatchTower daemon's background poller
         # already pays the live `gh` cost and persists a fresh snapshot every
@@ -1243,22 +1284,25 @@ def _gh_queue_poll_once():
     except Exception:
         return False
 
-    sig = _gh_queue_signature(items)
+    # One signature source per poll mode, so the fast path and a rebuild can
+    # never disagree and fire a phantom change.
+    sig = probe_sig if probe is not None else _gh_queue_signature(items)
     all_sig = tuple(
         (str(it.get("ref") or ""), str(it.get("status") or ""), str(it.get("updated_at") or ""))
         for it in items if isinstance(it, dict)
     )
     with _ux_fixes_list_cache_lock:
         existing = _ux_fixes_list_cache.get(("", ""))
-        if existing is not None and existing.get("all_sig") == all_sig:
-            existing["ts"] = time.time()
-            items = existing["items"]
-        else:
-            items = with_stages(with_waiting_on(items))
-            _ux_fixes_list_cache[("", "")] = {
-                "ts": time.time(), "items": items, "all_sig": all_sig,
-            }
+        if existing is None or existing.get("all_sig") != all_sig:
+            existing = {"items": with_stages(with_waiting_on(items)), "all_sig": all_sig}
+            _ux_fixes_list_cache[("", "")] = existing
+        existing["ts"] = time.time()
+        existing["store_stamp"] = stamp
+        existing["gh_sig"] = probe_sig
+    return _gh_queue_note_sig(sig)
 
+
+def _gh_queue_note_sig(sig):
     with _gh_watch_lock:
         first = _gh_watch["sig"] is None
         changed = (not first) and sig != _gh_watch["sig"]
