@@ -1,0 +1,1 @@
+Turn-end notifications show the session's actual outcome and any required next step instead of the generic “Ready for your input” message. Older agents fall back to the latest response, with no extra AI call.
