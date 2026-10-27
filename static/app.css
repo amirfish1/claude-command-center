@@ -32255,6 +32255,14 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   .conv-model-picker-strip.is-new-session .ccc-free-pill {
     display: none !important;
   }
+  /* Keep Smart repo beside the phone's folder shortcuts while the path
+     input and browse controls remain collapsed. */
+  .conv-input-context.is-new-session .spawn-cwd-row { display: contents !important; }
+  .conv-input-context.is-new-session .spawn-cwd-row > :not(.smart-repo-status) { display: none !important; }
+  .conv-input-context.is-new-session .smart-repo-status {
+    grid-area: chips; justify-self: end; align-self: center;
+  }
+  .conv-input-context.is-new-session .spawn-cwd-quick-chips { margin-right: 38px; }
   .conv-input-context.is-new-session .spawn-cwd-quick-chips,
   .conv-model-picker-strip.is-new-session .conv-model-picker-chips {
     display: flex;
