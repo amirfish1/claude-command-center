@@ -4893,8 +4893,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 1200px)')", app_js)
         self.assertNotIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 768px)')", app_js)
-        # Simple mode is opt-in (localStorage 'ccc-ui-mode'); unset always
-        # defaults to advanced so a narrow window never flips chrome alone.
+        # A saved mode wins; otherwise mobile starts with Simple Home.
         self.assertIn("function isSimpleMode() { return getUiMode() === 'simple'; }", app_js)
         self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
         self.assertIn('id="mobileSimpleHeader"', index_html)

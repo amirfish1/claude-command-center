@@ -19997,15 +19997,14 @@
   // gates mobile-vs-desktop CHROME). This gates plain-language labels and
   // progressive disclosure of technical info within whatever chrome is
   // already showing. Explicit user choice (localStorage 'ccc-ui-mode')
-  // always wins; unset ALWAYS defaults to 'advanced', regardless of viewport
-  // width, so nothing about this redesign is ever active for anyone —
-  // mobile or desktop — until they explicitly opt in from Settings.
+  // always wins. Without a saved choice, mobile starts on Simple Home;
+  // desktop keeps the Advanced workspace.
   function getUiMode() {
     try {
       const stored = localStorage.getItem('ccc-ui-mode');
       if (stored === 'simple' || stored === 'advanced') return stored;
     } catch (_) {}
-    return 'advanced';
+    return isMobileRedesign() ? 'simple' : 'advanced';
   }
   function setUiMode(mode) {
     const value = mode === 'simple' ? 'simple' : 'advanced';
@@ -20015,9 +20014,8 @@
   function isSimpleMode() { return getUiMode() === 'simple'; }
   // The mobile CHROME (collapsed "More" menu, mobile id chip, mobile
   // status-line row redesign, bottom nav) is gated on this, not on
-  // isMobileRedesign() alone — a narrow window by itself must never change
-  // the UI for a user who hasn't opted into Simple mode. See isSimpleMode's
-  // opt-in-only default above.
+  // isMobileRedesign() alone, so an explicit Advanced choice also keeps
+  // the Advanced chrome on mobile.
   function isMobileChromeActive() { return isMobileRedesign() && isSimpleMode(); }
   function _syncUiModeBodyClass() {
     document.body.classList.toggle('ccc-simple-mode', isSimpleMode());
@@ -21830,10 +21828,9 @@
     // Landing surface: home on load in Simple mode. Deferred one tick so the
     // module-scope lets this section references at runtime (spawn defaults,
     // model catalog) finish initializing first.
-    _syncSimpleHomeVisibility();
     setTimeout(() => {
+      _syncSimpleHomeVisibility();
       _simpleLoadComposerData();
-      _simpleHomeRefresh();
     }, 0);
   }
   _wireSimpleHome();
