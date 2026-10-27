@@ -384,6 +384,29 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.sweep_rows(rows), 0)
         self.assertEqual(len([c for c in self.calls if c[0] == "add"]), 1)
 
+    def test_sweep_attaches_auto_skipped_child_once_lineage_is_ticketed(self):
+        # CCC-231: a reviewer was skipped ("not a UI spawn") before its spawner
+        # joined an idea; once the row names a ticketed parent it attaches.
+        rows = [{"session_id": "rev", "last_assistant_preview": "done"}]
+        it.attach_or_file("rev")
+        self.assertTrue(it._auto_skip(it.load_state()["sessions"]["rev"]))
+        self._ui_session("spawner")
+        ref = it.attach_or_file("spawner", classify_fn=lambda t: "idea")["ref"]
+        self.assertEqual(it.sweep_rows(rows), 0)  # no lineage on the row yet
+        rows[0]["parent_session_id"] = "spawner"
+        self.assertEqual(it.sweep_rows(rows), 1)
+        self.assertEqual(it.ticket_for_session("rev")["ref"], ref)
+        self.assertEqual(it.sweep_rows(rows), 0)
+
+    def test_sweep_never_reattaches_a_session_moved_to_other(self):
+        self._ui_session("spawner")
+        it.attach_or_file("spawner", classify_fn=lambda t: "idea")
+        it._mutate(lambda d: d["sessions"].__setitem__("kid", {"skip": "other", "at": 1}))
+        rows = [{"session_id": "kid", "parent_session_id": "spawner",
+                 "last_assistant_preview": "done"}]
+        self.assertEqual(it.sweep_rows(rows), 0)
+        self.assertIsNone(it.ticket_for_session("kid"))
+
     def test_flag_off_disables_everything(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")

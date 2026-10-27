@@ -3343,6 +3343,11 @@ def _apply_watchtower_worker_display_names(rows):
                 row["parent_session_id"] = origin["parent_session_id"]
             if not row.get("continued_from_session_id"):
                 row["is_watchtower_worker"] = True
+        elif origin and not row.get("parent_session_id") \
+                and origin.get("parent_session_id") and origin["parent_session_id"] != sid:
+            # A session's own `wt spawn` (reviewer, critic) stays unbadged but
+            # still nests under its spawner, so it joins the spawner's idea.
+            row["parent_session_id"] = origin["parent_session_id"]
         if sid in worker_session_ids:
             # Continuation sessions (F2) are user interactive sessions continuing
             # prior work; they must not be classified as WatchTower background workers.

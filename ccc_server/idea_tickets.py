@@ -420,6 +420,16 @@ def note_ui_spawn(session_id, via):
 SWEEP_MAX_PER_CALL = 5
 
 
+_AUTO_SKIP_PREFIX = "not a UI spawn"
+
+
+def _auto_skip(entry):
+    """True for a skip ``attach_or_file`` recorded on its own (no lineage
+    yet), as opposed to a user's move to Other."""
+    return (isinstance(entry, dict) and not entry.get("ref")
+            and str(entry.get("skip") or "").startswith(_AUTO_SKIP_PREFIX))
+
+
 def sweep_rows(rows):
     """List-build entry point for engines without a Stop hook (Codex etc.):
     queue ticket creation after a reply, or inherit a continuation's ticket
@@ -441,16 +451,21 @@ def sweep_rows(rows):
     started = 0
     for row in rows or []:
         sid = str(row.get("session_id") or row.get("id") or "")
-        if not sid or sid in known or sid in _inflight:
+        if not sid or sid in _inflight:
             continue
         # Task-tool subagents ("agent-…") are helpers inside a session, not
         # sessions of their own; they don't join the ticket's log.
         if sid.startswith("agent-"):
             continue
         continuing = _ticketed(row.get("continued_from_session_id"))
-        if not (sid in pending
-                or continuing
-                or _ticketed(row.get("parent_session_id"))):
+        child = _ticketed(row.get("parent_session_id"))
+        if sid in known:
+            # An automatic skip was recorded before the session's lineage was
+            # ticketed (the parent joined its idea later, or the parent link
+            # was learned later); a user's move to Other is never undone.
+            if not (_auto_skip(known.get(sid)) and (continuing or child)):
+                continue
+        elif not (sid in pending or continuing or child):
             continue
         # "Has replied": Claude rows carry a reply preview; Codex rows only
         # record that the last event was a turn result.
@@ -462,6 +477,7 @@ def sweep_rows(rows):
             continued_from=str(row.get("continued_from_session_id") or ""),
             parent=str(row.get("parent_session_id") or ""),
             text=str(row.get("first_message") or ""),
+            retry_skip=sid in known,
         )
         if queued.get("queued"):
             started += 1
@@ -523,15 +539,17 @@ def _retitle(ref, title):
         with _lock:
             _inflight.discard(("title", ref))
 
-def on_turn_end(session_id, *, continued_from="", parent="", text=""):
+def on_turn_end(session_id, *, continued_from="", parent="", text="", retry_skip=False):
     """Stop-hook entry point. Returns at once; the work runs on a thread.
-    ``continued_from`` / ``parent`` are lineage hints from a list row."""
+    ``continued_from`` / ``parent`` are lineage hints from a list row.
+    ``retry_skip`` lets an automatic skip try again (its lineage got a ticket)."""
     sid = str(session_id or "").strip()
     if not sid or not _enabled():
         return {"queued": False, "reason": "disabled"}
     if sid.startswith("agent-"):
         return {"queued": False, "reason": "subagent"}
-    if sid in load_state()["sessions"]:
+    known = load_state()["sessions"]
+    if sid in known and not (retry_skip and _auto_skip(known.get(sid))):
         return {"queued": False, "reason": "known"}
     with _lock:
         if sid in _inflight:
