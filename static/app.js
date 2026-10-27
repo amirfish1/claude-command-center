@@ -76105,6 +76105,11 @@
     const pending = _archiveAllInflight.get(url);
     if (pending) return pending;
     const _perfT0 = performance.now();
+    // Stage split for the list_read tail (CCC-229): headers arrive after
+    // client queueing + server work; body covers download + JSON parse,
+    // which stretches when a fresh page's main thread is busy booting.
+    let _perfHdrAt = 0;
+    let _perfBodyMs = 0;
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
@@ -76133,6 +76138,9 @@
             detail: {
               bytes: bytes || 0, status: status, extra: extra || '',
               wall_ms: wallMs, hidden_ms: wallMs - ms,
+              ttfb_ms: _perfHdrAt ? Math.round(_perfHdrAt - _perfT0) : null,
+              body_ms: _perfBodyMs ? Math.round(_perfBodyMs) : null,
+              start_nav_ms: Math.round(_perfT0),
             },
           });
         }
@@ -76165,6 +76173,7 @@
         } finally {
           clearTimeout(timeoutId);
         }
+        _perfHdrAt = performance.now();
         _lastArchiveListHttpStatus = r.status;
         // 304 → the server confirms our cached payload is still current, so we
         // skip re-parsing ~500KB and reuse the last conversations as-is. The
@@ -76192,6 +76201,7 @@
         let etag = r.headers.get('ETag');
         let _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
         let d = await r.json();
+        _perfBodyMs = performance.now() - _perfHdrAt;
         let _merged = null;
         if (d && d.delta) {
           _merged = _mergeArchiveListDelta(_archiveAllData.get(url), d);
