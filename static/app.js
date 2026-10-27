@@ -40532,7 +40532,12 @@
       const expanded = _repeatGroupExpanded(key, cards);
       const latest = cards.reduce((best, c) => Math.max(best, c.modified || c.last_interacted || 0), 0);
       const title = _repeatGroupTitle(first);
-      const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' });
+      // CCC-226: idea avatars are <button>s; nested in the toggle <button> the
+      // parser hoists them out unpositioned and the repo logo fills the list.
+      const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' })
+        .replace(/^<button type="button"/, '<span aria-hidden="true"')
+        .replace(/ data-role="idea-ticket"/, '')
+        .replace(/<\/button>$/, '</span>');
       // relativeTime counts backwards, so the newest stamp is the SMALLEST
       // age: _repeatGroupRange emits max-first, which reads "1h-5h".
       const stamps = cards.map(c => c.modified || c.last_interacted || 0).filter(Boolean);

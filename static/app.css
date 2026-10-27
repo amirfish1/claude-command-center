@@ -6181,6 +6181,14 @@
     opacity: 0.88;
     pointer-events: none;
   }
+  .conv-repeat-group-toggle > .conv-session-icon.conv-idea-avatar {
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    justify-content: center;
+    opacity: 1;
+  }
   .conv-repeat-group-toggle:hover > .conv-session-icon,
   .conv-repeat-group-toggle:focus-visible > .conv-session-icon {
     opacity: 1;
