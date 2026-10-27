@@ -88300,6 +88300,8 @@
           if (ranked) {
             markNsAdvisorManual();
             applyNsAdvisorChoice(picks[index]);
+            const overrides = document.getElementById('nsModelOverrides');
+            if (overrides) overrides.open = false;
             renderNsAdvisor();
           } else selectSpawnPick(chip.getAttribute('data-engine'), chip.getAttribute('data-model'));
         });
@@ -88371,6 +88373,7 @@
     if (currentConversation !== '__new__') return;
     const host = getConvView()?.querySelector('.ns-model-comparison');
     if (!host) return;
+    host.classList.toggle('is-manual-expanded', _nsModelComparisonOpen);
     const engine = getSpawnEngine();
     const selected = $convInputModelSelect?.value || _defaultModelsByEngine[engine] || '';
     const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
@@ -88421,6 +88424,7 @@
     host.querySelector('.ns-model-table-wrap').scrollTop = scrollTop;
     host.querySelector('details').addEventListener('toggle', event => {
       _nsModelComparisonOpen = event.target.open;
+      host.classList.toggle('is-manual-expanded', _nsModelComparisonOpen);
     });
     host.querySelector('select').addEventListener('change', event => {
       _spawnEngineChosenByUser = true;
@@ -88567,31 +88571,46 @@
 
   function renderNsAdvisor() {
     if (!nsAdvisor || nsAdvisor.applying || currentConversation !== '__new__') return;
-    const host = getConvView()?.querySelector('.ns-advisor');
+    const host = document.getElementById('nsComposerAdvisor');
     if (!host || nsAdvisor.editing) return;
+    host.hidden = false;
+    host.classList.remove('is-editing');
+    const whyOpen = !!host.querySelector('.ns-advisor-why')?.open;
     const config = nsAdvisor.data?.config;
     const choices = nsAdvisorChoices();
     const best = choices.find(c => !c.unavailable);
     if (config?.enabled && !nsAdvisor.manual && best) applyNsAdvisorChoice(best);
     const label = c => spawnEngineLabel(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
-    host.innerHTML = '<div class="ns-advisor-top"><strong>Recommended model</strong><div class="ns-advisor-depth" role="group" aria-label="Task depth">'
-      + ['routine', 'deep'].map(depth => '<button type="button" data-depth="' + depth + '" aria-pressed="' + (nsAdvisor.depth === depth) + '">'
-        + (depth === 'routine' ? 'Routine' : 'Deep') + '</button>').join('') + '</div></div>'
-      + '<p class="ns-advisor-caption">' + (nsAdvisor.depth === 'deep' ? 'Hard debugging, architecture, ambiguous work.' : 'Clear implementation, small fixes, routine edits.') + '</p>'
+    const automatic = config?.enabled && !nsAdvisor.manual && !!best;
+    const strip = document.getElementById('convModelPickerStrip');
+    const overrides = document.getElementById('nsModelOverrides');
+    strip?.classList.add('has-depth-control');
+    strip?.classList.toggle('has-auto-selection', !!config?.enabled);
+    if (overrides) {
+      overrides.classList.toggle('is-legacy', config?.enabled === false);
+      if (config?.enabled === false) overrides.open = true;
+    }
+    const selected = document.getElementById('nsSelectedModel');
+    const held = currentSpawnChoice();
+    const selectedLabel = window.CCCFreeRuntime?.runtimeForSpawn?.(held.engine) === 'free'
+      ? 'Free · ' + spawnEngineLabel(held.engine) : label(held);
+    if (selected) selected.innerHTML = '<span class="ns-selection-mode">' + (automatic ? 'Auto' : nsAdvisor.manual ? 'Custom' : 'Model')
+      + '</span><span class="ns-selection-name">' + escapeHtml(selectedLabel) + '</span>';
+    host.innerHTML = '<div class="ns-advisor-top"><div class="ns-advisor-depth" role="group" aria-label="Task depth">'
+      + ['routine', 'deep'].map(depth => '<button type="button" data-depth="' + depth + '" aria-pressed="' + (nsAdvisor.depth === depth) + '" title="'
+        + (depth === 'deep' ? 'Hard debugging, architecture, ambiguous work' : 'Clear implementation, small fixes, routine edits') + '">'
+        + (depth === 'routine' ? 'Routine' : 'Deep') + '</button>').join('') + '</div>'
+      + (nsAdvisor.manual && best && config?.enabled ? '<button type="button" class="ns-auto-restore" data-advisor-use>Use auto</button>' : '')
+      + '<details class="ns-advisor-why"' + (whyOpen ? ' open' : '') + '><summary>Why?</summary><div class="ns-advisor-explanation">'
       + (nsAdvisor.error ? '<p role="status">' + escapeHtml(nsAdvisor.error) + ' <button type="button" data-advisor-refresh>Retry</button></p>'
         : !config ? '<p role="status">Loading your preferences…</p>'
-        : !config.enabled ? '<p>Enable recommendations and add your preferred models below.</p>'
-        : best ? '<div class="ns-advisor-result" aria-live="polite"><strong>' + escapeHtml(label(best)) + '</strong>'
+        : !config.enabled ? '<p>Enable automatic selection in model preferences.</p>'
+        : best ? '<div class="ns-advisor-result"><strong>' + escapeHtml(label(best)) + '</strong>'
           + '<span>' + escapeHtml(best.reason || 'Your preferred eligible model for this task depth.') + '</span>'
-          + '<small>' + escapeHtml(best.funding + ' · ' + best.notes.join(' · ')) + '</small></div>'
-          + '<div class="ns-advisor-actions"><span>' + (nsAdvisor.manual ? 'Your manual choice is selected.' : 'Selected for your next session.')
-          + '</span><button type="button" data-advisor-use>' + (nsAdvisor.manual ? 'Use recommendation' : 'Using recommendation ✓') + '</button></div>'
-        : '<p role="status">No eligible recommendation. Check engine availability, quotas, or your preferred models. You can still choose manually below.</p>')
-      + (config ? '<details class="ns-advisor-alternatives"><summary>Ranked choices and allowances</summary>'
-        + '<ol>' + choices.map(c => '<li><strong>' + escapeHtml(label(c)) + '</strong><small>'
-          + escapeHtml(c.unavailable || [c.reason, c.funding, ...c.notes].filter(Boolean).join(' · ')) + '</small></li>').join('') + '</ol>'
-        + '<button type="button" data-advisor-refresh>Refresh usage</button></details>' : '')
-      + '<button type="button" class="ns-advisor-preferences" data-advisor-edit>Model &amp; subscription preferences</button>';
+          + '<small>' + escapeHtml([best.funding, ...best.notes].filter(Boolean).join(' · ')) + '</small></div>'
+        : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
+      + '<div class="ns-advisor-actions"><button type="button" data-advisor-refresh>Refresh usage</button>'
+      + '<button type="button" data-advisor-edit>Preferences</button></div></div></details></div>';
     host.querySelectorAll('[data-depth]').forEach(button => button.addEventListener('click', () => {
       nsAdvisor.depth = button.dataset.depth;
       nsAdvisor.manual = false;
@@ -88616,8 +88635,10 @@
   }
 
   function renderNsAdvisorEditor() {
-    const host = getConvView()?.querySelector('.ns-advisor');
+    const host = document.getElementById('nsComposerAdvisor');
     if (!host || !nsAdvisor.draft) return;
+    host.hidden = false;
+    host.classList.add('is-editing');
     const draft = nsAdvisor.draft;
     host.innerHTML = '<strong>Model &amp; subscription preferences</strong><p class="ns-advisor-caption">Saved on this CCC server. Ranked lists define which models are suitable; fresh allowance data can adjust their order.</p>'
       + '<label><input type="checkbox" data-advisor-enabled' + (draft.enabled ? ' checked' : '') + '> Recommend and select a model for new sessions</label>'
@@ -88691,7 +88712,15 @@
         if (event.detail?.enabled) { markNsAdvisorManual(); renderNsAdvisor(); }
       });
     }
-    if (currentConversation !== '__new__') { nsAdvisor.manual = false; nsAdvisor.editing = false; }
+    if (currentConversation !== '__new__') {
+      nsAdvisor.manual = false;
+      nsAdvisor.editing = false;
+      _nsModelComparisonOpen = false;
+      const overrides = document.getElementById('nsModelOverrides');
+      if (overrides) overrides.open = false;
+      const why = document.querySelector('#nsComposerAdvisor .ns-advisor-why');
+      if (why) why.open = false;
+    }
     ++newSessionComposerRevision;
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
@@ -88749,7 +88778,6 @@
         + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-stage-title">New session</div>'
         + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
-        + '<section class="ns-advisor" aria-label="Model recommendation"></section>'
         + '<section class="ns-model-comparison" aria-label="Compare models"></section>'
         + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
         +   '<summary>Create a fresh folder</summary>'

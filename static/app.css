@@ -31008,6 +31008,57 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .ns-model-manual { border: 0; background: transparent; color: var(--text-muted); font: inherit; cursor: pointer; white-space: nowrap; padding: 3px 7px; order: 2; }
 .is-depth-ranked > .ccc-free-pill { order: 1; }
 .ns-advisor { width: 100%; max-width: 800px; box-sizing: border-box; padding: 18px; margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); text-align: left; font-size: 13px; line-height: 1.5; }
+/* Composer hierarchy: thinking first, automatic model second. */
+.conv-model-picker-strip.has-depth-control { flex-direction: column; gap: 4px; }
+#nsComposerAdvisor {
+  width: 100%; max-width: none; padding: 0; margin: 0;
+  border: 0; border-radius: 0; background: transparent;
+}
+#nsComposerAdvisor[hidden] { display: none; }
+#nsComposerAdvisor .ns-advisor-top { justify-content: flex-start; gap: 10px; }
+#nsComposerAdvisor .ns-advisor-depth {
+  display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--surface);
+}
+#nsComposerAdvisor .ns-advisor-depth button {
+  padding: 6px 18px; border-radius: 999px; border-color: transparent;
+  background: transparent; font-size: 13px; font-weight: 600; color: var(--text-muted);
+}
+#nsComposerAdvisor .ns-advisor-depth button[aria-pressed="true"] {
+  color: var(--text); border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+}
+.ns-advisor-why { font-size: 12px; color: var(--text-muted); }
+.ns-advisor-why > summary { cursor: pointer; list-style: none; padding: 8px 4px; }
+.ns-advisor-why > summary::-webkit-details-marker { display: none; }
+.ns-advisor-explanation {
+  padding: 12px; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text); max-height: 220px; overflow-y: auto;
+}
+#nsComposerAdvisor .ns-advisor-result { margin: 0 0 10px; }
+#nsComposerAdvisor .ns-advisor-result > strong { font-size: 13px; }
+#nsComposerAdvisor .ns-advisor-why[open] { flex: 1 0 100%; }
+#nsComposerAdvisor .ns-auto-restore { font-size: 11px; padding: 3px 8px; }
+.ns-model-overrides { min-width: 0; width: 100%; }
+.ns-model-overrides > summary {
+  display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%;
+  list-style: none; cursor: pointer; color: var(--text-muted); font-size: 11px; padding: 3px 0;
+}
+.ns-model-overrides > summary::-webkit-details-marker { display: none; }
+#nsSelectedModel { display: flex; gap: 7px; min-width: 0; align-items: center; }
+.ns-selection-mode { color: var(--accent); font-size: 10px; font-weight: 600; }
+.ns-selection-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ns-model-change { text-decoration: underline; text-underline-offset: 3px; }
+.ns-model-overrides .conv-model-picker-inner { margin-top: 8px; }
+.ns-model-overrides.is-legacy > summary { display: none; }
+.conv-pane:has(.conv-model-picker-strip.has-auto-selection) .ns-model-comparison:not(.is-manual-expanded) { display: none; }
+.conv-pane.has-new-session-context:has(.has-auto-selection):not(:has(#nsModelOverrides[open])) :is(#convInputEngineSelect, #convInputModelSelect, #convInputEffortSelect) { display: none !important; }
+#nsComposerAdvisor.is-editing { padding: 12px; border: 1px solid var(--border); border-radius: 8px; max-height: 50vh; overflow-y: auto; }
+@media (max-width: 1200px) {
+  #nsComposerAdvisor .ns-advisor-depth button { min-height: 36px; padding: 5px 20px; }
+  .ns-model-overrides > summary { min-height: 32px; }
+  .ns-model-overrides[open] .conv-model-picker-chips { flex-wrap: wrap !important; overflow: visible; }
+}
 .ns-advisor-top, .ns-advisor-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .ns-advisor-top > strong { font-size: 14px; }
 .ns-advisor button, .ns-advisor input, .ns-advisor select { font: inherit; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 5px 9px; }

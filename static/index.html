@@ -1708,10 +1708,14 @@
         </button>
         <div class="conv-goal-strip" data-role="conv-goal-strip" hidden></div>
         <div class="conv-model-picker-strip" id="convModelPickerStrip" style="display:none;" aria-label="Quick model picker">
-          <div class="conv-model-picker-inner">
-            <span class="conv-model-picker-label">Model</span>
-            <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
-          </div>
+          <section class="ns-advisor" id="nsComposerAdvisor" aria-label="Session thinking" hidden></section>
+          <details class="ns-model-overrides" id="nsModelOverrides">
+            <summary><span id="nsSelectedModel" aria-live="polite"></span><span class="ns-model-change">Change</span></summary>
+            <div class="conv-model-picker-inner">
+              <span class="conv-model-picker-label">Model</span>
+              <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
+            </div>
+          </details>
         </div>
         <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
           <div class="engine-missing-notice" id="engineMissingNotice" role="status" hidden></div>
