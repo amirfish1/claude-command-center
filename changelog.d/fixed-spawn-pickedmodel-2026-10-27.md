@@ -1,0 +1,1 @@
+- New-session spawn no longer shows "Spawn failed: Can't find variable pickedModel" after a successful launch.

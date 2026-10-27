@@ -89306,7 +89306,7 @@
         if (autoPickedCwd) { try { localStorage.setItem(SPAWN_CWD_KEY, autoPickedCwd); } catch (_) {} }
         if (newSessionLaunchStillCurrent(launchContext) || pendingSpawnIsSelected(pendingSpawns.get(tempPid))) resetRepoGuess(false);
         if (typeof recordSpawnChoice === 'function') {
-          recordSpawnChoice(engine, pickedModel, spawnBody.reasoning_effort || '');
+          recordSpawnChoice(engine, spawnBody.model || launchSelection.model || '', spawnBody.reasoning_effort || '');
         }
         if (data.prewarm_fallback) showClaudePrewarmFallbackRecovery();
         if (data.session_id) {
