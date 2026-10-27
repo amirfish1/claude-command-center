@@ -321,8 +321,31 @@
   // payload as a non-enumerable __perf (never serialized or rendered).
   // keepErrors: parse non-2xx bodies too (the direct open path renders the
   // server's error payload); the prefetch path drops them.
+  // Resource Timing for the tail fetch (CCC-143): stall_ms is time Chrome held
+  // the request before sending it (no free HTTP/1.1 connection), req_wait_ms is
+  // send -> first byte (server accept + handler). ttfb >> server_ms needs this
+  // split to tell browser queueing from server-side accept/GIL wait.
+  function _convResourceTiming(url, t0) {
+    try {
+      const abs = new URL(url, window.location.href).href;
+      const list = performance.getEntriesByName(abs, 'resource');
+      for (let i = list.length - 1; i >= 0; i--) {
+        const e = list[i];
+        if (e.startTime + 1 < t0 || !e.requestStart) continue;
+        return {
+          stall_ms: Math.round(e.requestStart - e.startTime),
+          req_wait_ms: Math.round(e.responseStart - e.requestStart),
+          conn_ms: Math.round(Math.max(0, e.connectEnd - e.connectStart)),
+          proto: e.nextHopProtocol || '',
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
   function _fetchConvJsonTimed(url, init, keepErrors) {
     const t0 = performance.now();
+    const g = window.__cccConnectionGate;
+    const gate = g ? { streams: g.openStreams, pool_active: g.active, pool_queued: g.queued, direct_active: g.directActive } : null;
     const pending = fetch(url, init).then(r => {
       if (!r.ok && !keepErrors) return null;
       const tResp = performance.now();
@@ -338,6 +361,7 @@
               t0, tResp, tBody, tParse, bytes: txt.length,
               server_ms: num('app'), server_cpu_ms: num('cpu'),
               server_cache: ((st.match(/cache;desc="([^"]+)"/) || [])[1] || null),
+              gate, rt: _convResourceTiming(url, t0),
             }, enumerable: false, configurable: true });
           }
         } catch (_) {}
@@ -59178,6 +59202,8 @@
       if (p.server_ms !== null) out.server_ms = p.server_ms;
       if (p.server_cpu_ms !== null) out.server_cpu_ms = p.server_cpu_ms;
       if (p.server_cache) out.server_cache = p.server_cache;
+      if (p.gate) out.gate = p.gate;
+      if (p.rt) Object.assign(out, p.rt);
     }
     return out;
   }
