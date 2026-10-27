@@ -8397,6 +8397,20 @@
   function clearLiveGeneratingIndicator($view) {
     ($view || document).querySelectorAll('.conv-live-tool-inline.is-generating').forEach(n => n.remove());
   }
+  // Click toggles the live tool card's expanded view (full command/path,
+  // not truncated). Wired once per node: the card can be created by the
+  // Codex "generating" branch and later reused by the sidecar-tool branch.
+  function _wireLiveInlineExpand(inline) {
+    if (!inline || inline._cccExpandWired) return;
+    inline._cccExpandWired = true;
+    inline.addEventListener('click', (e) => {
+      if (e.target.closest('button, a, input')) return;
+      if (inline.classList.contains('is-wake-status') || inline.classList.contains('optimistic')) return;
+      inline.classList.toggle('is-expanded');
+      try { updateLiveToolStrip(); } catch (_) {}
+    });
+  }
+
   function getSingleLiveToolInline($view) {
     if (!$view) return null;
     const nodes = Array.from($view.querySelectorAll('.conv-live-tool-inline:not(.optimistic):not(.is-wake-status):not(.wake-breakdown)'));
@@ -9595,18 +9609,23 @@
         ? String(liveStatus.pendingTool) : '';
       const _toolTxt = _activeItem.label || _kimiPendingTool || (_isCodex ? 'Thinking…' : (_webuiPane ? 'Working…' : 'Generating…'));
       const _detailTxt = _activeItem.label ? _activeItem.detail : '';
+      // CCC-227: the Codex in-flight card ("▶ Bash /bin/bash -lc …") must
+      // expand on click like the sidecar tool card below.
+      _wireLiveInlineExpand(inline);
+      const _detailShown = (_detailTxt && !inline.classList.contains('is-expanded')) ? truncate(_detailTxt, 80) : _detailTxt;
       const _silenceSec = (_liveMatches && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
       const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress;
       const _wakeBtnHtml = showGeneratingWakeBtn
         ? '<button type="button" class="cl-working-wake-btn" title="No output for ' + Math.max(1, Math.floor(_silenceSec / 60)) + 'm - click to send a status-check nudge">Nudge</button>'
         : '';
-      inline.className = 'conv-live-tool-inline is-generating' + (_activeItem.label ? ' in-flight' : '');
+      inline.className = 'conv-live-tool-inline is-generating' + (_activeItem.label ? ' in-flight' : '')
+        + (_detailTxt && inline.classList.contains('is-expanded') ? ' is-expanded' : '');
       // Webui panes get the kimi-web moon-phases waiting spinner (honest
       // busy signal — no fake per-token streaming); other engines keep the
       // generic pulse.
       const generatingHtml = (_webuiPane && !_activeItem.label ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
         + '<span class="cl-tool">' + ((_activeItem.label || _kimiPendingTool) ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
-        + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
+        + (_detailTxt ? '<span class="cl-file">' + escapeHtml(_detailShown) + '</span>' : '')
         + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '')
         + _wakeBtnHtml;
       if (inline.innerHTML !== generatingHtml) inline.innerHTML = generatingHtml;
@@ -9647,12 +9666,8 @@
     if (!inline) {
       inline = document.createElement('div');
       inline.className = 'conv-live-tool-inline';
-      // Click toggles expanded view (shows full URL/path, not truncated).
-      inline.addEventListener('click', (e) => {
-        if (e.target.closest('button, a, input')) return;
-        inline.classList.toggle('is-expanded');
-      });
     }
+    _wireLiveInlineExpand(inline);
     inline.classList.toggle('in-flight', inFlight);
     inline.classList.toggle('is-question', isQuestion);
     // Store the full detail so users can expand to see it.
@@ -18221,6 +18236,21 @@
       +   '<span class="skill-loaded-title">' + escapeHtml(name) + '</span>'
       + '</summary>'
       + '<div class="skill-loaded-body">' + renderMarkdown(String(ev.text || '')) + '</div>'
+      + '</details>';
+  }
+
+  // Codex loads a skill by reading its SKILL.md through the shell; the
+  // server tags that tool call with a skill_loaded block (name + path). Same
+  // card as Claude's, with the path as the body (the rules live in the file).
+  function renderCodexSkillLoadedCard(b) {
+    const name = String((b && b.name) || 'skill').trim();
+    const path = String((b && b.path) || '').trim();
+    return '<details class="skill-loaded-card codex-skill-loaded-card">'
+      + '<summary>'
+      +   '<span class="skill-loaded-label">\u25b8 Skill loaded</span>'
+      +   '<span class="skill-loaded-title">' + escapeHtml(name) + '</span>'
+      + '</summary>'
+      + (path ? '<div class="skill-loaded-body">Read ' + linkifyPath(path) + '</div>' : '')
       + '</details>';
   }
 
@@ -66453,9 +66483,13 @@
       : status === 'error'
         ? '<span class="kimi-tool-status error" role="status" aria-label="failed">' + _KIMI_GLYPHS['close'] + '</span>'
         : '<span class="kimi-tool-status running" role="status" aria-label="running"><span class="kimi-pulse-dot"></span></span>';
+    // CCC-227: wt / ccc CLI and CCC API calls get the same purple compact
+    // orchestration chips Claude's .tool-call rows carry (_ccOrchLabels).
+    const ccOrch = Array.from(_ccOrchScan(inputText, _ccOrchScan(summary))).join('|');
     return '<div class="kimi-tool' + (status === 'error' ? ' err' : '') + (open ? ' open' : '')
       + (b.approval_required ? ' acp-needs-approval' : '') + '"'
-      + (toolUseId ? ' data-tool-use-id="' + escapeAttr(toolUseId) + '"' : '') + '>'
+      + (toolUseId ? ' data-tool-use-id="' + escapeAttr(toolUseId) + '"' : '')
+      + (ccOrch ? ' data-cc-orch="' + escapeAttr(ccOrch) + '"' : '') + '>'
       + '<div class="kimi-tool-head"' + (expandable ? ' role="button" tabindex="0" aria-expanded="' + String(open) + '" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();this.click()}" onclick="this.setAttribute(\'aria-expanded\',this.parentElement.classList.toggle(\'open\'))"' : '') + '>'
       + '<span class="kimi-tool-glyph">' + _kimiToolGlyph(b.name) + '</span>'
       + '<span class="kimi-tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
@@ -68068,6 +68102,9 @@
               // doesn't strip thinking either).
               _kimiHolder.innerHTML = _kimiThinkingHtml(String(b.text), _codexPane);
               if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
+            } else if (b.kind === 'skill_loaded') {
+              _kimiHolder.innerHTML = renderCodexSkillLoadedCard(b);
+              if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
             } else if (b.kind === 'plan') {
               const planHtml = _planEntriesHtml(b.entries);
               if (planHtml) {
@@ -68301,6 +68338,9 @@
               hasNonTool = true;
               if (_compactRun) _compactRunAdoptDevinSummary(ev);
             }
+          } else if (b.kind === 'skill_loaded') {
+            blockParts.push(renderCodexSkillLoadedCard(b));
+            hasNonTool = true;
           } else if (b.kind === 'plan') {
             // ACP plan snapshot (kimi TodoList): compact todo card.
             const planHtml = _planEntriesHtml(b.entries);
@@ -83545,7 +83585,7 @@
   function _ccOrchLabels(units) {
     const seen = new Set();
     for (const { el } of units) {
-      const calls = el.classList.contains('tool-call') ? [el] : el.querySelectorAll('.tool-call');
+      const calls = el.matches('.tool-call, .kimi-tool') ? [el] : el.querySelectorAll('.tool-call, .kimi-tool');
       for (const tc of calls) {
         (tc.dataset.ccOrch || '').split('|').filter(Boolean).forEach(l => seen.add(l));
       }

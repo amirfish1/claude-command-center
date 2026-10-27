@@ -84,7 +84,7 @@ test('working status keeps its Thinking row while a completed sidecar name linge
       window.updateLiveStripOffset = () => {};
       (0, eval)(code + '\nwindow.updateLive = updateLiveToolStrip;');
     }, fn('anchorCodexStateBadge') + fn('_reanchorToTailUnlessOnlyTransientBetween')
-      + fn('getSingleLiveToolInline') + fn('updateLiveToolStrip'));
+      + fn('getSingleLiveToolInline') + fn('_wireLiveInlineExpand') + fn('updateLiveToolStrip'));
     const result = await page.evaluate(() => {
       const view = getConvView();
       updateLive();
@@ -102,4 +102,45 @@ test('working status keeps its Thinking row while a completed sidecar name linge
     });
     assert.deepEqual(result, { sameRow: true, sameLabel: true, label: 'Thinking…', heightStable: true });
   } finally { await browser.close(); }
+});
+
+test('Codex in-flight tool card expands on click to the full command (CCC-227)', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>${css}</style><div class="conversations-view"><div class="event assistant">Latest reply</div></div>`);
+    const full = "/bin/bash -lc 'node ../../node_modules/eslint/bin/eslint.js src/components/notifications/NotificationCenter.tsx --max-warnings 0'";
+    await page.evaluate((code, full) => {
+      window.getConvView = () => document.querySelector('.conversations-view');
+      window.liveStatusMatchesOpenConv = () => true;
+      window.liveStatus = { live: true, codexState: 'working', sidecarStatus: 'idle', sidecarTs: Date.now() / 1000 };
+      window.currentSession = { source: 'codex' };
+      window.escapeHtml = window.escapeAttr = s => String(s);
+      window.truncate = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
+      window._liveStripLastKeyTs = window._liveStripLastLiveTime = 0;
+      window._liveStripShown = false;
+      window._streamingBubble = null;
+      window.codexActiveItemLabel = () => ({ label: 'Bash', detail: full });
+      window.codexTokenUsageText = () => '';
+      window.updateLiveStripOffset = () => {};
+      (0, eval)(code + '\nwindow.updateLive = updateLiveToolStrip;');
+    }, fn('anchorCodexStateBadge') + fn('_reanchorToTailUnlessOnlyTransientBetween')
+      + fn('getSingleLiveToolInline') + fn('_wireLiveInlineExpand') + fn('updateLiveToolStrip'), full);
+    const result = await page.evaluate(() => {
+      updateLive();
+      const row = document.querySelector('.conv-live-tool-inline');
+      const before = row.querySelector('.cl-file').textContent;
+      row.querySelector('.cl-tool').click();
+      const after = row.querySelector('.cl-file').textContent;
+      updateLive();
+      const afterPoll = row.querySelector('.cl-file').textContent;
+      return { before, after, afterPoll, expanded: row.classList.contains('is-expanded') };
+    });
+    assert.ok(result.before.length < full.length);
+    assert.equal(result.after, full);
+    assert.equal(result.afterPoll, full);
+    assert.equal(result.expanded, true);
+  } finally {
+    await browser.close();
+  }
 });

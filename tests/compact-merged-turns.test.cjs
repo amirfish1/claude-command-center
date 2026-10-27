@@ -83,3 +83,40 @@ test('merged turns fold tools and reasoning across lifecycle markers, preserving
     await browser.close();
   }
 });
+
+test('Codex wt / CCC API tool rows get purple orchestration chips (CCC-227)', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    const rowFn = (name) => { const s = app.indexOf('  function ' + name + '('); return app.slice(s, app.indexOf('\n  }', s) + 4); };
+    await page.setContent(`<style>${css}</style><body class="conv-compact">
+      <div class="conv-pane is-webui-session"><div class="conversations-view">
+        <div class="event user_text"><div class="user-msg">Drain the queue</div></div>
+        <div class="kimi-turn" id="turn"></div>
+      </div></div></body>`);
+    const result = await page.evaluate((code) => {
+      window.escapeHtml = window.escapeAttr = s => String(s);
+      window._kimiToolStatusOf = () => 'ok';
+      window._webuiToolDisplayName = n => n;
+      window._kimiToolSummary = (n, b) => b.detail || '';
+      window._kimiDiffHtml = () => '';
+      window._kimiNormToolName = n => n;
+      window._kimiToolGlyph = () => '';
+      window._kimiToolPeekHtml = () => '';
+      window._KIMI_GLYPHS = {};
+      (0, eval)(code + '\nwindow.markRuns = _ccMarkRuns; window.rowHtml = _kimiToolRowHtml;');
+      const turn = document.querySelector('#turn');
+      turn.innerHTML = rowHtml({ kind: 'tool_use', name: 'Bash', detail: "wt claim -q CCC --json" })
+        + rowHtml({ kind: 'tool_use', name: 'Bash', detail: 'curl', command: 'curl -s http://127.0.0.1:8091/api/sessions' });
+      const view = document.querySelector('.conversations-view');
+      markRuns(view);
+      return [...view.querySelectorAll('.cc-orch-chip')].map(c => ({ label: c.dataset.ccOrch, shown: getComputedStyle(c).display !== 'none' }));
+    }, compact + rowFn('_kimiToolRowHtml'));
+    assert.deepEqual(result, [
+      { label: 'wt claim', shown: true },
+      { label: 'CCC API /api/sessions', shown: true },
+    ]);
+  } finally {
+    await browser.close();
+  }
+});

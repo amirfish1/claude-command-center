@@ -31757,6 +31757,9 @@ body.conv-compact .conversations-view .cc-orch-chip {
   border: 1px solid rgba(163,113,247,0.45);
 }
 body.conv-compact .conversations-view .cc-orch-chip::before { content: attr(data-cc-orch); }
+/* A run with no preceding text hosts its chips inside the bare head line,
+   whose other children are hidden while folded. */
+body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open):not(.tool-call-group) > .cc-orch-chip { display: inline-block !important; }
 
 /* Toned-down narration in compact: no cards, no heavy weight or wide
    tracking, so it reads as plain prose. User messages keep their theme
