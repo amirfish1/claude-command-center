@@ -1,0 +1,1 @@
+- Speaker speed dial now sits centered around the read-aloud button on phones and narrow windows instead of drifting up and to the left.

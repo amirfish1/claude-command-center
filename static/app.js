@@ -47927,8 +47927,11 @@
     const tools = btn._speakerTools;
     if (!tools) return;
     tools.hidden = !btn.classList.contains('visible');
-    tools.style.left = (btn.offsetLeft - 14) + 'px';
-    tools.style.top = (btn.offsetTop - 14) + 'px';
+    // Center the dial on the button from measured sizes: phones shrink both
+    // (40px button, 56px dial), so a fixed desktop offset puts the ring off-center.
+    const inset = tools.hidden ? 14 : (tools.offsetWidth - btn.offsetWidth) / 2;
+    tools.style.left = (btn.offsetLeft - inset) + 'px';
+    tools.style.top = (btn.offsetTop - inset) + 'px';
     const current = btn.classList.contains('speaking') || btn.classList.contains('paused');
     tools.querySelector('.speaker-next-sentence').disabled = !current;
   }
