@@ -1401,18 +1401,15 @@
                       aria-label="Choose folder">&#128193;</button>
               <div id="spawnCwdMenu" class="spawn-cwd-menu" role="listbox"></div>
             </span>
+            <button id="jevRepoSetupBtn" type="button" class="smart-repo-status" hidden
+                    aria-label="Smart repo off — add token" title="Smart repo off — add a Jev token to enable">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="m14 10 1.2 2.8L18 14l-2.8 1.2L14 18l-1.2-2.8L10 14l2.8-1.2Z"/></svg>
+            </button>
             <span id="spawnCwdGuessChip" class="spawn-cwd-guess-chip" hidden aria-live="polite"></span>
           </span>
           <label class="spawn-worktree-row" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main.">
             <input type="checkbox" id="inlineWorktreeToggle"> 🌿 worktree
           </label>
-          <div id="jevRepoPromo" class="jev-repo-promo" hidden>
-            <div><strong id="jevRepoPromoTitle">Let Jev find the right repo</strong>
-              <span id="jevRepoPromoText">Add your Jev token for matching based on what you want to work on.</span>
-              <small>Jev receives your scrubbed prompt, repo descriptions and recent session titles. Your token stays in the local Vault.</small>
-            </div>
-            <button id="jevRepoSetupBtn" type="button" class="settings-action-btn">Add Jev token</button>
-          </div>
           <span class="wp-usage" data-usage></span>
         </div>
         <!-- Right-side status rail. Always visible — hosts session-level
@@ -3230,6 +3227,15 @@
                 <div class="settings-row-label">Vault</div>
                 <div class="settings-row-desc" id="vaultBackendDesc">Checking secret storage…</div>
               </div>
+            </div>
+
+            <div class="settings-row" data-keywords="smart repo repository matching jev token key">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Smart repo</div>
+                <div class="settings-row-desc" id="smartRepoSettingsStatus">Matches your prompt to a repository using Jev, with local matching as a fallback.</div>
+                <div class="settings-row-desc">Jev receives your scrubbed prompt, repo descriptions and recent session titles. Your token stays in the local Vault.</div>
+              </div>
+              <button id="smartRepoTokenBtn" type="button" class="settings-action-btn">Manage token</button>
             </div>
 
             <div class="settings-row vault-form-row" id="vaultFormRow" data-keywords="vault add secret new api key token login password username env var website notes">

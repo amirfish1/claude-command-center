@@ -5260,18 +5260,18 @@
     background: rgba(88,166,255,0.16);
   }
   /* Repo auto-guess chips beside the folder picker (new-session only). */
-  .conv-input-context .jev-repo-promo { display: none; }
-  .conv-input-context.is-new-session .jev-repo-promo:not([hidden]) {
-    display: flex; align-items: center; gap: 12px; grid-column: 1 / -1; min-width: 0;
-    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
-    background: var(--surface); font-size: 12px; line-height: 1.5;
+  .smart-repo-status {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; width: 30px; height: 30px; padding: 4px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: transparent; color: var(--text-muted); cursor: pointer;
   }
-  .jev-repo-promo strong, .jev-repo-promo span, .jev-repo-promo small { display: block; }
-  .jev-repo-promo small { color: var(--text-muted); }
-  .jev-repo-promo button { flex-shrink: 0; }
-  @media (max-width: 600px) {
-    .conv-input-context.is-new-session .jev-repo-promo:not([hidden]) { flex-wrap: wrap; }
+  .smart-repo-status[hidden] { display: none; }
+  .smart-repo-status.is-enabled {
+    color: var(--green, #3fb950); border-color: transparent; cursor: default;
   }
+  .smart-repo-status:not(.is-enabled):hover { color: var(--text); border-color: var(--text-muted); }
+  .smart-repo-status:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .conv-input-context .spawn-cwd-guess-chip {
     display: inline-flex;
     align-items: center;

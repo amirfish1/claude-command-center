@@ -87452,30 +87452,36 @@
   }
 
   // ── New-session repo auto-guess ──
+  let smartRepoConfigured = null;
   async function refreshJevRepoPromo() {
-    const promo = document.getElementById('jevRepoPromo');
-    if (!promo) return;
+    const icon = document.getElementById('jevRepoSetupBtn');
+    if (!icon) return;
     try {
-      const res = await fetch('/api/repo/guess/status', { cache: 'no-store' });
+      const res = await fetch('/api/repo/guess/status', { cache: 'no-store', cccPriority: 'user' });
       if (!res.ok) throw new Error('Status unavailable');
       const data = await res.json();
       const configured = data.jev_configured === true;
-      document.getElementById('jevRepoPromoTitle').textContent = configured
-        ? 'Jev matching enabled' : 'Let Jev find the right repo';
-      document.getElementById('jevRepoPromoText').textContent = configured
-        ? 'CCC uses Jev to match your prompt to a repo, with local matching as a fallback.'
-        : 'Add your Jev token for matching based on what you want to work on.';
-      document.getElementById('jevRepoSetupBtn').textContent = configured ? 'Manage token' : 'Add Jev token';
-      promo.hidden = false;
+      smartRepoConfigured = configured;
+      icon.classList.toggle('is-enabled', configured);
+      icon.setAttribute('aria-disabled', String(configured));
+      icon.setAttribute('aria-label', configured ? 'Smart repo enabled' : 'Smart repo off — add token');
+      icon.title = configured ? 'Smart repo enabled' : 'Smart repo off — add a Jev token to enable';
+      icon.hidden = false;
+      const status = document.getElementById('smartRepoSettingsStatus');
+      if (status) status.textContent = configured
+        ? 'Enabled. Jev matches your prompt to a repository, with local matching as a fallback.'
+        : 'Off. Add a Jev token to enable smart repo matching.';
+      const manage = document.getElementById('smartRepoTokenBtn');
+      if (manage) manage.textContent = configured ? 'Manage token' : 'Add token';
     } catch (_) {
-      promo.hidden = true;
+      smartRepoConfigured = null;
+      icon.hidden = true;
     }
   }
-  const jevRepoSetupBtn = document.getElementById('jevRepoSetupBtn');
-  if (jevRepoSetupBtn) jevRepoSetupBtn.addEventListener('click', async () => {
-    jevRepoSetupBtn.disabled = true;
+  async function openSmartRepoTokenSetup(button) {
+    button.disabled = true;
     try {
-      const res = await fetch('/api/vault', { cache: 'no-store' });
+      const res = await fetch('/api/vault', { cache: 'no-store', cccPriority: 'user' });
       if (!res.ok) throw new Error('Could not load the Vault');
       const data = await res.json();
       const entry = (data.entries || []).find(e => e.env_var === 'JEV_API_KEY' ||
@@ -87486,13 +87492,20 @@
         name: 'jev-api-key', kind: 'api_key', service: 'TypeSafe Jev', env_var: 'JEV_API_KEY',
       }, entry ? { name: entry.name } : {});
       _vaultSetStatus('Save your Jev token here to enable repo matching. Existing environment or provider-profile keys take precedence.');
+      document.getElementById('vaultFormRow')?.scrollIntoView({ block: 'nearest' });
       setTimeout(() => { const input = _vaultEl('value'); if (input) input.focus(); }, 0);
     } catch (err) {
       showConvToast(err.message || 'Could not open Jev setup');
     } finally {
-      jevRepoSetupBtn.disabled = false;
+      button.disabled = false;
     }
+  }
+  const jevRepoSetupBtn = document.getElementById('jevRepoSetupBtn');
+  if (jevRepoSetupBtn) jevRepoSetupBtn.addEventListener('click', () => {
+    if (smartRepoConfigured === false) openSmartRepoTokenSetup(jevRepoSetupBtn);
   });
+  const smartRepoTokenBtn = document.getElementById('smartRepoTokenBtn');
+  if (smartRepoTokenBtn) smartRepoTokenBtn.addEventListener('click', () => openSmartRepoTokenSetup(smartRepoTokenBtn));
   // POST /api/repo/guess reads the prompt and names the folder it belongs in.
   // Confident guesses (>= 0.95) fill the picker unless the user already chose;
   // middling ones (>= 0.5) become a click-to-apply chip. An auto-pick is NOT
