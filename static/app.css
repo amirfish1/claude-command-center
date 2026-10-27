@@ -33219,6 +33219,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   background: #161b22; border: 1px solid #59636e; border-radius: 8px;
   font-size: 12px; box-shadow: 0 2px 10px #0008;
 }
+#ttsCacheDebugQueue[hidden] { display: none; }
 #ttsCacheDebugQueue summary { padding: 7px 10px; cursor: pointer; }
 #ttsCacheDebugQueue .tts-queue-log { max-height: 32vh; overflow: auto; padding: 0 10px 8px; overflow-anchor: none; }
 #ttsCacheDebugQueue .tts-queue-positions { padding: 0 10px 8px; border-bottom: 1px solid #59636e; overflow-wrap: anywhere; }

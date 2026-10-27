@@ -14342,6 +14342,7 @@
       panel.append(summary, positions, log);
       panel.addEventListener('toggle', () => {
         if (panel.open) log.scrollTop = log.scrollHeight;
+        else _ttsScheduleCacheDebug();
       });
       document.body.appendChild(panel);
     }
@@ -14349,6 +14350,9 @@
     const processing = _ttsDebugJobs.filter(j => j.status === 'processing');
     const title = 'TTS: ' + processing.length + ' sent · ' + waiting.length + ' waiting';
     if (panel.firstChild.textContent !== title) panel.firstChild.textContent = title;
+    // Idle and collapsed, the box only covers the header controls; show it
+    // while TTS requests are in flight or once the user has expanded it.
+    panel.hidden = !panel.open && !waiting.length && !processing.length;
     const positions = panel.querySelector('.tts-queue-positions');
     const queueText = waiting.length
       ? 'Browser waiting: ' + waiting.map((_, i) => '#' + (i + 1) + (i === 0 ? ' next' : '')).join(' · ') + '.'

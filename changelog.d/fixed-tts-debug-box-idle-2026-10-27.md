@@ -1,0 +1,1 @@
+- The speaker debug queue box (cache-debug mode) now hides while no speech requests are pending, so it no longer covers the header controls.
