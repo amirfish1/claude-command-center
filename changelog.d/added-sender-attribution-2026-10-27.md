@@ -1,0 +1,1 @@
+- Messages sent through CCC and WatchTower retain a sender snapshot and logical message ID across delivery retries and relays. Conversation sender badges distinguish runtime evidence, caller claims, remote relays, and legacy gaps; none implies authenticated identity. Monthly attribution journals support local cross-application history without automatic expiry.

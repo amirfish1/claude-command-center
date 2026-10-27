@@ -155,10 +155,12 @@ def find_codex_conversations(
         tail_first_message = _core._strip_ccc_session_state_instruction(
             _core._strip_host_system_instruction(tail.get("first_message"))
         ).strip()
-        first_message = row_first_message or tail_first_message
+        import sender_envelope as attribution
+        first_message = attribution.strip_header(row_first_message or tail_first_message)
         title = _core._strip_ccc_session_state_instruction(
             _core._strip_host_system_instruction(row.get("title")).strip()
         ).strip()
+        title = attribution.strip_header(title)
         # Codex sometimes stores the verbatim first user message as the
         # "title" when the prompt is too short to summarize. Only treat the
         # title as AI-generated when it actually differs from first_message
@@ -588,6 +590,11 @@ def _codex_skill_reads(text):
 
 
 def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
+    import sender_envelope as attribution
+    return attribution.decorate_event(_parse_codex_event_unattributed(ev, line_num, token_usage, codex_turn_meta))
+
+
+def _parse_codex_event_unattributed(ev, line_num, token_usage=None, codex_turn_meta=None):
     ev_type = ev.get("type", "")
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     ptype = payload.get("type", "")

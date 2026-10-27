@@ -41,11 +41,11 @@ _HUMAN_SOURCES = ("composer",)
 # Text that marks input CCC or the harness produced, not the person.
 _MACHINE_PREFIXES = (
     "[From ", "[Sent from a remote client through CCC Cloud Relay",
-    "Announced from:", "<system-reminder", "<task-notification",
+    "Announced from:", "[Message attribution v1:", "<system-reminder", "<task-notification",
     "<local-command-", "<command-name>", "<command-message>", "Caveat:",
     "[Request interrupted", "Stop hook feedback", "<user-prompt-submit-hook",
 )
-_MACHINE_MARKERS = ("CCC Cloud Relay", "Announced from:")
+_MACHINE_MARKERS = ("CCC Cloud Relay", "Announced from:", "[Message attribution v1:")
 
 _lock = threading.Lock()
 _ui_input: dict = {}       # sid -> epoch of the last composer send
@@ -86,6 +86,10 @@ def _is_machine_text(sid, text) -> bool:
     t = text.lstrip()
     if not t:
         return True
+    import sender_envelope as attribution
+    attr = attribution.lookup(text=t)
+    if attr:
+        return attr["author"]["kind"] != "human"
     if t.startswith(_MACHINE_PREFIXES):
         return True
     if any(m in t[:400] for m in _MACHINE_MARKERS):

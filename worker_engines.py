@@ -656,6 +656,7 @@ class EngineHost:
                     force_queue=bool(args.get("force_queue")),
                     source=args.get("source") or "api",
                     peer_sender_sid=args.get("peer_sender_sid"),
+                    attr=args.get("attr"),
                     idempotency_key=args.get("idempotency_key"),
                 )
             if operation == "retire_idle":
@@ -697,6 +698,7 @@ class EngineHost:
                     timeout_ms=int(args.get("timeout_ms") or 30000),
                     cwd=args.get("cwd"),
                     peer_sender_sid=args.get("peer_sender_sid"),
+                    attr=args.get("attr"),
                 )
             if operation == "compact":
                 return legacy.compact_session_context(

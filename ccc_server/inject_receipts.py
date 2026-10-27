@@ -109,7 +109,14 @@ def open_receipt(sid, inject_id, text, *, source="", now=None, path=None):
             "sent_ts": now,
         }
 
-    _mutate(path, fn)
+    import sender_envelope as attribution
+    attr = attribution.from_text(text)
+    original_fn = fn
+    def with_attr(state):
+        original_fn(state)
+        if attr and isinstance(state.get(sid), dict):
+            state[sid].update(attr=attr, message_id=attr["message_id"])
+    _mutate(path, with_attr)
 
 
 def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,

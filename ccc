@@ -565,6 +565,10 @@ def cmd_send(args):
     if err:
         print(err, file=sys.stderr)
         return 1
+    import sender_envelope as attribution
+    attr = attribution.capture_cli(sid, claimed=getattr(args, "sender", None) or "")
+    if not args.dry_run:
+        attribution.journal(attr, app="ccc", event="cli")
     if args.new_if_large_and_stale or args.dry_run:
         qs = urllib.parse.urlencode({
             "large_threshold": args.large_threshold, "stale_seconds": args.stale_seconds,
@@ -586,7 +590,7 @@ def cmd_send(args):
                 print(json.dumps(decision, indent=2))
             return 0
         if args.new_if_large_and_stale and decision["path"] == "new":
-            return _spawn_continue_from(base, decision.get("resolved_session_id") or sid, text, args)
+            return _spawn_continue_from(base, decision.get("resolved_session_id") or sid, attribution.carry(text, attr, app="ccc"), args)
         if args.dry_run:
             preview = {"path": "normal", "session_id": sid, "text": text}
             if args.json:
@@ -594,8 +598,8 @@ def cmd_send(args):
             else:
                 print(f"[dry-run] would send normally to {sid}")
             return 0
-    payload = {"session_id": sid, "text": text}
-    sender_sid = getattr(args, "sender", None) or os.environ.get("CLAUDE_SESSION_ID") or None
+    payload = {"session_id": sid, "text": text, **({"attr": attr, "idempotency_key": attr["message_id"]} if attribution.enabled("ccc") else {})}
+    sender_sid = getattr(args, "sender", None) or attr["author"].get("id") or None
     if sender_sid:
         resolved_sender, _ = _resolve_target(base, sender_sid)
         payload["peer_sender_sid"] = resolved_sender or sender_sid
@@ -639,13 +643,16 @@ def cmd_ask(args):
     if err:
         print(err, file=sys.stderr)
         return 1
+    import sender_envelope as attribution
+    attr = attribution.capture_cli(sid)
+    attribution.journal(attr, app="ccc", event="cli-ask")
     timeout_ms = int(args.timeout * 1000)
     try:
         # HTTP timeout outlasts the server-side wait so the server, not the
         # transport, decides when the ask has timed out.
         status, result = _post_json(
             base, "/api/ask",
-            {"session_id": sid, "text": text, "timeout_ms": timeout_ms},
+            {"session_id": sid, "text": text, "timeout_ms": timeout_ms, "attr": attr},
             timeout=timeout_ms / 1000 + 30,
         )
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -2368,7 +2375,7 @@ def main(argv=None):
     g.add_argument("--queue", action="store_true",
                    help="queue behind the current turn instead of delivering now")
     p.add_argument("--from", dest="sender", metavar="SESSION_ID",
-                   help="sender session id or name for peer attribution (defaults to $CLAUDE_SESSION_ID)")
+                   help="sender session id or name for peer attribution (defaults to the current engine session)")
     p.add_argument("--new-if-large-and-stale", action="store_true",
                    help="if the target is large (context tokens >= --large-threshold) "
                         "AND stale (idle >= --stale-seconds, so resuming it would be a "

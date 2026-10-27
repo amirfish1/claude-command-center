@@ -100,9 +100,11 @@ _auto_resume_opt_in_lock = threading.Lock()
 class _PendingInputEntry(str):
     """String-compatible durable queue row with stable plain-entry identity."""
 
-    def __new__(cls, text, pending_id=None):
+    def __new__(cls, text, pending_id=None, attr=None):
         value = super().__new__(cls, str(text or ""))
         value.pending_id = str(pending_id or uuid.uuid4())
+        import sender_envelope as attribution
+        value.attr = attr or getattr(text, "attr", None) or attribution.current()
         return value
 
 
@@ -211,8 +213,8 @@ def _decode_pending_queue(
     if not valid:
         candidate_ids = [str(uuid.uuid4()) for _ in rows]
     decoded_items = [
-        _PendingInputEntry(text, pending_id)
-        for text, pending_id in zip(rows, candidate_ids)
+        _PendingInputEntry(text, pending_id, attr=(metadata[index].get("attr") if valid and sidecar_version == 2 else None))
+        for index, (text, pending_id) in enumerate(zip(rows, candidate_ids))
     ]
     seen_ids.update(candidate_ids)
     return decoded_items, (not valid or sidecar_version != 2 or any(
@@ -1751,6 +1753,7 @@ def _persist_pending_inputs_current(
                                 else _PendingInputEntry(item).pending_id
                             ),
                             "fingerprint": _pending_text_fingerprint(item),
+                            **({"attr": item.attr} if getattr(item, "attr", None) else {}),
                         } for item in entries]
                     else:
                         id_map.pop(sid, None)

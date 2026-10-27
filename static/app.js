@@ -3045,6 +3045,13 @@
     return String(s).slice(m.index).trim();
   }
 
+  function visibleQueueNote(value) {
+    // Queue notes may be shortened before reaching this renderer. Remove a
+    // carrier line even when its JSON was truncated; retain the task text.
+    const lines = String(value || '').split('\n');
+    return lines.filter((line, index) => index >= 5 || !line.startsWith('[Message attribution v1: ')).join('\n') || 'Attributed message';
+  }
+
   function cleanIssuePrompt(s) {
     if (!s) return s;
     let out = String(s);
@@ -13057,7 +13064,7 @@
         const payload = {
           session_id: sid,
           text: _tapbackPrefix ? _tapbackPrefix + '\n' + text : text,
-          source: 'composer',
+          source: 'composer', composer_form: 'ccc-composer-v1',
           // send_queue isn't a real backend mode - it's plain "send" plus an
           // explicit opt-in to always defer to the next turn boundary
           // (force_queue), even on a tty session where regular "send" lets
@@ -48577,7 +48584,7 @@
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({session_id: sid, text: '[' + line + '] ' + TAPBACK_LABEL[b.dataset.kind],
-            source: 'composer', mode: 'send', idempotency_key: durableActionId('inject')}),
+            source: 'composer', composer_form: 'ccc-composer-v1', mode: 'send', idempotency_key: durableActionId('inject')}),
         }).then(r => { if (!r.ok) showOpToast('Could not send reaction', 'error'); })
           .catch(() => showOpToast('Could not send reaction', 'error'));
         return;
@@ -55240,12 +55247,12 @@
         .filter(pending => !proj || _uxqInScope(pending.project, proj))
         .map(pending => '<div class="fq-row fq-pending-add" aria-busy="true" title="Adding ticket…">'
           + '<span class="fq-ref">new</span>'
-          + '<span class="fq-note">' + escapeHtml(pending.note) + '</span>'
+          + '<span class="fq-note">' + escapeHtml(visibleQueueNote(pending.note)) + '</span>'
           + '<span class="fq-row-signals"><span class="fq-status fq-status-pending" role="status" aria-label="Adding ticket"></span></span>'
           + '</div>')
         .join('');
       const queueRowsHtml = visibleRows.map(it => {
-        const noteFull = String(it.note || '');
+        const noteFull = visibleQueueNote(it.note);
         const rawStatus = it.status || 'open';
         const status = _effectiveStatus(it);
         const ref = _uxqItemRef(it);
@@ -55256,8 +55263,8 @@
         const blocked = !!it.needs_input && rawStatus !== 'closed';
         const unresolvedNotes = _uxqUnresolvedNotes(it);
         const hasUnresolved = rawStatus === 'closed' && unresolvedNotes.length > 0;
-        const noteShown = blocked && it.block_question ? String(it.block_question) : noteFull;
-        const tip = (blocked && it.block_question ? ('Needs input: ' + it.block_question + '\n\n') : '')
+        const noteShown = blocked && it.block_question ? visibleQueueNote(it.block_question) : noteFull;
+        const tip = (blocked && it.block_question ? ('Needs input: ' + visibleQueueNote(it.block_question) + '\n\n') : '')
           + (hasUnresolved ? ('Closed with unresolved follow-up:\n' + unresolvedNotes.join('\n\n') + '\n\n') : '')
           + noteFull + '\n\nClick to view ticket details.';
         const nextPrio = { '': 'p2', p3: 'p2', p2: 'p1', p1: 'p0', p0: 'p0' };
@@ -67182,15 +67189,31 @@
     // ev.peer = {name, from, from_mode, msg_id}. from_mode is the sender's
     // attested permission mode; blank when the sender did not attest.
     function peerSenderHtml(ev) {
+      const attr = ev && ev.attribution;
+      if (attr) {
+        const author = attr.author || {};
+        const name = author.name_at_send || author.id || 'Unattributed sender';
+        const via = [...new Set((attr.relay || []).map(h => h.via).filter(Boolean))].join(' → ');
+        const basis = String(attr.basis || 'unknown');
+        const node = ev.attribution_local ? '' : (' · node ' + (author.node || 'unknown'));
+        const reply = attr.reply_to ? 'reply route available' : 'no reply path';
+        return '<span class="peer-sender" title="' + escapeAttr('Attribution, not authentication · ' + reply + (attr.reply_to ? ' (' + (attr.reply_to.addr || attr.reply_to.route_token || '') + ')' : '')) + '">'
+          + (ev.attribution_session_id ? '<a class="peer-sender-name" href="?session=' + encodeURIComponent(ev.attribution_session_id) + '">' + escapeHtml(name) + '</a>' : '<span class="peer-sender-name">' + escapeHtml(name) + '</span>')
+          + '<span class="peer-sender-mode">' + escapeHtml([author.engine, basis].filter(Boolean).join(' · ') + node) + '</span>'
+          + (via ? '<span class="peer-sender-mode">' + escapeHtml('via ' + via) + '</span>' : '')
+          + '<span class="peer-sender-mode">' + escapeHtml(reply) + '</span>'
+          + '</span>';
+      }
       const peer = ev && ev.peer;
       if (!peer || typeof peer !== 'object') return '';
-      const name = String(peer.name || '').trim() || String(peer.from || '').replace(/^uds:/, '') || 'peer';
+      const name = String(peer.name || '').trim() || String(peer.from || '').replace(/^uds:/, '') || 'Unattributed legacy sender';
       const mode = String(peer.from_mode || '').trim();
-      const title = 'Message from another Claude session'
+      const title = 'Sender-provided name; attribution unavailable for this legacy/native message'
         + (peer.from ? ' (' + peer.from + ')' : '')
         + (mode ? ', sender mode: ' + mode : '');
       return '<span class="peer-sender" title="' + escapeAttr(title) + '">'
         + '<span class="peer-sender-icon" aria-hidden="true">&#8644;</span>'
+        + '<span class="peer-sender-mode">unattributed · legacy/native</span>'
         + '<span class="peer-sender-name">' + escapeHtml(name) + '</span>'
         + (mode ? '<span class="peer-sender-mode">' + escapeHtml(mode) + '</span>' : '')
         + '</span>';
@@ -79129,7 +79152,7 @@
           const payload = {
             session_id: sid,
             text,
-            source: 'composer',
+            source: 'composer', composer_form: 'ccc-composer-v1',
             idempotency_key: idempotencyKey,
           };
           if (announcedFrom) payload.announced_from = announcedFrom;

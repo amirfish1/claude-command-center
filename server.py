@@ -18,6 +18,7 @@ from __future__ import annotations
 
 __version__ = "5.40.0"
 
+import sender_envelope as _attribution
 import ast
 import base64
 import traceback
@@ -9977,7 +9978,7 @@ def _spawn_auto_compact_k_tokens(auto_compact_k=None):
 
 def _spawn_env(auto_compact_k=None):
     """Child env for a new spawned session, including autocompact window."""
-    env = _question_relay_env()
+    env = _attribution.child_env(_question_relay_env())
     tokens = _spawn_auto_compact_k_tokens(auto_compact_k=auto_compact_k)
     if tokens:
         env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(tokens)
@@ -13606,7 +13607,7 @@ def _extract_user_prompt_text(ev):
     if ev.get("type") != "user" or ev.get("isMeta"):
         return ""
     msg = _safe_parse_message(ev.get("message", {}))
-    text = _extract_text_from_content(msg.get("content", ""))
+    text = _attribution.strip_header(_extract_text_from_content(msg.get("content", "")))
     if _is_transcript_control_text(text):
         # A slash command like "/goal ..." is still control-prefixed
         # bookkeeping (<command-name>...), but it carries a real,
@@ -15111,7 +15112,7 @@ def find_all_conversations(
 # v10: Rebuild Codex rows to recover replies from response_item messages.
 # v11: Exclude injected setup messages from Codex prompt/title metadata.
 # v12: Reparse session footers so cached rows retain short action labels.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 12
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 13
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
@@ -27158,6 +27159,8 @@ def _peer_block_from_origin(origin):
         "from": str(origin.get("from") or "").strip(),
         "from_mode": str(origin.get("fromMode") or "").strip(),
         "msg_id": str(origin.get("msg_id") or "").strip(),
+        "verifiedPeerPid": origin.get("verifiedPeerPid"),
+        "verifiedPeerProcStart": origin.get("verifiedPeerProcStart"),
     }
 
 
@@ -27219,6 +27222,11 @@ def _skill_body_event(ev, line_num, ts):
 
 
 def _parse_conversation_event(ev, line_num):
+    parsed = _parse_conversation_event_unattributed(ev, line_num)
+    return _attribution.decorate_event(parsed, ev.get("origin"))
+
+
+def _parse_conversation_event_unattributed(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
     ts = ev.get("timestamp", "") or ""
@@ -39878,9 +39886,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing continue_from"}, 400)
             else:
                 from ccc_server import continuation as _continuation
+                try:
+                    supplied = dict(payload)
+                    supplied.setdefault('attr', _attribution.from_text(payload.get('prompt')))
+                    if supplied['attr'] is None:
+                        supplied.pop('attr')
+                    continuation_attr = _attribution.request_attr(supplied, continue_from)
+                except ValueError as exc:
+                    self.send_json({'ok':False,'error':str(exc)},400)
+                    return
+                if not payload.get('dry_run'):
+                    _attribution.journal(continuation_attr,app='ccc',event='continuation-send')
                 result = _continuation.spawn_continuation(
                     continue_from,
-                    prompt=str(payload.get("prompt") or ""),
+                    prompt=_attribution.carry(str(payload.get("prompt") or ""), continuation_attr, app="ccc"),
                     model=payload.get("model"),
                     effort=payload.get("effort") or payload.get("reasoning_effort"),
                     report_to=payload.get("report_to"),
@@ -39894,6 +39913,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(result, 400)
                 else:
                     if not result.get("dry_run"):
+                        forwarded = _attribution.relay(continuation_attr,'continuation',delivered=result.get('new_session_id'))
+                        _attribution.journal(forwarded,app='ccc',event='continuation-delivered')
                         _log_activity(
                             "spawn", "CONTINUE_FROM",
                             f"from={continue_from} latest={result.get('latest_session_id')} "
@@ -40082,6 +40103,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         str(payload.get("source") or "").strip()
                         or _inject_source_for_request(announced_from, inject_options["wt_origin"])
                     )
+                    browser_composer = (
+                        source == "composer" and payload.get("composer_form") == "ccc-composer-v1"
+                        and bool(self.headers.get("Origin"))
+                    )
+                    if source == "composer" and not browser_composer:
+                        source = "api"
+                    try:
+                        inject_options["attr"] = _attribution.request_attr(payload, continuation_origin, browser_composer=browser_composer)
+                    except ValueError as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 400)
+                        return
+                    if continuation_origin != sid:
+                        inject_options["attr"] = _attribution.relay(inject_options["attr"], "continuation", delivered=sid)
                     try:
                         # Cloud-relay presence: composer sends are human input;
                         # every other source is remembered as machine input.
@@ -40303,8 +40337,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if guard:
                     self.send_json(guard, 409)
                 else:
+                    try:
+                        request_attr = _attribution.request_attr(payload, sid)
+                    except ValueError as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 400)
+                        return
                     result = ask_session_and_wait(
                         sid, text, timeout_ms=timeout_ms, cwd=cwd or None, peer_sender_sid=peer_sender_sid,
+                        attr=request_attr,
                     )
                     self.send_json(result)
         elif path == "/api/launch-terminal":

@@ -596,11 +596,11 @@ def test_inject_endpoint_forwards_source_and_peer_sender(monkeypatch):
     monkeypatch.setattr(server, "_inject_text_into_session", fake_inject)
     monkeypatch.setattr(server, "_record_interaction", lambda sid: None)
 
-    def post(payload):
+    def post(payload, origin=True):
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{httpd.server_address[1]}"},
+            headers={"Content-Type": "application/json", **({"Origin": f"http://127.0.0.1:{httpd.server_address[1]}"} if origin else {})},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -626,9 +626,17 @@ def test_inject_endpoint_forwards_source_and_peer_sender(monkeypatch):
         assert calls[-1]["kw"]["peer_sender_sid"] == "sender-sid-2"
 
         # 4. Web UI composer specifies source="composer"
-        res = post({"session_id": "target-sid", "text": "human composer text", "source": "composer"})
+        res = post({"session_id": "target-sid", "text": "human composer text", "source": "composer", "composer_form": "ccc-composer-v1"})
         assert res["ok"] is True
         assert calls[-1]["kw"]["source"] == "composer"
+        assert calls[-1]['kw']['attr']['author']['kind']=='human'
+        assert calls[-1]['kw']['attr']['basis']=='claimed'
+        post({'session_id':'target-sid','text':'curl','source':'composer','composer_form':'ccc-composer-v1'}, origin=False)
+        assert calls[-1]['kw']['attr']['author']['kind']=='unknown'
+        post({'session_id':'target-sid','text':'API','source':'composer'})
+        assert calls[-1]['kw']['source']=='api'
+        assert calls[-1]['kw']['attr']['author']['kind']=='unknown'
+
     finally:
         httpd.shutdown()
 
@@ -679,12 +687,91 @@ def test_ccc_send_forwards_peer_sender_sid(monkeypatch):
     assert posted[0]["text"] == "hello peer"
     assert posted[0]["peer_sender_sid"] == "sender-sid-cli"
 
-    # Test CLAUDE_SESSION_ID env var fallback
+    # Test the Claude Code session variable fallback
     Args.sender = None
-    monkeypatch.setenv("CLAUDE_SESSION_ID", "env-sender-sid")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "env-sender-sid")
     rc = ccc_cli.cmd_send(Args())
     assert rc == 0
     assert len(posted) == 2
     assert posted[1]["peer_sender_sid"] == "env-sender-sid"
 
 
+
+
+def test_new_envelope_preserved_across_control_plane_and_reply_route(monkeypatch):
+    import sender_envelope as attribution
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    captured=[]
+    monkeypatch.setattr(server,'_inject_text_into_session_router',lambda sid,text,**kw: captured.append((sid,text,kw)) or {'ok':True,'via':'worker'})
+    a=attribution.make('recipient',who=attribution.author('session','sender','Original','codex'),basis='runtime')
+    attribution.journal(a,app='wt')
+    server._inject_text_into_session('recipient','review',source='wt',attr=a)
+    sid,text,kw=captured[0]
+    assert kw['idempotency_key']==a['message_id']
+    assert kw['attr']['author']==a['author']
+    assert kw['attr']['reply_to']['route_token'].startswith('rr_')
+    route=kw['attr']['reply_to']['route_token']
+    assert server._report_routes.resolve(route)=='sender'
+    server._report_routes.rebind('successor', route_id=route)
+    assert server._report_routes.resolve(route)=='successor'
+    parsed=server._parse_conversation_event({'type':'user','timestamp':'2026-01-01T00:00:00Z','origin':{'kind':'peer','msg_id':a['message_id']},'message':{'role':'user','content':text}},1)
+    assert parsed['attribution']['author']['name_at_send']=='Original'
+    assert attribution.HEADER not in parsed['text']
+    assert parsed['attribution']['basis']=='runtime'
+
+
+def test_envelope_fallback_uses_env_with_strict_old_wt(monkeypatch,tmp_path):
+    import sender_envelope as attribution
+    import os
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    record=tmp_path/'received.json'
+    old=tmp_path/'old-wt'
+    old.write_text('#!/usr/bin/env python3\nimport argparse,json,os\np=argparse.ArgumentParser();p.add_argument("cmd");p.add_argument("sid");p.add_argument("text");p.add_argument("--no-queue",action="store_true");p.add_argument("--json",action="store_true");a=p.parse_args()\nopen('+repr(str(record))+',"w").write(os.environ.get("WT_MESSAGE_ENVELOPE",""))\nprint(json.dumps({"ok":True,"transport":"fifo"}))\n')
+    old.chmod(0o700)
+    import subprocess,sys
+    run=subprocess.run
+    monkeypatch.setattr(server,'_wt_messaging_enabled',lambda: True)
+    monkeypatch.setattr(server,'_wt_cli_available',lambda: True)
+    monkeypatch.setattr(server,'_wt_cli_path',lambda: str(old))
+    monkeypatch.setattr(server.subprocess,'run',lambda args,**kw: run([sys.executable]+args,**kw))
+    a=attribution.service('ccc:control-plane','recipient')
+    result=server._try_wt_send_for_headless_delivery('recipient','/compact',attr=a)
+    assert result['ok']
+    assert 'legacy' in result['attribution_limitation']
+    assert json.loads(record.read_text())['message_id']==a['message_id']
+    assert attribution.ENV not in os.environ
+
+
+def test_envelope_uds_header_and_ask_nonce_order(monkeypatch,tmp_path):
+    import sender_envelope as attribution
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    sent=[]
+    _enable_uds(monkeypatch,tmp_path,_dialable_row(tmp_path),sent)
+    monkeypatch.setattr(server,'_transcript_peer_receipt',lambda *a,**k: 'delivered')
+    monkeypatch.setattr(server,'_find_live_spawn_entry_for_session',lambda sid: None)
+    a=attribution.service('ccc:control-plane','target-sid')
+    result=server._try_uds_peer_delivery('target-sid','body\n⟨wt:dlv-1234⟩',source='ask',attr=a)
+    content=sent[0][1][1]['message']['content']
+    assert result['receipt_id']==a['message_id']
+    inner=content.split('\n')[1:-1]
+    assert inner[0]=='orig_msg_id: '+a['message_id']
+    assert inner[1].startswith(attribution.HEADER)
+    # The receipt nonce stays last even when ask instructions are added.
+    assert inner[-1]=='⟨wt:dlv-1234⟩'
+
+
+def test_envelope_reaches_execution_worker_unchanged(monkeypatch,tmp_path):
+    import sender_envelope as attribution
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    _stub_inject_router_seams(monkeypatch,is_codex=False)
+    _stub_inject_router_engine_detectors(monkeypatch)
+    monkeypatch.setattr(server,'session_live_status',lambda sid,cwd: {'live':True,'tty':None})
+    calls=[]
+    monkeypatch.setattr(server,'_control_plane_engine_call',lambda engine,operation,args,**kw: calls.append((engine,operation,args,kw)) or {'ok':True,'via':'worker'})
+    a=attribution.service('wt:notify','recipient')
+    result=server._inject_text_into_session('recipient','notice',source='wt',attr=a)
+    assert result['message_id']==a['message_id']
+    assert len(calls)==1
+    assert calls[0][2]['attr']['author']==a['author']
+    assert calls[0][2]['idempotency_key']==a['message_id']
+    assert attribution.lookup(message_id=a['message_id'])['author']==a['author']

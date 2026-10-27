@@ -9204,7 +9204,8 @@ def _codex_display_name(row, override=None, title="", first_message=""):
     # straight off the thread row rather than through
     # _extract_user_prompt_text, so the shared stripper is applied here.
     def visible_prompt(value):
-        return _core._strip_host_system_instruction(value)
+        import sender_envelope as attribution
+        return attribution.strip_header(_core._strip_host_system_instruction(value))
 
     return (
         _core._truncate_session_name(override)

@@ -5995,6 +5995,8 @@ def _start_claude_prewarm(
         claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
         effort=reasoning_effort,
     )
+    from sender_envelope import child_env as scrub_sender_env
+    child_env = scrub_sender_env(child_env)
     popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,
