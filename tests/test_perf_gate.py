@@ -60,6 +60,26 @@ class PerfGateTest(unittest.TestCase):
         self.assertEqual(self._run("--kind", "list_read", "--p95-ms", "100",
                                    "--exclude-status", "304", "--min-samples", "21"), 1)
 
+    def test_where_scores_one_detail_slice(self):
+        # CCC-144: prepared speaker starts are gated apart from cold ones,
+        # and selection reads count in neither.
+        rows = [{"ts": _iso(5), "kind": "tts_start", "ms": 30,
+                 "detail": {"head": "ready", "target": "turn"}} for _ in range(20)]
+        rows += [{"ts": _iso(5), "kind": "tts_start", "ms": 1500,
+                  "detail": {"head": h, "target": "turn"}} for h in ("none", "generating") * 10]
+        rows += [{"ts": _iso(5), "kind": "tts_start", "ms": 9000,
+                  "detail": {"head": "none", "target": "selection"}} for _ in range(5)]
+        self._write(rows)
+        prepared = ("--kind", "tts_start", "--where", "head=ready", "--where", "target!=selection")
+        cold = ("--kind", "tts_start", "--where", "head=none,generating", "--where", "target!=selection")
+        self.assertEqual(self._run(*prepared, "--p95-ms", "300", "--min-samples", "20"), 0)
+        self.assertEqual(self._run(*cold, "--p95-ms", "2000", "--min-samples", "20"), 0)
+        self.assertEqual(self._run(*cold, "--p95-ms", "300", "--min-samples", "20"), 1)
+        # unfiltered, the selection reads blow the budget
+        self.assertEqual(self._run("--kind", "tts_start", "--p95-ms", "2000"), 1)
+        with self.assertRaises(SystemExit):
+            self._run("--kind", "tts_start", "--p95-ms", "1", "--where", "head")
+
     def test_unknown_commit_counts_no_samples(self):
         self._write([{"ts": _iso(5), "kind": "conv_open", "ms": 100, "build": "deadbeef"}
                      for _ in range(20)])

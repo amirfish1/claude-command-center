@@ -14,6 +14,10 @@ Which samples count, when ``--commit`` (default ``$WT_GATE_COMMIT``) is set:
     (served live from disk -- a page reload, not a restart, deploys them) and
     the sample was recorded after the commit was made.
 
+``--where`` scores one slice of a kind, e.g. speaker starts whose first clip
+was prepared (``--where head=ready --where target!=selection``); a value list
+``head=none,generating`` matches any of them.
+
 Stdlib only. Example:
     python3 scripts/perf_gate.py --kind conv_open --p95-ms 1000 --min-samples 20
 """
@@ -107,6 +111,25 @@ class _Deployed:
         return "missing"
 
 
+def _parse_where(spec):
+    """``key=a,b`` / ``key!=a,b`` -> (key, negate, {values})."""
+    negate = "!=" in spec
+    key, _, vals = spec.partition("!=" if negate else "=")
+    if not key or not _:
+        raise ValueError(f"bad --where {spec!r}: use key=value or key!=value")
+    return key.strip(), negate, {v.strip() for v in vals.split(",")}
+
+
+def _matches(row, wheres):
+    detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+    for key, negate, vals in wheres:
+        value = detail.get(key)
+        hit = ("" if value is None else str(value)) in vals
+        if hit == negate:
+            return False
+    return True
+
+
 def _percentile(vals, pct):
     if not vals:
         return 0
@@ -126,6 +149,9 @@ def main(argv=None):
     ap.add_argument("--exclude-status", action="append", default=[],
                     help="drop samples whose detail.status equals this (repeatable), "
                          "e.g. 304 for list reads that skipped the body")
+    ap.add_argument("--where", action="append", default=[],
+                    help="keep samples whose detail.KEY matches (repeatable): "
+                         "KEY=a,b or KEY!=a,b, e.g. head=ready, target!=selection")
     ap.add_argument("--commit", default=os.environ.get("WT_GATE_COMMIT", ""),
                     help="only count samples measured on code containing this commit")
     ap.add_argument("--repo", default=os.environ.get("WT_GATE_REPO") or ".",
@@ -135,6 +161,10 @@ def main(argv=None):
     if args.p95_ms is None and args.p50_ms is None and args.max_ms is None:
         ap.error("give at least one budget: --p95-ms / --p50-ms / --max-ms")
 
+    try:
+        wheres = [_parse_where(w) for w in args.where]
+    except ValueError as exc:
+        ap.error(str(exc))
     since = datetime.now(timezone.utc) - timedelta(hours=args.hours)
     rows = [r for r in _read_rows(args.events, since) if r.get("kind") == args.kind]
     excluded = {str(s) for s in args.exclude_status}
@@ -142,11 +172,14 @@ def main(argv=None):
         rows = [r for r in rows
                 if str(((r.get("detail") or {}) if isinstance(r.get("detail"), dict) else {})
                        .get("status")) not in excluded]
+    if wheres:
+        rows = [r for r in rows if _matches(r, wheres)]
     deployed = _Deployed(args.repo, args.commit)
     counted = [r for r in rows if deployed(r)]
     ms = [float(r.get("ms") or 0) for r in counted]
 
-    label = f"{args.kind} over {args.hours:g}h"
+    label = f"{args.kind} over {args.hours:g}h" + (
+        " where " + " ".join(args.where) if args.where else "")
     print(f"perf_gate: {label}: {len(rows)} samples, {len(counted)} on code with the fix"
           + (f" ({args.commit[:12]})" if args.commit else ""))
     if len(counted) < args.min_samples:

@@ -194,15 +194,17 @@ console.log(JSON.stringify({ requests, whilePlaying }));
     def test_cache_coverage_uses_actual_ready_characters_including_uncached_tail(self):
         coverage = function_block(self.source, "_ttsTextCacheCoverage", "_ttsRefreshCacheCoverage")
         chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        chunker += "const _TTS_SECOND_CHARS = 160;\n" + function_block(self.source, "_ttsRestChunks", "_ttsSetPlay")
         result = self.run_node(chunker + """
-const text = 'a'.repeat(80) + 'b'.repeat(400) + 'c'.repeat(400) + 'd'.repeat(400) + 'e'.repeat(400) + 'f'.repeat(400);
+const text = 'a'.repeat(80) + 'b'.repeat(160) + 'c'.repeat(400) + 'd'.repeat(400) + 'e'.repeat(400) + 'f'.repeat(400);
 const _ttsHeadCache = new Map();
 const _ttsChunkState = null;
 const _ttsDebugJobs = [];
 const _ttsCacheDebug = true;
 const _ttsHeadChunk = s => _chunkTtsText(s, 80)[0];
 _ttsHeadCache.set('a'.repeat(80), {debugReady:false});
-for (const letter of 'bcde') _ttsHeadCache.set(letter.repeat(400), {debugReady:false});
+_ttsHeadCache.set('b'.repeat(160), {debugReady:false});
+for (const letter of 'cde') _ttsHeadCache.set(letter.repeat(400), {debugReady:false});
 """ + coverage + """
 const sentOnly = _ttsTextCacheCoverage(text);
 _ttsHeadCache.get('a'.repeat(80)).debugReady = true;
@@ -214,14 +216,14 @@ const ready = _ttsTextCacheCoverage(text);
 console.log(JSON.stringify({sentOnly, partial, capped, ready}));
 """)
         self.assertEqual(result["sentOnly"]["fraction"], 0)
-        self.assertAlmostEqual(result["sentOnly"]["sentFraction"], 1680 / 2080)
+        self.assertAlmostEqual(result["sentOnly"]["sentFraction"], 1440 / 1840)
         self.assertTrue(result["sentOnly"]["pending"])
-        self.assertAlmostEqual(result["partial"]["fraction"], 80 / 2080)
+        self.assertAlmostEqual(result["partial"]["fraction"], 80 / 1840)
         self.assertTrue(result["partial"]["pending"])
-        self.assertAlmostEqual(result["partial"]["sentFraction"], 1680 / 2080)
-        self.assertAlmostEqual(result["capped"]["fraction"], 1680 / 2080)
+        self.assertAlmostEqual(result["partial"]["sentFraction"], 1440 / 1840)
+        self.assertAlmostEqual(result["capped"]["fraction"], 1440 / 1840)
         self.assertFalse(result["capped"]["pending"])
-        self.assertAlmostEqual(result["capped"]["sentFraction"], 1680 / 2080)
+        self.assertAlmostEqual(result["capped"]["sentFraction"], 1440 / 1840)
         self.assertEqual(result["ready"], {"fraction": 1, "sentFraction": 1, "cancelledFraction": 0, "pending": False})
 
     def test_priority_change_cancels_waiting_work_but_keeps_sent_and_ready(self):
@@ -256,30 +258,66 @@ console.log(JSON.stringify({skipped:true}));
     def test_cancelled_coverage_yields_to_new_requests_and_ready_cache(self):
         coverage = function_block(self.source, "_ttsTextCacheCoverage", "_ttsRefreshCacheCoverage")
         chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        chunker += "const _TTS_SECOND_CHARS = 160;\n" + function_block(self.source, "_ttsRestChunks", "_ttsSetPlay")
         result = self.run_node(chunker + """
-const text = 'a'.repeat(80) + 'b'.repeat(400);
+const text = 'a'.repeat(80) + 'b'.repeat(160);
 const _ttsHeadCache = new Map([['a'.repeat(80), {debugReady:true}]]);
 const _ttsChunkState = null;
-const _ttsDebugJobs = [{text:'b'.repeat(400),status:'cancelled'}];
+const _ttsDebugJobs = [{text:'b'.repeat(160),status:'cancelled'}];
 let _ttsCacheDebug = true;
 const _ttsHeadChunk = s => _chunkTtsText(s, 80)[0];
 """ + coverage + """
 const cancelled = _ttsTextCacheCoverage(text);
-_ttsDebugJobs.push({text:'b'.repeat(400),status:'queued'});
+_ttsDebugJobs.push({text:'b'.repeat(160),status:'queued'});
 const requeued = _ttsTextCacheCoverage(text);
-_ttsDebugJobs.push({text:'b'.repeat(400),status:'cancelled'});
-_ttsHeadCache.set('b'.repeat(400), {debugReady:true});
+_ttsDebugJobs.push({text:'b'.repeat(160),status:'cancelled'});
+_ttsHeadCache.set('b'.repeat(160), {debugReady:true});
 const ready = _ttsTextCacheCoverage(text);
-_ttsHeadCache.delete('b'.repeat(400));
+_ttsHeadCache.delete('b'.repeat(160));
 _ttsCacheDebug = false;
 const disabled = _ttsTextCacheCoverage(text);
 console.log(JSON.stringify({cancelled,requeued,ready,disabled}));
 """)
-        self.assertAlmostEqual(result["cancelled"]["cancelledFraction"], 400 / 480)
+        self.assertAlmostEqual(result["cancelled"]["cancelledFraction"], 160 / 240)
         self.assertEqual(result["requeued"]["cancelledFraction"], 0)
         self.assertEqual(result["ready"]["fraction"], 1)
         self.assertEqual(result["ready"]["cancelledFraction"], 0)
         self.assertEqual(result["disabled"]["cancelledFraction"], 0)
+
+    def test_second_clip_is_short_and_prepare_ahead_runs_during_another_read(self):
+        # CCC-144: a cold read's second clip is ~160 chars so it is made while
+        # the head plays; the focused pane's latest reply keeps preparing
+        # (head + one clip) while ANOTHER message is read, never the one read.
+        chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        rest = function_block(self.source, "_ttsRestChunks", "_ttsSetPlay")
+        during = function_block(self.source, "_ttsReadingOther", "_ttsStartChain")
+        result = self.run_node(chunker + "const _TTS_SECOND_CHARS = 160;\n" + rest + """
+const _TTS_PREFETCH_CLIPS = 4, _TTS_PREFETCH_CLIPS_QUIET = 1;
+let _ttsActive = false, _ttsPaused = false, _ttsChunkState = null, _ttsBoundUtteranceText = '';
+""" + during + """
+const words = Array.from({length: 200}, (_, i) => 'word' + i).join(' ');
+const chunks = _ttsRestChunks('  ' + words, 80);
+const idle = _ttsPrefetchClipCount('pane-1');
+_ttsActive = true; _ttsChunkState = {}; _ttsBoundUtteranceText = 'Reading the older answer now.';
+const reading = _ttsPrefetchClipCount('pane-1');
+console.log(JSON.stringify({
+  lens: chunks.map(c => c.text.length), start0: chunks[0].start,
+  joined: chunks.map(c => c.text).join(' ') === words,
+  idle, reading,
+  other: _ttsReadingOther('The latest reply head'),
+  same: _ttsReadingOther('the older answer'),
+}));
+""")
+        self.assertLessEqual(result["lens"][0], 160)
+        self.assertGreater(result["lens"][0], 100)
+        self.assertTrue(all(n <= 400 for n in result["lens"][1:]))
+        self.assertGreater(max(result["lens"][1:]), 300)
+        self.assertEqual(result["start0"], 82)
+        self.assertTrue(result["joined"])
+        self.assertEqual(result["idle"], 4)
+        self.assertEqual(result["reading"], 1)
+        self.assertTrue(result["other"])
+        self.assertFalse(result["same"])
 
     def test_neural_word_progress_uses_audio_time_and_whole_utf16_words(self):
         helper = function_block(self.source, "_ttsWordAtProgress", "_ttsSpeakChunkNeural")

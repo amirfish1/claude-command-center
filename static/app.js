@@ -437,6 +437,26 @@
     osc.start(t0);
     osc.stop(t0 + durationMs / 1000 + 0.05);
   }
+  // Speaker cold-click cue (CCC-144): a soft tick when the first clip of a
+  // read is not made yet, so the 1-2 s of generation doesn't feel like a
+  // dead click. Not gated by session sounds: the speaker click asked for audio.
+  function _cccPlaySpeakerCue() {
+    const ctx = _ensureAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(660, t0);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.06, t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.12);
+  }
   function _cccPlayTurnEnd() {
     // Two quick rising notes: "agent handed back".
     _cccBeep(523, 90, 'sine', 0);
@@ -14544,7 +14564,7 @@
     const head = _ttsHeadChunk(clean, 0);
     if (!head) return { fraction: 0, sentFraction: 0, cancelledFraction: 0, pending: false };
     const end = head.start + head.text.length;
-    const chunks = [head].concat(_chunkTtsText(clean.slice(end), 400, end));
+    const chunks = [head].concat(_ttsRestChunks(clean.slice(end), end));
     let ready = 0, sent = 0, cancelled = 0, total = 0, pending = false;
     const latestJobs = new Map(_ttsDebugJobs.map(j => [j.text, j]));
     for (const c of chunks) {
@@ -14619,6 +14639,17 @@
   function _ttsHeadChunk(text, baseOffset) {
     return _chunkTtsText(text, _TTS_HEAD_CHARS, baseOffset)[0] || null;
   }
+  // Clips after the head: a short ~160-char second clip, then ~400-char ones.
+  // A cold read's second clip is made while the head plays; a 400-char one
+  // often wasn't ready in time and paused the read after its first sentence
+  // (CCC-144). Prepare-ahead, coverage and the read must split identically.
+  const _TTS_SECOND_CHARS = 160;
+  function _ttsRestChunks(rest, offset) {
+    const second = _chunkTtsText(rest, _TTS_SECOND_CHARS, offset)[0];
+    if (!second) return [];
+    const used = second.start - offset + second.text.length;
+    return [second].concat(_chunkTtsText(rest.slice(used), 400, offset + used));
+  }
   // Dot on the Speak button: amber = first clip ready, green = whole last message ready.
   const _ttsCacheState = new Map();   // head text -> 'partial' | 'ready'
   // f = share of the message's clips already made (0..1), drawn as the bar width.
@@ -14662,6 +14693,7 @@
   function _ttsMarkCache(paneId, headText, st, f) {
     if (headText) _ttsCacheState.set(headText, { st, f });
     const apply = (btn) => {
+      if ((_ttsActive || _ttsPaused) && btn.classList.contains('speaking')) return;
       if (st) { btn.dataset.ttsCache = st; btn.style.setProperty('--tts-cache-f', String(f == null ? 1 : f)); }
       else { delete btn.dataset.ttsCache; btn.style.removeProperty('--tts-cache-f'); }
     };
@@ -14697,6 +14729,7 @@
     if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
     if (!head) return;
+    if ((_ttsActive || _ttsPaused) && mk === paneId && !_ttsReadingOther(head.text)) return;
     _ttsSelectPrefetchTarget(mk, head.text);
     if (sourceBtn) sourceBtn.dataset.ttsHead = head.text;
     if (_ttsHeadCache.has(head.text)) {
@@ -14755,12 +14788,24 @@
   // this is paid once per message. Prepare-ahead pauses while a read plays.
   const _TTS_PREFETCH_CLIPS = 4;
   const _TTS_PREFETCH_CLIPS_QUIET = 1;
+  // While another message is read aloud, the focused pane's latest reply is
+  // still prepared (head + the short second clip) at bg priority, which the
+  // voice server runs only in the playing read's idle time. Clicking "next"
+  // right after a read used to start cold: prepare-ahead paused during reads
+  // (CCC-144). Hover/viewport preparation still waits for the read to end.
+  function _ttsReadingOther(headText) {
+    return !!_ttsChunkState && !(_ttsBoundUtteranceText || '').includes(headText);
+  }
+  function _ttsPrefetchClipCount(mk) {
+    if (mk === '__quiet' || _ttsActive || _ttsPaused) return _TTS_PREFETCH_CLIPS_QUIET;
+    return _TTS_PREFETCH_CLIPS;
+  }
   const _ttsChainRunning = new Set();   // head texts whose chain is queued or running
   function _ttsStartChain(clean, head, got, mk) {
     if (_ttsPrefetchTargets.get(mk) !== head.text) return;
     const end = head.start + head.text.length;
     const planned = got.voice && got.voice !== 'MeloTTS'
-      ? _chunkTtsText(clean.slice(end), 400, end).slice(0, mk === '__quiet' ? _TTS_PREFETCH_CLIPS_QUIET : _TTS_PREFETCH_CLIPS) : [];
+      ? _ttsRestChunks(clean.slice(end), end).slice(0, _ttsPrefetchClipCount(mk)) : [];
     const jobs = planned.map(c => {
       const entry = _ttsHeadCache.get(c.text);
       const status = entry ? (entry.debugReady ? 'ready' : 'processing') : 'queued';
@@ -14790,9 +14835,10 @@
     if (!headGot.voice || headGot.voice === 'MeloTTS') return;
     await headGot.done;
     const end = head.start + head.text.length;
-    const rest = _chunkTtsText(clean.slice(end), 400, end)
-      .slice(0, paneId === '__quiet' ? _TTS_PREFETCH_CLIPS_QUIET : _TTS_PREFETCH_CLIPS);
-    const live = () => token === _ttsChainTokens[paneId || ''] && !_ttsActive && Date.now() >= _ttsNeuralCooldownUntil;
+    const rest = _ttsRestChunks(clean.slice(end), end).slice(0, _ttsPrefetchClipCount(paneId));
+    const duringRead = !!paneId && paneId !== '__quiet' && !paneId.startsWith('__viewport:');
+    const live = () => token === _ttsChainTokens[paneId || ''] && Date.now() >= _ttsNeuralCooldownUntil
+      && (!(_ttsActive || _ttsPaused) || (duringRead && _ttsReadingOther(head.text)));
     const entries = [];
     const settle = async (i) => {   // clip i fully made; the bar moves past it
       const got = await entries[i].p;
@@ -14902,7 +14948,7 @@
     _ttsPrefetchTimer = setTimeout(() => {
       _ttsPrefetchTimer = null;
       try {
-        if (_ttsActive || _ttsPaused || document.hidden) return;
+        if (document.hidden) return;
         // Prefetch only the focused pane; background split panes prefetch on
         // focus or hover so multi-pane layouts don't multiply synthesis work.
         const paneId = activePaneId();
@@ -15272,9 +15318,25 @@
         toClips('media error');
       };
       if (_ttsPaused) { audio.load?.(); return; }
-      audio.play().catch((error) => {
+      const ourSrc = audio.src;
+      let retried = false;
+      const playStream = () => audio.play().catch((error) => {
         if (stale()) return;
-        _ttsLog('ERROR', 'continuous play rejected: ' + (error?.name || 'unknown'));
+        _ttsLog('ERROR', 'continuous play rejected: ' + (error?.name || 'unknown')
+          + ' (same src ' + (audio.src === ourSrc) + ', ready ' + audio.readyState
+          + ', net ' + audio.networkState + ', paused ' + audio.paused + (retried ? ', retry' : '') + ')');
+        // AbortError = the pending play was interrupted (a load or pause on
+        // the shared element, or Safari restarting a slow stream). Falling
+        // back to per-clip re-made clip 0 cold, 7 s of silence (CCC-144);
+        // the stream is still ours, so retry once when it can play.
+        if (error?.name === 'AbortError' && !retried && audio.src === ourSrc) {
+          retried = true;
+          let fired = false;
+          const again = () => { if (fired || stale()) return; fired = true; playStream(); };
+          audio.addEventListener('canplay', again, { once: true });
+          setTimeout(again, 1500);
+          return;
+        }
         if (error?.name === 'NotAllowedError') {
           _ttsPaused = true;
           setTtsButtonsBusy(false);
@@ -15285,6 +15347,7 @@
         }
         toClips('play rejected');
       });
+      playStream();
     };
     fetch('/api/free-runtime/tts-session', {
       method: 'POST',
@@ -15796,7 +15859,7 @@
     _perfEvent('tts_start', _perfActiveElapsed(p.t0, end), { detail: {
       engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
       chars: p.chars, clips: p.clips, target: p.target, rate: _ttsRate,
-      wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips',
+      wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips', cue: !!p.cue,
     } });
   }
   function _ttsPerfSilence(state, ms, kind) {
@@ -15853,7 +15916,7 @@
       const head = _chunkTtsText(text, _TTS_HEAD_CHARS, baseOffset)[0];
       const used = head ? (head.start - (Number(baseOffset) || 0)) + head.text.length : 0;
       if (head && used < text.length) {
-        chunks = [head].concat(_chunkTtsText(text.slice(used), 400, (Number(baseOffset) || 0) + used));
+        chunks = [head].concat(_ttsRestChunks(text.slice(used), (Number(baseOffset) || 0) + used));
       }
     }
     const _ttsFresh = !(Number(baseOffset) > 0) && !pauseOnStart && !_ttsKeepVoice;
@@ -15869,7 +15932,13 @@
           head: _ttsPerfEntry ? (_ttsPerfEntry.ready ? 'ready' : 'generating') : 'none',
           chars: text.length, clips: chunks.length, target: _ttsPerfTarget || 'other',
           gaps: 0, maxGap: 0, stalls: 0, maxStall: 0, gapT0: 0,
+          cue: false,
         };
+        // Cold click on the free voice: tick now, speech follows when made.
+        if (perf.head !== 'ready' && _ttsHeadReady) {
+          perf.cue = true;
+          try { _cccPlaySpeakerCue(); } catch (_) {}
+        }
       }
     }
     _ttsPerfTarget = '';
