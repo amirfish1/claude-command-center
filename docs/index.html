@@ -63,7 +63,7 @@
   .nav-links { display: flex; gap: 22px; font-size: 14px; align-items: center; }
   .nav-links a { text-decoration: none; color: var(--fg-dim); }
   .nav-links a:hover { color: var(--fg); }
-  @media (max-width: 640px) { .nav-links a:not(.gh):not(.captain-link) { display: none; } }
+  @media (max-width: 640px) { .nav-links a:not(.download-link) { display: none; } }
 
   /* Hero */
   .hero { padding: 70px 0 40px; position: relative; }
@@ -481,7 +481,7 @@
       <a href="/watchtower/">WatchTower</a>
       <a href="/receipts/">Receipts</a>
       <a href="/demo/" rel="noopener">Demo</a>
-      <a href="#install">Install</a>
+      <a class="download-link" href="#install" data-ccc-cta="install_options" data-ccc-placement="nav">Download</a>
       <a class="gh" href="https://github.com/amirfish1/claude-command-center" rel="noopener">GitHub</a>
     </nav>
   </div>
@@ -507,11 +507,12 @@
       </p>
 
       <div class="cta-row fade-target">
-        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/latest">GET CCC</a>
+        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/download/v5.39.0/ccc.dmg" data-ccc-cta="download" data-ccc-placement="hero">Download for macOS</a>
+        <a class="btn btn-soft" href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Linux, Windows &amp; Homebrew</a>
       </div>
       <p class="download-meta fade-target">
         v5.39.0 macOS app, source, and Homebrew release &middot;
-        <a href="#install">Homebrew, Linux, and Windows</a> &middot;
+        <a href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Homebrew, Linux, and Windows</a> &middot;
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md#landing-page-download-clicks">anonymous click count</a>
       </p>
 
@@ -1001,7 +1002,7 @@ open http://localhost:8090
         <div class="install-block">
           <h3># Homebrew or Mac app</h3>
 <pre><span class="comment"># drag-and-drop install (recommended if you avoid the terminal)</span>
-<a href="https://github.com/amirfish1/claude-command-center/releases/latest/download/ccc.dmg" style="color: var(--orange); text-decoration: underline; text-underline-offset: 3px;">Download CCC.dmg &darr;</a>
+<a href="https://github.com/amirfish1/claude-command-center/releases/download/v5.39.0/ccc.dmg" data-ccc-cta="download" data-ccc-placement="install" style="color: var(--orange); text-decoration: underline; text-underline-offset: 3px;">Download CCC.dmg &darr;</a>
 
 <span class="comment"># or via Homebrew</span>
 brew install amirfish1/tap/ccc</pre>
@@ -1100,10 +1101,16 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
 
 <script>
   const DOWNLOAD_EVENT_URL = "https://telemetry.claude-command-center.workers.dev/v1/download";
+  document.querySelectorAll("[data-ccc-cta]").forEach((link) => {
+    link.addEventListener("click", () => {
+      if (window.cccTrackCta) {
+        window.cccTrackCta(link.dataset.cccCta, link.dataset.cccPlacement);
+      }
+    });
+  });
   const downloadCta = document.getElementById("downloadCta");
   if (downloadCta) {
     downloadCta.addEventListener("click", () => {
-      if (window.cccTrackCta) window.cccTrackCta("download");
       try {
         if (navigator.sendBeacon && navigator.sendBeacon(DOWNLOAD_EVENT_URL)) return;
       } catch (_) {
