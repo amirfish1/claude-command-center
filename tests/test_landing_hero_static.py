@@ -1,12 +1,10 @@
 from pathlib import Path
 import re
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DMG_URL = (
-    "https://github.com/amirfish1/claude-command-center/"
-    "releases/latest/download/ccc.dmg"
-)
+DMG_URL = ET.parse(ROOT / "docs/appcast.xml").find("./channel/item/enclosure").attrib["url"]
 
 
 def _current_mm():

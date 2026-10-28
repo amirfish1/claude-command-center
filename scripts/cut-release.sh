@@ -230,7 +230,8 @@ if [ "$SKIP_DMG" = 0 ]; then
   # (releases/latest/download/ccc.dmg) always resolves — Sparkle/appcast keep
   # the versioned name. This is what lets the landing page never need a bump.
   run "cp ccc-v${VERSION}.dmg ccc.dmg && gh release upload v${VERSION} ccc.dmg --clobber && rm -f ccc.dmg"
-  run "git commit --only docs/appcast.xml -m 'chore(release): publish v${VERSION} appcast'"
+  [ ! -f scripts/update-release-page.py ] || run "python3 scripts/update-release-page.py ${VERSION}"
+  run "git commit --only docs/appcast.xml docs/index.html -m 'chore(release): publish v${VERSION} appcast'"
   run "git push origin main"
   if [ "$DRY_RUN" = 0 ]; then
     step "     Verify release site: ${RELEASE_SITE}"
