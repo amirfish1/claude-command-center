@@ -88,3 +88,16 @@ def test_attributed_queue_row_matches_visible_text(monkeypatch):
         assert claim and str(claim['item'])==carried
     finally:
         server._pending_resume_queue.pop(sid,None)
+
+
+def test_attributed_drain_closes_plain_text_receipt(monkeypatch, tmp_path):
+    # CCC-233: the composer opens the receipt with plain text; the queue drain
+    # closes it with the attribution-carrying text. It stayed "outstanding".
+    from ccc_server import inject_receipts
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    path=str(tmp_path/'receipts.json')
+    sid='ccc-233-receipt'
+    inject_receipts.open_receipt(sid,'inject:1','just answer the ticket',path=path)
+    carried=attribution.carry('just answer the ticket',attribution.service('ccc:test',sid),app='ccc')
+    inject_receipts.close_receipt(sid,text=carried,path=path)
+    assert inject_receipts.outstanding(sid,stale_after_s=0,path=path) is None
