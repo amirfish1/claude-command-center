@@ -13,6 +13,8 @@
 #   ./scripts/cut-release.sh X.Y.Z --allow-dirty  # cut anyway with a dirty tree
 #   ./scripts/cut-release.sh X.Y.Z --release-site URL  # verify public release page
 #
+# Set CCC_RELEASE_ANNOUNCE=0 to omit the optional community announcement.
+#
 # A dirty working tree is refused by default: this script stages a fixed file
 # list, so uncommitted work in static/ (or anywhere outside that list) would be
 # left out and the release would ship a half-finished feature. See the preflight.
@@ -293,7 +295,7 @@ if [ "$DRY_RUN" = 0 ]; then
       || { echo "${RED}published Homebrew formula does not match v${VERSION}${NC}" >&2; exit 1; }
     echo "   brew formula: v${VERSION} published"
   fi
-  if [ -f "${HOME}/.claude/command-center/discord.json" ]; then
+  if [ "${CCC_RELEASE_ANNOUNCE:-1}" != 0 ] && [ -f "${HOME}/.claude/command-center/discord.json" ]; then
     REL_URL="$(gh release view v${VERSION} --json url --jq .url 2>/dev/null || echo "https://github.com/amirfish1/claude-command-center/releases/tag/v${VERSION}")"
     python3 ./scripts/discord_community.py ship "🚀 **CCC v${VERSION} shipped!** Release notes & download: ${REL_URL}" >/dev/null 2>&1 || true
     echo "   discord:  announced v${VERSION} in #ship-log"
