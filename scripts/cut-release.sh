@@ -148,7 +148,7 @@ if [ "$SKIP_DMG" = 0 ] && [ "$DRY_RUN" = 0 ]; then
     exit 1
   }
   xcrun notarytool history --keychain-profile ccc-notary \
-    --output-format json >/dev/null 2>&1 || {
+    --output-format json >/dev/null || {
       echo "${RED}notarization profile 'ccc-notary' is unavailable; restore it before cutting the release${NC}" >&2
       exit 1
     }
@@ -186,6 +186,7 @@ fi
 step "3/9  Bump version in pyproject.toml + server.py"
 run "sed_i 's/^version = \".*\"/version = \"${VERSION}\"/' pyproject.toml"
 run "sed_i 's/^__version__ = \".*\"/__version__ = \"${VERSION}\"/' server.py"
+[ ! -f scripts/update-release-page.py ] || run "python3 scripts/update-release-page.py ${VERSION}"
 # plugin/ is generated from skills/*.md + the pyproject version.
 PLUGIN_MANIFEST=""
 [ -f scripts/build-plugin.py ] && PLUGIN_MANIFEST=plugin
@@ -196,13 +197,13 @@ if [ "$DRY_RUN" = 0 ]; then
     || { echo "${RED}version bump verification failed${NC}" >&2; exit 1; }
 fi
 
-# The download link is version-stable. Version badges, release highlights,
-# and the seeded hero screenshot still need refreshing (docs/RELEASING.md).
+# Release labels and stable download links are refreshed above. Release
+# highlights and the captured hero screenshot remain editorial updates.
 
 # ── 4. Commit + tag + push ──────────────────────────────────────────────────
 step "4/9  Commit, tag, push main + tag"
-run "git add CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d"
-run "git commit --only CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d -m 'chore(release): v${VERSION}'"
+run "git add CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d docs/index.html"
+run "git commit --only CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d docs/index.html -m 'chore(release): v${VERSION}'"
 run "git tag -a v${VERSION} -m 'v${VERSION}'"
 run "git push origin main"
 run "git push origin v${VERSION}"

@@ -21,6 +21,8 @@ import subprocess
 import time
 import uuid
 
+from ccc_server.paths import _is_pid_alive
+
 ENV = 'WT_MESSAGE_ENVELOPE'
 HEADER = '[Message attribution v1: '
 MAX_BYTES = 32768
@@ -222,7 +224,8 @@ def capture_cli(recipient='', *, claimed=''):
             pid = int(row.get('pid') or 0)
             if not pid or path.stat().st_uid != os.getuid():
                 continue
-            os.kill(pid, 0)
+            if not _is_pid_alive(pid):
+                continue
         except (OSError, ValueError):
             continue
         token = str(row.get('procStart') or '').strip()
@@ -253,7 +256,8 @@ def capture_cli(recipient='', *, claimed=''):
                         continue
                     pid = int(row.get('pid') or 0)
                     if pid:
-                        os.kill(pid, 0)
+                        if not _is_pid_alive(pid):
+                            continue
                     elif path.name != 'agents.json':
                         continue
                     if pid and row.get('procStart') and not process_start_matches(pid, str(row['procStart'])):

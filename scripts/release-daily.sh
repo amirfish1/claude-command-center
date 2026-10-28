@@ -77,7 +77,12 @@ $blocks"
   fi
 }
 check_repo "$REPO_ROOT"
-for r in $EXTRA_REPOS; do check_repo "$r"; done
+for r in $EXTRA_REPOS; do
+  check_repo "$r"
+  # The clean check fetches tags but does not advance a stale local main.
+  # Sync before computing a sibling version to avoid reusing a published tag.
+  git -C "$r" pull --ff-only --quiet origin main 2>/dev/null || waive "cannot fast-forward $r"
+done
 
 git pull --ff-only --quiet origin main 2>/dev/null || waive "cannot fast-forward $REPO_ROOT"
 
@@ -117,6 +122,6 @@ for r in $EXTRA_REPOS; do
   say "releasing $(basename "$r") (patch bump from $wtag, dry-run=$DRY)"
   if [ "$DRY" = 1 ]; then (cd "$r" && ./scripts/cut-release.sh patch --dry-run) >>"$LOG" 2>&1; wrc=$?
   else (cd "$r" && ./scripts/cut-release.sh patch) >>"$LOG" 2>&1; wrc=$?; fi
-  if [ "$wrc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED): $(basename "$r") patch"; else say "FAILED: $(basename "$r") cut-release exit $wrc (CCC v$NEXT did ship)"; exit 1; fi
+  if [ "$wrc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED): $(basename "$r") patch"; else say "FAILED: $(basename "$r") cut-release exit $wrc (CCC v$NEXT $([ "$DRY" = 1 ] && echo dry-run-only || echo 'did ship'))"; exit 1; fi
 done
 exit 0

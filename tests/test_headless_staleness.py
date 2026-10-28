@@ -505,9 +505,13 @@ def test_ask_routes_claude_to_persistent_worker(server_mod):
             "timeout_ms": 12_000,
             "cwd": None,
             "peer_sender_sid": None,
+            "attr": mock.ANY,
         },
         timeout_ms=12_000,
     )
+    attr = ask.call_args.args[2]["attr"]
+    assert attr["intended_recipient"]["id"] == sid
+    assert attr["relay"][-1]["via"] == "ccc-ask"
 
 
 def test_worker_executes_claude_ask_in_its_owned_process(server_mod):
@@ -529,7 +533,7 @@ def test_worker_executes_claude_ask_in_its_owned_process(server_mod):
     assert result == expected
     server_mod.ask_session_and_wait.assert_called_once_with(
         "worker-session", "status?", timeout_ms=12_000, cwd="/repo",
-        peer_sender_sid=None,
+        peer_sender_sid=None, attr=None,
     )
 
 
@@ -1120,6 +1124,8 @@ def test_federated_inject_forwards_explicit_queue_flag(server_mod):
         "text": "wait until next turn",
         "mode": "send",
         "force_queue": True,
+        "attr": None,
+        "idempotency_key": None,
     })
 
 

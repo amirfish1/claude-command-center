@@ -166,7 +166,7 @@ def test_critical_spawn_can_preempt_background_api_reads():
     assert "activeConversation === '__new__'" in pause
     assert "startsWith('spawning-')" in pause
     assert "claudeFastSpawnAwaitingPaint()" in pause
-    enter = _function_source("enterNewSessionMode", 2400)
+    enter = _function_source("enterNewSessionMode").split("\n  function ", 1)[0]
     assert "abortBackgroundApiReadsForSpawn()" in enter
 
 

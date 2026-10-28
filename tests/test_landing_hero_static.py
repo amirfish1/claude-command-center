@@ -22,12 +22,12 @@ def _hero(page):
 
 def test_landing_hero_uses_public_safe_product_screenshot():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
-    slug = _current_mm().replace(".", "-")
-    asset = ROOT / "docs" / "images" / f"ccc-v{slug}-hero.png"
+    capture = re.search(r'src="\./(images/ccc-v(\d+)-(\d+)-hero\.png)"', _hero(page))
+    assert capture is not None
+    asset = ROOT / "docs" / capture.group(1)
 
     assert asset.is_file()
-    assert f'./images/ccc-v{slug}-hero.png' in page
-    assert f"CCC v{_current_mm()} showing the session fleet" in page
+    assert f"CCC v{capture.group(2)}.{capture.group(3)} showing the session fleet" in page
 
 
 def test_landing_page_declares_its_existing_favicon():
@@ -51,10 +51,13 @@ def test_landing_hero_has_one_direct_download_cta():
         re.S,
     )
 
-    assert len(ctas) == 1
-    assert 'id="downloadCta"' in ctas[0]
-    assert 'href="https://github.com/amirfish1/claude-command-center/releases/latest"' in ctas[0]
-    assert re.sub(r"<[^>]+>", "", ctas[0]).strip() == "GET CCC"
+    downloads = [cta for cta in ctas if 'id="downloadCta"' in cta]
+    assert len(downloads) == 1
+    assert f'href="{DMG_URL}"' in downloads[0]
+    assert re.sub(r"<[^>]+>", "", downloads[0]).strip() == "Download for macOS"
+    alternatives = [cta for cta in ctas if cta not in downloads]
+    assert len(alternatives) == 1
+    assert 'href="#install"' in alternatives[0]
 
 
 def test_landing_page_names_current_release():

@@ -288,7 +288,8 @@ class TestQueuePanelLayout(unittest.TestCase):
         # Order matters (park, rebuild, re-mount); decorator calls may sit between.
         self.assertRegex(
             app_js,
-            r"\$convList\.innerHTML = _convListHtml;\s+_convListRenderVersion\+\+;"
+            r"\$convList\.innerHTML = _convListHtml;"
+            r"(?:(?!\$convList\.innerHTML)[\s\S]){0,500}?_convListRenderVersion\+\+;"
             r"(?:(?!\$convList\.innerHTML)[\s\S]){0,1500}?"
             r"_updateConvTabBarHeightVar\(\$convList\);\s+_mountSharedQueuePanel\(\);",
         )

@@ -450,7 +450,6 @@ configure_tailnet() {
 
   apply_tailnet_network_config "$target_port" "$ts_info"
   TAILNET_IP="$ts_ip"
-  TAILNET_DNS="$ts_dns"
   if [ -n "$ts_dns" ]; then
     TAILNET_URL="http://${ts_dns}:${target_port}"
   else
@@ -523,7 +522,7 @@ launch_server() {
   configure_tailnet "$PORT" "$@"
 
   local url open_hint
-  url="$(dashboard_open_url)"
+  url="$(dashboard_open_url "$DASHBOARD_URL")"
   case "$url" in
     *\?onboarding=1) open_hint="your browser will open a short setup tour in a moment" ;;
     *)             open_hint="your browser will open the dashboard in a moment" ;;
@@ -559,7 +558,8 @@ launch_server() {
     fi
     if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
       local service_label="com.github.claude-command-center"
-      local service_target="gui/$(id -u)/$service_label"
+      local service_target
+      service_target="gui/$(id -u)/$service_label"
       if launchctl print "$service_target" >/dev/null 2>&1 || launchctl list 2>/dev/null | grep -q "$service_label"; then
         printf '\n'
         ok "CCC is running in the background (it was slow to start)"
