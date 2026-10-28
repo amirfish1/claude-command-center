@@ -82,7 +82,7 @@ from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota",
+SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "brief", "where",
                "brain", "consent", "jobs", "vault", "secret")
 
@@ -1414,6 +1414,193 @@ def cmd_quota(args):
     return 0
 
 
+# `ccc restart`: the one way agents should restart CCC. Every restart costs a
+# ~30s cold warmup, and agents restarting after each of their own commits
+# caused 13 of ~23 restarts in one day (OPS-150), each bypassing the
+# drain/adopt handoff in POST /api/restart/all. This goes through those
+# endpoints and coalesces requests: within RESTART_DEBOUNCE_S of the last
+# restart, a request becomes one pending restart that a detached runner fires
+# when the window ends (so the newest commit still goes live). A 409 (the
+# server says a restart is unsafe right now) is retried the same way.
+RESTART_STATE_FILE = os.path.expanduser("~/.claude/command-center/restart-debounce.json")
+RESTART_DEBOUNCE_S = int(os.environ.get("CCC_RESTART_DEBOUNCE_S") or 300)
+_RESTART_RETRY_S = 60
+_RESTART_MAX_RETRIES = 10
+_RESTART_PATHS = {"all": "/api/restart/all", "dashboard": "/api/restart", "worker": "/api/restart/worker"}
+
+
+def _merge_restart_targets(a, b):
+    """Smallest target covering both requests (dashboard+worker == all)."""
+    if not a or a == b:
+        return b
+    if not b:
+        return a
+    return "all"
+
+
+def _restart_state_update(fn):
+    """Run fn(state) -> result under an exclusive lock on the state file."""
+    import fcntl
+    os.makedirs(os.path.dirname(RESTART_STATE_FILE), exist_ok=True)
+    with open(RESTART_STATE_FILE + ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(RESTART_STATE_FILE) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+        result = fn(state)
+        tmp = RESTART_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, RESTART_STATE_FILE)
+        return result
+
+
+def _spawn_restart_runner(base, due):
+    """Detached `ccc restart --run-pending` that sleeps until `due`; its pid."""
+    cmd = [sys.executable, os.path.realpath(__file__), "--server", base,
+           "restart", "--run-pending", "--due", str(int(due))]
+    log = os.path.expanduser("~/.claude/command-center/restart-debounce.log")
+    with open(log, "a") as out:
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                                start_new_session=True, close_fds=True).pid
+
+
+def _defer_restart(base, target, due, why):
+    def apply(state):
+        pending = state.get("pending") or {}
+        state["pending"] = {
+            "target": _merge_restart_targets(pending.get("target"), target),
+            "due": max(float(pending.get("due") or 0), due),
+            "retries": int(pending.get("retries") or 0),
+            "why": why,
+        }
+        # Spawn under the lock and record the pid here, not from the runner:
+        # a second request racing the runner's startup must see it.
+        runner = state.get("runner_pid")
+        if not (runner and _pid_alive(runner)):
+            state["runner_pid"] = _spawn_restart_runner(base, state["pending"]["due"])
+        return state["pending"]
+    pending = _restart_state_update(apply)
+    when = datetime.fromtimestamp(pending["due"]).strftime("%H:%M:%S")
+    print(f"ccc restart: {why}; queued one {pending['target']} restart for {when} "
+          f"(requests until then are merged into it)")
+    return 0
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _post_restart(base, target):
+    """(status, payload) from the drain-aware restart endpoint; status -1
+    when the server could not be reached."""
+    try:
+        return _post_json(base, _RESTART_PATHS[target], {}, timeout=120)
+    except OSError as e:
+        return -1, {"ok": False, "error": str(e)}
+
+
+def _wait_dashboard_back(base, before_pid, timeout=120):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(2)
+        try:
+            v = _get_json(base, "/api/version", timeout=5)
+        except (OSError, ValueError):
+            continue
+        if v.get("pid") and v.get("pid") != before_pid:
+            return v
+    return None
+
+
+def _restart_now(base, target, wait=True):
+    import time
+    status, payload = _post_restart(base, target)
+    if status == 200 and payload.get("ok", True):
+        _restart_state_update(lambda s: s.update(last_restart=time.time(), last_target=target))
+        print(f"ccc restart: {target} restart started")
+        if target != "worker" and wait:
+            before = (payload.get("before") or {}).get("pid")
+            back = _wait_dashboard_back(base, before)
+            if back:
+                print(f"ccc restart: dashboard back (pid {back.get('pid')}, rev {back.get('code_rev') or '?'})")
+            else:
+                print("ccc restart: dashboard has not answered yet; check `ccc doctor`", file=sys.stderr)
+        return 0, payload
+    return status, payload
+
+
+def cmd_restart(args):
+    import time
+    base = _resolve_server(args.server)
+    if not base:
+        print(f"ccc: no server found — is CCC running? (looked for --server, $CCC_SERVER, {PORT_FILE})",
+              file=sys.stderr)
+        return 1
+    if args.run_pending:
+        return _run_pending_restart(base, args.due)
+    target = args.target
+    if not args.now:
+        state = _restart_state_update(lambda s: dict(s))
+        since = time.time() - float(state.get("last_restart") or 0)
+        if since < RESTART_DEBOUNCE_S or state.get("pending"):
+            due = float(state.get("last_restart") or 0) + RESTART_DEBOUNCE_S
+            return _defer_restart(base, target, max(due, time.time() + 1),
+                                  f"last restart was {int(since)}s ago")
+    status, payload = _restart_now(base, target)
+    if status == 0:
+        return 0
+    if status == 409:
+        why = payload.get("error") or payload.get("reason") or "server says unsafe now"
+        return _defer_restart(base, target, time.time() + _RESTART_RETRY_S, f"not safe yet ({why})")
+    print(f"ccc restart: failed (HTTP {status}): {payload.get('error') or payload}", file=sys.stderr)
+    return 1
+
+
+def _run_pending_restart(base, due):
+    """Detached runner: sleep to the due time, then fire the merged restart."""
+    import time
+    me = os.getpid()
+    while True:
+        state = _restart_state_update(lambda s: dict(s))
+        if state.get("runner_pid") != me:
+            return 0  # another runner owns the pending restart
+        pending = state.get("pending")
+        if not pending:
+            break
+        wait_s = float(pending.get("due") or due or 0) - time.time()
+        if wait_s > 0:
+            time.sleep(min(wait_s, 5))
+            continue
+        target = pending.get("target") or "all"
+        # Clear before posting: the dashboard restart kills nothing of ours
+        # (we are detached), but a request arriving mid-restart must queue anew.
+        _restart_state_update(lambda s: s.pop("pending", None))
+        status, payload = _restart_now(base, target)
+        if status == 0:
+            continue
+        retries = int(pending.get("retries") or 0) + 1
+        if retries > _RESTART_MAX_RETRIES:
+            print(f"ccc restart: giving up on {target} after {retries - 1} retries: {payload}", file=sys.stderr)
+            break
+
+        def requeue(s, target=target, retries=retries):
+            cur = s.get("pending") or {}
+            s["pending"] = {"target": _merge_restart_targets(cur.get("target"), target),
+                            "due": time.time() + _RESTART_RETRY_S, "retries": retries,
+                            "why": f"retry after HTTP {status}"}
+        _restart_state_update(requeue)
+    _restart_state_update(lambda s: s.pop("runner_pid", None) if s.get("runner_pid") == me else None)
+    return 0
+
+
 _CONSENT_STATUS_LABEL = {
     "enabled": "approved",
     "changed": "CHANGED - review",
@@ -2541,6 +2728,23 @@ def main(argv=None):
     )
     p.add_argument("--json", action="store_true", help="raw /api/usage/current JSON")
     p.set_defaults(func=cmd_quota)
+
+    p = sub.add_parser(
+        "restart",
+        help="restart the dashboard and/or worker (debounced, drain-aware)",
+        description="Restart CCC through its drain-aware restart endpoints. "
+                    "Use this instead of systemctl/launchctl. Requests within "
+                    f"{RESTART_DEBOUNCE_S}s of the last restart (CCC_RESTART_DEBOUNCE_S) "
+                    "merge into one restart fired when the window ends; a restart "
+                    "the server refuses as unsafe right now is retried every minute.",
+    )
+    p.add_argument("target", nargs="?", default="all", choices=("all", "dashboard", "worker"),
+                   help="all (default): worker then dashboard; dashboard; or worker only")
+    p.add_argument("--now", action="store_true",
+                   help="skip the debounce window (a human asked for it now)")
+    p.add_argument("--run-pending", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--due", type=float, default=0, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_restart)
 
     p = sub.add_parser(
         "rebind-report-to",

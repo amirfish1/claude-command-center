@@ -175,6 +175,12 @@ processes. State it clearly in the final summary, e.g.:
 - Worker: **no restart needed**
 - WatchTower: **no restart needed**
 
+To restart, run `ccc restart` (or `ccc restart dashboard` / `ccc restart worker`).
+Never run `systemctl --user restart ccc*` or `launchctl kickstart` yourself:
+`ccc restart` uses the drain-aware restart endpoints and merges restarts within
+5 minutes of the last one into a single deferred restart (OPS-150). See
+`docs/agent-rules.md`.
+
 ## How users get changes
 
 Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.

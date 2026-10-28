@@ -212,11 +212,29 @@ request — a browser reload is enough), `docs/`, `changelog.d/`, `tests/`,
 markdown. Frontend-only fixes are `N/N/N`.
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center.worker
-launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center
+ccc restart            # worker, then dashboard (POST /api/restart/all)
+ccc restart worker     # worker only (POST /api/restart/worker)
+ccc restart dashboard  # dashboard only (POST /api/restart)
 ```
 
-Order does not matter: on launch `run.sh` compares the worker's loaded code
+**Agents never restart CCC with `systemctl --user restart ccc*` or
+`launchctl kickstart` directly.** On one busy Linux host, 13 of ~23 dashboard
+and worker restarts in a day were agents restarting after their own commits,
+each skipping the drain/adopt handoff and each costing a ~30s cold warmup
+(OPS-150). `ccc restart` goes through the drain-aware endpoints and debounces:
+a request within 5 minutes of the last restart (`CCC_RESTART_DEBOUNCE_S`)
+becomes one pending restart that a detached runner fires when the window ends,
+merging targets (worker + dashboard = all), so the newest commit still goes
+live. A 409 (the server says a restart is unsafe right now) is retried every
+minute, up to 10 times. State lives in
+`~/.claude/command-center/restart-debounce.json`, runner output in
+`restart-debounce.log` next to it. `--now` skips the window; use it only when a
+human asked for an immediate restart. The raw `launchctl kickstart -k
+gui/$(id -u)/com.github.claude-command-center[.worker]` (or `systemctl --user
+restart ccc[-worker]` on Linux) is for a human recovering a wedged server that
+no longer answers HTTP.
+
+Order does not matter for the raw commands: on launch `run.sh` compares the worker's loaded code
 fingerprint (`server.py` + `ccc_server/*.py`) to the repo, kickstarts a stale
 worker, and waits for the new worker pid before starting the dashboard. So
 `kickstart`-ing only the dashboard also refreshes a stale worker; the second
