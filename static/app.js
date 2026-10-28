@@ -10527,7 +10527,7 @@
       revertOptimisticSteerMove(moved, activePaneId());
     };
     try {
-      const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
+      const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true });
       if (data && data.queue_pump_started) {
         giveBack();
         showOpToast('Turn ended; sending the oldest queued message now.');
@@ -10610,7 +10610,8 @@
     btn.disabled = true;
     btn.textContent = isPending ? 'Steering…' : '...';
     try {
-      const data = await postInjectInput(sid, text, 'steer', isPending ? { replaceQueued: true } : undefined);
+      const data = await postInjectInput(sid, text, 'steer', isPending
+        ? { replaceQueued: true, userInitiated: true } : { userInitiated: true });
       if (data && data.queue_pump_started) {
         showOpToast('Turn ended; sending the oldest queued message now.');
         setTimeout(refreshConversationList, 500);
@@ -10685,6 +10686,7 @@
     try {
       const data = await postInjectInput(sid, texts.join('\n\n'), 'steer', {
         replaceQueuedTexts: texts,
+        userInitiated: true,
       });
       if (data && (data.queue_pump_started || data.queued_preserved)) {
         giveBack();
@@ -37475,7 +37477,13 @@
     if (mode) payload.mode = mode;
     // A human clicking a reply chip has the same authority as composer input.
     // Leave automated callers on the API/peer route unless explicitly opted in.
-    if (opts && opts.userInitiated === true) payload.source = 'composer';
+    // The server only trusts the source as dashboard input together with
+    // composer_form; without it the send is recorded as unattributed API
+    // input and renders as a peer message that never clears its queued echo.
+    if (opts && opts.userInitiated === true) {
+      payload.source = 'composer';
+      payload.composer_form = 'ccc-composer-v1';
+    }
     if (opts && opts.replaceQueued) payload.replace_queued = true;
     if (opts && Array.isArray(opts.replaceQueuedTexts) && opts.replaceQueuedTexts.length) {
       // Steer-all delivers the concatenation, so the server cannot find the

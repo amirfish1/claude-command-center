@@ -1,0 +1,1 @@
+- Steering a queued message from the dashboard now records it as your own input, so it no longer shows as an unattributed peer message and its queued card clears once delivered.

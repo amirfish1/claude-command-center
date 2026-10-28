@@ -157,10 +157,17 @@ test('human row replies use composer provenance without promoting automated send
   });
   await post('test-session', 'Yes, enable the scoped test routine.', 'send', {userInitiated:true});
   assert.deepEqual(sent[0], {url:'/api/inject-input', payload:{session_id:'test-session',
-    text:'Yes, enable the scoped test routine.', mode:'send', idempotency_key:'inject-test-id', source:'composer'}});
+    text:'Yes, enable the scoped test routine.', mode:'send', idempotency_key:'inject-test-id', source:'composer',
+    composer_form:'ccc-composer-v1'}});
   await post('test-session', 'Automated nudge.', 'send');
   assert.equal(Object.hasOwn(sent[1].payload, 'source'), false);
   await post('test-session', 'Peer report.', 'send', {announcedFrom:'Verifier',userInitiated:false});
   assert.equal(Object.hasOwn(sent[2].payload, 'source'), false);
   assert.equal(sent[2].payload.announced_from, 'Verifier');
+  // A Steer click is the operator's own input: unattributed steers rendered
+  // as peer messages and never cleared their queued echo (CCC-236).
+  const steerCalls = app.match(/postInjectInput\([^;]*'steer'[^;]*;/g) || [];
+  const humanSteers = steerCalls.filter(c => /replaceQueued/.test(c));
+  assert.equal(humanSteers.length, 3);
+  for (const call of humanSteers) assert.match(call, /userInitiated: true/);
 });
