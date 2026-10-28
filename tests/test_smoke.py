@@ -2488,7 +2488,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function setObjectSubtreeDomHidden(group, hidden)", app_js)
         self.assertIn("setObjectSubtreeDomHidden(group, wasCollapsed);", app_js)
         self.assertIn("setObjectSubtreeDomHidden(group, false);", app_js)
-        self.assertIn(".conv-folder-group.is-subtree-hidden { display: none; }", app_css)
+        self.assertIn(".conv-folder-group.is-subtree-hidden { display: none !important; }", app_css)
         self.assertIn("if (objNodeForToggle) {", app_js)
         self.assertIn("localStorage.removeItem(_objectSessionsStorageKey(objNodeForToggle));", app_js)
         self.assertIn("renderArchiveList(document.getElementById('convSearch')?.value || '');", app_js)
@@ -5091,7 +5091,7 @@ class TestServerImports(unittest.TestCase):
             "setProperty('--app-vv-top', vv.offsetTop + 'px')",
             app_js,
         )
-        self.assertIn("top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;", app_css)
+        self.assertIn("top: calc(var(--app-vv-top, 0px) + env(safe-area-inset-top, 0px)); right: 0; bottom: auto; left: 0;", app_css)
         self.assertIn("height: var(--app-vh, 100vh);", app_css)
         self.assertIn("@media (pointer: coarse), (max-width: 1200px)", app_css)
         self.assertIn("#cpInput {\n    font-size: 16px !important;", app_css)
@@ -7298,7 +7298,7 @@ class TestServerImports(unittest.TestCase):
             app_js.index("const btn = ev.target.closest('[data-steer-queued-message]')"):
             app_js.index("const btn = ev.target.closest('[data-steer-user-message]')")
         ]
-        self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true })", queued_handler)
+        self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true })", queued_handler)
         self.assertNotIn("postInjectInput(sid, text, 'send')", queued_handler)
         self.assertIn("if (data && data.queue_pump_started)", queued_handler)
         self.assertIn("if (data && data.queued_preserved)", queued_handler)
@@ -9134,7 +9134,13 @@ class TestRepoContextHelpers(unittest.TestCase):
                 force_terminal=False,
                 force_headless=False,
                 force_queue=False,
+                attr=mock.ANY,
             )
+            attr = inject.call_args.kwargs["attr"]
+            self.assertEqual(attr["author"]["kind"], "session")
+            self.assertEqual(attr["basis"], "claimed")
+            self.assertEqual(attr["intended_recipient"]["id"], sid)
+            self.assertTrue(attr["message_id"])
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -9189,7 +9195,13 @@ class TestRepoContextHelpers(unittest.TestCase):
                 force_terminal=False,
                 force_headless=False,
                 force_queue=False,
+                attr=mock.ANY,
             )
+            attr = inject.call_args.kwargs["attr"]
+            self.assertEqual(attr["author"]["kind"], "unknown")
+            self.assertEqual(attr["basis"], "unknown")
+            self.assertEqual(attr["intended_recipient"]["id"], sid)
+            self.assertTrue(attr["message_id"])
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -9240,7 +9252,13 @@ class TestRepoContextHelpers(unittest.TestCase):
                 force_terminal=False,
                 force_headless=False,
                 force_queue=False,
+                attr=mock.ANY,
             )
+            attr = inject.call_args.kwargs["attr"]
+            self.assertEqual(attr["author"]["kind"], "unknown")
+            self.assertEqual(attr["basis"], "unknown")
+            self.assertEqual(attr["intended_recipient"]["id"], sid)
+            self.assertTrue(attr["message_id"])
         finally:
             httpd.shutdown()
             httpd.server_close()

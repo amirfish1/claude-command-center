@@ -80,6 +80,9 @@ def test_attributed_queue_row_matches_visible_text(monkeypatch):
     carried=attribution.carry('just answer the ticket',attribution.service('ccc:test',sid),app='ccc')
     assert carried.startswith(attribution.HEADER)
     monkeypatch.setattr(server,'_mutate_pending_inputs',lambda sids,fn:{'ok':True,'value':fn()})
+    # This test seeds the in-memory view; a durable queue left by another test
+    # must not replace it before the visible-text assertion.
+    monkeypatch.setattr(pending_inputs,'_refresh_queued_view_if_file_changed',lambda sid:None)
     monkeypatch.setitem(server._pending_resume_queue,sid,[pending_inputs._PendingInputEntry(carried)])
     try:
         events=pending_inputs._get_queued_events_for_session(sid)

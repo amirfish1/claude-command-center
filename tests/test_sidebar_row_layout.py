@@ -113,7 +113,8 @@ console.log('ok');
         group_start = app_js.index("const _renderRepeatGroup = (cards, opts, key) =>")
         group_html = app_js[group_start:app_js.index("const _renderRowsWithRepeatGroups", group_start)]
 
-        self.assertIn("const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' });", group_html)
+        self.assertIn("const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' })", group_html)
+        self.assertIn(".replace(/^<button type=\"button\"/, '<span aria-hidden=\"true\"')", group_html)
         self.assertIn("+ groupIconHtml", group_html)
         self.assertNotIn("conv-repeat-group-meta", group_html)
         self.assertIn(".conv-repeat-group-toggle > .conv-session-icon", app_css)

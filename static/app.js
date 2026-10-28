@@ -87714,8 +87714,8 @@
       smartRepoConfigured = configured;
       icon.classList.toggle('is-enabled', configured);
       icon.setAttribute('aria-disabled', String(configured));
-      icon.setAttribute('aria-label', configured ? 'Smart repo enabled' : 'Smart repo off — add token');
-      icon.title = configured ? 'Smart repo enabled' : 'Smart repo off — add a Jev token to enable';
+      icon.setAttribute('aria-label', configured ? 'Smart repo enabled' : 'Smart repo off: add token');
+      icon.title = configured ? 'Smart repo enabled' : 'Smart repo off: add a Jev token to enable';
       icon.hidden = false;
       const status = document.getElementById('smartRepoSettingsStatus');
       if (status) status.textContent = configured
