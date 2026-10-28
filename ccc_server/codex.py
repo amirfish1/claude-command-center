@@ -3310,6 +3310,7 @@ def _codex_app_server_request_to_transport(
                 "error": f"Codex app-server exited before replying: {method}",
                 "fallback": "queue",
                 "exited": True,
+                "ambiguous": True,
             }
         if timed_out is not None:
             _core._app_server_trace(
@@ -3326,6 +3327,8 @@ def _codex_app_server_request_to_transport(
                 "ok": False,
                 "error": f"Codex app-server request timed out: {method}",
                 "fallback": "queue",
+                # The request was written; the server may have applied it.
+                "ambiguous": True,
             }
     finally:
         if count_as_inflight:
@@ -7737,6 +7740,7 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
         _bind_codex_queued_steer_ack_suppression(
             session_id, text, _fast_turn_id,
         )
+        baseline = _core._codex_rollout_stat(session_id)
         steered = _core._codex_app_server_request(
             "turn/steer",
             {
@@ -7757,12 +7761,9 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
         if _codex_error_is_thread_unloaded(steered) or _core._codex_error_is_not_steerable(steered):
             pass  # stale fast-path state — resume below is the authority
         else:
-            return {
-                "ok": False,
-                "via": "codex-steer",
-                "code": "codex_steer_failed",
-                "error": _codex_error_text(steered) or "Codex steer failed",
-            }
+            return _codex_steer_failure_result(
+                session_id, text, steered, baseline, _fast_turn_id,
+            )
     resume_params = {
         "threadId": session_id,
         "excludeTurns": False,
@@ -7792,6 +7793,7 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
     _bind_codex_queued_steer_ack_suppression(
         session_id, text, active_turn.get("id"),
     )
+    baseline = _core._codex_rollout_stat(session_id)
     steered = _core._codex_app_server_request(
         "turn/steer",
         {
@@ -7808,11 +7810,62 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
             "turn_id": (steered["result"] or {}).get("turnId") or active_turn["id"],
             "session_id": session_id,
         }
+    return _codex_steer_failure_result(
+        session_id, text, steered, baseline, active_turn["id"],
+    )
+
+
+# How long a timed-out turn/steer may take to show up in the rollout. Codex
+# writes the steered UserMessage when it accepts the input, usually well
+# before the RPC reply, so a short look is enough.
+_CODEX_STEER_RECONCILE_S = 3.0
+
+
+def _codex_steer_failure_result(session_id, text, steered, baseline, turn_id):
+    """Turn a failed turn/steer reply into an honest delivery outcome.
+
+    A timeout or app-server exit happens AFTER the request was written, so
+    Codex may already have applied the steer (CCC-238: the rollout held the
+    message 20s before the RPC timed out, and the reply arrived 10s late).
+    Reporting that as a failure makes senders resend a duplicate. Check the
+    rollout first; if the message is not there, report the outcome as
+    unknown instead of rejected.
+    """
+    if not (isinstance(steered, dict) and steered.get("ambiguous")):
+        return {
+            "ok": False,
+            "via": "codex-steer",
+            "code": "codex_steer_failed",
+            "error": _codex_error_text(steered) or "Codex steer failed",
+        }
+    deadline = time.monotonic() + _CODEX_STEER_RECONCILE_S
+    while True:
+        if _core._codex_rollout_contains_user_text_since(baseline, session_id, text):
+            _core._log_activity(
+                "app-server", "STEER_RECONCILED",
+                f"session={session_id} turn/steer reply missing "
+                f"({_codex_error_text(steered)}) but the rollout recorded the input",
+            )
+            return {
+                "ok": True,
+                "via": "codex-steer",
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "reconciled": "rollout",
+            }
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
     return {
         "ok": False,
         "via": "codex-steer",
-        "code": "codex_steer_failed",
-        "error": _codex_error_text(steered) or "Codex steer failed",
+        "code": "codex_steer_unknown",
+        "uncertain": True,
+        "ambiguous": True,
+        "error": (
+            f"{_codex_error_text(steered) or 'Codex steer failed'}; delivery is "
+            "unknown (it may still land) - check the session before resending"
+        ),
     }
 
 

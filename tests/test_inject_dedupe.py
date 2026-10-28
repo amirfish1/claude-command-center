@@ -435,3 +435,24 @@ def test_expired_entries_are_pruned(window):
 
     assert "s1" not in server._inject_dedupe_recent
     assert "s2" in server._inject_dedupe_recent
+
+
+def test_uncertain_inject_logs_unknown_not_rejection(window, monkeypatch):
+    """CCC-238: a timed-out steer may have landed; never report it rejected."""
+    monkeypatch.setattr(
+        server, "_inject_text_into_session_router",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "via": "codex-steer",
+            "code": "codex_steer_unknown",
+            "uncertain": True,
+            "error": "delivery is unknown",
+        },
+    )
+
+    with mock.patch.object(server, "_log_activity") as log_activity:
+        result = server._inject_text_into_session("s1", "steer me", source="api")
+
+    assert result["effect"] == "unknown"
+    assert result["landed"] == "unknown"
+    assert [call.args[1] for call in log_activity.call_args_list] == ["INJECT_UNKNOWN"]

@@ -1510,11 +1510,17 @@ def _annotate_inject_result(result, *, requested, force_queue=False, fields=None
         effect = "queued" if result.get("queued") else "delivered"
     elif result.get("blocked"):
         effect = "blocked"
+    elif result.get("uncertain"):
+        # The transport may have applied it (e.g. a timed-out Codex
+        # turn/steer); "failed" would invite a duplicate resend (CCC-238).
+        effect = "unknown"
     else:
         effect = "failed"
     aborted = bool(result.get("interrupted")) or via in _INJECT_ABORTING_VIA
     if effect == "queued":
         landed = "after_turn"
+    elif effect == "unknown":
+        landed = "unknown"
     elif effect != "delivered":
         landed = "none"
     elif aborted:
@@ -1568,7 +1574,7 @@ def _log_inject_result(
         )
         return
     _core._log_activity(
-        "inject", "INJECT_REJECT",
+        "inject", "INJECT_UNKNOWN" if result.get("uncertain") else "INJECT_REJECT",
         f"{detail}code={result.get('code') or '-'} "
         f"error=\"{_core._activity_log_preview(str(result.get('error') or 'delivery failed'))}\" "
         f"text=\"{_core._activity_log_preview(text)}\"",

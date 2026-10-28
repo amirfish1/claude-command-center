@@ -623,6 +623,11 @@ def cmd_send(args):
     if args.json:
         print(json.dumps(result, indent=2))
         return 0 if result.get("ok") else 1
+    if not result.get("ok") and result.get("effect") == "unknown":
+        # Not a failure: the target may already have the message. Resending
+        # blindly would duplicate it (CCC-238).
+        print(f"ccc: delivery unknown: {result.get('error') or 'no confirmation'}", file=sys.stderr)
+        return 3
     if not result.get("ok"):
         print(f"ccc: send failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
         return 1
