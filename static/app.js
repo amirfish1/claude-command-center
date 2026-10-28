@@ -39285,8 +39285,36 @@
         + (it.next_step ? '<div class="att-next">' + _nyaFormatText(it.next_step, it.stale_tool_age_s) + '</div>' : '')
       + '</div>';
     };
+    // CCC-228: a parent whose lanes aren't already clustered beside it
+    // (e.g. one row per idea ticket) nests them as real indented rows under
+    // one fold toggle, the same shape as the Workers tab cluster.
+    const _familyNestChildRows = (c) => {
+      const ids = new Set([String(c.session_id || c.id), ..._sessionEarlierRows(c).map(row => String(row.session_id || row.id))]);
+      const seen = new Set(ids);
+      const out = [];
+      // Depth-first so each grandchild sits right under its own parent.
+      const walk = (pid, depth) => (_sessionChildrenById.get(pid) || []).forEach(row => {
+        const sid = String(row.session_id || row.id || '');
+        if (!sid || seen.has(sid) || row.trashed) return;
+        seen.add(sid);
+        out.push({ card: row, depth });
+        if (depth < 4) walk(sid, depth + 1);
+      });
+      ids.forEach(id => walk(id, 1));
+      return out;
+    };
     const _renderRow = (c, opts = {}) => {
       c = _ultraFreshCurrent(c);
+      if (!opts.subagentClusterMeta && !(opts.currentChildDepth > 0) && !opts.familyNested
+        && !opts.evergreenAgent && (opts.lifecycleContext === 'active' || opts.lifecycleContext === 'all-main')) {
+        const _nestKids = _familyNestChildRows(c);
+        if (_nestKids.length) {
+          return _renderSubagentCluster({
+            familyNest: true,
+            rows: [{ card: c, depth: 0 }].concat(_nestKids),
+          }, Object.assign({}, opts, { familyNested: true }));
+        }
+      }
       const goalIconOnly = !!opts.goalIconOnly;
       const quietTitleChrome = !!opts.quietTitleChrome;
       const subagentCompact = !!opts.subagentCompact;
@@ -40038,7 +40066,8 @@
       const _earlierRows = _sessionEarlierRows(c);
       const _familyIds = new Set([String(c.session_id || c.id), ..._earlierRows.map(row => String(row.session_id || row.id))]);
       const _childRows = subagentClusterMeta ? [] : [..._familyIds].flatMap(id => _sessionChildrenById.get(id) || []);
-      const orchChildBadgeHtml = _sessionFamilyDetailsHtml('\u21b3 ' + _childRows.length + (_childRows.length === 1 ? ' lane' : ' lanes'), _childRows, c.id + ':lanes');
+      // Inside a family nest every lane already has its own row (CCC-228).
+      const orchChildBadgeHtml = opts.familyNested ? '' : _sessionFamilyDetailsHtml('\u21b3 ' + _childRows.length + (_childRows.length === 1 ? ' lane' : ' lanes'), _childRows, c.id + ':lanes');
       const earlierDetailsHtml = _sessionFamilyDetailsHtml('\u21b1 ' + _earlierRows.length + ' earlier', _earlierRows, c.id + ':earlier');
 
       // Pin indicator — shown when the row's repo bucket has been
@@ -40874,7 +40903,8 @@
           + '</button>'
           + '</div>'
         : '';
-      return '<div class="conv-subagent-cluster' + (expanded ? ' is-expanded' : '') + '"'
+      return '<div class="conv-subagent-cluster' + (expanded ? ' is-expanded' : '')
+        + (cluster.familyNest ? ' is-family-nest' : '') + '"'
         + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '">'
         + _renderRow(rootItem.card, parentOpts)
         + '<div class="conv-subagent-cluster-body">' + descendantsHtml + collapseFooterHtml + '</div>'
@@ -43894,6 +43924,7 @@
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
     _parkSharedQueuePanelForSidebarRender();
     $convList.innerHTML = _convListHtml;
+    try { if (typeof _dedupeFamilyNestRows === 'function') _dedupeFamilyNestRows($convList); } catch (_) {}
     _convListRenderVersion++;
     // Re-apply decorator overlays in the SAME task, before the first paint of
     // the rebuilt list. Their MutationObserver fallbacks defer via rAF, which
@@ -71101,6 +71132,40 @@
     _orchFamily = { root, lanes: laneIds, count };
     orchApplyFamilyRows();
   }
+  // CCC-228: a lane nested under its parent (is-family-nest) may also render
+  // as its own row elsewhere in the list. Keep that row where it is and drop
+  // the nested copy, so one session never has two rows; recount the toggle.
+  function _dedupeFamilyNestRows(list) {
+    const nests = list ? list.querySelectorAll('.conv-subagent-cluster.is-family-nest') : [];
+    if (!nests.length) return;
+    const outside = new Set();
+    list.querySelectorAll('.conv-item[data-id]').forEach(el => {
+      if (!el.closest('.is-family-nest > .conv-subagent-cluster-body')) outside.add(el.getAttribute('data-id'));
+    });
+    nests.forEach(nest => {
+      const body = nest.querySelector(':scope > .conv-subagent-cluster-body');
+      if (!body) return;
+      let removed = 0;
+      body.querySelectorAll(':scope > .conv-item[data-id]').forEach(el => {
+        if (outside.has(el.getAttribute('data-id'))) { el.remove(); removed++; }
+      });
+      if (!removed) return;
+      const left = body.querySelectorAll(':scope > .conv-item[data-id]').length;
+      const noun = left === 1 ? 'lane' : 'lanes';
+      nest.querySelectorAll('.conv-subagent-cluster-summary').forEach(n => { n.textContent = '\u21b3 ' + left + ' ' + noun; });
+      nest.querySelectorAll('.wa-lanes').forEach(b => {
+        if (b.firstChild && b.firstChild.nodeType === 3) b.firstChild.nodeValue = '\u21b3 ' + left + ' ';
+      });
+      nest.querySelectorAll('.conv-subagent-collapse-btn').forEach(b => {
+        b.innerHTML = '<span class="conv-subagent-cluster-arrow">&#9652;</span> Collapse ' + left + ' ' + noun;
+      });
+      if (!left) {
+        nest.querySelectorAll('[data-role="subagent-cluster-toggle"]').forEach(t => t.remove());
+        nest.classList.remove('is-expanded');
+      }
+    });
+  }
+
   function orchApplyFamilyRows() {
     const list = document.getElementById('convList');
     if (!list) return;
@@ -71123,7 +71188,7 @@
       const mainRow = isRoot ? el.querySelector('.conv-main-row') : null;
       let chip = el.querySelector('.conv-orch-lanes-chip');
       if (isRoot && mainRow) {
-        if (mainRow.querySelector('.conv-subagent-cluster-toggle')) {
+        if (el.querySelector('.conv-subagent-cluster-toggle, .wa-lanes')) {
           if (chip && !chip.classList.contains('conv-subagent-cluster-toggle')) chip.remove();
           return;
         }
