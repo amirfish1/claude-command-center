@@ -1,1 +1,0 @@
-- Option to remove the floating "CALL" voice button on mobile view via Settings > Layout & View, Simple mode settings, and Voice mode settings.

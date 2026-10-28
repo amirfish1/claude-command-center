@@ -1,1 +1,0 @@
-- Codex sessions: the in-flight tool card ("▶ Bash …") now expands on click to the full command, `wt` / `ccc` / CCC API calls get the same purple compact chips as Claude sessions, and skill loads (reads of a `SKILL.md`) show as "Skill loaded" cards.

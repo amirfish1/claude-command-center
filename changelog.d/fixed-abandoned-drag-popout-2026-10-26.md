@@ -1,1 +1,0 @@
-- Releasing an unfinished drag of a sidebar conversation inside the window no longer pops it out into a separate window.

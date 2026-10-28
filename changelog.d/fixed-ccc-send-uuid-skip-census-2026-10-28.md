@@ -1,1 +1,0 @@
-- `ccc send`/`ccc ask` to a full session UUID no longer waits on the seven-day session census, so it returns promptly on a busy dashboard.

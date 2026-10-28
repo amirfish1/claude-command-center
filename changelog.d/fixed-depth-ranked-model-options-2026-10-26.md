@@ -1,1 +1,0 @@
-Show depth-specific ranked model choices above the new-session composer, including thinking level, instead of unrelated history and engine defaults. Keep the full catalog and free runtime labelled as manual overrides.

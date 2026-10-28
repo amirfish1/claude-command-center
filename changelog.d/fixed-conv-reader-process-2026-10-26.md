@@ -1,1 +1,0 @@
-- Opening a conversation no longer waits behind dashboard background work: opens are served from a separate reader process with its own interpreter, falling back to the old in-process path if it is unavailable (`CCC_CONV_READER=0` turns it off).

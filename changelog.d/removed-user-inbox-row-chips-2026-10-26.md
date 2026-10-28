@@ -1,1 +1,0 @@
-- Sidebar rows no longer show the meaningless "user" origin chip or an "Object · Inbox" chip for sessions auto-filed into the default Inbox.

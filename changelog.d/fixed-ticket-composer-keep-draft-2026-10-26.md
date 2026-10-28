@@ -1,1 +1,0 @@
-- The New queue ticket dialog asks before discarding a typed draft when you click outside it or press Esc, and you can move it by dragging its header.

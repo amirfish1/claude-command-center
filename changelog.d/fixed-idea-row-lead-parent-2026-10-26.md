@@ -1,1 +1,0 @@
-- Idea rows keep the parent session as the lead row; a newer subagent it spawned no longer takes over the row.

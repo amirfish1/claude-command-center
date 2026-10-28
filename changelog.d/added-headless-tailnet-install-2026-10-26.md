@@ -1,1 +1,0 @@
-- **Tailscale headless install**: scripts/install.sh auto-detects Tailscale and prompts (or accepts `--tailnet` / `CCC_TAILNET=1`) to bind the node's Tailscale IP, configure `network.json`, and apply boot retries with `StartLimitIntervalSec=0` so remote headless setups connect reliably.

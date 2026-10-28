@@ -1,1 +1,0 @@
-- **Install background service**: `run.sh` extends the service bind wait from 2.5s to 20s (aborting early if the service fails) to accommodate slower startup on headless hosts, and `scripts/install.sh` avoids falling back to a conflicting foreground instance if the background service is active.

@@ -1,1 +1,0 @@
-- Read-aloud no longer slows to half speed while another message is being prepared in the background: background voice work now waits until the read being heard is idle.

@@ -1,1 +1,0 @@
-- Sidebar search results now show one row per idea ticket instead of one row per session in that ticket.

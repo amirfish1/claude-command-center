@@ -1,1 +1,0 @@
-- In narrow conversation panes the composer strip now drops the "peak" token label before the current `Xk / XXk` context count, instead of hiding the count first.

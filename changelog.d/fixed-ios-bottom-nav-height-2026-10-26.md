@@ -1,1 +1,0 @@
-- Lowered the mobile bottom-nav icon row so it sits closer to the home indicator instead of floating above the safe-area dead space.

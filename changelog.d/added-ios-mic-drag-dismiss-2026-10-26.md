@@ -1,1 +1,0 @@
-- iOS shell: drag the composer chrome down to dismiss the keyboard, plus interactive scroll-dismiss; mic button now uses on-device iOS speech recognition via the SpeechRecognition Capacitor plugin (Web Speech API doesn't exist in WKWebView).

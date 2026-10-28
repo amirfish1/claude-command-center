@@ -1,1 +1,0 @@
-- Desktop Mobile view now condenses worker ticket history like the phone does: the "N recorded tickets" label is gone and the ticket chips sit on one line.

@@ -1,1 +1,0 @@
-- The "Report a bug" form can be reached again from the sidebar **⋮** menu. Its only button had been hidden since the sidebar icon row was collapsed behind ⋮.

@@ -1,1 +1,0 @@
-- Speaker cache-debug overlay no longer paints a stray column of marks across the conversation from a long pinned ask's hidden (scrolled-away) lines.

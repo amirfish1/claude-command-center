@@ -1,1 +1,0 @@
-- Reviewer and critic sessions that another session starts with `wt spawn` now show under that session's idea, even when the parent joined the idea after the reviewer started.

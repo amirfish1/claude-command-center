@@ -1,1 +1,0 @@
-- Devin sessions no longer leave an answered message stuck on "Delivered - waiting to pick it up" at the bottom of the conversation, and the note now names Devin instead of Claude.

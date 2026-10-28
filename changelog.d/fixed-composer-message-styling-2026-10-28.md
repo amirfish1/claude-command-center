@@ -1,1 +1,0 @@
-- Composer messages and inputs without a recorded sender keep normal user-bubble styling without peer badges. Identified agent and service messages retain their sender badges; attribution metadata is preserved.

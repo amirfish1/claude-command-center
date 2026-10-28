@@ -1,1 +1,0 @@
-- `ccc restart [all|dashboard|worker]` restarts CCC through the drain-aware restart endpoints and merges restarts requested within 5 minutes of the last one into one deferred restart. Agent instructions now use it instead of `systemctl`/`launchctl`.

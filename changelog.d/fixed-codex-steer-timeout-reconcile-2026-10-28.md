@@ -1,1 +1,0 @@
-- A Codex steer whose reply times out is now checked against the session transcript before it is reported: if the message landed it counts as delivered, otherwise `ccc send` reports "delivery unknown" (exit 3) instead of "send failed", so senders no longer resend duplicates.

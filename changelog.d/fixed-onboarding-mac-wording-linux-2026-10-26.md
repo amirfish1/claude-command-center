@@ -1,1 +1,0 @@
-- **Onboarding setup wording on Linux**: adapt copy and developer tools step dynamically between Mac, server, and PC so remote and Linux hosts show the machine's hostname instead of hardcoding "Mac".

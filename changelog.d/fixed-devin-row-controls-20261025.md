@@ -1,1 +1,0 @@
-Devin CLI sessions now receive dashboard reporting instructions, retain authored action/question/completion state beyond long previews, and expose it in session rows. Hourly audits also detect explicitly ended replies that ask a permission or destination question without exposing a question control; missing footers alone do not trigger tickets.

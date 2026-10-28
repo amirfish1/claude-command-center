@@ -1,1 +1,0 @@
-- Fixed the iOS shell so the header respects the status-bar safe area and the composer rides above the keyboard (Capacitor Keyboard resize 'native'; WKWebView never shrinks visualViewport).

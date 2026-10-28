@@ -1,1 +1,0 @@
-- Sidebar: a session's child lanes now show as real indented rows under it, with one "↳ N" fold toggle (like the Workers tab), instead of a "↳ N lanes" list of links. The duplicate second lane-count chip is gone.

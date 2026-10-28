@@ -1,1 +1,0 @@
-- Typing in the composer with a multi-line draft no longer makes the conversation jump up and flicker the status pill and Last/Previous button.
