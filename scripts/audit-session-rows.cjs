@@ -39,7 +39,7 @@ async function main() {
   const queue = option('--queue', 'CCC');
   const out = option('--output', path.join(home, 'row-audit'));
   fs.mkdirSync(out, {recursive:true});
-  const report = {started:new Date().toISOString(), url:base, queue, scope:'Features and Small bugs, last 7 days, desktop and mobile', checked:[], incidents:[], errors:[]};
+  const report = {started:new Date().toISOString(), url:base, queue, scope:'Features and Small bugs, last 7 days, desktop and mobile', checked:[], skipped:[], incidents:[], errors:[]};
   const get = endpoint => fetchJson(new URL(endpoint, base));
   const sessions = new Map((await get('/api/conversations/all?stale_ok=1')).conversations.map(row => [row.session_id,row]));
   const puppeteer = require('../require-puppeteer');
@@ -64,6 +64,12 @@ async function main() {
           if (!row || row.archived || row.trashed) continue;
           try {
             const selector = `#convList .conv-item[data-session-id="${sid}"]`;
+            // A list re-render (ccc.service restart, reconnect, re-sort) can drop a row
+            // collected moments ago; that is no missing control, so skip rather than fail.
+            if (!await page.$(selector)) {
+              await new Promise(resolve => setTimeout(resolve, 4000));
+              if (!await page.$(selector)) {report.skipped.push({sid,tab,viewport:viewport.name,reason:'row left the rendered list'}); continue;}
+            }
             await page.$eval(selector, el => el.scrollIntoView({block:'center'}));
             await new Promise(resolve => setTimeout(resolve, 1500));
             const measure = () => page.$eval(selector, el => {
@@ -118,7 +124,7 @@ async function main() {
   }
   report.finished = new Date().toISOString();
   fs.writeFileSync(path.join(out,'last-run.json'), JSON.stringify(report,null,2)+'\n');
-  console.log(JSON.stringify({checked:report.checked.length,incidents:report.incidents.length,errors:report.errors.length,report:path.join(out,'last-run.json')}));
+  console.log(JSON.stringify({checked:report.checked.length,skipped:report.skipped.length,incidents:report.incidents.length,errors:report.errors.length,report:path.join(out,'last-run.json')}));
   if (report.errors.length) process.exitCode=1;
 }
 module.exports = {incident,digest,fetchJson};
