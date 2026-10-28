@@ -67300,6 +67300,7 @@
       const attr = ev && ev.attribution;
       if (attr) {
         const author = attr.author || {};
+        if (author.kind === 'human' || author.kind === 'unknown') return '';
         const name = author.name_at_send || author.id || 'Unattributed sender';
         const via = [...new Set((attr.relay || []).map(h => h.via).filter(Boolean))].join(' → ');
         const basis = String(attr.basis || 'unknown');
@@ -67349,7 +67350,13 @@
         + '<pre class="codex-ambient-context__body">' + escapeHtml(String(context.text)) + '</pre>'
         + '</details>';
     }
-    for (const ev of events) {
+    for (const sourceEvent of events) {
+      // A transport hop does not make ordinary dashboard input a peer
+      // message. Keep its evidence, but use normal input rendering unless
+      // the envelope identifies an external session or service.
+      const authorKind = sourceEvent.attribution && sourceEvent.attribution.author && sourceEvent.attribution.author.kind;
+      const ordinaryInput = authorKind === 'human' || authorKind === 'unknown';
+      const ev = ordinaryInput ? { ...sourceEvent, peer: null } : sourceEvent;
       if (isRoutineCodexCoordination(ev)) continue;
       // Provisional (live_key) events never carry a real jsonl `line` — they
       // upsert in place (see _upsertProvisionalNode below) instead of taking
