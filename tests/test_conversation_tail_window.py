@@ -156,3 +156,34 @@ def test_full_parse_engine_honours_tail_and_pages_negative_lines(monkeypatch):
     assert sorted(seen) == sorted(e["line"] for e in events)
     full = server.parse_conversation("devincli-x")
     assert len(full["events"]) == len(events)
+
+
+def _write_codex_rollout(path, turns):
+    """A Codex rollout: one prompt, then `turns` user/agent exchanges."""
+    rows = [{"type": "session_meta", "payload": {"type": "session_meta", "cwd": "/tmp/p"}}]
+    for i in range(turns + 1):
+        text = "first prompt" if i == 0 else f"follow-up {i}"
+        rows.append({"type": "event_msg", "timestamp": "2026-06-02T10:00:00Z",
+                     "payload": {"type": "user_message", "message": text}})
+        rows.append({"type": "event_msg", "timestamp": "2026-06-02T10:00:01Z",
+                     "payload": {"type": "agent_message", "message": f"reply {i}"}})
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_codex_truncated_tail_carries_first_prompt(tmp_path):
+    # CCC-239: a long Codex session's tail never reached its opening prompt.
+    p = tmp_path / "rollout.jsonl"
+    _write_codex_rollout(p, 200)
+    tw = server._parse_conversation_windowed("sid", str(p), tail=40, before=None,
+                                             parser=server._parse_codex_event)
+    assert tw["truncated_before"] is True
+    assert tw["first_prompt"]["type"] == "user_text"
+    assert tw["first_prompt"]["text"] == "first prompt"
+    assert tw["first_prompt"]["line"] == 2
+    # Earlier pages and untruncated windows don't repeat it.
+    earlier = server._parse_conversation_windowed("sid", str(p), tail=40, before=tw["first_line"],
+                                                  parser=server._parse_codex_event)
+    assert "first_prompt" not in earlier
+    full = server._parse_conversation_windowed("sid", str(p), tail=1000, before=None,
+                                               parser=server._parse_codex_event)
+    assert "first_prompt" not in full

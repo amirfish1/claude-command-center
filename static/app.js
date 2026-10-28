@@ -59095,7 +59095,31 @@
       $view.addEventListener('wheel', armIfUpward, { passive: true });
       $view.addEventListener('touchmove', armIfUpward, { passive: true });
     }
-    $view.insertBefore(banner, $view.firstChild);
+    const pin = $view.querySelector('.conv-first-prompt-pin');
+    $view.insertBefore(banner, pin ? pin.nextSibling : $view.firstChild);
+  }
+
+  // Codex rollouts spend several JSONL lines per visible row, so a long
+  // session's tail window never reaches its opening prompt and the reader
+  // saw only "Load earlier" at the top (CCC-239). The server sends that
+  // prompt as `first_prompt`; render it above the banner, unnumbered so
+  // the page that later loads its real line renders it in place.
+  function _placeFirstPromptPin($view, pin) {
+    const sticky = $view.firstChild && $view.firstChild.classList
+      && $view.firstChild.classList.contains('conv-sticky-header') ? $view.firstChild : null;
+    $view.insertBefore(pin, sticky ? sticky.nextSibling : $view.firstChild);
+  }
+
+  function _renderFirstPromptPin($view, ev, paneId) {
+    if (!$view || !ev || ev.type !== 'user_text' || ev.line == null) return;
+    if ($view.querySelector('.conv-first-prompt-pin')) return;
+    if (_prependConversationEvents([ev], paneId) === false) return;
+    const node = $view.querySelector('.event.user_text[data-jsonl-line="' + Number(ev.line) + '"]');
+    if (!node) return;
+    node.classList.add('conv-first-prompt-pin');
+    node.dataset.firstPromptLine = String(ev.line);
+    delete node.dataset.jsonlLine;
+    _placeFirstPromptPin($view, node);
   }
 
   // Second stage of a fresh open: prepend the rest of the usual tail window
@@ -59146,6 +59170,14 @@
       const keep = stickyHeaders[0];
       stickyHeaders.slice(1).forEach((el) => el.remove());
       if (keep !== $view.firstChild) $view.insertBefore(keep, $view.firstChild);
+    }
+    // The pinned first prompt stays on top of each earlier page until the
+    // page that holds its real line arrives (CCC-239).
+    const pin = $view.querySelector('.conv-first-prompt-pin');
+    if (pin) {
+      const pinLine = Number(pin.dataset.firstPromptLine);
+      if (events.some((ev) => ev && Number(ev.line) === pinLine)) pin.remove();
+      else _placeFirstPromptPin($view, pin);
     }
     _currentToolGroup = savedToolGroup;
     _currentToolCount = savedToolCount;
@@ -59518,6 +59550,9 @@
           const _perfRenderAt = performance.now();
           const _renderOk = renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
           if (_renderOk) convLastLine = data.last_line;
+          if (_renderOk && _freshOpen && data.truncated_before && data.first_prompt) {
+            _renderFirstPromptPin($view, data.first_prompt, fetchPaneId);
+          }
           // Perf metric 2 end (conv_open): only the initialLoad render for the
           // click still pending in _perfConvOpen fires — a poll/backfill
           // re-render of the same pane (opts.initialLoad false, or a click

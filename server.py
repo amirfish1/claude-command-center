@@ -24926,6 +24926,32 @@ def _codex_turn_meta_before_line(filepath, first_line, total, lookback=1024):
     return None
 
 
+def _codex_first_prompt_event(filepath, before_line, scan_limit=4000):
+    """Parsed first user prompt of a Codex rollout, if it sits before ``before_line``.
+
+    Codex rollouts spend several JSONL lines per visible row, so a long
+    session's tail window starts well past its opening prompt (CCC-239). The
+    prompt sits near the top of the file; scan forward a bounded number of
+    lines, decoding only rows that mention user_message.
+    """
+    try:
+        with open(filepath, "r") as f:
+            for number, raw in enumerate(f, 1):
+                if number >= before_line or number > scan_limit:
+                    return None
+                if '"user_message"' not in raw and '"UserMessage"' not in raw:
+                    continue
+                try:
+                    parsed = _parse_codex_event(json.loads(raw), number)
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                if parsed and parsed.get("type") == "user_text":
+                    return parsed
+    except OSError:
+        return None
+    return None
+
+
 def _read_tail_lines(filepath, n):
     """(total_lines, [(line_no, text), ...]) for the last ``n`` lines of a file.
 
@@ -25276,6 +25302,10 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         "first_line": first_line,
         "truncated_before": truncated,
     }
+    if is_codex and before is None and truncated:
+        first_prompt = _codex_first_prompt_event(filepath, first_line)
+        if first_prompt:
+            result["first_prompt"] = first_prompt
     if before is None:
         # The live tail also carries any optimistic queued events, same as the
         # full-parse path; an earlier-history window must not.
