@@ -430,6 +430,27 @@ class ContinuationCliTests(unittest.TestCase):
         self.assertEqual(sid, "head-sid")
         self.assertIsNone(err)
 
+    def test_resolve_target_full_uuid_skips_census(self):
+        ccc = self.ccc
+        sid_in = "49F8AAF3-594d-42f2-a5e4-cb28a39c6f5b"
+        with mock.patch.object(ccc, "_get_json") as get_json:
+            sid, err = ccc._resolve_target("http://127.0.0.1:8090", f"  {sid_in} ")
+        get_json.assert_not_called()
+        self.assertEqual(sid, sid_in)
+        self.assertIsNone(err)
+
+    def test_resolve_target_prefix_still_uses_census_and_flags_ambiguity(self):
+        ccc = self.ccc
+        census_payload = {"sessions": [
+            {"session_id": "49f8aaf3-594d-42f2-a5e4-cb28a39c6f5b", "name": "a"},
+            {"session_id": "49f8aaf3-0000-42f2-a5e4-cb28a39c6f5b", "name": "b"},
+        ]}
+        with mock.patch.object(ccc, "_get_json", return_value=census_payload) as get_json:
+            sid, err = ccc._resolve_target("http://127.0.0.1:8090", "49f8aaf3")
+        get_json.assert_called_once()
+        self.assertIsNone(sid)
+        self.assertIn("ambiguous", err)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -492,14 +492,22 @@ def cmd_sessions(args):
     return 0
 
 
+_FULL_SESSION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+
 def _resolve_target(base, target):
     """Turn a user-supplied target (session id, unique id prefix, or unique
     name fragment) into a session id, using the census (including recent
     ended sessions so `ccc send` / `ccc ask` can wake them up). Returns
     (session_id, error_message) — exactly one is set. An unmatched target
     passes through untouched so server-side aliases (bridge ULIDs, spawn
-    prefixes) still work."""
+    prefixes) still work. A complete UUID is already canonical, so it skips
+    the seven-day census (which can take longer than the send itself)."""
     target = (target or "").strip()
+    if _FULL_SESSION_ID_RE.match(target):
+        return target, None
     try:
         payload = _get_json(base, "/api/sessions/census?since=604800")
         sessions = list(payload.get("sessions") or [])
