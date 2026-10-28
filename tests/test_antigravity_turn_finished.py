@@ -54,6 +54,7 @@ def test_freshly_started_process_is_never_finished(tmp_path):
         assert server._antigravity_turn_finished(sid, pid=123) is False
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reaper verifies argv through Linux /proc")
 def test_reap_only_touches_that_conversations_agy():
     server = importlib.import_module("server")
     sid = str(uuid.uuid4())

@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import threading
 import time
@@ -57,6 +58,7 @@ class FlushTests(unittest.TestCase):
         # Window resets.
         self.assertIsNone(ca.maybe_flush(now=1000.0 + ca.WINDOW_S + 2))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "live thread CPU snapshots require Linux /proc")
     def test_background_thread_cpu_is_attributed_by_name(self):
         stop = threading.Event()
 
