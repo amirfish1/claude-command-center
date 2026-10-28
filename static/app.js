@@ -17501,7 +17501,14 @@
           : planned.owner === 'external' ? 'Waiting on' : 'Next step';
         rows.push('<div class="ssb-row ssb-plan"><span class="ssb-key">' + label + '</span>' + escapeHtml(planned.text) + '</div>');
       } else if (!hasUserAction && (!valid || reasons.length)) {
-        rows.push('<div class="ssb-row ssb-plan"><span class="ssb-key">Next step</span>Not stated.</div>');
+        // An open card with no plan is a dead end; offer one fixed reply that
+        // asks the session for its step instead of guessing one for it.
+        const ask = 'Your assessment is open (' + (valid ? reasons.join('; ') : 'invalid assessment')
+          + ') but names no next step. If it is authorized agent work, do it now and verify it.'
+          + ' Otherwise state it as the first remaining action, with an owner and a success check.';
+        rows.push('<div class="ssb-row ssb-plan"><span class="ssb-key">Next step</span>Not stated. <span class="ssb-actions">'
+          + '<button type="button" class="ssb-action ssb-act-say" data-ssb-act="say" data-ssb-value="' + escapeAttr(ask)
+          + '" title="' + escapeAttr('Send to this session: ' + ask) + '">Ask for next step</button></span></div>');
       }
     }
     if (fields.COMPLETION) {

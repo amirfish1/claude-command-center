@@ -144,10 +144,11 @@ class TestSessionStateCard(unittest.TestCase):
         self.assertIn('Open · topic goal is not yet met', html)
         self.assertIn('Done when</span>Follow-ups stay accurate.', html)
         self.assertIn('Next step</span>Not stated.', html)
+        self.assertIn('>Ask for next step</button>', html)
+        self.assertIn('data-ssb-value="Your assessment is open (topic goal is not yet met) but names no next step.', html)
         self.assertIn('Status</span>Open', html)
         self.assertNotIn('Needs you</span>None', html)
         self.assertNotIn('Close criteria met', html)
-        self.assertNotIn('ssb-action', html)
         assessment["scope"]["closure_met"] = True
         html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
         self.assertIn('Close criteria met', html)

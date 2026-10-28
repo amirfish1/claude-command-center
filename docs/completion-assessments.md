@@ -61,7 +61,8 @@ remaining actions include `owner:"agent"`, `owner:"user"`, or `owner:"external"`
 and are ordered by what happens next. The card labels these **My next step**,
 **Your next step**, or **Waiting on**. Legacy entries without an owner use
 **Next step**; CCC does not guess the owner. An open report without a plan
-shows **Next step: Not stated**. Guidance asks the model to name an observable
+shows **Next step: Not stated** with one **Ask for next step** button that
+sends a fixed reply asking the session to do or state its step. Guidance asks the model to name an observable
 step and a success check; future validation must name its trigger and check.
 An agent-owned step never becomes an approval chip merely because it is pending.
 
