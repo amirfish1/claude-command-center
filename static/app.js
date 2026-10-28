@@ -93808,7 +93808,10 @@
       .catch(function () { return { ids: [], sessions: {} }; });
   }
   function loadConversations() {
-    return fetchJSON('/api/conversations/list?window=all&stale_ok=1', 14000).then(function (data) {
+    // The splash only counts the last 24h and names live sessions, so the
+    // 1d window is enough. window=all made every page boot build and parse a
+    // ~30MB body next to the sidebar's own read (CCC-229).
+    return fetchJSON('/api/conversations/list?window=1d&stale_ok=1', 14000).then(function (data) {
       var rows = Array.isArray(data && data.conversations) ? data.conversations : [];
       var cutoff = Date.now() / 1000 - 86400;
       var recent = rows.filter(function (r) { return Number(r.mtime || r.modified || 0) >= cutoff; });
