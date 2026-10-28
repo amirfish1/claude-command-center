@@ -354,12 +354,16 @@ def lookup(*, message_id='', transport_id='', text='', recipient=''):
                 cached = _cache.get(str(path))
                 if not cached or cached[0] != signature:
                     index = {}
+                    snapshots = {}
                     for line in path.read_text().splitlines():
                         try:
                             row = json.loads(line)
                             a = validate(row['attr'])
                             if row.get('node') not in [node] + aliases:
                                 continue
+                            previous = snapshots.get(a['message_id'])
+                            if previous is None or len(a.get('relay', [])) >= len(previous.get('relay', [])):
+                                snapshots[a['message_id']] = a
                             ids = [a['message_id']] + list(a.get('transport_ids', []))
                             ids += [row.get(k) for k in ('transport_id', 'nonce', 'receipt_id', 'delivery_id')]
                             for key in ids:
@@ -367,6 +371,10 @@ def lookup(*, message_id='', transport_id='', text='', recipient=''):
                                     index[str(key).removeprefix('⟨wt:').removesuffix('⟩')] = a
                         except (ValueError, TypeError, KeyError):
                             continue
+                    # Receipts can carry an earlier snapshot than the adapter
+                    # that delivered them. Keep every alias, while resolving
+                    # all of them to the fullest locally recorded relay chain.
+                    index = {key: snapshots[a['message_id']] for key, a in index.items()}
                     _cache[str(path)] = (signature, index)
                 index = _cache[str(path)][1]
                 for key in keys:

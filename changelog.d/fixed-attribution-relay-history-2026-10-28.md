@@ -1,0 +1,1 @@
+- Late delivery receipts preserve the complete recorded relay history and permission-mode assertion in sender badges.

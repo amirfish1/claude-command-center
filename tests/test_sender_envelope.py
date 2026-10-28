@@ -157,3 +157,15 @@ def test_manual_prune_is_only_retention_deletion(tmp_path,monkeypatch):
     envelope.main()
     assert not (directory/'2025-01.jsonl').exists()
     assert (directory/'2026-01.jsonl').exists()
+
+
+def test_late_receipt_keeps_complete_transport_snapshot():
+    original = envelope.service('wt:notify', 'recipient')
+    delivered = envelope.relay(original, 'wt-uds', attested_mode='bypass', delivered='recipient')
+    assert envelope.journal(delivered, app='wt', event='transport')
+    assert envelope.journal(original, app='wt', event='receipt', nonce='⟨wt:dlv-late⟩')
+    for query in ({'message_id': original['message_id']}, {'text': 'body\n⟨wt:dlv-late⟩'}):
+        found = envelope.lookup(**query)
+        assert found['relay'][-1]['via'] == 'wt-uds'
+        assert found['relay'][-1]['attested_mode'] == 'bypass'
+        assert found['delivered_recipient']['id'] == 'recipient'
