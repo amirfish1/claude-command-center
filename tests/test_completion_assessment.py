@@ -211,3 +211,10 @@ def test_prompt_is_delivered_through_existing_system_instruction_channel():
     assert _CCC_SESSION_STATE_SYSTEM_PROMPT in _claude_session_state_args()[1]
     for term in ("COMPLETION:", "remaining_actions", "decision_dependency", "Never infer authorization", "manual archive", "instead of asking"):
         assert term in _CCC_SESSION_STATE_SYSTEM_PROMPT
+
+
+def test_prompt_forbids_narrowing_an_open_ended_goal():
+    # CCC-234: "maybe we don't need all of these jobs?" was closed after
+    # disabling two leftovers while the reply itself proposed the next cut.
+    for term in ("never a narrower subset", "targets the whole set", "the next useful reduction", "caveat is\nblocking"):
+        assert term in _CCC_SESSION_STATE_SYSTEM_PROMPT

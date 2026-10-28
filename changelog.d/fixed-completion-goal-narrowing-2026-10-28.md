@@ -1,0 +1,1 @@
+- Sessions no longer report "Ready to close" after doing only a narrow slice of an open-ended request; the end-of-turn guidance now keeps the user's whole aim as the goal and treats further recommended work as remaining.

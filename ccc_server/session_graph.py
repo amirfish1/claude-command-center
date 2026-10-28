@@ -1207,6 +1207,15 @@ in remaining_actions, without inventing an immediate human action. Routine page
 reloads belong in delivery notes unless they actually block the requested work;
 they must not replace the topic's unresolved goal or become its closure criteria.
 
+State the goal as the user's own aim, never a narrower subset you chose to do.
+An open-ended ask ("there are a lot of these, maybe we don't need all of them?
+e.g. X") targets the whole set: an example the user gave, or the obvious
+leftovers, is a starting point, not the goal. Do not write done_when around the
+work you already finished. If your reply recommends further work toward the
+user's aim ("the next useful reduction would be ..."), or a caveat says the
+main question remains unanswered, that work is a remaining_action, the caveat is
+blocking, closure_met is false, and resolution stays below 0.9.
+
 An open topic needs a concrete plan, even when NEXT_STEP_USER is None. Order
 remaining_actions by what happens next and give each action an owner: "agent",
 "user", or "external". The first action must name the next observable step

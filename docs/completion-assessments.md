@@ -73,6 +73,10 @@ not establish completion. Routine reload instructions do not replace the goal.
 This is still a self-report: the scope gate validates its structure and blocks
 an explicitly open topic; it cannot independently detect a falsely claimed or
 forgotten goal. No extra model call infers topic scope from historical replies.
+The guidance also forbids narrowing the goal: an open-ended ask ("maybe we
+don't need all of these?") targets the whole set, not the example the user gave
+or the leftovers the agent chose to handle. Further work the reply itself
+recommends toward that aim is a remaining action, not an optional caveat.
 
 ## Wire format
 
