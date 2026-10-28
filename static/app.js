@@ -3069,7 +3069,7 @@
     // Queue notes may be shortened before reaching this renderer. Remove a
     // carrier line even when its JSON was truncated; retain the task text.
     const lines = String(value || '').split('\n');
-    return lines.filter((line, index) => index >= 5 || !line.startsWith('[Message attribution v1: ')).join('\n') || 'Attributed message';
+    return lines.filter((line, index) => index >= 5 || !(line.startsWith('[Message attribution v1: ') || /^\[sender: .* · msg [0-9a-fA-F-]{36}/.test(line))).join('\n') || 'Attributed message';
   }
 
   function cleanIssuePrompt(s) {

@@ -68,7 +68,7 @@ def test_attribution_carrier_hidden_from_original_ask_and_titles(monkeypatch):
     parsed=server._parse_conversation_event(event,1)
     assert parsed['text']=='Actual original ask'
     assert parsed['attribution']['message_id']==attr['message_id']
-    assert carried.startswith(attribution.HEADER)
+    assert carried.startswith(attribution.COMPACT)
 
 
 def test_attributed_queue_row_matches_visible_text(monkeypatch):
@@ -78,7 +78,7 @@ def test_attributed_queue_row_matches_visible_text(monkeypatch):
     monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
     sid='ccc-233-attributed-queue'
     carried=attribution.carry('just answer the ticket',attribution.service('ccc:test',sid),app='ccc')
-    assert carried.startswith(attribution.HEADER)
+    assert carried.startswith(attribution.COMPACT)
     monkeypatch.setattr(server,'_mutate_pending_inputs',lambda sids,fn:{'ok':True,'value':fn()})
     # This test seeds the in-memory view; a durable queue left by another test
     # must not replace it before the visible-text assertion.

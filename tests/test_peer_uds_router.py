@@ -716,7 +716,7 @@ def test_new_envelope_preserved_across_control_plane_and_reply_route(monkeypatch
     assert server._report_routes.resolve(route)=='successor'
     parsed=server._parse_conversation_event({'type':'user','timestamp':'2026-01-01T00:00:00Z','origin':{'kind':'peer','msg_id':a['message_id']},'message':{'role':'user','content':text}},1)
     assert parsed['attribution']['author']['name_at_send']=='Original'
-    assert attribution.HEADER not in parsed['text']
+    assert attribution.COMPACT not in parsed['text']
     assert parsed['attribution']['basis']=='runtime'
 
 
@@ -755,7 +755,7 @@ def test_envelope_uds_header_and_ask_nonce_order(monkeypatch,tmp_path):
     assert result['receipt_id']==a['message_id']
     inner=content.split('\n')[1:-1]
     assert inner[0]=='orig_msg_id: '+a['message_id']
-    assert inner[1].startswith(attribution.HEADER)
+    assert inner[1].startswith(attribution.COMPACT)
     # The receipt nonce stays last even when ask instructions are added.
     assert inner[-1]=='⟨wt:dlv-1234⟩'
 

@@ -29,7 +29,11 @@ journal `possible_duplicate` with reason `held`: a held frame can later land.
 Unknown receipts reconcile for `WT_UDS_RECONCILE_S` (default 30 seconds), then fall
 back once and journal the uncertainty. Socket errors fall back directly.
 
-Non-slash text carries one `[Message attribution v1: <compact JSON>]` line.
+Non-slash text from a session, service or unknown sender carries one short
+`[sender: <name> (<kind>) · msg <uuid>]` line (plus `· reply: ccc send <addr>`
+when a reply route exists); readers resolve the full record from the journal
+by message ID. Text a person types (`human` author) carries no line. Readers
+still accept the legacy `[Message attribution v1: <compact JSON>]` line.
 Outgoing order is ask correlation line (when present), attribution, body, then
 receipt nonce last. Slash commands receive neither attribution headers nor
 nonces; their attribution remains in the delivery journal/queue metadata.
@@ -39,7 +43,8 @@ and `~/.claude/command-center/attribution/YYYY-MM.jsonl`. Each reader checks bot
 on the same node, read-only, joining logical IDs, transport IDs, or receipt
 nonces. Missing journals are tolerated. A foreign-node record never upgrades a
 claim. Journal failure logs a diagnostic and delivery continues; the in-band
-snapshot remains a claim without durable evidence. Nothing prunes automatically.
+line remains a name-and-kind claim without durable evidence. Nothing prunes
+automatically.
 For deliberate retention management, use `python -m watchtower.sender_envelope
 prune --app wt --before YYYY-MM`, or `python sender_envelope.py prune --app ccc
 --before YYYY-MM` from CCC. Deleted evidence cannot be reconstructed.
