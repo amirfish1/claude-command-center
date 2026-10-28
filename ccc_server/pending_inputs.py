@@ -97,6 +97,16 @@ _auto_resume_opt_in: dict = {}   # session_id → True
 _auto_resume_opt_in_lock = threading.Lock()
 
 
+def _queued_text_key(value):
+    """Queued text as the user sees it, for matching client-sent copies.
+
+    Queue rows carry a sender-attribution header line; the browser renders,
+    steers and cancels the text without it, so compare header-free text.
+    """
+    import sender_envelope as attribution
+    return attribution.strip_header(str(value or "")).strip()
+
+
 class _PendingInputEntry(str):
     """String-compatible durable queue row with stable plain-entry identity."""
 
@@ -2186,7 +2196,7 @@ def _apply_pending_input_operations(
                                 if op.get("identity") == "handoff_id"
                                 else getattr(item, "pending_id", None) == match
                                 if op.get("identity") == "pending_id"
-                                else str(item or "").strip() == str(match or "").strip()
+                                else _queued_text_key(item) == _queued_text_key(match)
                             )
                             if not matched:
                                 continue
@@ -2196,14 +2206,14 @@ def _apply_pending_input_operations(
                             seen += 1
                         results.append(removed)
                     elif action == "remove_all_matching":
-                        match = str(op.get("match") or "").strip()
+                        match = _queued_text_key(op.get("match"))
                         removed = [
                             item for item in queue
-                            if str(item or "").strip() == match
+                            if _queued_text_key(item) == match
                         ]
                         queue[:] = [
                             item for item in queue
-                            if str(item or "").strip() != match
+                            if _queued_text_key(item) != match
                         ]
                         results.append(removed)
                     elif action == "drop_unattended":
@@ -2647,7 +2657,7 @@ def _get_queued_events_for_session(session_id):
     now = time.time()
 
     def _queued_event(text):
-        visible_text = _core._strip_mode3_instruction(text)
+        visible_text = _core._strip_mode3_instruction(_queued_text_key(text))
         if not visible_text:
             return None
         with _pending_queued_meta_lock:
@@ -2753,7 +2763,7 @@ def _drop_matching_terminal_queue_entries(session_id, text):
 
 
 def _claim_matching_pending_input(session_id, text):
-    clean = str(text or "").strip()
+    clean = _queued_text_key(text)
     if not session_id or not clean:
         return None
     def claim_one():
@@ -2766,7 +2776,7 @@ def _claim_matching_pending_input(session_id, text):
                 if not items:
                     continue
                 for index, item in enumerate(items):
-                    if str(item or "").strip() != clean:
+                    if _queued_text_key(item) != clean:
                         continue
                     claimed = items.pop(index)
                     if not items:

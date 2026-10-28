@@ -1,0 +1,1 @@
+- Steering or cancelling a queued message no longer fails with "queued message no longer exists", and a queued message no longer shows up twice; queue rows that carry sender attribution now match the text you see.

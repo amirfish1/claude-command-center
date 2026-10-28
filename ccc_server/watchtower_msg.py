@@ -2926,7 +2926,7 @@ def _bridge_pending_inputs(session_id):
             rows.append({
                 "id": f"{queue_name}:{index}",
                 "queue": queue_name,
-                "text": str(text or ""),
+                "text": attribution.strip_header(str(text or "")),
             })
     return rows
 
@@ -3246,7 +3246,10 @@ def _recover_engine_bridge(session_id, selected_text="", idempotency_key=None):
     engine = _core._detect_session_engine(sid)
     if engine not in ("codex", "kimi"):
         return _core._engine_bridge_status_local(engine, sid)
-    if text and not any(row["text"] == text for row in _bridge_pending_inputs(sid)):
+    # Rows are shown without the attribution header; the client may send
+    # either form back.
+    wanted = attribution.strip_header(text).strip()
+    if text and not any(row["text"].strip() == wanted for row in _bridge_pending_inputs(sid)):
         return {
             "ok": False,
             "code": "queued_message_missing",

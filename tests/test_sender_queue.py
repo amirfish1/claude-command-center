@@ -69,3 +69,22 @@ def test_attribution_carrier_hidden_from_original_ask_and_titles(monkeypatch):
     assert parsed['text']=='Actual original ask'
     assert parsed['attribution']['message_id']==attr['message_id']
     assert carried.startswith(attribution.HEADER)
+
+
+def test_attributed_queue_row_matches_visible_text(monkeypatch):
+    # CCC-233: queued rows carry the attribution header, but the browser shows,
+    # steers and cancels the header-free text. Steer reported "queued message
+    # no longer exists" and the queued card rendered twice.
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    sid='ccc-233-attributed-queue'
+    carried=attribution.carry('just answer the ticket',attribution.service('ccc:test',sid),app='ccc')
+    assert carried.startswith(attribution.HEADER)
+    monkeypatch.setattr(server,'_mutate_pending_inputs',lambda sids,fn:{'ok':True,'value':fn()})
+    monkeypatch.setitem(server._pending_resume_queue,sid,[pending_inputs._PendingInputEntry(carried)])
+    try:
+        events=pending_inputs._get_queued_events_for_session(sid)
+        assert [e['text'] for e in events if e.get('pending')]==['just answer the ticket']
+        claim=pending_inputs._claim_matching_pending_input(sid,'just answer the ticket')
+        assert claim and str(claim['item'])==carried
+    finally:
+        server._pending_resume_queue.pop(sid,None)
