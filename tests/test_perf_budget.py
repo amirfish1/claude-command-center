@@ -1442,33 +1442,38 @@ def test_archive_serve_default_throttles_large_corpus_refreshes():
 
 
 def test_archive_spawned_cold_cache_does_not_block_request(monkeypatch):
-    """A slow first spawned-session refresh must not hang ?all=1."""
+    """A cold request must return while spawned-session discovery is blocked."""
     release = threading.Event()
     refreshed = threading.Event()
+    returned = threading.Event()
+    result = {}
 
     def slow_list():
-        release.wait(timeout=2)
+        release.wait(timeout=10)
         refreshed.set()
         return [{"spawn_id": "late"}]
+
+    def request():
+        try:
+            result["rows"] = server._archive_spawned_coalesced()
+        finally:
+            returned.set()
 
     monkeypatch.setattr(server, "list_spawned_sessions", slow_list)
     monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 2.0)
     monkeypatch.setattr(server, "_archive_spawned_cache", {"ts": 0.0, "data": None})
     monkeypatch.setattr(server, "_archive_spawned_refreshing", False)
-    timer = threading.Timer(0.5, release.set)
-    timer.start()
-    start = time.perf_counter()
+    caller = threading.Thread(target=request, daemon=True)
+    caller.start()
     try:
-        rows = server._archive_spawned_coalesced()
-        elapsed = time.perf_counter() - start
-        assert rows == [], "cold request should serve an empty stale snapshot"
-        assert elapsed < 0.2, (
-            f"cold spawned-session cache blocked for {elapsed:.3f}s instead of "
-            "refreshing off-thread"
-        )
+        # Check ordering against an explicitly blocked discovery, rather than
+        # a 200ms wall-clock budget that includes unrelated host scheduling.
+        assert returned.wait(timeout=2), "cold request waited for discovery"
+        assert not refreshed.is_set(), "discovery must still be blocked"
+        assert result["rows"] == [], "cold request should serve an empty stale snapshot"
     finally:
         release.set()
-        timer.cancel()
+        caller.join(timeout=2)
         refreshed.wait(timeout=2)
         deadline = time.time() + 2
         while server._archive_spawned_refreshing and time.time() < deadline:
@@ -2543,7 +2548,11 @@ def test_throughput_full_aggregate_persists_initial_snapshot(monkeypatch, tmp_pa
     """A completed aggregate refresh should seed the next cold initial paint."""
     server._THROUGHPUT_AGG_CACHE.clear()
     monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
-    monkeypatch.setattr(server, "find_all_conversations", lambda *a, **k: [])
+    # Seven-day refreshes use bounded discovery rather than the archive
+    # scanner. Keep this persistence test independent of the host transcripts.
+    monkeypatch.setattr(server, "_throughput_recent_conversations", lambda *a, **k: [])
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda: {})
+    monkeypatch.setattr(server, "usage_reset_events_payload", lambda **_: {"events": []})
 
     full_payload, full_status = server._throughput_payload("all_7_days")
     server._THROUGHPUT_AGG_CACHE.clear()
