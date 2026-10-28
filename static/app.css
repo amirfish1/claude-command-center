@@ -32732,7 +32732,24 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     border-radius: 1px;
     background: color-mix(in srgb, var(--text, #e6edf3) 16%, transparent);
   }
-  #convList .conv-subagent-cluster-body .conv-item > .wa-row { padding-left: 52px; }
+  /* CCC-240: a child shares its parent's ticket, so it drops the avatar and
+     reads smaller: text lines up with the parent's title, one-line title and
+     preview, tighter padding. */
+  #convList .conv-subagent-cluster-body .conv-item > .wa-row { padding-left: 64px; }
+  #convList .conv-subagent-cluster-body .wa-avatar { display: none !important; }
+  #convList .conv-subagent-cluster-body .wa-body { min-height: 0; padding-top: 6px; padding-bottom: 6px; }
+  #convList .conv-subagent-cluster-body .wa-title {
+    font-size: 14px;
+    line-height: 19px;
+    font-weight: 500;
+    -webkit-line-clamp: 1;
+  }
+  #convList .conv-subagent-cluster-body .wa-time { line-height: 19px; }
+  #convList .conv-subagent-cluster-body .wa-preview {
+    font-size: 13px;
+    line-height: 17px;
+    -webkit-line-clamp: 1;
+  }
   #convList .conv-subagent-cluster-body .wa-avatar.orch-glyph {
     flex-basis: 36px;
     width: 36px;
