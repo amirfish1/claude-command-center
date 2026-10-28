@@ -15833,6 +15833,30 @@ class TestRepoContextHelpers(unittest.TestCase):
             ):
             self.assertTrue(server._resume_queue_engine_busy(sid))
 
+    def test_resume_queue_engine_busy_waits_for_headless_exec_owner(self):
+        """A live headless `codex exec` owner keeps the queue busy without
+        any app-server probe: Codex rejects a second writer, so probing it
+        only produced a per-minute 'active writer' failure (OPS-155)."""
+        server = self.server
+        sid = "test-sid-headless-exec"
+        never = AssertionError("second writer probe must not be reached")
+        with mock.patch.object(server, "_is_codex_session", return_value=True), \
+             mock.patch.object(server, "find_headless_codex_exec_owner",
+                               return_value={"pid": 4242}), \
+             mock.patch.object(server, "_codex_thread_writer_snapshot",
+                               return_value={"writer": None, "external_active": False}), \
+             mock.patch.object(server, "_codex_note_external_writer_transition"), \
+             mock.patch.object(server, "_codex_app_server_thread_is_active",
+                               side_effect=never):
+            self.assertTrue(server._resume_queue_engine_busy(sid))
+        with mock.patch.object(server, "_is_codex_session", return_value=True), \
+             mock.patch.object(server, "find_headless_codex_exec_owner", return_value=None), \
+             mock.patch.object(server, "_codex_thread_writer_snapshot",
+                               return_value={"writer": None, "external_active": False}), \
+             mock.patch.object(server, "_codex_note_external_writer_transition"), \
+             mock.patch.object(server, "_codex_app_server_thread_is_active", return_value=False):
+            self.assertFalse(server._resume_queue_engine_busy(sid))
+
     def test_resume_queue_engine_busy_revalidates_unknown_writer(self):
         """Unknown ownership is reattached once instead of blocking forever."""
         server = self.server

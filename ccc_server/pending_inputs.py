@@ -3804,6 +3804,13 @@ def _resume_queue_engine_busy(sid):
         # the same conversation.
         return True
     if _core._is_codex_session(sid):
+        # A live headless `codex exec` holds Codex's single-writer lock for its
+        # whole run; any thread/resume or thread/read from our app-server fails
+        # "already has an active writer" and the 60s retry repeats that for the
+        # life of the worker (OPS-155). Wait without touching the app-server;
+        # the 5s watcher delivers once the exec exits.
+        if _core.find_headless_codex_exec_owner(sid):
+            return True
         # Preserve proven external writers on the cheap stat/lsof path. Only an
         # ownership-unknown turn needs an authoritative passive read.
         snap = {}
