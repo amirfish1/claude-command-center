@@ -557,10 +557,10 @@ launch_server() {
       exit 0
     fi
     if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
-      local service_label="com.github.claude-command-center"
+      local service_label="com.github.claude-command-center.server"
       local service_target
       service_target="gui/$(id -u)/$service_label"
-      if launchctl print "$service_target" >/dev/null 2>&1 || launchctl list 2>/dev/null | grep -q "$service_label"; then
+      if launchctl print "$service_target" >/dev/null 2>&1 || launchctl list 2>/dev/null | grep -qF "$service_label"; then
         printf '\n'
         ok "CCC is running in the background (it was slow to start)"
         note "$open_hint"

@@ -5643,6 +5643,7 @@ _STRAY_REAPER_LAST_RUN = {"ts": 0.0}
 _STRAY_REAPER_LOG = []
 _STRAY_REAPER_LOG_LOCK = threading.Lock()
 _STRAY_REAPER_LAUNCHD_LABELS = (
+    "com.github.claude-command-center.server",
     "com.github.claude-command-center",
     "com.github.claude-command-center.worker",
 )

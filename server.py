@@ -18371,8 +18371,28 @@ def _compute_server_code_rev():
 _SERVER_CODE_REV = _compute_server_code_rev()
 
 
-_CCC_DASHBOARD_LAUNCHD_LABEL = "com.github.claude-command-center"
+# The dashboard LaunchAgent label. It was once the .app bundle ID
+# (com.github.claude-command-center); macOS refuses to bootstrap a job whose
+# Label matches a running app's bundle ID, so run.sh --install-service now
+# writes `.server` and migrates the legacy plist. Machines that have not
+# re-installed yet still run the legacy label, so callers resolve it with
+# _ccc_dashboard_launchd_label().
+_CCC_DASHBOARD_LAUNCHD_LABEL = "com.github.claude-command-center.server"
+_CCC_LEGACY_DASHBOARD_LAUNCHD_LABEL = "com.github.claude-command-center"
 _WORKER_LAUNCHD_LABEL = "com.github.claude-command-center.worker"
+
+
+def _launch_agent_plist_path(label):
+    return Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+
+
+def _ccc_dashboard_launchd_label():
+    """The installed dashboard label: `.server` unless only the legacy plist exists."""
+    if _launch_agent_plist_path(_CCC_DASHBOARD_LAUNCHD_LABEL).is_file():
+        return _CCC_DASHBOARD_LAUNCHD_LABEL
+    if _launch_agent_plist_path(_CCC_LEGACY_DASHBOARD_LAUNCHD_LABEL).is_file():
+        return _CCC_LEGACY_DASHBOARD_LAUNCHD_LABEL
+    return _CCC_DASHBOARD_LAUNCHD_LABEL
 
 
 def _repo_version_on_disk():
@@ -20905,9 +20925,10 @@ def _schedule_restart(delay=0.5):
         except Exception:
             pass
         if sys.platform == "darwin":
-            service_label = "com.github.claude-command-center"
-            plist_path = Path.home() / "Library" / "LaunchAgents" / f"{service_label}.plist"
-            if plist_path.is_file() and _launchd_restart_targets_pid(service_label, os.getpid()):
+            for service_label in (_CCC_DASHBOARD_LAUNCHD_LABEL, _CCC_LEGACY_DASHBOARD_LAUNCHD_LABEL):
+                plist_path = _launch_agent_plist_path(service_label)
+                if not (plist_path.is_file() and _launchd_restart_targets_pid(service_label, os.getpid())):
+                    continue
                 try:
                     proc = subprocess.run(
                         ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{service_label}"],
@@ -20918,6 +20939,7 @@ def _schedule_restart(delay=0.5):
                         return
                 except Exception:
                     pass
+                break
         os.execvp(sys.executable, [sys.executable, str(Path(__file__).resolve())])
     t = threading.Timer(delay, _go)
     t.daemon = True
@@ -43682,7 +43704,7 @@ def _doctor_registry_by_pid(repo_path=None):
 def _doctor_instance_fix_line(kill_pids):
     restart = (
         "launchctl kickstart -k "
-        f"gui/$(id -u)/{_CCC_DASHBOARD_LAUNCHD_LABEL}"
+        f"gui/$(id -u)/{_ccc_dashboard_launchd_label()}"
     )
     pids = [str(int(pid)) for pid in kill_pids]
     return f"kill {' '.join(pids)} && {restart}" if pids else restart
@@ -43696,7 +43718,8 @@ def build_doctor_instances():
     cwds = _doctor_process_cwds(pids)
     ports_by_pid = _doctor_listening_ports(pids)
     registry_by_pid = _doctor_registry_by_pid(repo_path)
-    launchd_pid = _launchd_print_job_pid(_CCC_DASHBOARD_LAUNCHD_LABEL)
+    launchd_label = _ccc_dashboard_launchd_label()
+    launchd_pid = _launchd_print_job_pid(launchd_label)
 
     instances = []
     for row in process_rows:
@@ -43755,7 +43778,7 @@ def build_doctor_instances():
         "ok": True,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "repo_path": repo_path,
-        "launchd_label": _CCC_DASHBOARD_LAUNCHD_LABEL,
+        "launchd_label": launchd_label,
         "launchd_pid": launchd_pid,
         "status": "warn" if warnings else "ok",
         "warning": "; ".join(warnings),
