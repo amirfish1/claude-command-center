@@ -1262,8 +1262,7 @@ def cmd_doctor(args):
     elif freshness == "stale":
         print(
             f"server: STALE CODE — running {running_rev[:12]}, disk HEAD is "
-            f"{local_rev[:12]} — restart needed (POST /api/restart, or "
-            "launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center)\n"
+            f"{local_rev[:12]} — restart needed (run `ccc restart dashboard`)\n"
         )
     else:
         print("server: code freshness unknown (not a git install, or /api/version unreachable)\n")

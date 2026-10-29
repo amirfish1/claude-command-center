@@ -136,6 +136,8 @@ def test_doctor_instances_warns_on_duplicate_repo_server(monkeypatch):
         111: [8090],
         222: [8099],
     })
+    monkeypatch.setattr(server, "_ccc_dashboard_launchd_label",
+                        lambda: "com.github.claude-command-center.server")
     monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: 111)
     monkeypatch.setattr(server, "_read_registry_pruned", lambda: [
         {
@@ -159,7 +161,7 @@ def test_doctor_instances_warns_on_duplicate_repo_server(monkeypatch):
     assert "more than one" in report["warning"]
     assert report["fix"] == (
         "kill 222 && launchctl kickstart -k "
-        "gui/$(id -u)/com.github.claude-command-center"
+        "gui/$(id -u)/com.github.claude-command-center.server"
     )
     by_pid = {row["pid"]: row for row in report["instances"]}
     assert by_pid[111]["port"] == 8090
@@ -181,6 +183,8 @@ def test_doctor_instances_warns_when_listener_is_not_launchd_owned(monkeypatch):
     ])
     monkeypatch.setattr(server, "_doctor_process_cwds", lambda pids: {222: repo})
     monkeypatch.setattr(server, "_doctor_listening_ports", lambda pids: {222: [8099]})
+    monkeypatch.setattr(server, "_ccc_dashboard_launchd_label",
+                        lambda: "com.github.claude-command-center.server")
     monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: 111)
     monkeypatch.setattr(server, "_read_registry_pruned", lambda: [])
 
@@ -190,7 +194,7 @@ def test_doctor_instances_warns_when_listener_is_not_launchd_owned(monkeypatch):
     assert "not launchd-owned" in report["warning"]
     assert report["fix"] == (
         "kill 222 && launchctl kickstart -k "
-        "gui/$(id -u)/com.github.claude-command-center"
+        "gui/$(id -u)/com.github.claude-command-center.server"
     )
 
 
@@ -206,6 +210,8 @@ def test_doctor_instances_warns_on_single_manual_listener(monkeypatch):
     ])
     monkeypatch.setattr(server, "_doctor_process_cwds", lambda pids: {222: repo})
     monkeypatch.setattr(server, "_doctor_listening_ports", lambda pids: {222: [8099]})
+    monkeypatch.setattr(server, "_ccc_dashboard_launchd_label",
+                        lambda: "com.github.claude-command-center.server")
     monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: None)
     monkeypatch.setattr(server, "_read_registry_pruned", lambda: [])
 
@@ -215,7 +221,7 @@ def test_doctor_instances_warns_on_single_manual_listener(monkeypatch):
     assert "not launchd-owned" in report["warning"]
     assert report["fix"] == (
         "kill 222 && launchctl kickstart -k "
-        "gui/$(id -u)/com.github.claude-command-center"
+        "gui/$(id -u)/com.github.claude-command-center.server"
     )
 
 
@@ -231,6 +237,8 @@ def test_doctor_instances_ignores_reused_pid_registry_from_other_repo(monkeypatc
     ])
     monkeypatch.setattr(server, "_doctor_process_cwds", lambda pids: {222: repo})
     monkeypatch.setattr(server, "_doctor_listening_ports", lambda pids: {222: [8099]})
+    monkeypatch.setattr(server, "_ccc_dashboard_launchd_label",
+                        lambda: "com.github.claude-command-center.server")
     monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: 222)
     monkeypatch.setattr(server, "_read_registry_pruned", lambda: [
         {
@@ -266,3 +274,15 @@ def test_doctor_instances_route_is_wired():
 
     assert 'path == "/api/doctor/instances"' in source
     assert "self.send_json(build_doctor_instances())" in source
+
+
+def test_dashboard_launchd_label_prefers_server_label_then_legacy(monkeypatch, tmp_path):
+    server = _fresh_server()
+    monkeypatch.setattr(server.Path, "home", classmethod(lambda cls: tmp_path))
+    agents = tmp_path / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    assert server._ccc_dashboard_launchd_label() == "com.github.claude-command-center.server"
+    (agents / "com.github.claude-command-center.plist").write_text("legacy")
+    assert server._ccc_dashboard_launchd_label() == "com.github.claude-command-center"
+    (agents / "com.github.claude-command-center.server.plist").write_text("new")
+    assert server._ccc_dashboard_launchd_label() == "com.github.claude-command-center.server"
