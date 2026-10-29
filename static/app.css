@@ -33352,3 +33352,16 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 #ttsCacheDebugLines [data-tts-state="sent"] { background: #f59e0b; }
 #ttsCacheDebugLines [data-tts-state="ready"] { background: #22c55e; }
 #ttsCacheDebugLines [data-tts-state="cancelled"] { background: #a855f7; }
+
+/* CCC-243: with smart repo on, the new-session folder picker collapses to
+   one "Auto · repo · Change" line, matching the model line below it. */
+.spawn-cwd-summary { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--text-muted); font-size: 11px; padding: 3px 0; }
+.spawn-cwd-summary[hidden] { display: none; }
+.spawn-cwd-summary .ns-selection-name { display: inline-flex; align-items: center; min-width: 0; }
+.spawn-cwd-summary .repo-avatar { width: 14px; height: 14px; flex-basis: 14px; border-radius: 3px; }
+.spawn-cwd-change { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.spawn-cwd-change:hover { color: var(--text); }
+body.ccc-spawn-cwd-collapsed #spawnCwdQuickChips,
+body.ccc-spawn-cwd-collapsed .spawn-cwd-row > :not(#spawnCwdSummary):not(#spawnCwdGuessChip),
+body.ccc-spawn-cwd-collapsed .spawn-cwd-guess-note { display: none !important; }
+body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-template-areas: "cwd worktree"; }

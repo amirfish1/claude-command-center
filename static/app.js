@@ -87474,7 +87474,34 @@
     return out.slice(0, SPAWN_CWD_CHIP_LIMIT);
   }
 
+  // Jev picks the repo from the prompt, so the folder picker starts
+  // collapsed to one line like the model choice (CCC-243).
+  let spawnCwdExpanded = false;
+  function renderSpawnCwdSummary() {
+    const host = document.getElementById('spawnCwdSummary');
+    if (!host) return;
+    let jevOn = false;
+    try { jevOn = smartRepoConfigured === true; } catch (_) {}   // declared below; may be in TDZ at boot
+    const collapsed = jevOn && !spawnCwdExpanded;
+    document.body.classList.toggle('ccc-spawn-cwd-collapsed', collapsed);
+    host.hidden = !collapsed;
+    if (!collapsed) { host.textContent = ''; return; }
+    const cwd = getSpawnCwd();
+    const label = cwd ? spawnCwdLabel(cwd) : '';
+    host.innerHTML = '<span class="ns-selection-mode">' + (repoGuessUserPicked ? 'Custom' : 'Auto') + '</span>'
+      + '<span class="ns-selection-name">' + (cwd ? repoAvatarHtml(cwd, label) + escapeHtml(label) : 'Picked from your prompt') + '</span>'
+      + '<button type="button" class="ns-model-change spawn-cwd-change">Change</button>';
+    host.title = (repoGuessUserPicked ? 'Folder you chose: ' : 'Jev picks the repo from your prompt. Now: ') + (cwd || 'none yet');
+    host.querySelector('.spawn-cwd-change').addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      spawnCwdExpanded = true;
+      renderSpawnCwdSummary();
+    });
+  }
+
   function renderSpawnCwdQuickChips() {
+    renderSpawnCwdSummary();
     const wrap = document.getElementById('spawnCwdQuickChips');
     if (!wrap) return;
     const current = getSpawnCwd();
@@ -88012,6 +88039,7 @@
       const data = await res.json();
       const configured = data.jev_configured === true;
       smartRepoConfigured = configured;
+      renderSpawnCwdSummary();
       icon.classList.toggle('is-enabled', configured);
       icon.setAttribute('aria-disabled', String(configured));
       icon.setAttribute('aria-label', configured ? 'Smart repo enabled' : 'Smart repo off: add token');
@@ -88026,6 +88054,7 @@
     } catch (_) {
       smartRepoConfigured = null;
       icon.hidden = true;
+      renderSpawnCwdSummary();
     }
   }
   async function openSmartRepoTokenSetup(button) {
@@ -88091,11 +88120,12 @@
     host.textContent = '';
     if (repoGuessAuto) {
       const note = document.createElement('span');
+      note.className = 'spawn-cwd-guess-note';
       note.textContent = 'Auto-picked ' + spawnCwdLabel(repoGuessAuto.path) + ' \u00b7 ';
       note.title = 'Folder chosen from your prompt: ' + repoGuessAuto.path;
       const undo = document.createElement('button');
       undo.type = 'button';
-      undo.className = 'spawn-cwd-guess-btn';
+      undo.className = 'spawn-cwd-guess-btn spawn-cwd-guess-note';
       undo.textContent = 'undo';
       undo.title = 'Go back to ' + (repoGuessAuto.prev || 'the previous folder');
       undo.addEventListener('click', () => {
@@ -88120,6 +88150,7 @@
       host.appendChild(btn);
     }
     host.hidden = !host.childNodes.length;
+    renderSpawnCwdSummary();
   }
 
   function applyRepoGuess(data) {
@@ -88151,6 +88182,7 @@
     repoGuessUserPicked = false;
     repoGuessAuto = null;
     repoGuessSuggestion = '';
+    spawnCwdExpanded = false;
     renderRepoGuessChips();
   }
 
