@@ -101,7 +101,7 @@ test('changes to attributed ticket history invalidate the sidebar content signat
   assert.notEqual(updated, initial);
 });
 
-test('worker history expands all records and ticket clicks do not select the session row', async () => {
+test('worker history shows ticket numbers only, and ticket clicks do not select the session row', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
@@ -116,10 +116,12 @@ test('worker history expands all records and ticket clicks do not select the ses
       document.getElementById('row').addEventListener('click', () => rowClicks++);
       window._uxqOpenItemDetail = ref => { window.openedRef = ref; };
     }, {source, row, tickets: Array.from({length: 30}, (_, i) => ticket(i + 1)), escapeSource: escapeHtml.toString()});
-    await page.click('.conv-worker-history summary > span:first-child');
-    assert.equal(await page.$eval('.conv-worker-history', el => el.open), true);
-    assert.equal(await page.$$eval('.conv-worker-history-list button', els => els.length), 30);
-    await page.click('.conv-worker-history-list button');
+    // No disclosure, no title list: three numbered chips and a +N.
+    assert.equal(await page.$$eval('.conv-worker-history details, .conv-worker-history summary, .conv-worker-history-list', els => els.length), 0);
+    assert.equal(await page.$$eval('.conv-worker-history button', els => els.length), 3);
+    assert.equal(await page.$eval('.conv-worker-history-more', el => el.textContent), '+27');
+    assert.ok(!(await page.$eval('.conv-worker-history', el => el.textContent)).includes('Task'));
+    await page.click('.conv-worker-history button');
     assert.equal(await page.evaluate(() => openedRef), 'EXAMPLE-30');
     assert.equal(await page.evaluate(() => rowClicks), 0);
   } finally { await browser.close(); }
@@ -134,7 +136,7 @@ test('a run of same-project chips prints the prefix once, and stays clickable', 
      closed_at: new Date(1700000000000 + 990 * 1000).toISOString()},
   ]);
   const html = ctx._uxFixesWorkerHistoryHtml(row);
-  const summary = html.slice(html.indexOf('conv-worker-history-recent'), html.indexOf('</summary>'));
+  const summary = html.slice(html.indexOf('conv-worker-history-recent'), html.indexOf('</div>'));
   const labels = Array.from(summary.matchAll(/>([^<>]*)<\/button>/g), m => m[1].trim());
   // Newest first: the run leads with its full ref and the rest drop the prefix.
   assert.deepEqual(labels, ['EXAMPLE-996', '-995', '-994']);
@@ -145,10 +147,6 @@ test('a run of same-project chips prints the prefix once, and stays clickable', 
   );
   // An elided chip leads its tooltip with the ref it no longer prints.
   assert.match(summary, /title="EXAMPLE-995 \u00b7 [^"]*"/);
-  // The expanded list is read one row at a time, so it never elides.
-  const list = html.slice(html.indexOf('conv-worker-history-list'));
-  assert.ok(!list.includes('is-elided'));
-  assert.ok(list.includes('EXAMPLE-994 <span>'));
 });
 
 test('a chip only drops its prefix after a chip from the same project', () => {
@@ -161,7 +159,7 @@ test('a chip only drops its prefix after a chip from the same project', () => {
     ticket(994),
   ]);
   const html = ctx._uxFixesWorkerHistoryHtml(row);
-  const summary = html.slice(html.indexOf('conv-worker-history-recent'), html.indexOf('</summary>'));
+  const summary = html.slice(html.indexOf('conv-worker-history-recent'), html.indexOf('</div>'));
   const labels = Array.from(summary.matchAll(/>([^<>]*)<\/button>/g), m => m[1].trim());
   // EXAMPLE-994 follows a CCC chip, so it has to reprint its own prefix.
   assert.deepEqual(labels, ['EXAMPLE-996', 'CCC-12', 'EXAMPLE-994']);

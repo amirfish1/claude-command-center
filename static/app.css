@@ -30535,16 +30535,12 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   min-width: 0;
   color: var(--text-muted);
   font-size: 11px;
-}
-.conv-worker-history > summary {
-  cursor: pointer;
   line-height: 1.7;
 }
 .conv-worker-history-recent {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-left: 7px;
 }
 .conv-worker-ticket {
   padding: 1px 5px;
@@ -30567,29 +30563,6 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   padding-left: 3px;
   margin-left: -2px;
 }
-.conv-worker-history-scope { margin: 6px 0; }
-.conv-worker-history-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 240px;
-  overflow-y: auto;
-}
-.conv-worker-history-list > li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 5px;
-  padding: 4px 0;
-}
-.conv-worker-history-title {
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-/* Expanded ticket history owns the row space; floating hover metadata must not cover it. */
-.conv-item:has(.conv-worker-history[open]) .conv-hover-extras { display: none !important; }
-
 /* ── Coding and Workers: compact row layout ────────────────────────────────
    Both session lanes use this table treatment in Compact mode. The legacy
    .workers-dense class lives on #convList; Cozy and Detailed restore cards.
@@ -30761,26 +30734,18 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #convList.workers-dense .conv-item .conv-outcome,
 #convList.workers-dense .conv-item .drag-handle { display: none; }
 
-/* Ticket chips become the meta column instead of a second line: the prose
-   count label goes (the chips and the +N chip already carry it) and the
-   summary lays out as a single chip run. */
-#convList.workers-dense .conv-worker-history-count { display: none; }
-/* The card list indents the chips onto their own line and gives the summary a
+/* Ticket chips become the meta column instead of a second line: a single
+   chip run. */
+/* The card list indents the chips onto their own line and gives them a
    1.7 line-height; in a table cell that margin and leading are what set the
    row height. Strip both -- the chips are the tallest thing in the row. */
 #convList.workers-dense .conv-item .conv-worker-history {
+  display: flex;
+  align-items: center;
   margin: 0;
   font-size: 10.5px;
   line-height: 15px;
 }
-#convList.workers-dense .conv-worker-history > summary {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  line-height: 15px;
-  list-style: none;
-}
-#convList.workers-dense .conv-worker-history > summary::-webkit-details-marker { display: none; }
 #convList.workers-dense .conv-worker-history-recent {
   display: flex;
   align-items: center;
@@ -30976,7 +30941,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   border: 1px dashed var(--border);
   border-radius: 4px;
   color: var(--text-muted);
-  cursor: pointer;
+  cursor: default;
 }
 
 /* Readable log entries keep severity and summaries visible, diagnostics expandable. */
@@ -32320,19 +32285,9 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     padding-right: 10px;
     font-size: 14px;
   }
-  .sidebar .conv-worker-history { font-size: 14px; }
-  .sidebar .conv-worker-history > summary { min-height: 40px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
   /* Ticket refs: one chip run on one line. At 36px/10px padding three refs
-     wrapped to three lines under their own "N recorded tickets" line; the
-     chips (and the +N chip) already carry the count, so the label goes. */
-  .sidebar .conv-worker-history { margin-left: 0; }
-  .sidebar .conv-worker-history-count { display: none; }
-  .sidebar .conv-worker-history > summary { min-height: 0; flex-wrap: nowrap; list-style: none; }
-  /* One disclosure arrow on every browser: Safari keeps its marker on a flex
-     summary, Chrome drops it, and without the label it is the expand target. */
-  .sidebar .conv-worker-history > summary::-webkit-details-marker { display: none; }
-  .sidebar .conv-worker-history > summary::before { content: '\25B8'; padding: 0 6px 0 2px; }
-  .sidebar .conv-worker-history[open] > summary::before { content: '\25BE'; }
+     would wrap to three lines. */
+  .sidebar .conv-worker-history { font-size: 14px; margin-left: 0; display: flex; align-items: center; }
   .sidebar .conv-worker-history-recent { flex-wrap: nowrap; gap: 4px; margin-left: 0; min-width: 0; overflow: hidden; }
   .sidebar .conv-worker-history-recent .conv-worker-ticket {
     min-height: 30px;

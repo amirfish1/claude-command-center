@@ -44,11 +44,9 @@ function renderRow(row) {
     rowDraggableAttr: () => 'true',
     isMobileChromeActive: () => false,
     _uxFixesWorkerHistoryHtml: () => row.tickets && row.tickets.length
-      ? '<details class="conv-worker-history"><summary>'
-        + '<span class="conv-worker-history-count">' + row.tickets.length + ' recorded tickets</span>'
-        + '<span class="conv-worker-history-recent">'
+      ? '<div class="conv-worker-history"><span class="conv-worker-history-recent">'
         + row.tickets.map(t => '<button type="button" class="conv-worker-ticket">' + t + '</button>').join('')
-        + '</span></summary><ul class="conv-worker-history-list"></ul></details>'
+        + '</span></div>'
       : '<span class="conv-worker-no-tickets" aria-hidden="true">no tickets</span>',
     // Optional badge helpers the template calls; this fixture has none.
     sessionStuckWarningHtml: () => '', workerOriginBadgeHtml: () => '',

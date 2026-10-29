@@ -14,7 +14,7 @@ const row = (i) => `<div class="conv-item">
   </div></div>
   <div class="conv-last">last message preview</div>
   <div class="conv-outcome">outcome card</div>
-  <details class="conv-worker-history"><summary><span class="conv-worker-history-count">4 tickets</span></summary></details>
+  <div class="conv-worker-history"><span class="conv-worker-history-recent"><button type="button" class="conv-worker-ticket">OPS-1</button></span></div>
 </div>`;
 
 async function measure(page, dense) {

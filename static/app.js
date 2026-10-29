@@ -76063,7 +76063,10 @@
       + (others ? _uxFixesWorkerHistoryHtml(c) : '');
   }
 
-  const _uxFixesHistoryExpanded = new Set();
+  // A session row names its tickets by number and nothing more: the chips
+  // open the ticket, and the ticket view is where titles and status live.
+  // (An inline expandable list of every ticket's title used to sit here; it
+  // turned the row into a second ticket list, so it is gone.)
   function _uxFixesWorkerHistoryHtml(c) {
     const tickets = _uxFixesWorkerTicketsForRow(c);
     // The Workers table keeps a fixed chips column, and a blank cell reads as
@@ -76071,28 +76074,25 @@
     // shows this only in that layout: on a card list it would be a repeated
     // string on every ticketless row, which is the noise we came to remove.
     if (!tickets.length) return '<span class="conv-worker-no-tickets" aria-hidden="true">no tickets</span>';
-    const sid = c.session_id || c.id || c._worker_id || '';
     const statusLabel = t => {
       const status = String(t.status || 'unknown').replace(/_/g, ' ');
       if (t.resolved) return t.status === 'closed' ? 'Resolved' : 'Resolved earlier · ' + status;
       return t.currentClaimed ? 'Claimed' : 'Worked · ' + status;
     };
-    const ticketButton = (t, recent, label) => {
-      const elided = !!label && label !== t.ref;
+    const ticketButton = (t, label) => {
+      const elided = label !== t.ref;
       // The full ref stays in data-worker-ticket (that is what the click
       // opens) and leads the tooltip, so an elided chip is never ambiguous.
       const tip = (elided ? t.ref + ' \u00b7 ' : '') + statusLabel(t) + ': ' + (t.title || t.note || t.summary || t.ref);
       return '<button type="button" class="conv-worker-ticket' + (elided ? ' is-elided' : '') + '"'
         + ' data-worker-ticket="' + escapeAttr(t.ref) + '"'
         + ' title="' + escapeAttr(tip) + '">'
-        + escapeHtml(label || t.ref) + (recent ? '' : ' <span>' + escapeHtml(statusLabel(t)) + '</span>') + '</button>';
+        + escapeHtml(label) + '</button>';
     };
     // Consecutive chips from the same project repeat the project prefix
     // (OPS-996 OPS-995 OPS-994) -- three copies of a string that only has to
     // be read once. Print the prefix on the first chip and drop it from the
-    // runs that follow: OPS-996 -995 -994. Only the visible summary elides;
-    // the expanded list gives every ticket its full ref, since those rows are
-    // read one at a time and have to stand alone.
+    // runs that follow: OPS-996 -995 -994.
     const elideRefs = (list) => {
       let prev = null;
       return list.map(t => {
@@ -76100,45 +76100,31 @@
         const ref = String(t.ref || '');
         const repeatsPrefix = project && project === prev && ref.startsWith(project);
         prev = project;
-        return ticketButton(t, true, repeatsPrefix ? ref.slice(project.length) : ref);
+        return ticketButton(t, repeatsPrefix ? ref.slice(project.length) : ref);
       }).join('');
     };
-    return '<details class="conv-worker-history" data-worker-history-sid="' + escapeAttr(sid) + '"'
-      + (_uxFixesHistoryExpanded.has(sid) ? ' open' : '') + '>'
-      // The "+N" chip carries the same count the prose label does, in a tenth
-      // of the width. Dense mode hides the label and keeps the chips, so the
-      // total stays visible either way.
-      + '<summary><span class="conv-worker-history-count">' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
+    const hidden = tickets.slice(3);
+    return '<div class="conv-worker-history">'
       + '<span class="conv-worker-history-recent">' + elideRefs(tickets.slice(0, 3))
-      + (tickets.length > 3
-          ? '<span class="conv-worker-history-more" title="' + escapeAttr((tickets.length - 3) + ' more recorded ticket' + (tickets.length - 3 === 1 ? '' : 's')) + '">+' + (tickets.length - 3) + '</span>'
+      // "+N" stands in for the rest; its tooltip names them by number.
+      + (hidden.length
+          ? '<span class="conv-worker-history-more" title="' + escapeAttr(hidden.map(t => t.ref).join(', ')) + '">+' + hidden.length + '</span>'
           : '')
-      + '</span></summary>'
-      + '<div class="conv-worker-history-scope">Tickets attributed to this session by recorded claims, progress, and resolutions.</div>'
-      + '<ul class="conv-worker-history-list">' + tickets.map(t => '<li>' + ticketButton(t, false)
-        + '<span class="conv-worker-history-title">' + escapeHtml(t.title || t.note || t.summary || '') + '</span></li>').join('') + '</ul></details>';
+      + '</span></div>';
   }
-  // Capture before a session row's own handler. Native details/button keyboard
-  // behavior remains intact, and ticket navigation uses the usual opener.
+  // Capture before a session row's own handler so a ticket chip opens the
+  // ticket instead of selecting the row. Clicks elsewhere in the strip fall
+  // through to the row as usual.
   document.addEventListener('click', ev => {
-    const history = ev.target.closest && ev.target.closest('.conv-worker-history');
-    if (!history) return;
+    const ticket = ev.target.closest && ev.target.closest('.conv-worker-history [data-worker-ticket]');
+    if (!ticket) return;
     ev.stopPropagation();
-    const ticket = ev.target.closest('[data-worker-ticket]');
-    if (ticket) {
-      ev.preventDefault();
-      _uxqOpenItemDetail(ticket.getAttribute('data-worker-ticket'));
-    }
+    ev.preventDefault();
+    _uxqOpenItemDetail(ticket.getAttribute('data-worker-ticket'));
   }, true);
   document.addEventListener('keydown', ev => {
     if (isImeKey(ev)) return;
     if (ev.target.closest && ev.target.closest('.conv-worker-history')) ev.stopPropagation();
-  }, true);
-  document.addEventListener('toggle', ev => {
-    if (!ev.target.matches || !ev.target.matches('.conv-worker-history')) return;
-    const sid = ev.target.getAttribute('data-worker-history-sid');
-    if (ev.target.open) _uxFixesHistoryExpanded.add(sid);
-    else _uxFixesHistoryExpanded.delete(sid);
   }, true);
   // Signature of the queue state last painted into the live sessions sidebar.
   let _uxFixesChipPaintedSig = '';
