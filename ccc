@@ -827,6 +827,20 @@ def cmd_recall(args):
     return 0
 
 
+def _brief_link_text(link):
+    """One continuation edge from `ccc brief` (multi-machine S6), e.g.
+    `[hermes-gcp] 2938bb2e "memory wave 3 lead"`; a local edge has no tag."""
+    sid = str(link.get("session_id") or "")
+    if link.get("ambiguous"):
+        return f"{sid} (on several machines: {', '.join(link.get('candidates') or [])})"
+    if link.get("dangling"):
+        return f"{sid} (on another machine, not resolved)"
+    tag = f"[{link.get('node_name')}] " if link.get("local") is False and link.get("node_name") else ""
+    title = f' "{link["title"]}"' if link.get("title") else ""
+    also = f" (also on {', '.join(link['also_on'])})" if link.get("also_on") else ""
+    return f"{tag}{sid}{title}{also}"
+
+
 def cmd_brief(args):
     base = _resolve_server(args.server)
     if not base:
@@ -874,6 +888,12 @@ def cmd_brief(args):
         if latest:
             bits.append(f"latest: {latest}")
         print(f"  {', '.join(bits)}")
+    pred = payload.get("predecessor")
+    if isinstance(pred, dict) and pred.get("session_id"):
+        print(f"  predecessor: {_brief_link_text(pred)}")
+    succ = [s for s in payload.get("successors") or [] if isinstance(s, dict)]
+    if succ:
+        print(f"  successors: {', '.join(_brief_link_text(s) for s in succ[:10])}")
     for t in payload.get("tickets") or []:
         title = f" — {t['title']}" if t.get("title") else ""
         print(f"  ticket: {t['ref']} [{t.get('status') or '?'}]{title}")
