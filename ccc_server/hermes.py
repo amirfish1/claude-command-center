@@ -1428,6 +1428,9 @@ def search_hermes_messages(query, limit=50):
         limit = max(1, min(int(limit), 200))
     except (TypeError, ValueError):
         limit = 50
+    # Rank first, snippet last (MEMORY-20): selecting snippet() next to the
+    # ORDER BY builds one for every match before the LIMIT applies (~500
+    # rows, 71 ms on a 23k-message gateway DB, vs 2 ms ranked alone).
     best = {}
     for db in _hermes_db_paths():
         con = _hermes_connect(db)
@@ -1435,17 +1438,17 @@ def search_hermes_messages(query, limit=50):
             continue
         try:
             rows = con.execute(
-                "SELECT m.session_id, bm25(messages_fts) AS score, m.timestamp, "
-                "snippet(messages_fts, 0, '<mark>', '</mark>', '…', 20) "
-                "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
-                "WHERE messages_fts MATCH ? ORDER BY score LIMIT ?",
+                "SELECT m.session_id, r.score, m.timestamp, r.id FROM ("
+                "SELECT rowid AS id, bm25(messages_fts) AS score FROM messages_fts "
+                "WHERE messages_fts MATCH ? ORDER BY score LIMIT ?) r "
+                "JOIN messages m ON m.id = r.id ORDER BY r.score",
                 (match, limit * 3),
             ).fetchall()
         except sqlite3.Error:
             continue
         finally:
             con.close()
-        for sid, score, ts, snippet in rows:
+        for sid, score, ts, rowid in rows:
             sid = str(sid or "").strip()
             if not sid:
                 continue
@@ -1454,10 +1457,31 @@ def search_hermes_messages(query, limit=50):
                     "session_id": sid,
                     "score": score,
                     "mtime": _hermes_epoch(ts),
-                    "snippet": snippet or "",
+                    "snippet": "",
+                    "_at": (db, rowid),
                 }
-    ranked = sorted(best.values(), key=lambda r: r["score"])
-    return ranked[:limit]
+    ranked = sorted(best.values(), key=lambda r: r["score"])[:limit]
+    by_db = {}
+    for r in ranked:
+        db, rowid = r.pop("_at")
+        by_db.setdefault(db, {})[rowid] = r
+    for db, wanted in by_db.items():
+        con = _hermes_connect(db)
+        if con is None:
+            continue
+        try:
+            for rowid, snippet in con.execute(
+                "SELECT rowid, snippet(messages_fts, 0, '<mark>', '</mark>', '…', 20) "
+                "FROM messages_fts WHERE messages_fts MATCH ? AND rowid IN ("
+                + ",".join("?" for _ in wanted) + ")",
+                (match, *wanted),
+            ):
+                wanted[rowid]["snippet"] = snippet or ""
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+    return ranked
 
 
 def hermes_meta_for_sids(sids):

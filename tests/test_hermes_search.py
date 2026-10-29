@@ -84,6 +84,26 @@ def test_search_hermes_messages_finds_and_ranks_by_bm25(hermes_env):
         assert h["score"] <= 0  # bm25() is negative-is-better in sqlite
 
 
+def test_search_hermes_messages_snippets_best_row_per_session_within_limit(hermes_env):
+    # MEMORY-20: snippets are built after ranking, for the returned rows only.
+    _write_hermes_db(
+        hermes_env,
+        messages=[
+            (1, "sess-a", "user", "long chat that mentions frobnicator once among many other words", 1000.0),
+            (2, "sess-a", "user", "frobnicator frobnicator", 1001.0),
+            (3, "sess-b", "user", "frobnicator plus some padding text here", 1002.0),
+            (4, "sess-c", "user", "a frobnicator in a much longer message about other things entirely", 1003.0),
+        ],
+    )
+
+    hits = hermes.search_hermes_messages("frobnicator", limit=2)
+
+    assert [h["session_id"] for h in hits] == ["sess-a", "sess-b"]
+    assert hits[0]["snippet"] == "<mark>frobnicator</mark> <mark>frobnicator</mark>"
+    assert hits[0]["mtime"] == 1001.0
+    assert hits[1]["snippet"].startswith("<mark>frobnicator</mark> plus")
+    assert all("_at" not in h for h in hits)
+
 def test_search_hermes_messages_empty_query_and_no_db_degrade_to_empty(hermes_env):
     assert hermes.search_hermes_messages("") == []
     assert hermes.search_hermes_messages("anything") == []  # no db written yet
