@@ -18718,11 +18718,6 @@ def _restart_body_allows_codex_interrupt(handler):
 # restart on another handler thread holds no token, cannot renew or lift
 # this one's lease, and the worker refuses it a lease of its own.
 _CODEX_RESTART_LEASE = threading.local()
-# The final check renews the lease for the full TTL and refuses a kill if
-# less than this is left: every kill below (systemctl 60s, launchctl 10s +
-# a 10s death wait, a direct SIGTERM) finishes well inside it, so the lease
-# cannot lapse and admit a turn before the kill lands.
-_CODEX_KILL_WINDOW_S = 120.0
 
 
 def _codex_restart_lease_token():
@@ -18734,6 +18729,7 @@ def _codex_restart_freeze(reason, *, allow_codex_interrupt=False):
     the caller explicitly accepted interrupting turns) under a lease this
     thread now owns."""
     _CODEX_RESTART_LEASE.token = ""
+    _CODEX_RESTART_LEASE.committed = False
     if allow_codex_interrupt:
         _log_activity(
             "worker", "RESTART_CODEX_OVERRIDE",
@@ -18791,8 +18787,18 @@ def _codex_restart_release(reason=""):
     refused, or it never froze) sends nothing, and the worker ignores any
     token but the owner's, so this can never lift another restart's."""
     token = _codex_restart_lease_token()
+    committed = getattr(_CODEX_RESTART_LEASE, "committed", False)
     _CODEX_RESTART_LEASE.token = ""
+    _CODEX_RESTART_LEASE.committed = False
     if not token:
+        return
+    if committed:
+        # The final check committed the lease: the worker never lifts it,
+        # since the kill may still land. It ends with the worker.
+        _log_activity(
+            "worker", "RESTART_CODEX_COMMITTED",
+            f"reason={reason} Codex stays frozen until the worker restarts",
+        )
         return
     try:
         _control_plane_request("codex.restart_freeze", {
@@ -18808,31 +18814,27 @@ def _codex_restart_final_check(health=None):
     the worker answers frozen with no loaded Codex thread. Anything else
     (live turns, a lapsed freeze, an error, no reply) is nonzero; -1 means
     unknown. `health` is ignored; the count in health is local bookkeeping,
-    not the native proof. It renews this thread's own lease: with no lease,
+    not the native proof. It commits this thread's own lease: with no lease,
     or one that lapsed or was lost, the worker refuses, so a restart that
-    lost its lease has no kill authority. A renewal with less than
-    _CODEX_KILL_WINDOW_S left is refused too."""
+    lost its lease has no kill authority. A 0 means the worker committed
+    the lease under the same lock as the proof; a committed lease never
+    expires, so no delay between here and the kill can reopen Codex."""
     token = _codex_restart_lease_token()
     if not token:
         return -1
     try:
         resp = _control_plane_request("codex.restart_freeze", {
             "enabled": True, "reason": "final pre-kill check",
-            "token": token,
+            "token": token, "commit": True,
         })
     except Exception:
         return -1
     if not isinstance(resp, dict) or not resp.get("ok"):
         return -1
     if resp.get("frozen") is True:
-        if resp.get("token") != token:
+        if resp.get("token") != token or resp.get("committed") is not True:
             return -1
-        try:
-            remaining = float(resp.get("remaining_s"))
-        except (TypeError, ValueError):
-            return -1
-        if remaining < _CODEX_KILL_WINDOW_S:
-            return -1
+        _CODEX_RESTART_LEASE.committed = True
         return 0
     try:
         return max(int(resp.get("live_turns") or 0), 1)

@@ -461,29 +461,33 @@ worker_systemd_managed() {
 # Freeze Codex admissions in the worker before any worker kill (CCC-250).
 # Succeeds only when the worker froze and proved no Codex thread is loaded
 # and none of its turns is live; an older worker without the gate, or one
-# that does not answer, fails, which defers the kill. Callers run it again
-# as the last step before the kill. The freeze is a lease: the first call
-# keeps its token in CODEX_RESTART_TOKEN and later calls renew that lease,
-# so a refused call can only release its own lease, never another
-# restart's (and a lapsed lease is refused, never re-taken mid-roll).
+# that does not answer, fails, which defers the kill. The freeze is a lease:
+# the first call keeps its token in CODEX_RESTART_TOKEN and later calls renew
+# that lease, so a refused call can only release its own lease, never another
+# restart's (and a lapsed lease is refused, never re-taken mid-roll). Run it
+# as `codex_restart_freeze_ok commit` as the last step before the kill: that
+# re-proves and commits the lease, which then never lapses or lifts, so a
+# slow service-manager call before the kill cannot reopen Codex.
 CODEX_RESTART_TOKEN=""
 codex_restart_freeze_ok() {
-  local reply token
-  if [ -n "$CODEX_RESTART_TOKEN" ]; then
-    reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze \
-      --codex-restart-token "$CODEX_RESTART_TOKEN" 2>/dev/null)" || return 1
-  else
-    reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze 2>/dev/null)" || return 1
-  fi
-  token="$(printf '%s' "$reply" | "${PYTHON:-python3}" -c '
+  local mode="${1:-}" reply token
+  if [ -z "$CODEX_RESTART_TOKEN" ] || [ "$mode" != "commit" ]; then
+    if [ -n "$CODEX_RESTART_TOKEN" ]; then
+      reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze \
+        --codex-restart-token "$CODEX_RESTART_TOKEN" 2>/dev/null)" || return 1
+    else
+      reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze 2>/dev/null)" || return 1
+    fi
+    token="$(printf '%s' "$reply" | "${PYTHON:-python3}" -c '
 import json, sys
 try:
     print(json.load(sys.stdin).get("token") or "")
 except Exception:
     pass
 ')"
-  [ -n "$token" ] || return 1
-  CODEX_RESTART_TOKEN="$token"
+    [ -n "$token" ] || return 1
+    CODEX_RESTART_TOKEN="$token"
+  fi
   if ! "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health 2>/dev/null | "${PYTHON:-python3}" -c '
 import json, sys
 try:
@@ -497,6 +501,16 @@ raise SystemExit(0 if data.get("ok") and data.get("codex_live_turns") == 0 else 
     CODEX_RESTART_TOKEN=""
     return 1
   fi
+  if [ "$mode" = "commit" ]; then
+    # Exits 0 only with committed=true. A failed proof already released
+    # this lease in the worker, and a lost one has nothing to release.
+    if ! "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze \
+        --codex-restart-commit --codex-restart-token "$CODEX_RESTART_TOKEN" \
+        >/dev/null 2>&1; then
+      CODEX_RESTART_TOKEN=""
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -505,7 +519,7 @@ raise SystemExit(0 if data.get("ok") and data.get("codex_live_turns") == 0 else 
 # but does not answer is unknown, never safe (CCC-250).
 worker_stop_safe() {
   if "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
-    codex_restart_freeze_ok
+    codex_restart_freeze_ok commit
     return
   fi
   ! pgrep -f -- "$HERE/ccc_worker\\.py\$" >/dev/null 2>&1
@@ -1102,7 +1116,7 @@ EOF
     if [ "${worker_compatible:-0}" != "1" ] \
       && [ "${existing_worker_idle:-0}" = "1" ] \
       && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null \
-      && codex_restart_freeze_ok; then
+      && codex_restart_freeze_ok commit; then
       # A pre-engine-control worker owns no live work. Retire that exact PID;
       # launchd/systemd may replace it, otherwise the detached start below
       # does. Never roll an older worker with unresolved work.
@@ -1222,8 +1236,9 @@ EOF
         fi
         echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
         worker_kicked=0
-        if ! codex_restart_freeze_ok; then
-          # Re-prove the freeze as the last step before the kill (CCC-250).
+        if ! codex_restart_freeze_ok commit; then
+          # Re-prove and commit the freeze as the last step before the kill
+          # (CCC-250).
           echo "→ Codex state changed before the restart — restart deferred"
           worker_kicked=deferred
         elif worker_systemd_managed; then

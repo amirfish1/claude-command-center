@@ -26,6 +26,17 @@ restart can neither replace nor lift the first one's freeze; renewing
 that lapsed is gone for good: its token renews nothing, so a restart that
 lost its lease has no proof left to kill on and must start over.
 
+The final pre-kill check commits the lease (acquire(commit=True)): the
+proof and the commit happen under one lock, and a committed lease never
+expires and cannot be released. Only the worker's exit ends it. Expiry
+used to reopen admissions while the kill the proof had authorized was
+still on its way (a wall-clock step, a stalled systemctl), so a turn could
+start and be killed. Nothing a caller does after the proof can outlive a
+lease that does not lapse. A restart whose kill then failed leaves Codex
+frozen until the next restart. Any later acquire() takes over a committed
+lease without ever lifting it, and its proof passes because nothing could
+load under the freeze. Times are monotonic, so a clock step changes nothing.
+
 Stdlib-only and free of server imports so the worker can freeze before it
 ever loaded the Codex stack (no transport then means no turns to protect).
 """
@@ -48,11 +59,16 @@ _state_lock = threading.Lock()
 _frozen_until = 0.0
 _frozen_reason = ""
 _owner = ""
+_committed = False
+
+
+def _now():
+    return time.monotonic()
 
 
 def frozen(now=None):
-    now = time.time() if now is None else now
-    return _frozen_until > now
+    now = _now() if now is None else now
+    return _committed or _frozen_until > now
 
 
 def blocks(method, now=None):
@@ -100,11 +116,15 @@ def _refused(reason, live_turns=1, threads=()):
 
 def _take_lease_unlocked(token, ttl_s, reason, now):
     """Caller holds _state_lock. Returns (token, None) when the caller now
-    owns a live lease, else (None, refusal) with the state untouched."""
-    live = _frozen_until > now
+    owns a live lease, else (None, refusal) with the state untouched. A
+    fresh caller takes over a committed lease (it stays committed): its
+    kill already had authority, so no one can be refused for good."""
+    live = _committed or _frozen_until > now
     if token:
         if not live or token != _owner:
             return None, _refused("lease_lost")
+    elif _committed:
+        token = secrets.token_hex(16)
     elif live:
         return None, _refused("restart_in_progress")
     else:
@@ -113,7 +133,7 @@ def _take_lease_unlocked(token, ttl_s, reason, now):
     return token, None
 
 
-def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None):
+def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False):
     """Freeze native admissions, then prove no Codex turn can run.
 
     Returns {"ok": True, "frozen": bool, "live_turns": n, "threads": [...],
@@ -123,6 +143,9 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None):
     of a live lease it renews the TTL and re-runs the whole proof (the
     final pre-kill check); a lapsed or foreign token is refused
     (lease_lost). A refusal never touches another owner's lease.
+    commit=True (with a token) commits the lease when the proof holds:
+    the reply then has committed=True and the freeze lasts until the
+    worker exits.
     """
     try:
         ttl_s = min(max(float(ttl_s), 1.0), MAX_TTL_S)
@@ -133,16 +156,15 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None):
     if lock is None:
         with _state_lock:
             if _app_server_lock() is None:
-                now = time.time() if now is None else now
+                now = _now() if now is None else now
                 owned, refusal = _take_lease_unlocked(token, ttl_s, reason, now)
                 if refusal:
                     return refusal
-                return {"ok": True, "frozen": True, "live_turns": 0,
-                        "threads": [], "reason": "no_codex_stack",
-                        "token": owned, "remaining_s": ttl_s}
+                return _proved(owned, "no_codex_stack", ttl_s,
+                               commit and bool(token))
         lock = _app_server_lock()
     with lock, _state_lock:
-        now = time.time() if now is None else now
+        now = _now() if now is None else now
         owned, refusal = _take_lease_unlocked(token, ttl_s, reason, now)
     if refusal:
         return refusal
@@ -156,26 +178,39 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None):
         return _refused(str(proof.get("reason") or "unknown"),
                         threads=proof.get("threads"))
     with _state_lock:
-        remaining = _frozen_until - time.time()
-        still = remaining > 0 and _owner == owned
-    if not still:
-        # The lease lapsed while the barrier ran: something may have been
-        # admitted in that gap, so this proof proves nothing.
-        return _refused("freeze_lapsed")
+        remaining = _frozen_until - _now()
+        still = _owner == owned and (_committed or remaining > 0)
+        if not still:
+            # The lease lapsed while the barrier ran: something may have
+            # been admitted in that gap, so this proof proves nothing.
+            return _refused("freeze_lapsed")
+        return _proved(owned, str(proof.get("reason") or "proved"),
+                       remaining, commit and bool(token))
+
+
+def _proved(owned, reason, remaining, commit):
+    """Caller holds _state_lock and still owns a live lease."""
+    global _committed
+    if commit:
+        _committed = True
     return {"ok": True, "frozen": True, "live_turns": 0, "threads": [],
-            "reason": str(proof.get("reason") or "proved"),
-            "token": owned, "remaining_s": remaining}
+            "reason": reason, "token": owned,
+            "remaining_s": max(0.0, remaining), "committed": _committed}
 
 
 def release(token=None):
     """Lift the freeze, but only for the lease's own token: a failed,
-    refused or foreign restart can never lift someone else's protection."""
+    refused or foreign restart can never lift someone else's protection.
+    A committed lease is never lifted: the kill it authorized may still be
+    on its way."""
     global _frozen_until, _frozen_reason, _owner
     token = str(token or "")
     with _state_lock:
         if not token or token != _owner:
             return {"ok": True, "released": False, "reason": "not_owner"}
-        was = _frozen_until > time.time()
+        if _committed:
+            return {"ok": True, "released": False, "reason": "committed"}
+        was = _frozen_until > _now()
         _frozen_until = 0.0
         _frozen_reason = ""
         _owner = ""
@@ -183,6 +218,7 @@ def release(token=None):
 
 
 def status(now=None):
-    now = time.time() if now is None else now
+    now = _now() if now is None else now
     return {"frozen": frozen(now), "remaining_s": max(0.0, _frozen_until - now),
-            "reason": _frozen_reason, "owned": bool(_owner) and frozen(now)}
+            "reason": _frozen_reason, "owned": bool(_owner) and frozen(now),
+            "committed": _committed}

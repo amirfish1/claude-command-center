@@ -130,6 +130,7 @@ class WorkerRuntime:
                     reason=params.get("reason") or "",
                     ttl_s=params.get("ttl_s") or codex_restart_gate.DEFAULT_TTL_S,
                     token=params.get("token"),
+                    commit=params.get("commit") is True,
                 )
             except Exception as exc:
                 return {"ok": False, "code": "codex_state_unavailable",
@@ -499,6 +500,11 @@ def main(argv=None):
         help="lease token printed by --codex-restart-freeze: renews that "
              "lease instead of taking a new one, or names the one to release",
     )
+    parser.add_argument(
+        "--codex-restart-commit", action="store_true",
+        help="with --codex-restart-freeze and a token: the final pre-kill "
+             "proof; commits the lease so it lasts until the worker exits",
+    )
     args = parser.parse_args(argv)
     if args.codex_restart_freeze or args.codex_restart_release:
         params = (
@@ -507,12 +513,18 @@ def main(argv=None):
         )
         if args.codex_restart_token:
             params["token"] = args.codex_restart_token
+        commit = bool(args.codex_restart_commit and args.codex_restart_freeze
+                      and args.codex_restart_token)
+        if commit:
+            params["commit"] = True
         response = ControlPlaneClient(path=args.socket).request(
             "codex.restart_freeze", params,
         )
         print(json.dumps(response, indent=2, sort_keys=True))
         if args.codex_restart_release:
             return 0 if response.get("ok") else 1
+        if commit and response.get("committed") is not True:
+            return 1
         return 0 if response.get("ok") and response.get("frozen") else 1
     if args.health:
         response = ControlPlaneClient(path=args.socket).request("health")

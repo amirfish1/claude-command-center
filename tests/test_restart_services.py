@@ -150,7 +150,8 @@ class RestartWorkerProcessTests(unittest.TestCase):
         def fake(method, params=None, *, engine_timeout=False):
             if method == "codex.restart_freeze":
                 return {"ok": True, "frozen": True, "live_turns": 0,
-                        "token": "tok-A", "remaining_s": 300.0}
+                        "token": "tok-A", "remaining_s": 300.0,
+                        "committed": bool((params or {}).get("commit"))}
             return health
         return fake
 
@@ -574,7 +575,8 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
             calls.append(method)
             if method == "codex.restart_freeze":
                 return {"ok": True, "frozen": True, "live_turns": 0,
-                        "token": "tok-A", "remaining_s": 300.0}
+                        "token": "tok-A", "remaining_s": 300.0,
+                        "committed": bool((params or {}).get("commit"))}
             if method == "engine.adopt":
                 return {"ok": True, "available": True, "adopted": 2}
             if method == "drain.set":
@@ -691,7 +693,8 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
             calls.append((method, (params or {}).get("enabled")))
             if method == "codex.restart_freeze":
                 return {"ok": True, "frozen": True, "live_turns": 0,
-                        "token": "tok-A", "remaining_s": 300.0}
+                        "token": "tok-A", "remaining_s": 300.0,
+                        "committed": bool((params or {}).get("commit"))}
             if method == "engine.adopt":
                 return {"ok": False, "available": True, "error": "nope"}
             return {"ok": True}
@@ -733,7 +736,8 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
             sent.append(dict(params or {}))
             if (params or {}).get("enabled"):
                 return {"ok": True, "frozen": True, "live_turns": 0,
-                        "token": "tok-A", "remaining_s": 300.0}
+                        "token": "tok-A", "remaining_s": 300.0,
+                        "committed": bool((params or {}).get("commit"))}
             return {"ok": True, "released": True}
 
         with mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr):
@@ -777,10 +781,11 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
             ({"ok": True, "frozen": True, "live_turns": 0,
               "token": "tok-B", "remaining_s": 300.0}, False),         # foreign
             ({"ok": True, "frozen": True, "live_turns": 0,
-              "token": "tok-A", "remaining_s": 5.0}, False),           # too short
+              "token": "tok-A", "remaining_s": 300.0}, False),         # not committed
             ({"ok": True, "frozen": False, "live_turns": 1, "reason": "lease_lost"}, False),
             ({"ok": True, "frozen": True, "live_turns": 0,
-                        "token": "tok-A", "remaining_s": 300.0}, True),
+                        "token": "tok-A", "remaining_s": 0.001,
+                        "committed": True}, True),
             ({"ok": True, "frozen": False, "live_turns": 0, "reason": "freeze_lapsed"}, False),
             ({"ok": False, "code": "method_not_found"}, False),  # older worker
             ({"ok": False, "available": False}, False),
@@ -815,7 +820,8 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
         def fake_cpr(method, params=None, *, engine_timeout=False):
             if method == "codex.restart_freeze":
                 return {"ok": True, "frozen": True, "live_turns": 0,
-                        "token": "tok-A", "remaining_s": 300.0}
+                        "token": "tok-A", "remaining_s": 300.0,
+                        "committed": bool((params or {}).get("commit"))}
             return health
 
         with mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr), \

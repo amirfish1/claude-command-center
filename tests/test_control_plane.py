@@ -518,7 +518,8 @@ class TestWorkerCompatMaintenanceSelfHeal(unittest.TestCase):
                 return dict(health)
             if method == "codex.restart_freeze":
                 return {"ok": True, "frozen": True, "live_turns": 0, "threads": [],
-                        "token": "tok-A", "remaining_s": 300.0}
+                        "token": "tok-A", "remaining_s": 300.0,
+                        "committed": bool((params or {}).get("commit"))}
             if method == "engine.adopt":
                 return {"ok": True, "available": True, "adopted": 0}
             if method == "drain.set":
