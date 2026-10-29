@@ -17562,7 +17562,9 @@
     const value = btn.dataset.ssbValue || '';
     const paneEl = btn.closest('.conv-pane[data-pane-id]');
     const paneId = paneEl ? paneEl.getAttribute('data-pane-id') : activePaneId();
-    if (act === 'copy') {
+    if (act === 'close') {
+      await closeReadyConversation(btn);
+    } else if (act === 'copy') {
       const ok = await copyTextValue(value);
       showConvToast(ok ? 'Copied' : 'Copy failed');
     } else if (act === 'reload') {
@@ -17629,8 +17631,8 @@
       && typeof scope.closure_met === 'boolean'
       && ['goal', 'done_when', 'evidence'].every(k => typeof scope[k] === 'string' && scope[k].trim()));
     const openTopic = validScope && scope && scope.closure_met === false;
-    // Historical cards describe this assessment, not the current session's
-    // eligibility: only the live row may offer the manual Close action.
+    // Historical cards describe this assessment. The live pane adds Close
+    // only to its latest card after checking the current session's readiness.
     const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
     const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
     const valid = assessment && assessment.version === 1 && validScope && axes.every(k => {
@@ -17721,8 +17723,9 @@
             + ' · downside ' + escapeHtml(String(item.downside)) + '</div>';
         }
       }
-      const status = !valid ? 'Unassessed' : reasons.length ? 'Open' : 'Ready to close';
-      rows.push('<div class="ssb-row ssb-status"><span class="ssb-key">Status</span>' + status + '</div>');
+      const status = !valid ? 'Unassessed' : reasons.length ? 'Open' : 'Close criteria met';
+      rows.push('<div class="ssb-row ssb-status"' + (valid && !reasons.length ? ' data-assessment-ready="true"' : '')
+        + '><span class="ssb-key">Status</span>' + status + '</div>');
       const scores = valid ? '(' + axes.map(k => String(assessment[k].score)).join(', ') + ')' : '(unassessed)';
       rows.push('<details class="ssb-completion"><summary title="Expand for the topic goal, completion gates, scores, and evidence.">Details</summary>'
         + '<div class="ssb-row ssb-verdict"><span class="ssb-key">Assessment</span>' + escapeHtml(verdict) + '</div>'
@@ -20790,6 +20793,23 @@
       || (Array.isArray(archiveData) ? archiveData.find(match) : null);
   }
 
+  function syncSessionStateCloseActions(pane, ready) {
+    if (!pane) return;
+    const cards = [...pane.querySelectorAll('.session-state-block')];
+    for (const card of cards) {
+      const status = card.querySelector('.ssb-status[data-assessment-ready="true"]');
+      if (!status) continue;
+      const current = ready && card === cards[cards.length - 1];
+      const text = [...status.childNodes].find(node => node.nodeType === 3);
+      const label = current ? 'Ready to close' : 'Close criteria met';
+      if (text && text.textContent !== label) text.textContent = label;
+      const button = status.querySelector('[data-ssb-act="close"]');
+      if (!current) { if (button) button.remove(); }
+      else if (!button) status.insertAdjacentHTML('beforeend',
+        ' <button type="button" class="ssb-action" data-ssb-act="close" title="Close: archive this finished session">Close</button>');
+    }
+  }
+
   // Keep the close action just above the composer card, on the right, as
   // readiness changes on polls. It lives in the bar (the pane is a named-area
   // grid, so a new sibling would be auto-placed elsewhere) but is anchored
@@ -20801,13 +20821,14 @@
       footer.dataset.role = 'conv-ready-archive';
       footer.className = 'conv-ready-archive-footer';
       footer.hidden = true;
-      footer.innerHTML = '<button type="button" class="conv-ready-archive-btn" title="Archive completed session">Archive</button>';
+      footer.innerHTML = '<button type="button" class="conv-ready-archive-btn" title="Close: archive this finished session">Close</button>';
       bar.prepend(footer);
     }
     const row = _openConversationRow();
     const hide = activeTab !== 'sessions' || !sessionReadyToClose(row,
       row ? _applyLiveOverlayToRow(row) : null)
       || sessionIsOptimisticallySending(row && (row.session_id || row.id));
+    syncSessionStateCloseActions(bar.closest('.conv-pane'), !hide);
     if (footer.hidden === hide) return;
     footer.hidden = hide;
     const pane = bar.closest('.conv-pane');
@@ -20815,17 +20836,25 @@
     if (view) positionConversationEndAffordance(view);
   }
 
-  document.addEventListener('click', async (ev) => {
-    const button = ev.target.closest('[data-role="conv-ready-archive"] button');
+  async function closeReadyConversation(button) {
     if (!button || button.disabled) return;
     const pane = button.closest('.conv-pane');
     if (pane) setActivePaneById(pane.dataset.paneId);
+    if (button.dataset.ssbAct === 'close') {
+      const cards = pane && pane.querySelectorAll('.session-state-block');
+      if (!cards || button.closest('.session-state-block') !== cards[cards.length - 1]) return;
+    }
     const row = _openConversationRow();
     if (!sessionReadyToClose(row, _applyLiveOverlayToRow(row))
         || sessionIsOptimisticallySending(row && (row.session_id || row.id))) return;
     button.disabled = true;
     try { await _setOpenSessionLifecycle('archive'); }
     finally { button.disabled = false; }
+  }
+
+  document.addEventListener('click', async (ev) => {
+    const button = ev.target.closest('[data-role="conv-ready-archive"] button');
+    await closeReadyConversation(button);
   });
 
   function returnToConversationList() {

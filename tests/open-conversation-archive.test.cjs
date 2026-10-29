@@ -83,3 +83,49 @@ test('archive and restore patch every returned group member but leave other idea
     assert.equal(other.archived, !archived);
   }
 });
+
+const closeStart = app.indexOf('  async function closeReadyConversation(');
+const closeCode = app.slice(closeStart, app.indexOf("  document.addEventListener('click'", closeStart));
+const readinessStart = app.indexOf('  function sessionReadyToClose(');
+const readinessCode = app.slice(readinessStart, app.indexOf('  // The finished row', readinessStart));
+
+function closeFixture() {
+  const row = { id: 'ready-session', state: 'idle', session_state: {
+    next_step_user: 'None.', completion: { version: 1, valid: true, ready_to_close: true },
+  } };
+  const card = {};
+  const pane = { dataset: { paneId: 'p2' }, querySelectorAll: () => [card] };
+  const calls = [];
+  const button = { disabled: false, dataset: { ssbAct: 'close' },
+    closest: selector => selector === '.conv-pane' ? pane : card };
+  const context = { _openConversationRow: () => row, _applyLiveOverlayToRow: r => r,
+    sessionIsOptimisticallySending: () => false, setActivePaneById: id => calls.push(id),
+    _setOpenSessionLifecycle: async kind => calls.push(kind) };
+  vm.createContext(context);
+  vm.runInContext(readinessCode + closeCode, context);
+  return { row, pane, card, button, calls, context, close: () => context.closeReadyConversation(button) };
+}
+
+test('transcript Close targets its own pane and archives only on a deliberate click', async () => {
+  const f = closeFixture();
+  assert.deepEqual(f.calls, []);
+  await f.close();
+  assert.deepEqual(f.calls, ['p2', 'archive']);
+  assert.equal(f.button.disabled, false);
+});
+
+test('a rendered Close cannot archive after new work, send, or a newer card', async () => {
+  for (const invalidate of [
+    f => { f.row.state = 'working'; },
+    f => { f.row.last_event_type = 'user'; },
+    f => { f.row.archived = true; },
+    f => { f.row.session_state.completion.ready_to_close = false; },
+    f => { f.context.sessionIsOptimisticallySending = () => true; },
+    f => { f.pane.querySelectorAll = () => [f.card, {}]; },
+  ]) {
+    const f = closeFixture();
+    invalidate(f);
+    await f.close();
+    assert.equal(f.calls.includes('archive'), false);
+  }
+});

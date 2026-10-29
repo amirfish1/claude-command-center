@@ -153,6 +153,9 @@ class TestSessionStateCard(unittest.TestCase):
         assessment["scope"]["closure_met"] = True
         html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
         self.assertIn('Close criteria met', html)
+        self.assertIn('data-assessment-ready="true"', html)
+        self.assertNotIn('Ready to close', html)
+        self.assertNotIn('data-ssb-act="close"', html, 'Only live pane readiness may add Close')
         assessment["scope"]["closure_met"] = "false"
         html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
         self.assertIn('Unassessed · invalid assessment', html)
