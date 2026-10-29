@@ -85,6 +85,17 @@ class WorkerRuntime:
                 and summary.get("uncertain_max_age_s", 0.0)
                 > RETIRE_UNCERTAIN_AFTER_S + UNCERTAIN_SWEEP_INTERVAL_S
             )
+            # Codex turns on this process's stdio app-server hold no ledger
+            # job, yet a restart aborts every one of them (CCC-250). Kept out
+            # of "active" so ledger semantics stay intact; restart gates add it.
+            live_turns = []
+            if server_mod is not None:
+                try:
+                    live_turns = server_mod._codex_app_server_live_turns()
+                except Exception:
+                    live_turns = None
+            # -1 = unknown; every gate treats a nonzero value as busy.
+            summary["codex_live_turns"] = -1 if live_turns is None else len(live_turns)
             return {
                 "ok": True,
                 "worker": {
@@ -102,10 +113,29 @@ class WorkerRuntime:
                         "work-graph-v1",
                         "safe-drain-v1",
                         "pending-input-cas-v1",
+                        "codex-turn-gate-v1",
                     ],
                 },
                 **summary,
             }
+        if method == "codex.restart_freeze":
+            # CCC-250: freeze Codex admissions before a restart, atomically
+            # with counting in-flight turns; frozen=False means do not restart.
+            from ccc_server import codex_restart_gate
+            try:
+                # The token is the lease: only its owner renews or lifts it.
+                if params.get("enabled") is False:
+                    return codex_restart_gate.release(params.get("token"))
+                return codex_restart_gate.acquire(
+                    reason=params.get("reason") or "",
+                    ttl_s=params.get("ttl_s") or codex_restart_gate.DEFAULT_TTL_S,
+                    token=params.get("token"),
+                    commit=params.get("commit") is True,
+                    owner_pid=params.get("owner_pid"),
+                )
+            except Exception as exc:
+                return {"ok": False, "code": "codex_state_unavailable",
+                        "error": f"could not read Codex turn state: {exc}"}
         if method == "system.app_server":
             # The Codex transport lives HERE, not in the dashboard:
             # _control_plane_routes_engines() defaults on, so worker_engines
@@ -342,6 +372,37 @@ def _worker_pid_alive(pidfile):
     return b"ccc_worker" in cmdline
 
 
+def codex_restart_fence_path():
+    """Shared with server._codex_restart_fence_path() and run.sh."""
+    override = os.environ.get("CCC_CODEX_RESTART_FENCE")
+    if override:
+        return Path(override)
+    from ccc_server.paths import COMMAND_CENTER_STATE_DIR
+    return COMMAND_CENTER_STATE_DIR / "codex-restart-fence.json"
+
+
+def _adopt_codex_restart_fence(path=None, interval_s=2.0):
+    """Before serving anything, adopt a restart fence the previous worker
+    committed (its kill authority may still be live), then keep checking
+    whether every authority it lists has ended (CCC-250)."""
+    from ccc_server import codex_restart_gate
+    state = codex_restart_gate.configure_fence(path or codex_restart_fence_path())
+    if state.get("committed"):
+        print("CCC worker: inherited a Codex restart fence; Codex admissions "
+              "stay frozen until its restart authority ends", flush=True)
+
+    def loop():
+        while True:
+            time.sleep(interval_s)
+            try:
+                if codex_restart_gate.status().get("committed"):
+                    codex_restart_gate.recover()
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, name="codex-restart-fence", daemon=True).start()
+
+
 def serve(path=None):
     path = Path(path or socket_path())
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -364,6 +425,7 @@ def serve(path=None):
         except OSError:
             pass
     open_files = _raise_open_file_limit()
+    _adopt_codex_restart_fence()
     runtime = WorkerRuntime(token=token)
     server = WorkerServer(path, runtime)
     os.chmod(path, 0o600)
@@ -457,7 +519,54 @@ def main(argv=None):
         "--health", action="store_true",
         help="query the running worker and exit",
     )
+    parser.add_argument(
+        "--codex-restart-freeze", action="store_true",
+        help="freeze Codex admissions for a restart if no turn is in flight; "
+             "exit 0 only when frozen (CCC-250)",
+    )
+    parser.add_argument(
+        "--codex-restart-release", action="store_true",
+        help="lift a Codex restart freeze (needs its --codex-restart-token)",
+    )
+    parser.add_argument(
+        "--codex-restart-token", default="",
+        help="lease token printed by --codex-restart-freeze: renews that "
+             "lease instead of taking a new one, or names the one to release",
+    )
+    parser.add_argument(
+        "--codex-restart-commit", action="store_true",
+        help="with --codex-restart-freeze and a token: the final pre-kill "
+             "proof; commits the lease so it lasts until the worker exits",
+    )
+    parser.add_argument(
+        "--codex-restart-owner-pid", type=int, default=0,
+        help="with --codex-restart-commit: the pid that will issue the kill "
+             "(run.sh passes $$); the fence waits for it",
+    )
     args = parser.parse_args(argv)
+    if args.codex_restart_freeze or args.codex_restart_release:
+        params = (
+            {"enabled": False} if args.codex_restart_release
+            else {"enabled": True, "reason": "run.sh worker roll"}
+        )
+        if args.codex_restart_token:
+            params["token"] = args.codex_restart_token
+        commit = bool(args.codex_restart_commit and args.codex_restart_freeze
+                      and args.codex_restart_token)
+        if commit:
+            params["commit"] = True
+            # The kill comes from the calling shell (run.sh), so that is
+            # the authority the fence waits on.
+            params["owner_pid"] = args.codex_restart_owner_pid or os.getppid()
+        response = ControlPlaneClient(path=args.socket).request(
+            "codex.restart_freeze", params,
+        )
+        print(json.dumps(response, indent=2, sort_keys=True))
+        if args.codex_restart_release:
+            return 0 if response.get("ok") else 1
+        if commit and response.get("committed") is not True:
+            return 1
+        return 0 if response.get("ok") and response.get("frozen") else 1
     if args.health:
         response = ControlPlaneClient(path=args.socket).request("health")
         print(json.dumps(response, indent=2, sort_keys=True))

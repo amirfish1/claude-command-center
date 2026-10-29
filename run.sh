@@ -458,17 +458,198 @@ worker_systemd_managed() {
     && [ "$(systemctl --user show -p LoadState --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null)" = "loaded" ]
 }
 
+# Freeze Codex admissions in the worker before any worker kill (CCC-250).
+# Succeeds only when the worker froze and proved no Codex thread is loaded
+# and none of its turns is live; an older worker without the gate, or one
+# that does not answer, fails, which defers the kill. The freeze is a lease:
+# the first call keeps its token in CODEX_RESTART_TOKEN and later calls renew
+# that lease, so a refused call can only release its own lease, never another
+# restart's (and a lapsed lease is refused, never re-taken mid-roll). Run it
+# as `codex_restart_freeze_ok commit` as the last step before the kill: that
+# re-proves and commits the lease, which then never lapses or lifts, so a
+# slow service-manager call before the kill cannot reopen Codex.
+# A commit is persisted by the worker and outlives it: the next worker keeps
+# Codex frozen until this shell reports, with codex_restart_report_kill
+# after its kill commands return, that its kill authority ended (or this
+# shell is gone with nothing queued). Kill commands go through ccc_bounded.
+CODEX_RESTART_TOKEN=""
+CODEX_RESTART_COMMITTED=0
+CODEX_RESTART_FENCE="${CCC_CODEX_RESTART_FENCE:-$HOME/.claude/command-center/codex-restart-fence.json}"
+codex_restart_freeze_ok() {
+  local mode="${1:-}" reply token
+  if [ -z "$CODEX_RESTART_TOKEN" ] || [ "$mode" != "commit" ]; then
+    if [ -n "$CODEX_RESTART_TOKEN" ]; then
+      reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze \
+        --codex-restart-token "$CODEX_RESTART_TOKEN" 2>/dev/null)" || return 1
+    else
+      reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze 2>/dev/null)" || return 1
+    fi
+    token="$(printf '%s' "$reply" | "${PYTHON:-python3}" -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("token") or "")
+except Exception:
+    pass
+')"
+    [ -n "$token" ] || return 1
+    CODEX_RESTART_TOKEN="$token"
+  fi
+  if ! "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health 2>/dev/null | "${PYTHON:-python3}" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if data.get("ok") and data.get("codex_live_turns") == 0 else 1)
+'; then
+    "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-release \
+      --codex-restart-token "$CODEX_RESTART_TOKEN" >/dev/null 2>&1 || true
+    CODEX_RESTART_TOKEN=""
+    return 1
+  fi
+  if [ "$mode" = "commit" ]; then
+    # Exits 0 only with committed=true. A failed proof already released
+    # this lease in the worker, and a lost one has nothing to release.
+    if ! "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze \
+        --codex-restart-commit --codex-restart-token "$CODEX_RESTART_TOKEN" \
+        --codex-restart-owner-pid "$$" >/dev/null 2>&1; then
+      CODEX_RESTART_TOKEN=""
+      return 1
+    fi
+    CODEX_RESTART_COMMITTED=1
+  fi
+  return 0
+}
+
+# After the kill commands of a committed restart returned: "killed" when the
+# kill went through, "uncertain" otherwise (the worker then waits until no
+# service-manager job is queued). No-op without a committed lease.
+codex_restart_report_kill() {
+  local word="$1" marker
+  [ "$CODEX_RESTART_COMMITTED" = "1" ] && [ -n "$CODEX_RESTART_TOKEN" ] || return 0
+  marker="$CODEX_RESTART_FENCE.done.$CODEX_RESTART_TOKEN"
+  printf '%s\n' "$word" > "$marker.tmp" 2>/dev/null && mv -f "$marker.tmp" "$marker" 2>/dev/null || true
+  CODEX_RESTART_COMMITTED=0
+  CODEX_RESTART_TOKEN=""
+}
+
+# Run a service-manager command for at most $1 seconds, so a stalled one
+# cannot keep a restart's kill authority open indefinitely.
+ccc_bounded() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  else
+    perl -e 'alarm shift; exec @ARGV' "$secs" "$@"
+  fi
+}
+
+# 0 only when no process of this install runs ccc_worker.py: some argv
+# element names $HERE/ccc_worker.py (absolute, or relative to that process's
+# cwd), whatever arguments follow it (--socket PATH, client flags). Exact
+# path comparison, no pattern, so regex characters in $HERE cannot hide a
+# worker. 1 = one runs; 2 = unknown (unreadable process, listing or ps
+# failure, unresolvable relative path), which callers must treat as running.
+# CCC_WORKER_PROC_ROOT is a test seam: another proc root, or "-" for ps.
+worker_process_absent() {
+  CCC_WORKER_SCRIPT="$HERE/ccc_worker.py" "${PYTHON:-python3}" -c '
+import os, subprocess, sys
+target = os.environ["CCC_WORKER_SCRIPT"]
+real = os.path.realpath(target)
+name = os.path.basename(target)
+root = os.environ.get("CCC_WORKER_PROC_ROOT") or "/proc"
+me = str(os.getpid())
+
+def is_worker(arg, cwd):
+    if os.path.basename(arg) != name:
+        return False
+    if not os.path.isabs(arg):
+        if cwd is None:
+            sys.exit(2)
+        arg = os.path.join(cwd, arg)
+    return arg == target or os.path.realpath(arg) == real
+
+def scan_proc():
+    try:
+        pids = [d for d in os.listdir(root) if d.isdigit()]
+    except OSError:
+        sys.exit(2)
+    for pid in pids:
+        if pid == me:
+            continue
+        try:
+            with open(os.path.join(root, pid, "cmdline"), "rb") as f:
+                raw = f.read()
+        except (FileNotFoundError, ProcessLookupError):
+            continue  # exited during the scan
+        except OSError:
+            sys.exit(2)
+        args = [a.decode("utf-8", "surrogateescape") for a in raw.split(b"\0") if a]
+        if not any(os.path.basename(a) == name for a in args):
+            continue
+        cwd = None
+        if any(os.path.basename(a) == name and not os.path.isabs(a) for a in args):
+            try:
+                cwd = os.readlink(os.path.join(root, pid, "cwd"))
+            except OSError:
+                pass  # unknown cwd: a relative worker path stays unknown
+        if any(is_worker(a, cwd) for a in args):
+            sys.exit(1)
+    sys.exit(0)
+
+def scan_ps():
+    # ps joins argv with spaces, so only an absolute path that resolves
+    # elsewhere is provably not this worker; anything else is unknown.
+    try:
+        out = subprocess.run(["ps", "-A", "-ww", "-o", "pid=", "-o", "args="],
+                             capture_output=True, text=True, timeout=10)
+    except Exception:
+        sys.exit(2)
+    if out.returncode != 0 or not out.stdout.strip():
+        sys.exit(2)
+    for line in out.stdout.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if pid == me or name not in cmd:
+            continue
+        if target in cmd or real in cmd:
+            sys.exit(1)
+        for tok in cmd.split():
+            if name in tok and not (os.path.isabs(tok)
+                                    and os.path.basename(tok) == name
+                                    and os.path.realpath(tok) != real):
+                sys.exit(2)
+    sys.exit(0)
+
+if root == "-" or (root == "/proc" and not os.path.isdir("/proc/self")):
+    scan_ps()
+scan_proc()
+'
+}
+
+# 0 when stopping the worker cannot abort a Codex turn: it froze admissions
+# with nothing loaded, or no worker answers and none provably runs. A worker
+# that runs but does not answer, or a scan that cannot tell, is never safe
+# (CCC-250).
+worker_stop_safe() {
+  if "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+    codex_restart_freeze_ok commit
+    return
+  fi
+  worker_process_absent >/dev/null 2>&1
+}
+
 # Restart the systemd-managed worker. A stray worker outside the unit (pid
 # given, not the unit's MainPID) is stopped first so the unit's copy can bind
 # the socket. KillMode=process keeps the sessions the worker launched alive.
 restart_worker_via_systemd() {
   local stray_pid="${1:-0}" main_pid
-  main_pid="$(systemctl --user show -p MainPID --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null || echo 0)"
+  main_pid="$(ccc_bounded 10 systemctl --user show -p MainPID --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null || echo 0)"
   if [ "${stray_pid:-0}" -gt 1 ] 2>/dev/null && [ "$stray_pid" != "${main_pid:-0}" ]; then
     kill "$stray_pid" >/dev/null 2>&1 || true
     sleep 0.5
   fi
-  systemctl --user restart "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1
+  ccc_bounded 60 systemctl --user restart "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1
 }
 
 write_systemd_unit() {
@@ -584,7 +765,17 @@ EOF
   # Without this, re-running --install-service to repair a partial install
   # (e.g. a missing worker unit) always fails: the dashboard unit it already
   # installed is still bound to the port.
-  systemctl --user stop "$SYSTEMD_UNIT_NAME" "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+  if systemctl --user is-active --quiet "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null \
+    && ! worker_stop_safe; then
+    # Stopping the worker would abort its live Codex turns (CCC-250).
+    echo "Error: the CCC worker has running Codex turns (or cannot report them). Re-run --install-service once they finish." >&2
+    exit 1
+  fi
+  if ccc_bounded 60 systemctl --user stop "$SYSTEMD_UNIT_NAME" "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1; then
+    codex_restart_report_kill killed
+  else
+    codex_restart_report_kill uncertain
+  fi
   sleep 0.3
 
   if is_port_bound "$target_port"; then
@@ -1026,9 +1217,13 @@ except Exception:
     data = {}
 worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
 capabilities = worker.get("capabilities") or []
-idle = not any(int(data.get(key) or 0) for key in (
-    "active", "queued", "uncertain",
-))
+# codex_live_turns: Codex turns on the worker's stdio app-server hold no
+# ledger job, but a worker restart aborts them all (CCC-250). A failed reply
+# or a missing field (an older worker) is unknown, never idle.
+idle = bool(data.get("ok")) and all(
+    key in data and not int(data.get(key) or 0)
+    for key in ("active", "queued", "uncertain", "codex_live_turns")
+)
 print(
     int(worker.get("pid") or 0),
     int(bool(data.get("ok")) and idle),
@@ -1038,11 +1233,16 @@ print(
 EOF
     if [ "${worker_compatible:-0}" != "1" ] \
       && [ "${existing_worker_idle:-0}" = "1" ] \
-      && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
+      && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null \
+      && codex_restart_freeze_ok commit; then
       # A pre-engine-control worker owns no live work. Retire that exact PID;
       # launchd/systemd may replace it, otherwise the detached start below
       # does. Never roll an older worker with unresolved work.
-      kill "$existing_worker_pid" >/dev/null 2>&1 || true
+      if kill "$existing_worker_pid" >/dev/null 2>&1; then
+        codex_restart_report_kill killed
+      else
+        codex_restart_report_kill uncertain
+      fi
       for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         sleep 0.1
         worker_health="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null || true)"
@@ -1065,8 +1265,16 @@ raise SystemExit(0 if "engine-execution-v1" in caps else 1)
       echo "⚠ Older persistent worker still has unresolved work; using compatibility execution." >&2
     elif [ "${worker_compatible:-0}" != "1" ] && worker_systemd_managed; then
       # Never start a second worker beside the unit's own: (re)start the unit.
-      if [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
-        restart_worker_via_systemd "$existing_worker_pid" || true
+      if [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null && ! worker_stop_safe; then
+        # A worker that stopped answering may still run Codex turns, and a
+        # restart would abort them (CCC-250). Leave it; compatibility mode.
+        echo "⚠ Older worker is unreachable or busy; restart deferred, using compatibility execution." >&2
+      elif [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
+        if restart_worker_via_systemd "$existing_worker_pid"; then
+          codex_restart_report_kill killed
+        else
+          codex_restart_report_kill uncertain
+        fi
       else
         systemctl --user start "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
       fi
@@ -1139,6 +1347,13 @@ EOF
         # files change far more often than worker behaviour, and a restart
         # cuts off live turns. The hourly maintenance tick retries once idle.
         echo "→ Worker code is stale but the worker is busy — restart deferred until it is idle"
+      elif { [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; } \
+        && ! codex_restart_freeze_ok; then
+        # CCC-250: a worker restart aborts every live Codex app-server turn,
+        # and those turns hold no ledger job. The freeze stops new Codex
+        # turns atomically with counting live ones; it refuses when any run
+        # or the worker cannot report them. The maintenance tick retries.
+        echo "→ Worker code is stale but Codex turns are running (or cannot be checked) — restart deferred"
       elif [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; then
         if [ "$worker_stale_version" = "1" ]; then
           echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
@@ -1147,20 +1362,38 @@ EOF
         fi
         echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
         worker_kicked=0
-        if worker_systemd_managed; then
+        codex_kill_word=uncertain
+        if ! codex_restart_freeze_ok commit; then
+          # Re-prove and commit the freeze as the last step before the kill
+          # (CCC-250).
+          echo "→ Codex state changed before the restart — restart deferred"
+          worker_kicked=deferred
+        elif worker_systemd_managed; then
           # Even if the restart call fails, never fall through to a
           # detached spawn: the unit's Restart=always owns recovery.
-          restart_worker_via_systemd "${existing_worker_pid:-0}" || true
+          if restart_worker_via_systemd "${existing_worker_pid:-0}"; then
+            codex_kill_word=killed
+          fi
           worker_kicked=1
-        elif launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+        elif ccc_bounded 20 launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+          codex_kill_word=killed
           worker_kicked=1
         fi
-        if [ "$worker_kicked" != "1" ]; then
+        if [ "$worker_kicked" = "1" ]; then
+          codex_restart_report_kill "$codex_kill_word"
+        fi
+        if [ "$worker_kicked" = "deferred" ]; then
+          :
+        elif [ "$worker_kicked" != "1" ]; then
           # No launchd worker service on this install path (brew service or
           # DMG app spawn): kill the stale worker AND immediately replace it,
           # or the dashboard runs workerless (legacy execution) until the
           # next launch.
-          kill "$existing_worker_pid" >/dev/null 2>&1 || true
+          if kill "$existing_worker_pid" >/dev/null 2>&1; then
+            codex_restart_report_kill killed
+          else
+            codex_restart_report_kill uncertain
+          fi
           sleep 0.5
           if ! "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
             nohup "$PYTHON" "$HERE/ccc_worker.py" \

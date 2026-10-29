@@ -150,7 +150,8 @@ def auto(managed, monkeypatch):
                         lambda c, v, d: events.append((c, v, d)))
     monkeypatch.setattr(server, "_dashboard_owned_active_executions", lambda: [])
     monkeypatch.setattr(server, "_control_plane_request",
-                        lambda *a, **k: {"ok": True, "active": 0, "queued": 0, "uncertain": 0})
+                        lambda *a, **k: {"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                                                 "codex_live_turns": 0})
     monkeypatch.setattr(server, "_wt_live_workers", lambda: [])
     monkeypatch.setattr(server, "_load_last_interactions", lambda: {})
     monkeypatch.setattr(server, "_safe_worker_restart_precheck",
