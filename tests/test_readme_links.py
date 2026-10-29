@@ -117,7 +117,7 @@ class ReadmeTests(unittest.TestCase):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(text.splitlines()), 350)
         gallery = text.index("## See CCC at work")
-        for item in ("Your coding agents outgrew your terminal.", "scripts/install.sh", "brew install ccc", "## Start free in 5 minutes"):
+        for item in ("Your coding agents outgrew your terminal.", "scripts/install.sh", "brew install amirfish1/tap/ccc", "## Start free in 5 minutes"):
             self.assertLess(text.index(item), gallery)
         hero = re.search(r"docs/images/ccc-v[\d-]+-hero\.png", text)
         self.assertIsNotNone(hero)
@@ -138,14 +138,14 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("(README.zh-CN.md)", (ROOT / "README.md").read_text(encoding="utf-8"))
         text = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
         self.assertIn("(README.md)", text)
-        for item in ("scripts/install.sh", "brew install ccc", "install.ps1", "./run.sh", "GLM", "Kimi", "DeepSeek", "Qwen", "MiniMax"):
+        for item in ("scripts/install.sh", "brew install amirfish1/tap/ccc", "install.ps1", "./run.sh", "GLM", "Kimi", "DeepSeek", "Qwen", "MiniMax"):
             self.assertIn(item, text)
 
     def test_japanese_readme_is_linked_and_keeps_install_path(self):
         self.assertIn("(README.ja.md)", (ROOT / "README.md").read_text(encoding="utf-8"))
         text = (ROOT / "README.ja.md").read_text(encoding="utf-8")
         self.assertIn("(README.md)", text)
-        for item in ("scripts/install.sh", "brew install ccc", "install.ps1", "./run.sh", "localhost:8090"):
+        for item in ("scripts/install.sh", "brew install amirfish1/tap/ccc", "install.ps1", "./run.sh", "localhost:8090"):
             self.assertIn(item, text)
 
     def test_readme_first_screen_says_not_affiliated_with_anthropic(self):

@@ -230,7 +230,8 @@ def test_jev_auth_failure_is_logged_once(rg, tmp_path, monkeypatch):
 
 def test_jev_key_from_byok_profile(tmp_path, monkeypatch):
     _server()
-    from ccc_server import byok, repo_guess
+    from ccc_server import byok, repo_guess, vault
+    monkeypatch.setattr(vault, "vault_list_entries", lambda: [])
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     monkeypatch.setattr(byok, "_state_dir", lambda: tmp_path)
     monkeypatch.setattr(byok, "_keychain_available", lambda: False)
@@ -239,6 +240,37 @@ def test_jev_key_from_byok_profile(tmp_path, monkeypatch):
     assert repo_guess._rg_jev_key() == "jev-test-key"
     monkeypatch.setenv("JEV_API_KEY", "from-env")
     assert repo_guess._rg_jev_key() == "from-env"
+
+
+@pytest.mark.parametrize("entry", [
+    {"name": "jev-api-key.password"},
+    {"name": "jev-api-key.token"},
+    {"name": "jev-api-key"},
+    {"name": "custom-jev", "env_var": "JEV_API_KEY"},
+])
+def test_jev_key_from_vault_and_status(monkeypatch, entry):
+    _server()
+    from ccc_server import byok, repo_guess, vault
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    monkeypatch.setattr(byok, "byok_list_profiles", lambda: [])
+    monkeypatch.setattr(vault, "vault_list_entries", lambda: [entry])
+    monkeypatch.setattr(vault, "vault_get_value", lambda name: "  jev-test-key  ")
+    assert repo_guess._rg_jev_key() == "jev-test-key"
+    assert repo_guess.repo_guess_status() == {"ok": True, "jev_configured": True}
+    monkeypatch.setattr(vault, "vault_get_value", lambda name: None)
+    assert repo_guess.repo_guess_status() == {"ok": True, "jev_configured": False}
+
+
+def test_jev_ignores_unrelated_vault_entries(monkeypatch):
+    _server()
+    from ccc_server import byok, repo_guess, vault
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    monkeypatch.setattr(byok, "byok_list_profiles", lambda: [])
+    monkeypatch.setattr(vault, "vault_list_entries", lambda: [{"name": "another-service"}])
+    def unexpected_read(name):
+        pytest.fail("Unrelated secret must not be read")
+    monkeypatch.setattr(vault, "vault_get_value", unexpected_read)
+    assert repo_guess.repo_guess_status() == {"ok": True, "jev_configured": False}
 
 
 def test_jev_key_not_injected_into_agent_env(tmp_path, monkeypatch):

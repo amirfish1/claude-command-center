@@ -20,6 +20,8 @@ function row() {
     rowDraggableAttr: () => 'false', isMobileChromeActive: () => false,
     _uxFixesWorkerHistoryHtml: () => '', _continuationChainBadgeHtml: () => '',
     sessionStuckWarningHtml: () => '', workerOriginBadgeHtml: () => '',
+    ideaTicketChipHtml: () => '', _ideaRowLine: () => '',
+    readyToCloseArchiveHtml: () => '', _nyaRowBlockHtml: () => '',
     window: {},
   };
   const context = new Proxy(values, {

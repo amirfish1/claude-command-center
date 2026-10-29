@@ -22,6 +22,8 @@ command, without opening the dashboard:
 
     ccc send <session> "message"        # fire-and-forget into a session
     ccc send <session> "…" --steer      # interrupt the current turn with it
+    ccc send <session> "STOP …" --steer --stop   # stop: hold queued after-turn sends
+    ccc held <session> [--release ID|all] [--cancel ID|all]   # input a Stop held
     ccc send <session> "…" --new-if-large-and-stale   # continuation instead of a cold resume, when warranted
     ccc ask <session> "question"        # send and wait for the reply text
 
@@ -82,9 +84,11 @@ from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota",
+SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "brief", "where",
                "brain", "consent", "jobs", "vault", "secret")
+
+RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
 BRAIN_CONFIG_FILE = os.path.expanduser("~/.claude/command-center/brain-plugin.json")
 
@@ -251,6 +255,9 @@ def _fmt_age(age_s):
     return f"{age_s // 86400}d{age_s % 86400 // 3600:02d}h"
 
 
+_DEFAULT_SESSIONS_SINCE_S = 86400  # 24h default window (mirrors Command Center's 1d view)
+
+
 def cmd_sessions(args):
     base = _resolve_server(args.server)
     if not base:
@@ -260,21 +267,28 @@ def cmd_sessions(args):
             file=sys.stderr,
         )
         return 1
+    live_only = bool(getattr(args, "live", False))
+    flat_mode = bool(getattr(args, "flat", False))
+    effective_since = args.since
+    if effective_since is None and not live_only:
+        effective_since = _DEFAULT_SESSIONS_SINCE_S
     try:
         census_path = "/api/sessions/census"
-        if args.since is not None:
+        if effective_since is not None:
             # Server widens the candidate pool with recently-ended sessions in
             # the window; the client-side filter below then applies uniformly.
-            census_path += f"?since={args.since}"
+            census_path += f"?since={effective_since}"
         payload = _get_json(base, census_path)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
     sessions = list(payload.get("sessions") or [])
-    if args.since is not None:
+    if live_only:
+        sessions = [s for s in sessions if s.get("state") != "ended"]
+    if effective_since is not None:
         sessions = [
             s for s in sessions
-            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= args.since
+            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= effective_since
         ]
     if args.json:
         out = dict(payload)
@@ -283,22 +297,103 @@ def cmd_sessions(args):
         return 0
 
     n_helpers = sum(1 for s in sessions if s.get("helper"))
+    n_archived = sum(1 for s in sessions if s.get("archived") or s.get("trashed"))
+    n_empty_polls = sum(
+        1 for s in sessions
+        if s.get("empty_worker_poll") and s.get("state") not in ("working", "waiting")
+    )
     if not args.all:
-        sessions = [s for s in sessions if not s.get("helper")]
-    if args.sort == "status":
-        sessions = sorted(sessions, key=lambda s: _STATUS_RANK.get(s.get("state") or "", 4))
+        sessions = [
+            s for s in sessions
+            if not s.get("helper")
+            and not s.get("archived")
+            and not s.get("trashed")
+            and not (s.get("empty_worker_poll") and s.get("state") not in ("working", "waiting"))
+        ]
+
+    # Fold continuation chains (`continued_from_session_id`) so earlier legs
+    # fold into the chain head, which renders `↱ N earlier` and inherits any
+    # `↳` subagent children from earlier legs (matches _continuationFoldMaps in
+    # static/app.js).
+    by_sid = {s.get("session_id"): s for s in sessions if s.get("session_id")}
+    earlier_count = {}
+    head_of = {}
+    n_folded = 0
+    if not args.all:
+        superseded = set()
+        for s in sessions:
+            sid = s.get("session_id")
+            cont = s.get("continued_from_session_id")
+            if sid and cont and cont != sid and cont in by_sid:
+                superseded.add(cont)
+        folded_out = set()
+        for s in sessions:
+            sid = s.get("session_id")
+            if not sid or sid in superseded:
+                continue
+            cur = s.get("continued_from_session_id")
+            seen = {sid}
+            count = 0
+            while cur and cur not in seen and cur in by_sid:
+                seen.add(cur)
+                folded_out.add(cur)
+                head_of[cur] = sid
+                count += 1
+                cur = by_sid[cur].get("continued_from_session_id")
+            if count > 0:
+                earlier_count[sid] = count
+        n_folded = len(folded_out)
+        if folded_out:
+            sessions = [s for s in sessions if s.get("session_id") not in folded_out]
 
     children_of = {}
     for s in sessions:
-        parent = s.get("parent_session_id") or ""
-        if parent:
+        raw_parent = s.get("parent_session_id") or ""
+        parent = head_of.get(raw_parent, raw_parent)
+        if parent and parent != s.get("session_id"):
             children_of.setdefault(parent, []).append(s)
-    sids = {s.get("session_id") for s in sessions}
-    roots = [s for s in sessions if (s.get("parent_session_id") or "") not in sids]
+    sids = {s.get("session_id") for s in sessions if s.get("session_id")}
+    roots = [
+        s for s in sessions
+        if head_of.get(s.get("parent_session_id") or "", s.get("parent_session_id") or "") not in sids
+    ]
+
+    def _family_nodes(root, _seen=None):
+        if _seen is None:
+            _seen = set()
+        sid = root.get("session_id")
+        if sid in _seen:
+            return [root]
+        if sid:
+            _seen.add(sid)
+        nodes = [root]
+        for c in children_of.get(sid) or ():
+            nodes.extend(_family_nodes(c, _seen))
+        return nodes
+
+    def _family_sort_key(root):
+        fam = _family_nodes(root)
+        ages = [n.get("last_event_age_s") for n in fam if n.get("last_event_age_s") is not None]
+        min_age = min(ages) if ages else float("inf")
+        if args.sort == "status":
+            min_rank = min(_STATUS_RANK.get(n.get("state") or "", 4) for n in fam)
+            return (min_rank, min_age)
+        return (min_age == float("inf"), min_age)
+
+    roots = sorted(roots, key=_family_sort_key)
+    if args.sort == "status":
+        sessions = sorted(
+            sessions,
+            key=lambda s: (
+                _STATUS_RANK.get(s.get("state") or "", 4),
+                s.get("last_event_age_s") if s.get("last_event_age_s") is not None else float("inf"),
+            ),
+        )
 
     home_prefix = os.path.expanduser("~") + os.sep
 
     def _row(s, depth=0, child=False):
+        sid = s.get("session_id") or "?"
         flags = ""
         if s.get("needs_approval"):
             flags += " !approval"
@@ -310,11 +405,20 @@ def cmd_sessions(args):
             flags += " !stuck"
             if s.get("stuck_age_s") is not None:
                 flags += f" {_fmt_age(s['stuck_age_s'])} silent"
+        if earlier_count.get(sid):
+            flags += f"  ↱ {earlier_count[sid]} earlier"
         tool = s.get("pending_tool") or "-"
         if s.get("turn_age_s") is not None and s.get("state") == "working":
             tool = f"{tool} {_fmt_age(s['turn_age_s'])}"
-        name = (s.get("name") or "(no conversation row)")[:44]
+        raw_name = s.get("name") or "(no conversation row)"
+        if depth or child:
+            for pfx in ("↳ ⤴︎ ", "↳ ", "⤴︎ "):
+                if raw_name.startswith(pfx):
+                    raw_name = raw_name[len(pfx):]
+                    break
         marker = ("  " * depth + "↳ ") if (depth or child) else ""
+        avail_w = max(20, 46 - len(marker))
+        name_col = f"{marker}{raw_name[:avail_w]}"
         engine_effort = f"{s.get('engine') or '?'}/{s.get('effort') or '?'}"
         via = s.get("spawned_via") or "terminal"
         if via in ("-", "none", "null", "not-available", "not available"):
@@ -323,57 +427,91 @@ def cmd_sessions(args):
         if path.startswith(home_prefix):
             path = path[len(home_prefix):]
         print(
-            f"{_fmt_age(s.get('last_event_age_s')):>7}  {marker}{name:<44} "
+            f"{_fmt_age(s.get('last_event_age_s')):>7}  {name_col:<46} "
             f"{s.get('state') or '?':<8} {(s.get('model') or '?')[:18]:<18} "
-            f"{s.get('session_id') or '?'}  {engine_effort:<14} "
-            f"via:{via:<6} {path}  {tool}{flags}"
+            f"{sid}  {engine_effort:<14} "
+            f"via:{via:<8} {path}  {tool}{flags}"
         )
 
-    def _walk(s, depth):
+    def _walk(s, depth, _seen=None):
+        if _seen is None:
+            _seen = set()
+        sid = s.get("session_id")
+        if sid and sid in _seen:
+            return
+        if sid:
+            _seen.add(sid)
         _row(s, depth)
-        kids = children_of.get(s.get("session_id")) or ()
+        kids = children_of.get(sid) or ()
         if args.sort == "status":
             kids = sorted(kids, key=lambda c: (
                 _STATUS_RANK.get(c.get("state") or "", 4),
                 c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
             ))
         else:
-            kids = sorted(kids, key=lambda c: c.get("last_event_age_s") or 0)
+            kids = sorted(
+                kids,
+                key=lambda c: c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
+            )
         for child in kids:
-            _walk(child, depth + 1)
+            _walk(child, depth + 1, _seen)
 
-    if args.tree:
+    if not flat_mode:
         for s in roots:
             _walk(s, 0)
     else:
-        # Flat (default): every row in the requested sort order, children
-        # marked ↳ inline. Nesting under parents (--tree) groups families but
-        # breaks the global sort order — the hiding problem in new clothes.
         for s in sessions:
             _row(s, 0, child=bool(s.get("parent_session_id")))
     n = len(sessions)
+    n_roots = len(roots)
+    n_children = n - n_roots
     n_live = sum(1 for s in sessions if s.get("state") != "ended")
     n_ended = n - n_live
     n_orphan = sum(1 for s in sessions if not s.get("has_conversation_row"))
-    counts = f"{n_live} live"
-    if n_ended:
-        counts += f" + {n_ended} ended"
-    suffix = f", {n_orphan} with no conversation row" if n_orphan else ""
-    print(f"\n{counts} session{'s' if n != 1 else ''}{suffix}")
-    if n_helpers and not args.all:
-        print(f"({n_helpers} CCC helper session{'s' if n_helpers != 1 else ''} hidden — auto-title bots; --all to show)")
+    if live_only and args.since is None:
+        header = f"{n_live} live session{'s' if n_live != 1 else ''}"
+    else:
+        win_label = _fmt_age(effective_since) if effective_since else "window"
+        header = f"{n} session{'s' if n != 1 else ''} in last {win_label} ({n_live} live + {n_ended} ended"
+        if n_children:
+            header += f"; {n_roots} root + {n_children} subagent{'s' if n_children != 1 else ''}"
+        header += ")"
+    if n_orphan:
+        header += f", {n_orphan} with no conversation row"
+    print(f"\n{header}")
+    if not args.all:
+        hidden_parts = []
+        if n_folded:
+            hidden_parts.append(f"{n_folded} continuation leg{'s' if n_folded != 1 else ''} folded (↱)")
+        if n_empty_polls:
+            hidden_parts.append(f"{n_empty_polls} empty queue-drain poll{'s' if n_empty_polls != 1 else ''} hidden")
+        if n_archived:
+            hidden_parts.append(f"{n_archived} archived/trashed hidden")
+        if n_helpers:
+            hidden_parts.append(f"{n_helpers} helper{'s' if n_helpers != 1 else ''} hidden")
+        if hidden_parts:
+            print(f"({', '.join(hidden_parts)} — use --all to show)")
     return 0
+
+
+_FULL_SESSION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
 
 
 def _resolve_target(base, target):
     """Turn a user-supplied target (session id, unique id prefix, or unique
-    name fragment) into a session id, using the live census. Returns
+    name fragment) into a session id, using the census (including recent
+    ended sessions so `ccc send` / `ccc ask` can wake them up). Returns
     (session_id, error_message) — exactly one is set. An unmatched target
     passes through untouched so server-side aliases (bridge ULIDs, spawn
-    prefixes) still work."""
+    prefixes) still work. A complete UUID is already canonical, so it skips
+    the seven-day census (which can take longer than the send itself)."""
     target = (target or "").strip()
+    if _FULL_SESSION_ID_RE.match(target):
+        return target, None
     try:
-        payload = _get_json(base, "/api/sessions/census")
+        payload = _get_json(base, "/api/sessions/census?since=604800")
         sessions = list(payload.get("sessions") or [])
     except OSError:
         return target, None  # census unreachable — let the send itself report
@@ -388,6 +526,20 @@ def _resolve_target(base, target):
         s for s in sessions
         if needle and needle in (s.get("name") or "").lower()
     ]
+    if len(named) > 1:
+        # Prefer non-trashed, non-superseded continuation heads when a name
+        # matches multiple legs of the same continuation chain.
+        superseded = {
+            s.get("continued_from_session_id")
+            for s in sessions
+            if s.get("continued_from_session_id")
+        }
+        preferred = [
+            s for s in named
+            if not s.get("trashed") and s.get("session_id") not in superseded
+        ]
+        if len(preferred) == 1:
+            return preferred[0].get("session_id") or target, None
     if len(named) == 1:
         return named[0].get("session_id") or target, None
     if len(named) > 1:
@@ -419,10 +571,17 @@ def cmd_send(args):
         print("ccc send: missing message (pass it as an argument or pipe it on stdin)",
               file=sys.stderr)
         return 2
+    if getattr(args, "stop", False) and not args.steer:
+        print("ccc send: --stop only applies to --steer", file=sys.stderr)
+        return 2
     sid, err = _resolve_target(base, args.target)
     if err:
         print(err, file=sys.stderr)
         return 1
+    import sender_envelope as attribution
+    attr = attribution.capture_cli(sid, claimed=getattr(args, "sender", None) or "")
+    if not args.dry_run:
+        attribution.journal(attr, app="ccc", event="cli")
     if args.new_if_large_and_stale or args.dry_run:
         qs = urllib.parse.urlencode({
             "large_threshold": args.large_threshold, "stale_seconds": args.stale_seconds,
@@ -444,7 +603,7 @@ def cmd_send(args):
                 print(json.dumps(decision, indent=2))
             return 0
         if args.new_if_large_and_stale and decision["path"] == "new":
-            return _spawn_continue_from(base, decision.get("resolved_session_id") or sid, text, args)
+            return _spawn_continue_from(base, decision.get("resolved_session_id") or sid, attribution.carry(text, attr, app="ccc"), args)
         if args.dry_run:
             preview = {"path": "normal", "session_id": sid, "text": text}
             if args.json:
@@ -452,13 +611,15 @@ def cmd_send(args):
             else:
                 print(f"[dry-run] would send normally to {sid}")
             return 0
-    payload = {"session_id": sid, "text": text}
-    sender_sid = getattr(args, "sender", None) or os.environ.get("CLAUDE_SESSION_ID") or None
+    payload = {"session_id": sid, "text": text, **({"attr": attr, "idempotency_key": attr["message_id"]} if attribution.enabled("ccc") else {})}
+    sender_sid = getattr(args, "sender", None) or attr["author"].get("id") or None
     if sender_sid:
         resolved_sender, _ = _resolve_target(base, sender_sid)
         payload["peer_sender_sid"] = resolved_sender or sender_sid
     if args.steer:
         payload["mode"] = "steer"
+        if getattr(args, "stop", False):
+            payload["stop"] = True
     elif args.queue:
         payload["mode"] = "queue"
     try:
@@ -469,12 +630,65 @@ def cmd_send(args):
     if args.json:
         print(json.dumps(result, indent=2))
         return 0 if result.get("ok") else 1
+    if not result.get("ok") and result.get("effect") == "unknown":
+        # Not a failure: the target may already have the message. Resending
+        # blindly would duplicate it (CCC-238).
+        print(f"ccc: delivery unknown: {result.get('error') or 'no confirmation'}", file=sys.stderr)
+        return 3
     if not result.get("ok"):
         print(f"ccc: send failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
         return 1
     effect = result.get("effect") or result.get("landed") or "delivered"
     print(f"sent to {sid} ({effect})")
+    if result.get("held_queued"):
+        print(f"held {result['held_queued']} queued message(s) for release: ccc held {sid}")
     return 0
+
+
+def cmd_held(args):
+    """Inspect, release, or cancel queued input an explicit Stop held."""
+    base = _resolve_server(args.server)
+    if not base:
+        print("ccc: no server found — is CCC running?", file=sys.stderr)
+        return 1
+    sid, err = _resolve_target(base, args.target)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    action, chosen = None, None
+    if args.release is not None:
+        action, chosen = "release", args.release
+    elif args.cancel is not None:
+        action, chosen = "cancel", args.cancel
+    try:
+        if action:
+            ids = None if "all" in chosen else chosen
+            status, result = _post_json(
+                base, f"/api/stop-held/{action}",
+                {"session_id": sid, **({} if ids is None else {"ids": ids})},
+            )
+            view = result.get("held") or {}
+        else:
+            status, result = 200, _get_json(base, f"/api/session/{sid}/stop-held")
+            view = result
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if action == "release":
+        print(f"released {result.get('released', 0)}"
+              + (f", {result['failed']} failed (still held)" if result.get("failed") else ""))
+    elif action == "cancel":
+        print(f"cancelled {result.get('cancelled', 0)}")
+    items = view.get("items") or []
+    if not items:
+        print(f"no held input for {sid}")
+    for item in items:
+        preview = " ".join(str(item.get("text") or "").split())[:100]
+        print(f"  {item.get('id')}  {preview}")
+    return 0 if result.get("ok") else 1
 
 
 def cmd_ask(args):
@@ -497,13 +711,16 @@ def cmd_ask(args):
     if err:
         print(err, file=sys.stderr)
         return 1
+    import sender_envelope as attribution
+    attr = attribution.capture_cli(sid)
+    attribution.journal(attr, app="ccc", event="cli-ask")
     timeout_ms = int(args.timeout * 1000)
     try:
         # HTTP timeout outlasts the server-side wait so the server, not the
         # transport, decides when the ask has timed out.
         status, result = _post_json(
             base, "/api/ask",
-            {"session_id": sid, "text": text, "timeout_ms": timeout_ms},
+            {"session_id": sid, "text": text, "timeout_ms": timeout_ms, "attr": attr},
             timeout=timeout_ms / 1000 + 30,
         )
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -1262,6 +1479,193 @@ def cmd_quota(args):
         if note:
             flags += f"  ({note})"
         print(f"{engine:<8} {remaining_s:>4} remaining   resets {when}{flags}")
+    return 0
+
+
+# `ccc restart`: the one way agents should restart CCC. Every restart costs a
+# ~30s cold warmup, and agents restarting after each of their own commits
+# caused 13 of ~23 restarts in one day (OPS-150), each bypassing the
+# drain/adopt handoff in POST /api/restart/all. This goes through those
+# endpoints and coalesces requests: within RESTART_DEBOUNCE_S of the last
+# restart, a request becomes one pending restart that a detached runner fires
+# when the window ends (so the newest commit still goes live). A 409 (the
+# server says a restart is unsafe right now) is retried the same way.
+RESTART_STATE_FILE = os.path.expanduser("~/.claude/command-center/restart-debounce.json")
+RESTART_DEBOUNCE_S = int(os.environ.get("CCC_RESTART_DEBOUNCE_S") or 300)
+_RESTART_RETRY_S = 60
+_RESTART_MAX_RETRIES = 10
+_RESTART_PATHS = {"all": "/api/restart/all", "dashboard": "/api/restart", "worker": "/api/restart/worker"}
+
+
+def _merge_restart_targets(a, b):
+    """Smallest target covering both requests (dashboard+worker == all)."""
+    if not a or a == b:
+        return b
+    if not b:
+        return a
+    return "all"
+
+
+def _restart_state_update(fn):
+    """Run fn(state) -> result under an exclusive lock on the state file."""
+    import fcntl
+    os.makedirs(os.path.dirname(RESTART_STATE_FILE), exist_ok=True)
+    with open(RESTART_STATE_FILE + ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(RESTART_STATE_FILE) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+        result = fn(state)
+        tmp = RESTART_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, RESTART_STATE_FILE)
+        return result
+
+
+def _spawn_restart_runner(base, due):
+    """Detached `ccc restart --run-pending` that sleeps until `due`; its pid."""
+    cmd = [sys.executable, os.path.realpath(__file__), "--server", base,
+           "restart", "--run-pending", "--due", str(int(due))]
+    log = os.path.expanduser("~/.claude/command-center/restart-debounce.log")
+    with open(log, "a") as out:
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                                start_new_session=True, close_fds=True).pid
+
+
+def _defer_restart(base, target, due, why):
+    def apply(state):
+        pending = state.get("pending") or {}
+        state["pending"] = {
+            "target": _merge_restart_targets(pending.get("target"), target),
+            "due": max(float(pending.get("due") or 0), due),
+            "retries": int(pending.get("retries") or 0),
+            "why": why,
+        }
+        # Spawn under the lock and record the pid here, not from the runner:
+        # a second request racing the runner's startup must see it.
+        runner = state.get("runner_pid")
+        if not (runner and _pid_alive(runner)):
+            state["runner_pid"] = _spawn_restart_runner(base, state["pending"]["due"])
+        return state["pending"]
+    pending = _restart_state_update(apply)
+    when = datetime.fromtimestamp(pending["due"]).strftime("%H:%M:%S")
+    print(f"ccc restart: {why}; queued one {pending['target']} restart for {when} "
+          f"(requests until then are merged into it)")
+    return 0
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _post_restart(base, target):
+    """(status, payload) from the drain-aware restart endpoint; status -1
+    when the server could not be reached."""
+    try:
+        return _post_json(base, _RESTART_PATHS[target], {}, timeout=120)
+    except OSError as e:
+        return -1, {"ok": False, "error": str(e)}
+
+
+def _wait_dashboard_back(base, before_pid, timeout=120):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(2)
+        try:
+            v = _get_json(base, "/api/version", timeout=5)
+        except (OSError, ValueError):
+            continue
+        if v.get("pid") and v.get("pid") != before_pid:
+            return v
+    return None
+
+
+def _restart_now(base, target, wait=True):
+    import time
+    status, payload = _post_restart(base, target)
+    if status == 200 and payload.get("ok", True):
+        _restart_state_update(lambda s: s.update(last_restart=time.time(), last_target=target))
+        print(f"ccc restart: {target} restart started")
+        if target != "worker" and wait:
+            before = (payload.get("before") or {}).get("pid")
+            back = _wait_dashboard_back(base, before)
+            if back:
+                print(f"ccc restart: dashboard back (pid {back.get('pid')}, rev {back.get('code_rev') or '?'})")
+            else:
+                print("ccc restart: dashboard has not answered yet; check `ccc doctor`", file=sys.stderr)
+        return 0, payload
+    return status, payload
+
+
+def cmd_restart(args):
+    import time
+    base = _resolve_server(args.server)
+    if not base:
+        print(f"ccc: no server found — is CCC running? (looked for --server, $CCC_SERVER, {PORT_FILE})",
+              file=sys.stderr)
+        return 1
+    if args.run_pending:
+        return _run_pending_restart(base, args.due)
+    target = args.target
+    if not args.now:
+        state = _restart_state_update(lambda s: dict(s))
+        since = time.time() - float(state.get("last_restart") or 0)
+        if since < RESTART_DEBOUNCE_S or state.get("pending"):
+            due = float(state.get("last_restart") or 0) + RESTART_DEBOUNCE_S
+            return _defer_restart(base, target, max(due, time.time() + 1),
+                                  f"last restart was {int(since)}s ago")
+    status, payload = _restart_now(base, target)
+    if status == 0:
+        return 0
+    if status == 409:
+        why = payload.get("error") or payload.get("reason") or "server says unsafe now"
+        return _defer_restart(base, target, time.time() + _RESTART_RETRY_S, f"not safe yet ({why})")
+    print(f"ccc restart: failed (HTTP {status}): {payload.get('error') or payload}", file=sys.stderr)
+    return 1
+
+
+def _run_pending_restart(base, due):
+    """Detached runner: sleep to the due time, then fire the merged restart."""
+    import time
+    me = os.getpid()
+    while True:
+        state = _restart_state_update(lambda s: dict(s))
+        if state.get("runner_pid") != me:
+            return 0  # another runner owns the pending restart
+        pending = state.get("pending")
+        if not pending:
+            break
+        wait_s = float(pending.get("due") or due or 0) - time.time()
+        if wait_s > 0:
+            time.sleep(min(wait_s, 5))
+            continue
+        target = pending.get("target") or "all"
+        # Clear before posting: the dashboard restart kills nothing of ours
+        # (we are detached), but a request arriving mid-restart must queue anew.
+        _restart_state_update(lambda s: s.pop("pending", None))
+        status, payload = _restart_now(base, target)
+        if status == 0:
+            continue
+        retries = int(pending.get("retries") or 0) + 1
+        if retries > _RESTART_MAX_RETRIES:
+            print(f"ccc restart: giving up on {target} after {retries - 1} retries: {payload}", file=sys.stderr)
+            break
+
+        def requeue(s, target=target, retries=retries):
+            cur = s.get("pending") or {}
+            s["pending"] = {"target": _merge_restart_targets(cur.get("target"), target),
+                            "due": time.time() + _RESTART_RETRY_S, "retries": retries,
+                            "why": f"retry after HTTP {status}"}
+        _restart_state_update(requeue)
+    _restart_state_update(lambda s: s.pop("runner_pid", None) if s.get("runner_pid") == me else None)
     return 0
 
 
@@ -2047,9 +2451,13 @@ def cmd_secret(args):
             _secret_post(base, "forget", {"name": args.name})
             print("Saved credential forgotten; outstanding deliveries revoked.")
             return 0
-        if not args.stdout or sys.stdout.isatty():
-            print("ccc secret: use --stdout only in a pipe to the consuming program; "
+        if args.return_key and sys.stdout.isatty():
+            print("ccc secret: use --return-key only in a pipe to the consuming program; "
                   "never print credentials into an agent transcript.", file=sys.stderr)
+            return 2
+        if not args.return_key and args.kind == "otp":
+            print("ccc secret: one-time codes cannot be stored; add --return-key and pipe them.",
+                  file=sys.stderr)
             return 2
         if not 1 <= args.timeout <= 900:
             print("ccc secret: timeout must be 1-900 seconds", file=sys.stderr)
@@ -2059,12 +2467,16 @@ def cmd_secret(args):
             "name": args.name, "kind": args.kind, "reason": args.reason,
             "session_id": args.session_id or os.environ.get("CCC_SESSION_ID")
                 or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID", ""),
-            "timeout": args.timeout,
+            "timeout": args.timeout, "store_only": not args.return_key,
         })
         capability = {"id": created["id"], "token": created["token"]}
         print("Waiting for credential approval in CCC…", file=sys.stderr)
         while time.monotonic() < deadline:
             result = _secret_post(base, "take", capability)
+            if result.get("status") == "stored":
+                capability = None
+                print(f"saved to Vault: {result['entry']}")
+                return 0
             if result.get("status") == "ready":
                 capability = None
                 sys.stdout.write(result["value"])
@@ -2111,20 +2523,18 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     _register_antigravity_session()
     # `ccc` is also the Homebrew launcher's name (foreground server /
-    # --install-service). Keep one name for both roles: known query
-    # subcommands run the client below; anything else (no args, unknown
-    # flags) passes through to ./run.sh so `ccc` still launches CCC.
+    # --install-service). Keep one name for both roles: no args or explicit
+    # run.sh launcher flags pass through to ./run.sh; everything else is
+    # parsed as a CLI invocation so mistyped subcommands fail fast instead
+    # of accidentally launching a second server.
     # `ccc astra-check <sid>` is a thin wrapper over scripts/astra-check (the
     # astra-guardrail skill's spend audit); it needs no running server.
     if argv and argv[0] == "astra-check":
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "astra-check")
         os.execv(script, [script] + argv[1:])
-    if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--server"):
+    if not argv or argv[0] in RUN_SH_FLAGS:
         run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
         os.execv(run_sh, [run_sh] + argv)
-    if not argv:
-        run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
-        os.execv(run_sh, [run_sh])
 
     parser = argparse.ArgumentParser(
         prog="ccc",
@@ -2134,18 +2544,23 @@ def main(argv=None):
     parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("sessions", "list-sessions"):
-        p = sub.add_parser(name, help="live session census (state, age, engine, repo, name)")
+    for name in ("sessions", "session", "list-sessions"):
+        p = sub.add_parser(name, help="session census (24h window by default; state, age, engine, repo, name)")
         p.add_argument("--since", type=_parse_since,
                        help="show sessions (live + recently-ended) with activity in "
-                            "the window, e.g. 5h / 30m / 2d")
+                            "the window, e.g. 5h / 30m / 2d (default: 24h)")
+        p.add_argument("--live", action="store_true",
+                       help="only sessions with a live/attached OS process (state != ended)")
         p.add_argument("--sort", choices=("recency", "status"), default="recency",
                        help="recency (default): most recent first; status: waiting, "
                             "working, idle, ended — recency within each")
         p.add_argument("--all", action="store_true",
-                       help="include CCC helper sessions (auto-title bots), hidden by default")
+                       help="include helpers, archived/trashed sessions, unfolded continuation legs, "
+                            "and empty queue-drain polls (hidden by default)")
         p.add_argument("--tree", action="store_true",
-                       help="nest children under parents (default: flat, ↳ marks children)")
+                       help="nest ↳ children under parents (default)")
+        p.add_argument("--flat", action="store_true",
+                       help="flat list instead of nesting ↳ children under parents")
         p.add_argument("--json", action="store_true", help="raw census JSON")
         p.set_defaults(func=cmd_sessions)
 
@@ -2215,7 +2630,7 @@ def main(argv=None):
     g.add_argument("--queue", action="store_true",
                    help="queue behind the current turn instead of delivering now")
     p.add_argument("--from", dest="sender", metavar="SESSION_ID",
-                   help="sender session id or name for peer attribution (defaults to $CLAUDE_SESSION_ID)")
+                   help="sender session id or name for peer attribution (defaults to the current engine session)")
     p.add_argument("--new-if-large-and-stale", action="store_true",
                    help="if the target is large (context tokens >= --large-threshold) "
                         "AND stale (idle >= --stale-seconds, so resuming it would be a "
@@ -2241,8 +2656,26 @@ def main(argv=None):
     p.add_argument("--report-to", metavar="SESSION_ID",
                    help="with --new-if-large-and-stale: override the report-to the "
                         "spawned continuation inherits (default: the old session's own)")
+    p.add_argument("--stop", action="store_true",
+                   help="with --steer: this steer stops the turn, so hold the "
+                        "session's queued after-turn sends until released (`ccc held`)")
     p.add_argument("--json", action="store_true", help="raw inject/decision result JSON")
     p.set_defaults(func=cmd_send)
+
+    p = sub.add_parser(
+        "held",
+        help="list, release, or cancel queued input an explicit Stop held",
+        description="A Stop (or a stop steer) parks the session's queued "
+                    "after-turn sends so they never replay on their own. "
+                    "Release re-sends them (still after any running turn); "
+                    "cancel discards them.",
+    )
+    p.add_argument("target", help="session id, id prefix, or name fragment")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--release", nargs="+", metavar="ID", help="held ids to send, or 'all'")
+    g.add_argument("--cancel", nargs="+", metavar="ID", help="held ids to discard, or 'all'")
+    p.add_argument("--json", action="store_true", help="raw JSON")
+    p.set_defaults(func=cmd_held)
 
     p = sub.add_parser(
         "ask",
@@ -2383,6 +2816,23 @@ def main(argv=None):
     p.set_defaults(func=cmd_quota)
 
     p = sub.add_parser(
+        "restart",
+        help="restart the dashboard and/or worker (debounced, drain-aware)",
+        description="Restart CCC through its drain-aware restart endpoints. "
+                    "Use this instead of systemctl/launchctl. Requests within "
+                    f"{RESTART_DEBOUNCE_S}s of the last restart (CCC_RESTART_DEBOUNCE_S) "
+                    "merge into one restart fired when the window ends; a restart "
+                    "the server refuses as unsafe right now is retried every minute.",
+    )
+    p.add_argument("target", nargs="?", default="all", choices=("all", "dashboard", "worker"),
+                   help="all (default): worker then dashboard; dashboard; or worker only")
+    p.add_argument("--now", action="store_true",
+                   help="skip the debounce window (a human asked for it now)")
+    p.add_argument("--run-pending", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--due", type=float, default=0, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_restart)
+
+    p = sub.add_parser(
         "rebind-report-to",
         help="redirect spawned children's completion reports to another session",
         description="Repoint the return address of children spawned with "
@@ -2451,13 +2901,14 @@ def main(argv=None):
 
     p = sub.add_parser("secret", help="request a credential through the CCC dashboard")
     ssub = p.add_subparsers(dest="secret_command", required=True)
-    sp = ssub.add_parser("request", help="wait for approval; pipe the value directly to a program")
+    sp = ssub.add_parser("request", help="ask the user for a credential; saved to the Vault by default")
     sp.add_argument("name", help="service/account alias, never a credential value")
     sp.add_argument("--reason", required=True, help="public-safe explanation shown in the dashboard")
     sp.add_argument("--kind", choices=("password", "token", "ssh-passphrase", "otp"), default="password")
     sp.add_argument("--session-id", help="requesting session (defaults to agent session environment)")
     sp.add_argument("--timeout", type=int, default=300, help="wait seconds, 1-900 (default 300)")
-    sp.add_argument("--stdout", action="store_true", help="write exact value for piping; refuses a terminal")
+    sp.add_argument("--return-key", "--stdout", dest="return_key", action="store_true",
+                    help="write the exact value to stdout for piping instead of storing it; refuses a terminal")
     sp.set_defaults(func=cmd_secret)
     sp = ssub.add_parser("forget", help="delete a remembered service credential on this machine")
     sp.add_argument("name")

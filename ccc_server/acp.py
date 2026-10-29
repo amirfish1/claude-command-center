@@ -467,12 +467,27 @@ def _acp_resume_next_line(harness, sid):
     it silently, so a restart mid-conversation could make new replies vanish
     from the UI while landing fine in the transcript file. Count the file
     instead of assuming.
+
+    Counted in 1 MB binary chunks: this runs under _ACP_LOCK for every
+    persisted session at boot, and iterating text lines over ~135 MB of
+    Devin transcripts held the lock for 15s+ under GIL load, stalling the
+    sidebar list, live builds and conversation opens behind it (CCC-142).
     """
     try:
-        with _core._acp_transcript_path(harness, sid).open() as f:
-            return sum(1 for _ in f) + 1
+        with _core._acp_transcript_path(harness, sid).open("rb") as f:
+            count = 0
+            last = b""
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                count += chunk.count(b"\n")
+                last = chunk[-1:]
     except OSError:
         return 1
+    if last and last != b"\n":
+        count += 1  # unterminated final line still holds a line number
+    return count + 1
 
 
 def _acp_new_session_state(harness, sid, cwd=""):
@@ -506,6 +521,12 @@ def _acp_session(harness, sid, create=False, cwd=""):
     if state is None and create:
         state = _acp_new_session_state(harness, sid, cwd=cwd)
         sessions[sid] = state
+    elif state is not None and create and cwd and not state.get("cwd"):
+        # A state recreated without a cwd (after a worker restart, by a
+        # snapshot read) must still accept the cwd a caller knows, or the
+        # attach fails with "session cwd unknown" and the queue falls back to
+        # one-shot runs that re-send the message.
+        state["cwd"] = cwd
     return state
 
 
@@ -633,6 +654,14 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, mode="steer",
             result = _core._acp_prompt(
                 "devin", raw_id, text, mode="steer", idempotency_key=retry_key,
                 cwd=cwd,
+            )
+        if not result.get("ok"):
+            # Falling back to a one-shot CLI run is slower and can re-send;
+            # say why instead of doing it silently.
+            _core._log_activity(
+                "inject", "DEVIN_ACP_FALLBACK",
+                f"session={session_id} mode={mode} code={result.get('code')} "
+                f"error=\"{str(result.get('error'))[:160]}\"",
             )
         return result if result.get("ok") else None
     except Exception as exc:
@@ -763,7 +792,7 @@ def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None,
     if _core._control_plane_routes_engines():
         routed = _core._control_plane_engine_call(
             "devin", "acp_spawn", {
-                "prompt": prompt, "cwd": cwd, "model": model,
+                "prompt": _core._devin_session_state_prompt(prompt), "cwd": cwd, "model": model,
                 "permission_mode": permission_mode,
                 "reasoning_effort": reasoning_effort,
             },
@@ -941,6 +970,7 @@ def _acp_load_state(harness):
     for sid, meta in sessions.items():
         if not isinstance(meta, dict):
             continue
+        existed = sid in (_core._ACP_SESSION_STATE.get(harness) or {})
         state = _core._acp_session(harness, sid, create=True, cwd=meta.get("cwd") or "")
         state["status"] = "idle"
         state["turn_seq"] = int(meta.get("turn_seq") or 0)
@@ -951,7 +981,9 @@ def _acp_load_state(harness):
         # most recent activity, or the sid was never captured in a save at
         # all -- see _acp_resume_next_line), so never trust it below what the
         # transcript file actually holds.
-        next_line = max(int(meta.get("next_line") or 1), _acp_resume_next_line(harness, sid))
+        on_disk = (_acp_resume_next_line(harness, sid) if existed
+                   else int(state.get("next_line") or 1))  # just counted on create
+        next_line = max(int(meta.get("next_line") or 1), on_disk)
         state["next_line"] = max(1, next_line)
 
 
@@ -1828,19 +1860,24 @@ def _acp_tool_content_text(update):
     return text
 
 
+_ACP_DIFF_TEXT_MAX_CHARS = 65536
+
+
 def _acp_tool_content_diff(update):
     """First {type:'diff', path, oldText, newText} content block, if any.
 
     Edit/Write calls carry these (see docs/kimi-code-reference.md §Content
-    shapes); kept in full so the client can render the diff."""
+    shapes); kept in full up to _ACP_DIFF_TEXT_MAX_CHARS per side so the
+    client can render the diff without multi-MB whole-file payloads bloating
+    the session JSONL transcript."""
     for c in update.get("content") or []:
         if isinstance(c, dict) and c.get("type") == "diff":
             old = c.get("oldText")
             new = c.get("newText")
             return {
                 "path": str(c.get("path") or ""),
-                "oldText": old if isinstance(old, str) else "",
-                "newText": new if isinstance(new, str) else "",
+                "oldText": old[:_ACP_DIFF_TEXT_MAX_CHARS] if isinstance(old, str) else "",
+                "newText": new[:_ACP_DIFF_TEXT_MAX_CHARS] if isinstance(new, str) else "",
             }
     return None
 
@@ -2499,12 +2536,19 @@ def _acp_prompt(
         routed = _core._control_plane_engine_call(
             harness, "prompt", {
                 "session_id": sid,
-                "text": text,
+                "text": _core._devin_session_state_prompt(text) if harness == "devin" else text,
                 "mode": mode,
                 "from_queue": bool(from_queue),
                 "cwd": cwd or "",
             },
             idempotency_key=idempotency_key,
+            # The worker may have to session/load a long-lived session first
+            # (~27s+ for Devin); the default 45s call budget timed out before
+            # the load could finish and sent the queue down the CLI fallback.
+            timeout_ms=(
+                int(_acp_load_timeout(harness) * 1000) + 15000
+                if harness == "devin" else None
+            ),
         )
         if routed is not None:
             return routed
@@ -2516,7 +2560,11 @@ def _acp_prompt(
     if not text:
         return {"ok": False, "error": "empty prompt"}
     text = _core._strip_lone_surrogates(str(text))
+    if harness == "devin":
+        text = _core._strip_ccc_session_state_instruction(text)
     visible_text = text
+    if harness == "devin":
+        text = _core._devin_session_state_prompt(text)
     if harness == "kimi":
         text = _core._kimi_goal_prompt_text(text)
     if harness in ("kimi", "grok") and re.match(r"^\s*/context(\s|$)", text, re.IGNORECASE):
@@ -2709,6 +2757,18 @@ def _acp_cancel(harness, sid):
     return {"ok": sent, "via": "acp-cancel"}
 
 
+def _acp_load_timeout(harness):
+    """session/load replays the whole history: a long-lived Devin session
+    takes ~27s on an idle box and longer under load, so 30s made the ACP
+    drain fail and fall back to one-shot CLI runs that re-sent the message."""
+    if harness == "devin":
+        try:
+            return max(30.0, float(os.environ.get("CCC_DEVIN_ACP_LOAD_TIMEOUT_S", "120")))
+        except ValueError:
+            return 120.0
+    return 30
+
+
 def _acp_load(harness, sid, cwd):
     """Attach to an existing harness session in the current ACP connection.
 
@@ -2739,7 +2799,7 @@ def _acp_load(harness, sid, cwd):
             state["replay"] = {"kind": None, "text": "", "drop": drop_replay}
     resp = _core._acp_request(harness, method, {
         "sessionId": sid, "cwd": cwd, "mcpServers": [],
-    }, timeout=30, sid=sid)
+    }, timeout=_acp_load_timeout(harness), sid=sid)
     # A harness that doesn't implement session/resume at all (-32601) —
     # the generic version of cfg["no_resume"] for harnesses we haven't
     # annotated — falls back to session/load with the replay dropped.
@@ -2751,7 +2811,7 @@ def _acp_load(harness, sid, cwd):
                 state["replay"] = {"kind": None, "text": "", "drop": True}
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=30, sid=sid)
+        }, timeout=_acp_load_timeout(harness), sid=sid)
     # A dormant harness session can be mid-write from another live consumer
     # of its own on-disk store (e.g. a native TUI the user has open outside
     # CCC) right as we attach — the harness's own resume handler can trip
@@ -2766,7 +2826,7 @@ def _acp_load(harness, sid, cwd):
         time.sleep(0.75)
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=30, sid=sid)
+        }, timeout=_acp_load_timeout(harness), sid=sid)
     with _core._ACP_LOCK:
         state = _core._acp_session(harness, sid, create=True, cwd=cwd)
         desired_mode = state.get("desired_mode")

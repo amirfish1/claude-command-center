@@ -19,6 +19,7 @@ class TestSystemdUnits(unittest.TestCase):
         self.assertIn("MemoryMax=8G", content)
         self.assertIn("KillMode=process", content)
         self.assertIn("multi-user.target", content)
+        self.assertIn("StartLimitIntervalSec=0", content)
 
         # Ensure documentation comment exists explaining the 8090 collision
         self.assertIn("8090", content)
@@ -32,9 +33,15 @@ class TestSystemdUnits(unittest.TestCase):
 
         self.assertIn("User=hermes", content)
         self.assertIn("Group=hermes", content)
-        self.assertIn("MemoryMax=4G", content)
+        self.assertIn("MemoryMax=32G", content)
         self.assertIn("KillMode=process", content)
         self.assertIn("ccc_worker.py", content)
+        self.assertIn("StartLimitIntervalSec=0", content)
+
+    def test_run_sh_systemd_units_have_zero_start_limit(self):
+        run_script = REPO_ROOT / "run.sh"
+        content = run_script.read_text(encoding="utf-8")
+        self.assertIn("StartLimitIntervalSec=0", content)
 
     def test_install_script(self):
         install_script = REPO_ROOT / "systemd" / "install.sh"

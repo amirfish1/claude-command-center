@@ -308,6 +308,73 @@ class ProcessAuditTests(unittest.TestCase):
         self.assertFalse(by[1700]["cwd_exists"])
         self.assertGreaterEqual(by[1700]["score"], 4.0)
 
+    def test_linux_lsof_permission_denied_cwd_and_anonymous_pipe_are_not_false_positives(self):
+        rows = [
+            ps_row(4242, 1, "-zsh", tty="pts/0", stat="Ss"),
+            ps_row(1701, 4242, "sshd: hermes@pts/0", etime="05:00:00"),
+            ps_row(1702, 4242, "python3 scripts/run_test_gate.py", etime="00:05:00"),
+            ps_row(1703, 4242, "node worker.js", etime="00:05:00"),
+            ps_row(1704, 4242, "node deleted-cwd.js", etime="00:05:00"),
+        ]
+        lsof_blocks = [
+            "p1701\nfcwd\ntunknown\nn/proc/1701/cwd (readlink: Permission denied)",
+            lsof_block(1702, cwd="/", fd0="pipe", fd0_type="FIFO"),
+            lsof_block(1703, cwd="/", fd0="/nonexistent/named.fifo", fd0_type="FIFO"),
+            "p1704\nfcwd\ntDIR\nn/tmp/gone-dir (deleted)",
+        ]
+        by, _ = self._build(rows, lsof_blocks=lsof_blocks)
+        self.assertTrue(by[1701]["cwd_exists"])
+        self.assertNotIn("Deleted CWD", by[1701]["reasons"])
+        self.assertTrue(by[1702]["fd0_exists"])
+        self.assertNotIn("Unlinked stdin FIFO", by[1702]["reasons"])
+        self.assertFalse(by[1703]["fd0_exists"])
+        self.assertIn("Unlinked stdin FIFO", by[1703]["reasons"])
+        self.assertFalse(by[1704]["cwd_exists"])
+        self.assertEqual(by[1704]["cwd"], "/tmp/gone-dir")
+        self.assertIn("Deleted CWD", by[1704]["reasons"])
+
+    def test_linux_systemd_user_subreaper_flags_orphans_and_anchors_services(self):
+        server = self.server
+        ps_out = "\n".join([
+            ps_row(2597, 1, "/usr/lib/systemd/systemd --user", etime="02-00:00:00"),
+            ps_row(2610, 2597, "(sd-pam)", etime="02-00:00:00"),
+            ps_row(2783, 2597, "/bin/bash /repo/actions-runner/run.sh", etime="02-00:00:00"),
+            ps_row(2792, 2783, "/repo/actions-runner/bin/Runner.Listener run", etime="02-00:00:00"),
+            ps_row(801, 2597, "chrome-headless-shell --headless --user-data-dir=/tmp/puppeteer_dev_chrome_profile-1", etime="02:00:00"),
+            ps_row(802, 801, "chrome-headless-shell --type=renderer --user-data-dir=/tmp/puppeteer_dev_chrome_profile-1", etime="02:00:00"),
+        ]) + "\n"
+        systemctl_out = "MainPID=2783\nId=actions-runner@repo.service\n\nMainPID=0\nId=inactive.service\n"
+
+        def fake_run(cmd, timeout=3):
+            base = os.path.basename(cmd[0])
+            if base == "ps":
+                return ps_out
+            if base == "systemctl":
+                return systemctl_out
+            return ""
+
+        with mock.patch.object(server, "_sys_run", side_effect=fake_run), \
+             mock.patch.object(server, "_sys_ccc_session_pids", return_value=set()), \
+             mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server.os, "getpid", return_value=999901), \
+             mock.patch.object(server.os, "getppid", return_value=999900):
+            data = server._build_system_processes_uncached()
+        by = {p["pid"]: p for p in data["processes"]}
+        self.assertEqual(by[2597]["risk"], "safe", by[2597]["reasons"])
+        self.assertEqual(by[2610]["risk"], "safe", by[2610]["reasons"])
+        self.assertEqual(by[2783]["risk"], "safe", by[2783]["reasons"])
+        self.assertIsNone(by[2792]["tree_root"])
+        self.assertEqual(by[801]["risk"], "critical", by[801]["reasons"])
+        self.assertIn("Leaked headless browser (launcher gone)", by[801]["reasons"])
+        self.assertEqual(by[802]["tree_root"], 801)
+
+        with mock.patch.object(server, "build_system_processes", return_value=data), \
+             mock.patch.object(server.os, "kill") as kill, \
+             mock.patch.object(server, "_log_activity"):
+            reaped = server._reap_orphaned_automation_browsers()
+        self.assertEqual(reaped["killed"], [801])
+        kill.assert_called_once_with(801, server.signal.SIGTERM)
+
     # ── helpers ──────────────────────────────────────────────────────────
 
     def test_cputime_parser(self):

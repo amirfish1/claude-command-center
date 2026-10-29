@@ -7,6 +7,7 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from pathlib import Path
+import functools
 import json
 import os
 import platform
@@ -25,6 +26,7 @@ import uuid
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
+from ccc_server.quick_actions import _validated_quick_action
 
 # ---------------------------------------------------------------------------
 # SessionGraph — unified parent-child adjacency list
@@ -306,6 +308,11 @@ class _SessionGraph:
         """Return the parent session_id for ``child``, or None."""
         with self._lock:
             return self._parent_of.get(str(child or "").strip())
+
+    def parent_snapshot(self):
+        """One-lock copy of the child -> parent map, for bulk row projection."""
+        with self._lock:
+            return dict(self._parent_of)
 
     def children_of(self, parent):
         """Return a list of child session_ids for ``parent``."""
@@ -871,6 +878,7 @@ def _set_conversation_trashed(sid, trashed):
 
     with _core._conversation_lifecycle_lock:
         archived_ids, trashed_ids = _core._load_conversation_lifecycle_state()
+        archived_before, trashed_before = set(archived_ids), set(trashed_ids)
         if want_trashed:
             # Write/refresh the sticky marker first so a concurrent archive
             # sweep can never observe this session without its manual grace
@@ -910,9 +918,17 @@ def _set_conversation_trashed(sid, trashed):
         else:
             trashed_ids = [existing for existing in trashed_ids if existing != sid]
 
-        # Persist both lists once after all mutations.
-        _core._save_archived_conversations(archived_ids)
-        _core._save_trashed_conversations(trashed_ids)
+        # Persist both lists once after all mutations, as deltas against a
+        # fresh locked read so a concurrent writer's changes survive (CCC-156).
+        if want_trashed:
+            _core._update_archived_conversations(
+                add=[s for s in archived_ids if s not in archived_before], reason="trash",
+            )
+            _core._update_trashed_conversations(
+                add=[s for s in trashed_ids if s not in trashed_before], reason="trash",
+            )
+        else:
+            _core._update_trashed_conversations(remove=[sid], reason="untrash")
 
         archived_now = sid in archived_ids
         trashed_now = sid in trashed_ids
@@ -1066,7 +1082,7 @@ _SESSION_STATE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _SESSION_STATE_FIELD_RE = re.compile(
-    r"^(DID|INSIGHT|NEXT_STEP_USER)\s*:\s*(.+?)\s*$",
+    r"^(DID|INSIGHT|NEXT_STEP_USER|NEXT_ACTION|COMPLETION)[ \t]*:[ \t]*(.*?)[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE = re.compile(
@@ -1137,14 +1153,130 @@ _CCC_SHELL_SEARCH_SYSTEM_PROMPT = (
     "Exclude `.claude`, `.git`, `node_modules`, `.venv`, `.next`, `dist`, and "
     "`build` unless the user explicitly asks to search them."
 )
-_CCC_SESSION_STATE_SYSTEM_PROMPT = (
-    "End your final reply with a compact CCC session-state block:\n"
-    "<session-state>\n"
-    "DID: one sentence describing what you changed or learned\n"
-    "INSIGHT: one sentence with the main finding, root cause, or surprise\n"
-    "NEXT_STEP_USER: one sentence with the exact next thing the user should do\n"
-    "</session-state>"
-)
+_CCC_SESSION_STATE_SYSTEM_PROMPT = """Complete authorized work before ending a turn. Before asking the user to
+approve another action, assess whether it is within the requested scope, your
+confidence it helps, its downside, and reversibility. For an authorized action
+with confidence >=0.9, downside <=0.2, and easy reversal, do it and verify it
+instead of asking "shall I?". Never infer authorization from a score. Ask only
+for a consequential tradeoff, missing preference, or genuinely required approval;
+explain the downside and recommendation. Do not invent a user action to end a turn.
+
+When the user reports broken or missing behavior, including a question phrased
+as "why doesn't this work?", diagnosing the cause is not by itself resolution
+of the problem. Identify the concrete remedy and check the authorized scope.
+If the repair is already authorized, carry it out and verify it. If it requires
+new authorization, explain the proposed repair and its material downside, and
+put that specific approval in NEXT_STEP_USER (and NEXT_ACTION when eligible).
+Do not silently classify a reported malfunction as "explanation only; no
+changes requested" just because the user phrased it as a question. An explicit
+request for explanation only or no changes must still be respected; do not
+infer permission for a repair from the diagnosis alone.
+
+NEXT_STEP_USER: None means no human action is required; it does not mean the
+task is complete. Agent-owned unfinished work belongs in remaining_actions,
+keeps resolution below 0.9, and must be continued before ending the turn when
+possible. A repair awaiting authorization also belongs in remaining_actions
+and must have nonzero decision_dependency. Do not mark a known unresolved
+malfunction ready to close merely because its cause has been explained.
+For a genuinely explanation-only request, an evidence-backed answer may be
+complete without implementation or a fabricated approval request.
+
+Keep the footer scoped to the ongoing requested task across informational
+follow-ups. A side question such as "which folder are you using?" must not
+replace the task summary with "clarified paths" or erase its still-pending
+repair, verification, or user action. Answer the side question in the prose;
+retain the task's current outcome and unresolved actions in the footer.
+Remove an earlier action only when evidence shows it was performed, superseded,
+or no longer needed. Do not carry obsolete actions forward or treat an unrelated
+new task as a continuation when the user clearly changes scope.
+
+Separate the stable topic goal from the latest execution milestone. For an
+ongoing experiment, investigation, or long-term topic, shipping one fix does
+not establish that the overall solution is settled. Keep the goal and closure
+criteria across follow-ups; change them only when the user changes the scope
+or new evidence refines the criteria. Do not infer completion from inactivity,
+elapsed time, a successful subtask, or the absence of a user decision.
+Include scope in COMPLETION: {"goal":"the overall requested outcome",
+"done_when":"observable conditions for closing this topic","closure_met":false,
+"evidence":"what remains unresolved at the topic level"}. Set closure_met true
+only with evidence that those conditions are met. If the solution or closure
+criteria are still being explored, keep it false and resolution below 0.9.
+Report the shipped milestone in DID and delivery; assess resolution and
+verification against the whole goal. Put unresolved experiments and validation
+in remaining_actions, without inventing an immediate human action. Routine page
+reloads belong in delivery notes unless they actually block the requested work;
+they must not replace the topic's unresolved goal or become its closure criteria.
+
+State the goal as the user's own aim, never a narrower subset you chose to do.
+An open-ended ask ("there are a lot of these, maybe we don't need all of them?
+e.g. X") targets the whole set: an example the user gave, or the obvious
+leftovers, is a starting point, not the goal. Do not write done_when around the
+work you already finished. If your reply recommends further work toward the
+user's aim ("the next useful reduction would be ..."), or a caveat says the
+main question remains unanswered, that work is a remaining_action, the caveat is
+blocking, closure_met is false, and resolution stays below 0.9.
+
+An open topic needs a concrete plan, even when NEXT_STEP_USER is None. Order
+remaining_actions by what happens next and give each action an owner: "agent",
+"user", or "external". The first action must name the next observable step
+and its success check, not just "evaluate", "refine", or "continue using".
+For validation that depends on a future event, name that trigger and the check
+to perform then. Do immediately available authorized agent work before ending
+the turn; do not park it in a plan. NEXT_STEP_USER identifies only the user's
+actual required contribution; it must not stand in for the whole plan or invent
+an approval request when the agent owns the next step. Keep DID and INSIGHT to
+one short sentence each; put supporting evidence in COMPLETION.
+
+End your final reply with a compact CCC session-state block:
+<session-state>
+DID: one sentence describing what you changed or learned
+INSIGHT: one sentence with the main finding, root cause, or surprise
+NEXT_STEP_USER: the exact action requiring the user, or None.
+NEXT_ACTION: null or a single-line JSON object as described below
+COMPLETION: a single-line JSON object using the schema below
+</session-state>
+
+Write NEXT_ACTION yourself in this same answer; the dashboard renders it
+directly without another model call. Use {"label":"Restart","reply":"Yes, restart the dashboard and worker."}
+(on ONE line) only when NEXT_STEP_USER offers exactly one concrete, scoped
+next step and needs the user's go-ahead. Prefer one short verb for the label;
+up to three words and 24 characters are allowed when needed for clarity.
+Reply is the exact text to send back to this session (at most
+400 characters), preserving the scope and qualifications. Otherwise use null.
+Never choose between alternatives, invent missing information, claim the user
+performed a task, or turn a request to review/read/check something into approval.
+Do authorized work first; do not invent a pending action just to provide a button.
+
+COMPLETION is a self-assessment of the entire requested task, not just this turn.
+Use version 1 and four axes, each with score (number 0..1) and evidence (a short,
+specific factual string): resolution, verification, delivery, decision_dependency.
+Resolution: 0=unhandled, 0.5=partial, 0.9=all required work handled with only
+nonessential caveats, 1=fully resolved. Verification: 0=unchecked, 0.5=partial
+checks, 0.8=relevant checks of requested behavior passed, 1=strong direct evidence;
+name the checks and limits. Delivery: 0=local/unshipped, 0.5=partly delivered,
+1=at the intended destination; cite the push/deployment/save evidence. Delivery
+may have applicable:false only when no delivery is required, with a reason.
+Decision_dependency: 0=no meaningful decision or approval remains, 0.5=material
+choice remains, 1=blocked on the user; describe the actual tradeoff, not a ritual
+confirmation. Missing evidence means unassessed, not complete. Do not manufacture
+precise confidence: lower a score when evidence is incomplete.
+
+Also include caveats (array of {text,blocking} objects) and remaining_actions
+(array of {text,confidence,downside,reversible,within_scope} objects; confidence
+and downside are numbers 0..1, reversible and within_scope are booleans).
+All unresolved work belongs in remaining_actions. Disclose material caveats;
+blocking:true prevents closure. Queue actionable optional follow-ups where
+appropriate and cite their ticket in the caveat text; do not queue work required
+to finish the current request merely to declare it complete.
+
+CCC computes Close only if resolution>=0.9, verification>=0.8, delivery=1 (or
+explicitly not applicable), decision_dependency=0, no blocking caveat, and no
+remaining action. These are independent gates, never an average. This recommends
+manual archive only; never archive a session yourself. An explicit scope with
+closure_met false also prevents Close, regardless of the numeric scores.
+Example structure (replace all scores/evidence with facts):
+{"version":1,"scope":{"goal":"The overall requested outcome","done_when":"Observable topic closure criteria","closure_met":false,"evidence":"The topic is still unresolved"},"resolution":{"score":0,"evidence":"Request not yet handled"},"verification":{"score":0,"evidence":"No checks yet"},"delivery":{"score":0,"evidence":"Not delivered","applicable":true},"decision_dependency":{"score":0,"evidence":"No user decision needed"},"caveats":[],"remaining_actions":[]}
+""".strip()
 
 
 def _claude_session_state_args():
@@ -1167,26 +1299,116 @@ def _claude_peer_inbound_args():
     return ["--settings", json.dumps({"crossSessionInbound": "accept"}, separators=(",", ":"))]
 
 
+def _completion_assessment(value):
+    """Validate a self-report and derive readiness; never accept its verdict."""
+    invalid = {"version": 1, "valid": False, "ready_to_close": False,
+               "reasons": ["Completion assessment is incomplete or invalid."]}
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1:
+        return invalid
+
+    def score(number):
+        return type(number) in (int, float) and 0 <= number <= 1
+
+    result = {"version": 1, "valid": True}
+    if "scope" in value:
+        scope = value["scope"]
+        if (not isinstance(scope, dict) or type(scope.get("closure_met")) is not bool
+                or any(not isinstance(scope.get(key), str) or not scope[key].strip()
+                       for key in ("goal", "done_when", "evidence"))):
+            return invalid
+        result["scope"] = {key: scope[key].strip()[:4000]
+                           for key in ("goal", "done_when", "evidence")}
+        result["scope"]["closure_met"] = scope["closure_met"]
+    for key in ("resolution", "verification", "delivery", "decision_dependency"):
+        axis = value.get(key)
+        if not isinstance(axis, dict) or not score(axis.get("score")):
+            return invalid
+        evidence = axis.get("evidence")
+        if not isinstance(evidence, str) or not evidence.strip():
+            return invalid
+        result[key] = {"score": axis["score"], "evidence": evidence.strip()[:4000]}
+        if key == "delivery":
+            applicable = axis.get("applicable", True)
+            if type(applicable) is not bool:
+                return invalid
+            result[key]["applicable"] = applicable
+    caveats = value.get("caveats")
+    actions = value.get("remaining_actions")
+    if not isinstance(caveats, list) or not isinstance(actions, list):
+        return invalid
+    result["caveats"] = []
+    for caveat in caveats:
+        if (not isinstance(caveat, dict) or not isinstance(caveat.get("text"), str)
+                or not caveat["text"].strip() or type(caveat.get("blocking")) is not bool):
+            return invalid
+        result["caveats"].append({"text": caveat["text"].strip()[:4000], "blocking": caveat["blocking"]})
+    result["remaining_actions"] = []
+    for action in actions:
+        if (not isinstance(action, dict) or not isinstance(action.get("text"), str)
+                or not action["text"].strip() or not score(action.get("confidence"))
+                or not score(action.get("downside"))
+                or type(action.get("reversible")) is not bool
+                or type(action.get("within_scope")) is not bool):
+            return invalid
+        if "owner" in action and action["owner"] not in ("agent", "user", "external"):
+            return invalid
+        parsed_action = {key: action[key] for key in
+            ("text", "confidence", "downside", "reversible", "within_scope")}
+        if "owner" in action:
+            parsed_action["owner"] = action["owner"]
+        result["remaining_actions"].append(parsed_action)
+    reasons = []
+    if "scope" in result and not result["scope"]["closure_met"]:
+        reasons.append("Topic goal is not yet met.")
+    if result["resolution"]["score"] < 0.9:
+        reasons.append("Resolution is below 0.9.")
+    if result["verification"]["score"] < 0.8:
+        reasons.append("Verification is below 0.8.")
+    if result["delivery"]["applicable"] and result["delivery"]["score"] != 1:
+        reasons.append("Delivery is incomplete.")
+    if result["decision_dependency"]["score"] != 0:
+        reasons.append("A user decision remains.")
+    if any(c["blocking"] for c in result["caveats"]):
+        reasons.append("A blocking caveat remains.")
+    if result["remaining_actions"]:
+        reasons.append("Unfinished actions remain.")
+    result["ready_to_close"] = not reasons
+    result["reasons"] = reasons
+    return result
+
+
 def _parse_session_state(text):
-    """Extract the structured `<session-state>` block sessions emit on final
-    reply. Returns {did, insight, next_step_user} or None.
-    """
+    """Parse the last footer, preserving legacy fields and optional assessment."""
     if not text:
         return None
-    m = _SESSION_STATE_RE.search(text)
-    if not m:
+    matches = list(_SESSION_STATE_RE.finditer(text))
+    if not matches:
         return None
-    body = m.group(1)
+    body = matches[-1].group(1)
     out = {"did": None, "insight": None, "next_step_user": None}
     for fm in _SESSION_STATE_FIELD_RE.finditer(body):
         key = fm.group(1).upper()
         val = fm.group(2).strip()
-        if key == "DID":
-            out["did"] = val
-        elif key == "INSIGHT":
-            out["insight"] = val
-        elif key == "NEXT_STEP_USER":
-            out["next_step_user"] = val
+        if key == "NEXT_ACTION":
+            out.pop("next_action", None)
+            try:
+                action = _validated_quick_action(json.loads(val)) if len(val) <= 2000 else None
+            except (ValueError, TypeError, RecursionError):
+                action = None
+            if action:
+                out["next_action"] = action
+        elif key == "COMPLETION":
+            try:
+                raw = json.loads(val) if len(val) <= 32000 else None
+            except (ValueError, TypeError, RecursionError):
+                raw = None
+            out["completion"] = _completion_assessment(raw)
+        else:
+            out[key.lower()] = val
+    next_step = str(out.get("next_step_user") or "").strip()
+    if not next_step or re.fullmatch(
+            r"(?:none|nothing|no action(?: is)? needed|n/a|not applicable)[.!]?", next_step, re.I):
+        out.pop("next_action", None)
     if not any(out.values()):
         return None
     return out
@@ -1200,7 +1422,8 @@ def _strip_ccc_session_state_instruction(text):
     """
     if text is None:
         return ""
-    return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", str(text)).rstrip()
+    text = re.sub(r"\n*<ccc-session-state-instructions>.*?</ccc-session-state-instructions>\s*$", "", str(text), flags=re.DOTALL)
+    return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", text).rstrip()
 
 
 def _strip_f2_retrieval_prompt(text):
@@ -2791,13 +3014,11 @@ def pick_headless_exec_owner(candidates, session_started_at, etimes, now,
     """Choose the single `codex exec` process that owns a rollout.
 
     candidates: process dicts already filtered to exec commands in the
-    session's cwd. A lone candidate is the owner; several are separated by
-    process start time vs the rollout's session start (exec creates the
+    session's cwd. Every candidate must match the rollout's session start
+    by process start time (exec creates the
     rollout moments after launch). Returns a dict or None when ambiguous."""
     if not candidates:
         return None
-    if len(candidates) == 1:
-        return candidates[0]
     if session_started_at is None:
         return None
     close = []
@@ -2860,7 +3081,7 @@ def find_headless_codex_exec_owner(session_id, session_cwd=None):
         if session_cwd and p.get("cwd") == session_cwd:
             candidates.append(p)
     etimes = {}
-    if len(candidates) > 1:
+    if candidates:
         etimes = _ps_etimes([p["pid"] for p in candidates])
     return pick_headless_exec_owner(
         candidates, meta.get("started_at"), etimes, time.time())
@@ -2944,13 +3165,25 @@ def find_live_antigravity_processes():
     return procs
 
 
+@functools.lru_cache(maxsize=512)
+def _command_tokens(command):
+    # Process argv strings repeat across every live-activity build (one per
+    # session x process); shlex on long `codex exec` prompts was most of a
+    # warm build (CCC-168). Tuples so cached results can't be mutated.
+    try:
+        return tuple(shlex.split(command))
+    except ValueError:
+        return tuple(command.split())
+
+
 def _command_targets_engine_session(command, session_id, engine):
     if not command or not session_id:
         return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    # Every engine below needs a token equal to session_id, so a command that
+    # never mentions it can't match: skip tokenizing.
+    if session_id not in command:
+        return False
+    tokens = list(_command_tokens(command))
     if not tokens:
         return False
     if engine == "codex":
@@ -2997,10 +3230,7 @@ def _command_targets_engine_session(command, session_id, engine):
 def _command_targets_other_session(command, session_id, engine):
     if not command:
         return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    tokens = list(_command_tokens(command))
     if not tokens:
         return False
     uuid_re = re.compile(

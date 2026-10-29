@@ -26,7 +26,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
+        // WhatsApp-style keyboard dismissal: let a downward drag on the
+        // webview's scroll view pull the keyboard away interactively.
+        if let vc = window?.rootViewController as? CAPBridgeViewController {
+            vc.webView?.scrollView.keyboardDismissMode = .interactive
+        }
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

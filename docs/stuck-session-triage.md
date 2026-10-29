@@ -14,6 +14,10 @@ When a user says a session "got stuck", "won't take input", or a message sits on
    closed the moment the terminal-queue watcher (or auto-recovery, or
    force-restart) proves the text reached the session — it is what steps 1-2
    below exist to reconstruct by hand when this field is unavailable.
+   A non-zero `stop_held` count is not a stuck delivery: an explicit Stop
+   (or a stop steer) parked that queued input on purpose (CCC-237). It sends
+   only when released (`ccc held <sid> --release all`, or the "Held after
+   Stop" block in the conversation); `Q_STOP_HELD` in `activity.log`.
 1. **Was something injected after the last turn?** Compare
    `~/.claude/command-center/last-interactions.json` for the sid against the
    transcript mtime. An interaction newer than the last transcript line means a
@@ -47,5 +51,23 @@ Facts that trip people up:
   same for a child whose log is silent, bounded to one recovery per message and
   2 per session per 30 min, then marks the session `inject_stuck`
   (`inject-recovery.json`). Disable with `CCC_INJECT_AUTORECOVER=0`.
+- Every automatic wake (this recovery, the approved limit-reset "continue")
+  also goes through the wake ledger (`session-wakes.json`, `wake_guard.py`):
+  at most 2 per session per 24h, and no second wake unless the first one made
+  progress (transcript grew and the turn closed). A refusal logs
+  `RECOVER_GUARDED` / `AUTO_RESUME_GUARDED` and asks the owner instead; Force
+  restart clears it. Disable all automatic wakes with `CCC_AUTO_WAKE=0`.
+- Off-dashboard alerts: set `CCC_ALERT_COMMAND` (e.g. in
+  `~/.claude/command-center/config.local.env`) to a command that reads the
+  message on stdin. CCC runs it for dead sessions and refused wakes, once per
+  incident, at most 10 per hour (`alert-hook.json`; `ALERT_HOOK` in
+  `activity.log`).
+- Dead sessions are notify-only by default. A session can opt in to one
+  automatic rerun (`POST /api/auto-rerun {"session_id", "enabled"}`); a
+  scheduled job that starts a fresh session each run gets a host-only rule in
+  `auto-rerun.json` (cwd + first-prompt prefix + the job's command). Every
+  rerun goes through the wake ledger; a rule's second death inside 24h is
+  refused as no progress until the rule is re-saved. `auto-rerun` lines in
+  `activity.log` (`RERUN`, `RERUN_GUARDED`, `RERUN_FAIL`).
 - Never kill a child that is mid-turn or running a tool: confirm the spawn log
   has been silent for minutes and it has no child process first.

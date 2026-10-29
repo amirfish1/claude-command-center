@@ -169,8 +169,7 @@ def test_site_install_page_covers_the_journey():
     html = SITE_INSTALL.read_text()
     assert CURL_LINE in html
     assert "install.ps1 | iex" in html
-    assert "brew tap amirfish1/ccc" in html
-    assert "brew install ccc" in html
+    assert "brew install amirfish1/tap/ccc" in html
     # Novice path: open Terminal, paste, tour.
     for needle in ("Terminal", "setup tour", "data-copy", "<details class=\"faq\">"):
         assert needle in html, needle

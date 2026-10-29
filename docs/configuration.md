@@ -62,15 +62,20 @@ The file is machine-local, outside the checkout. Unlike `launchctl setenv` or
 
 ## Python stack diagnostics
 
-On macOS and Linux, send `SIGUSR2` to the running server to dump all Python
-thread stacks without restarting it or installing a debugger:
+To see what every Python thread in the running server is doing, without
+restarting it or installing a debugger, ask the server itself:
 
 ```bash
 CCC_PORT="$(sed 's/.*://' ~/.claude/command-center/port.txt)"
-CCC_PID="$(lsof -nP -iTCP:"$CCC_PORT" -sTCP:LISTEN -t | head -1)"
-kill -USR2 "$CCC_PID"
+# One snapshot, or N snapshots `interval` seconds apart (max 50, max 2s):
+curl -s "http://127.0.0.1:$CCC_PORT/api/debug/stacks?samples=20&interval=0.5" > stacks.json
 tail -n 200 ~/.claude/command-center/logs/python-stacks.log
 ```
 
-Each signal appends a traceback to the same log. Use it when the dashboard
-is alive but a request seems stuck. The signal is unavailable on Windows.
+The endpoint is local-only. Each sample is returned as JSON and appended to
+`python-stacks.log`. Sampling repeatedly is the way to find where a slow
+request spends its time.
+
+On macOS and Linux, `kill -USR2 <server pid>` also appends one snapshot to the
+same log, which helps when HTTP itself is wedged. A burst of signals coalesces
+into one dump. The signal is unavailable on Windows.

@@ -134,6 +134,40 @@ test('restoration consumes existing occurrences only once for repeated genuine s
   assert.equal(result, 2);
 });
 
+test('rebuilding queued cards reuses pending records across repeated restores', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Rebuild this queue', 'session', 'main');
+    markPendingSendQueued(pending, 'Waiting for this turn');
+    for (let i = 0; i < 6; i++) {
+      document.querySelector('.queued-steer-tray')?.remove();
+      restorePendingSendEchoes('conversation', 'main');
+      restorePendingSendEchoes('conversation', 'main');
+    }
+    return { cards: document.querySelectorAll('.queued-steer-tray .send-queued').length,
+      tracked: _pendingSends.length, saved: fixturePane.pendingSendsByConv.conversation.length,
+      original: _pendingSends[0] === pending.entry,
+      liveReference: pending.element.isConnected && pending.element === pending.entry.element };
+  });
+  assert.deepEqual(result, { cards: 1, tracked: 1, saved: 1, original: true, liveReference: true });
+});
+
+test('rebuilding genuine identical queued sends preserves each occurrence', async () => {
+  const result = await fixture(() => {
+    for (let i = 0; i < 2; i++) {
+      markPendingSendQueued(appendPendingSendEcho('Again', 'session', 'main'), 'Waiting');
+    }
+    const originals = _pendingSends.slice();
+    for (let i = 0; i < 4; i++) {
+      document.querySelector('.queued-steer-tray')?.remove();
+      restorePendingSendEchoes('conversation', 'main');
+    }
+    return { cards: document.querySelectorAll('.queued-steer-tray .send-queued').length,
+      tracked: _pendingSends.length, saved: fixturePane.pendingSendsByConv.conversation.length,
+      original: originals.every(entry => _pendingSends.includes(entry)) };
+  });
+  assert.deepEqual(result, { cards: 2, tracked: 2, saved: 2, original: true });
+});
+
 test('a tray belonging to another conversation cannot satisfy restoration', async () => {
   const result = await fixture(() => {
     fixturePane.pendingSendsByConv.conversation = [{ text: 'Queued fixture', ts: Date.now() }];
@@ -394,6 +428,16 @@ for (const incomingText of ['Again', 'Older different message']) {
     assert.deepEqual(result, { beforeDelivery: { connected: true, tracked: 1 }, afterDelivery: { connected: false, tracked: 0 } });
   });
 }
+
+test('a whole-second durable timestamp acknowledges a send made later in that second', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('what is the status', 'session', 'main');
+    pending.entry.ts = Math.floor(pending.entry.ts / 1000) * 1000 + 900;
+    reconcileUserEvent({ text: 'what is the status', ts: new Date(Math.floor(pending.entry.ts / 1000) * 1000).toISOString().replace(/\.\d+Z$/, 'Z') }, 'main', getConvView());
+    return { connected: pending.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { connected: false, tracked: 0 });
+});
 
 test('a late original queue ACK preserves the optimistic steering presentation', async () => {
   const result = await fixture(() => {

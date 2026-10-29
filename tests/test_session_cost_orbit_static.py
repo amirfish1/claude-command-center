@@ -129,8 +129,9 @@ def test_sidebar_and_pane_header_use_shared_session_icon_renderer():
     assert "sessionEngineIconHtml(row, { context: 'pane' })" in source
     assert "sessionIconPresentation(row, optimistic)" in source
     assert "session-activity-dot" in source
-    assert "tierDollarCounts = { premium: 3, high: 2, medium: 1, low: 0 }" in source
-    assert "session-tier-cost" in source
+    # Dollar markers were dropped from session portraits (1c96b703).
+    assert "tierDollarCounts" not in source
+    assert "session-tier-cost" not in source
     assert "session-tier-label" not in source
     assert "session-cost-orbit" not in source
     assert "session-cost-symbol" not in source

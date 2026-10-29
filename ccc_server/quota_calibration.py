@@ -16,16 +16,25 @@ BOUNDARY_TOLERANCE = 20 * 60
 MAX_OBSERVATION_GAP = 6 * 3600
 _CACHE = {}
 _LOCK = threading.Lock()
+_EPOCH_MEMO = {}
 
 
 def _epoch(value):
     if not isinstance(value, str):
         return None
+    cached = _EPOCH_MEMO.get(value)
+    if cached is not None:
+        return cached
     try:
         parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        return parsed.timestamp() if parsed.tzinfo else None
+        res = parsed.timestamp() if parsed.tzinfo else None
     except (ValueError, OverflowError):
-        return None
+        res = None
+    if res is not None:
+        if len(_EPOCH_MEMO) >= 65536:
+            _EPOCH_MEMO.clear()
+        _EPOCH_MEMO[value] = res
+    return res
 
 
 def _number(value):

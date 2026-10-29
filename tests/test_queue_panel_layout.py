@@ -229,6 +229,17 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("state.workerSessionMap", q2_js)
         self.assertIn("state.pastWorkers", q2_js)
 
+    def test_ticket_detail_session_link_survives_wt_block(self):
+        """`wt block` nulls claimed_by/claimed_session_id and keeps the session
+        under `parked`; the Assignment panel must still link to it."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        block = app_js[
+            app_js.index('<div class="uxq-td-pg-label">Assignment</div>'):
+            app_js.index("open in CCC ↗")]
+        self.assertIn("item.parked.session_id", block)
+        self.assertIn("item.parked.worker_id", block)
+        self.assertIn("by.session_id", block)
+
     def test_pending_worker_row_retires_on_devincli_conv_id(self):
         """The Workers lane's 'starting…' pending row must retire once the
         worker's session row lands — for devin workers that means matching
@@ -247,8 +258,14 @@ class TestQueuePanelLayout(unittest.TestCase):
             app_js.index("const _sidebarTab = (() => {"):
             app_js.index("const _tabEmpty =", app_js.index("const _sidebarTab = (() => {"))
         ]
-        self.assertIn("t === 'queues'", tab_block)
-        self.assertNotIn("t === 'merge'", tab_block)
+        # The saved tab key is validated by normalizeSidebarTabKey().
+        self.assertIn("normalizeSidebarTabKey(t)", tab_block)
+        normalize = app_js[
+            app_js.index("function normalizeSidebarTabKey(t) {"):
+            app_js.index("function ff(name)", app_js.index("function normalizeSidebarTabKey(t) {"))
+        ]
+        self.assertIn("t === 'queues'", normalize)
+        self.assertNotIn("t === 'merge'", normalize)
         self.assertIn("['queues', 'Queues'", tab_block)
         self.assertNotIn("['merge', 'Merge'", tab_block)
         self.assertIn('id="sidebarQueueHost"', app_js)
@@ -271,7 +288,8 @@ class TestQueuePanelLayout(unittest.TestCase):
         # Order matters (park, rebuild, re-mount); decorator calls may sit between.
         self.assertRegex(
             app_js,
-            r"\$convList\.innerHTML = _convListHtml;\s+_convListRenderVersion\+\+;"
+            r"\$convList\.innerHTML = _convListHtml;"
+            r"(?:(?!\$convList\.innerHTML)[\s\S]){0,500}?_convListRenderVersion\+\+;"
             r"(?:(?!\$convList\.innerHTML)[\s\S]){0,1500}?"
             r"_updateConvTabBarHeightVar\(\$convList\);\s+_mountSharedQueuePanel\(\);",
         )

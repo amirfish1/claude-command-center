@@ -272,3 +272,62 @@ def test_sse_folds_remote_version_into_change_detection():
     assert "gh_queue_watch_enter()" in body
     assert "gh_queue_watch_exit()" in body
     assert "finally:" in body, "refcount must be released on every exit path"
+
+
+class _StampedQueue(_StubQueue):
+    """watchtower.queue shape with the hooks the cheap probe uses (CCC-142)."""
+
+    def __init__(self, gh_rows, local_rows):
+        super().__init__(gh_rows)
+        self.local_rows = local_rows
+        self.stamp = (1, 100, 0, 0)
+        self.full_reads = 0
+
+    def _github_projects(self):
+        return ["DEMO-GH"]
+
+    def _db_path(self):
+        return "/nonexistent/queues.db"
+
+    def _db_stamp(self, path):
+        return self.stamp
+
+    def list_items(self, status=None, lane=None, project=None, fresh=False, **kw):
+        if project:
+            return [dict(r) for r in self.rows]
+        self.full_reads += 1
+        return [dict(r) for r in self.rows] + [dict(r) for r in self.local_rows]
+
+
+def test_unchanged_poll_skips_the_full_store_read():
+    """An idle tick must not re-read every local ticket (CCC-142)."""
+    server = _load_server()
+    qe = sys.modules["ccc_server.queue_events"]
+    stub = _install_stub(server, _StampedQueue([_gh_row("D-1")], [_LOCAL_ROW]))
+    qe._ux_fixes_list_cache.clear()
+    qe._gh_watch["sig"] = None
+    qe._gh_watch["version"] = 0
+
+    assert qe._gh_queue_poll_once() is False
+    assert stub.full_reads == 1, "first poll builds the board memo"
+    qe._ux_fixes_list_cache[("", "")]["ts"] = 0
+    for _ in range(3):
+        assert qe._gh_queue_poll_once() is False
+    assert stub.full_reads == 1, "unchanged GitHub rows + store stamp: no rebuild"
+    assert time.time() - qe._ux_fixes_list_cache[("", "")]["ts"] < 5, (
+        "the skipped poll must still keep the board memo fresh"
+    )
+
+    # A local write moves the store stamp: rebuild, but no remote event.
+    stub.stamp = (2, 120, 0, 0)
+    stub.local_rows.append(dict(_LOCAL_ROW, ref="LOCAL-2"))
+    assert qe._gh_queue_poll_once() is False
+    assert stub.full_reads == 2
+    refs = {r["ref"] for r in qe._ux_fixes_list_cache[("", "")]["items"]}
+    assert refs == {"D-1", "LOCAL-1", "LOCAL-2"}
+
+    # A remote change is still detected on the cheap path.
+    stub.rows.append(_gh_row("D-2"))
+    assert qe._gh_queue_poll_once() is True
+    assert qe.gh_queue_version() == 1
+    assert stub.full_reads == 3, "a remote change rebuilds the board memo"

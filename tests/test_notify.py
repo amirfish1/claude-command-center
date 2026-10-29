@@ -332,3 +332,13 @@ def test_hook_item_dedupes_with_session_watcher_and_picks_os_banner():
 def test_scheduled_items_land_on_throughput():
     assert notify._wants_os_banner(True) is True
     assert notify._wants_os_banner(False) is False
+
+
+def test_post_logs_outcome_to_activity_log(monkeypatch):
+    lines = []
+    import ccc_server.activity_log as al
+    monkeypatch.setattr(al, "_log_activity", lambda c, v, d: lines.append((c, v, d)))
+    _, publish = _captured()
+    notify.post({"title": "Logged", "kind": "info"}, publish=publish, now=1000)
+    notify.post({"title": "Logged", "kind": "info"}, publish=publish, now=1010)
+    assert [(c, v) for c, v, _ in lines] == [("NOTIFY", "emitted"), ("NOTIFY", "deduped")]

@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 
 <sub>Needs Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
 
-- **One board for eight agents.** Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin, however you launched them.
+- **One board for nine agents.** Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Grok, and Devin, however you launched them.
 - **Start free in 5 minutes.** The first-run wizard runs your first task on a $0 model and shows what it would have cost.
 - **Local and source-available.** No account, no cloud, free to use at work ([FSL-1.1-MIT](LICENSE)). Not affiliated with Anthropic.
 
@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ![Antigravity](https://img.shields.io/badge/Antigravity-4285F4?logo=google&logoColor=white)
 ![Kilo Code](https://img.shields.io/badge/Kilo%20Code-F8F675?logoColor=black)
 ![Kimi Code](https://img.shields.io/badge/Kimi%20Code-1A1A2E)
-![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B) ![Devin](https://img.shields.io/badge/Devin-0EA5E9)
+![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B) ![Grok](https://img.shields.io/badge/Grok-111111) ![Devin](https://img.shields.io/badge/Devin-0EA5E9)
 
 <a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="A Claude session hits its usage limit and CCC keeps all 12 sessions going on a free model through your own router" width="100%" /></a>
 
@@ -51,8 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 Other ways to install. With Homebrew:
 
 ```bash
-brew tap amirfish1/ccc
-brew install ccc
+brew install amirfish1/tap/ccc
 ccc
 ```
 
@@ -79,7 +78,7 @@ training; CCC asks for consent before enabling it. Do not send it private code.
 <tr>
 <td width="50%" valign="middle">
 
-### One board, eight engines
+### One board, nine engines
 
 See sessions you started in a terminal or from CCC. Each agent's own files
 keep the list up to date.
@@ -232,9 +231,9 @@ You can skip them, review the diff, or remove them later in Settings.
 
 ## Engine support
 
-All eight engines can start sessions from CCC. Follow-up and model controls
+All nine engines can start sessions from CCC. Follow-up and model controls
 vary; Kilo Code has no resume, and Cursor IDE sync is metadata-only.
-**GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** are read-only,
+**GitHub Copilot CLI** and **VS Code Copilot Chat** are read-only,
 as are Devin cloud sessions. [Full engine support matrix](docs/engine-support.md).
 
 ## Why this exists

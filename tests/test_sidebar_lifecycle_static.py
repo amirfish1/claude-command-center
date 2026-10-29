@@ -48,7 +48,7 @@ def test_session_trash_handler_calls_additive_endpoint():
 
 
 def test_trashing_open_row_selects_visible_neighbor_after_success():
-    assert "const _visibleConversationNeighborId = (convId, sourceItem = null) =>" in APP_JS
+    assert "const _visibleConversationNeighborId = (convId, sourceItem = null, excludedIds = new Set()) =>" in APP_JS
     start = APP_JS.index("$convList.querySelectorAll('.conv-trash-btn')")
     handler = APP_JS[start:APP_JS.index("$convList.querySelectorAll('.conv-wake-btn')", start)]
     assert "wantTrashed && currentConversation === convId" in handler

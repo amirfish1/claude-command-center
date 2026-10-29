@@ -39,6 +39,7 @@ def fts_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(gemini_dir))
     monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(cursor_dir))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin"))
     # Isolate the S8b harvested-sandbox root too -- same leak risk as above.
     monkeypatch.setenv("CCC_HARVESTED_ROOT", str(harvested_dir))
     # Isolate the Hermes messages_fts channel (S9) too -- HERMES_STATE_DB is
@@ -133,6 +134,29 @@ def test_search_sessions_path_query_matches_exactly(fts_env):
     assert [h["session_id"] for h in hits] == [target]
     assert session_fts.search_sessions("/Users/test/pasted-images/paste-999.png") == []
     assert session_fts._literal_phrase_query("two words") == "two words"
+
+
+@pytest.mark.parametrize("query", ["TASK-142 TASK-143 TASK-144", "task-142  task-143\ttask-144"])
+def test_plain_ticket_list_requires_every_ticket(fts_env, query):
+    texts = [
+        "TASK-142 was fixed. Later we discussed TASK-143 and TASK-144.",
+        "TASK-142 and TASK-143 only.",
+        "TASK-144 only.",
+        "TASK-142 and OTHER-143 and TASK-144.",
+        "TASK-142 and TASK-143 and TASK-1440.",
+    ]
+    sids = [f"aaaaaaaa-0000-0000-0000-{i:012d}" for i in range(len(texts))]
+    for sid, text in zip(sids, texts):
+        _write_claude_jsonl(fts_env["projects"] / "repo-t" / f"{sid}.jsonl", sid, [{
+            "type": "user", "cwd": "/repo-t",
+            "message": {"role": "user", "content": text},
+        }])
+    assert [h["session_id"] for h in session_fts.search_sessions(query)] == [sids[0]]
+    explicit = '"TASK-142" AND "TASK-143" AND "TASK-144"'
+    assert session_fts.search_sessions(query) == session_fts.search_sessions(explicit)
+    # Explicit OR remains the opt-in for matching any ticket.
+    hits = session_fts.search_sessions('"TASK-142" OR "TASK-144"')
+    assert {h["session_id"] for h in hits} == set(sids)
 
 
 def test_search_sessions_finds_assistant_text(fts_env):
@@ -653,3 +677,21 @@ def test_candidate_files_default_window_covers_a_year_not_45_days(fts_env, monke
     assert recent_sid in found_sids, "a 1-day-old session must always be a candidate"
     assert old_sid in found_sids, "a 68-day-old session regressed past the old 45-day cutoff"
     assert ancient_sid not in found_sids, "the window must still have *some* bound, not be unbounded"
+
+
+def test_devin_acp_transcript_is_searchable(fts_env, tmp_path):
+    root = tmp_path / "devin"
+    root.mkdir()
+    transcript = root / "sample-session.jsonl"
+    events = [
+        {"type": "user_text", "text": "Track the pilot work"},
+        {"type": "assistant", "blocks": [
+            {"kind": "thinking", "text": "PRIVATE-999"},
+            {"kind": "text", "text": "Filed TASK-142 TASK-143 TASK-144"}]},
+        {"type": "tool_result", "text": "TOOL-999"},
+    ]
+    transcript.write_text("\n".join(json.dumps(e) for e in events) + "\ninvalid\n")
+    hits = session_fts.search_sessions("TASK-142 TASK-143 TASK-144")
+    assert [hit["session_id"] for hit in hits] == ["devincli-sample-session"]
+    assert session_fts.search_sessions("PRIVATE-999") == []
+    assert session_fts.search_sessions("TOOL-999") == []

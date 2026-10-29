@@ -97,12 +97,24 @@ _auto_resume_opt_in: dict = {}   # session_id → True
 _auto_resume_opt_in_lock = threading.Lock()
 
 
+def _queued_text_key(value):
+    """Queued text as the user sees it, for matching client-sent copies.
+
+    Queue rows carry a sender-attribution header line; the browser renders,
+    steers and cancels the text without it, so compare header-free text.
+    """
+    import sender_envelope as attribution
+    return attribution.strip_header(str(value or "")).strip()
+
+
 class _PendingInputEntry(str):
     """String-compatible durable queue row with stable plain-entry identity."""
 
-    def __new__(cls, text, pending_id=None):
+    def __new__(cls, text, pending_id=None, attr=None):
         value = super().__new__(cls, str(text or ""))
         value.pending_id = str(pending_id or uuid.uuid4())
+        import sender_envelope as attribution
+        value.attr = attr or getattr(text, "attr", None) or attribution.current()
         return value
 
 
@@ -211,8 +223,8 @@ def _decode_pending_queue(
     if not valid:
         candidate_ids = [str(uuid.uuid4()) for _ in rows]
     decoded_items = [
-        _PendingInputEntry(text, pending_id)
-        for text, pending_id in zip(rows, candidate_ids)
+        _PendingInputEntry(text, pending_id, attr=(metadata[index].get("attr") if valid and sidecar_version == 2 else None))
+        for index, (text, pending_id) in enumerate(zip(rows, candidate_ids))
     ]
     seen_ids.update(candidate_ids)
     return decoded_items, (not valid or sidecar_version != 2 or any(
@@ -1751,6 +1763,7 @@ def _persist_pending_inputs_current(
                                 else _PendingInputEntry(item).pending_id
                             ),
                             "fingerprint": _pending_text_fingerprint(item),
+                            **({"attr": item.attr} if getattr(item, "attr", None) else {}),
                         } for item in entries]
                     else:
                         id_map.pop(sid, None)
@@ -2183,7 +2196,7 @@ def _apply_pending_input_operations(
                                 if op.get("identity") == "handoff_id"
                                 else getattr(item, "pending_id", None) == match
                                 if op.get("identity") == "pending_id"
-                                else str(item or "").strip() == str(match or "").strip()
+                                else _queued_text_key(item) == _queued_text_key(match)
                             )
                             if not matched:
                                 continue
@@ -2193,14 +2206,14 @@ def _apply_pending_input_operations(
                             seen += 1
                         results.append(removed)
                     elif action == "remove_all_matching":
-                        match = str(op.get("match") or "").strip()
+                        match = _queued_text_key(op.get("match"))
                         removed = [
                             item for item in queue
-                            if str(item or "").strip() == match
+                            if _queued_text_key(item) == match
                         ]
                         queue[:] = [
                             item for item in queue
-                            if str(item or "").strip() != match
+                            if _queued_text_key(item) != match
                         ]
                         results.append(removed)
                     elif action == "drop_unattended":
@@ -2596,6 +2609,38 @@ def _refresh_queued_view_if_file_changed(session_id):
             _queued_view_file_identity[session_id] = identity
 
 
+def queued_wait_snapshot(now=None):
+    """Per-session wait stats over the in-memory durable input queues.
+
+    Returns {session_id: {"items": n, "wait_s": total_seconds}} so callers
+    can join against session state without re-reading pending-inputs.json.
+    """
+    now = time.time() if now is None else now
+    with _pending_resume_lock:
+        resume = {s: list(v) for s, v in _core._pending_resume_queue.items()}
+    with _pending_terminal_input_lock:
+        term = {s: list(v) for s, v in _core._pending_terminal_input_queue.items()}
+    out = {}
+
+    def _add(session_id, text):
+        if not session_id or not text:
+            return
+        with _pending_queued_meta_lock:
+            meta = _pending_queued_meta.get((session_id, text)) or {}
+        queued_at = float(meta.get("queued_at") or now)
+        entry = out.setdefault(session_id, {"items": 0, "wait_s": 0.0})
+        entry["items"] += 1
+        entry["wait_s"] += max(0.0, now - queued_at)
+
+    for sid, texts in resume.items():
+        for text in texts:
+            _add(sid, text)
+    for sid, texts in term.items():
+        for text in texts:
+            _add(sid, text)
+    return out
+
+
 def _get_queued_events_for_session(session_id):
     """Get synthetic events for any queued messages of this session."""
     events = []
@@ -2612,7 +2657,7 @@ def _get_queued_events_for_session(session_id):
     now = time.time()
 
     def _queued_event(text):
-        visible_text = _core._strip_mode3_instruction(text)
+        visible_text = _core._strip_mode3_instruction(_queued_text_key(text))
         if not visible_text:
             return None
         with _pending_queued_meta_lock:
@@ -2640,6 +2685,25 @@ def _get_queued_events_for_session(session_id):
         ev = _queued_event(text)
         if ev:
             events.append(ev)
+    # CCC-237: one block for input an explicit Stop held. The line id carries
+    # the store revision, so each change renders a fresh block that replaces
+    # the old one; an emptied record keeps emitting (items=[]) to clear it.
+    try:
+        held = _stop_held_inputs_view(session_id)
+    except Exception:
+        held = None
+    if held and held["revision"]:
+        events.append({
+            "line": f"stopheld-{session_id[:8]}-{held['revision']}",
+            "ts": datetime.fromtimestamp(
+                held["updated_at"] or now, timezone.utc,
+            ).isoformat().replace("+00:00", "Z"),
+            "type": "system",
+            "subtype": "stop_held_inputs",
+            "session_id": session_id,
+            "revision": held["revision"],
+            "items": held["items"],
+        })
     # Codex threads also surface durable desktop↔CCC coordination events
     # (external turn detected, input queued, CCC turn boundaries) so the
     # ownership story is part of the conversation, not just transient status.
@@ -2718,7 +2782,7 @@ def _drop_matching_terminal_queue_entries(session_id, text):
 
 
 def _claim_matching_pending_input(session_id, text):
-    clean = str(text or "").strip()
+    clean = _queued_text_key(text)
     if not session_id or not clean:
         return None
     def claim_one():
@@ -2731,7 +2795,7 @@ def _claim_matching_pending_input(session_id, text):
                 if not items:
                     continue
                 for index, item in enumerate(items):
-                    if str(item or "").strip() != clean:
+                    if _queued_text_key(item) != clean:
                         continue
                     claimed = items.pop(index)
                     if not items:
@@ -2817,6 +2881,136 @@ def _consume_matching_pending_input(session_id, text):
             _core._complete_pending_input_handoff(removed_item)
             return 1
     return 0
+
+
+def _hold_queued_inputs_for_stop(session_id, reason="stop"):
+    """CCC-237: an explicit Stop parks the session's queued after-turn input.
+
+    The queued text was written for the plan the user just stopped; letting
+    the queue pump deliver it when the stopped turn ends replays obsolete
+    instructions as new turns. Atomically move every queued entry out of the
+    delivery queues into ccc_server.stop_holds, where only an explicit
+    release or cancel takes it out again. Returns the held item count.
+    Call it BEFORE interrupting, so the turn cannot end and drain first.
+    """
+    from ccc_server import stop_holds
+    if not session_id:
+        return 0
+    transaction = _core._apply_pending_input_operations(session_id, [
+        {"field": "resume", "action": "clear"},
+        {"field": "terminal", "action": "clear"},
+    ])
+    if not transaction.get("ok"):
+        _core._log_activity(
+            "inject", "Q_STOP_HOLD_FAILED",
+            f"session={session_id} reason={reason} "
+            f"error={transaction.get('error') or transaction.get('code') or '-'}",
+        )
+        return 0
+    removed = transaction.get("value") or [[], []]
+    entries = []
+    for queue_name, items in zip(("resume", "terminal"), removed):
+        for item in items or []:
+            with _pending_queued_meta_lock:
+                meta = dict(_pending_queued_meta.pop((session_id, item), None) or {})
+            entries.append({
+                "id": getattr(item, "pending_id", None),
+                "text": str(item),
+                "queue": queue_name,
+                "queued_at": meta.get("queued_at"),
+                "attr": getattr(item, "attr", None),
+            })
+    if not entries:
+        return 0
+    stop_holds.hold(session_id, entries, reason=reason)
+    for items in removed:
+        for item in items or []:
+            _core._complete_pending_input_handoff(item)
+    _core._log_activity(
+        "inject", "Q_STOP_HELD",
+        f"session={session_id} reason={reason} held={len(entries)} "
+        f"text=\"{_core._activity_log_preview(_queued_text_key(entries[0]['text']))}\"",
+    )
+    return len(entries)
+
+
+def _stop_held_inputs_view(session_id):
+    """Client-facing held state: ids, header-free text, timestamps."""
+    from ccc_server import stop_holds
+    snap = stop_holds.snapshot(session_id) or {"revision": 0, "updated_at": 0, "items": []}
+    return {
+        "session_id": session_id,
+        "revision": snap["revision"],
+        "updated_at": snap["updated_at"],
+        "items": [
+            {
+                "id": item.get("id"),
+                "text": _core._strip_mode3_instruction(_queued_text_key(item.get("text"))),
+                "queue": item.get("queue"),
+                "held_at": item.get("held_at"),
+                "reason": item.get("reason"),
+            }
+            for item in snap["items"]
+        ],
+    }
+
+
+def _release_stop_held_inputs(session_id, ids=None):
+    """Re-send held items (all, or the given ids) through the normal inject
+    path, oldest first. A send still waits behind a running turn. Items that
+    fail to send go back to the held list instead of being lost."""
+    import sender_envelope as attribution
+    from ccc_server import stop_holds
+    taken = stop_holds.take(session_id, ids)
+    released, failed, results = [], [], []
+    for item in taken:
+        stored = str(item.get("text") or "")
+        kwargs = {
+            "mode": "send",
+            "source": "stop-hold-release",
+            "allow_duplicate": True,
+            "idempotency_key": f"stop-hold-release:{item.get('id')}",
+        }
+        attr = (item.get("attr") if isinstance(item.get("attr"), dict) else None) \
+            or attribution.from_text(stored)
+        if attr:
+            kwargs["attr"] = attr
+        try:
+            result = _core._inject_text_into_session(
+                session_id, attribution.strip_header(stored) if attr else stored, **kwargs,
+            )
+        except Exception as e:  # keep the text: put it back below
+            result = {"ok": False, "error": str(e) or "release failed"}
+        results.append({"id": item.get("id"), "ok": bool(result.get("ok")),
+                        "queued": bool(result.get("queued")),
+                        "error": result.get("error") if not result.get("ok") else None})
+        (released if result.get("ok") else failed).append(item)
+    if failed:
+        stop_holds.restore(session_id, failed)
+    if taken:
+        _core._log_activity(
+            "inject", "Q_STOP_RELEASED",
+            f"session={session_id} released={len(released)} failed={len(failed)}",
+        )
+    return {"ok": not failed, "released": len(released), "failed": len(failed),
+            "results": results, "held": _stop_held_inputs_view(session_id)}
+
+
+def _cancel_stop_held_inputs(session_id, ids=None):
+    """Discard held items (all, or the given ids) without delivering them."""
+    from ccc_server import inject_receipts, stop_holds
+    taken = stop_holds.take(session_id, ids)
+    for item in taken:
+        try:
+            inject_receipts.close_receipt(session_id, text=item.get("text"), outcome="dropped")
+        except Exception:
+            pass
+    if taken:
+        _core._log_activity(
+            "inject", "Q_STOP_CANCELLED",
+            f"session={session_id} cancelled={len(taken)}",
+        )
+    return {"ok": True, "cancelled": len(taken), "held": _stop_held_inputs_view(session_id)}
 
 
 def _snapshot_matching_pending_input_id_quick(session_id, text):
@@ -3701,6 +3895,13 @@ def _transcript_peer_receipt(session_id, msg_id, body, start_offset=0, timeout_s
 
 
 def _resume_queue_engine_busy(sid):
+    if _core._is_antigravity_session(sid):
+        # A persistent stream-json process reports its own turn state (the
+        # `result` event); an idle one is not busy however long it lives.
+        from ccc_server import antigravity_stream
+        stream_state = antigravity_stream.state(sid)
+        if stream_state is not None:
+            return bool(stream_state["busy"])
     if _core._is_devin_cli_session(sid):
         # An in-flight ACP turn on our shared `devin acp` conn is engine-busy
         # the same as a one-shot resume process — the pump must wait for it
@@ -3732,8 +3933,19 @@ def _resume_queue_engine_busy(sid):
             started = _core._spawn_entry_started_epoch(s)
             if started and (time.time() - started) > _core._antigravity_resume_stale_seconds():
                 continue
+            # Finished turn, lingering process: not busy (see
+            # _antigravity_turn_finished); free the conversation.
+            if (
+                _core._antigravity_turn_finished(sid, pid=s.get("pid"))
+                and _core._antigravity_reap_finished_process(sid, s.get("pid"))
+            ):
+                continue
         return True
-    if _core._antigravity_live_resume_pid(sid) is not None:
+    live_agy = _core._antigravity_live_resume_pid(sid)
+    if live_agy is not None and _core._antigravity_turn_finished(sid, pid=live_agy):
+        if _core._antigravity_reap_finished_process(sid, live_agy):
+            live_agy = None
+    if live_agy is not None:
         # Ground-truth fallback: `_spawned_sessions` lost track of a live
         # `agy` resume for this sid (registry reattach can drop a live PID
         # under load, CCC-1011) -- a real OS-level scan still finds it, so
@@ -3741,6 +3953,13 @@ def _resume_queue_engine_busy(sid):
         # the same conversation.
         return True
     if _core._is_codex_session(sid):
+        # A live headless `codex exec` holds Codex's single-writer lock for its
+        # whole run; any thread/resume or thread/read from our app-server fails
+        # "already has an active writer" and the 60s retry repeats that for the
+        # life of the worker (OPS-155). Wait without touching the app-server;
+        # the 5s watcher delivers once the exec exits.
+        if _core.find_headless_codex_exec_owner(sid):
+            return True
         # Preserve proven external writers on the cheap stat/lsof path. Only an
         # ownership-unknown turn needs an authoritative passive read.
         snap = {}
@@ -3963,6 +4182,27 @@ def _pump_codex_resume_queue(session_id, *, _backstop=False):
     return result
 
 
+_devin_pump_last_wait = {}
+
+
+def _note_devin_pump_wait(session_id, reason, **fields):
+    """Log why a queued Devin message is not being delivered, once per change.
+
+    The pump ticks every 5s and used to wait silently, so a stuck queue left
+    no trace in activity.log. One line per (session, reason) change keeps the
+    log quiet while making the cause visible.
+    """
+    key = (reason, tuple(sorted(fields.items())))
+    if _devin_pump_last_wait.get(session_id) == key:
+        return
+    _devin_pump_last_wait[session_id] = key
+    detail = " ".join(f"{k}={v}" for k, v in fields.items())
+    _core._log_activity(
+        "inject", "Q_WAIT",
+        f"session={session_id} engine=devin reason={reason} {detail}".rstrip(),
+    )
+
+
 def _pump_devin_resume_queue(session_id):
     """Deliver at most one durable Devin CLI message, preserving FIFO order.
 
@@ -3979,6 +4219,7 @@ def _pump_devin_resume_queue(session_id):
         if not _core._pending_resume_retry_due(session_id):
             return {"ok": True, "waiting": "backoff"}
         if _core._resume_queue_engine_busy(session_id):
+            _note_devin_pump_wait(session_id, "engine-busy")
             return {"ok": True, "waiting": "busy"}
         raw_id = _core._devin_cli_raw_id(session_id)
         live_spawn = _core._find_live_spawn_entry_for_session(session_id)
@@ -3987,18 +4228,28 @@ def _pump_devin_resume_queue(session_id):
         # check every ACP-attached session would park its durable queue in
         # "external-owner" forever.
         acp_loaded = _core._devin_acp_session_loaded(raw_id)
+        own_conn_holds_lock = False
         if (
             _core._devin_cli_session_live(raw_id)
             and live_spawn is None
             and not acp_loaded
         ):
-            return {
-                "ok": True,
-                "queued": True,
-                "waiting": "external-owner",
-                "external_devin_owner": True,
-                "via": "devin-external-owner-queued",
-            }
+            # A worker connection may retain the writer lock after losing
+            # its loaded-session marker (conn re-created, worker restart).
+            # It is ours, not an external client: re-attach through that same
+            # conn below instead of waiting. Never race a `devin --resume -p`
+            # onto it -- that can only fail with session_locked.
+            owner_pid = _core._devin_cli_lock_pid(raw_id)
+            if not (owner_pid and owner_pid == _core._acp_conn_pid("devin")):
+                _note_devin_pump_wait(session_id, "external-owner", lock_pid=owner_pid)
+                return {
+                    "ok": True,
+                    "queued": True,
+                    "waiting": "external-owner",
+                    "external_devin_owner": True,
+                    "via": "devin-external-owner-queued",
+                }
+            own_conn_holds_lock = True
         with _core._pending_resume_lock:
             queue = _core._pending_resume_queue.get(session_id) or []
             text = queue[0] if queue else None
@@ -4034,9 +4285,22 @@ def _pump_devin_resume_queue(session_id):
                       "match": text}
             )
             drop_tx = _core._apply_pending_input_operations(session_id, [drop])
+            # The ACP prompt landed: settle the inject receipt too, or a
+            # delivered message keeps showing as "outstanding" forever and
+            # stuck-session triage chases a message that already arrived.
+            _inject_receipts.close_receipt(session_id, text=text)
             return {"ok": True, "started": True, "via": "acp-prompt",
                     "result": acp_result,
                     "queue_cleanup_ok": bool((drop_tx or {}).get("ok"))}
+
+        if own_conn_holds_lock:
+            # The re-attach above did not land. Recycle only an idle conn
+            # through its owner (never one that is mid-turn); the next tick
+            # then finds the lock free and the ACP drain loads the session.
+            recovery = _core._acp_close_idle_conn("devin")
+            waiting = "owner-released" if recovery.get("closed") else "busy"
+            _note_devin_pump_wait(session_id, waiting, lock_pid=_core._devin_cli_lock_pid(raw_id))
+            return {"ok": True, "queued": True, "waiting": waiting}
 
         result = _core.resume_session_devin(
             session_id, text, _delivery_slot=delivery_slot,
@@ -4127,7 +4391,14 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         silent_turn = _core._codex_recovery_is_silent_turn(recovery)
 
         suppressed = None
-        if state.get("thread_needs_approval") or _core._codex_app_server_pending_approval_item(state):
+        known_turns = {
+            str(recovery.get("compaction_turn_id") or ""),
+            str(recovery.get("recovery_turn_id") or ""),
+        }
+        latest_turn = str(state.get("active_turn_id") or state.get("last_turn_id") or "")
+        if not silent_turn and latest_turn and latest_turn not in known_turns:
+            suppressed = "later-turn"
+        elif state.get("thread_needs_approval") or _core._codex_app_server_pending_approval_item(state):
             suppressed = "approval"
         elif state.get("active_flags"):
             suppressed = "active-flag"
@@ -4170,6 +4441,18 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
             if active_item.get("type") == "contextCompaction":
                 return {"ok": True, "waiting": "compacting"}
             return {"ok": True, "waiting": "active-tool"}
+
+        # Successful turn/start RPCs consume the same bounded retry budget as
+        # failed ones. A turn that never emits completion must not loop forever.
+        if int(recovery.get("attempts") or 0) >= _core._CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS:
+            recovery["status"] = "exhausted"
+            recovery["reason"] = "Recovery attempts exhausted"
+            _core._codex_coordination_event_unlocked(
+                state, _core._codex_recovery_event_kind(recovery, "exhausted"),
+                detail=recovery["reason"], now=now,
+            )
+            _core._save_codex_app_server_state_unlocked()
+            return {"ok": True, "exhausted": True}
 
         active_turn = bool(
             state.get("active_turn_id")
@@ -4348,6 +4631,11 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         recovery = state.get("compaction_recovery")
         if not isinstance(recovery, dict):
             return {"ok": False, "started": False, "result": result}
+        # Notifications can prove execution resumed before turn/start returns.
+        # Never overwrite that terminal latch with the RPC's older snapshot.
+        if str(recovery.get("status") or "") in _core._CODEX_COMPACTION_RECOVERY_TERMINAL:
+            return {"ok": bool(result and result.get("ok")),
+                    "started": started, "result": result}
         if started:
             recovery["status"] = "recovering"
             recovery["reason"] = _core._codex_recovery_activity_text(recovery)
@@ -4992,6 +5280,27 @@ def _maybe_recover_stuck_hold(sid, reason, held_s, now):
         return False
     if action != ir.RECOVER:
         return False
+    # RESIL-5: shared wake ledger (cap per session, no second wake without
+    # progress from the first). A refusal parks the session for a human.
+    from ccc_server import wake_guard
+    try:
+        transcript = _core._usage_limit_session_path("claude", sid)
+    except Exception:
+        transcript = None
+    allowed, guard_why = wake_guard.request(
+        sid, source="inject-recovery", incident=msg_hash,
+        transcript_path=str(transcript) if transcript else None, now=now,
+        path=str(_core.COMMAND_CENTER_STATE_DIR / "session-wakes.json"),
+    )
+    if not allowed:
+        if guard_why != "disabled":
+            ir.mark_stuck(sid, f"wake_guard:{guard_why}", now=now, path=path)
+        _core._log_activity(
+            "inject", "RECOVER_GUARDED",
+            f"session={sid} reason={guard_why} — wake ledger refused another "
+            "automatic recovery; needs a manual force-restart",
+        )
+        return False
     ir.record_attempt(sid, msg_hash, now=now, path=path)
     transaction = _core._apply_pending_input_operations(sid, [{
         "field": "terminal", "action": "pop_head",
@@ -5037,6 +5346,8 @@ def _force_restart_session(sid):
     if spawn is None:
         return {"ok": False, "error": "no live CCC-owned Claude process for this session"}
     ir.clear_stuck(sid, _inject_recovery_state_path())
+    from ccc_server import wake_guard
+    wake_guard.clear(sid, str(_core.COMMAND_CENTER_STATE_DIR / "session-wakes.json"))
     transaction = _core._apply_pending_input_operations(sid, [{
         "field": "terminal", "action": "pop_head",
     }])

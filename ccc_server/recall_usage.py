@@ -932,10 +932,26 @@ def _read_codex_account_usage(now_epoch=None):
     return _core._codex_account_usage_from_response(response, now_epoch=now_epoch)
 
 
+_USAGE_TS_EPOCH_MEMO = {}
+
+
 def _usage_snapshot_epoch(snapshot):
     if not isinstance(snapshot, dict):
         return None
-    dt = _core._stats_parse_ts(snapshot.get("ts"))
+    raw_ts = snapshot.get("ts")
+    if isinstance(raw_ts, str) and raw_ts:
+        cached = _USAGE_TS_EPOCH_MEMO.get(raw_ts)
+        if cached is not None:
+            return cached
+        dt = _core._stats_parse_ts(raw_ts)
+        if dt is None:
+            return None
+        epoch = dt.timestamp()
+        if len(_USAGE_TS_EPOCH_MEMO) >= 65536:
+            _USAGE_TS_EPOCH_MEMO.clear()
+        _USAGE_TS_EPOCH_MEMO[raw_ts] = epoch
+        return epoch
+    dt = _core._stats_parse_ts(raw_ts)
     if dt is None:
         return None
     return dt.timestamp()
@@ -980,12 +996,22 @@ def _read_native_usage_snapshots_unlocked():
 
 
 def _write_native_usage_snapshots_unlocked(snapshots):
-    _core._USAGE_SNAPSHOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _core._USAGE_SNAPSHOTS_FILE.with_suffix(".tmp")
+    path = _core._USAGE_SNAPSHOTS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         for item in snapshots:
             f.write(json.dumps(item, separators=(",", ":")) + "\n")
-    tmp.replace(_core._USAGE_SNAPSHOTS_FILE)
+    tmp.replace(path)
+    try:
+        stat = path.stat()
+        _native_usage_snapshots_memo.update({
+            "path": str(path),
+            "signature": (stat.st_mtime_ns, stat.st_size),
+            "snapshots": list(snapshots),
+        })
+    except OSError:
+        pass
 
 
 def _append_native_usage_snapshot(snapshot, now_epoch=None):

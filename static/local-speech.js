@@ -87,5 +87,6 @@
   }
   if (button) button.addEventListener('click', install);
   window.cccLocalSpeech = { offer: offer };
-  check();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', check);
+  else check();
 })();

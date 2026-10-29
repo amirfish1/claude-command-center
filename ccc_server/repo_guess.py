@@ -7,10 +7,10 @@
 1. Local, no network: an absolute / ~ path in the prompt that lies inside a
    known repo, else a single repo whose folder name appears as a whole word.
 2. Optional TypeSafe Jev call, only when a key is configured (env
-   ``JEV_API_KEY`` or a BYOK ``jev`` key). The prompt is scrubbed of likely
-   secrets first; repos are sent as opaque labels (R1, R2...) with short
-   descriptions, never as paths. Short timeout, no retries, any failure
-   falls back to the local result.
+   ``JEV_API_KEY``, a BYOK ``jev`` key, or a Jev Vault entry). The prompt is
+   scrubbed of likely secrets first; repos are sent as opaque labels
+   (R1, R2...) with short descriptions, never as paths. Short timeout, no
+   retries, any failure falls back to the local result.
 
 Names still living in server.py are reached via ``_core`` at call time, same
 convention as every other ccc_server module. Top-level names are prefixed so
@@ -563,7 +563,23 @@ def _rg_jev_key():
                 return k
     except Exception:
         pass
+    try:
+        from ccc_server import vault
+        entries = vault.vault_list_entries()
+        for entry in entries:
+            if (entry.get("env_var") == "JEV_API_KEY" or entry.get("name") in
+                    ("jev-api-key", "jev-api-key.password", "jev-api-key.token")):
+                key = (vault.vault_get_value(entry["name"]) or "").strip()
+                if key:
+                    return key
+    except Exception:
+        pass
     return ""
+
+
+def repo_guess_status():
+    """Configuration only; never return a key or make a provider call."""
+    return {"ok": True, "jev_configured": bool(_rg_jev_key())}
 
 
 def _rg_ask_jev(key, prompt, cands, current_rep, mentioned=(), members=None):

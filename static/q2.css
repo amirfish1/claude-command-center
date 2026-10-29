@@ -247,6 +247,14 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   background: var(--surface);
   overflow: hidden;
 }
+/* ALL view: the band hosts the history chart plus every live worker, far
+   taller than the 320px cap. Clipped, it left the live-workers list cut off
+   with a blank box below it. Let it fill the column and scroll instead. */
+.q2-diagram:has(.q2-live-workers-wrap) {
+  flex: 1 1 auto;
+  max-height: none;
+  overflow-y: auto;
+}
 /* Sized for the tickets column at its 440px default, which is the tightest
    this has to work at; the column is resizable, so it only gets roomier.
    Raised from 168px (CCC-757 reopen): the worker-stage scroll fix wasn't

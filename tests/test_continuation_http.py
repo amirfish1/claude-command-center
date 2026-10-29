@@ -208,3 +208,19 @@ def test_ephemeral_forward_retry_returns_pane_successor(httpd, monkeypatch):
     assert result['continue_from'] == 'old-codex'
     assert result['deduped']
     assert seen['_dedupe_session_id'] == 'old-codex'
+
+
+def test_continuation_envelope_keeps_author_and_actual_recipient(httpd,monkeypatch):
+    import sender_envelope as attribution
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    a=attribution.service('wt:notify','original')
+    attribution.journal(a,app='wt')
+    seen=[]
+    monkeypatch.setattr(continuation,'spawn_continuation',lambda sid,**kw: seen.append(kw) or {'ok':True,'new_session_id':'successor'})
+    status,result=_request(httpd,'/api/sessions/spawn-continue-from',{'continue_from':'original','prompt':'notice','attr':a})
+    assert status==200 and result['ok']
+    assert attribution.from_text(seen[0]['prompt'])['message_id']==a['message_id']
+    stored=attribution.lookup(message_id=a['message_id'],recipient='successor')
+    assert stored['author']==a['author']
+    assert stored['intended_recipient']['id']=='original'
+    assert stored['delivered_recipient']['id']=='successor'

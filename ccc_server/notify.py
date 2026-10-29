@@ -39,12 +39,14 @@ from datetime import datetime
 from pathlib import Path
 
 from ccc_server import core as _core
+from ccc_server import session_death as _session_death
 from ccc_server import test_isolation_active
 from ccc_server.paths import COMMAND_CENTER_STATE_DIR, _SYS_OSASCRIPT
 
 
 KINDS = frozenset(
-    ("info", "success", "task", "needs_input", "milestone", "digest", "error")
+    ("info", "success", "task", "needs_input", "milestone", "digest", "error",
+     "session_died")
 )
 
 if test_isolation_active():
@@ -280,6 +282,20 @@ def validate(data):
     return item, None
 
 
+def _log_outcome(outcome, item):
+    """One activity.log line per intake attempt (emitted, deduped, ...), so
+    notification cadence can be audited with timestamps: grep ' NOTIFY '."""
+    try:
+        from ccc_server.activity_log import _log_activity
+        _log_activity(
+            "NOTIFY", outcome,
+            f"kind={item.get('kind')} sid={(item.get('session_id') or '-')[:8]} "
+            f"title={item.get('title', '')[:60]!r}",
+        )
+    except Exception:
+        pass
+
+
 def post(data, publish=None, now=None):
     """Validate, rate-limit, dedupe, then emit. Returns the response dict."""
     now = time.time() if now is None else float(now)
@@ -287,6 +303,7 @@ def post(data, publish=None, now=None):
     if err:
         return {"ok": False, "error": err}, 400
     if not _rate_ok(now):
+        _log_outcome("ratelimit", item)
         return {"ok": False, "error": "too many notifications; try again shortly"}, 429
     sid = item.get("session_id")
     if sid and item["kind"] in ("needs_input", "task"):
@@ -294,14 +311,18 @@ def post(data, publish=None, now=None):
         # report the same turn end, and whichever lands first wins.
         window = _NEEDS_INPUT_COOLDOWN_S
         if not _cooldown_ok(sid, "needs_input", now, window):
+            _log_outcome("cooldown", item)
             return {"ok": True, "deduped": True, "id": ""}, 200
         _last_kind_emit[(sid, "task")] = now
     dup_id = _dedupe_hit(item, now)
     if dup_id:
+        _log_outcome("deduped", item)
         return {"ok": True, "deduped": True, "id": dup_id}, 200
     _emit(item, publish=publish, os_notify=_wants_os_banner(data.get("os")))
     if item.get("held"):
+        _log_outcome("held", item)
         return {"ok": True, "id": item["id"], "held": True}, 200
+    _log_outcome("emitted", item)
     return {"ok": True, "id": item["id"]}, 200
 
 
@@ -504,6 +525,20 @@ def observe_session_states(previous, current, publish=None, now=None):
     def _state_of(entry):
         return str((entry or {}).get("state") or "")
 
+    def _died(sid, state):
+        try:
+            return _session_death.consider(sid, state, now=now_epoch)
+        except Exception:
+            return False
+
+    if previous is None:
+        # Dashboard (re)connect: catch sessions that died while nobody watched.
+        try:
+            for sid, state in _session_death.missed_while_away(current):
+                _died(sid, state)
+        except Exception:
+            pass
+
     for sid, cur in current.items():
         before = prev.get(sid)
         cur_state = _state_of(cur)
@@ -545,6 +580,8 @@ def observe_session_states(previous, current, publish=None, now=None):
             emitted.append(_emit(item, publish=publish))
             continue
         if was_busy and cur_state in ("idle", "ended"):
+            if _died(sid, cur_state):
+                continue
             if work_s < _MIN_WORK_S:
                 continue
             if not _cooldown_ok(sid, "task", now_epoch, _TASK_COOLDOWN_S):
@@ -576,6 +613,8 @@ def observe_session_states(previous, current, publish=None, now=None):
             continue
         work_s = now_mono - _work_started.get(sid, now_mono)
         _work_started.pop(sid, None)
+        if _died(sid, "gone"):
+            continue
         if work_s < _MIN_WORK_S:
             continue
         if not _cooldown_ok(sid, "task", now_epoch, _TASK_COOLDOWN_S):
@@ -595,7 +634,75 @@ def observe_session_states(previous, current, publish=None, now=None):
         if _dedupe_hit(item, now_epoch):
             continue
         emitted.append(_emit(item, publish=publish))
+    emitted.extend(_emit_session_deaths(current, now_epoch, publish))
     return emitted
+
+
+def _emit_session_deaths(current, now_epoch, publish=None):
+    """Toast sessions whose death outlived the grace period. Notify-only
+    unless the session opted in to a rerun (auto_rerun.py)."""
+    try:
+        _session_death.track_working(current)
+        incidents = _session_death.due(current, now=now_epoch)
+    except Exception:
+        return []
+    out = []
+    for inc in incidents:
+        sid = inc["session_id"]
+        ident = _session_identity(sid) or {}
+        if not str(ident.get("name") or "").strip() and inc.get("title"):
+            ident = dict(ident, name=" ".join(str(inc["title"]).lstrip("# ").split())[:50])
+        name = _display_name(sid, ident)
+        suffix, body = _session_death.describe(inc)
+        rerun = _plan_rerun(inc)
+        if rerun:
+            from ccc_server import auto_rerun
+            body = body.replace(" Nothing will restart it on its own.", "") + auto_rerun.note_for(rerun)
+        item = {
+            "id": "ntf_" + uuid.uuid4().hex[:16],
+            "kind": "session_died",
+            "title": f"{name} {suffix}",
+            "body": body,
+            "url": f"/?session={sid}",
+            "session_id": sid,
+            "ts": now_epoch,
+        }
+        if rerun and rerun.get("allowed"):  # already in the wake ledger: always carry it out
+            from ccc_server import auto_rerun
+            auto_rerun.execute_async(rerun, inc)
+        if _dedupe_hit(item, now_epoch):
+            continue
+        out.append(_emit(item, publish=publish))
+        _alert_off_dashboard(f"death:{sid}:{inc.get('size')}", item)
+    return out
+
+
+def _plan_rerun(inc):
+    """RESIL-9: notify-only unless the session (or a host rule for its job)
+    opted in to one automatic rerun, gated by the wake guard. Never raises."""
+    try:
+        from ccc_server import auto_rerun
+        return auto_rerun.plan(inc)
+    except Exception:
+        return None
+
+
+def _alert_off_dashboard(key, item):
+    """RESIL-6: also reach the owner's phone via CCC_ALERT_COMMAND (off unless
+    set). Once per incident key, rate-capped; never raises."""
+    try:
+        from ccc_server import alert_hook
+        from ccc_server.activity_log import _log_activity
+
+        def log(outcome):
+            _log_activity("ALERT_HOOK", "RAN", f"key={key[:60]} {outcome}")
+
+        result = alert_hook.send(key, item.get("title"), item.get("body"),
+                                 alert_hook.dashboard_link(item.get("url")), log=log)
+        if result != alert_hook.OFF:
+            _log_activity("ALERT_HOOK", result.upper(), f"key={key[:60]}")
+    except Exception:
+        pass
 
 
 # ── scheduled items: daily digest + savings milestones ───────────────────
@@ -833,3 +940,4 @@ def reset_for_tests():
         _rate_bucket.clear()
         _work_started.clear()
         _last_kind_emit.clear()
+    _session_death.reset_for_tests()

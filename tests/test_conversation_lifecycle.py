@@ -207,13 +207,13 @@ def test_parallel_trash_operations_do_not_lose_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    real_save = server._save_archived_conversations
+    real_save = server._update_archived_conversations
 
-    def delayed_save(rows):
+    def delayed_save(*args, **kwargs):
         time.sleep(0.03)
-        return real_save(rows)
+        return real_save(*args, **kwargs)
 
-    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_archived_conversations", delayed_save)
     start = threading.Event()
 
     def trash(sid):
@@ -237,13 +237,13 @@ def test_parallel_archive_endpoints_do_not_lose_sessions(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    real_save = server._save_archived_conversations
+    real_save = server._update_archived_conversations
 
-    def delayed_save(rows):
+    def delayed_save(*args, **kwargs):
         time.sleep(0.03)
-        return real_save(rows)
+        return real_save(*args, **kwargs)
 
-    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_archived_conversations", delayed_save)
     start = threading.Event()
 
     def archive(sid):
@@ -268,13 +268,13 @@ def test_parallel_bulk_archive_calls_do_not_lose_sessions(tmp_path, monkeypatch)
     monkeypatch.setattr(server, "_archive_grace", {})
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    real_save = server._save_archived_conversations
+    real_save = server._update_archived_conversations
 
-    def delayed_save(rows):
+    def delayed_save(*args, **kwargs):
         time.sleep(0.03)
-        return real_save(rows)
+        return real_save(*args, **kwargs)
 
-    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_archived_conversations", delayed_save)
     start = threading.Event()
 
     def archive(sid):
@@ -343,13 +343,13 @@ def test_unarchive_does_not_erase_concurrent_worker_trash(tmp_path, monkeypatch)
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
     server._save_archived_conversations(["worker-a"])
     server._save_trashed_conversations(["worker-a"])
-    real_save = server._save_trashed_conversations
+    real_save = server._update_trashed_conversations
 
-    def delayed_save(rows):
-        time.sleep(0.05 if not rows else 0.01)
-        return real_save(rows)
+    def delayed_save(add=(), remove=(), **kwargs):
+        time.sleep(0.05 if remove else 0.01)
+        return real_save(add=add, remove=remove, **kwargs)
 
-    monkeypatch.setattr(server, "_save_trashed_conversations", delayed_save)
+    monkeypatch.setattr(server, "_update_trashed_conversations", delayed_save)
     start = threading.Event()
 
     def unarchive():
@@ -427,8 +427,8 @@ def test_single_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatc
     server._save_trashed_conversations(["sid-a"])
     monkeypatch.setattr(
         server,
-        "_save_archived_conversations",
-        lambda rows: (_ for _ in ()).throw(OSError("archive write failed")),
+        "_update_archived_conversations",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("archive write failed")),
     )
 
     status, _body = _post_json(
@@ -470,8 +470,8 @@ def test_bulk_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch)
     server._save_trashed_conversations(["sid-a"])
     monkeypatch.setattr(
         server,
-        "_save_archived_conversations",
-        lambda rows: (_ for _ in ()).throw(OSError("archive write failed")),
+        "_update_archived_conversations",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("archive write failed")),
     )
 
     status, _body = _post_json(
@@ -571,3 +571,78 @@ def test_every_engine_finder_stamps_lifecycle_state():
         assert "_load_conversation_lifecycle_sets" in source, finder.__name__
         assert '"archived"' in source, finder.__name__
         assert '"trashed"' in source, finder.__name__
+
+
+@pytest.fixture
+def archive_group_state(tmp_path, monkeypatch):
+    from ccc_server import idea_tickets
+
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    monkeypatch.setattr(server, "_idea_tickets_on_archive", lambda *args: None)
+    monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
+    monkeypatch.setattr(server, "_restamp_archive_serve_cache_after_mutation", lambda **kw: None)
+    monkeypatch.setattr(server, "_publish_dashboard_patch", lambda *args: None)
+    monkeypatch.setattr(idea_tickets, "_enabled", lambda: True)
+    monkeypatch.setattr(idea_tickets, "on_archive", lambda *args: None)
+    monkeypatch.setattr(idea_tickets, "ticket_for_session", lambda sid: (
+        {"sessions": ["origin", "continued", "helper"]}
+        if sid in {"origin", "continued", "helper"} else None
+    ))
+    monkeypatch.setattr(server, "_find_descendant_sessions", lambda sid: (
+        ["nested"] if sid == "helper" else []
+    ))
+    return {"origin", "continued", "helper", "nested"}
+
+
+@pytest.mark.parametrize("clicked", ["origin", "continued", "helper"])
+def test_archive_endpoint_moves_entire_ticket_and_nested_children(archive_group_state, clicked):
+    server._save_archived_conversations(["unrelated"])
+    status, body = _post_json(
+        f"/api/conversations/{clicked}/archive", {"archived": True},
+    )
+    assert status == 200
+    assert set(body["session_ids"]) == archive_group_state
+    assert set(server._load_archived_conversations(sweep=False)) == archive_group_state | {"unrelated"}
+    assert set(server._archive_grace) == archive_group_state
+
+    status, body = _post_json(
+        f"/api/conversations/{clicked}/archive", {"archived": False},
+    )
+    assert status == 200
+    assert body["archived"] is False
+    assert set(body["session_ids"]) == archive_group_state
+    assert server._load_archived_conversations(sweep=False) == ["unrelated"]
+    assert not server._archive_grace
+
+
+def test_bulk_archive_expands_and_deduplicates_groups(archive_group_state):
+    status, body = _post_json("/api/conversations/archive-bulk", {
+        "session_ids": ["origin", "helper"], "archived": True,
+    })
+    assert status == 200
+    assert set(body["changed"]) == archive_group_state
+    assert body["count"] == 4
+    status, repeated = _post_json("/api/conversations/archive-bulk", {
+        "session_ids": ["origin"], "archived": True,
+    })
+    assert status == 200
+    assert repeated["changed"] == []
+    assert set(repeated["unchanged"]) == archive_group_state
+
+
+def test_unticketed_session_archives_only_its_descendants(archive_group_state, monkeypatch):
+    from ccc_server import idea_tickets
+
+    monkeypatch.setattr(idea_tickets, "_enabled", lambda: False)
+    monkeypatch.setattr(server, "_find_descendant_sessions", lambda sid: (
+        ["child", "grandchild"] if sid == "parent" else []
+    ))
+    assert server._set_conversation_archived("parent", True) == (True, True)
+    assert set(server._load_archived_conversations(sweep=False)) == {"parent", "child", "grandchild"}
+    assert server._set_conversation_archived("parent", None) == (False, True)
+    assert not server._load_archived_conversations(sweep=False)

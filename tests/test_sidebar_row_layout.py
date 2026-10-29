@@ -14,7 +14,7 @@ class TestSidebarRowLayout(unittest.TestCase):
 
         row_start = app_js.index("return '<div class=\"conv-item'")
         row_html = app_js[row_start:app_js.index("+   hoverMetaRowHtml", row_start)]
-        main_row = row_html[row_html.index("+ '<div class=\"conv-main-row\">'"):]
+        main_row = row_html[row_html.index("+ '<div class=\"conv-main-row"):]
         row_end = row_html[row_html.index("+ '<span class=\"conv-row-end\">'"):]
 
         self.assertIn("+ sessionIconHtml\n            + _nyaChevronHtml", main_row)
@@ -113,7 +113,8 @@ console.log('ok');
         group_start = app_js.index("const _renderRepeatGroup = (cards, opts, key) =>")
         group_html = app_js[group_start:app_js.index("const _renderRowsWithRepeatGroups", group_start)]
 
-        self.assertIn("const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' });", group_html)
+        self.assertIn("const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' })", group_html)
+        self.assertIn(".replace(/^<button type=\"button\"/, '<span aria-hidden=\"true\"')", group_html)
         self.assertIn("+ groupIconHtml", group_html)
         self.assertNotIn("conv-repeat-group-meta", group_html)
         self.assertIn(".conv-repeat-group-toggle > .conv-session-icon", app_css)

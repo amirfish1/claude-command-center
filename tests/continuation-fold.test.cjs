@@ -86,8 +86,11 @@ test('the successor is the effective parent of the session it continued from', (
   assert.equal(ctx.eff('successor-sess-01', 'origin-session-01'), '');
 });
 
-test('the ⤴ from: chip stays visible on unselected rows, hovered or not', () => {
-  assert.match(css, /\.conv-item:not\(\.active\) \.conv-hover-meta-row:has\(\.conv-session-origin-chip\.is-successor\) \{/);
+test('continuations replace the from chip with an expandable earlier-session list', () => {
+  assert.equal(css.includes('.conv-session-origin-chip.is-successor'), false);
+  assert.match(app, /if \(contId\) return '';/);
+  assert.equal(app.includes('const earlierDetailsHtml = _sessionFamilyDetailsHtml('), true);
+  assert.equal(app.includes("'.conv-family-link[data-parent-sid]'"), true);
 });
 
 test('hovering an unselected row adds no meta overlay (the row is one click target)', () => {
@@ -102,7 +105,7 @@ test('the selected-row title no longer carries ⤴ from: chips', () => {
 
 test('a continuation is not counted as a lane of its origin; the head carries the chain lanes', () => {
   assert.match(app, /if \(!pid \|\| continuationParentId\(row\) === pid\) return;/);
-  assert.match(app, /subagentClusterMeta \? 0 : _sessionLaneCountWithAncestors\(c\)/);
+  assert.equal(app.includes('subagentClusterMeta ? [] : [..._familyIds].flatMap(id => _sessionChildrenById.get(id) || [])'), true);
 });
 
 test('effective-parent lookups index origin markers once per snapshot, not once per row', () => {
@@ -145,4 +148,24 @@ test('effective-parent lookups index origin markers once per snapshot, not once 
   assert.equal(ctx.eff('sess-0598', ''), 'sess-0599');
   // One index build (n reads) plus at most one self-row read per call.
   assert.ok(reads <= n + 4 * n + 3 * 2, `first_message read ${reads} times for ${n} rows across 4 passes`);
+});
+
+test('continued topics strip stacked legacy labels and inherit plain parent titles', () => {
+  const ctx = { LEADING_PATH_OR_URL_RE: /(?!)/, LEADING_CCC_PASTED_IMAGE_PATH_RE: /(?!)/ };
+  vm.createContext(ctx);
+  vm.runInContext(
+    extractFunction('stripLeadingPathOrUrl')
+      + extractFunction('capitalizeSessionTitleStart')
+      + extractFunction('sidebarRowDisplayTitle')
+      + extractFunction('continuationFallbackTitle')
+      + '; this.display = sidebarRowDisplayTitle; this.fallback = continuationFallbackTitle;',
+    ctx,
+  );
+  assert.equal(ctx.display('⤴︎ Cont’d: ⤴ Add letters to options'), 'Add letters to options');
+  assert.equal(ctx.display("↪ Continue cont'd: Topic"), 'Topic');
+  assert.equal(ctx.display('Continue improving search'), 'Improving search');
+  assert.equal(ctx.display('Working with continued fractions'), 'Working with continued fractions');
+  assert.equal(ctx.fallback('⤴ Cont’d: Topic', 'parent-session'), 'Topic');
+  assert.equal(ctx.fallback('', 'parent-session'), 'parent-s');
+  assert.equal(app.includes("title = '⤴︎ ' + title"), false);
 });

@@ -1,1 +1,0 @@
-- Send failures with `repo_not_allowed` now offer an **Add repo…** button in the error toast that registers the folder so you can resend.
