@@ -23967,8 +23967,13 @@ body.has-gc-reader .pwa-install-banner {
 .fq-row.is-waiting.is-att-answer .fq-status { background: #d29922; box-shadow: none; }
 .fq-row.is-waiting.is-att-external .fq-note { color: #a5d6ff; }
 :root[data-theme="light"] .fq-row.is-waiting.is-att-external .fq-note { color: #0550ae; }
-/* Answer handoff on an unblocked row: amber dot unless a live worker pulses. */
-.fq-row.is-open.is-att-answer .fq-status { background: #d29922; box-shadow: 0 0 0 3px rgba(210,153,34,0.22); }
+/* Answer handoff on an unblocked row: amber dot and tint while the answer is
+   queued/sending; a live worker on a delivered answer (.is-att-working)
+   keeps its green pulse and the 'working on answer' title. */
+.fq-row.is-open.is-att-answer .fq-status,
+.fq-row.is-in_progress.is-att-answer:not(.is-att-working) .fq-status { background: #d29922; box-shadow: 0 0 0 3px rgba(210,153,34,0.22); animation: none; }
+.fq-row.is-open.is-att-answer,
+.fq-row.is-in_progress.is-att-answer:not(.is-att-working) { background: rgba(210,153,34,0.05); }
 /* in_review (WT-5 gate): closed by its worker, waiting on accept/reject. */
 .fq-chip.fq-review { background: rgba(163,113,247,0.20); color: #d2a8ff; }
 /* WT-4 dependency: replaces READY while a blocked_by ticket is unfinished. */

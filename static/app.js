@@ -55490,6 +55490,7 @@
           ? 'Queued to run - click to cancel'
           : (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
         const statusTitle = (blocked && att) ? att.label : blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
+          : (att && att.tone === 'answer') ? att.label
           : (stageTone && !queuedToRun) ? stageToneTitle
           : unverifiedClaim ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
           : staleClaim ? 'stale claim - no current live worker'
@@ -55511,7 +55512,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(blocked && !ownerBlocked ? 'waiting' : status) + (att ? ' is-att-' + escapeAttr(att.tone) : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(blocked && !ownerBlocked ? 'waiting' : status) + (att ? ' is-att-' + escapeAttr(att.tone) : '') + (att && att.key === 'answer-working' ? ' is-att-working' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(compactRef) + '</span>'
           + queueLabelHtml

@@ -239,6 +239,16 @@
   // Who the ticket is waiting on (CCC-244): owner decision, external actor,
   // dependency, worker or answer delivery. Shared with the main dashboard via
   // static/queue-attention.js, so labels, colours and counts agree.
+  // GitHub-backed blocks are answered on GitHub. Only an owner decision asks
+  // the owner to answer; any other wait names who must act instead (CCC-244).
+  function githubBlockedHint(it) {
+    var a = attentionOf(it);
+    if (!a || a.owner || a.key === 'gate') {
+      return 'This ticket needs input, but is synced from GitHub \u2014 answer it there.';
+    }
+    var who = a.label.charAt(0).toUpperCase() + a.label.slice(1);
+    return who + '; nothing for you to answer. Synced from GitHub \u2014 changes to the wait happen there.';
+  }
   function attentionOf(it) {
     var QA = window.QueueAttention;
     if (!QA || !it) return null;
@@ -2305,10 +2315,13 @@
     var st = statusOf(it);
     var ref = it.ref || '';
     var title = titleOf(it).split('\n')[0];
-    // A blocked worker has already left; who the block waits on is the
+    var att = st !== 'closed' ? attentionOf(it) : null;
+    // A blocked worker has already left, and an answer in flight already
+    // says whether a worker has it: who/what the ticket waits on is the
     // signal, not whether the claim that asked is still alive.
-    var stale = st !== 'blocked' && isStaleClaim(it);
-    var unverified = st !== 'blocked' && isUnverifiedClaim(it);
+    var claimShown = st !== 'blocked' && !(att && att.tone === 'answer');
+    var stale = claimShown && isStaleClaim(it);
+    var unverified = claimShown && isUnverifiedClaim(it);
     var unresolved = String(it.status) === 'closed' && unresolvedNotes(it).length > 0;
     // Same source the main dashboard uses: last touch, or close time once
     // closed. Rendered without the trailing " ago", as it is there.
@@ -2327,7 +2340,6 @@
     // request is still true but no longer the thing to tell someone; showing
     // "run requested" here reads as if nothing had happened yet.
     var queued = canRun && !!it.run_requested && st !== 'blocked';
-    var att = st !== 'closed' ? attentionOf(it) : null;
     // A block someone else must clear reads "waiting", never "needs input".
     var rowSt = (st === 'blocked' && att && !att.owner && att.key !== 'gate') ? 'waiting' : st;
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
@@ -2335,6 +2347,9 @@
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
       : queued ? 'launching\u2026'
       : (st === 'blocked' && att) ? (att.owner ? statusLabel(st) : att.label)
+      // An answer in flight (queued/sending) or received names that state, so
+      // the status word never reads plain "in progress" over an amber chip.
+      : (att && att.tone === 'answer') ? att.label
       : statusLabel(st);
     // Hover-only detail for the stale-claim dot: names the actual source
     // (workers.json + a liveness check) so "stale claim" isn't an opaque
@@ -2353,11 +2368,13 @@
     // to the claiming worker, so a stale/unverified claim still wins there;
     // in plan, verify or review the builder being gone is expected.
     var claimIssue = (stale && st !== 'blocked') || unverified;
-    var stageText = (sp && !sp.queued && st !== 'closed' && !queued && !(claimIssue && sp.current === 'build'))
+    var stageText = (sp && !sp.queued && st !== 'closed' && !queued && !(claimIssue && sp.current === 'build')
+        && !(att && att.tone === 'answer'))
       ? stageNowText(it, sp, true) : '';
     var stuckAtStage = sp ? stageStuck(it, sp) : false;
     return '<button type="button" class="q2-trow is-' + esc(rowSt)
       + (att ? ' is-att-' + esc(att.tone) : '')
+      + (att && att.key === 'answer-working' ? ' is-att-working' : '')
       + (stageText ? ' has-stage' : '')
       + (stuckAtStage ? ' is-stage-stuck' : '')
       + (ref === state.ref ? ' is-selected' : '')
@@ -3068,7 +3085,7 @@
               // user explicitly where to actually respond instead of
               // silently dropping the box.
               ? '<div class="q2-inline q2-inline-answer">'
-                + '<span class="q2-dim">This ticket needs input, but is synced from GitHub — answer it there.'
+                + '<span class="q2-dim">' + esc(githubBlockedHint(item))
                 + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
                 + '</span></div>'
               // The question is NOT repeated here. The timeline's last "Needs input"
