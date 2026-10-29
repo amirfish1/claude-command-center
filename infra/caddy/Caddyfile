@@ -24,11 +24,11 @@
 	default_sni localhost
 }
 
-# Serve on :8443 for the local hostnames + loopback IPs. Listing explicit
-# subjects (rather than a bare `:8443`) makes Caddy's internal CA mint a cert
-# whose SAN covers localhost / 127.0.0.1 / ::1, so the TLS handshake succeeds
-# whether the client connects by name or by IP. Add your tailnet/LAN hostname
-# here if you reach the dashboard under a different name.
+# Serve the local hostname and loopback IPs. Caddy issues certificates for
+# these individual subjects. Clients without SNI receive the localhost cert
+# via default_sni, so use https://localhost:8443 for hostname-verified TLS;
+# an IP-only client without SNI cannot validate that hostname certificate.
+# Add your VPN/LAN hostname here before using it from another device.
 https://localhost:8443, https://127.0.0.1:8443, https://[::1]:8443 {
 	tls internal
 

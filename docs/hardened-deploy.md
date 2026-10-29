@@ -74,7 +74,9 @@ this profile's scope.
 
 4. **Open the dashboard:** <https://localhost:8443>. Your browser will warn
    about the self-signed cert (Caddy's internal CA) — accept it once. Log in
-   with the credentials from step 2.
+   with the credentials from step 2. Use `localhost` for hostname-verified TLS;
+   clients that connect by IP without SNI receive the default `localhost`
+   certificate, which does not validate for that IP.
 
 ## Verification
 
