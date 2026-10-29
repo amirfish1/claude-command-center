@@ -73,7 +73,7 @@ def _cross_process_pump_worker(
 
 
 def _cross_process_rmw_worker(
-    pending_file, session_id, action, both_loaded, first_saved, results,
+    pending_file, session_id, action, both_loaded, start_mutations, first_saved, results,
 ):
     import server as process_server
 
@@ -85,6 +85,8 @@ def _cross_process_rmw_worker(
         process_server._auto_resume_opt_in.clear()
         process_server._load_pending_inputs()
         both_loaded.put(os.getpid())
+        if not start_mutations.wait(10):
+            raise AssertionError("both writers did not finish loading")
         if action == "update" and not first_saved.wait(5):
             raise AssertionError("delete writer did not persist")
         with process_server._pending_resume_lock:
@@ -164,9 +166,27 @@ def clean_pending_queues(monkeypatch):
         suppressions.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_worker_compat(monkeypatch):
+    """Keep these tests hermetic from a real CCC worker on the dev machine.
+
+    resume_session_codex refuses to run when a reachable worker lacks the
+    pending-input CAS capability; a stale worker left running on a developer
+    box made the queue-pump tests fail locally while CI (no worker) passed.
+    """
+    monkeypatch.setattr(server, "_get_worker_compat_cache", lambda *a, **k: {})
+
+
 @pytest.fixture
 def router_env(monkeypatch):
     resume = mock.Mock()
+    # A Codex Desktop on the dev machine (~/.codex/ipc) would own delivery.
+    monkeypatch.setenv("CCC_CODEX_DESKTOP_IPC", "0")
+    # Never reach the real Codex CLI health probe (subprocess, up to 5s).
+    monkeypatch.setattr(
+        server, "_resolve_codex_bin",
+        lambda: {"available": True, "bin": "/usr/bin/codex-test"},
+    )
     monkeypatch.setattr(
         server, "_persist_pending_inputs_current", mock.Mock(return_value=True),
     )
@@ -860,8 +880,11 @@ def test_second_explicit_steer_cannot_deliver_after_first_claim(router_env):
     assert router_env.resume.call_count == 1
 
 
-def test_direct_steer_excludes_codex_resume_queue_pump(router_env):
+def test_direct_steer_excludes_codex_resume_queue_pump(router_env, monkeypatch):
     sid = "steer-vs-pump"
+    # The pump's busy probe would start a real Codex app-server and lsof the
+    # host's ~/.codex state db; this test is about lock exclusion only.
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
     server._pending_resume_queue[sid] = ["target", "next"]
     entered = threading.Event()
     release = threading.Event()
@@ -970,25 +993,28 @@ def test_two_process_session_rmw_neither_resurrects_nor_loses_rows(tmp_path):
     }))
     context = multiprocessing.get_context("spawn")
     both_loaded = context.Queue()
+    start_mutations = context.Event()
     first_saved = context.Event()
     results = context.Queue()
     delete_writer = context.Process(
         target=_cross_process_rmw_worker,
-        args=(pending_file, "sid-a", "delete", both_loaded, first_saved, results),
+        args=(pending_file, "sid-a", "delete", both_loaded, start_mutations, first_saved, results),
     )
     update_writer = context.Process(
         target=_cross_process_rmw_worker,
-        args=(pending_file, "sid-b", "update", both_loaded, first_saved, results),
+        args=(pending_file, "sid-b", "update", both_loaded, start_mutations, first_saved, results),
     )
     delete_writer.start()
     update_writer.start()
     assert both_loaded.get(timeout=10) != both_loaded.get(timeout=10)
+    # Both children must hold the stale snapshot before either mutates it.
+    start_mutations.set()
     outcomes = [results.get(timeout=10), results.get(timeout=10)]
     delete_writer.join(10)
     update_writer.join(10)
 
     assert all(outcome[0] != "error" for outcome in outcomes), outcomes
-    assert all(outcome[2] is True for outcome in outcomes)
+    assert all(outcome[2] is True for outcome in outcomes), outcomes
     payload = json.loads(pending_file.read_text())
     assert "sid-a" not in payload["resume_queue"]
     assert payload["resume_queue"]["sid-b"] == ["new-b"]
@@ -2558,6 +2584,7 @@ def test_resume_queue_insert_front_dedupe_skips_existing_value(monkeypatch, tmp_
 def test_fifo_pump_native_delivery_preserves_queue_origin(monkeypatch, tmp_path, engine_busy):
     """Exercise the real native wrapper, including rollback when Codex is busy."""
     sid = "fifo-native-origin"
+    monkeypatch.setenv("CCC_CODEX_DESKTOP_IPC", "0")  # ignore a live Codex Desktop
     monkeypatch.setattr(server, "_schedule_codex_queue_pump", lambda sid: None)
     monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
     monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs")

@@ -865,6 +865,9 @@ def codex_client_dispatch(action, data):
                 resolve_repo=_core.resolve_repo_path, read_thread=lambda _: tombstone)
         else:
             _client_scope("thread/read", {"threadId": tid}, context)
+        if action == "handover":
+            from ccc_server.codex_handover import handover_to_desktop
+            return handover_to_desktop(tid, cwd=_client_read_thread(tid).get("cwd"))
         if action == "queue-owner":
             if _client_desktop_mode():
                 raise ValueError("This desktop conversation keeps its queue with Codex Desktop")
@@ -929,6 +932,17 @@ def codex_client_dispatch(action, data):
 
 
 def codex_client_call(action, data):
+    # Codex cloud (dot/aeon) threads are read-only: they live in OpenAI's
+    # cloud, not in the local app-server, so no local action may target one.
+    if isinstance(data, dict):
+        _ctx = data.get("context") or {}
+        _tid = _ctx.get("thread_id") or _ctx.get("session_id") or ""
+        try:
+            if _tid and _core.is_cloud_thread_id(_tid):
+                return {"ok": False, "error": "cloud thread, read-only in CCC",
+                        "cloud_readonly": True}
+        except Exception:
+            pass
     # Engine query dispatch deliberately does not persist the payload. This
     # channel carries OAuth answers and audio as well as ordinary operations.
     # Mutation receipts above prevent a retry from submitting an action twice.

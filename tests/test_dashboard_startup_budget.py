@@ -91,8 +91,10 @@ def test_optional_startup_reads_wait_for_archive_then_use_the_four_slot_pool():
     assert "_startupReplaysDirect(task.input, task.init) ? _startupBaseFetch : backgroundApiFetch" in source
     assert "'/api/conversations/list'" in source
     assert "window.fetch = startupBudgetedFetch" in source
-    assert "addEventListener('pointerdown', _releaseStartupApiReads" in source
-    assert "addEventListener('keydown', _releaseStartupApiReads" in source
+    assert "window.addEventListener('pointerdown'" in source
+    assert "window.addEventListener('keydown', () => _releaseStartupApiReads()" in source
+    # CCC-143: the release waits for an in-flight conversation tail.
+    assert "_startupOpenFetches.size && held < STARTUP_OPEN_HOLD_MAX_MS" in source
 
 
 def test_background_pool_reads_honor_the_startup_deferral():
@@ -143,7 +145,9 @@ def test_archive_readiness_settles_even_for_empty_or_failed_loads():
     assert "_markArchiveFirstLoaded();" in finally_block
     marker_start = SOURCE.index("function _markArchiveFirstLoaded()")
     marker_end = SOURCE.index("window.__cccThroughputActivityRows", marker_start)
-    assert "_releaseStartupApiReads();" in SOURCE[marker_start:marker_end]
+    marker_body = SOURCE[marker_start:marker_end]
+    assert "hideLoadingOverlay();" in marker_body
+    assert "_releaseStartupApiReads();" in marker_body
 
 
 def test_merging_spawn_defaults_does_not_refetch_spawn_defaults():
@@ -186,7 +190,7 @@ def test_archive_scroll_restore_skips_layout_reads_for_a_pristine_capture():
     # remaining JS chunk between list arrival and rows painted. On first boot
     # the capture is pristine (placeholder at scrollTop 0, no anchor row), so
     # there is nothing to restore and no reason to touch layout.
-    restore = _function("function _restoreArchiveListScroll", "// Dedupe concurrent /api/conversations/all")
+    restore = _function("function _restoreArchiveListScroll", "const ARCHIVE_SIDEBAR_CACHE_KEY")
     assert "function _archiveScrollStateIsPristine(" in SOURCE
     assert restore.index("_archiveScrollStateIsPristine(state)") < restore.index("restore();")
     pristine = _function("function _archiveScrollStateIsPristine(", "function _restoreArchiveListScroll")
@@ -238,6 +242,18 @@ def test_boot_skips_the_second_full_render_when_recovery_already_painted_the_row
     assert "_lastArchiveRenderFilter" in covers
 
 
+def test_stuck_recovery_waits_for_an_inflight_fetch_instead_of_demoting_to_7d():
+    # CCC-118: the loading-status poll's first tick runs recovery while a
+    # 4k-row 'all' payload is still parsing. Recovery demoted the saved window
+    # to 7d and fired a second list request + full re-render on every 'all'
+    # boot. It must wait on the in-flight fetch for the current window first.
+    recovery = _function("function _recoverArchiveRenderIfStuck()", "function _scheduleArchiveStaleRetry()")
+    assert recovery.index("_archiveListFetchInflight(currentWin)") < recovery.index("localStorage.setItem(ARCHIVE_WINDOW_KEY, '7d')")
+    helper = _function("function _archiveListFetchInflight(", "function _recoverArchiveRenderIfStuck()")
+    assert "_archiveBootstrapFetchPromise" in helper
+    assert "_archiveAllInflight" in helper
+
+
 def test_index_html_requests_features_once_at_boot():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
@@ -261,3 +277,40 @@ def test_reader_only_popouts_skip_dashboard_stream_heartbeat_and_subagent_status
     pills = _function("function _popoutProcPills()", "if (CONV_POPOUT_MODE) { try { _popoutProcPills(); }")
     assert "if (String(CONV_POPOUT_TARGET).includes(':agent-')) return;" in pills
     assert "if (document.hidden) return;" in pills
+
+
+def test_window_all_sidebar_render_avoids_per_row_formatter_and_repo_rebuilds():
+    # CCC-120: with window=all the sidebar render sees ~11k rows per pass.
+    # Number#toLocaleString() built an Intl formatter per row (context-badge
+    # tooltip), and rowBelongsToKnownRepo rebuilt the known-repo list per row.
+    assert "ctxPct.displayTokens.toLocaleString()" not in SOURCE
+    assert "_fmtInt(ctxPct.displayTokens)" in SOURCE
+    known = _function("function _sidebarKnownRepoPaths()", "function rowBelongsToKnownRepo(")
+    assert "cache.repos === repos" in known
+
+
+def test_evergreen_queue_sig_ignores_ticking_past_worker_seconds():
+    # CCC-120: ended_ago_seconds changes on every fetch, so a sig over the raw
+    # value forced a full sidebar re-render on every evergreen poll. Key on the
+    # rendered age label instead.
+    fresh = _function("async function _ensureEvergreenQueuesFresh()", "function _wtLogVerbClass(")
+    assert "pw.ended_ago_seconds])" not in fresh
+    assert "_uxqFmtAge(" in fresh
+
+
+def test_startup_critical_read_defers_federated_and_live_activity_session_polls():
+    critical = _function("function _startupCriticalApiRead", "function _startupReplaysDirect")
+    assert "req.pathname === '/api/sessions/live-activity'" in critical
+    assert "req.searchParams.get('peers_only') === '1'" in critical
+    assert "req.searchParams.get('federated') === '1'" in critical
+
+    local_speech = (ROOT / "static" / "local-speech.js").read_text(encoding="utf-8")
+    assert "if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', check);" in local_speech
+
+
+def test_threaded_http_server_increases_listen_backlog_for_reload_bursts():
+    server_py = (ROOT / "server.py").read_text(encoding="utf-8")
+    start = server_py.index("class ThreadedHTTPServer(")
+    block = server_py[start:server_py.index("port = PORT", start)]
+    assert "request_queue_size = 128" in block
+

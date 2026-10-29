@@ -337,11 +337,8 @@ def _worker_pid_alive(pidfile):
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
     except OSError:
         # No /proc (macOS): fall back to a bare liveness probe.
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        from ccc_server.paths import _is_pid_alive
+        return _is_pid_alive(pid)
     return b"ccc_worker" in cmdline
 
 
@@ -381,6 +378,7 @@ def serve(path=None):
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    _install_stack_dump_signal()
     print(
         f"CCC worker running pid={runtime.pid} epoch={runtime.epoch} "
         f"socket={path} nofile={open_files}",
@@ -425,6 +423,29 @@ def serve(path=None):
                     pidfile.unlink()
             except OSError:
                 pass
+
+
+def _dump_stacks_on_signal(_signum, _frame):
+    # server is imported lazily (worker_engines._legacy), which also opens
+    # python-stacks.log; before that there is nothing worth dumping.
+    legacy = sys.modules.get("server")
+    dump = getattr(legacy, "_dump_python_stacks", None)
+    if dump is not None:
+        threading.Thread(
+            target=dump, args=("worker SIGUSR2",), daemon=True,
+            name="ccc-stack-dump",
+        ).start()
+
+
+def _install_stack_dump_signal():
+    """SIGUSR2 dumps worker stacks instead of terminating it (CCC-145).
+
+    server's own handler can only be installed from the main thread, and the
+    worker imports server from a request thread, so the worker owns it.
+    """
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is not None:
+        signal.signal(sigusr2, _dump_stacks_on_signal)
 
 
 def main(argv=None):

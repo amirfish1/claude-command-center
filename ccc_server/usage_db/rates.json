@@ -148,6 +148,18 @@
   },
   {
    "provider": "openai",
+   "pricing_key": "gpt-6-1-sol",
+   "effective_from": "1970-01-01",
+   "input": 2.0,
+   "cache_read": 0.1,
+   "cache_write_5m": 2.5,
+   "cache_write_1h": null,
+   "output": 10.0,
+   "source_note": "Standard short-context API list-price equivalent; excludes long-context and service-tier premiums. https://developers.openai.com/api/docs/pricing; applied to all model history since launch.",
+   "verified_at": "2026-10-18"
+  },
+  {
+   "provider": "openai",
    "pricing_key": "gpt-6-astra",
    "effective_from": "1970-01-01",
    "input": 10.0,

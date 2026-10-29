@@ -212,11 +212,29 @@ request — a browser reload is enough), `docs/`, `changelog.d/`, `tests/`,
 markdown. Frontend-only fixes are `N/N/N`.
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center.worker
-launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center
+ccc restart            # worker, then dashboard (POST /api/restart/all)
+ccc restart worker     # worker only (POST /api/restart/worker)
+ccc restart dashboard  # dashboard only (POST /api/restart)
 ```
 
-Order does not matter: on launch `run.sh` compares the worker's loaded code
+**Agents never restart CCC with `systemctl --user restart ccc*` or
+`launchctl kickstart` directly.** On one busy Linux host, 13 of ~23 dashboard
+and worker restarts in a day were agents restarting after their own commits,
+each skipping the drain/adopt handoff and each costing a ~30s cold warmup
+(OPS-150). `ccc restart` goes through the drain-aware endpoints and debounces:
+a request within 5 minutes of the last restart (`CCC_RESTART_DEBOUNCE_S`)
+becomes one pending restart that a detached runner fires when the window ends,
+merging targets (worker + dashboard = all), so the newest commit still goes
+live. A 409 (the server says a restart is unsafe right now) is retried every
+minute, up to 10 times. State lives in
+`~/.claude/command-center/restart-debounce.json`, runner output in
+`restart-debounce.log` next to it. `--now` skips the window; use it only when a
+human asked for an immediate restart. The raw `launchctl kickstart -k
+gui/$(id -u)/com.github.claude-command-center[.worker]` (or `systemctl --user
+restart ccc[-worker]` on Linux) is for a human recovering a wedged server that
+no longer answers HTTP.
+
+Order does not matter for the raw commands: on launch `run.sh` compares the worker's loaded code
 fingerprint (`server.py` + `ccc_server/*.py`) to the repo, kickstarts a stale
 worker, and waits for the new worker pid before starting the dashboard. So
 `kickstart`-ing only the dashboard also refreshes a stale worker; the second
@@ -235,12 +253,14 @@ Depends entirely on what you touched. Most changes ship the moment you `git push
 | `docs/appcast.xml` | Same as `docs/` — but this is what Sparkle reads. | Push, then verify `curl -s https://ccc.amirfish.ai/appcast.xml` returns the new entry. |
 | `scripts/macapp/main.swift`, `scripts/build-dmg.sh`, `scripts/release-dmg.sh`, `scripts/macapp/vendor/Sparkle.framework` (the .app shell or DMG build flow) | **DMG users get it ONLY via Sparkle auto-update**, which only fires when you ship a new versioned DMG with an EdDSA signature in the appcast. | Bump version → `./scripts/release-dmg.sh X.Y.Z` → `gh release create vX.Y.Z` with the DMG attached → commit + push `docs/appcast.xml`. See `docs/RELEASING.md` for the full sequence. |
 | `infra/telemetry-worker/` (Cloudflare Worker) | The Worker is independent of `main`. Pushing the repo does NOT deploy it. | `cd infra/telemetry-worker && npx wrangler deploy`. |
-| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-ccc`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
+| `infra/card-worker/` (Cloudflare Worker) | Independent of `main`; pushing does NOT deploy it. Hosts the share card page (Workers KV `CARDS`). | `cd infra/card-worker && npx wrangler deploy`. |
+| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-tap`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
 | `changelog.d/*`, `tests/`, `README.md`, `CLAUDE.md`, `AGENTS.md`, `pyproject.toml`/`server.py` version bumps | On push to main | Just `git push origin main`. Bumping versions touches a release cycle — see `docs/RELEASING.md`. |
 
 **Quick rule of thumb:**
 - Touched anything in `scripts/macapp/` or `scripts/build-dmg.sh`? → **You owe a Sparkle release** (`docs/RELEASING.md`).
 - Touched `infra/telemetry-worker/`? → **Run `wrangler deploy`** separately.
+- Touched `infra/card-worker/`? → **Run `wrangler deploy`** separately.
 - Everything else? → **`git push origin main`** and you're done.
 
 If you're unsure, default to pushing then checking the table — `git push` is reversible (`git revert`); a half-shipped release is harder to clean up.
@@ -264,3 +284,13 @@ showing an active per-PID "application" domain for the running app). The
 serving the port — quit and relaunch the .app to restore it instead of
 fighting the launchd install path. `run.sh` now detects this and prints the
 same guidance (OPS-1246).
+
+## Scratch-HOME test servers
+
+`server.py` hard-imports `watchtower.queue`, and `watchtower` is installed in
+the user site (`~/Library/Python/<ver>/lib/python/site-packages`). Python
+derives that path from `$HOME`, so `HOME=$(mktemp -d) python3 server.py` dies
+with `ModuleNotFoundError: watchtower`. Keep the real user site visible:
+`HOME=$scratch PYTHONUSERBASE=$(python3 -m site --user-base) python3 server.py`
+(compute the user base before overriding HOME). Also pick a free port; check
+with `/usr/sbin/lsof -nP -iTCP:<port>` first (OPS-1392/1393).

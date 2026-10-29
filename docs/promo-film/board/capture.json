@@ -1,0 +1,57 @@
+{
+ "name": "CCC \u2014 board: filter, fold a lane, clear (motion source)",
+ "url": "http://127.0.0.1:8892/static/index.html?demo=1",
+ "viewport": {
+  "width": 3840,
+  "height": 2160
+ },
+ "wait_for": "#kanbanBoard .kanban-card",
+ "stage": {
+  "init_scripts": [
+   "// Promo-film staging for the CCC static demo. Runs at document start on every page.\n// {\"ccc-last-seen-version\": \"5.37\", \"ccc-whats-new-dismissed-version\": \"5.37\", \"ccc-pwa-install-dismissed\": \"9999999999999\", \"ccc-telemetry-bar-dismissed\": \"1\", \"ccc-tour-done\": \"1\", \"ccc-archive-window\": \"all\", \"ccc-status-rail-collapsed\": \"1\", \"ccc-spawn-cwd\": \"/home/demo/code/widgets-api\", \"ccc-session-view\": \"board\", \"ccc-kanban-view\": \"true\", \"ccc-sidebar-width\": \"1020\"} is replaced by build-capture.py with the film's localStorage seeds.\n(function () {\n  window.__CCC_DEMO__ = true;\n  window.__CCC_DEMO_FIXTURE_BASE__ = '/api';\n  var seeds = {\"ccc-last-seen-version\": \"5.37\", \"ccc-whats-new-dismissed-version\": \"5.37\", \"ccc-pwa-install-dismissed\": \"9999999999999\", \"ccc-telemetry-bar-dismissed\": \"1\", \"ccc-tour-done\": \"1\", \"ccc-archive-window\": \"all\", \"ccc-status-rail-collapsed\": \"1\", \"ccc-spawn-cwd\": \"/home/demo/code/widgets-api\", \"ccc-session-view\": \"board\", \"ccc-kanban-view\": \"true\", \"ccc-sidebar-width\": \"1020\"};\n  try { Object.keys(seeds).forEach(function (k) { localStorage.setItem(k, seeds[k]); }); } catch (e) {}\n  var nativeFetch = window.fetch.bind(window);\n  var UUID = /^\\/api\\/conversations\\/([0-9a-f]{8})-[0-9a-f-]{27}$/i;\n  document.addEventListener('DOMContentLoaded', function () {\n    // Per-session transcripts: /api/conversations/<uuid> -> staged t-<prefix>.json (falls back to the demo mapping).\n    var demoFetch = window.fetch;\n    window.fetch = function (input, init) {\n      try {\n        var u = typeof input === 'string' ? input : (input && input.url) || '';\n        var m = UUID.exec(u.split('?')[0]);\n        if (m && (!init || !init.method || init.method === 'GET')) {\n          var staged = '/api/conversations/t-' + m[1].toLowerCase() + '.json';\n          return nativeFetch(staged).then(function (r) { return r.ok ? r : demoFetch(input, init); });\n        }\n      } catch (e) {}\n      return demoFetch(input, init);\n    };\n    var s = document.createElement('style');\n    s.textContent = '[data-hf-overlay]{display:none!important}' +\n      '#__ccc_demo_ro_banner__,#hiOobePrompt,.hi-oobe,.hi-retention-warning{display:none!important}' +\n      'html,body,*{scroll-behavior:auto!important}' +\n      '*{caret-color:auto}' +\n      // CSS zoom breaks sticky offsets inside the scrolled list; the film never scrolls it.\n      '#convList .conv-archived-tools{position:static!important}' +\n      // The optimistic \"Thinking\u2026\" pill after a send never resolves in the static demo.\n      '.conv-live-tool-inline.optimistic{display:none!important}' +\n      // Search-progress banner under the sidebar search while typing.\n      '#convSearchStatus{display:none!important}';\n    document.head.appendChild(s);\n    document.documentElement.style.zoom = '3';\n    // The demo repo list renders one unlabeled folder chip; drop it.\n    var scrub = function () {\n      document.querySelectorAll('.spawn-cwd-chip').forEach(function (b) {\n        if (b.textContent.trim() === '[object Object]') b.remove();\n      });\n    };\n    new MutationObserver(scrub).observe(document.body, { childList: true, subtree: true });\n    scrub();\n  });\n})();\n",
+   "document.addEventListener('DOMContentLoaded',function(){var s=document.createElement('style');s.textContent='.main,#sidebarResizer{display:none!important}.sidebar{width:calc(100vw - 25px)!important;max-width:none!important;flex:1 1 auto!important}';document.head.appendChild(s)});"
+  ],
+  "chrome_args": [
+   "--disable-gpu",
+   "--disable-smooth-scrolling",
+   "--disable-gpu-vsync"
+  ]
+ },
+ "steps": [
+  {
+   "do": "wait",
+   "s": 5
+  },
+  {
+   "do": "click",
+   "selector": "#convSearch"
+  },
+  {
+   "do": "type",
+   "text": "webhook",
+   "delay": 0.45
+  },
+  {
+   "do": "wait",
+   "s": 3.5
+  },
+  {
+   "do": "click",
+   "selector": "#kanbanBoard .kanban-column-header[data-col=\"icebox\"]",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 4.5
+  },
+  {
+   "do": "click",
+   "selector": "#convSearchClear",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 6
+  }
+ ]
+}

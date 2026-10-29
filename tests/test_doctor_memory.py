@@ -41,8 +41,22 @@ HEALTHY_INDEX = {
 HEALTHY_GRAPH = {"transcripts_rows": 50, "commits_rows": 20, "last_sync_ts": 1234.0, "indexing": False}
 
 
-def _patch_memory_modules(monkeypatch, *, index=None, graph=None, last_run_at="2026-09-27T10:00:00Z", cfg=None):
+_RECENT = object()
+
+
+def _recent_iso():
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _patch_memory_modules(monkeypatch, *, index=None, graph=None, last_run_at=_RECENT, cfg=None):
     from ccc_server import session_fts, ship_graph, decision_extraction
+
+    if last_run_at is _RECENT:
+        # Relative to now: a hardcoded date ages past the "overdue" threshold
+        # and flips the healthy case to warn.
+        last_run_at = _recent_iso()
 
     monkeypatch.setattr(session_fts, "index_health", lambda: index if index is not None else dict(HEALTHY_INDEX))
     monkeypatch.setattr(ship_graph, "graph_health", lambda: graph if graph is not None else dict(HEALTHY_GRAPH))
@@ -52,14 +66,15 @@ def _patch_memory_modules(monkeypatch, *, index=None, graph=None, last_run_at="2
 
 def test_memory_doctor_ok_when_everything_healthy(monkeypatch):
     server = _fresh_server()
-    _patch_memory_modules(monkeypatch)
+    recent = _recent_iso()
+    _patch_memory_modules(monkeypatch, last_run_at=recent)
 
     report = server.build_memory_doctor()
 
     assert report["status"] == "ok"
     assert report["warnings"] == []
     assert report["session_index"]["embed_coverage_pct"] == 98.0
-    assert report["decision_extraction"]["last_run_at"] == "2026-09-27T10:00:00Z"
+    assert report["decision_extraction"]["last_run_at"] == recent
 
 
 def test_memory_doctor_included_in_ccc_doctor(monkeypatch):
@@ -168,7 +183,7 @@ def test_memory_doctor_warns_when_decisions_stale(monkeypatch):
 
 def test_memory_doctor_no_decision_warning_when_extraction_disabled(monkeypatch):
     server = _fresh_server()
-    _patch_memory_modules(monkeypatch, last_run_at=None, cfg={"enabled": False})
+    _patch_memory_modules(monkeypatch, last_run_at=_RECENT, cfg={"enabled": False})
 
     report = server.build_memory_doctor()
 

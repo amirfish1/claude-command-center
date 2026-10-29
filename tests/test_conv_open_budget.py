@@ -49,7 +49,6 @@ def test_conversation_scoped_requests_join_the_abort_scope():
     # the scope signal, so the switch can free its slot immediately.
     sites = (
         "fetch('/api/session-status?' + params.toString(), { signal: convScopeSignal() })",
-        "encodeURIComponent(sid) + '/token-sitter-checkpoint'",
         "encodeURIComponent(sid) + '/transcript-path'",
         "encodeURIComponent(sid) + '/spawn-info'",
         "fetch('/api/sessions/children?parent='",
@@ -60,7 +59,7 @@ def test_conversation_scoped_requests_join_the_abort_scope():
     for site in sites:
         at = _index_of(SOURCE, site)
         assert "convScopeSignal()" in SOURCE[at:at + 220], site
-    confirm = _function("async function _confirmSessionNotLiveThenRenderOutcomeBanner(", "if (fresh === true) return;")
+    confirm = _function("async function _confirmSessionNotLiveThenRenderOutcomeBanner(", "if (fresh === true) {")
     assert "convScopeSignal()" in confirm
 
 
@@ -68,6 +67,3 @@ def test_aborted_scoped_fetches_do_not_poison_their_caches():
     files = _function("async function ffcFetch(", "function ffcInvalidate(")
     assert "AbortError" in files
     assert files.index("AbortError") < files.index("// Network / parse failure")
-    sitter = _function("async function f2TokenSitterCheckpointExists(", "function f2PaintTokenSitterBadge(")
-    assert "AbortError" in sitter
-    assert sitter.index("AbortError") < sitter.index("_tokenSitterCheckpointCache.set(sid, exists)")

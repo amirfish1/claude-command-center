@@ -1,19 +1,48 @@
-"""Tests for the report_to return-address footer (slice 3: SendMessage-to-ccc
-for Claude children, curl fallback for everyone else)."""
+"""Tests for the report_to return-address footer. The curl POST to
+/api/inject-input is the only path ever instructed as primary; SendMessage
+to CCC's own "ccc" peer identity is at most a best-effort mention for Claude
+children, demoted from primary 2026-10-03 (OPS-1250: CCC's own registry row
+publishes "kind": "background", which ListAgents never lists, so SendMessage
+to "ccc" reliably fails with "No agent named ... is reachable" regardless of
+gate/socket state -- reproduced repeatedly, not a flaky edge case)."""
 
 import server
+import pytest
 
 
-def test_footer_uses_sendmessage_for_claude_when_gate_on_and_peer_running(monkeypatch):
+@pytest.mark.parametrize("engine", ["claude", "codex", "cursor", "antigravity"])
+def test_coordinators_yield_to_reports_instead_of_sleep_polling(engine):
+    out = server._wrap_prompt_with_return_address("coordinate release", "parent", engine=engine)
+    assert "`report_to`" in out
+    assert "end your current turn while waiting" in out
+    assert "Do not repeatedly call sleep or poll child status" in out
+    # Ending a waiting turn must not generate an early success callback.
+    assert "send your own completion report only after the required child results" in out
+    assert "gh run watch <run-id> --exit-status" in out
+    assert "Give the watcher a timeout and retain its process handle" in out
+
+
+def test_footer_curl_is_always_present_for_claude_when_gate_on(monkeypatch):
+    monkeypatch.setenv("CCC_MESSAGING_BACKEND", "uds")
+    monkeypatch.setitem(server._CCC_PEER_STATE, "socket_path", "/tmp/cc-socks/1.sock")
+    out = server._wrap_prompt_with_return_address("do the thing", "dispatcher-sid", engine="claude")
+    # OPS-1250 regression: curl must be the primary instruction even when the
+    # uds gate is on and CCC's peer socket is listening -- the old code
+    # dropped the curl block entirely in this state, which is exactly the
+    # state where the SendMessage-to-"ccc" target silently never delivers.
+    assert "curl -s --max-time" in out
+    assert '"session_id": "dispatcher-sid"' in out
+
+
+def test_footer_mentions_sendmessage_only_as_best_effort(monkeypatch):
     monkeypatch.setenv("CCC_MESSAGING_BACKEND", "uds")
     monkeypatch.setitem(server._CCC_PEER_STATE, "socket_path", "/tmp/cc-socks/1.sock")
     out = server._wrap_prompt_with_return_address("do the thing", "dispatcher-sid", engine="claude")
     assert "SendMessage" in out
     assert 'agent="ccc"' in out
-    assert '"session_id": "dispatcher-sid"' in out
-    # SendMessage is the primary path; the one-line curl *fallback* mention
-    # is fine, but the full curl command block must stay curl-footer-only.
-    assert "curl -s --max-time" not in out
+    assert "best-effort" in out
+    assert "do NOT retry" in out
+    assert "curl -s --max-time" in out
 
 
 def test_footer_stays_curl_when_gate_off(monkeypatch):
@@ -59,13 +88,12 @@ def test_footer_defaults_to_claude_engine_when_unspecified(monkeypatch):
 def test_footer_sendmessage_warns_against_session_id_recipient(monkeypatch):
     """OPS-927: a lane that loses the footer's exact wording to context
     compaction tended to SendMessage the dispatcher's session UUID directly,
-    which peers reject with "No agent named ... is reachable". The footer
-    must state the recipient name prominently and forbid session-id
-    addressing, and keep a curl fallback."""
+    which peers reject with "No agent named ... is reachable". The best-effort
+    SendMessage mention names "No agent named ... is reachable" explicitly so
+    a lane that hits it moves straight to curl instead of retrying it."""
     monkeypatch.setenv("CCC_MESSAGING_BACKEND", "uds")
     monkeypatch.setitem(server._CCC_PEER_STATE, "socket_path", "/tmp/cc-socks/1.sock")
     out = server._wrap_prompt_with_return_address("do the thing", "dispatcher-sid", engine="claude")
     assert 'agent="ccc"' in out
-    assert "NEVER address SendMessage" in out
     assert "No agent named" in out
     assert "/api/inject-input" in out

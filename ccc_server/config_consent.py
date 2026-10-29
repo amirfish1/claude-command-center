@@ -10,8 +10,9 @@ without asking. This module is now the only path to those writes:
     ~/.claude/command-center dir. Each item can plan (diff), apply, and revoke.
   * Nothing is written until the user approves an item (dashboard modal or
     `ccc consent`). The decision is stored in config-consent.json with a hash
-    of the content CCC proposed; if that content later changes, the item goes
-    back to "changed" and is not re-applied until approved again.
+    of the content CCC proposed. An approval covers later CCC updates to the
+    same item: new content is applied on the next start without re-asking
+    (re-prompting on every update trained users to click through).
   * Declining an item that is already present removes it.
   * Installs that predate this gate are recorded as approved on the first run
     (so nothing breaks) and a one-time notice lists what is installed.
@@ -35,6 +36,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -52,10 +54,14 @@ BACKUPS_KEPT = 30
 HOOK_MARKER = "command-center/hooks/"
 HOOK_MARKER_LEGACY = "log-viewer/hooks/"
 PRETOOLUSE_HOOK_TIMEOUT = 1800
+# PermissionRequest parks (only while the cloud relay runs) waiting for a cloud
+# agent's decision; seconds, a little above the hook's own 900 s wait.
+PERMISSIONREQUEST_HOOK_TIMEOUT = 930
 
 # (event, script, timeout). Order is the order entries are appended.
 CLAUDE_HOOK_SPECS = (
     ("PreToolUse", "pre-tool-use.py", PRETOOLUSE_HOOK_TIMEOUT),
+    ("PermissionRequest", "permission-request.py", PERMISSIONREQUEST_HOOK_TIMEOUT),
     ("PostToolUse", "post-tool-use.py", None),
     ("Notification", "notification.py", None),
     ("Stop", "stop.py", None),
@@ -67,8 +73,8 @@ CODEX_HOOK_SPECS = (
     ("PostCompact", "post-compact-codex.py", 5),
 )
 HOOK_SCRIPT_NAMES = (
-    "pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py",
-    "session-start.py", "pre-compact.py", "post-compact.py", "_reorient_shared.py",
+    "pre-tool-use.py", "permission-request.py", "post-tool-use.py", "notification.py",
+    "stop.py", "session-start.py", "pre-compact.py", "post-compact.py", "_reorient_shared.py",
     "post-compact-codex.py",
 )
 
@@ -152,8 +158,23 @@ class Ctx:
 
 def _find_wt():
     found = shutil.which("wt")
+    # Windows Terminal's app alias (...\WindowsApps\wt.exe) shadows
+    # WatchTower's `wt` on PATH; running it opens a terminal tab instead.
+    if found and os.name == "nt" and "/windowsapps/" in found.replace("\\", "/").lower():
+        found = None
     if found:
         return found
+    if os.name == "nt":
+        for scheme in ("nt_user", None):
+            try:
+                scripts = (sysconfig.get_path("scripts", scheme=scheme) if scheme
+                           else sysconfig.get_path("scripts"))
+            except Exception:
+                continue
+            candidate = Path(scripts) / "wt.exe"
+            if os.access(candidate, os.X_OK):
+                return str(candidate)
+        return ""
     fallback = Path.home() / ".local" / "bin" / "wt"
     return str(fallback) if os.access(fallback, os.X_OK) else ""
 
@@ -167,10 +188,14 @@ def default_ctx():
         ccc_root = Path(__file__).resolve().parent.parent
     try:
         state_dir = Path(_core.COMMAND_CENTER_STATE_DIR)
+        if not str(state_dir).startswith(str(home)):
+            state_dir = home / ".claude" / "command-center"
     except Exception:
         state_dir = home / ".claude" / "command-center"
     try:
         scripts_dir = Path(_core.HOOK_SCRIPTS_DIR)
+        if not str(scripts_dir).startswith(str(home)):
+            scripts_dir = home / ".claude" / "command-center" / "hooks"
     except Exception:
         scripts_dir = home / ".claude" / "command-center" / "hooks"
     codex_home = Path(os.environ.get("CODEX_HOME") or (home / ".codex"))
@@ -581,10 +606,13 @@ class ClaudeHooks:
     id = "claude-hooks"
     kind = "hooks"
     title = "Claude Code hooks"
-    summary = ("Adds 6 hook entries (PreToolUse, PostToolUse, Notification, Stop, "
-               "PreCompact, PostCompact) to ~/.claude/settings.json. Each runs a "
-               "small script from ~/.claude/command-center/hooks/ that writes live "
-               "status for the dashboard. Your other hooks and settings are kept as-is.")
+    summary = ("Adds hook entries (PreToolUse, PermissionRequest, PostToolUse, "
+               "Notification, Stop, SessionStart, PreCompact, PostCompact) to "
+               "~/.claude/settings.json. Each runs a small script from "
+               "~/.claude/command-center/hooks/ that writes live status for the "
+               "dashboard. PermissionRequest does nothing unless CCC Cloud is on: "
+               "then it lets an agent you gave approval rights answer one exact "
+               "prompt. Your other hooks and settings are kept as-is.")
     depends = ("Live \"running X for Ns\" tool status, Needs-approval badges, "
                "answering AskUserQuestion from the dashboard, the Compacting badge, "
                "and precise turn-end detection for Claude sessions.")
@@ -873,7 +901,8 @@ def _status(record, digest):
     if record.get("decision") == "declined":
         return "declined"
     if record.get("decision") == "approved":
-        return "enabled" if record.get("hash") == digest else "changed"
+        # Approval sticks across CCC updates to the item's content.
+        return "enabled"
     return "pending"
 
 

@@ -7,6 +7,7 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from pathlib import Path
+import functools
 import json
 import os
 import platform
@@ -23,7 +24,9 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
+from ccc_server.quick_actions import _validated_quick_action
 
 # ---------------------------------------------------------------------------
 # SessionGraph — unified parent-child adjacency list
@@ -305,6 +308,11 @@ class _SessionGraph:
         """Return the parent session_id for ``child``, or None."""
         with self._lock:
             return self._parent_of.get(str(child or "").strip())
+
+    def parent_snapshot(self):
+        """One-lock copy of the child -> parent map, for bulk row projection."""
+        with self._lock:
+            return dict(self._parent_of)
 
     def children_of(self, parent):
         """Return a list of child session_ids for ``parent``."""
@@ -870,6 +878,7 @@ def _set_conversation_trashed(sid, trashed):
 
     with _core._conversation_lifecycle_lock:
         archived_ids, trashed_ids = _core._load_conversation_lifecycle_state()
+        archived_before, trashed_before = set(archived_ids), set(trashed_ids)
         if want_trashed:
             # Write/refresh the sticky marker first so a concurrent archive
             # sweep can never observe this session without its manual grace
@@ -909,9 +918,17 @@ def _set_conversation_trashed(sid, trashed):
         else:
             trashed_ids = [existing for existing in trashed_ids if existing != sid]
 
-        # Persist both lists once after all mutations.
-        _core._save_archived_conversations(archived_ids)
-        _core._save_trashed_conversations(trashed_ids)
+        # Persist both lists once after all mutations, as deltas against a
+        # fresh locked read so a concurrent writer's changes survive (CCC-156).
+        if want_trashed:
+            _core._update_archived_conversations(
+                add=[s for s in archived_ids if s not in archived_before], reason="trash",
+            )
+            _core._update_trashed_conversations(
+                add=[s for s in trashed_ids if s not in trashed_before], reason="trash",
+            )
+        else:
+            _core._update_trashed_conversations(remove=[sid], reason="untrash")
 
         archived_now = sid in archived_ids
         trashed_now = sid in trashed_ids
@@ -1065,7 +1082,7 @@ _SESSION_STATE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _SESSION_STATE_FIELD_RE = re.compile(
-    r"^(DID|INSIGHT|NEXT_STEP_USER)\s*:\s*(.+?)\s*$",
+    r"^(DID|INSIGHT|NEXT_STEP_USER|NEXT_ACTION|COMPLETION)[ \t]*:[ \t]*(.*?)[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE = re.compile(
@@ -1136,14 +1153,130 @@ _CCC_SHELL_SEARCH_SYSTEM_PROMPT = (
     "Exclude `.claude`, `.git`, `node_modules`, `.venv`, `.next`, `dist`, and "
     "`build` unless the user explicitly asks to search them."
 )
-_CCC_SESSION_STATE_SYSTEM_PROMPT = (
-    "End your final reply with a compact CCC session-state block:\n"
-    "<session-state>\n"
-    "DID: one sentence describing what you changed or learned\n"
-    "INSIGHT: one sentence with the main finding, root cause, or surprise\n"
-    "NEXT_STEP_USER: one sentence with the exact next thing the user should do\n"
-    "</session-state>"
-)
+_CCC_SESSION_STATE_SYSTEM_PROMPT = """Complete authorized work before ending a turn. Before asking the user to
+approve another action, assess whether it is within the requested scope, your
+confidence it helps, its downside, and reversibility. For an authorized action
+with confidence >=0.9, downside <=0.2, and easy reversal, do it and verify it
+instead of asking "shall I?". Never infer authorization from a score. Ask only
+for a consequential tradeoff, missing preference, or genuinely required approval;
+explain the downside and recommendation. Do not invent a user action to end a turn.
+
+When the user reports broken or missing behavior, including a question phrased
+as "why doesn't this work?", diagnosing the cause is not by itself resolution
+of the problem. Identify the concrete remedy and check the authorized scope.
+If the repair is already authorized, carry it out and verify it. If it requires
+new authorization, explain the proposed repair and its material downside, and
+put that specific approval in NEXT_STEP_USER (and NEXT_ACTION when eligible).
+Do not silently classify a reported malfunction as "explanation only; no
+changes requested" just because the user phrased it as a question. An explicit
+request for explanation only or no changes must still be respected; do not
+infer permission for a repair from the diagnosis alone.
+
+NEXT_STEP_USER: None means no human action is required; it does not mean the
+task is complete. Agent-owned unfinished work belongs in remaining_actions,
+keeps resolution below 0.9, and must be continued before ending the turn when
+possible. A repair awaiting authorization also belongs in remaining_actions
+and must have nonzero decision_dependency. Do not mark a known unresolved
+malfunction ready to close merely because its cause has been explained.
+For a genuinely explanation-only request, an evidence-backed answer may be
+complete without implementation or a fabricated approval request.
+
+Keep the footer scoped to the ongoing requested task across informational
+follow-ups. A side question such as "which folder are you using?" must not
+replace the task summary with "clarified paths" or erase its still-pending
+repair, verification, or user action. Answer the side question in the prose;
+retain the task's current outcome and unresolved actions in the footer.
+Remove an earlier action only when evidence shows it was performed, superseded,
+or no longer needed. Do not carry obsolete actions forward or treat an unrelated
+new task as a continuation when the user clearly changes scope.
+
+Separate the stable topic goal from the latest execution milestone. For an
+ongoing experiment, investigation, or long-term topic, shipping one fix does
+not establish that the overall solution is settled. Keep the goal and closure
+criteria across follow-ups; change them only when the user changes the scope
+or new evidence refines the criteria. Do not infer completion from inactivity,
+elapsed time, a successful subtask, or the absence of a user decision.
+Include scope in COMPLETION: {"goal":"the overall requested outcome",
+"done_when":"observable conditions for closing this topic","closure_met":false,
+"evidence":"what remains unresolved at the topic level"}. Set closure_met true
+only with evidence that those conditions are met. If the solution or closure
+criteria are still being explored, keep it false and resolution below 0.9.
+Report the shipped milestone in DID and delivery; assess resolution and
+verification against the whole goal. Put unresolved experiments and validation
+in remaining_actions, without inventing an immediate human action. Routine page
+reloads belong in delivery notes unless they actually block the requested work;
+they must not replace the topic's unresolved goal or become its closure criteria.
+
+State the goal as the user's own aim, never a narrower subset you chose to do.
+An open-ended ask ("there are a lot of these, maybe we don't need all of them?
+e.g. X") targets the whole set: an example the user gave, or the obvious
+leftovers, is a starting point, not the goal. Do not write done_when around the
+work you already finished. If your reply recommends further work toward the
+user's aim ("the next useful reduction would be ..."), or a caveat says the
+main question remains unanswered, that work is a remaining_action, the caveat is
+blocking, closure_met is false, and resolution stays below 0.9.
+
+An open topic needs a concrete plan, even when NEXT_STEP_USER is None. Order
+remaining_actions by what happens next and give each action an owner: "agent",
+"user", or "external". The first action must name the next observable step
+and its success check, not just "evaluate", "refine", or "continue using".
+For validation that depends on a future event, name that trigger and the check
+to perform then. Do immediately available authorized agent work before ending
+the turn; do not park it in a plan. NEXT_STEP_USER identifies only the user's
+actual required contribution; it must not stand in for the whole plan or invent
+an approval request when the agent owns the next step. Keep DID and INSIGHT to
+one short sentence each; put supporting evidence in COMPLETION.
+
+End your final reply with a compact CCC session-state block:
+<session-state>
+DID: one sentence describing what you changed or learned
+INSIGHT: one sentence with the main finding, root cause, or surprise
+NEXT_STEP_USER: the exact action requiring the user, or None.
+NEXT_ACTION: null or a single-line JSON object as described below
+COMPLETION: a single-line JSON object using the schema below
+</session-state>
+
+Write NEXT_ACTION yourself in this same answer; the dashboard renders it
+directly without another model call. Use {"label":"Restart","reply":"Yes, restart the dashboard and worker."}
+(on ONE line) only when NEXT_STEP_USER offers exactly one concrete, scoped
+next step and needs the user's go-ahead. Prefer one short verb for the label;
+up to three words and 24 characters are allowed when needed for clarity.
+Reply is the exact text to send back to this session (at most
+400 characters), preserving the scope and qualifications. Otherwise use null.
+Never choose between alternatives, invent missing information, claim the user
+performed a task, or turn a request to review/read/check something into approval.
+Do authorized work first; do not invent a pending action just to provide a button.
+
+COMPLETION is a self-assessment of the entire requested task, not just this turn.
+Use version 1 and four axes, each with score (number 0..1) and evidence (a short,
+specific factual string): resolution, verification, delivery, decision_dependency.
+Resolution: 0=unhandled, 0.5=partial, 0.9=all required work handled with only
+nonessential caveats, 1=fully resolved. Verification: 0=unchecked, 0.5=partial
+checks, 0.8=relevant checks of requested behavior passed, 1=strong direct evidence;
+name the checks and limits. Delivery: 0=local/unshipped, 0.5=partly delivered,
+1=at the intended destination; cite the push/deployment/save evidence. Delivery
+may have applicable:false only when no delivery is required, with a reason.
+Decision_dependency: 0=no meaningful decision or approval remains, 0.5=material
+choice remains, 1=blocked on the user; describe the actual tradeoff, not a ritual
+confirmation. Missing evidence means unassessed, not complete. Do not manufacture
+precise confidence: lower a score when evidence is incomplete.
+
+Also include caveats (array of {text,blocking} objects) and remaining_actions
+(array of {text,confidence,downside,reversible,within_scope} objects; confidence
+and downside are numbers 0..1, reversible and within_scope are booleans).
+All unresolved work belongs in remaining_actions. Disclose material caveats;
+blocking:true prevents closure. Queue actionable optional follow-ups where
+appropriate and cite their ticket in the caveat text; do not queue work required
+to finish the current request merely to declare it complete.
+
+CCC computes Close only if resolution>=0.9, verification>=0.8, delivery=1 (or
+explicitly not applicable), decision_dependency=0, no blocking caveat, and no
+remaining action. These are independent gates, never an average. This recommends
+manual archive only; never archive a session yourself. An explicit scope with
+closure_met false also prevents Close, regardless of the numeric scores.
+Example structure (replace all scores/evidence with facts):
+{"version":1,"scope":{"goal":"The overall requested outcome","done_when":"Observable topic closure criteria","closure_met":false,"evidence":"The topic is still unresolved"},"resolution":{"score":0,"evidence":"Request not yet handled"},"verification":{"score":0,"evidence":"No checks yet"},"delivery":{"score":0,"evidence":"Not delivered","applicable":true},"decision_dependency":{"score":0,"evidence":"No user decision needed"},"caveats":[],"remaining_actions":[]}
+""".strip()
 
 
 def _claude_session_state_args():
@@ -1166,26 +1299,116 @@ def _claude_peer_inbound_args():
     return ["--settings", json.dumps({"crossSessionInbound": "accept"}, separators=(",", ":"))]
 
 
+def _completion_assessment(value):
+    """Validate a self-report and derive readiness; never accept its verdict."""
+    invalid = {"version": 1, "valid": False, "ready_to_close": False,
+               "reasons": ["Completion assessment is incomplete or invalid."]}
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1:
+        return invalid
+
+    def score(number):
+        return type(number) in (int, float) and 0 <= number <= 1
+
+    result = {"version": 1, "valid": True}
+    if "scope" in value:
+        scope = value["scope"]
+        if (not isinstance(scope, dict) or type(scope.get("closure_met")) is not bool
+                or any(not isinstance(scope.get(key), str) or not scope[key].strip()
+                       for key in ("goal", "done_when", "evidence"))):
+            return invalid
+        result["scope"] = {key: scope[key].strip()[:4000]
+                           for key in ("goal", "done_when", "evidence")}
+        result["scope"]["closure_met"] = scope["closure_met"]
+    for key in ("resolution", "verification", "delivery", "decision_dependency"):
+        axis = value.get(key)
+        if not isinstance(axis, dict) or not score(axis.get("score")):
+            return invalid
+        evidence = axis.get("evidence")
+        if not isinstance(evidence, str) or not evidence.strip():
+            return invalid
+        result[key] = {"score": axis["score"], "evidence": evidence.strip()[:4000]}
+        if key == "delivery":
+            applicable = axis.get("applicable", True)
+            if type(applicable) is not bool:
+                return invalid
+            result[key]["applicable"] = applicable
+    caveats = value.get("caveats")
+    actions = value.get("remaining_actions")
+    if not isinstance(caveats, list) or not isinstance(actions, list):
+        return invalid
+    result["caveats"] = []
+    for caveat in caveats:
+        if (not isinstance(caveat, dict) or not isinstance(caveat.get("text"), str)
+                or not caveat["text"].strip() or type(caveat.get("blocking")) is not bool):
+            return invalid
+        result["caveats"].append({"text": caveat["text"].strip()[:4000], "blocking": caveat["blocking"]})
+    result["remaining_actions"] = []
+    for action in actions:
+        if (not isinstance(action, dict) or not isinstance(action.get("text"), str)
+                or not action["text"].strip() or not score(action.get("confidence"))
+                or not score(action.get("downside"))
+                or type(action.get("reversible")) is not bool
+                or type(action.get("within_scope")) is not bool):
+            return invalid
+        if "owner" in action and action["owner"] not in ("agent", "user", "external"):
+            return invalid
+        parsed_action = {key: action[key] for key in
+            ("text", "confidence", "downside", "reversible", "within_scope")}
+        if "owner" in action:
+            parsed_action["owner"] = action["owner"]
+        result["remaining_actions"].append(parsed_action)
+    reasons = []
+    if "scope" in result and not result["scope"]["closure_met"]:
+        reasons.append("Topic goal is not yet met.")
+    if result["resolution"]["score"] < 0.9:
+        reasons.append("Resolution is below 0.9.")
+    if result["verification"]["score"] < 0.8:
+        reasons.append("Verification is below 0.8.")
+    if result["delivery"]["applicable"] and result["delivery"]["score"] != 1:
+        reasons.append("Delivery is incomplete.")
+    if result["decision_dependency"]["score"] != 0:
+        reasons.append("A user decision remains.")
+    if any(c["blocking"] for c in result["caveats"]):
+        reasons.append("A blocking caveat remains.")
+    if result["remaining_actions"]:
+        reasons.append("Unfinished actions remain.")
+    result["ready_to_close"] = not reasons
+    result["reasons"] = reasons
+    return result
+
+
 def _parse_session_state(text):
-    """Extract the structured `<session-state>` block sessions emit on final
-    reply. Returns {did, insight, next_step_user} or None.
-    """
+    """Parse the last footer, preserving legacy fields and optional assessment."""
     if not text:
         return None
-    m = _SESSION_STATE_RE.search(text)
-    if not m:
+    matches = list(_SESSION_STATE_RE.finditer(text))
+    if not matches:
         return None
-    body = m.group(1)
+    body = matches[-1].group(1)
     out = {"did": None, "insight": None, "next_step_user": None}
     for fm in _SESSION_STATE_FIELD_RE.finditer(body):
         key = fm.group(1).upper()
         val = fm.group(2).strip()
-        if key == "DID":
-            out["did"] = val
-        elif key == "INSIGHT":
-            out["insight"] = val
-        elif key == "NEXT_STEP_USER":
-            out["next_step_user"] = val
+        if key == "NEXT_ACTION":
+            out.pop("next_action", None)
+            try:
+                action = _validated_quick_action(json.loads(val)) if len(val) <= 2000 else None
+            except (ValueError, TypeError, RecursionError):
+                action = None
+            if action:
+                out["next_action"] = action
+        elif key == "COMPLETION":
+            try:
+                raw = json.loads(val) if len(val) <= 32000 else None
+            except (ValueError, TypeError, RecursionError):
+                raw = None
+            out["completion"] = _completion_assessment(raw)
+        else:
+            out[key.lower()] = val
+    next_step = str(out.get("next_step_user") or "").strip()
+    if not next_step or re.fullmatch(
+            r"(?:none|nothing|no action(?: is)? needed|n/a|not applicable)[.!]?", next_step, re.I):
+        out.pop("next_action", None)
     if not any(out.values()):
         return None
     return out
@@ -1199,7 +1422,8 @@ def _strip_ccc_session_state_instruction(text):
     """
     if text is None:
         return ""
-    return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", str(text)).rstrip()
+    text = re.sub(r"\n*<ccc-session-state-instructions>.*?</ccc-session-state-instructions>\s*$", "", str(text), flags=re.DOTALL)
+    return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", text).rstrip()
 
 
 def _strip_f2_retrieval_prompt(text):
@@ -1768,7 +1992,37 @@ def summarize_issue_title(issue_number, repo_path):
     return result
 
 
-def _summarize_title_text(first_msg, validate=False):
+TITLER_TARGETS_FILE = _core.COMMAND_CENTER_STATE_DIR / "titler-targets.jsonl"
+
+
+def _session_mtime_epoch(session_id):
+    """Transcript mtime (epoch) for a Claude or Codex session being titled, else None."""
+    for finder in (_core._find_session_jsonl, _core._resolve_codex_rollout_path):
+        try:
+            path = finder(session_id)
+            if path:
+                return os.path.getmtime(path)
+        except Exception:
+            continue
+    return None
+
+
+def _record_titler_target(titler_sid, target_sid, target_mtime):
+    """Append titler-run -> titled-session link. The titler's own transcript
+    never names its target, so the sidebar's auto-title section reads this to
+    show which conversation each run titled and how stale it was. One short
+    line per run; any process (server, archive-refresh subprocess) may append."""
+    try:
+        with open(TITLER_TARGETS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "titler_sid": titler_sid, "target_sid": target_sid,
+                "target_mtime": target_mtime, "ts": time.time(),
+            }) + "\n")
+    except OSError:
+        pass
+
+
+def _summarize_title_text(first_msg, validate=False, target_sid=""):
     """Use `claude -p` to produce a concise title for an opening prompt string.
 
     Engine-agnostic: callers resolve the opening prompt however fits their
@@ -1809,11 +2063,21 @@ def _summarize_title_text(first_msg, validate=False):
         result["error"] = claude_bin.get("reason") or "Claude Code CLI not found"
         result["code"] = claude_bin.get("code", "claude_unavailable")
         return result
+    # Pin the titler's own session id so its token usage can be tied back to
+    # the session it titled (see _record_titler_target).
+    titler_sid = str(uuid.uuid4())
+    if target_sid:
+        _record_titler_target(titler_sid, target_sid, _session_mtime_epoch(target_sid))
     try:
         proc = subprocess.run(
             [
                 claude_bin["bin"], "-p", "--model", "claude-haiku-4-5-20251001",
+                "--session-id", titler_sid,
                 "--strict-mcp-config", '--mcp-config={"mcpServers":{}}',  # skip user MCP servers -- pure text-in/text-out
+                # Pure text-in/text-out: no settings/hooks/CLAUDE.md, no tools, and a
+                # one-line system prompt. Cuts a run from ~32k input tokens to <1k.
+                "--setting-sources", "", "--tools", "",
+                "--system-prompt", "You write short session titles.",
                 instruction,
             ],
             capture_output=True,
@@ -1861,7 +2125,12 @@ def summarize_session_title(session_id, validate=False):
     summarizer asking us for a prompt, rather than writing it onto the row.
     """
     first_msg = _extract_first_message(session_id)
-    result = _summarize_title_text(first_msg, validate=validate)
+    # Every titler spawn passes through here (auto-titler, /summarize, "Summarize
+    # all"), so this is the one line that attributes token burn to a session.
+    _core._log_activity("autotitle", "SPAWN",
+                        f"sid={session_id[:8]}{_auto_title_mtime_tag(session_id)} "
+                        f"via={'auto' if validate else 'manual'}")
+    result = _summarize_title_text(first_msg, validate=validate, target_sid=session_id)
     if not result.get("ok"):
         return result
     title = result["title"]
@@ -2017,6 +2286,22 @@ def _auto_title_looks_bogus(title):
     return any(m in low for m in _AUTO_TITLE_REJECT_MARKERS)
 
 
+_WT_WORKER_PROMPT_RE = re.compile(r"^Drain the \S+ WatchTower queue")
+
+
+def _is_wt_worker_session(session_id, first_message=""):
+    """True for sessions WatchTower launched as queue workers. Their prompt is
+    the same "Drain the <Q> WatchTower queue ..." text every cycle, so a Haiku
+    title adds nothing, and a respawning worker fleet turned titling into
+    ~450 runs/day. The ledger only knows a few of them, so match the prompt too."""
+    if _WT_WORKER_PROMPT_RE.match((first_message or "").lstrip()):
+        return True
+    try:
+        return session_id in set(_core._wt_read_worker_session_ids())
+    except Exception:
+        return False
+
+
 def _auto_title_needed(session_id):
     """True when this session has no real title of its own.
 
@@ -2034,6 +2319,8 @@ def _auto_title_needed(session_id):
     first = _extract_first_message(session_id) or ""
     if not first.strip() or first.startswith(_core._GENERATED_HELPER_SESSION_PREFIXES):
         return False
+    if _is_wt_worker_session(session_id, first):
+        return False
     if _core._is_transcript_control_text(first):
         return False
     path = _core._find_session_jsonl(session_id)
@@ -2050,25 +2337,36 @@ def _auto_title_needed(session_id):
     return True
 
 
+def _auto_title_mtime_tag(session_id):
+    """`mtime=<UTC iso> age=<s>s` of the session transcript being titled, for
+    the activity log. Empty string when the transcript can't be found."""
+    mtime = _session_mtime_epoch(session_id)
+    if mtime is None:
+        return ""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime))
+    return f" mtime={stamp} age={int(time.time() - mtime)}s"
+
+
 def _auto_title_worker(session_id):
     acquired = _auto_title_sem.acquire(blocking=False)
     if not acquired:
         # Fleet-wide Stop storm — let a later Stop on this session retry.
         _auto_title_release(session_id)
         return
+    tag = _auto_title_mtime_tag(session_id)
     try:
         result = summarize_session_title(session_id, validate=True)
         if not result.get("ok"):
             _auto_title_release(session_id)
             _core._log_activity("autotitle", "FAILED",
-                          f"sid={session_id[:8]} err={str(result.get('error') or '')[:120]}")
+                          f"sid={session_id[:8]}{tag} err={str(result.get('error') or '')[:120]}")
         else:
             _auto_title_record(session_id, str(result.get("title") or ""))
             _core._log_activity("autotitle", "TITLED",
-                          f"sid={session_id[:8]} title={str(result.get('title') or '')[:60]}")
+                          f"sid={session_id[:8]}{tag} title={str(result.get('title') or '')[:60]}")
     except Exception as e:
         _auto_title_release(session_id)
-        _core._log_activity("autotitle", "ERROR", f"sid={session_id[:8]} {str(e)[:120]}")
+        _core._log_activity("autotitle", "ERROR", f"sid={session_id[:8]}{tag} {str(e)[:120]}")
     finally:
         _auto_title_sem.release()
 
@@ -2128,7 +2426,7 @@ def _kimi_auto_title_worker(session_id):
         if not first_prompt or _core._is_transcript_control_text(first_prompt):
             _auto_title_release(session_id)
             return
-        result = _summarize_title_text(first_prompt, validate=True)
+        result = _summarize_title_text(first_prompt, validate=True, target_sid=session_id)
         if not result.get("ok"):
             _auto_title_release(session_id)
             _core._log_activity("autotitle", "FAILED",
@@ -2212,7 +2510,7 @@ def _codex_auto_title_worker(session_id, first_message):
         _auto_title_release(session_id)
         return
     try:
-        result = _summarize_title_text(first_message, validate=True)
+        result = _summarize_title_text(first_message, validate=True, target_sid=session_id)
         if not result.get("ok"):
             _auto_title_release(session_id)
             _core._log_activity("autotitle", "FAILED",
@@ -2234,11 +2532,29 @@ def _codex_auto_title_worker(session_id, first_message):
         _auto_title_sem.release()
 
 
-def _request_codex_auto_title(session_id, fresh=None):
-    """Queue a background auto-title for a Codex session. Returns immediately."""
+def _codex_title_max_age_s():
+    try:
+        return float(os.environ.get("CCC_AUTO_TITLE_CODEX_MAX_AGE_DAYS", "3")) * 86400
+    except ValueError:
+        return 3 * 86400
+
+
+def _request_codex_auto_title(session_id, fresh=None, mtime=None):
+    """Queue a background auto-title for a Codex session. Returns immediately.
+
+    Codex has no Stop hook, so this runs from the list-build path over every
+    Codex row; without an age cap that titled months-old history in bulk (a
+    Haiku run each). Sessions untouched for CCC_AUTO_TITLE_CODEX_MAX_AGE_DAYS
+    (default 3) are left alone; pass the row's mtime to enable the check.
+    """
     sid = str(session_id or "").strip()
     if not sid or not _auto_title_enabled():
         return
+    try:
+        if mtime and time.time() - float(mtime) > _codex_title_max_age_s():
+            return
+    except (TypeError, ValueError):
+        pass
     if _auto_title_marker_path(sid).exists():
         return
     needed = _codex_auto_title_needed(sid)
@@ -2250,7 +2566,7 @@ def _request_codex_auto_title(session_id, fresh=None):
         except Exception:
             fresh = None
     first_message = ((fresh or {}).get("first_user_message") or "").strip()
-    if not first_message:
+    if not first_message or _is_wt_worker_session(sid, first_message):
         return
     if not _auto_title_claim(sid):
         return
@@ -2583,6 +2899,194 @@ def find_live_codex_processes():
     return procs
 
 
+def _codex_command_subcommand(command):
+    """Return the Codex CLI subcommand (``exec``, ``app-server``, ...) of a
+    command line, skipping global flags and their values; None if unparsable."""
+    try:
+        tokens = shlex.split(command or "")
+    except ValueError:
+        tokens = (command or "").split()
+    value_flags = {"-c", "--config", "-m", "--model", "-p", "--profile",
+                   "-C", "--cd", "-s", "--sandbox"}
+    skip = False
+    for tok in tokens[1:]:
+        if tok == "--":
+            return None
+        if skip:
+            skip = False
+            continue
+        if tok in value_flags:
+            skip = True
+            continue
+        if tok.startswith("-"):
+            continue
+        return tok
+    return None
+
+
+def _codex_exec_resumes_other_session(command, session_id):
+    """True for `codex exec resume <other-uuid>`: that process is bound to a
+    different thread, so it can never be this session's owner."""
+    try:
+        tokens = shlex.split(command or "")
+    except ValueError:
+        tokens = (command or "").split()
+    head = tokens[:tokens.index("--")] if "--" in tokens else tokens
+    if "resume" not in head:
+        return False
+    after = head[head.index("resume") + 1:]
+    return any(
+        re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", t, re.I)
+        and t != session_id for t in after
+    )
+
+
+def codex_command_is_headless_exec(command):
+    """True for a `codex exec ...` command line (one-shot, no stdin channel)."""
+    return _codex_command_subcommand(command) == "exec"
+
+
+_CODEX_EXEC_META_CACHE = {}
+_CODEX_EXEC_META_RE_ORIGINATOR = re.compile(r'"originator"\s*:\s*"([^"]*)"')
+_CODEX_EXEC_META_RE_TS = re.compile(r'"timestamp"\s*:\s*"([^"]*)"')
+
+
+def codex_rollout_exec_meta(path):
+    """Cheap, cached read of a rollout's session_meta header.
+
+    Returns {"originator": str, "started_at": epoch|None}. The header is
+    immutable, so the result is cached per path. Reads only the first 4 KB."""
+    key = str(path)
+    cached = _CODEX_EXEC_META_CACHE.get(key)
+    if cached is not None:
+        return cached
+    meta = {"originator": "", "started_at": None}
+    try:
+        with open(key, "rb") as f:
+            head = f.read(4096).decode("utf-8", "replace")
+    except OSError:
+        return meta  # not cached: file may appear later
+    m = _CODEX_EXEC_META_RE_ORIGINATOR.search(head)
+    if m:
+        meta["originator"] = m.group(1)
+    # payload.timestamp (session start) is the second "timestamp" key.
+    stamps = _CODEX_EXEC_META_RE_TS.findall(head)
+    raw = stamps[1] if len(stamps) > 1 else (stamps[0] if stamps else "")
+    if raw:
+        try:
+            from datetime import datetime
+            meta["started_at"] = datetime.fromisoformat(
+                raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    if len(_CODEX_EXEC_META_CACHE) > 2000:
+        _CODEX_EXEC_META_CACHE.clear()
+    _CODEX_EXEC_META_CACHE[key] = meta
+    return meta
+
+
+def _parse_ps_etime(raw):
+    """Parse ps ``etime`` ([[dd-]hh:]mm:ss) into seconds, or None."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    days = 0
+    if "-" in raw:
+        d, raw = raw.split("-", 1)
+        try:
+            days = int(d)
+        except ValueError:
+            return None
+    try:
+        parts = [int(x) for x in raw.split(":")]
+    except ValueError:
+        return None
+    if not 1 <= len(parts) <= 3:
+        return None
+    secs = 0
+    for x in parts:
+        secs = secs * 60 + x
+    return days * 86400 + secs
+
+
+def pick_headless_exec_owner(candidates, session_started_at, etimes, now,
+                             tolerance_s=90.0):
+    """Choose the single `codex exec` process that owns a rollout.
+
+    candidates: process dicts already filtered to exec commands in the
+    session's cwd. Every candidate must match the rollout's session start
+    by process start time (exec creates the
+    rollout moments after launch). Returns a dict or None when ambiguous."""
+    if not candidates:
+        return None
+    if session_started_at is None:
+        return None
+    close = []
+    for p in candidates:
+        elapsed = (etimes or {}).get(p.get("pid"))
+        if elapsed is None:
+            continue
+        if abs((now - elapsed) - session_started_at) <= tolerance_s:
+            close.append(p)
+    return close[0] if len(close) == 1 else None
+
+
+def _ps_etimes(pids):
+    try:
+        out = subprocess.run(
+            ["ps", "-p", ",".join(str(p) for p in pids), "-o", "pid=,etime="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return {}
+    result = {}
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit():
+            secs = _parse_ps_etime(parts[1])
+            if secs is not None:
+                result[int(parts[0])] = secs
+    return result
+
+
+def find_headless_codex_exec_owner(session_id, session_cwd=None):
+    """Identity-verified live headless `codex exec` process for a Codex thread.
+
+    Only rollouts whose session_meta originator is ``codex_exec`` qualify, so
+    the cost for every other session is one cached 4 KB header read. Process
+    discovery then reuses the memoised ps scan. Returns the process dict
+    ({pid, cwd, command, ...}) or None."""
+    if not session_id:
+        return None
+    try:
+        path = _core._resolve_codex_rollout_path(session_id)
+    except Exception:
+        path = None
+    if not path:
+        return None
+    meta = codex_rollout_exec_meta(path)
+    if meta.get("originator") != "codex_exec":
+        return None
+    if not session_cwd:
+        session_cwd = _core.find_session_cwd(session_id)
+    candidates = []
+    for p in find_live_codex_processes():
+        cmd = p.get("command") or ""
+        if not codex_command_is_headless_exec(cmd):
+            continue
+        if _command_targets_engine_session(cmd, session_id, "codex"):
+            return p
+        if _codex_exec_resumes_other_session(cmd, session_id):
+            continue
+        if session_cwd and p.get("cwd") == session_cwd:
+            candidates.append(p)
+    etimes = {}
+    if candidates:
+        etimes = _ps_etimes([p["pid"] for p in candidates])
+    return pick_headless_exec_owner(
+        candidates, meta.get("started_at"), etimes, time.time())
+
+
 @_ttl_memo(3.0)
 def find_live_gemini_processes():
     """Return running Gemini CLI processes with pid, tty, cwd, terminal app, command."""
@@ -2661,13 +3165,25 @@ def find_live_antigravity_processes():
     return procs
 
 
+@functools.lru_cache(maxsize=512)
+def _command_tokens(command):
+    # Process argv strings repeat across every live-activity build (one per
+    # session x process); shlex on long `codex exec` prompts was most of a
+    # warm build (CCC-168). Tuples so cached results can't be mutated.
+    try:
+        return tuple(shlex.split(command))
+    except ValueError:
+        return tuple(command.split())
+
+
 def _command_targets_engine_session(command, session_id, engine):
     if not command or not session_id:
         return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    # Every engine below needs a token equal to session_id, so a command that
+    # never mentions it can't match: skip tokenizing.
+    if session_id not in command:
+        return False
+    tokens = list(_command_tokens(command))
     if not tokens:
         return False
     if engine == "codex":
@@ -2714,10 +3230,7 @@ def _command_targets_engine_session(command, session_id, engine):
 def _command_targets_other_session(command, session_id, engine):
     if not command:
         return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    tokens = list(_command_tokens(command))
     if not tokens:
         return False
     uuid_re = re.compile(
@@ -3113,10 +3626,24 @@ def session_live_status(session_id, session_cwd):
             return result
         if not session_cwd:
             session_cwd = _core.find_session_cwd(session_id)
+        exec_owner = find_headless_codex_exec_owner(session_id, session_cwd)
+        if exec_owner:
+            # A `codex exec` worker CCC did not spawn: no stdin channel, so it
+            # can be stopped (SIGINT) but not steered or compacted.
+            pid = exec_owner["pid"]
+            result["pid"] = pid
+            result["tty"] = exec_owner.get("tty")
+            result["cwd"] = exec_owner.get("cwd") or session_cwd
+            result["live"] = True
+            result["match_count"] = 1
+            result["headless_exec"] = True
+            return result
         exact_matches = []
         cwd_matches = []
         for p in _core.find_live_codex_processes():
             cmd = p.get("command") or ""
+            if _codex_command_subcommand(cmd) in ("app-server", "exec-server"):
+                continue
             if _core._command_targets_engine_session(cmd, session_id, "codex"):
                 exact_matches.append(p)
             elif not registry_known and session_cwd and p.get("cwd") == session_cwd:
@@ -3199,6 +3726,13 @@ def session_live_status(session_id, session_cwd):
         # is still running) and the lock file in the CLI's session_locks
         # dir. No TTY — the CLI runs headless.
         raw_id = _core._devin_cli_raw_id(session_id)
+        # Rehydrate the persisted ACP registry once per process — the
+        # model/current-config snapshot paths below need it (sessions.model
+        # is often blank for ACP-spawned sessions).
+        try:
+            _core._acp_load_state("devin")
+        except Exception:
+            pass
         # "Could a live steer/send be attempted over the shared `devin acp`
         # conn" — the same signal the conversation row carries as
         # devin_acp_ready, exposed here so the open session doesn't depend
@@ -3216,6 +3750,9 @@ def session_live_status(session_id, session_cwd):
             result["live"] = True
             result["kind"] = "headless"
             result["match_count"] = 1
+            result["model"] = (
+                entry.get("model") or _core._devin_cli_session_model(raw_id)
+            )
             return result
         # No live spawn entry — check the lock file (CLI may have been
         # started outside CCC).
@@ -3234,7 +3771,9 @@ def session_live_status(session_id, session_cwd):
                     "running" if snap.get("status") == "active" else "idle"
                 )
                 result["cwd"] = snap.get("cwd") or result["cwd"]
-                result["model"] = snap.get("model")
+                result["model"] = (
+                    snap.get("model") or _core._devin_cli_session_model(raw_id)
+                )
                 result["acp_pending_permission"] = snap.get("pending_permission")
                 if snap.get("pending_permissions"):
                     result["needs_approval"] = True
@@ -3245,6 +3784,14 @@ def session_live_status(session_id, session_cwd):
                 # sibling CCC) owns the writer slot — a send can only queue
                 # until that client lets go, so the UI should say why.
                 result["external_devin_owner"] = True
+                # The writer slot belongs to another host, but CCC's ACP
+                # state still remembers the model this session was last
+                # configured with (sessions.model is often blank for
+                # ACP-spawned sessions).
+                snap = _core._acp_session_snapshot("devin", raw_id) or {}
+                result["model"] = (
+                    snap.get("model") or _core._devin_cli_session_model(raw_id)
+                )
             return result
         # Dormant session — no live process anywhere. Same ACP contract as
         # kimi/grok: "live" means the shared `devin acp` conn can attach and
@@ -3262,7 +3809,9 @@ def session_live_status(session_id, session_cwd):
                 or _core._devin_cli_session_cwd(raw_id)
                 or session_cwd
             )
-            result["model"] = snap.get("model")
+            result["model"] = (
+                snap.get("model") or _core._devin_cli_session_model(raw_id)
+            )
             result["acp_pending_permission"] = snap.get("pending_permission")
             if snap.get("pending_permissions"):
                 result["needs_approval"] = True
@@ -3618,11 +4167,11 @@ _SESSION_UUID_RE = re.compile(
 
 
 def open_session_in_claude_desktop(session_id):
-    """Open the macOS Claude Desktop app and resume `session_id`.
+    """Open the Claude Desktop app and resume `session_id`.
 
     Uses the registered `claude://resume?session=<uuid>` deep-link, which
     the desktop app handles by importing the CLI session and navigating
-    to it. macOS only — relies on `open(1)`.
+    to it. Supported on macOS (via `open(1)`) and Windows (via `os.startfile`).
 
     Returns {ok, error?, url?}.
     """
@@ -3630,17 +4179,20 @@ def open_session_in_claude_desktop(session_id):
         return {"ok": False, "error": "missing session_id"}
     if not _SESSION_UUID_RE.match(session_id):
         return {"ok": False, "error": "invalid session_id (expected UUID)"}
-    if sys.platform != "darwin":
+    if sys.platform != "darwin" and sys.platform != "win32":
         _core._log_macos_only("desktopDeepLinks")
-        return {"ok": False, "error": "Claude Desktop deep-link is macOS-only"}
+        return {"ok": False, "error": "Claude Desktop deep-link is not supported on this platform"}
     url = f"claude://resume?session={session_id}"
     try:
         ctx = _core.repo_from_session(session_id)
         log_dir = _core.repo_log_dir(ctx["repo_path"])
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"desktop-{session_id[:8]}.log"
-        lf = open(log_path, "w")
-        subprocess.Popen(["open", url], stdout=lf, stderr=lf)
+        if sys.platform == "win32":
+            os.startfile(url)
+        else:
+            lf = open(log_path, "w")
+            subprocess.Popen(["open", url], stdout=lf, stderr=lf)
     except _core.RepoContextError as e:
         return e.as_payload()
     except (FileNotFoundError, OSError) as e:
@@ -3650,33 +4202,45 @@ def open_session_in_claude_desktop(session_id):
 
 
 def open_session_in_codex_desktop(session_id, cwd=None):
-    """Open the macOS Codex app for a Codex session.
+    """Open the Codex app for a Codex session.
 
-    Codex.app registers a `codex://` URL scheme. We mirror the Claude
-    Desktop launch path with a best-effort resume URL so the UI can expose a
-    distinct app destination next to the terminal fallback.
+    Codex registers a `codex://` URL scheme. We mirror the Claude
+    Desktop launch path with a canonical thread URL so the UI can expose a
+    distinct app destination next to the terminal fallback. Supported on macOS
+    and Windows.
     """
     if not session_id:
         return {"ok": False, "error": "missing session_id"}
-    if not _core._is_codex_session(session_id):
+    # Cloud (dot/aeon) threads are codex sessions too — they just live in the
+    # cloud instead of a local rollout. The codex://threads/<id> deep link
+    # resolves them in the app the same way.
+    try:
+        _is_cloud = bool(_core.is_cloud_thread_id(session_id))
+    except Exception:
+        _is_cloud = False
+    if not _core._is_codex_session(session_id) and not _is_cloud:
         return {"ok": False, "error": "Codex launch only handles Codex sessions"}
-    if sys.platform != "darwin":
+    if sys.platform != "darwin" and sys.platform != "win32":
         _core._log_macos_only("desktopDeepLinks")
-        return {"ok": False, "error": "Codex app launch is macOS-only"}
-    params = {"session": session_id}
-    if cwd:
-        params["cwd"] = cwd
-    url = "codex://resume?" + urllib.parse.urlencode(params)
+        return {"ok": False, "error": "Codex app launch is not supported on this platform"}
+    # Existing chats retain their recorded workspace. The supported thread
+    # link needs only the ID, so caller-supplied cwd cannot replace it.
+    url = "codex://threads/" + urllib.parse.quote(str(session_id), safe="")
     try:
         ctx = _core.repo_from_session(session_id)
         log_dir = _core.repo_log_dir(ctx["repo_path"])
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"codex-desktop-{session_id[:8]}.log"
-        lf = open(log_path, "w")
-        subprocess.Popen(["open", url], stdout=lf, stderr=lf)
+        if sys.platform == "win32":
+            os.startfile(url)
+        else:
+            with open(log_path, "w") as lf:
+                launched = subprocess.run(["open", "-b", "com.openai.codex", url], stdout=lf, stderr=lf, timeout=10)
+            if launched.returncode:
+                return {"ok": False, "error": "Codex Desktop did not accept the conversation link. Try opening it again.", "url": url}
     except _core.RepoContextError as e:
         return e.as_payload()
-    except (FileNotFoundError, OSError) as e:
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as e:
         print(f"open_session_in_codex_desktop: {e!r}", file=sys.stderr, flush=True)
         return {"ok": False, "error": "could not launch Codex", "url": url}
     return {"ok": True, "url": url}
@@ -3748,9 +4312,7 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
             # transcript state, not a mid-write snapshot.
             deadline = time.time() + 5.0
             while time.time() < deadline:
-                try:
-                    os.kill(hpid, 0)
-                except ProcessLookupError:
+                if not _is_pid_alive(hpid, perm_alive=True):
                     break
                 time.sleep(0.2)
             else:
@@ -5556,6 +6118,10 @@ _desktop_meta_cache_mtime = 0
 
 
 def _claude_desktop_sessions_root():
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        return base / "Claude" / "claude-code-sessions"
     return (
         Path.home()
         / "Library"
@@ -5820,10 +6386,48 @@ def _claude_desktop_workspace_for_summary(summary, existing_path=None, metadata_
     return dirs[0]
 
 
+def _warm_session_jsonl_path_cache(force=False):
+    """Populate _session_jsonl_path_cache across all PROJECTS_ROOT in one fast pass."""
+    global _session_jsonl_path_cache
+    if not _core.PROJECTS_ROOT.is_dir():
+        return
+    try:
+        for project_dir in _core.PROJECTS_ROOT.iterdir():
+            if not project_dir.is_dir():
+                continue
+            try:
+                for path in project_dir.glob("*.jsonl"):
+                    sid = path.stem
+                    if force or sid not in _session_jsonl_path_cache:
+                        _session_jsonl_path_cache[sid] = path
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
 def _claude_session_jsonl_path(session_id):
     sid = str(session_id or "").strip()
     if not sid or not _core.PROJECTS_ROOT.is_dir():
         return None
+    cached = _session_jsonl_path_cache.get(sid)
+    if cached is not None:
+        if cached.is_file():
+            return cached
+        _session_jsonl_path_cache.pop(sid, None)
+    now = time.time()
+    neg = _session_jsonl_negative_cache.get(sid)
+    if neg and (now - neg) < 10.0:
+        return None
+    meta_cache = getattr(_core, "_conv_meta_cache", None)
+    if meta_cache:
+        suffix = "/" + sid + ".jsonl"
+        for p_str in meta_cache:
+            if p_str.endswith(suffix):
+                p = Path(p_str)
+                if p.is_file():
+                    _session_jsonl_path_cache[sid] = p
+                    return p
     matches = []
     try:
         for path in _core.PROJECTS_ROOT.glob(f"*/{sid}.jsonl"):
@@ -5835,9 +6439,12 @@ def _claude_session_jsonl_path(session_id):
     except (OSError, RuntimeError, ValueError):
         return None
     if not matches:
+        _session_jsonl_negative_cache[sid] = now
         return None
     matches.sort(key=lambda item: item[0], reverse=True)
-    return matches[0][1]
+    best = matches[0][1]
+    _session_jsonl_path_cache[sid] = best
+    return best
 
 
 def _claude_desktop_title_from_text(text, max_len=120):
@@ -6141,6 +6748,7 @@ def _is_claude_desktop_transcript_unavailable_placeholder(path, data):
 
 def prune_unresumable_claude_desktop_metadata(dry_run=False):
     """Remove CCC-synthetic Desktop rows whose CLI transcript is unavailable."""
+    _warm_session_jsonl_path_cache()
     pruned = []
     for path in _core._claude_desktop_metadata_files():
         data = _read_json_object(path)

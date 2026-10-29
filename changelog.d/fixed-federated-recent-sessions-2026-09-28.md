@@ -1,1 +1,0 @@
-- The Other machines sidebar list shows a peer's most recently active sessions again, instead of only ones from a day or more ago.

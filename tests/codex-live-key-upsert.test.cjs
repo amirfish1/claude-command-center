@@ -32,7 +32,7 @@ assert.ok(selectorMatch, 'CONV_USER_MESSAGE_SELECTOR literal found in app.js');
 const CONV_USER_MESSAGE_SELECTOR = selectorMatch[1];
 
 let browser;
-before(async () => { browser = await puppeteer.launch({ headless: true }); });
+before(async () => { browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
 
 async function withPage(fn) {

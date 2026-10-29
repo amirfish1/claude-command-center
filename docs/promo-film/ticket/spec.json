@@ -1,0 +1,268 @@
+{
+ "schema": "product-motion/v1",
+ "id": "ccc-ticket",
+ "take": "takes/20261010-190056-ccc-file-a-ticket-from-the-dashboard-motion-sour",
+ "source": {
+  "w": 3840,
+  "h": 2160,
+  "css_zoom": 3,
+  "prepare_for_seek": true
+ },
+ "expect": {
+  "clicks": 4,
+  "keys": 16
+ },
+ "duration": 31,
+ "music": {
+  "synthesis": "pulse",
+  "period": 0.5,
+  "phase": 0,
+  "offset": 0,
+  "rights": "Original deterministic synthesis from the kit's sfx.py"
+ },
+ "palette": {
+  "paper": "#f6f8fa",
+  "ink": "#161b22",
+  "deep": "#0d1117",
+  "accent": "#6e8caf",
+  "hi": "#f5a623",
+  "mute": "#8b949e",
+  "page": "#0d1117",
+  "card": "#ffffff",
+  "tag": "#46607f",
+  "herob": "#46607f"
+ },
+ "layout": {
+  "landscape": {
+   "slab": {
+    "left": 96,
+    "top": 760,
+    "h2": 70,
+    "p": 29,
+    "max_w": 1100
+   }
+  }
+ },
+ "copy": {
+  "brand": {
+   "name": "CCC",
+   "wordmark": "ccc",
+   "dot": "."
+  },
+  "window_title": "CCC &middot; Claude Command Center",
+  "hook": {
+   "a": [
+    "A fix comes to mind",
+    "[mid-session.]"
+   ],
+   "b": [
+    "Where does it",
+    "go?"
+   ]
+  },
+  "storm": [
+   [
+    "OAuth 401 after deploy",
+    "#bugs"
+   ],
+   [
+    "Webhook double-fire",
+    "#p0"
+   ],
+   [
+    "Pagination count",
+    "#bugs"
+   ],
+   [
+    "Alt text backfill",
+    "#content"
+   ],
+   [
+    "Shortcodes to Eleventy",
+    "#content"
+   ],
+   [
+    "Hero video 4K or 1080p",
+    "#needs-input"
+   ],
+   [
+    "Cut v2.4",
+    "#release"
+   ],
+   [
+    "Contact form in Safari",
+    "#website"
+   ],
+   [
+    "Per-tag RSS feeds",
+    "#features"
+   ],
+   [
+    "srcset pipeline",
+    "#shape"
+   ],
+   [
+    "Footnote anchors",
+    "#done"
+   ],
+   [
+    "Changelog page",
+    "#later"
+   ]
+  ],
+  "storm_labels": [
+   "LATER",
+   "OPEN",
+   "P0",
+   "NOW"
+  ],
+  "hero": {
+   "eyebrow": "ONE TICKET",
+   "text": "Where does the fix go?",
+   "accent": "#queue"
+  },
+  "intro": {
+   "eyebrow": "MEET",
+   "tagline": [
+    "Every fix,",
+    "one queue."
+   ],
+   "chips": [
+    "BUGS &middot; FEATURES &middot; CONTENT",
+    "FILED IN SECONDS"
+   ]
+  },
+  "steps": [
+   {
+    "pill": "01 TYPE",
+    "eyebrow": "01 &mdash; TYPE",
+    "title": "Describe the fix.",
+    "sub": "One line is enough. The ticket dialog opens from the sidebar, ready to type."
+   },
+   {
+    "pill": "02 FILE",
+    "eyebrow": "02 &mdash; FILE",
+    "title": "One click to file.",
+    "sub": "Pick the queue, add the ticket. It lands in the list straight away."
+   },
+   {
+    "pill": "03 READY",
+    "eyebrow": "03 &mdash; READY",
+    "title": "Ready for a worker.",
+    "sub": "Priority, type and origin are set. Run it now, or leave it for the next free worker."
+   }
+  ],
+  "recap": [
+   "Type.",
+   "File.",
+   "Run."
+  ],
+  "end": {
+   "tagline": [
+    "Start the next",
+    "while Claude builds the first."
+   ],
+   "url": "github.com/amirfish1/claude-command-center",
+   "chips": [
+    "QUEUES",
+    "TICKETS",
+    "READY FOR A WORKER"
+   ],
+   "limit": "Recorded on the CCC demo dashboard with sample tickets.",
+   "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+  },
+  "hud_label": "CCC &middot; REAL CAPTURE"
+ },
+ "edit": {
+  "reveal_src": 3,
+  "act1": {
+   "click": 0,
+   "keys": [
+    0,
+    14
+   ],
+   "type_window": [
+    8.6,
+    15.2
+   ],
+   "type_region": [
+    1030,
+    740,
+    1750,
+    880
+   ]
+  },
+  "act2": {
+   "click": 2,
+   "instant_result": true,
+   "result_window": [
+    26.6,
+    31.5
+   ],
+   "result_after": 27.0,
+   "result_region": [
+    276,
+    1100,
+    2290,
+    1400
+   ],
+   "lift_region": [
+    276,
+    1190,
+    2010,
+    105
+   ],
+   "lock_label": "ONE CLICK",
+   "stamp": "FILED"
+  },
+  "act3": {
+   "click": 3,
+   "instant_result": true,
+   "skip_load": true,
+   "result_window": [
+    33.9,
+    38.5
+   ],
+   "result_after": 34.1,
+   "result_region": [
+    390,
+    140,
+    3450,
+    2010
+   ],
+   "track_region": [
+    2892,
+    650,
+    510,
+    95
+   ],
+   "track_label": "P0 URGENT",
+   "label_side": "above",
+   "hold_rate": 1
+  },
+  "recap": [
+   [
+    "type_end",
+    1.0,
+    930,
+    480,
+    1980
+   ],
+   [
+    "saved_visible",
+    0.5,
+    228,
+    700,
+    2200
+   ],
+   [
+    "filtered",
+    0.8,
+    390,
+    250,
+    3100
+   ]
+  ],
+  "recap_stills": true
+ }
+}

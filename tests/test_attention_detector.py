@@ -120,6 +120,28 @@ def test_live_formal_question_waiting_is_flagged():
     assert item and item["kind"] == "question_blocked" and item["priority"] == 1
 
 
+def test_dead_session_with_stale_tool_call_not_flagged():
+    """A session that died mid-tool is not stuck; nothing is running."""
+    item = server._classify_attention(
+        _row("running tests", stale_tool_call=True, stale_tool_age_s=8_000_000,
+             pending_tool="Bash"))
+    assert item is None or item.get("kind") != "stale_tool_call"
+
+
+def test_dormant_codex_stale_tool_expires_after_a_day():
+    item = server._classify_attention(
+        _row("x", source="codex", engine="codex", stale_tool_call=True,
+             stale_tool_age_s=90_000, pending_tool="write_stdin"))
+    assert item is None or item.get("kind") != "stale_tool_call"
+
+
+def test_live_session_with_stale_tool_call_is_flagged():
+    item = server._classify_attention(
+        _row("running tests", is_live=True, stale_tool_call=True,
+             stale_tool_age_s=1200, pending_tool="Bash"))
+    assert item and item["kind"] == "stale_tool_call"
+
+
 # ── MUST NOT flag ─────────────────────────────────────────────────────────────
 
 def test_working_subagent_not_flagged():
@@ -424,3 +446,14 @@ def test_soft_block_score_is_memoized_per_text(monkeypatch):
     assert server._detect_soft_block(row)
     assert server._detect_soft_block(dict(row))
     assert calls["n"] == 1
+
+
+@pytest.mark.parametrize("ns, expected", [
+    ('Say "fix the refs" if you want attention items to carry session names.', True),
+    ("Tell me which host to deploy to.", True),
+    ("Answer Q1 (Funnel or Cloud Relay).", True),
+    ("Refresh the cloud page and check the sessions list.", False),
+    ("Nothing to do; it shipped.", False),
+])
+def test_next_step_decision_phrases(ns, expected):
+    assert server._next_step_requests_decision(ns) is expected

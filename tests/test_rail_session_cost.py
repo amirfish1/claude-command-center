@@ -149,7 +149,11 @@ def test_visible_cost_text_and_tooltip_execute_production_formatter():
 def test_status_rail_renders_the_selected_cost_basis():
     source = APP_JS.read_text(encoding="utf-8")
 
-    assert "const costText = railSessionCostText(presentation);" in source
-    assert "costText.label" in source
-    assert "costText.tooltip" in source
+    # The rail headline was redesigned (allocated subscription cost first,
+    # API list-price equivalent as the caption) and now renders through
+    # railCostHeadline(); the per-basis label helper is still exercised above.
+    assert "const summary = railCostHeadline(quotaPresentation, breakdown.totalCost);" in source
+    assert "summary.headline" in source
+    assert "summary.apiLabel" in source
+    assert "' API list-price equivalent'" in source
     assert "/api/throughput/week-rankings?fresh=1" in source

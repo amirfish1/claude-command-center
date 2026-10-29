@@ -1,1 +1,0 @@
-- "Needs you" cards now carry buttons: Run a suggested command in a terminal (after a confirm), Copy it, Restart CCC, Reload, open linked URLs and files, or jump to the composer to reply.

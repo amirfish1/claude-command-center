@@ -20,7 +20,7 @@ class TestQueueBootstrap(unittest.TestCase):
         self.assertIn("_renderQueuePanel()", archive_boot)
         self.assertLess(
             archive_boot.index("_renderQueuePanel()"),
-            archive_boot.index("_firstSessionsLoaded.then(() => setArchiveMode())"),
+            archive_boot.index("queueMicrotask(() => setArchiveMode())"),
         )
 
 

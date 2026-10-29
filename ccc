@@ -22,6 +22,8 @@ command, without opening the dashboard:
 
     ccc send <session> "message"        # fire-and-forget into a session
     ccc send <session> "…" --steer      # interrupt the current turn with it
+    ccc send <session> "STOP …" --steer --stop   # stop: hold queued after-turn sends
+    ccc held <session> [--release ID|all] [--cancel ID|all]   # input a Stop held
     ccc send <session> "…" --new-if-large-and-stale   # continuation instead of a cold resume, when warranted
     ccc ask <session> "question"        # send and wait for the reply text
 
@@ -36,6 +38,16 @@ command, without opening the dashboard:
     ccc consent show <item>                     # exact diff for one item
     ccc consent approve <item...|all>           # or: decline / revoke <item...|all>
 
+    ccc jobs ls [--host hermes]                 # scheduled jobs: status, last/next run, outcome
+    ccc jobs add --host hermes --repo BYM --what "..." --when "hourly" [--name slug] [--wait]
+                                                # an agent session creates the job (POST /api/jobs/add)
+
+    ccc vault list [--json]                     # Vault entries: name/kind/service/env var, never values
+    ccc vault get <name> [--reveal]             # exit 0 if saved; prints the value only with --reveal
+    ccc vault exec --env VAR=<name> [--env ...] -- <cmd...>
+                                                # run cmd with secrets in env, redacted from its output
+
+    ccc astra-check <sid> ... # cost/behavior score for a Codex session (scripts/astra-check)
     ccc brain <subcmd> ...    # passthrough to an optional private plugin (no-op if unconfigured)
 
 <session> is a session id, a unique id prefix, or a (unique, case-
@@ -48,6 +60,9 @@ to `ccc spawn --model` / `--effort` verbatim. Before building a feature, run
 earlier work, run `ccc recall` instead of guessing from scratch. To resume a
 specific earlier session, run `ccc brief <session>` first — it answers
 "where did this stop" without opening the transcript.
+When a task needs an API key, token or login, use `ccc vault exec --env
+VAR=<name> -- <cmd>` rather than `ccc vault get --reveal`: exec keeps the
+value out of your transcript and redacts it from the command's output.
 
 Server discovery: --server URL > $CCC_SERVER > the port.txt the server
 publishes at ~/.claude/command-center/port.txt (see write_port_file in
@@ -69,9 +84,11 @@ from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota",
+SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "brief", "where",
-               "brain", "consent")
+               "brain", "consent", "jobs", "vault", "secret")
+
+RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
 BRAIN_CONFIG_FILE = os.path.expanduser("~/.claude/command-center/brain-plugin.json")
 
@@ -165,6 +182,34 @@ def _get_json(base, path, timeout=10):
         return json.loads(resp.read().decode("utf-8"))
 
 
+_NODE_STATUS_TEXT = {
+    "timeout": "timed out",
+    "peer_offline": "offline",
+    "unsupported_capability": "needs a CCC update for memory federation",
+    "skipped_backoff": "skipped (backing off after a failure)",
+    "unpaired_peer": "not paired back with this machine",
+    "error": "error",
+}
+
+
+def _node_status_lines(payload):
+    """`[hermes timed out]`-style lines for every peer that didn't answer a
+    scope=all memory query. Peers that answered print nothing. `nodes` is
+    the fan-out list on recall/shipped/history; brief uses `node_status`
+    (its `nodes` key was already a lineage-ref map)."""
+    nodes = payload.get("node_status") if "node_status" in payload else payload.get("nodes")
+    lines = []
+    for n in nodes if isinstance(nodes, list) else []:
+        if not isinstance(n, dict) or n.get("self") or n.get("status") == "ok":
+            continue
+        text = _NODE_STATUS_TEXT.get(n.get("status"), n.get("status") or "?")
+        if n.get("stale"):
+            age = n.get("cache_age_s")
+            text += f"; showing its answer from {max(0, int(age or 0) // 60)} min ago"
+        lines.append(f"[{n.get('name') or '?'} {text}]")
+    return lines
+
+
 def _post_json(base, path, payload, timeout=60):
     """POST JSON, returning (status, payload). HTTP error statuses still carry
     a JSON body on /api/sessions/spawn (error + supported_engines et al), so
@@ -210,6 +255,9 @@ def _fmt_age(age_s):
     return f"{age_s // 86400}d{age_s % 86400 // 3600:02d}h"
 
 
+_DEFAULT_SESSIONS_SINCE_S = 86400  # 24h default window (mirrors Command Center's 1d view)
+
+
 def cmd_sessions(args):
     base = _resolve_server(args.server)
     if not base:
@@ -219,21 +267,28 @@ def cmd_sessions(args):
             file=sys.stderr,
         )
         return 1
+    live_only = bool(getattr(args, "live", False))
+    flat_mode = bool(getattr(args, "flat", False))
+    effective_since = args.since
+    if effective_since is None and not live_only:
+        effective_since = _DEFAULT_SESSIONS_SINCE_S
     try:
         census_path = "/api/sessions/census"
-        if args.since is not None:
+        if effective_since is not None:
             # Server widens the candidate pool with recently-ended sessions in
             # the window; the client-side filter below then applies uniformly.
-            census_path += f"?since={args.since}"
+            census_path += f"?since={effective_since}"
         payload = _get_json(base, census_path)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
     sessions = list(payload.get("sessions") or [])
-    if args.since is not None:
+    if live_only:
+        sessions = [s for s in sessions if s.get("state") != "ended"]
+    if effective_since is not None:
         sessions = [
             s for s in sessions
-            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= args.since
+            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= effective_since
         ]
     if args.json:
         out = dict(payload)
@@ -242,22 +297,103 @@ def cmd_sessions(args):
         return 0
 
     n_helpers = sum(1 for s in sessions if s.get("helper"))
+    n_archived = sum(1 for s in sessions if s.get("archived") or s.get("trashed"))
+    n_empty_polls = sum(
+        1 for s in sessions
+        if s.get("empty_worker_poll") and s.get("state") not in ("working", "waiting")
+    )
     if not args.all:
-        sessions = [s for s in sessions if not s.get("helper")]
-    if args.sort == "status":
-        sessions = sorted(sessions, key=lambda s: _STATUS_RANK.get(s.get("state") or "", 4))
+        sessions = [
+            s for s in sessions
+            if not s.get("helper")
+            and not s.get("archived")
+            and not s.get("trashed")
+            and not (s.get("empty_worker_poll") and s.get("state") not in ("working", "waiting"))
+        ]
+
+    # Fold continuation chains (`continued_from_session_id`) so earlier legs
+    # fold into the chain head, which renders `↱ N earlier` and inherits any
+    # `↳` subagent children from earlier legs (matches _continuationFoldMaps in
+    # static/app.js).
+    by_sid = {s.get("session_id"): s for s in sessions if s.get("session_id")}
+    earlier_count = {}
+    head_of = {}
+    n_folded = 0
+    if not args.all:
+        superseded = set()
+        for s in sessions:
+            sid = s.get("session_id")
+            cont = s.get("continued_from_session_id")
+            if sid and cont and cont != sid and cont in by_sid:
+                superseded.add(cont)
+        folded_out = set()
+        for s in sessions:
+            sid = s.get("session_id")
+            if not sid or sid in superseded:
+                continue
+            cur = s.get("continued_from_session_id")
+            seen = {sid}
+            count = 0
+            while cur and cur not in seen and cur in by_sid:
+                seen.add(cur)
+                folded_out.add(cur)
+                head_of[cur] = sid
+                count += 1
+                cur = by_sid[cur].get("continued_from_session_id")
+            if count > 0:
+                earlier_count[sid] = count
+        n_folded = len(folded_out)
+        if folded_out:
+            sessions = [s for s in sessions if s.get("session_id") not in folded_out]
 
     children_of = {}
     for s in sessions:
-        parent = s.get("parent_session_id") or ""
-        if parent:
+        raw_parent = s.get("parent_session_id") or ""
+        parent = head_of.get(raw_parent, raw_parent)
+        if parent and parent != s.get("session_id"):
             children_of.setdefault(parent, []).append(s)
-    sids = {s.get("session_id") for s in sessions}
-    roots = [s for s in sessions if (s.get("parent_session_id") or "") not in sids]
+    sids = {s.get("session_id") for s in sessions if s.get("session_id")}
+    roots = [
+        s for s in sessions
+        if head_of.get(s.get("parent_session_id") or "", s.get("parent_session_id") or "") not in sids
+    ]
+
+    def _family_nodes(root, _seen=None):
+        if _seen is None:
+            _seen = set()
+        sid = root.get("session_id")
+        if sid in _seen:
+            return [root]
+        if sid:
+            _seen.add(sid)
+        nodes = [root]
+        for c in children_of.get(sid) or ():
+            nodes.extend(_family_nodes(c, _seen))
+        return nodes
+
+    def _family_sort_key(root):
+        fam = _family_nodes(root)
+        ages = [n.get("last_event_age_s") for n in fam if n.get("last_event_age_s") is not None]
+        min_age = min(ages) if ages else float("inf")
+        if args.sort == "status":
+            min_rank = min(_STATUS_RANK.get(n.get("state") or "", 4) for n in fam)
+            return (min_rank, min_age)
+        return (min_age == float("inf"), min_age)
+
+    roots = sorted(roots, key=_family_sort_key)
+    if args.sort == "status":
+        sessions = sorted(
+            sessions,
+            key=lambda s: (
+                _STATUS_RANK.get(s.get("state") or "", 4),
+                s.get("last_event_age_s") if s.get("last_event_age_s") is not None else float("inf"),
+            ),
+        )
 
     home_prefix = os.path.expanduser("~") + os.sep
 
     def _row(s, depth=0, child=False):
+        sid = s.get("session_id") or "?"
         flags = ""
         if s.get("needs_approval"):
             flags += " !approval"
@@ -269,11 +405,20 @@ def cmd_sessions(args):
             flags += " !stuck"
             if s.get("stuck_age_s") is not None:
                 flags += f" {_fmt_age(s['stuck_age_s'])} silent"
+        if earlier_count.get(sid):
+            flags += f"  ↱ {earlier_count[sid]} earlier"
         tool = s.get("pending_tool") or "-"
         if s.get("turn_age_s") is not None and s.get("state") == "working":
             tool = f"{tool} {_fmt_age(s['turn_age_s'])}"
-        name = (s.get("name") or "(no conversation row)")[:44]
+        raw_name = s.get("name") or "(no conversation row)"
+        if depth or child:
+            for pfx in ("↳ ⤴︎ ", "↳ ", "⤴︎ "):
+                if raw_name.startswith(pfx):
+                    raw_name = raw_name[len(pfx):]
+                    break
         marker = ("  " * depth + "↳ ") if (depth or child) else ""
+        avail_w = max(20, 46 - len(marker))
+        name_col = f"{marker}{raw_name[:avail_w]}"
         engine_effort = f"{s.get('engine') or '?'}/{s.get('effort') or '?'}"
         via = s.get("spawned_via") or "terminal"
         if via in ("-", "none", "null", "not-available", "not available"):
@@ -282,57 +427,91 @@ def cmd_sessions(args):
         if path.startswith(home_prefix):
             path = path[len(home_prefix):]
         print(
-            f"{_fmt_age(s.get('last_event_age_s')):>7}  {marker}{name:<44} "
+            f"{_fmt_age(s.get('last_event_age_s')):>7}  {name_col:<46} "
             f"{s.get('state') or '?':<8} {(s.get('model') or '?')[:18]:<18} "
-            f"{s.get('session_id') or '?'}  {engine_effort:<14} "
-            f"via:{via:<6} {path}  {tool}{flags}"
+            f"{sid}  {engine_effort:<14} "
+            f"via:{via:<8} {path}  {tool}{flags}"
         )
 
-    def _walk(s, depth):
+    def _walk(s, depth, _seen=None):
+        if _seen is None:
+            _seen = set()
+        sid = s.get("session_id")
+        if sid and sid in _seen:
+            return
+        if sid:
+            _seen.add(sid)
         _row(s, depth)
-        kids = children_of.get(s.get("session_id")) or ()
+        kids = children_of.get(sid) or ()
         if args.sort == "status":
             kids = sorted(kids, key=lambda c: (
                 _STATUS_RANK.get(c.get("state") or "", 4),
                 c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
             ))
         else:
-            kids = sorted(kids, key=lambda c: c.get("last_event_age_s") or 0)
+            kids = sorted(
+                kids,
+                key=lambda c: c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
+            )
         for child in kids:
-            _walk(child, depth + 1)
+            _walk(child, depth + 1, _seen)
 
-    if args.tree:
+    if not flat_mode:
         for s in roots:
             _walk(s, 0)
     else:
-        # Flat (default): every row in the requested sort order, children
-        # marked ↳ inline. Nesting under parents (--tree) groups families but
-        # breaks the global sort order — the hiding problem in new clothes.
         for s in sessions:
             _row(s, 0, child=bool(s.get("parent_session_id")))
     n = len(sessions)
+    n_roots = len(roots)
+    n_children = n - n_roots
     n_live = sum(1 for s in sessions if s.get("state") != "ended")
     n_ended = n - n_live
     n_orphan = sum(1 for s in sessions if not s.get("has_conversation_row"))
-    counts = f"{n_live} live"
-    if n_ended:
-        counts += f" + {n_ended} ended"
-    suffix = f", {n_orphan} with no conversation row" if n_orphan else ""
-    print(f"\n{counts} session{'s' if n != 1 else ''}{suffix}")
-    if n_helpers and not args.all:
-        print(f"({n_helpers} CCC helper session{'s' if n_helpers != 1 else ''} hidden — auto-title bots; --all to show)")
+    if live_only and args.since is None:
+        header = f"{n_live} live session{'s' if n_live != 1 else ''}"
+    else:
+        win_label = _fmt_age(effective_since) if effective_since else "window"
+        header = f"{n} session{'s' if n != 1 else ''} in last {win_label} ({n_live} live + {n_ended} ended"
+        if n_children:
+            header += f"; {n_roots} root + {n_children} subagent{'s' if n_children != 1 else ''}"
+        header += ")"
+    if n_orphan:
+        header += f", {n_orphan} with no conversation row"
+    print(f"\n{header}")
+    if not args.all:
+        hidden_parts = []
+        if n_folded:
+            hidden_parts.append(f"{n_folded} continuation leg{'s' if n_folded != 1 else ''} folded (↱)")
+        if n_empty_polls:
+            hidden_parts.append(f"{n_empty_polls} empty queue-drain poll{'s' if n_empty_polls != 1 else ''} hidden")
+        if n_archived:
+            hidden_parts.append(f"{n_archived} archived/trashed hidden")
+        if n_helpers:
+            hidden_parts.append(f"{n_helpers} helper{'s' if n_helpers != 1 else ''} hidden")
+        if hidden_parts:
+            print(f"({', '.join(hidden_parts)} — use --all to show)")
     return 0
+
+
+_FULL_SESSION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
 
 
 def _resolve_target(base, target):
     """Turn a user-supplied target (session id, unique id prefix, or unique
-    name fragment) into a session id, using the live census. Returns
+    name fragment) into a session id, using the census (including recent
+    ended sessions so `ccc send` / `ccc ask` can wake them up). Returns
     (session_id, error_message) — exactly one is set. An unmatched target
     passes through untouched so server-side aliases (bridge ULIDs, spawn
-    prefixes) still work."""
+    prefixes) still work. A complete UUID is already canonical, so it skips
+    the seven-day census (which can take longer than the send itself)."""
     target = (target or "").strip()
+    if _FULL_SESSION_ID_RE.match(target):
+        return target, None
     try:
-        payload = _get_json(base, "/api/sessions/census")
+        payload = _get_json(base, "/api/sessions/census?since=604800")
         sessions = list(payload.get("sessions") or [])
     except OSError:
         return target, None  # census unreachable — let the send itself report
@@ -347,6 +526,20 @@ def _resolve_target(base, target):
         s for s in sessions
         if needle and needle in (s.get("name") or "").lower()
     ]
+    if len(named) > 1:
+        # Prefer non-trashed, non-superseded continuation heads when a name
+        # matches multiple legs of the same continuation chain.
+        superseded = {
+            s.get("continued_from_session_id")
+            for s in sessions
+            if s.get("continued_from_session_id")
+        }
+        preferred = [
+            s for s in named
+            if not s.get("trashed") and s.get("session_id") not in superseded
+        ]
+        if len(preferred) == 1:
+            return preferred[0].get("session_id") or target, None
     if len(named) == 1:
         return named[0].get("session_id") or target, None
     if len(named) > 1:
@@ -378,10 +571,17 @@ def cmd_send(args):
         print("ccc send: missing message (pass it as an argument or pipe it on stdin)",
               file=sys.stderr)
         return 2
+    if getattr(args, "stop", False) and not args.steer:
+        print("ccc send: --stop only applies to --steer", file=sys.stderr)
+        return 2
     sid, err = _resolve_target(base, args.target)
     if err:
         print(err, file=sys.stderr)
         return 1
+    import sender_envelope as attribution
+    attr = attribution.capture_cli(sid, claimed=getattr(args, "sender", None) or "")
+    if not args.dry_run:
+        attribution.journal(attr, app="ccc", event="cli")
     if args.new_if_large_and_stale or args.dry_run:
         qs = urllib.parse.urlencode({
             "large_threshold": args.large_threshold, "stale_seconds": args.stale_seconds,
@@ -403,7 +603,7 @@ def cmd_send(args):
                 print(json.dumps(decision, indent=2))
             return 0
         if args.new_if_large_and_stale and decision["path"] == "new":
-            return _spawn_continue_from(base, decision.get("resolved_session_id") or sid, text, args)
+            return _spawn_continue_from(base, decision.get("resolved_session_id") or sid, attribution.carry(text, attr, app="ccc"), args)
         if args.dry_run:
             preview = {"path": "normal", "session_id": sid, "text": text}
             if args.json:
@@ -411,13 +611,15 @@ def cmd_send(args):
             else:
                 print(f"[dry-run] would send normally to {sid}")
             return 0
-    payload = {"session_id": sid, "text": text}
-    sender_sid = getattr(args, "sender", None) or os.environ.get("CLAUDE_SESSION_ID") or None
+    payload = {"session_id": sid, "text": text, **({"attr": attr, "idempotency_key": attr["message_id"]} if attribution.enabled("ccc") else {})}
+    sender_sid = getattr(args, "sender", None) or attr["author"].get("id") or None
     if sender_sid:
         resolved_sender, _ = _resolve_target(base, sender_sid)
         payload["peer_sender_sid"] = resolved_sender or sender_sid
     if args.steer:
         payload["mode"] = "steer"
+        if getattr(args, "stop", False):
+            payload["stop"] = True
     elif args.queue:
         payload["mode"] = "queue"
     try:
@@ -428,12 +630,65 @@ def cmd_send(args):
     if args.json:
         print(json.dumps(result, indent=2))
         return 0 if result.get("ok") else 1
+    if not result.get("ok") and result.get("effect") == "unknown":
+        # Not a failure: the target may already have the message. Resending
+        # blindly would duplicate it (CCC-238).
+        print(f"ccc: delivery unknown: {result.get('error') or 'no confirmation'}", file=sys.stderr)
+        return 3
     if not result.get("ok"):
         print(f"ccc: send failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
         return 1
     effect = result.get("effect") or result.get("landed") or "delivered"
     print(f"sent to {sid} ({effect})")
+    if result.get("held_queued"):
+        print(f"held {result['held_queued']} queued message(s) for release: ccc held {sid}")
     return 0
+
+
+def cmd_held(args):
+    """Inspect, release, or cancel queued input an explicit Stop held."""
+    base = _resolve_server(args.server)
+    if not base:
+        print("ccc: no server found — is CCC running?", file=sys.stderr)
+        return 1
+    sid, err = _resolve_target(base, args.target)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    action, chosen = None, None
+    if args.release is not None:
+        action, chosen = "release", args.release
+    elif args.cancel is not None:
+        action, chosen = "cancel", args.cancel
+    try:
+        if action:
+            ids = None if "all" in chosen else chosen
+            status, result = _post_json(
+                base, f"/api/stop-held/{action}",
+                {"session_id": sid, **({} if ids is None else {"ids": ids})},
+            )
+            view = result.get("held") or {}
+        else:
+            status, result = 200, _get_json(base, f"/api/session/{sid}/stop-held")
+            view = result
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if action == "release":
+        print(f"released {result.get('released', 0)}"
+              + (f", {result['failed']} failed (still held)" if result.get("failed") else ""))
+    elif action == "cancel":
+        print(f"cancelled {result.get('cancelled', 0)}")
+    items = view.get("items") or []
+    if not items:
+        print(f"no held input for {sid}")
+    for item in items:
+        preview = " ".join(str(item.get("text") or "").split())[:100]
+        print(f"  {item.get('id')}  {preview}")
+    return 0 if result.get("ok") else 1
 
 
 def cmd_ask(args):
@@ -456,13 +711,16 @@ def cmd_ask(args):
     if err:
         print(err, file=sys.stderr)
         return 1
+    import sender_envelope as attribution
+    attr = attribution.capture_cli(sid)
+    attribution.journal(attr, app="ccc", event="cli-ask")
     timeout_ms = int(args.timeout * 1000)
     try:
         # HTTP timeout outlasts the server-side wait so the server, not the
         # transport, decides when the ask has timed out.
         status, result = _post_json(
             base, "/api/ask",
-            {"session_id": sid, "text": text, "timeout_ms": timeout_ms},
+            {"session_id": sid, "text": text, "timeout_ms": timeout_ms, "attr": attr},
             timeout=timeout_ms / 1000 + 30,
         )
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -506,7 +764,7 @@ def cmd_recall(args):
         print("ccc recall: missing query (pass it as an argument or pipe it on stdin)",
               file=sys.stderr)
         return 2
-    qs = urllib.parse.urlencode({"q": text, "limit": args.limit})
+    qs = urllib.parse.urlencode({"q": text, "limit": args.limit, "scope": getattr(args, "scope", "all")})
     try:
         payload = _get_json(base, f"/api/memory/recall?{qs}", timeout=15)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -521,6 +779,8 @@ def cmd_recall(args):
             print(f"(indexing: true — no sessions found yet for {text!r}, still warming up)")
         else:
             print(f"(no sessions found for {text!r})")
+        for line in _node_status_lines(payload):
+            print(line)
         return 0
     tty = sys.stdout.isatty()
     width = shutil.get_terminal_size((100, 20)).columns if tty else 100
@@ -540,11 +800,16 @@ def cmd_recall(args):
         sid = str(r.get("session_id") or "?")
         short = sid.removeprefix("session_")[:8]
         title = _clean(r.get("title")) or "(untitled)"
+        tag = f"[{r.get('node_name')}] " if r.get("local") is False else ""
         head = f"{i:>2}. {short}  "
-        print(head + bold(_fit(title, width - len(head))))
+        print(head + bold(_fit(tag + title, width - len(head))))
         collapsed = r.get("chain_collapsed") or 0
+        also = ", ".join(a.get("node_name") or "?" for a in r.get("also_on") or [])
+        fork = f"fork of {r['fork_of']} at {r.get('fork_at')}" if r.get("fork_of") else ""
         meta = "  ·  ".join(x for x in (r.get("repo"), r.get("date"),
-                                        f"+{collapsed} related" if collapsed else "") if x)
+                                        f"+{collapsed} related" if collapsed else "",
+                                        f"also on {also}" if also else "", fork,
+                                        "cached" if r.get("stale") else "") if x)
         pad = " " * len(head)
         print(pad + dim(meta))
         m = r.get("match") or {}
@@ -555,6 +820,8 @@ def cmd_recall(args):
         print()
     if results:
         print(dim(f"full id / resume: ccc brief <id>   ·   raw: --json"))
+    for line in _node_status_lines(payload):
+        print(line)
     if payload.get("indexing"):
         print("(indexing: true — still warming up, results may be incomplete)")
     return 0
@@ -577,7 +844,8 @@ def cmd_brief(args):
               file=sys.stderr)
         return 2
     try:
-        payload = _get_json(base, f"/api/memory/brief/{urllib.parse.quote(text, safe='')}", timeout=20)
+        qs = urllib.parse.urlencode({"scope": getattr(args, "scope", "all")})
+        payload = _get_json(base, f"/api/memory/brief/{urllib.parse.quote(text, safe='')}?{qs}", timeout=20)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
@@ -588,8 +856,11 @@ def cmd_brief(args):
         print(f"(no session found for {text!r})")
         for alt in payload.get("alternates") or []:
             print(f"  maybe: {alt}")
+        for line in _node_status_lines(payload):
+            print(line)
         return 1
-    print(f"{payload['session_id']}  {payload.get('title') or '(untitled)'}")
+    tag = f"[{payload.get('node_name')}] " if payload.get("local") is False else ""
+    print(f"{tag}{payload['session_id']}  {payload.get('title') or '(untitled)'}")
     meta = " | ".join(x for x in (payload.get("repo"), payload.get("engine"),
                                   payload.get("start_date"), payload.get("end_date")) if x)
     if meta:
@@ -713,7 +984,7 @@ def cmd_shipped(args):
         print("ccc shipped: missing topic (pass it as an argument or pipe it on stdin)",
               file=sys.stderr)
         return 2
-    qs = urllib.parse.urlencode({"topic": text})
+    qs = urllib.parse.urlencode({"topic": text, "scope": getattr(args, "scope", "all")})
     try:
         payload = _get_json(base, f"/api/memory/shipped?{qs}", timeout=15)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -739,10 +1010,13 @@ def cmd_shipped(args):
     for ev in payload.get("evidence") or []:
         subj = ev.get("subject") or ""
         state = f"  ({ev['state']})" if ev.get("state") else ""
-        print(f"  {ev.get('repo') or '?'} {ev.get('commit') or ''}  {subj}{state}")
+        node = f"[{ev['node_name']}] " if ev.get("node_name") and payload.get("scope") == "all" else ""
+        print(f"  {node}{ev.get('repo') or '?'} {ev.get('commit') or ''}  {subj}{state}")
     tickets = payload.get("tickets") or []
     if tickets:
         print(f"  tickets: {', '.join(tickets)}")
+    for line in _node_status_lines(payload):
+        print(f"  {line}")
     return 0
 
 
@@ -763,7 +1037,7 @@ def cmd_history(args):
         print("ccc history: missing path (pass it as an argument or pipe it on stdin)",
               file=sys.stderr)
         return 2
-    params = {"path": text, "limit": args.limit}
+    params = {"path": text, "limit": args.limit, "scope": getattr(args, "scope", "all")}
     if args.repo:
         params["repo"] = args.repo
     qs = urllib.parse.urlencode(params)
@@ -778,15 +1052,21 @@ def cmd_history(args):
     entries = payload.get("history") or []
     if not entries:
         print(f"(no history found for {text!r})")
+        for line in _node_status_lines(payload):
+            print(line)
         return 0
     for e in entries:
         date = e.get("date") or "?"
         why = e.get("why") or ""
+        if e.get("local") is False:
+            why = f"[{e.get('node_name')}] {why}"
         if e.get("kind") == "commit":
             print(f"{date:<12} commit  {e.get('hash') or '?':<10} {why}")
         else:
             op = e.get("op") or "wrote"
             print(f"{date:<12} {op:<7} {e.get('session_id') or '?':<38} {why}")
+    for line in _node_status_lines(payload):
+        print(line)
     return 0
 
 
@@ -807,6 +1087,8 @@ def cmd_decisions(args):
               file=sys.stderr)
         return 2
     qs = urllib.parse.urlencode({"topic": text, "limit": args.limit})
+    if getattr(args, "repo", None):
+        qs += "&" + urllib.parse.urlencode({"repo": args.repo})
     try:
         payload = _get_json(base, f"/api/memory/decisions?{qs}", timeout=15)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -822,6 +1104,15 @@ def cmd_decisions(args):
     for r in results:
         meta = " | ".join(x for x in (r.get("title"), r.get("repo"), r.get("date")) if x)
         print(f"{r.get('session_id') or '?':<38} {meta}")
+        provenance = r.get("provenance")
+        if provenance:
+            label = ("user quote (candidate)" if provenance == "extracted_user_quote"
+                     else "session snippet (unverified)")
+            source = r.get("source") or {}
+            location = source.get("path") or ""
+            if location and source.get("line"):
+                location += f":{source['line']}"
+            print(f"  [{label}]" + (f" {location}" if location else ""))
         if r.get("snippet"):
             print(f"  {r['snippet']}")
     return 0
@@ -1191,6 +1482,193 @@ def cmd_quota(args):
     return 0
 
 
+# `ccc restart`: the one way agents should restart CCC. Every restart costs a
+# ~30s cold warmup, and agents restarting after each of their own commits
+# caused 13 of ~23 restarts in one day (OPS-150), each bypassing the
+# drain/adopt handoff in POST /api/restart/all. This goes through those
+# endpoints and coalesces requests: within RESTART_DEBOUNCE_S of the last
+# restart, a request becomes one pending restart that a detached runner fires
+# when the window ends (so the newest commit still goes live). A 409 (the
+# server says a restart is unsafe right now) is retried the same way.
+RESTART_STATE_FILE = os.path.expanduser("~/.claude/command-center/restart-debounce.json")
+RESTART_DEBOUNCE_S = int(os.environ.get("CCC_RESTART_DEBOUNCE_S") or 300)
+_RESTART_RETRY_S = 60
+_RESTART_MAX_RETRIES = 10
+_RESTART_PATHS = {"all": "/api/restart/all", "dashboard": "/api/restart", "worker": "/api/restart/worker"}
+
+
+def _merge_restart_targets(a, b):
+    """Smallest target covering both requests (dashboard+worker == all)."""
+    if not a or a == b:
+        return b
+    if not b:
+        return a
+    return "all"
+
+
+def _restart_state_update(fn):
+    """Run fn(state) -> result under an exclusive lock on the state file."""
+    import fcntl
+    os.makedirs(os.path.dirname(RESTART_STATE_FILE), exist_ok=True)
+    with open(RESTART_STATE_FILE + ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(RESTART_STATE_FILE) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+        result = fn(state)
+        tmp = RESTART_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, RESTART_STATE_FILE)
+        return result
+
+
+def _spawn_restart_runner(base, due):
+    """Detached `ccc restart --run-pending` that sleeps until `due`; its pid."""
+    cmd = [sys.executable, os.path.realpath(__file__), "--server", base,
+           "restart", "--run-pending", "--due", str(int(due))]
+    log = os.path.expanduser("~/.claude/command-center/restart-debounce.log")
+    with open(log, "a") as out:
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                                start_new_session=True, close_fds=True).pid
+
+
+def _defer_restart(base, target, due, why):
+    def apply(state):
+        pending = state.get("pending") or {}
+        state["pending"] = {
+            "target": _merge_restart_targets(pending.get("target"), target),
+            "due": max(float(pending.get("due") or 0), due),
+            "retries": int(pending.get("retries") or 0),
+            "why": why,
+        }
+        # Spawn under the lock and record the pid here, not from the runner:
+        # a second request racing the runner's startup must see it.
+        runner = state.get("runner_pid")
+        if not (runner and _pid_alive(runner)):
+            state["runner_pid"] = _spawn_restart_runner(base, state["pending"]["due"])
+        return state["pending"]
+    pending = _restart_state_update(apply)
+    when = datetime.fromtimestamp(pending["due"]).strftime("%H:%M:%S")
+    print(f"ccc restart: {why}; queued one {pending['target']} restart for {when} "
+          f"(requests until then are merged into it)")
+    return 0
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _post_restart(base, target):
+    """(status, payload) from the drain-aware restart endpoint; status -1
+    when the server could not be reached."""
+    try:
+        return _post_json(base, _RESTART_PATHS[target], {}, timeout=120)
+    except OSError as e:
+        return -1, {"ok": False, "error": str(e)}
+
+
+def _wait_dashboard_back(base, before_pid, timeout=120):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(2)
+        try:
+            v = _get_json(base, "/api/version", timeout=5)
+        except (OSError, ValueError):
+            continue
+        if v.get("pid") and v.get("pid") != before_pid:
+            return v
+    return None
+
+
+def _restart_now(base, target, wait=True):
+    import time
+    status, payload = _post_restart(base, target)
+    if status == 200 and payload.get("ok", True):
+        _restart_state_update(lambda s: s.update(last_restart=time.time(), last_target=target))
+        print(f"ccc restart: {target} restart started")
+        if target != "worker" and wait:
+            before = (payload.get("before") or {}).get("pid")
+            back = _wait_dashboard_back(base, before)
+            if back:
+                print(f"ccc restart: dashboard back (pid {back.get('pid')}, rev {back.get('code_rev') or '?'})")
+            else:
+                print("ccc restart: dashboard has not answered yet; check `ccc doctor`", file=sys.stderr)
+        return 0, payload
+    return status, payload
+
+
+def cmd_restart(args):
+    import time
+    base = _resolve_server(args.server)
+    if not base:
+        print(f"ccc: no server found — is CCC running? (looked for --server, $CCC_SERVER, {PORT_FILE})",
+              file=sys.stderr)
+        return 1
+    if args.run_pending:
+        return _run_pending_restart(base, args.due)
+    target = args.target
+    if not args.now:
+        state = _restart_state_update(lambda s: dict(s))
+        since = time.time() - float(state.get("last_restart") or 0)
+        if since < RESTART_DEBOUNCE_S or state.get("pending"):
+            due = float(state.get("last_restart") or 0) + RESTART_DEBOUNCE_S
+            return _defer_restart(base, target, max(due, time.time() + 1),
+                                  f"last restart was {int(since)}s ago")
+    status, payload = _restart_now(base, target)
+    if status == 0:
+        return 0
+    if status == 409:
+        why = payload.get("error") or payload.get("reason") or "server says unsafe now"
+        return _defer_restart(base, target, time.time() + _RESTART_RETRY_S, f"not safe yet ({why})")
+    print(f"ccc restart: failed (HTTP {status}): {payload.get('error') or payload}", file=sys.stderr)
+    return 1
+
+
+def _run_pending_restart(base, due):
+    """Detached runner: sleep to the due time, then fire the merged restart."""
+    import time
+    me = os.getpid()
+    while True:
+        state = _restart_state_update(lambda s: dict(s))
+        if state.get("runner_pid") != me:
+            return 0  # another runner owns the pending restart
+        pending = state.get("pending")
+        if not pending:
+            break
+        wait_s = float(pending.get("due") or due or 0) - time.time()
+        if wait_s > 0:
+            time.sleep(min(wait_s, 5))
+            continue
+        target = pending.get("target") or "all"
+        # Clear before posting: the dashboard restart kills nothing of ours
+        # (we are detached), but a request arriving mid-restart must queue anew.
+        _restart_state_update(lambda s: s.pop("pending", None))
+        status, payload = _restart_now(base, target)
+        if status == 0:
+            continue
+        retries = int(pending.get("retries") or 0) + 1
+        if retries > _RESTART_MAX_RETRIES:
+            print(f"ccc restart: giving up on {target} after {retries - 1} retries: {payload}", file=sys.stderr)
+            break
+
+        def requeue(s, target=target, retries=retries):
+            cur = s.get("pending") or {}
+            s["pending"] = {"target": _merge_restart_targets(cur.get("target"), target),
+                            "due": time.time() + _RESTART_RETRY_S, "retries": retries,
+                            "why": f"retry after HTTP {status}"}
+        _restart_state_update(requeue)
+    _restart_state_update(lambda s: s.pop("runner_pid", None) if s.get("runner_pid") == me else None)
+    return 0
+
+
 _CONSENT_STATUS_LABEL = {
     "enabled": "approved",
     "changed": "CHANGED - review",
@@ -1322,11 +1800,17 @@ def _print_continue_from_result(result, status, args):
     if rebound:
         print(f"  rebound {len(rebound)} report route(s) from the old chain")
     print("track it: ccc sessions")
+    if result.get("report_to") and not result.get("existing"):
+        print("Completion reports arrive automatically; finish independent work, then "
+              "end your turn while waiting. Do not repeatedly sleep or poll child status.")
     return 0
 
 
 def _spawn_continue_from(base, sid, prompt, args):
     payload = {"continue_from": sid, "prompt": prompt}
+    for field in ("name", "task_key", "dedupe"):
+        if getattr(args, field, None):
+            payload[field] = getattr(args, field)
     if getattr(args, "model", None):
         payload["model"] = args.model
     if getattr(args, "effort", None):
@@ -1374,6 +1858,8 @@ def cmd_spawn(args):
         payload["reasoning_effort"] = args.effort
     if args.name:
         payload["name"] = args.name
+    if args.runtime:
+        payload["runtime"] = args.runtime
     # The endpoint is repo-scoped (explicit cwd/repo_path required). A CLI's
     # natural scope is the directory it was invoked from.
     payload["cwd"] = args.cwd or os.getcwd()
@@ -1381,6 +1867,10 @@ def cmd_spawn(args):
         payload["worktree"] = True
     if args.confirm_blocked_model:
         payload["confirm_blocked_model"] = True
+    if args.task_key:
+        payload["task_key"] = args.task_key
+    if args.dedupe:
+        payload["dedupe"] = True
     if args.report_to:
         payload["report_to"] = args.report_to
     elif os.environ.get("CLAUDE_CODE_SESSION_ID"):
@@ -1425,9 +1915,22 @@ def cmd_spawn(args):
         bits.append(f"model={args.model}")
     if args.effort:
         bits.append(f"effort={args.effort}")
+    if result.get("runtime") == "free":
+        bits.append("runtime=free ($0)")
     ident = f"session {sid}" if sid else (f"pid {pid}" if pid else "session")
     suffix = f"  ({', '.join(bits)})" if bits else ""
-    print(f"spawned {engine} {ident}{suffix}")
+    if result.get("existing"):
+        verb = "finished lane already exists" if result.get("finished") \
+            else "lane already exists"
+        print(f"{verb} for this dedupe key: {engine} {ident}{suffix}")
+        if result.get("report_back") == "original_dispatcher":
+            print("note: completion reports go to the lane's original "
+                  "dispatcher, not this spawn")
+    else:
+        print(f"spawned {engine} {ident}{suffix}")
+    if result.get("report_to") and not result.get("existing"):
+        print("Completion reports arrive automatically; finish independent work, then "
+              "end your turn while waiting. Do not repeatedly sleep or poll child status.")
     print("track it: ccc sessions")
     return 0
 
@@ -1573,18 +2076,465 @@ def cmd_rebind_report_to(args):
     return 0
 
 
+def _fmt_rel(ts, now=None):
+    """'3m ago' / 'in 2h05m' for an ISO timestamp; '-' when absent."""
+    dt = _parse_iso(ts)
+    if dt is None:
+        return "-"
+    now = now or datetime.now(timezone.utc)
+    delta = (dt - now).total_seconds()
+    return f"in {_fmt_age(delta)}" if delta >= 0 else f"{_fmt_age(-delta)} ago"
+
+
+def _job_line(job, now=None):
+    outcome = " ".join(str(job.get("outcome") or "").split())
+    if len(outcome) > 70:
+        outcome = outcome[:69] + "…"
+    return (
+        f"{str(job.get('host') or '?'):<7} {str(job.get('name') or '?'):<40} "
+        f"{str(job.get('status') or '?'):<9} last {_fmt_rel(job.get('last_run_at'), now):<10} "
+        f"next {_fmt_rel(job.get('next_run_at'), now):<10} {outcome}"
+    ).rstrip()
+
+
+def cmd_jobs_ls(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(f"ccc: no server found — is CCC running? (looked for --server, $CCC_SERVER, {PORT_FILE})",
+              file=sys.stderr)
+        return 1
+    try:
+        payload = _get_json(base, "/api/jobs", timeout=30)
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    jobs = [j for j in (payload.get("jobs") or []) if not args.host or j.get("host") == args.host]
+    if args.json:
+        print(json.dumps(dict(payload, jobs=jobs), indent=2))
+        return 0
+    for host, info in sorted((payload.get("hosts") or {}).items()):
+        if args.host and host != args.host:
+            continue
+        if isinstance(info, dict) and info.get("status") not in (None, "online"):
+            print(f"{host}: {info.get('status')}{' — ' + info['error'] if info.get('error') else ''}",
+                  file=sys.stderr)
+    now = datetime.now(timezone.utc)
+    for j in jobs:
+        print(_job_line(j, now))
+    if not jobs:
+        print("(no jobs)", file=sys.stderr)
+    return 0
+
+
+def _wait_for_turn_end(base, sid, timeout_s, poll_s=5.0):
+    """Block until the spawned session stops working; return (ok, text).
+    Polls GET /api/session/<sid> (state + last_assistant_text)."""
+    import time
+    deadline = time.monotonic() + timeout_s
+    seen_working = False
+    started = time.monotonic()
+    while time.monotonic() < deadline:
+        try:
+            d = _get_json(base, f"/api/session/{urllib.parse.quote(sid, safe='')}", timeout=15)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                return False, f"HTTP {e.code}"
+            d = {}
+        except OSError:
+            d = {}
+        state = d.get("state") if d.get("ok") else None
+        if state == "working":
+            seen_working = True
+        # A brand-new transcript can read as idle before the first turn starts;
+        # accept a non-working state once the turn was seen or after a grace.
+        elif state and (seen_working or time.monotonic() - started > 60):
+            return True, (d.get("last_assistant_text") or "").strip()
+        time.sleep(poll_s)
+    return False, "timeout"
+
+
+def cmd_jobs_add(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(f"ccc: no server found — is CCC running? (looked for --server, $CCC_SERVER, {PORT_FILE})",
+              file=sys.stderr)
+        return 1
+    payload = {"host": args.host, "repo": args.repo, "what": args.what, "when": args.when,
+               "cwd": os.getcwd()}
+    for key in ("name", "model", "engine", "effort"):
+        if getattr(args, key, None):
+            payload[key] = getattr(args, key)
+    if os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        payload["report_to"] = os.environ["CLAUDE_CODE_SESSION_ID"]
+    else:
+        chain = _caller_pid_chain()
+        if chain:
+            payload["caller_pids"] = chain
+            payload["caller_cwd"] = os.getcwd()
+    try:
+        status, result = _post_json(base, "/api/jobs/add", payload, timeout=90)
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if not result.get("ok"):
+        if args.json:
+            print(json.dumps(result, indent=2))
+        print(f"ccc: jobs add failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
+        return 1
+    sid = result.get("session_id") or ""
+    if not args.wait:
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"spawned session {sid or '?'} ({result.get('session_name')}) to create the job")
+            print("track it: ccc sessions   list jobs: ccc jobs ls")
+        return 0
+    if not sid:
+        print("ccc: spawn returned no session id; cannot --wait", file=sys.stderr)
+        return 1
+    print(f"spawned session {sid} ({result.get('session_name')}); waiting for it to finish...",
+          file=sys.stderr)
+    ok, text = _wait_for_turn_end(base, sid, args.timeout)
+    if args.json:
+        print(json.dumps(dict(result, wait_ok=ok, reply=text if ok else None,
+                              wait_error=None if ok else text), indent=2))
+        return 0 if ok else 1
+    if not ok:
+        print(f"ccc: jobs add --wait: {text} (session {sid} may still be running)", file=sys.stderr)
+        return 1
+    print(text or "(session ended its turn with no reply text)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# ccc vault — local secrets (ccc_server/vault.py). Reads the Keychain /
+# encrypted file directly: the server's HTTP API is write-only, so values
+# never travel over HTTP. Needs no running server.
+# ---------------------------------------------------------------------------
+
+def _vault_module():
+    repo_dir = os.path.dirname(os.path.realpath(__file__))
+    if repo_dir not in sys.path:
+        sys.path.append(repo_dir)
+    from ccc_server import vault
+    return vault
+
+
+def _vault_fmt_ts(ts):
+    if not ts:
+        return "-"
+    try:
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return "-"
+
+
+def cmd_vault_list(args):
+    vault = _vault_module()
+    rows = [
+        {k: e.get(k) or "" for k in ("name", "kind", "service", "username", "env_var")}
+        | {"updated_at": e.get("value_updated_at") or e.get("updated_at")}
+        for e in vault.vault_list_entries()
+    ]
+    if args.json:
+        print(json.dumps({"backend": vault.vault_storage_backend(), "entries": rows}, indent=2))
+        return 0
+    if not rows:
+        print("(vault is empty — add entries in Settings > Vault)", file=sys.stderr)
+        return 0
+    headers = ("NAME", "KIND", "SERVICE", "USERNAME", "ENV VAR", "VALUE UPDATED")
+    table = [(r["name"], r["kind"], r["service"], r["username"], r["env_var"],
+              _vault_fmt_ts(r["updated_at"])) for r in rows]
+    widths = [max(len(h), *(len(str(row[i])) for row in table)) for i, h in enumerate(headers)]
+    print("  ".join(h.ljust(w) for h, w in zip(headers, widths)).rstrip())
+    for row in table:
+        print("  ".join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
+    return 0
+
+
+def cmd_vault_get(args):
+    vault = _vault_module()
+    entry = vault.vault_get_entry(args.name)
+    if not entry:
+        print(f"ccc vault: no entry named {args.name!r} (see `ccc vault list`)", file=sys.stderr)
+        return 1
+    value = vault.vault_get_value(args.name)
+    if not value:
+        print(f"ccc vault: {entry['name']!r} is listed but its value is missing from "
+              f"{vault.vault_storage_backend()}", file=sys.stderr)
+        return 1
+    if args.reveal:
+        sys.stdout.write(value + ("\n" if sys.stdout.isatty() else ""))
+        sys.stdout.flush()
+        return 0
+    bits = [entry.get("kind") or "", entry.get("service") or ""]
+    if entry.get("env_var"):
+        bits.append("env " + entry["env_var"])
+    desc = ", ".join(b for b in bits if b)
+    print(f"{entry['name']}: saved ({desc}); updated "
+          f"{_vault_fmt_ts(entry.get('value_updated_at') or entry.get('updated_at'))}. "
+          "Use `ccc vault exec` to use it, or --reveal to print it.")
+    return 0
+
+
+def _vault_redaction_pairs(secrets):
+    """[(needle_bytes, replacement_bytes)] longest first. ``secrets`` is
+    [(label, value)]. Multi-line values also redact each substantial line,
+    since a tool may print a PEM key line by line."""
+    pairs = {}
+    for label, value in secrets:
+        rep = f"[REDACTED:{label}]".encode("utf-8")
+        needles = {value}
+        if "\n" in value:
+            needles |= {ln.strip() for ln in value.splitlines() if len(ln.strip()) >= 8}
+        for needle in needles:
+            if needle:
+                pairs.setdefault(needle.encode("utf-8"), rep)
+    return sorted(pairs.items(), key=lambda kv: -len(kv[0]))
+
+
+def _vault_redact(data, pairs):
+    for needle, rep in pairs:
+        data = data.replace(needle, rep)
+    return data
+
+
+class _VaultRedactingPump:
+    """Copy a child's pipe to ``out`` with secret values replaced.
+
+    Chunked, not line-buffered, so prompts without a newline still appear.
+    After redacting, the last (longest needle - 1) bytes are held back until
+    more data arrives: any secret split across two reads is entirely inside
+    that tail, so it is caught on the next pass instead of leaking half."""
+
+    def __init__(self, src_fd, out, pairs):
+        self.src_fd = src_fd
+        self.out = out
+        self.pairs = pairs
+        self.hold = max((len(n) for n, _ in pairs), default=1) - 1
+
+    def run(self):
+        buf = b""
+        while True:
+            try:
+                chunk = os.read(self.src_fd, 65536)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            buf = _vault_redact(buf + chunk, self.pairs)
+            if len(buf) > self.hold:
+                cut = len(buf) - self.hold
+                self._write(buf[:cut])
+                buf = buf[cut:]
+        if buf:
+            self._write(_vault_redact(buf, self.pairs))
+        try:
+            os.close(self.src_fd)
+        except OSError:
+            pass
+
+    def _write(self, data):
+        try:
+            self.out.write(data)
+            self.out.flush()
+        except (OSError, ValueError):
+            pass
+
+
+def _vault_parse_env_specs(vault, specs):
+    """--env VAR=name / --env name  ->  ([(var, name)], error)."""
+    out = []
+    for spec in specs or []:
+        if "=" in spec:
+            var, name = spec.split("=", 1)
+            var, name = var.strip(), name.strip()
+        else:
+            name = spec.strip()
+            entry = vault.vault_get_entry(name)
+            var = (entry or {}).get("env_var") or ""
+            if not var:
+                return None, (f"--env {spec}: no env var stored for that entry; "
+                              f"use --env VAR={spec}")
+        if not vault.VAULT_ENV_VAR_RE.match(var):
+            return None, f"--env {spec}: {var!r} is not a valid environment variable name"
+        if not name:
+            return None, f"--env {spec}: missing entry name"
+        out.append((var, name))
+    return out, None
+
+
+def cmd_vault_exec(args):
+    import threading
+    vault = _vault_module()
+    cmd = list(args.cmd or [])
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        print("ccc vault exec: missing command (usage: ccc vault exec --env VAR=<name> -- <cmd...>)",
+              file=sys.stderr)
+        return 2
+    if not args.env:
+        print("ccc vault exec: pass at least one --env VAR=<name>", file=sys.stderr)
+        return 2
+    mapping, err = _vault_parse_env_specs(vault, args.env)
+    if err:
+        print(f"ccc vault exec: {err}", file=sys.stderr)
+        return 2
+    env = dict(os.environ)
+    secrets = []
+    for var, name in mapping:
+        value = vault.vault_get_value(name)
+        if not value:
+            print(f"ccc vault exec: no saved value for {name!r} (see `ccc vault list`)", file=sys.stderr)
+            return 2
+        env[var] = value
+        secrets.append((vault.vault_normalize_name(name), value))
+    pairs = _vault_redaction_pairs(secrets)
+    out_r, out_w = os.pipe()
+    err_r, err_w = os.pipe()
+    try:
+        proc = subprocess.Popen(cmd, env=env, stdout=out_w, stderr=err_w)
+    except OSError as e:
+        os.close(out_r); os.close(out_w); os.close(err_r); os.close(err_w)
+        print(f"ccc vault exec: cannot run {cmd[0]!r}: {e.strerror or e}", file=sys.stderr)
+        return 127
+    os.close(out_w)
+    os.close(err_w)
+    pumps = [
+        threading.Thread(target=_VaultRedactingPump(out_r, sys.stdout.buffer, pairs).run, daemon=True),
+        threading.Thread(target=_VaultRedactingPump(err_r, sys.stderr.buffer, pairs).run, daemon=True),
+    ]
+    for t in pumps:
+        t.start()
+    while True:
+        try:
+            rc = proc.wait()
+            break
+        except KeyboardInterrupt:
+            # The child shares our process group and got the SIGINT too;
+            # keep draining its (redacted) output until it exits.
+            continue
+    for t in pumps:
+        t.join()
+    return 128 - rc if rc < 0 else rc
+
+
+def _secret_post(base, action, payload):
+    """Local transport only; no environment proxy or redirects for secrets."""
+    parsed = urllib.parse.urlsplit(base)
+    if (parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
+            or parsed.username or parsed.password or parsed.path not in ("", "/")
+            or parsed.query or parsed.fragment):
+        raise ValueError("credential broker requires a local HTTP server")
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    request = urllib.request.Request(
+        base.rstrip("/") + "/api/secrets/" + action,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(request, timeout=5) as response:
+        return json.loads(response.read())
+
+
+def cmd_secret(args):
+    import time
+    base = _resolve_server(args.server)
+    capability = None
+    try:
+        if args.secret_command == "forget":
+            _secret_post(base, "forget", {"name": args.name})
+            print("Saved credential forgotten; outstanding deliveries revoked.")
+            return 0
+        if args.return_key and sys.stdout.isatty():
+            print("ccc secret: use --return-key only in a pipe to the consuming program; "
+                  "never print credentials into an agent transcript.", file=sys.stderr)
+            return 2
+        if not args.return_key and args.kind == "otp":
+            print("ccc secret: one-time codes cannot be stored; add --return-key and pipe them.",
+                  file=sys.stderr)
+            return 2
+        if not 1 <= args.timeout <= 900:
+            print("ccc secret: timeout must be 1-900 seconds", file=sys.stderr)
+            return 2
+        deadline = time.monotonic() + args.timeout
+        created = _secret_post(base, "request", {
+            "name": args.name, "kind": args.kind, "reason": args.reason,
+            "session_id": args.session_id or os.environ.get("CCC_SESSION_ID")
+                or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID", ""),
+            "timeout": args.timeout, "store_only": not args.return_key,
+        })
+        capability = {"id": created["id"], "token": created["token"]}
+        print("Waiting for credential approval in CCC…", file=sys.stderr)
+        while time.monotonic() < deadline:
+            result = _secret_post(base, "take", capability)
+            if result.get("status") == "stored":
+                capability = None
+                print(f"saved to Vault: {result['entry']}")
+                return 0
+            if result.get("status") == "ready":
+                capability = None
+                sys.stdout.write(result["value"])
+                sys.stdout.flush()
+                return 0
+            if result.get("status") == "denied":
+                capability = None
+                print("ccc secret: request denied", file=sys.stderr)
+                return 1
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
+        print("ccc secret: request timed out", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("ccc secret: cancelled", file=sys.stderr)
+        return 130
+    except (OSError, ValueError, KeyError, TypeError):
+        # Transport errors can contain URLs/payload details. Never echo them.
+        print("ccc secret: request failed or expired; check the local CCC server", file=sys.stderr)
+        return 1
+    finally:
+        if capability:
+            try:
+                _secret_post(base, "cancel", capability)
+            except (OSError, ValueError):
+                pass  # bounded server expiry is the fallback
+
+
+def _register_antigravity_session():
+    """Inside an agy shell, record its live language server so CCC (and
+    WatchTower through CCC) can deliver replies into that running session."""
+    if not os.environ.get("ANTIGRAVITY_CSRF_TOKEN"):
+        return
+    try:
+        repo_dir = os.path.dirname(os.path.realpath(__file__))
+        if repo_dir not in sys.path:
+            sys.path.append(repo_dir)
+        from ccc_server import antigravity_ls
+        antigravity_ls.register_from_env()
+    except Exception:
+        pass
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    _register_antigravity_session()
     # `ccc` is also the Homebrew launcher's name (foreground server /
-    # --install-service). Keep one name for both roles: known query
-    # subcommands run the client below; anything else (no args, unknown
-    # flags) passes through to ./run.sh so `ccc` still launches CCC.
-    if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--server"):
+    # --install-service). Keep one name for both roles: no args or explicit
+    # run.sh launcher flags pass through to ./run.sh; everything else is
+    # parsed as a CLI invocation so mistyped subcommands fail fast instead
+    # of accidentally launching a second server.
+    # `ccc astra-check <sid>` is a thin wrapper over scripts/astra-check (the
+    # astra-guardrail skill's spend audit); it needs no running server.
+    if argv and argv[0] == "astra-check":
+        script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "astra-check")
+        os.execv(script, [script] + argv[1:])
+    if not argv or argv[0] in RUN_SH_FLAGS:
         run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
         os.execv(run_sh, [run_sh] + argv)
-    if not argv:
-        run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
-        os.execv(run_sh, [run_sh])
 
     parser = argparse.ArgumentParser(
         prog="ccc",
@@ -1594,18 +2544,23 @@ def main(argv=None):
     parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("sessions", "list-sessions"):
-        p = sub.add_parser(name, help="live session census (state, age, engine, repo, name)")
+    for name in ("sessions", "session", "list-sessions"):
+        p = sub.add_parser(name, help="session census (24h window by default; state, age, engine, repo, name)")
         p.add_argument("--since", type=_parse_since,
                        help="show sessions (live + recently-ended) with activity in "
-                            "the window, e.g. 5h / 30m / 2d")
+                            "the window, e.g. 5h / 30m / 2d (default: 24h)")
+        p.add_argument("--live", action="store_true",
+                       help="only sessions with a live/attached OS process (state != ended)")
         p.add_argument("--sort", choices=("recency", "status"), default="recency",
                        help="recency (default): most recent first; status: waiting, "
                             "working, idle, ended — recency within each")
         p.add_argument("--all", action="store_true",
-                       help="include CCC helper sessions (auto-title bots), hidden by default")
+                       help="include helpers, archived/trashed sessions, unfolded continuation legs, "
+                            "and empty queue-drain polls (hidden by default)")
         p.add_argument("--tree", action="store_true",
-                       help="nest children under parents (default: flat, ↳ marks children)")
+                       help="nest ↳ children under parents (default)")
+        p.add_argument("--flat", action="store_true",
+                       help="flat list instead of nesting ↳ children under parents")
         p.add_argument("--json", action="store_true", help="raw census JSON")
         p.set_defaults(func=cmd_sessions)
 
@@ -1636,6 +2591,13 @@ def main(argv=None):
                    help="reasoning effort for engines with a ladder — see the "
                         "EFFORTS in `ccc models`")
     p.add_argument("--name", help="display name for the session")
+    p.add_argument("--task-key", metavar="KEY",
+                   help="dedupe contract: if a lane already carries this key "
+                        "(repo-scoped), return it with existing:true instead "
+                        "of spawning a twin — e.g. a ticket id or task slug")
+    p.add_argument("--dedupe", action="store_true",
+                   help="dedupe on the exact raw prompt hash instead of an "
+                        "explicit key")
     p.add_argument("--cwd", help="working directory for the session "
                                  "(default: your current directory)")
     p.add_argument("--worktree", action="store_true",
@@ -1643,6 +2605,10 @@ def main(argv=None):
     p.add_argument("--report-to", metavar="SESSION_ID",
                    help="session the spawned one reports back to on completion "
                         "(orchestration; also becomes its parent)")
+    p.add_argument("--runtime", choices=["free"],
+                   help="run the session on CCC's free router ($0; needs the "
+                        "free router running, refuses rather than billing "
+                        "your plan when it is not)")
     p.add_argument("--confirm-blocked-model", action="store_true",
                    help="spawn even if --model is on the model-policy blocklist "
                         "(~/.claude/command-center/model-policy.json)")
@@ -1664,7 +2630,7 @@ def main(argv=None):
     g.add_argument("--queue", action="store_true",
                    help="queue behind the current turn instead of delivering now")
     p.add_argument("--from", dest="sender", metavar="SESSION_ID",
-                   help="sender session id or name for peer attribution (defaults to $CLAUDE_SESSION_ID)")
+                   help="sender session id or name for peer attribution (defaults to the current engine session)")
     p.add_argument("--new-if-large-and-stale", action="store_true",
                    help="if the target is large (context tokens >= --large-threshold) "
                         "AND stale (idle >= --stale-seconds, so resuming it would be a "
@@ -1690,8 +2656,26 @@ def main(argv=None):
     p.add_argument("--report-to", metavar="SESSION_ID",
                    help="with --new-if-large-and-stale: override the report-to the "
                         "spawned continuation inherits (default: the old session's own)")
+    p.add_argument("--stop", action="store_true",
+                   help="with --steer: this steer stops the turn, so hold the "
+                        "session's queued after-turn sends until released (`ccc held`)")
     p.add_argument("--json", action="store_true", help="raw inject/decision result JSON")
     p.set_defaults(func=cmd_send)
+
+    p = sub.add_parser(
+        "held",
+        help="list, release, or cancel queued input an explicit Stop held",
+        description="A Stop (or a stop steer) parks the session's queued "
+                    "after-turn sends so they never replay on their own. "
+                    "Release re-sends them (still after any running turn); "
+                    "cancel discards them.",
+    )
+    p.add_argument("target", help="session id, id prefix, or name fragment")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--release", nargs="+", metavar="ID", help="held ids to send, or 'all'")
+    g.add_argument("--cancel", nargs="+", metavar="ID", help="held ids to discard, or 'all'")
+    p.add_argument("--json", action="store_true", help="raw JSON")
+    p.set_defaults(func=cmd_held)
 
     p = sub.add_parser(
         "ask",
@@ -1719,6 +2703,8 @@ def main(argv=None):
     p.add_argument("--limit", type=int, default=10, metavar="N",
                    help="max sessions to return (default 10, server caps at 50)")
     p.add_argument("--json", action="store_true", help="raw recall result JSON")
+    p.add_argument("--scope", choices=("all", "local"), default="all",
+                   help="all (default): also ask paired CCC machines; local: this machine only")
     p.set_defaults(func=cmd_recall)
 
     p = sub.add_parser(
@@ -1730,6 +2716,8 @@ def main(argv=None):
     )
     p.add_argument("topic", nargs="*", help="the feature/topic (or pipe it on stdin)")
     p.add_argument("--json", action="store_true", help="raw shipped result JSON")
+    p.add_argument("--scope", choices=("all", "local"), default="all",
+                   help="all (default): also ask paired CCC machines; local: this machine only")
     p.set_defaults(func=cmd_shipped)
 
     p = sub.add_parser(
@@ -1745,20 +2733,22 @@ def main(argv=None):
     p.add_argument("--limit", type=int, default=20, metavar="N",
                    help="max entries to return (default 20, server caps at 50)")
     p.add_argument("--json", action="store_true", help="raw file-history result JSON")
+    p.add_argument("--scope", choices=("all", "local"), default="all",
+                   help="all (default): also ask paired CCC machines; local: this machine only")
     p.set_defaults(func=cmd_history)
 
     p = sub.add_parser(
         "decisions",
         help="find sessions that recorded a decision on a topic",
-        description="GET /api/memory/decisions: search_sessions() hits whose "
-                    "snippet reads as a decision (\"went with\", \"instead "
-                    "of\", ...) for the topic. Heuristic stand-in pending a "
-                    "dedicated decision store.",
+        description="GET /api/memory/decisions: stored user decision quotes "
+                    "with provenance and source citations. Falls back to "
+                    "unverified session snippets when no quotes match.",
     )
     p.add_argument("topic", nargs="*", help="the topic (or pipe it on stdin)")
     p.add_argument("--limit", type=int, default=10, metavar="N",
                    help="max sessions to return (default 10, server caps at 50)")
     p.add_argument("--json", action="store_true", help="raw decisions result JSON")
+    p.add_argument("--repo", metavar="NAME", help="exact repository name to search")
     p.set_defaults(func=cmd_decisions)
 
     p = sub.add_parser(
@@ -1774,6 +2764,9 @@ def main(argv=None):
     p.add_argument("session", nargs="*",
                    help="session id, id prefix, or a recall-style query (or pipe it on stdin)")
     p.add_argument("--json", action="store_true", help="raw brief result JSON")
+    p.add_argument("--scope", choices=("all", "local"), default="all",
+                   help="all (default): ask paired CCC machines when this one "
+                        "doesn't have the session; local: this machine only")
     p.set_defaults(func=cmd_brief)
 
     p = sub.add_parser(
@@ -1823,6 +2816,23 @@ def main(argv=None):
     p.set_defaults(func=cmd_quota)
 
     p = sub.add_parser(
+        "restart",
+        help="restart the dashboard and/or worker (debounced, drain-aware)",
+        description="Restart CCC through its drain-aware restart endpoints. "
+                    "Use this instead of systemctl/launchctl. Requests within "
+                    f"{RESTART_DEBOUNCE_S}s of the last restart (CCC_RESTART_DEBOUNCE_S) "
+                    "merge into one restart fired when the window ends; a restart "
+                    "the server refuses as unsafe right now is retried every minute.",
+    )
+    p.add_argument("target", nargs="?", default="all", choices=("all", "dashboard", "worker"),
+                   help="all (default): worker then dashboard; dashboard; or worker only")
+    p.add_argument("--now", action="store_true",
+                   help="skip the debounce window (a human asked for it now)")
+    p.add_argument("--run-pending", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--due", type=float, default=0, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_restart)
+
+    p = sub.add_parser(
         "rebind-report-to",
         help="redirect spawned children's completion reports to another session",
         description="Repoint the return address of children spawned with "
@@ -1854,6 +2864,84 @@ def main(argv=None):
     p.add_argument("--diff", action="store_true", help="list: include each item's details and diff")
     p.add_argument("--json", action="store_true", help="raw JSON")
     p.set_defaults(func=cmd_consent)
+
+    p = sub.add_parser(
+        "jobs",
+        help="list scheduled jobs, or create one via an agent session",
+        description="Scheduled jobs (Hermes systemd timers + laptop launchd agents), "
+                    "the same data as the Jobs tab.",
+    )
+    jsub = p.add_subparsers(dest="jobs_command", required=True)
+    jp = jsub.add_parser("ls", help="one line per job: host, name, status, last run, next run, outcome")
+    jp.add_argument("--host", choices=("hermes", "laptop"), help="only this host's jobs")
+    jp.add_argument("--json", action="store_true", help="raw /api/jobs JSON (host-filtered)")
+    jp.set_defaults(func=cmd_jobs_ls)
+    jp = jsub.add_parser(
+        "add",
+        help="spawn an agent session that creates a scheduled job",
+        description="POST /api/jobs/add: the server composes the job prompt and "
+                    "spawns a session that creates the systemd timer (hermes) or "
+                    "LaunchAgent (laptop) and checks it appears in `ccc jobs ls`.",
+    )
+    jp.add_argument("--host", required=True, choices=("hermes", "laptop"))
+    jp.add_argument("--repo", required=True,
+                    help="repo path or folder name (hermes: /home/hermes/Apps/<folder>)")
+    jp.add_argument("--what", required=True, help="what the job should do, in plain English")
+    jp.add_argument("--when", required=True, help='when it runs, e.g. "hourly", "daily 7am"')
+    jp.add_argument("--name", help="kebab-case job name (default: the agent picks one)")
+    jp.add_argument("--model", help="model for the spawned session (see `ccc models`)")
+    jp.add_argument("--engine", help="engine for the spawned session")
+    jp.add_argument("--effort", help="reasoning effort for the spawned session")
+    jp.add_argument("--wait", action="store_true",
+                    help="block until the session ends its turn and print its final reply")
+    jp.add_argument("--timeout", type=float, default=1800.0, metavar="SECONDS",
+                    help="with --wait: give up after this long (default 1800)")
+    jp.add_argument("--json", action="store_true", help="raw result JSON")
+    jp.set_defaults(func=cmd_jobs_add)
+
+    p = sub.add_parser("secret", help="request a credential through the CCC dashboard")
+    ssub = p.add_subparsers(dest="secret_command", required=True)
+    sp = ssub.add_parser("request", help="ask the user for a credential; saved to the Vault by default")
+    sp.add_argument("name", help="service/account alias, never a credential value")
+    sp.add_argument("--reason", required=True, help="public-safe explanation shown in the dashboard")
+    sp.add_argument("--kind", choices=("password", "token", "ssh-passphrase", "otp"), default="password")
+    sp.add_argument("--session-id", help="requesting session (defaults to agent session environment)")
+    sp.add_argument("--timeout", type=int, default=300, help="wait seconds, 1-900 (default 300)")
+    sp.add_argument("--return-key", "--stdout", dest="return_key", action="store_true",
+                    help="write the exact value to stdout for piping instead of storing it; refuses a terminal")
+    sp.set_defaults(func=cmd_secret)
+    sp = ssub.add_parser("forget", help="delete a remembered service credential on this machine")
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_secret)
+
+    p = sub.add_parser(
+        "vault",
+        help="local secrets (API keys, tokens, logins) from Settings > Vault",
+        description="Reads the Vault straight from this machine's Keychain "
+                    "(or encrypted file); no server needed. Agents: prefer "
+                    "`exec`, which keeps values out of your output.",
+    )
+    vsub = p.add_subparsers(dest="vault_command", required=True)
+    vp = vsub.add_parser("list", help="entries: name, kind, service, username, env var (never values)")
+    vp.add_argument("--json", action="store_true", help="machine-readable list")
+    vp.set_defaults(func=cmd_vault_list)
+    vp = vsub.add_parser("get", help="exit 0 if the entry has a saved value; --reveal prints it")
+    vp.add_argument("name")
+    vp.add_argument("--reveal", action="store_true",
+                    help="print the secret value to stdout (avoid in agent transcripts)")
+    vp.set_defaults(func=cmd_vault_get)
+    vp = vsub.add_parser(
+        "exec",
+        help="run a command with secrets in its env; values are redacted from its output",
+        description="ccc vault exec --env STRIPE_KEY=stripe-live [--env ...] -- <cmd...>. "
+                    "--env <name> alone uses the entry's stored env var. The child's "
+                    "stdout/stderr are piped through a redactor that replaces each "
+                    "value with [REDACTED:<name>]. Exits with the command's status.",
+    )
+    vp.add_argument("--env", action="append", metavar="VAR=NAME",
+                    help="map env var VAR to vault entry NAME (repeatable)")
+    vp.add_argument("cmd", nargs=argparse.REMAINDER, help="-- then the command to run")
+    vp.set_defaults(func=cmd_vault_exec)
 
     p = sub.add_parser(
         "brain",

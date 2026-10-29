@@ -23,7 +23,7 @@ REPO_PATH="${CCC_REPO_PATH:-$(pwd -P)}"
 
 ### Identifying Your Own Session UUID
 If you need to know your own session UUID (e.g. to register yourself in a chat or trace your own session) and `$CLAUDE_SESSION_ID` is empty or unset in your Bash shell:
-1. Locate the project directory under `~/.claude/projects/` corresponding to your slugified current working directory (e.g., `/Users/amirfish/Apps/BYM+Finie` becomes `~/.claude/projects/-Users-amirfish-Apps-BYM+Finie`).
+1. Locate the project directory under `~/.claude/projects/` corresponding to your slugified current working directory (e.g., `/Users/me/Apps/Notes+Tasks` becomes `~/.claude/projects/-Users-me-Apps-Notes-Tasks`).
 2. Find the newest `*.jsonl` file in that directory; because you are actively executing, your active session transcript is the most recently modified.
 3. The basename of that file (without the `.jsonl` extension) is your session UUID.
 
@@ -32,7 +32,7 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
 
 ### URL-Encoding repo_path
 **CRITICAL:** Any parameter or payload value for `repo_path` must be properly URL-encoded (especially `+` to `%2B` and spaces to `%20`).
-- *Example:* `/Users/amirfish/Apps/BYM+Finie` must be sent as `/Users/amirfish/Apps/BYM%2BFinie`.
+- *Example:* `/Users/me/Apps/Notes+Tasks` must be sent as `/Users/me/Apps/Notes%2BTasks`.
 - Failure to URL-encode characters like `+` will result in HTTP 400 Bad Request because `+` is decoded as a space by the server.
 
 ### Avoiding Slow List Calls
@@ -60,11 +60,13 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
   ```
 - **List Spawned Runs (GET):** `/api/sessions/spawned`
   *Returns recent CCC-owned spawns with `spawn_id`, `session_id`, `parent_session_id`, `engine`, `model`, `reasoning_effort`, `repo_path`, `cwd`, and `spawned_at`. Use this if a spawn response has `session_id_pending: true`, or to confirm which engine/model/effort a spawn actually resolved to.*
+  *Dedupe fields:* rows also carry `task_key` (the caller's dedupe token), `task_summary` (first 200 chars of the RAW prompt — `command_summary`/`prompt` is the WRAPPED prompt and starts with boilerplate, so grep this instead), `prompt_hash`, and `display_name` (the AI/enriched title, present only once the session has an archive row). Filters: `?engine=`, `?task_key=` (exact), `?parent=<sid prefix, ≥8 chars>`, `?q=` (case-insensitive substring over name/display_name/task_summary/task_key/prompt), `?include_finished=1` (adds rows from spawned-history.json with `ended_at`/`exit_code` — `exit_code` is null for worker-owned and sweep-dropped rows).*
 - **List All (GET):** `/api/sessions?all=1` (optional `&engine=codex|antigravity|claude`)
   *Returns cross-repo sessions plus the spawned-run registry.*
 - **Spawn:** `/api/sessions/spawn` 
   *Payload:* `{"prompt": "...", "repo_path": "/abs/repo", "engine": "claude|codex|antigravity", "model": "...", "reasoning_effort": "low|medium|high|xhigh|max"}`. `repo_path` (or `cwd`) is required. `engine`, `model`, and `reasoning_effort` are optional; when omitted, CCC uses the server-side defaults from **Settings → Spawn defaults…**. Legacy `gemini` maps to `antigravity`. **When unsure of a model id, omit `model` entirely** rather than guessing — a made-up id can spawn a broken session. If you do need to see valid ids, `GET /api/engines/models` returns `{"engines": {"codex": ["gpt-5.5", ...], "claude": [...], ...}, "efforts_by_engine": {"claude": ["low", ..., "max"], "codex": [...], "cursor": [], ...}, "enforced": ["codex"]}`. Only `codex` is currently rejected (400) on an unrecognized model — e.g. `gpt-5.5-codex` is not a real id, the correct one is `gpt-5.5`.
   *Reasoning effort:* the ladder is **per engine**, so read it from `efforts_by_engine` rather than assuming one list. Claude accepts `low, medium, high, xhigh, max`; Codex tops out at `xhigh` (no `max`); Kimi offers only what its own `config.toml` declares; an engine with an empty list has no effort concept at all. Unlike `model`, an effort the engine does not accept is **dropped, not rejected**: the spawn succeeds at that engine's default effort, so never infer from a `200` that your value was applied. Confirm via `GET /api/sessions/spawned` (`reasoning_effort` on the row). `"effort"` is accepted as an alias.
+  *Dedupe a spawn before paying for it:* pass `"task_key": "<stable-key>"` (a ticket id or task slug, e.g. `"verify-d08302b3"` — repo-scoped). If a live lane already carries the key, the response is `200 {"ok": true, "existing": true, "pid": ..., "session_id": ...}` and NO new session is spawned; a lane that already finished matches too (`"finished": true`, `ended_at`, `exit_code`) so "was this already done" is answered without respawning. Concurrent identical spawns collapse: the second request waits on the first's result (`"deduped": "in_flight"`). Two sharp edges: completion reports go to the lane's ORIGINAL dispatcher (`"report_back": "original_dispatcher"`), and `task_key` is deliberately not `idempotency_key` — that field means "replay this exact request" at the work-ledger layer. Without a key, `"dedupe": true` dedupes on the raw prompt's exact hash instead. Prefer dedupe-first `GET /api/sessions/spawned?task_key=<key>&include_finished=1` for a cheap pre-check.
   *Return address + hierarchy (recommended for spawned siblings):* Add `"report_to": "<your-session-id>"` (aliases: `return_to`, `reply_to`) to the payload. CCC appends a footer to the spawned agent's prompt instructing it to POST a structured completion report back to your session via `/api/inject-input` when it finishes (success or failure), and uses the same id as `parent_session_id` so the child appears nested under the dispatcher in Current Sessions. Use explicit `"parent_session_id": "<session-id>"` only when the visual parent differs from the report target.
   *Returns:* `{"ok": true, "session_id": "...", "spawn_id": "123", "parent_session_id": "...", "engine": "...", "repo_path": "...", "cwd": "...", "session_id_pending": false}`. Prefer `session_id` immediately; if pending, poll Spawned Runs by `spawn_id`.
 - **Inject (Fire & Forget):** `/api/inject-input`

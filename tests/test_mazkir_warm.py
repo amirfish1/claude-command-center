@@ -164,7 +164,8 @@ class RunMazkirWarmTest(unittest.TestCase):
                 mock.patch.object(mazkir, "_mark_spawn", lambda sid: None), \
                 mock.patch.object(mazkir, "_scratch_dir", lambda: tmp):
             kw = dict(base="http://x", claude_bin=fake_bin, fetch=lambda p: {"sessions": []},
-                      prefetch_runner=prefetch, db_path="/nonexistent.db")
+                      prefetch_runner=prefetch, db_path="/nonexistent.db",
+                      peer_fan_out=lambda a, b: [])
             one, s1 = mazkir.run_mazkir("first?", **kw)
             two, s2 = mazkir.run_mazkir("second?", **kw)
         self.assertEqual((s1, s2), (200, 200))

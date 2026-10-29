@@ -16,12 +16,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import threading
 import time
 
 from ccc_server import core as _core
 from ccc_server.github_issues import github_rate_limited
+from ccc_server.ticket_stages import stage_counts, stage_stuck_seconds, with_stages
 
 # ---------------------------------------------------------------------------
 # Queue / ticket-appearance events for replay (W22 / B4)
@@ -170,8 +170,10 @@ def _queue_history_path():
 
 def _current_queue_counts(items):
     return {
-        "open": sum(1 for it in items if it.get("status") not in ("closed", "in_progress")),
+        "open": sum(1 for it in items if it.get("status") not in ("closed", "in_progress", "in_review")),
         "in_progress": sum(1 for it in items if it.get("status") == "in_progress"),
+        # WT-5 gate stage: not closed (dependents still wait), not claimable.
+        "in_review": sum(1 for it in items if it.get("status") == "in_review"),
         "closed": sum(1 for it in items if it.get("status") == "closed"),
         "needs_input": sum(
             1 for it in items
@@ -207,7 +209,7 @@ def _record_queue_snapshot_if_due(items):
     counts = _current_queue_counts(items)
     row = {
         "ts": now,
-        "open": counts["open"] + counts["in_progress"],
+        "open": counts["open"] + counts["in_progress"] + counts["in_review"],
         "needs_input": counts["needs_input"],
         "closed": counts["closed"],
     }
@@ -745,10 +747,15 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     gated_by_q = {}
     claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim
     in_progress_by_q = {}  # queue → items currently claimed/in progress
+    in_review_by_q = {}  # queue → items closed by a worker, awaiting a gate (WT-5)
+    stages_by_q = {}  # queue → {stage: n} for gated tickets (CCC-1236)
+    blocked_by_q = {}  # queue → open items waiting on an unsatisfied blocked_by (WT-4)
     last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
     last_progress_q = {}  # queue → most-recent close OR claim epoch (WT health semantics)
     try:
-        for it in ((_core._q.list_items() if items is None else items) or []):
+        all_items = with_stages(with_waiting_on((_core._q.list_items() if items is None else items) or []))
+        stages_by_q = stage_counts(all_items)
+        for it in all_items:
             qn = _norm(it.get("project"))
             if not qn or qn == "?":
                 continue
@@ -760,6 +767,8 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
                 close_ts = _core._uxq_parse_ts(it.get("closed_at"))
                 if close_ts and close_ts > last_progress_q.get(qn, 0):
                     last_progress_q[qn] = close_ts
+            if it.get("status") == "in_review":
+                in_review_by_q[qn] = in_review_by_q.get(qn, 0) + 1
             if it.get("status") == "in_progress":
                 in_progress_by_q[qn] = in_progress_by_q.get(qn, 0) + 1
                 # A fresh claim means a worker just started on previously-idle
@@ -777,6 +786,14 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             # claimable=True; un-runnable issues must not trigger drain state.
             if it.get("status") == "open":
                 if it.get("claimable") is False:
+                    continue
+                # Dependency gating (WT-4): WatchTower skips a ticket until
+                # every blocked_by ref is closed as completed, so it is not
+                # claimable work and must not read as an unstaffed queue.
+                # waiting_on is WatchTower's own verdict (WT-9); an older WT
+                # without it counts nothing as blocked.
+                if it.get("waiting_on"):
+                    blocked_by_q[qn] = blocked_by_q.get(qn, 0) + 1
                     continue
                 # Readiness gating, the other half of WatchTower's claim
                 # filter. `claim_next` skips needs-shaping/needs-spec tickets
@@ -904,6 +921,10 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             "depth": depth,
             "claimable": claimable,
             "in_progress": int(in_progress_by_q.get(q, 0)),
+            "in_review": int(in_review_by_q.get(q, 0)),
+            "stage_counts": dict(stages_by_q.get(q) or {}),
+            "stage_stuck_s": stage_stuck_seconds(),
+            "blocked": int(blocked_by_q.get(q, 0)),
             "closed": int(closed_by_q.get(q, 0)),
             "total": int(total_by_q.get(q, 0)),
             "gated": int(gated_by_q.get(q, 0)),
@@ -924,6 +945,10 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             "backend": cfg_backend.get(q, ""),
             "github_repo": cfg_github_repo.get(q, ""),
             "configured": q in cfg_names,
+            # Session that created this queue for itself, and whether it still
+            # owes the human a "start N workers?" prompt (CCC-1225).
+            "session_id": str(cfg_raw.get(q, {}).get("session_id") or "") or None,
+            "offer_workers": bool(cfg_raw.get(q, {}).get("offer_workers")),
             "worker_plan": plan,
             "config_issue": _queue_worker_config_issue(plan),
             "spawn_issue": _queue_spawn_issue(q, str(plan.get("engine") or ""), launch_failures, now_epoch),
@@ -936,16 +961,81 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     return out
 
 
+def with_waiting_on(items, extra=None):
+    """Attach WatchTower's ``waiting_on`` (WT-9) to tickets with ``blocked_by``.
+
+    WatchTower owns the blocker rule (``watchtower.queue.waiting_on``, the
+    same one ``wt ls --json`` and the claim gate use); CCC keeps no copy. The
+    ref index is built once per call, never per row; ``extra`` adds tickets
+    that may hold cross-queue blockers outside ``items``. An older WatchTower
+    without ``waiting_on`` returns ``items`` unchanged, so no chip shows.
+    """
+    fn = getattr(_core._q, "waiting_on", None)
+    if not callable(fn) or not items or not any(
+            isinstance(it, dict) and it.get("blocked_by") for it in items):
+        return items
+    by_ref = {}
+    for it in list(extra or []) + list(items):
+        if isinstance(it, dict) and it.get("ref"):
+            by_ref[str(it["ref"])] = it
+    return [
+        dict(it, waiting_on=fn(it, by_ref))
+        if isinstance(it, dict) and it.get("blocked_by") else it
+        for it in items
+    ]
+
+
+def _list_items_with_waiting_on(status_filter, lane_filter, **kw):
+    items = _core._q.list_items(status=status_filter, lane=lane_filter, **kw) or []
+    extra = None
+    if status_filter or lane_filter:
+        # A filtered list can miss its blockers; resolve against the full memo.
+        with _ux_fixes_list_cache_lock:
+            ent = _ux_fixes_list_cache.get(("", ""))
+        extra = ent["items"] if ent else None
+    return with_stages(with_waiting_on(items, extra))
+
+
 _UX_FIXES_LIST_TTL = 10.0
 _ux_fixes_list_cache = {}
 _ux_fixes_list_cache_lock = threading.Lock()
 _ux_fixes_list_refreshing = set()
 
 
+def _ux_fixes_cache_ack(item):
+    """Keep a successful resolution ack visible through cached list polls.
+
+    Patch only fields ack_resolution writes, preserving computed list fields
+    and the snapshot age. Copy the list so slim-mode memoization also expires.
+    """
+    ref = item.get("ref")
+    changes = {key: item[key] for key in ("resolution", "history", "updated_at")
+               if key in item}
+    with _ux_fixes_list_cache_lock:
+        for entry in _ux_fixes_list_cache.values():
+            if any(row.get("ref") == ref for row in entry["items"]):
+                entry["items"] = [
+                    dict(row, **changes) if row.get("ref") == ref else row
+                    for row in entry["items"]
+                ]
+
+
 def _ux_fixes_list_refresh(status_filter, lane_filter):
     key = (status_filter or "", lane_filter or "")
     try:
-        items = _core._q.list_items(status=status_filter, lane=lane_filter) or []
+        # CCC-142: the unfiltered board is kept current by the helper's
+        # GitHub watch; take its copy instead of rebuilding it here.
+        if key == ("", "") and _gh_watch["subscribers"] > 0:
+            with _ux_fixes_list_cache_lock:
+                current = _ux_fixes_list_cache.get(key) or {}
+            if (current.get("all_sig") or (None,))[0] != "bg-helper":
+                _gh_proxy["board_rev"] = -1  # memo was rebuilt here: resend
+            try:
+                if _gh_queue_proxy_tick(want_items=True):
+                    return
+            except Exception:
+                pass
+        items = _list_items_with_waiting_on(status_filter, lane_filter)
         with _ux_fixes_list_cache_lock:
             _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
     except Exception:
@@ -968,13 +1058,15 @@ def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None, fresh=Fals
     key = (status_filter or "", lane_filter or "")
     if fresh:
         try:
-            items = _core._q.list_items(status=status_filter, lane=lane_filter, fresh=True) or []
+            items = _list_items_with_waiting_on(status_filter, lane_filter, fresh=True)
         except TypeError:
-            items = _core._q.list_items(status=status_filter, lane=lane_filter) or []
+            items = _list_items_with_waiting_on(status_filter, lane_filter)
         with _ux_fixes_list_cache_lock:
             _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
         return items
     now = time.time()
+    if key == ("", ""):
+        _gh_proxy["read_at"] = now
     with _ux_fixes_list_cache_lock:
         ent = _ux_fixes_list_cache.get(key)
     if ent and now - ent["ts"] < _UX_FIXES_LIST_TTL:
@@ -989,7 +1081,7 @@ def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None, fresh=Fals
                     daemon=True, name="uxq-list-refresh",
                 ).start()
         return ent["items"]
-    items = _core._q.list_items(status=status_filter, lane=lane_filter) or []
+    items = _list_items_with_waiting_on(status_filter, lane_filter)
     with _ux_fixes_list_cache_lock:
         if len(_ux_fixes_list_cache) > 32:
             _ux_fixes_list_cache.clear()
@@ -1144,8 +1236,49 @@ def _gh_queue_signature(items):
     return tuple(rows)
 
 
+def _gh_queue_cheap_probe():
+    """(GitHub rows, local-store stamp) without reading the whole store.
+
+    The full soft list_items() re-reads and re-normalizes every local ticket
+    (~1.7k rows, 0.25-0.5s CPU) on each 5s tick even though this poller only
+    watches GitHub rows; it was the dashboard's largest CPU consumer (CCC-142).
+    Per-project GitHub lists hit the backend's identity memo (~20-80ms) and the
+    store's (mtime, size) stamp is one stat pair. Returns None when the engine
+    lacks either hook (stdlib fallback, test stubs): callers do the full read.
+    """
+    q = _core._q
+    projects_fn = getattr(q, "_github_projects", None)
+    stamp_fn = getattr(q, "_db_stamp", None)
+    path_fn = getattr(q, "_db_path", None)
+    if not (callable(projects_fn) and callable(stamp_fn) and callable(path_fn)):
+        return None
+    try:
+        stamp = stamp_fn(path_fn())
+        rows = []
+        for project in sorted(projects_fn()):
+            rows.extend(q.list_items(project=project) or [])
+    except Exception:
+        return None
+    return rows, stamp
+
+
 def _gh_queue_poll_once():
     """One remote-list read. Warms the list memo, returns True on change."""
+    probe = _gh_queue_cheap_probe()
+    probe_sig = stamp = None
+    if probe is not None:
+        gh_rows, stamp = probe
+        probe_sig = _gh_queue_signature(gh_rows)
+        with _ux_fixes_list_cache_lock:
+            existing = _ux_fixes_list_cache.get(("", ""))
+            if (
+                existing is not None
+                and existing.get("store_stamp") == stamp
+                and existing.get("gh_sig") == probe_sig
+            ):
+                # Nothing moved: keep the board's memo fresh, skip the rebuild.
+                existing["ts"] = time.time()
+                return _gh_queue_note_sig(probe_sig)
     try:
         # Soft read on purpose: the WatchTower daemon's background poller
         # already pays the live `gh` cost and persists a fresh snapshot every
@@ -1165,10 +1298,25 @@ def _gh_queue_poll_once():
     except Exception:
         return False
 
+    # One signature source per poll mode, so the fast path and a rebuild can
+    # never disagree and fire a phantom change.
+    sig = probe_sig if probe is not None else _gh_queue_signature(items)
+    all_sig = tuple(
+        (str(it.get("ref") or ""), str(it.get("status") or ""), str(it.get("updated_at") or ""))
+        for it in items if isinstance(it, dict)
+    )
     with _ux_fixes_list_cache_lock:
-        _ux_fixes_list_cache[("", "")] = {"ts": time.time(), "items": items}
+        existing = _ux_fixes_list_cache.get(("", ""))
+        if existing is None or existing.get("all_sig") != all_sig:
+            existing = {"items": with_stages(with_waiting_on(items)), "all_sig": all_sig}
+            _ux_fixes_list_cache[("", "")] = existing
+        existing["ts"] = time.time()
+        existing["store_stamp"] = stamp
+        existing["gh_sig"] = probe_sig
+    return _gh_queue_note_sig(sig)
 
-    sig = _gh_queue_signature(items)
+
+def _gh_queue_note_sig(sig):
     with _gh_watch_lock:
         first = _gh_watch["sig"] is None
         changed = (not first) and sig != _gh_watch["sig"]
@@ -1178,6 +1326,52 @@ def _gh_queue_poll_once():
     return changed
 
 
+# CCC-142: when the background-helper process is up, the real poll runs
+# there (ccc_server.bg_helper) and this loop only mirrors its result.
+_GH_PROXY_INTERVAL_S = 1.0
+# The board memo is ~16MB of JSON on a busy store (~0.18s to parse), so it is
+# pulled only while something here reads it (a board is open).
+_GH_PROXY_BOARD_READ_WINDOW_S = 60.0
+_gh_proxy = {"version": None, "board_rev": -1, "read_at": 0.0}
+
+
+def _gh_queue_proxy_tick(want_items=None):
+    """Mirror the helper's GitHub watch into this process. False when the
+    helper is unavailable, so the caller polls in-process instead."""
+    from ccc_server import bg_helper
+    if bg_helper.is_child() or not bg_helper.ready():
+        return False
+    if want_items is None:
+        want_items = time.time() - _gh_proxy["read_at"] < _GH_PROXY_BOARD_READ_WINDOW_S
+    reply = bg_helper.call(
+        "gh_tick", timeout=10,
+        have_board_rev=_gh_proxy["board_rev"] if want_items else "skip",
+    )
+    if reply is None:
+        return False
+    version = reply.get("version")
+    with _gh_watch_lock:
+        if _gh_proxy["version"] is not None and version != _gh_proxy["version"]:
+            _gh_watch["version"] += 1
+        _gh_proxy["version"] = version
+    board_ts = reply.get("board_ts")
+    with _ux_fixes_list_cache_lock:
+        if isinstance(reply.get("items"), list):
+            _ux_fixes_list_cache[("", "")] = {
+                "items": reply["items"],
+                "all_sig": ("bg-helper", reply.get("board_rev")),
+                "ts": float(board_ts or time.time()),
+            }
+            _gh_proxy["board_rev"] = reply.get("board_rev")
+        elif board_ts:
+            existing = _ux_fixes_list_cache.get(("", ""))
+            if existing is not None and existing.get("all_sig") == (
+                "bg-helper", reply.get("board_rev"),
+            ):
+                existing["ts"] = max(float(existing.get("ts") or 0), float(board_ts))
+    return True
+
+
 def _gh_queue_watch_loop():
     interval = _GH_POLL_INTERVAL_S
     while True:
@@ -1185,6 +1379,16 @@ def _gh_queue_watch_loop():
             if _gh_watch["subscribers"] <= 0:
                 _gh_watch["thread"] = None
                 return
+        try:
+            proxied = _gh_queue_proxy_tick()
+        except Exception:
+            proxied = False
+        if proxied:
+            _gh_watch_wake.wait(_GH_PROXY_INTERVAL_S)
+            _gh_watch_wake.clear()
+            continue
+        # Helper down: forget its board revision so a recovery resends it.
+        _gh_proxy["board_rev"] = -1
         # Re-read config every pass so a queue switched to the GitHub backend
         # starts being watched without needing a reconnect.
         if _github_queue_configured():
@@ -1342,10 +1546,22 @@ def _build_ux_fixes_health_payload_uncached():
 _ux_fixes_health_refreshing = False
 
 
+def _ux_fixes_health_from_helper(force=False):
+    """CCC-142: the health payload built in the background-helper process,
+    or None (build in-process). Only the JSON parse costs this process."""
+    from ccc_server import bg_helper
+    if bg_helper.is_child() or not bg_helper.ready():
+        return None
+    reply = bg_helper.call("ux_health", force=bool(force))
+    if reply is None or not isinstance(reply.get("data"), dict):
+        return None
+    return reply["data"]
+
+
 def _ux_fixes_health_refresh():
     global _ux_fixes_health_refreshing
     try:
-        data = _build_ux_fixes_health_payload_uncached()
+        data = _ux_fixes_health_from_helper() or _build_ux_fixes_health_payload_uncached()
         with _ux_fixes_health_snapshot_lock:
             _core._ux_fixes_health_snapshot["data"] = data
             _core._ux_fixes_health_snapshot["ts"] = time.time()
@@ -1386,7 +1602,8 @@ def build_ux_fixes_health_payload(force=False):
         now = time.time()
         if not force and snap["data"] is not None and now - snap["ts"] < _core._UX_FIXES_HEALTH_TTL:
             return copy.deepcopy(snap["data"])
-        data = _build_ux_fixes_health_payload_uncached()
+        data = (_ux_fixes_health_from_helper(force=force)
+                or _build_ux_fixes_health_payload_uncached())
         snap["data"] = data
         snap["ts"] = time.time()
         return copy.deepcopy(data)
@@ -1610,7 +1827,12 @@ def build_codex_wake_status(session_id):
 
     attempt = _last("codex_wake_attempt")
     connect = _last("codex_wake_stage", stage="connect")
-    turnstart = _last("codex_wake_stage", stage="turn-start")
+    # "turn-start-fast" is the resume-skipped fast path — the daemon's thread
+    # view was already current, so no thread/resume row belongs in the
+    # timeline. A fast miss still falls through to the full resume path and
+    # emits the usual "connect" stage.
+    fast_turnstart = _last("codex_wake_stage", stage="turn-start-fast")
+    turnstart = _last("codex_wake_stage", stage="turn-start") or fast_turnstart
     ok = _last("codex_wake_ok")
     warn = _last("codex_wake_warn")
     exec_ev = _last("codex_wake_exec")
@@ -1620,7 +1842,7 @@ def build_codex_wake_status(session_id):
     attempt_epoch = float((attempt or {}).get("epoch") or 0.0)
 
     snap = _codex_wake_rollout_snapshot(session_id)
-    app_state = _core._codex_app_server_thread_state(session_id)
+    app_state = _core._codex_thread_state_resolved(session_id)
     app_transport = _core._codex_app_server_transport_kind()
     ctx_used = snap.get("context_used")
     ctx_win = snap.get("context_window")
@@ -1630,9 +1852,9 @@ def build_codex_wake_status(session_id):
     tc_epoch = float(snap.get("task_complete_epoch") or 0.0)
     turn_ended = bool(running_reached and tc_epoch and tc_epoch >= (attempt_epoch - 1.0))
 
-    # A hard failure that will not yield a turn: exec-stage failure, or a
-    # queue fallback (message parked for later). A fail whose fallback is
-    # "exec" is a retry, not terminal, so it is ignored here.
+    # A hard failure that will not yield a turn: an exec-stage failure from
+    # a historical one-shot exec attempt, or a queue fallback (message parked
+    # for later). The current code only ever produces fallback "queue".
     hard_error = None
     if fail and float(fail.get("epoch") or 0.0) >= attempt_epoch:
         if fail.get("stage") == "exec" or fail.get("fallback") == "queue":
@@ -1693,17 +1915,18 @@ def build_codex_wake_status(session_id):
     running_done = outcome is not None
 
     stages = []
-    if attempt or connect:
+    if attempt or connect or fast_turnstart:
         stages.append({
             "name": "connect",
             "ts": float((connect or attempt or {}).get("epoch") or 0.0) or None,
             "done": bool(resume_returned),
         })
-        stages.append({
-            "name": "thread-resume",
-            "ts": float((turnstart or connect or attempt or {}).get("epoch") or 0.0) or None,
-            "done": bool(threadresume_done),
-        })
+        if not (fast_turnstart and connect is None):
+            stages.append({
+                "name": "thread-resume",
+                "ts": float((turnstart or connect or attempt or {}).get("epoch") or 0.0) or None,
+                "done": bool(threadresume_done),
+            })
     if turnstart_started:
         stages.append({
             "name": "turn-start",
@@ -2036,13 +2259,190 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
     return {"ok": False, "delivered": False, "result": result}
 
 
+_CODEX_EPHEMERAL_LOCKS = tuple(threading.RLock() for _ in range(64))
+
+
+def _codex_continue_ephemeral(
+    session_id, text, *, cwd, capture_row, idempotency_key=None,
+):
+    from ccc_server import continuation as _continuation
+    # Serialize the creation of a successor, including publication of the
+    # forward. A second send may already have resolved the old ID before the
+    # first request finished spawning, so recheck under the same lock.
+    with _CODEX_EPHEMERAL_LOCKS[hash(session_id) % len(_CODEX_EPHEMERAL_LOCKS)]:
+        successor = _continuation.manual_forward_target(session_id)
+        if successor != session_id:
+            result = _core._inject_duplicate_check(
+                successor, text, idempotency_key=idempotency_key,
+            )
+            if result is None:
+                result = _core.resume_session_codex(
+                    successor, text, idempotency_key=idempotency_key,
+                )
+            if result.get("ok"):
+                result = dict(result, via="codex-continuation",
+                              continue_from=session_id, new_session_id=successor)
+            return result
+        return _codex_spawn_ephemeral_continuation(
+            session_id, text, cwd=cwd, capture_row=capture_row,
+            idempotency_key=idempotency_key,
+        )
+
+
+def _codex_spawn_ephemeral_continuation(
+    session_id, text, *, cwd, capture_row, idempotency_key=None,
+):
+    """An --ephemeral `codex exec` run has no native thread to resume; start a
+    fresh Codex session in the same folder that continues it from a brief."""
+    from ccc_server import continuation as _continuation
+    ctx = {
+        "engine": "codex",
+        "session_id": session_id,
+        "latest": session_id,
+        "title": capture_row.get("title") or "",
+        "transcript_path": capture_row.get("_ccc_capture") or "",
+        "capture_path": capture_row.get("_ccc_capture") or "",
+        "context_tokens": 0,
+    }
+    prompt = _continuation.build_continuation_prompt(text, ctx)
+    override = _core._get_session_override(session_id)
+    override_model = (override or {}).get("model") if override else None
+    effort = (override or {}).get("reasoning_effort") or ""
+    model = (
+        override_model
+        or os.environ.get("CCC_CODEX_MODEL")
+        or capture_row.get("model")
+        or _core._spawn_fallback_model_for_engine("codex")
+    )
+    if _core._model_policy_blocks(model):
+        model = _core._spawn_fallback_model_for_engine("codex")
+    name = ("Continue " + (ctx["title"] or session_id))[:60]
+    _core._resume_ledger_append(
+        "codex_ephemeral_continuation", sid=session_id, cwd=cwd, model=model,
+    )
+    spawn = _core.spawn_session_codex(
+        prompt, name=name, cwd=cwd, repo_path=cwd, model=model,
+        reasoning_effort=effort or "", parent_session_id=session_id,
+    )
+    if not spawn or not spawn.get("ok"):
+        return {
+            "ok": False,
+            "via": "codex-continuation",
+            "code": (spawn or {}).get("code") or "codex_continuation_failed",
+            "error": (spawn or {}).get("error")
+                or "could not start a continuation session",
+        }
+    new_sid = spawn.get("session_id")
+    if new_sid:
+        # The first message was delivered as part of the new session's
+        # initial prompt. Retries resolve to this successor before inject
+        # dedupe, so record delivery under its ID before publishing it.
+        _core._inject_dedupe_record(new_sid, text, idempotency_key=idempotency_key)
+        try:
+            _continuation.record_manual_forward(session_id, new_sid)
+        except Exception:
+            pass
+        try:
+            _continuation.rebind_chain_to(session_id, new_sid)
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "via": "codex-continuation",
+        "continue_from": session_id,
+        "new_session_id": new_sid,
+        "pid": spawn.get("pid"),
+        "spawn_id": spawn.get("spawn_id"),
+        "log": spawn.get("log"),
+        "name": name,
+        "cwd": cwd,
+        "model": model,
+        "ephemeral": True,
+        "message": (
+            "That Codex run was ephemeral (no native thread), so CCC started "
+            "a new Codex session that continues it."
+        ),
+    }
+
+
+_CODEX_SUBAGENT_RELAY_DEPTH = threading.local()
+_CODEX_SUBAGENT_RELAY_MAX_DEPTH = 4
+
+
+def _codex_subagent_relay_text(session_id, text, meta):
+    agent = meta.get("agent_path") or "the sub-agent"
+    who = f"{agent} ({meta['nickname']})" if meta.get("nickname") else agent
+    return (
+        f"[CCC relay] The user sent the message below to your sub-agent {who}, "
+        f"thread {session_id}. Codex does not accept direct input to multi-agent "
+        f"sub-agents, so forward it verbatim to {agent} with followup_task and "
+        f"relay its answer. Answer it yourself only if that agent no longer exists.\n\n"
+        f"{text}"
+    )
+
+
+def _codex_relay_subagent_input(session_id, text, *, steer, result):
+    """Deliver input Codex refused for a multi-agent v2 sub-agent via its parent.
+
+    Codex rejects direct app-server input to v2 sub-agents; the only path in is
+    the parent's followup_task. Without this the message bounced back to the
+    durable queue on every pump and every Steer click, forever. Steers the
+    parent's running turn when it has one, else starts a turn on it. Returns
+    None when the refusal is something else or no parent is known.
+
+    The relay never writes the parent's durable queue: a busy parent comes back
+    as queued/failed and the child's own claim is restored and retried, so a
+    retry cannot duplicate the message.
+    """
+    if not _core._codex_error_is_subagent_input_forbidden(result):
+        return None
+    depth = getattr(_CODEX_SUBAGENT_RELAY_DEPTH, "value", 0)
+    if depth >= _CODEX_SUBAGENT_RELAY_MAX_DEPTH:
+        return None
+    meta = _core._codex_subagent_meta(session_id)
+    parent = meta.get("parent") or _core._codex_thread_parent_id(session_id)
+    if not parent:
+        return None
+    framed = _codex_subagent_relay_text(session_id, text, meta)
+    _core._resume_ledger_append(
+        "codex_subagent_relay", sid=session_id, parent=parent,
+        agent_path=meta.get("agent_path") or "", steer=bool(steer),
+    )
+    _CODEX_SUBAGENT_RELAY_DEPTH.value = depth + 1
+    try:
+        relayed = _core.resume_session_codex(
+            parent, framed, steer=True, _native_delivery=True,
+        )
+        if not relayed.get("ok"):
+            relayed = _core.resume_session_codex(
+                parent, framed, steer=False, _native_delivery=True, _from_queue=True,
+            )
+    finally:
+        _CODEX_SUBAGENT_RELAY_DEPTH.value = depth
+    relayed = dict(relayed or {})
+    relayed["relayed_via_parent"] = parent
+    relayed["relay_agent_path"] = meta.get("agent_path") or ""
+    relayed["relay_from_session_id"] = session_id
+    if relayed.get("ok") and not relayed.get("queued"):
+        relayed["relay_via"] = relayed.get("via")
+        if steer:
+            # The queued-steer transaction commits only a "codex-steer" result;
+            # the message was delivered now, so the queued copy must go.
+            relayed["via"] = "codex-steer"
+    return relayed
+
+
 def resume_session_codex(
     session_id, text, *, steer=False, _from_queue=False, idempotency_key=None,
     preserve_queued_steer=False, _native_delivery=False,
     queued_steer_transaction_protocol=None,
     queued_delivery_transaction_protocol=0,
 ):
-    """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
+    """Resume a dormant Codex thread with a new prompt through the app-server.
+
+    There is no `codex exec resume` fallback: when the app-server transport
+    cannot deliver, the message is parked in the durable queue and retried.
+    """
     transaction_protocol = (
         _CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL
         if queued_steer_transaction_protocol is None
@@ -2080,6 +2480,12 @@ def resume_session_codex(
         if routed is not None:
             return routed
     text = _core._strip_ccc_session_state_instruction(text)
+    if text and not _from_queue:
+        # A WatchTower app-server worker is mid-task by construction: steer it
+        # now rather than parking behind the writer gates below.
+        hosted = _core._codex_wt_app_worker_delivery(session_id, text)
+        if hosted is not None:
+            return hosted
     if (
         _from_queue
         and not _native_delivery
@@ -2091,6 +2497,10 @@ def resume_session_codex(
         )
     if not text:
         return {"ok": False, "error": "missing text"}
+    if steer:
+        refusal = _core._codex_headless_exec_refusal(session_id, "steered")
+        if refusal is not None:
+            return refusal
     if steer and not _native_delivery:
         if transaction_protocol >= _CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL:
             return _codex_queued_steer_transaction(
@@ -2135,8 +2545,13 @@ def resume_session_codex(
                 pass
     row = _core._codex_thread_row(session_id) or {}
     spawned_ctx = _core._spawn_registry_entry_for_session(session_id, "codex") or {}
+    try:
+        capture_row = _core._codex_capture_thread_row(session_id) or {}
+    except Exception:
+        capture_row = {}
     cwd = (
         row.get("cwd")
+        or capture_row.get("cwd")
         or spawned_ctx.get("cwd")
         or (active_resume_entry or {}).get("cwd")
         or _core.find_session_cwd(session_id)
@@ -2148,6 +2563,29 @@ def resume_session_codex(
         except _core.RepoContextError as e:
             cwd_error = e
             cwd = None
+    # A `codex exec --ephemeral` run left no native rollout and no state-DB
+    # row — nothing exists that `codex exec resume` or the app-server could
+    # resume, so a normal send continues it in a fresh session instead.
+    try:
+        native_rollout = _core._resolve_codex_rollout_path(session_id)
+    except Exception:
+        native_rollout = None
+    ephemeral = bool(capture_row.get("_ccc_capture")) and not row and not native_rollout
+    if ephemeral and not steer and not _from_queue:
+        if not cwd:
+            return {
+                "ok": False,
+                "code": "codex_ephemeral_no_cwd",
+                "via": "codex-continuation",
+                "error": (
+                    "This Codex run was ephemeral (no native thread) and its "
+                    "working folder is unknown, so it can't be continued."
+                ),
+            }
+        return _codex_continue_ephemeral(
+            session_id, text, cwd=cwd, capture_row=capture_row,
+            idempotency_key=idempotency_key,
+        )
     # Per-session override (set via the click-to-switch picker) wins over
     # the env-var default and the previous run's recorded model.
     override = _core._get_session_override(session_id)
@@ -2194,13 +2632,15 @@ def resume_session_codex(
     if desktop_result is not None and desktop_result.get("fallback") != "queue":
         return desktop_result
     if steer:
-        return _core._codex_steer_via_app_server(
+        steered = _core._codex_steer_via_app_server(
             session_id,
             text,
             cwd=cwd,
             model=model,
             image_paths=image_paths,
         )
+        relayed = _codex_relay_subagent_input(session_id, text, steer=True, result=steered)
+        return relayed if relayed is not None else steered
     app_result = desktop_result if desktop_result is not None else _core._codex_resume_or_steer_via_app_server(
         session_id,
         text,
@@ -2210,6 +2650,13 @@ def resume_session_codex(
         allow_start=active_resume_entry is None,
         reasoning_effort=reasoning_effort,
     )
+    relayed = _codex_relay_subagent_input(session_id, text, steer=False, result=app_result)
+    if relayed is not None:
+        if relayed.get("ok") and not relayed.get("queued"):
+            return relayed
+        # Parent busy or unreachable: keep the child's own queue/retry path,
+        # which re-attempts the relay on the next pump.
+        app_result = dict(app_result, error=relayed.get("error") or relayed.get("queued_reason") or app_result.get("error"))
     if app_result.get("ok"):
         # Accepted means the engine already started this turn. Re-queueing
         # the same text (especially a lone "continue") fires a second turn
@@ -2248,76 +2695,24 @@ def resume_session_codex(
         return _core._queue_codex_resume(session_id, text, pid=active_resume_entry.get("pid"))
     if cwd_error is not None:
         return cwd_error.as_payload()
-    timestamp = time.strftime("%Y%m%dT%H%M%S")
-    log_filename = f"resume-codex-{session_id[:8]}-{timestamp}.log"
-    repo_for_logs = _core._git_toplevel_for_existing_dir(cwd) or cwd
-    log_dir = _core.repo_log_dir(repo_for_logs)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / log_filename
-    cmd = [
-        resolved["bin"], *_core._codex_context_window_args(), "exec", "resume",
-        "--json",
-        "--skip-git-repo-check",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--model", model,
-    ]
-    if reasoning_effort:
-        cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
-    for image_path in image_paths:
-        cmd.extend(["--image", image_path])
-    cmd.extend([session_id, text])
+    # No one-shot `codex exec resume` fallback: park the message in the
+    # durable queue and let the pump retry the app-server transport. An
+    # exec one-shot could only produce output CCC can't steer, orphan the
+    # thread's native writer state, or (worse) double-post once the real
+    # transport recovers — queueing keeps the message safe and ordered.
+    reason = app_result.get("error") or "Codex app-server delivery failed"
     _core._resume_ledger_append(
-        "codex_wake_exec", sid=session_id,
-        stage="exec", log_path=str(log_path),
+        "codex_wake_queued", sid=session_id, stage="transport", reason=reason,
     )
-    log_fh = open(log_path, "w")
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            start_new_session=True,
-        )
-    except (FileNotFoundError, OSError) as e:
-        log_fh.close()
-        _core._resume_ledger_append(
-            "codex_wake_fail", sid=session_id,
-            stage="exec", error=str(e),
-        )
-        return {"ok": False, "error": str(e), "via": "codex-resume", "stage": "exec"}
-    entry = {
-        "pid": proc.pid,
-        "name": f"resume-codex-{session_id[:8]}",
-        "log": str(log_path),
-        "prompt": text[:200],
-        "started": timestamp,
-        "proc": proc,
-        "log_fh": log_fh,
-        "resumed_sid": session_id,
-        "fifo": None,
-        "stdin_fd": None,
-        "engine": "codex",
-        "cwd": cwd,
-        "repo_path": repo_for_logs,
-        "model": model,
-    }
-    _core._spawned_sessions.append(entry)
-    _core._record_spawn_to_registry(
-        pid=proc.pid,
-        name=entry["name"],
-        log_path=log_path,
-        cwd=cwd,
-        spawned_at=timestamp,
-        command_summary=text[:200],
-        fifo=None,
-        engine="codex",
-        session_id=session_id,
-        repo_path=repo_for_logs,
-        model=model,
-    )
-    return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "codex-resume"}
+    if _from_queue:
+        return {
+            "ok": True,
+            "queued": True,
+            "via": "codex-resume-queued",
+            "queued_reason": reason,
+            "error": reason,
+        }
+    return _core._queue_codex_resume(session_id, text, reason=reason)
 
 
 def _extract_codex_usage(session_id):

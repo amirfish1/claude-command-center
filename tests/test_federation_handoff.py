@@ -36,12 +36,20 @@ def _transcript_bytes(cwd=SRC, extra_lines=()):
 class _IsolatedHome(unittest.TestCase):
     def setUp(self):
         self._old_home = os.environ.get("HOME")
+        self._old_userprofile = os.environ.get("USERPROFILE")
         self._tmp = tempfile.TemporaryDirectory(prefix="ccc-handoff-test-")
         os.environ["HOME"] = self._tmp.name
+        os.environ["USERPROFILE"] = self._tmp.name
 
     def tearDown(self):
         if self._old_home is not None:
             os.environ["HOME"] = self._old_home
+        else:
+            os.environ.pop("HOME", None)
+        if self._old_userprofile is not None:
+            os.environ["USERPROFILE"] = self._old_userprofile
+        else:
+            os.environ.pop("USERPROFILE", None)
         self._tmp.cleanup()
 
 

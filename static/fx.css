@@ -1,0 +1,102 @@
+/* CCC sound + motion kit: shared visual effects (pairs with static/fx.js).
+ *
+ * Class helpers any view can opt into:
+ *   .fx-shimmer  - a soft light sweep across the element (badges, tickers)
+ *   .fx-glow     - a warm pulsing glow (celebration cards, milestones)
+ *   .fx-pop      - a one-shot scale-in pop when an element appears
+ *   .fx-confetti-canvas - the full-viewport canvas window.cccFx.confetti() uses
+ *
+ * Everything here honors prefers-reduced-motion: animation collapses to a
+ * static hint of the effect (a sheen, a fixed soft glow) instead of motion.
+ */
+
+.fx-confetti-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 100000;
+}
+
+.fx-confetti-canvas.fx-fade {
+  transition: opacity 0.6s ease-out;
+  opacity: 0;
+}
+
+/* Light sweep. Add to pills, headers, or cards that deserve a sheen. */
+.fx-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.fx-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    rgba(255, 255, 255, 0.22) 50%,
+    transparent 60%
+  );
+  transform: translateX(-130%);
+  animation: fx-shimmer-sweep 2.8s ease-in-out infinite;
+}
+@keyframes fx-shimmer-sweep {
+  0% {
+    transform: translateX(-130%);
+  }
+  55%,
+  100% {
+    transform: translateX(130%);
+  }
+}
+
+/* Warm pulse. --fx-glow-color customizes the tint per element. */
+.fx-glow {
+  --fx-glow-color: rgba(217, 119, 87, 0.55);
+  animation: fx-glow-pulse 1.8s ease-in-out infinite;
+}
+@keyframes fx-glow-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 8px 0 var(--fx-glow-color),
+      0 0 0 0 rgba(0, 0, 0, 0);
+  }
+  50% {
+    box-shadow: 0 0 22px 4px var(--fx-glow-color),
+      0 0 0 0 rgba(0, 0, 0, 0);
+  }
+}
+
+/* One-shot entrance pop. Replay by removing and re-adding the class. */
+.fx-pop {
+  animation: fx-pop-in 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+@keyframes fx-pop-in {
+  0% {
+    transform: scale(0.82);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-shimmer::after {
+    /* Keep a hint of sheen, never move it. */
+    animation: none;
+    transform: none;
+    opacity: 0.12;
+  }
+  .fx-glow {
+    animation: none;
+    box-shadow: 0 0 12px 1px var(--fx-glow-color, rgba(217, 119, 87, 0.4));
+  }
+  .fx-pop {
+    animation: none;
+  }
+}

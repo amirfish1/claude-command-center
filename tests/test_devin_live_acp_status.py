@@ -4,11 +4,13 @@ import server
 
 
 def _setup(monkeypatch, *, lock_live, loaded, status):
+    # The worker owns the `devin acp` conn, so the turn state comes from its
+    # snapshot, never from this process's (stale) registry copy.
     monkeypatch.setattr(server, "_devin_cli_session_live", lambda raw: lock_live)
-    monkeypatch.setattr(server, "_devin_acp_session_loaded", lambda raw: loaded)
     monkeypatch.setattr(server, "_acp_load_state", lambda harness: None)
-    sessions = {"raw-1": {"status": status}} if status else {}
-    monkeypatch.setattr(server, "_ACP_SESSION_STATE", {"devin": sessions})
+    snap = {"status": status, "loaded": loaded} if status else None
+    monkeypatch.setattr(server, "_acp_session_snapshot", lambda harness, sid: snap)
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", {"devin": {}})
 
 
 def test_dormant_idle_session_reports_idle(monkeypatch):

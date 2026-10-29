@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
 """API-layer glue for ccc_server.ship_graph (is_shipped, search_sessions).
 
-Both functions already exist and are fully working — until now the only
-caller was the ~/rnd/ccc-memory benchmark, so no running agent could reach
-them. This module is the thin read-only surface that powers:
+This module is the thin read-only surface that powers:
 
   - GET /api/memory/recall?q=&limit=              -> recall()
   - GET /api/memory/shipped?topic=                -> shipped()
@@ -36,6 +34,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import federation
 from ccc_server import lineage as _lineage
 from ccc_server import session_fts as _sfts
 from ccc_server import ship_graph as _sg
@@ -57,7 +56,33 @@ def _session_meta_rows(conn: sqlite3.Connection, sids: list[str]) -> dict[str, d
             "repo": repo or "",
             "date": time.strftime("%Y-%m-%d", time.localtime(ts)) if ts else "",
             "ts": ts or 0.0,
+            "last_ts": end_ts or start_ts or 0.0,
         }
+    return out
+
+
+def _lease_fields(sids: list[str]) -> dict[str, dict]:
+    """{sid: {lease_owner, lease_handoff_at}} for the handful of result sids
+    that have a handoff lease -- one directory listing, then a read only for
+    sids that actually have a lease file (bounded by the result limit, never
+    by session count). Lets a requesting node pick the owner copy and spot
+    forks when the same session shows up on two machines (S4 dedupe)."""
+    try:
+        lease_dir = federation.leases_dir()
+        names = {p.stem for p in lease_dir.glob("*.json")} if lease_dir.is_dir() else set()
+    except OSError:
+        return {}
+    out: dict[str, dict] = {}
+    for sid in sids:
+        if sid not in names:
+            continue
+        lease = federation.read_lease(sid)
+        if not lease:
+            continue
+        history = lease.get("history") or []
+        handoff_at = history[-1].get("at") if history and isinstance(history[-1], dict) else None
+        out[sid] = {"lease_owner": lease.get("owner_node"),
+                    "lease_handoff_at": handoff_at or lease.get("acquired_at")}
     return out
 
 
@@ -80,7 +105,7 @@ def _sdoc_rows(sids: list[str]) -> dict[str, dict]:
     return out
 
 
-def recall(query: str, limit: int = 20) -> dict:
+def recall(query: str, limit: int = 20, scope: str = "local") -> dict:
     """GET /api/memory/recall — ranked sessions for `query`, each enriched
     with title/repo/date/snippet from already-synced index state.
 
@@ -89,7 +114,14 @@ def recall(query: str, limit: int = 20) -> dict:
     background thread (see session_fts.warm_start / ship_graph.warm_start),
     and a request that lands mid-warm just gets whatever is indexed so far
     plus `indexing: true` rather than waiting tens of seconds.
+
+    `scope="all"` (multi-machine S4) also asks every paired peer and merges
+    their rows in (memory_fanout.recall_all); the default stays local so a
+    caller resuming by bare `session_id` never gets a peer's session.
     """
+    if scope == "all":
+        from ccc_server import memory_fanout as _fanout
+        return _fanout.recall_all(query, limit, lambda q, n: recall(q, limit=n))
     # MEMO-FIX-lineage: over-fetch so collapsing lineage-linked hits into
     # their newest member still leaves `limit` rows on the table, rather than
     # quietly returning fewer than asked for.
@@ -112,21 +144,28 @@ def recall(query: str, limit: int = 20) -> dict:
             "date": sm.get("date", ""),
             "snippet": sd.get("snippet", ""),
             "_ts": sm.get("ts", 0.0),
+            "last_activity_ts": sm.get("last_ts", 0.0),
         }
         if sid in sections:
             row["match"] = sections[sid]
         results.append(row)
     conn = _sg._get_connection()
     results = _lineage.collapse_chain_hits(results, conn, ts_key="_ts")[:limit]
+    leases = _lease_fields([r["session_id"] for r in results])
     for row in results:
         row.pop("_ts", None)
+        row.update(leases.get(row["session_id"], {}))
     indexing = _sfts.is_indexing() or _sg.is_indexing()
     return {"query": query, "results": results, "indexing": indexing}
 
 
-def shipped(topic: str) -> dict:
+def shipped(topic: str, scope: str = "local") -> dict:
     """GET /api/memory/shipped — is_shipped() contract as-is, with the
-    topic echoed back for the CLI/UI to display."""
+    topic echoed back for the CLI/UI to display. `scope="all"` merges every
+    reachable peer's verdict (memory_fanout.shipped_all)."""
+    if scope == "all":
+        from ccc_server import memory_fanout as _fanout
+        return _fanout.shipped_all(topic, lambda t: shipped(t))
     result = _sg.is_shipped(topic)
     result["topic"] = topic
     return result
@@ -258,10 +297,16 @@ def _sessions_with_file_op(conn: sqlite3.Connection, abs_path: str, limit: int) 
     return out[:limit]
 
 
-def file_history(path: str, repo: str = "", limit: int = 20) -> dict:
+def file_history(path: str, repo: str = "", limit: int = 20, scope: str = "local") -> dict:
     """GET /api/memory/file-history — sessions and commits that touched
     `path`, newest first, each with a one-line why (commit subject / session
-    title)."""
+    title). `scope="all"` adds peers' history for the same repo identity."""
+    if scope == "all":
+        from ccc_server import memory_fanout as _fanout
+        return _fanout.file_history_all(
+            path, repo, limit,
+            lambda p, repo="", limit=20: file_history(p, repo=repo, limit=limit),
+            lambda p, r: _resolve_repo_for_path(os.path.expanduser((p or "").strip()), r))
     p = os.path.expanduser((path or "").strip())
     if not p:
         return {"path": "", "repo": "", "history": []}
@@ -305,10 +350,8 @@ def file_history(path: str, repo: str = "", limit: int = 20) -> dict:
 
 # Words that mark a snippet as recording a DECISION rather than just
 # mentioning a topic — "we added X" isn't a decision, "we went with X
-# instead of Y" is. Heuristic-only: this is a stand-in backend for
-# MEMO-FIX-7's dedicated decision store. _decision_hits() is the seam —
-# MEMO-FIX-7 can replace its body with a real store lookup without touching
-# decisions()'s signature or the /api/memory/decisions route.
+# instead of Y" is. This weaker fallback is used only when the nightly
+# extraction has no matching user quotes.
 _DECISION_MARKERS = (
     "decided", "decision", "we'll use", "we will use", "going with",
     "went with", "instead of", "rather than", "chose", "chosen",
@@ -322,8 +365,7 @@ def _looks_like_decision(text: str) -> bool:
 
 
 def _decision_hits(topic: str, limit: int) -> list[dict]:
-    """Heuristic decision-shaped filter over search_sessions() hits. See the
-    module-level note above _DECISION_MARKERS for the MEMO-FIX-7 hand-off."""
+    """Heuristic decision-shaped filter over search_sessions() hits."""
     hits = _sg.search_sessions(topic, limit=max(limit * 3, 20))
     sids = [h["session_id"] for h in hits if h.get("session_id")]
     sdoc = _sdoc_rows(sids) if sids else {}
@@ -339,27 +381,46 @@ def _decision_hits(topic: str, limit: int) -> list[dict]:
     return out
 
 
-def decisions(topic: str, limit: int = 10) -> dict:
-    """GET /api/memory/decisions — sessions whose recall snippet reads as a
-    decision (`decided`, `instead of`, `went with`, ...) for `topic`.
+def decisions(topic: str, limit: int = 10, repo: str | None = None) -> dict:
+    """Stored user decision quotes first; labelled session snippets as fallback.
 
-    Backed by search_sessions() plus a decision-language filter for now;
-    MEMO-FIX-7's real decision store is meant to plug into `_decision_hits`
-    later without changing this function's contract."""
+    The request never runs extraction. Quotes remain candidate evidence, not
+    approved or necessarily current policy. All original result fields stay
+    available to older CLI/UI consumers.
+    """
+    from ccc_server import decision_extraction as _dex
+
     t = (topic or "").strip()
     if not t:
         return {"topic": "", "results": []}
-    hits = _decision_hits(t, limit)
+    limit = max(1, min(int(limit), 50))
+    repo = (repo or "").strip() or None
+    extracted = _dex.search_decisions(t, repo=repo, limit=limit)
+    if extracted:
+        return {"topic": t, "results": [{
+            "session_id": d["session_id"],
+            "title": "Decision: " + d["quote"][:120],
+            "repo": d["repo"], "date": d["date"], "snippet": d["quote"],
+            "decision_id": d["id"], "provenance": "extracted_user_quote",
+            "status": "candidate", "confidence": d["confidence"],
+            "source": {"path": d["source_path"], "line": d["source_line"],
+                       "timestamp": d["ts"], "engine": d["engine"]},
+        } for d in extracted]}
+
+    hits = _decision_hits(t, 50 if repo else limit)
     sids = [h["session_id"] for h in hits]
     session_meta = _session_meta_rows(_sg._get_connection(), sids) if sids else {}
     results = []
     for h in hits:
         sm = session_meta.get(h["session_id"], {})
+        if repo and sm.get("repo") != repo:
+            continue
         results.append({
             "session_id": h["session_id"],
             "title": h["title"],
             "repo": sm.get("repo", ""),
             "date": sm.get("date", ""),
             "snippet": h["snippet"],
+            "provenance": "session_snippet", "status": "unverified",
         })
-    return {"topic": t, "results": results}
+    return {"topic": t, "results": results[:limit]}

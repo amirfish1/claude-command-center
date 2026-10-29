@@ -1,0 +1,327 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Free model leaderboard: which $0 model codes best? · CCC</title>
+<meta name="description" content="Compare saved results from five small coding tasks. See scores, tasks passed, and reply times. Run the same benchmark locally with CCC.">
+<meta property="og:title" content="Free model leaderboard: which $0 model codes best?">
+<meta property="og:description" content="Five coding tasks. Saved scores and reply times. Run the same benchmark on your machine with CCC.">
+<meta property="og:type" content="website">
+<meta name="color-scheme" content="dark">
+<style>
+/* Same design tokens as site/assets/css/site.css, inlined so this page also
+   works when mirrored under the GitHub Pages tree (docs/leaderboard/). */
+:root{
+  --bg:#0e0c0b; --bg-2:#141110; --surface:#1c1917; --surface-2:#232020;
+  --fg:#eae8e6; --fg-dim:#a8a29e; --border:#2b2724;
+  --accent:#ee7e00; --accent-2:#ff9d33; --yes:#38ce83;
+  --maxw:1120px;
+  --sans:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:1rem;line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-underline-offset:.2em}
+a:focus-visible,button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--accent-2);outline-offset:4px}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+.eyebrow{font:600 .8rem/1.3 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent-2)}
+.h1{font-size:clamp(2.2rem,5.4vw,3.6rem);line-height:1.06;font-weight:600;letter-spacing:-.02em;margin:.3em 0}
+.h2{font-size:clamp(1.6rem,3.4vw,2.4rem);line-height:1.15;font-weight:600;letter-spacing:-.01em;margin:0 0 .4em}
+.lede{font-size:1.125rem;color:var(--fg-dim);max-width:62ch}
+.mono{font-family:var(--mono)}
+.accent{color:var(--accent-2)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5em;padding:.7em 1.2em;border-radius:10px;
+  font:600 1rem var(--sans);border:1px solid transparent;cursor:pointer;transition:.15s;text-decoration:none}
+.btn-primary{background:var(--accent);color:#1a1206}
+.btn-primary:hover{background:var(--accent-2)}
+/* nav */
+.site-nav{border-bottom:1px solid var(--border);background:var(--bg-2)}
+.nav-inner{max-width:var(--maxw);margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:24px}
+.nav-brand{font-weight:700;letter-spacing:-.02em;text-decoration:none;white-space:nowrap}
+.nav-links{display:flex;gap:22px;margin-left:auto;align-items:center}
+.nav-links a{color:var(--fg-dim);font-size:.95rem;text-decoration:none}
+.nav-links a:hover{color:var(--fg)}
+.nav-links .nav-cta{color:#1a1206}
+/* stats strip */
+.stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:34px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 20px;min-width:150px}
+.stat b{display:block;font-size:1.5rem;font-weight:650;letter-spacing:-.02em}
+.stat span{color:var(--fg-dim);font-size:.85rem}
+/* leaderboard table */
+.board{margin-top:26px;border:1px solid var(--border);border-radius:16px;overflow:hidden;background:var(--surface)}
+.board-scroll{overflow-x:auto}
+table.lb{width:100%;border-collapse:collapse;font-size:.95rem;min-width:800px}
+.lb caption{text-align:left;padding:14px 16px;color:var(--fg-dim);font-size:.9rem;border-bottom:1px solid var(--border)}
+.lb th{font:600 .78rem/1.3 var(--mono);letter-spacing:.04em;color:var(--fg-dim);text-align:left;
+  padding:14px 16px;border-bottom:1px solid var(--border);white-space:nowrap}
+.lb th:nth-child(2),.lb td:nth-child(2){min-width:210px;width:210px}
+.lb td{padding:16px;border-bottom:1px solid var(--border);vertical-align:middle}
+.lb tbody tr:last-child td{border-bottom:0}
+.lb tbody tr{transition:background .15s}
+.lb tbody tr:hover{background:var(--surface-2)}
+tr.best td{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+tr.best td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.rank{font:700 1.05rem/1 var(--mono);color:var(--fg-dim);width:2.4rem}
+tr.best .rank{color:var(--accent-2)}
+.model-name{font:600 .92rem/1.4 var(--mono);overflow-wrap:anywhere}
+.badge-best{display:block;width:fit-content;margin-top:6px;padding:2px 8px;border-radius:999px;
+  background:var(--accent);color:#1a1206;font:700 .68rem/1.6 var(--sans)}
+.score-cell{min-width:160px}
+.score-num{font:700 1rem/1 var(--mono)}
+.score-bar{height:6px;border-radius:3px;background:var(--surface-2);margin-top:7px;overflow:hidden;max-width:140px}
+.score-fill{height:100%;border-radius:3px;background:var(--accent);width:0}
+.pass{font-family:var(--mono);font-size:.9rem;white-space:nowrap}
+.pass small{display:block;font:.8rem/1.5 var(--sans);color:var(--fg-dim)}
+.tools{font-size:.8rem;color:var(--fg-dim);white-space:nowrap}
+.tools.yes{color:var(--yes)}
+.date{font-family:var(--mono);font-size:.84rem;color:var(--fg-dim);white-space:nowrap}
+/* states */
+.notice{margin-top:26px;border:1px dashed var(--border);border-radius:16px;padding:30px 28px;color:var(--fg-dim);max-width:760px}
+.notice b{color:var(--fg);font-size:1.1rem}
+.notice p{margin-bottom:0}
+/* sections */
+.section{padding:72px 0}
+.section.tight{padding-top:0}
+.task-list{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-top:24px;
+  counter-reset:task;padding:0;list-style:none}
+.task{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:.95rem}
+.task::before{counter-increment:task;content:counter(task);display:inline-flex;align-items:center;justify-content:center;
+  width:1.7em;height:1.7em;border-radius:50%;background:var(--surface-2);color:var(--accent-2);
+  font:700 .85rem/1 var(--mono);margin-right:.6em}
+.how-note{color:var(--fg-dim);font-size:.92rem;margin-top:18px;max-width:76ch}
+.install-line{display:flex;align-items:stretch;gap:10px;background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:10px 10px 10px 18px;max-width:760px;margin-top:24px;min-width:0}
+.install-line code{flex:1;min-width:0;align-self:center;font:.85rem/1.5 var(--mono);overflow-x:auto;white-space:nowrap}
+.install-line button{flex:none}
+.copy-status{min-height:1.6em;color:var(--fg-dim);font-size:.9rem;margin-top:8px}
+.race-steps{margin:20px 0 0;padding-left:22px;max-width:66ch;color:var(--fg-dim)}
+.race-steps li{padding:8px 0 8px 8px}
+.race-steps b{color:var(--fg)}
+/* footer */
+.site-footer{border-top:1px solid var(--border);background:var(--bg-2);padding:32px 0}
+.footer-inner{max-width:var(--maxw);margin:0 auto;padding:0 24px;display:flex;justify-content:space-between;
+  flex-wrap:wrap;gap:12px;color:var(--fg-dim);font-size:.85rem}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{transition:none!important;animation:none!important}
+}
+@media(max-width:640px){
+  .nav-links a:not(.nav-cta){display:none}
+  .nav-inner{gap:12px}
+  .nav-cta{padding:.6em .9em}
+  .section{padding:48px 0}
+  .stat{min-width:calc(50% - 8px)}
+  .wrap{padding:0 20px}
+}
+</style>
+</head><body>
+<header class="site-nav"><div class="nav-inner">
+  <a class="nav-brand" href="../">CCC</a>
+  <nav class="nav-links" aria-label="Main navigation">
+    <a href="https://github.com/amirfish1/claude-command-center">GitHub</a>
+    <a class="btn btn-primary nav-cta" href="#run-your-own">Try it on your machine</a>
+  </nav>
+</div></header>
+
+<main>
+<section class="section" style="padding-top:64px;padding-bottom:32px">
+ <div class="wrap">
+  <p class="eyebrow">Free model leaderboard</p>
+  <h1 class="h1">Which <span class="accent">$0 model</span><br>codes best?</h1>
+  <p class="lede">Compare measured results from CCC's five small coding tasks. Each row is a
+    saved benchmark run, not a promise about every job. Try the same test in CCC to choose
+    a model for your machine.</p>
+  <div class="stats" id="stats" hidden>
+    <div class="stat"><b id="stat-models">0</b><span>models tested</span></div>
+    <div class="stat"><b>5</b><span>tasks per model</span></div>
+    <div class="stat"><b id="stat-updated">Not yet</b><span>last benchmark, UTC</span></div>
+  </div>
+ </div>
+</section>
+
+<section class="section tight" aria-label="Benchmark results">
+ <div class="wrap">
+  <div id="board-status" role="status" aria-live="polite">
+    <div id="board-loading" class="notice"><b>Loading the scores...</b></div>
+    <div id="board-empty" class="notice" hidden>
+      <b>No scores published yet.</b>
+      <p>You can still try the test in CCC. Your results stay on your machine unless you
+        choose to publish a snapshot.</p>
+      <p><a class="accent" href="#run-your-own">Run your own benchmark</a></p>
+    </div>
+    <div id="board-error" class="notice" hidden>
+      <b>The scores are unavailable right now.</b>
+      <p>The result file could not be loaded. You can still run the benchmark on your own
+        machine using the steps below.</p>
+    </div>
+  </div>
+  <noscript><style>#board-loading{display:none}</style><p class="notice">Enable JavaScript to view
+    the table, or <a href="data.json">read the result file</a>. The steps below work without it.</p></noscript>
+  <div class="board" id="board" hidden>
+    <div class="board-scroll" role="region" aria-label="Model scores. Scroll sideways for all columns." tabindex="0">
+    <table class="lb">
+      <caption>Latest published run per model. Higher scores rank first; faster replies break ties.</caption>
+      <thead><tr>
+        <th scope="col">Rank</th><th scope="col">Model</th><th scope="col">Score / 100</th>
+        <th scope="col">Tasks passed</th><th scope="col">Median reply</th><th scope="col">File tools</th><th scope="col">Tested, UTC</th>
+      </tr></thead>
+      <tbody id="lb-rows"></tbody>
+    </table>
+    </div>
+  </div>
+  <p class="how-note"><a href="data.json" download>Download the scores (JSON)</a> ·
+    <a href="https://github.com/amirfish1/claude-command-center/blob/main/ccc_server/free_eval.py">Read the benchmark code</a></p>
+ </div>
+</section>
+
+<section class="section tight">
+ <div class="wrap">
+  <p class="eyebrow">How the test works</p>
+  <h2 class="h2">Small jobs. Checks you can trust.</h2>
+  <p class="lede" style="font-size:1.05rem">Each model gets the same five jobs in scratch
+    folders, with file tools and a fixed time budget. CCC checks the final files to decide
+    whether a task passed.</p>
+  <ol class="task-list" id="task-list">
+    <li class="task">Fix a typo in a file</li>
+    <li class="task">Make a failing test pass</li>
+    <li class="task">Add a new function</li>
+    <li class="task">Read one file, write another</li>
+    <li class="task">Read two files, combine, write</li>
+  </ol>
+  <p class="how-note">Score = 80% tasks passed + 20% speed. A reply time of 1.5 seconds or
+    less earns full speed credit; 20 seconds or more earns none. Between those times,
+    the credit falls evenly. The median reply is the middle value of the tasks' measured
+    median API reply times, not the time to finish a task. Unmeasured replies are left out.</p>
+  <p class="how-note">These are local benchmark snapshots, not a broad study. A row keeps
+    the latest saved result for that model. Providers, free limits, and response times can
+    change. A <b>Top tool-ready</b> badge marks the highest-ranked model with file tools
+    and at least one task passed. It does not confirm that the provider is available now.</p>
+ </div>
+</section>
+
+<section class="section tight" id="run-your-own">
+ <div class="wrap">
+  <p class="eyebrow">Run your own benchmark</p>
+  <h2 class="h2">Pick a model with your own results.</h2>
+  <p class="lede" style="font-size:1.05rem">CCC is a local dashboard for your coding agents.
+    Its setup tour helps you connect a free model provider. You choose when to run the test.</p>
+  <div class="install-line">
+    <code id="install-command" tabindex="0">curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash</code>
+    <button class="btn btn-primary" type="button" id="copy-install" aria-label="Copy the CCC install command">Copy</button>
+  </div>
+  <div class="copy-status" id="copy-status" role="status" aria-live="polite"></div>
+  <ol class="race-steps">
+    <li><b>Install CCC.</b> Copy the line into your terminal. A guided setup tour opens in your browser.</li>
+    <li><b>Choose a free provider.</b> Some need a free key. Check the provider's limits and privacy terms first.</li>
+    <li><b>Open the local leaderboard.</b> In your CCC browser tab, replace the part of the address after the port
+      with <code>/free-models</code>. Choose <b>Run the race</b>. It can take several minutes.</li>
+  </ol>
+  <p class="how-note">Some keyless providers log prompts for training. CCC asks for consent
+    before enabling them. A benchmark sends its own small test tasks, not your project code.
+    Publishing scores is always a separate, manual step.</p>
+ </div>
+</section>
+</main>
+
+<footer class="site-footer"><div class="footer-inner">
+  <span>Claude Command Center · Free to use · FSL-1.1-MIT · Not affiliated with Anthropic</span>
+  <span class="mono">Saved results. No automatic uploads.</span>
+</div></footer>
+
+<script>
+(function(){
+"use strict";
+var $=function(id){return document.getElementById(id)};
+function el(tag,cls,text){
+  var e=document.createElement(tag);
+  if(cls)e.className=cls;
+  if(text!==undefined)e.textContent=text;
+  return e;
+}
+function fmtMs(ms){
+  if(ms===null)return "Not measured";
+  if(ms<1000)return ms+" ms";
+  return (ms/1000).toFixed(ms<10000?1:0)+" s";
+}
+function fmtDate(iso){
+  return new Date(iso).toLocaleDateString("en-US",{year:"numeric",month:"short",day:"numeric",timeZone:"UTC"});
+}
+function valid(data){
+  return data&&data.version===1&&Array.isArray(data.models)&&Array.isArray(data.tasks)&&data.tasks.length===5&&
+    data.models.every(function(m){return m&&typeof m.id==="string"&&Number.isFinite(m.score)&&m.score>=0&&m.score<=100&&
+      Number.isFinite(m.pass_rate)&&m.pass_rate>=0&&m.pass_rate<=1&&Number.isInteger(m.passed)&&m.passed>=0&&m.passed<=5&&
+      m.tasks===5&&Number.isInteger(m.rank)&&m.rank>0&&typeof m.supports_tools==="boolean"&&
+      (m.median_request_ms===null||(Number.isInteger(m.median_request_ms)&&m.median_request_ms>=0))&&
+      typeof m.evaluated_at==="string"&&!isNaN(new Date(m.evaluated_at))});
+}
+function render(data){
+  if(!valid(data))throw new Error("Invalid snapshot");
+  var models=data.models;
+  $("board-loading").hidden=true;
+
+  /* task list renders even with zero scores so the page explains itself */
+  $("stats").hidden=false;
+  $("stat-models").textContent=String(models.length);
+  if(!models.length){$("board-empty").hidden=false;return}
+  $("stat-updated").textContent=fmtDate(data.last_eval_at);
+  var tbody=$("lb-rows");
+  tbody.textContent="";
+  models.forEach(function(m){
+    var tr=document.createElement("tr");
+    if(data.best===m.id)tr.className="best";
+    tr.appendChild(el("td","rank",String(m.rank)));
+    var nameTd=el("td");
+    nameTd.appendChild(el("span","model-name",m.id));
+    if(data.best===m.id)nameTd.appendChild(el("span","badge-best","Top tool-ready"));
+    tr.appendChild(nameTd);
+    var scoreTd=el("td","score-cell");
+    scoreTd.appendChild(el("span","score-num",String(m.score)));
+    var bar=el("div","score-bar");bar.setAttribute("aria-hidden","true");
+    var fill=el("div","score-fill");
+    bar.appendChild(fill);scoreTd.appendChild(bar);tr.appendChild(scoreTd);
+    var passed=el("td","pass",Math.round(m.pass_rate*100)+"%");
+    passed.appendChild(el("small","",m.passed+" of "+m.tasks+" tasks"));tr.appendChild(passed);
+    tr.appendChild(el("td","date",fmtMs(m.median_request_ms)));
+    tr.appendChild(el("td","tools"+(m.supports_tools?" yes":""),m.supports_tools?"Supported":"Not supported"));
+    var dateTd=el("td","date");
+    var date=el("time","",fmtDate(m.evaluated_at));date.dateTime=m.evaluated_at;date.title=m.evaluated_at;
+    dateTd.appendChild(date);tr.appendChild(dateTd);tbody.appendChild(tr);
+
+    /* set the bar after layout; no sound or animated motion is needed */
+    requestAnimationFrame(function(){fill.style.width=m.score+"%"});
+  });
+  $("board").hidden=false;
+}
+var controller=new AbortController();
+var deadline=setTimeout(function(){controller.abort()},8000);
+fetch("data.json",{cache:"no-store",signal:controller.signal})
+  .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json()})
+  .then(render)
+  .catch(function(){
+    $("board-loading").hidden=true;
+    $("board-error").hidden=false;
+  })
+  .finally(function(){clearTimeout(deadline)});
+
+/* install one-liner copy button */
+var btn=$("copy-install");
+function copied(){
+  btn.textContent="Copied!";$("copy-status").textContent="Install command copied.";
+  setTimeout(function(){btn.textContent="Copy"},1600);
+}
+function fallbackCopy(){
+  var range=document.createRange();range.selectNodeContents($("install-command"));
+  var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+  try{if(document.execCommand("copy")){copied();return}}catch(e){}
+  $("copy-status").textContent="Select and copy the install line.";
+}
+btn.addEventListener("click",function(){
+  var line=$("install-command").textContent;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(line).then(copied).catch(fallbackCopy);
+  }else{fallbackCopy()}
+});
+})();
+</script>
+</body></html>

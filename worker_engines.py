@@ -23,6 +23,8 @@ ASYNC_OPERATIONS = {
     ("kimi", "prompt"),
     ("grok", "spawn"),
     ("grok", "prompt"),
+    ("devin", "prompt"),
+    ("devin", "acp_spawn"),
     ("codex", "spawn"),
     ("codex", "resume"),
     ("claude", "spawn"),
@@ -76,8 +78,8 @@ class EngineHost:
                     server._ccc_closure = None
                 # server.main() installs this for the dashboard process, but
                 # the worker never calls main() -- it only imports server as
-                # a library here. Without this, SIGUSR2-triggered dumps (used
-                # by e.g. _codex_app_server_dump_stacks_on_liveness_miss) are
+                # a library here. Without this, liveness-miss stack dumps
+                # (e.g. _codex_app_server_dump_stacks_on_liveness_miss) are
                 # silent no-ops in the one process that actually owns Codex
                 # app-server execution and liveness churn.
                 server._install_python_stack_dump_handler()
@@ -180,7 +182,7 @@ class EngineHost:
                     live = live or legacy._codex_app_server_thread_is_active(
                         sid, start_if_needed=True
                     )
-            elif engine in ("kimi", "grok") and sid:
+            elif engine in ("kimi", "grok", "devin") and sid:
                 legacy._acp_maybe_attach_on_view(engine, sid)
                 snap = legacy._acp_session_snapshot(engine, sid) or {}
                 live = snap.get("status") == "active"
@@ -428,13 +430,16 @@ class EngineHost:
 
     def _call(self, engine, operation, args, query=False):
         legacy = self._legacy()
-        if engine in ("kimi", "grok"):
+        if engine in ("kimi", "grok", "devin"):
             if operation == "availability":
-                resolve = (
-                    legacy._resolve_kimi_bin if engine == "kimi"
-                    else legacy._resolve_grok_bin
-                )
-                info = resolve()
+                if engine == "devin":
+                    info = legacy._acp_resolve_bin("devin")
+                else:
+                    resolve = (
+                        legacy._resolve_kimi_bin if engine == "kimi"
+                        else legacy._resolve_grok_bin
+                    )
+                    info = resolve()
                 info["model"] = legacy._spawn_model_for_engine(engine)
                 conn = legacy._acp_conn(engine)
                 info["acp"] = bool(
@@ -447,7 +452,19 @@ class EngineHost:
                 if engine != "kimi":
                     return {"ok": False, "error": "verify is kimi-only"}
                 return legacy._kimi_setup_verify()
-            if operation == "spawn":
+            if operation == "acp_spawn" and engine == "devin":
+                return legacy._devin_acp_spawn_new_session(
+                    args.get("prompt") or "",
+                    args.get("cwd") or "",
+                    model=args.get("model"),
+                    permission_mode=args.get("permission_mode"),
+                    reasoning_effort=args.get("reasoning_effort"),
+                )
+            if operation == "conn_pid":
+                return {"ok": True, "pid": legacy._acp_conn_pid(engine)}
+            if operation == "close_idle_conn":
+                return legacy._acp_close_idle_conn(engine)
+            if operation == "spawn" and engine != "devin":
                 spawn_fn = (
                     legacy.spawn_session_kimi if engine == "kimi"
                     else legacy.spawn_session_grok
@@ -460,6 +477,7 @@ class EngineHost:
                     args.get("text") or "",
                     mode=args.get("mode") or "send",
                     from_queue=bool(args.get("from_queue")),
+                    cwd=args.get("cwd") or None,
                 )
             if operation == "ask":
                 return legacy._acp_ask_and_wait(
@@ -561,6 +579,15 @@ class EngineHost:
                         args.get("session_id")
                     ),
                 }
+            if operation == "thread_states":
+                with legacy._CODEX_APP_SERVER_LOCK:
+                    states = {
+                        str(sid): dict(state)
+                        for sid, state in (
+                            legacy._CODEX_APP_SERVER_THREAD_STATE or {}
+                        ).items()
+                    }
+                return {"ok": True, "states": states}
             if operation == "active":
                 return {
                     "ok": True,
@@ -599,7 +626,9 @@ class EngineHost:
                 # child presence with no age cap. `_tool_child_blocks_inject`
                 # is the same signal but bounded (_INJECT_TOOL_CHILD_MAX_HOLD_S),
                 # matching the in-process terminal-queue gate's intent.
-                tool_child_blocks = bool(legacy._tool_child_blocks_inject(spawn))
+                tool_child_blocks = bool(
+                    legacy._tool_child_blocks_inject(spawn, require_open_turn=True)
+                )
                 return {
                     "ok": True,
                     "owned": True,
@@ -627,8 +656,17 @@ class EngineHost:
                     force_queue=bool(args.get("force_queue")),
                     source=args.get("source") or "api",
                     peer_sender_sid=args.get("peer_sender_sid"),
+                    attr=args.get("attr"),
                     idempotency_key=args.get("idempotency_key"),
                 )
+            if operation == "retire_idle":
+                # Limit-hit failover: the worker owns the warm child, so only
+                # it can retire it (busy children are deferred, never killed).
+                return {"ok": True, **legacy._retire_idle_headless_for_session(
+                    args.get("session_id"),
+                    reason=args.get("reason") or "",
+                    defer_if_busy=bool(args.get("defer_if_busy")),
+                )}
             if operation == "interrupt":
                 return legacy._interrupt_claude_headless_local(
                     args.get("session_id")
@@ -650,6 +688,8 @@ class EngineHost:
                     args.get("session_id"),
                     args.get("text") or "",
                     cwd=args.get("cwd"),
+                    runtime=args.get("runtime") or "",
+                    extra_env=args.get("extra_env"),
                 )
             if operation == "ask":
                 return legacy.ask_session_and_wait(
@@ -658,6 +698,7 @@ class EngineHost:
                     timeout_ms=int(args.get("timeout_ms") or 30000),
                     cwd=args.get("cwd"),
                     peer_sender_sid=args.get("peer_sender_sid"),
+                    attr=args.get("attr"),
                 )
             if operation == "compact":
                 return legacy.compact_session_context(
@@ -747,7 +788,7 @@ class EngineHost:
     @staticmethod
     def _async_state(legacy, engine, operation, sid, result, args=None):
         args = args if isinstance(args, dict) else {}
-        if engine in ("kimi", "grok"):
+        if engine in ("kimi", "grok", "devin"):
             snap = legacy._acp_session_snapshot(engine, sid) or {}
             active = snap.get("status") == "active"
             return active, not active, {

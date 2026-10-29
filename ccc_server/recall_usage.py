@@ -18,6 +18,8 @@ import re
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -204,20 +206,99 @@ def _get_claude_org_id():
     return cli_org_id
 
 
+# The claude.ai usage endpoint is what Claude Code's own `/usage` view reads;
+# Anthropic does not document it as a public API. The only documented quota
+# surface today is the `rate_limits` object Claude Code passes to a status-line
+# script (code.claude.com/docs/en/statusline), which exists only inside a
+# running session. So CCC reads the endpoint as itself: an honest CCC
+# User-Agent, no browser impersonation, no redirects, and a denial (401/403/
+# 429, anti-bot challenge, any non-JSON body) is an unavailable reading that
+# backs off instead of being retried around. Never send a model request or
+# refresh a token to obtain a reading.
+_PLAN_USAGE_HOST = "claude.ai"
+_PLAN_USAGE_TIMEOUT_SECS = 5
+_PLAN_USAGE_DENIED_HOLD_SECS = 30 * 60
+_PLAN_USAGE_MAX_RETRY_AFTER_SECS = 6 * 3600
+_plan_usage_denied_until = 0.0
+_plan_usage_denied_error = None
+_plan_usage_denied_lock = threading.Lock()
+
+
+def _plan_usage_user_agent():
+    version = str(getattr(_core, "__version__", "") or "dev")
+    return (
+        f"claude-command-center/{version} "
+        "(+https://github.com/amirfish1/claude-command-center; plan-usage-meter)"
+    )
+
+
+class _PlanUsageNoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect so credentials never follow a Location header."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_plan_usage_opener = urllib.request.build_opener(_PlanUsageNoRedirect)
+
+
+def _plan_usage_open(req, timeout):
+    return _plan_usage_opener.open(req, timeout=timeout)
+
+
+def _redact_plan_usage_error(text, creds):
+    out = str(text or "")
+    for key in ("oauth_token", "session_key"):
+        secret = (creds or {}).get(key)
+        if isinstance(secret, str) and len(secret) >= 4:
+            out = out.replace(secret, "[redacted]")
+    out = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", out)
+    out = re.sub(r"(?i)(sessionKey=)[^;\s]+", r"\1[redacted]", out)
+    return out[:300]
+
+
+def _plan_usage_retry_after_secs(headers):
+    try:
+        value = (headers or {}).get("Retry-After")
+        secs = int(str(value).strip()) if value is not None else 0
+    except (TypeError, ValueError, AttributeError):
+        secs = 0
+    return max(0, min(secs, _PLAN_USAGE_MAX_RETRY_AFTER_SECS))
+
+
+def _plan_usage_unavailable(reason, error, status=None, hold_secs=0):
+    global _plan_usage_denied_until, _plan_usage_denied_error
+    out = {"ok": False, "unavailable": True, "reason": reason, "error": error}
+    if status is not None:
+        out["status"] = status
+    if hold_secs > 0:
+        with _plan_usage_denied_lock:
+            _plan_usage_denied_until = time.time() + hold_secs
+            _plan_usage_denied_error = dict(out)
+    return out
+
+
 def _fetch_plan_usage():
+    with _plan_usage_denied_lock:
+        if _plan_usage_denied_error and time.time() < _plan_usage_denied_until:
+            held = dict(_plan_usage_denied_error)
+            held["backoff_until"] = _plan_usage_denied_until
+            return held
+
     creds = _get_claude_credentials()
     if not creds:
         return {"ok": False, "error": "No credentials found. Please run `claude auth login` in your terminal."}
 
-    org_id = _get_claude_org_id()
+    org_id = _valid_claude_org_id(_get_claude_org_id())
     if not org_id:
         diagnostic = _claude_org_id_diagnostic()
         error = "Could not determine organization ID. Ensure `claude` is logged in."
         return {"ok": False, "error": f"{error} {diagnostic}" if diagnostic else error}
 
-    url = f"https://claude.ai/api/organizations/{org_id}/usage"
+    url = f"https://{_PLAN_USAGE_HOST}/api/organizations/{org_id}/usage"
     req = urllib.request.Request(url)
-    req.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+    req.add_header("User-Agent", _plan_usage_user_agent())
+    req.add_header("Accept", "application/json")
 
     if "session_key" in creds:
         req.add_header("Cookie", f"sessionKey={creds['session_key']}")
@@ -225,11 +306,66 @@ def _fetch_plan_usage():
         req.add_header("Authorization", f"Bearer {creds['oauth_token']}")
 
     try:
-        with urllib.request.urlopen(req, timeout=5) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
+        with _plan_usage_open(req, _PLAN_USAGE_TIMEOUT_SECS) as response:
+            final_url = response.geturl() if hasattr(response, "geturl") else url
+            if urllib.parse.urlsplit(final_url).hostname != _PLAN_USAGE_HOST:
+                return _plan_usage_unavailable(
+                    "redirected", "Anthropic usage request left claude.ai; reading refused.",
+                    hold_secs=_PLAN_USAGE_DENIED_HOLD_SECS,
+                )
+            ctype = str(response.headers.get("Content-Type") or "").lower()
+            body = response.read()
+            if "json" not in ctype:
+                return _plan_usage_unavailable(
+                    "challenge",
+                    "Anthropic returned a non-JSON page (likely an access check); usage unavailable.",
+                    status=getattr(response, "status", None),
+                    hold_secs=_PLAN_USAGE_DENIED_HOLD_SECS,
+                )
+            res_data = json.loads(body.decode("utf-8"))
+            if not isinstance(res_data, dict):
+                return _plan_usage_unavailable("malformed", "Anthropic usage response was not an object.")
             return {"ok": True, "usage": res_data}
+    except urllib.error.HTTPError as e:
+        status = e.code
+        if 300 <= status < 400:
+            return _plan_usage_unavailable(
+                "redirected", f"Anthropic usage endpoint redirected (HTTP {status}); reading refused.",
+                status=status, hold_secs=_PLAN_USAGE_DENIED_HOLD_SECS,
+            )
+        if status == 401:
+            # Usually an expired login; Claude Code refreshes its own token,
+            # so retry on the normal poll cadence rather than refreshing here.
+            return _plan_usage_unavailable(
+                "unauthorized", "Anthropic rejected the Claude login (HTTP 401); usage unavailable.",
+                status=status,
+                hold_secs=max(_PLAN_USAGE_POLL_SECS, _plan_usage_retry_after_secs(e.headers)),
+            )
+        if status == 403:
+            return _plan_usage_unavailable(
+                "denied", "Anthropic denied the usage request (HTTP 403); usage unavailable.",
+                status=status,
+                hold_secs=max(_PLAN_USAGE_DENIED_HOLD_SECS, _plan_usage_retry_after_secs(e.headers)),
+            )
+        if status == 429:
+            return _plan_usage_unavailable(
+                "rate_limited", "Anthropic rate-limited the usage request (HTTP 429); usage unavailable.",
+                status=status,
+                hold_secs=max(_PLAN_USAGE_DENIED_HOLD_SECS, _plan_usage_retry_after_secs(e.headers)),
+            )
+        if status in (404, 405, 410):
+            return _plan_usage_unavailable(
+                "unsupported", f"Anthropic usage endpoint is not available (HTTP {status}).",
+                status=status, hold_secs=_PLAN_USAGE_DENIED_HOLD_SECS,
+            )
+        return _plan_usage_unavailable(
+            "http_error", f"Failed to fetch from Anthropic: HTTP {status}", status=status,
+        )
     except Exception as e:
-        return {"ok": False, "error": f"Failed to fetch from Anthropic: {str(e)}"}
+        return {
+            "ok": False,
+            "error": "Failed to fetch from Anthropic: " + _redact_plan_usage_error(e, creds),
+        }
 
 
 def _plan_usage_with_codex(res):
@@ -796,10 +932,26 @@ def _read_codex_account_usage(now_epoch=None):
     return _core._codex_account_usage_from_response(response, now_epoch=now_epoch)
 
 
+_USAGE_TS_EPOCH_MEMO = {}
+
+
 def _usage_snapshot_epoch(snapshot):
     if not isinstance(snapshot, dict):
         return None
-    dt = _core._stats_parse_ts(snapshot.get("ts"))
+    raw_ts = snapshot.get("ts")
+    if isinstance(raw_ts, str) and raw_ts:
+        cached = _USAGE_TS_EPOCH_MEMO.get(raw_ts)
+        if cached is not None:
+            return cached
+        dt = _core._stats_parse_ts(raw_ts)
+        if dt is None:
+            return None
+        epoch = dt.timestamp()
+        if len(_USAGE_TS_EPOCH_MEMO) >= 65536:
+            _USAGE_TS_EPOCH_MEMO.clear()
+        _USAGE_TS_EPOCH_MEMO[raw_ts] = epoch
+        return epoch
+    dt = _core._stats_parse_ts(raw_ts)
     if dt is None:
         return None
     return dt.timestamp()
@@ -844,12 +996,22 @@ def _read_native_usage_snapshots_unlocked():
 
 
 def _write_native_usage_snapshots_unlocked(snapshots):
-    _core._USAGE_SNAPSHOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _core._USAGE_SNAPSHOTS_FILE.with_suffix(".tmp")
+    path = _core._USAGE_SNAPSHOTS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         for item in snapshots:
             f.write(json.dumps(item, separators=(",", ":")) + "\n")
-    tmp.replace(_core._USAGE_SNAPSHOTS_FILE)
+    tmp.replace(path)
+    try:
+        stat = path.stat()
+        _native_usage_snapshots_memo.update({
+            "path": str(path),
+            "signature": (stat.st_mtime_ns, stat.st_size),
+            "snapshots": list(snapshots),
+        })
+    except OSError:
+        pass
 
 
 def _append_native_usage_snapshot(snapshot, now_epoch=None):

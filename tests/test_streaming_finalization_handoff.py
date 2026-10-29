@@ -1,12 +1,43 @@
 """Regression coverage for stream-json to durable transcript handoff."""
 
 from pathlib import Path
+import shutil
 import subprocess
 import textwrap
+
+import pytest
 
 
 APP_JS = Path(__file__).resolve().parents[1] / "static" / "app.js"
 PROJECT_ROOT = APP_JS.parents[1]
+
+
+def _browser_harness_unavailable():
+    """Reason string when node + puppeteer + a local Chrome are not all present.
+
+    Puppeteer and Chrome are dev-machine installs (no npm step in CI), so the
+    real-browser test can only run where they exist.
+    """
+    if shutil.which("node") is None:
+        return "node is not installed"
+    probe = (
+        "require('./require-puppeteer.js');"
+        "const {findChromePath}=require('./puppeteer-browser-config.js');"
+        "if(!findChromePath()) process.exit(3);"
+    )
+    try:
+        done = subprocess.run(
+            ["node", "-e", probe], cwd=PROJECT_ROOT,
+            capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "node could not run the puppeteer probe"
+    if done.returncode != 0:
+        return "puppeteer or a local Chrome/headless-shell is not installed"
+    return None
+
+
+_HARNESS_MISSING = _browser_harness_unavailable()
 
 
 def _render_conversation_events_source():
@@ -21,7 +52,10 @@ def test_matching_stream_bubble_handoff_skips_live_word_reveal():
     body = _render_conversation_events_source()
 
     assert "let handedOffStreamingBubble = false;" in body
-    assert "$view._streamedAssistantMessageIds.delete(ev.message_id)" in body
+    # The marker is read with .has(), never consumed: a later rebuild of the
+    # same row (pane refresh, resync) must not replay the reveal either.
+    assert "$view._streamedAssistantMessageIds.has(ev.message_id)" in body
+    assert "_streamedAssistantMessageIds.delete(ev.message_id)" not in body
     assert "handedOffStreamingBubble = true;" in body
     bubble_lookup = body.index("const liveBubble = $view.querySelector")
     bubble_handoff = body.index("handedOffStreamingBubble = true;", bubble_lookup)
@@ -70,6 +104,7 @@ def test_ordinary_assistant_events_keep_live_word_reveal():
     assert "_convLiveRevealNewText(div, paneId, opts);" in body
 
 
+@pytest.mark.skipif(bool(_HARNESS_MISSING), reason=_HARNESS_MISSING or "")
 def test_result_before_durable_handoff_in_real_browser():
     """Chromium executes the real renderers through the problematic ordering."""
     node_program = textwrap.dedent(
@@ -163,7 +198,7 @@ def test_result_before_durable_handoff_in_real_browser():
                 durablePresent: !!handed,
                 durableText: handed?.querySelector('.assistant-text')?.textContent.trim() || '',
                 durableWordWrappers: handed?.querySelectorAll('.conv-live-word').length ?? -1,
-                markerConsumed: !view._streamedAssistantMessageIds?.has('msg-result-first'),
+                markerRetained: !!view._streamedAssistantMessageIds?.has('msg-result-first'),
                 ordinaryWordWrappers: ordinary?.querySelectorAll('.conv-live-word').length ?? -1,
               };
             });
@@ -174,7 +209,7 @@ def test_result_before_durable_handoff_in_real_browser():
               throw new Error(`wrong durable text: ${result.durableText}`);
             }
             if (result.durableWordWrappers !== 0) throw new Error('durable row replayed');
-            if (!result.markerConsumed) throw new Error('handoff marker leaked');
+            if (!result.markerRetained) throw new Error('handoff marker was consumed');
             if (result.ordinaryWordWrappers < 1) throw new Error('ordinary reveal disabled');
           } finally {
             await browser.close();

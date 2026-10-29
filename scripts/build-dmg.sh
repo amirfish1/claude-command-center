@@ -314,7 +314,7 @@ sign_target "$SPARKLE_FW/Versions/B"
 sign_target "$SPARKLE_FW"
 
 # 6. The .app itself, deep so any other nested helpers we missed get sealed.
-codesign "${CODESIGN_FLAGS[@]}" --deep "$APP_DIR" >/dev/null 2>&1 || {
+codesign "${CODESIGN_FLAGS[@]}" --entitlements "$(dirname "$0")/macapp/entitlements.plist" --deep "$APP_DIR" >/dev/null 2>&1 || {
   echo "build-dmg: codesign of $APP_DIR failed" >&2
   exit 1
 }

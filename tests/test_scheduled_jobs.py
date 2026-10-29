@@ -118,3 +118,47 @@ class TestScheduledJobs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScheduledJobLive(unittest.TestCase):
+    """Live (cursor-based) log for a running hermes unit."""
+
+    def _run(self, stdout, rc=0, **kw):
+        from ccc_server.scheduled_jobs import get_scheduled_job_log_live
+        proc = MagicMock(returncode=rc, stdout=stdout, stderr="boom")
+        with patch("platform.system", return_value="Darwin"), \
+                patch("ccc_server.scheduled_jobs.subprocess.run", return_value=proc) as run:
+            return get_scheduled_job_log_live("hermes:bym-ship.service", **kw), run
+
+    def test_parses_state_cursor_and_lines(self):
+        out = "@@STATE:activating\nline one\nline two\n-- cursor: s=abc;i=1f\n"
+        d, run = self._run(out)
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["running"])
+        self.assertEqual(d["cursor"], "s=abc;i=1f")
+        self.assertEqual(d["log"], "line one\nline two")
+        self.assertEqual(run.call_count, 1)  # one ssh per poll
+        args = run.call_args[0][0]
+        self.assertEqual(args[0], "ssh")
+        self.assertIn("bym-ship.service", args[-1])
+        self.assertTrue(args[-1].rstrip().endswith("-"))  # no cursor yet
+
+    def test_finished_and_cursor_passthrough(self):
+        d, run = self._run("@@STATE:inactive\n-- cursor: s=z;i=2\n", cursor="s=abc;i=1f")
+        self.assertFalse(d["running"])
+        self.assertEqual(d["log"], "")
+        self.assertIn("s=abc;i=1f", run.call_args[0][0][-1])
+
+    def test_rejects_bad_unit_and_cursor_without_ssh(self):
+        from ccc_server.scheduled_jobs import get_scheduled_job_log_live
+        with patch("ccc_server.scheduled_jobs.subprocess.run") as run:
+            self.assertFalse(get_scheduled_job_log_live("hermes:x;reboot")["ok"])
+            self.assertFalse(get_scheduled_job_log_live("hermes:a.service", cursor="a b;$(x)")["ok"])
+            self.assertFalse(get_scheduled_job_log_live("laptop:com.x")["ok"])
+            self.assertFalse(get_scheduled_job_log_live("")["ok"])
+            run.assert_not_called()
+
+    def test_ssh_failure_reported(self):
+        d, _ = self._run("", rc=255)
+        self.assertFalse(d["ok"])
+        self.assertFalse(d["running"])

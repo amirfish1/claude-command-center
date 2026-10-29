@@ -18,6 +18,7 @@ import sys
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 
 def _backup_jsonl_before_compact(session_id):
     """Copy the session's JSONL to ~/.claude/command-center/compact-backups/
@@ -119,6 +120,20 @@ def _compact_via_hidden_pty(session_id, cwd):
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "via": "hidden-pty", "error": "missing session_id"}
+    # Check before retiring a live headless session: native Windows has no
+    # POSIX pty/termios, and a failed import must leave that session intact.
+    unavailable = {"ok": False, "via": "hidden-pty",
+                   "error": "Hidden terminal compaction is unavailable on this platform."}
+    if sys.platform == "win32":
+        return unavailable
+    try:
+        import pty
+        import select as _select
+        import fcntl as _fcntl
+        import termios as _termios
+        import struct as _struct
+    except ImportError:
+        return unavailable
     claude_bin = _core._resolve_claude_bin()
     if not claude_bin.get("available"):
         return {
@@ -153,9 +168,7 @@ def _compact_via_hidden_pty(session_id, cwd):
         if hpid is not None:
             deadline = time.time() + 5.0
             while time.time() < deadline:
-                try:
-                    os.kill(int(hpid), 0)
-                except (ProcessLookupError, ValueError, PermissionError):
+                if not _is_pid_alive(hpid):
                     break
                 time.sleep(0.2)
     else:
@@ -165,12 +178,6 @@ def _compact_via_hidden_pty(session_id, cwd):
             # External headless we don't own — leave it for the visible
             # fallback, which warns instead of silently killing it.
             return {"ok": False, "via": "hidden-pty", "error": "external headless owns this session"}
-
-    import pty
-    import select as _select
-    import fcntl as _fcntl
-    import termios as _termios
-    import struct as _struct
 
     jsonl = _core._resolve_conversation_path(sid)
     n0 = _tail_count(jsonl, b'"compact_boundary"')
@@ -793,6 +800,25 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
             _core._COMPACT_INFLIGHT_SESSIONS.pop(sid, None)
 
 
+_PRESET_REFUSED = "compact_preset_resume_failed"
+
+
+def _hidden_pty_compact(sid, cwd):
+    """Hidden-pty /compact, refused for sessions on a paid domestic preset.
+
+    That path resumes with the plain Claude login, which would send the
+    vendor transcript to Anthropic and bill the user's Claude plan."""
+    from ccc_server import domestic_providers as _domestic_providers
+    try:
+        model = str(_domestic_providers.session_model(sid) or "")
+    except Exception:
+        model = ""
+    if model.lower().startswith(_domestic_providers.MODEL_PREFIX):
+        return {"ok": False, "code": _PRESET_REFUSED, "via": "preset",
+                "error": "Could not compact this paid-model session. Check its key in Settings, then try again."}
+    return _core._compact_via_hidden_pty(sid, cwd)
+
+
 def _compact_session_context_impl(session_id, *, terminal_app=None, _from_terminal_queue=False):
     sid = (session_id or "").strip()
     if not sid:
@@ -820,6 +846,9 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         # Codex compaction goes through the app-server `thread/compact/start`
         # RPC — no interactive TUI needed (unlike Claude). Back up the rollout
         # first because compaction is lossy.
+        refusal = _core._codex_headless_exec_refusal(sid, "compacted")
+        if refusal is not None:
+            return refusal
         backup_path = _core._backup_codex_rollout_before_compact(sid)
         result = _core._codex_compact_via_app_server(sid)
         result = _compact_result(result, backup_path=backup_path)
@@ -853,10 +882,7 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         # the next prompt when the turn ends.
         raw_id = _core._devin_cli_raw_id(sid)
         cwd = _core.find_session_cwd(sid) or ""
-        if cwd:
-            with _core._ACP_LOCK:
-                _core._acp_session("devin", raw_id, create=True, cwd=cwd)
-        result = _core._acp_prompt("devin", raw_id, "/compact")
+        result = _core._acp_prompt("devin", raw_id, "/compact", cwd=cwd or None)
         if not result.get("ok"):
             # _queue_devin_steer returns a bool, not a result dict — calling
             # .setdefault on it raised AttributeError and 500'd the request.
@@ -912,8 +938,8 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         # SILENT path first: drive /compact in an invisible pty so no Terminal
         # window pops (the Claude-Desktop approach). Falls through to the
         # visible launch on any failure so compaction is never silently dropped.
-        silent = _core._compact_via_hidden_pty(sid, cwd)
-        if silent.get("ok"):
+        silent = _hidden_pty_compact(sid, cwd)
+        if silent.get("ok") or silent.get("code") == _PRESET_REFUSED:
             return _compact_result(silent, backup_path)
         # Hidden-pty failed. The only remaining automatic path opens a NEW
         # terminal and AppleScript-types /compact into it. When other terminals
@@ -1041,8 +1067,8 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         "— falling back to hidden-pty\n"
     )
     # SILENT fallback: no Terminal window pops.
-    silent = _core._compact_via_hidden_pty(sid, cwd)
-    if silent.get("ok"):
+    silent = _hidden_pty_compact(sid, cwd)
+    if silent.get("ok") or silent.get("code") == _PRESET_REFUSED:
         return _compact_result(silent, backup_path)
     # Hidden-pty failed too. We no longer auto-open a terminal and type
     # /compact — that keystroke injection lands in the wrong window when other

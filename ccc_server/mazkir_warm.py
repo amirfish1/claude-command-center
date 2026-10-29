@@ -189,6 +189,8 @@ class WarmProcess:
                     "is_error": bool(ev.get("is_error")),
                     "duration_ms": ev.get("duration_ms"),
                     "claude_session_id": ev.get("session_id"),
+                    "usage": ev.get("usage"),
+                    "model_usage": ev.get("modelUsage"),
                     "ttft_ms": ttft_ms,
                     "tool_calls": list(tool_calls.values()),
                 }

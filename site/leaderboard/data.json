@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "generated_at": null,
+  "last_eval_at": null,
+  "tasks": [
+    {"id": "edit_file", "title": "Fix a typo in a file"},
+    {"id": "fix_test", "title": "Make a failing test pass"},
+    {"id": "add_function", "title": "Add a new function"},
+    {"id": "tool_read_write", "title": "Read one file, write another"},
+    {"id": "multi_step", "title": "Read two files, combine, write"}
+  ],
+  "best": null,
+  "models": []
+}

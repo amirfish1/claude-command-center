@@ -1,1 +1,0 @@
-- The sidebar session list no longer jumps for a moment when it refreshes in narrow windows.

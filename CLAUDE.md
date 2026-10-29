@@ -36,6 +36,18 @@ Every "CCC is slow" incident was O(all sessions) work per item, uncached. On any
 gate live work by candidacy, cache by `(mtime, size)` persisted to disk, never spawn a subprocess per row, skip flags the view doesn't render.
 `tests/test_perf_budget.py` (run by the pre-push gate) enforces call counts; add a test for any new all-sessions path; never relax a bound.
 
+## Credential requests
+
+When a task needs a credential, use the [credential broker](docs/credential-broker.md)
+to show a masked dashboard prompt instead of asking for the value in chat or
+asking the user to SSH in. Default: `ccc secret request NAME --reason "..."`
+saves the value to the CCC Vault and prints only the entry name; then use it
+with `ccc vault exec --env VAR=NAME -- cmd`. Only when a program must receive
+the value directly, pipe `ccc secret request NAME --reason "..." --return-key`
+into a program that accepts credentials on stdin; never let a tool capture the
+value into a transcript. Keep names/reasons free of secrets. It requires
+explicit consumer integration; it does not intercept login prompts automatically.
+
 ## Testing
 - Run targeted tests locally: `python3 -m pytest tests/test_<feature>.py`. Never run `tests/test_smoke.py` locally (>4 GB RAM, freezes the server); CI runs it.
 - Full unittest run: `PYTHONWARNINGS="ignore::ResourceWarning" python3 -m unittest discover`.

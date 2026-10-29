@@ -12,6 +12,7 @@ kicks a real service.
 """
 
 import importlib
+import os
 import pathlib
 import subprocess
 import unittest
@@ -126,6 +127,77 @@ class RestartWorkerProcessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = importlib.import_module("server")
+
+    def setUp(self):
+        env = mock.patch.dict(os.environ, {"CCC_WORKER_AUTO_RESTART": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+        # The launchd/respawn cases below must not depend on whether the
+        # test host runs a systemd worker unit; the systemd tests opt in.
+        scope = mock.patch.object(
+            self.server, "_worker_systemd_scope", return_value=(None, False),
+        )
+        scope.start()
+        self.addCleanup(scope.stop)
+
+    def test_systemd_user_worker_restarts_through_systemctl_never_respawns(self):
+        """A detached respawn beside the unit's own worker holds worker.sock
+        while the unit's copy crash-loops "already running"."""
+        server = self.server
+        with mock.patch.object(
+            server, "_worker_systemd_scope", return_value=("user", True),
+        ), mock.patch.object(server.subprocess, "run") as run, \
+             mock.patch.object(server.subprocess, "Popen") as popen, \
+             mock.patch.object(server.os, "kill") as kill:
+            run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            out = server._restart_worker_process({"pid": 4242})
+        self.assertTrue(out["restarted"])
+        self.assertEqual(out["via"], "systemd")
+        self.assertEqual(
+            run.call_args[0][0],
+            ["systemctl", "--user", "restart", "ccc-worker.service"],
+        )
+        kill.assert_not_called()
+        popen.assert_not_called()
+
+    def test_stray_worker_is_stopped_before_the_unit_restarts(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_worker_systemd_scope", return_value=("user", False),
+        ), mock.patch.object(server.subprocess, "run") as run, \
+             mock.patch.object(server.subprocess, "Popen") as popen, \
+             mock.patch.object(server.os, "kill") as kill, \
+             mock.patch.object(server.time, "sleep"):
+            run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            out = server._restart_worker_process({"pid": 4242})
+        kill.assert_called_once_with(4242, server.signal.SIGTERM)
+        self.assertEqual(out["via"], "systemd")
+        popen.assert_not_called()
+
+    def test_failed_systemctl_restart_reports_failure_without_respawning(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_worker_systemd_scope", return_value=("user", True),
+        ), mock.patch.object(server.subprocess, "run") as run, \
+             mock.patch.object(server.subprocess, "Popen") as popen:
+            run.return_value = mock.Mock(returncode=1, stdout="", stderr="boom")
+            out = server._restart_worker_process({"pid": 4242})
+        self.assertFalse(out["restarted"])
+        self.assertIn("boom", out["reason"])
+        popen.assert_not_called()
+
+    def test_system_unit_worker_is_signalled_and_left_to_restart_always(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_worker_systemd_scope", return_value=("system", True),
+        ), mock.patch.object(server.subprocess, "run") as run, \
+             mock.patch.object(server.subprocess, "Popen") as popen, \
+             mock.patch.object(server.os, "kill") as kill:
+            out = server._restart_worker_process({"pid": 4242})
+        kill.assert_called_once_with(4242, server.signal.SIGTERM)
+        run.assert_not_called()
+        popen.assert_not_called()
+        self.assertEqual(out["via"], "systemd")
 
     def test_skips_kickstart_when_a_different_pid_owns_the_worker_label(self):
         """A duplicate/dev worker (pid 4242) must not trust a kickstart that
@@ -321,6 +393,52 @@ class RestartWorkerProcessTests(unittest.TestCase):
         self.assertTrue(out["restarted"])
         restart.assert_called_once()
 
+    def test_stale_idle_worker_restarts_by_default(self):
+        """KillMode=process keeps the sessions alive across a worker restart,
+        so an idle stale worker rolls without asking."""
+        server = self.server
+        env = {k: v for k, v in os.environ.items() if k != "CCC_WORKER_AUTO_RESTART"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch.object(
+                 server, "_control_plane_request",
+                 return_value={"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                               "worker": {"server_version": "1.0.0"}},
+             ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
+             mock.patch.object(server, "_restart_worker_process",
+                               return_value={"restarted": True}) as restart:
+            out = server._restart_stale_worker()
+        self.assertTrue(out["restarted"])
+        restart.assert_called_once()
+
+    def test_owner_can_opt_out_of_automatic_worker_restarts(self):
+        server = self.server
+        with mock.patch.dict(os.environ, {"CCC_WORKER_AUTO_RESTART": "0"}), \
+             mock.patch.object(
+                 server, "_control_plane_request",
+                 return_value={"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                               "worker": {"server_version": "1.0.0"}},
+             ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
+             mock.patch.object(server, "_restart_worker_process") as restart:
+            out = server._restart_stale_worker()
+        self.assertFalse(out["restarted"])
+        self.assertEqual(out["reason"], "stale_needs_approval")
+        restart.assert_not_called()
+
+    def test_run_sh_restarts_stale_worker_unless_opted_out(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent / "run.sh").read_text()
+        gate = src.index('CCC_WORKER_AUTO_RESTART:-1}" = "0"')
+        self.assertLess(gate, src.index("restart deferred until it is idle"))
+        self.assertLess(gate, src.index('launchctl kickstart -k "$(worker_service_target)"', gate))
+
+    def test_run_sh_starts_a_systemd_worker_only_through_systemd(self):
+        """Both run.sh worker starts (missing worker, stale worker) must go
+        through the unit when it exists, before any nohup/launchctl path."""
+        src = (pathlib.Path(__file__).resolve().parent.parent / "run.sh").read_text()
+        boot = src.index('"${worker_compatible:-0}" != "1" ] && worker_systemd_managed')
+        self.assertLess(boot, src.index('nohup "$PYTHON" "$HERE/ccc_worker.py"', boot))
+        stale = src.index("if worker_systemd_managed; then")
+        self.assertLess(stale, src.index('launchctl kickstart -k "$(worker_service_target)"', stale))
+
     def test_run_sh_defers_stale_restart_when_worker_busy(self):
         src = (pathlib.Path(__file__).resolve().parent.parent / "run.sh").read_text()
         defer = src.index("restart deferred until it is idle")
@@ -401,7 +519,7 @@ class RestartRoutingTests(unittest.TestCase):
         src = pathlib.Path(self.server.__file__).read_text()
         block = src[src.index('if path in ("/api/restart", "/api/restart/all"):'):]
         handoff = block.index("_safe_worker_restart_precheck(")
-        kick = block.index("worker_outcome = _restart_worker_process() if restart_all else None")
+        kick = block.index("if restart_all:\n                worker_outcome = _restart_worker_process()")
         self.assertLess(
             handoff, kick,
             "the worker restart must come after the safety precheck (which "

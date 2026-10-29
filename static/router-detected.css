@@ -1,0 +1,157 @@
+/* Existing-router card (L20). Shown when the machine already runs a free
+   model router, so onboarding can offer "use yours" instead of installing
+   ours. Floating card on the dashboard; plain block when embedded into the
+   onboarding flow. */
+.ccc-rd-card {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 4000;
+  width: min(380px, calc(100vw - 40px));
+  background: linear-gradient(160deg, #171a26 0%, #10131c 100%);
+  border: 1px solid rgba(217, 119, 87, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255,255,255,0.03) inset;
+  color: #e8eaf2;
+  font-family: Inter, -apple-system, sans-serif;
+  padding: 16px 18px 14px;
+  animation: ccc-rd-pop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.ccc-rd-card.ccc-rd-embedded {
+  position: static;
+  width: 100%;
+  animation: none;
+  box-shadow: none;
+}
+@keyframes ccc-rd-pop {
+  from { transform: translateY(14px) scale(0.97); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ccc-rd-card { animation: none; }
+}
+.ccc-rd-title {
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ccc-rd-title .ccc-rd-spark { color: #f0b429; }
+.ccc-rd-sub {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #aab0c4;
+  margin: 0 0 12px;
+}
+.ccc-rd-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  margin-bottom: 6px;
+}
+.ccc-rd-row:last-of-type { margin-bottom: 0; }
+.ccc-rd-row-info { flex: 1; min-width: 0; }
+.ccc-rd-row-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.ccc-rd-pill {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+}
+.ccc-rd-pill.ccc-rd-pill-idle {
+  background: rgba(250, 204, 21, 0.13);
+  color: #facc15;
+}
+.ccc-rd-pill.ccc-rd-pill-key {
+  background: rgba(96, 165, 250, 0.15);
+  color: #60a5fa;
+}
+.ccc-rd-row-detail {
+  font-size: 11.5px;
+  color: #8a90a6;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ccc-rd-use {
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #10131c;
+  background: linear-gradient(135deg, #f0b429, #d97757);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.ccc-rd-use:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.ccc-rd-use:active { transform: translateY(0); }
+.ccc-rd-use[disabled] { opacity: 0.55; cursor: default; transform: none; }
+.ccc-rd-dismiss {
+  margin-top: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #7a8098;
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 4px;
+  cursor: pointer;
+  text-align: center;
+}
+.ccc-rd-dismiss:hover { color: #aab0c4; }
+.ccc-rd-done {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #c6e8cf;
+}
+.ccc-rd-done .ccc-rd-check { color: #4ade80; font-weight: 700; }
+.ccc-rd-engines {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: #8a90a6;
+}
+.ccc-rd-engines code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  background: rgba(255,255,255,0.07);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.ccc-rd-engines .ccc-rd-setup {
+  margin-top: 6px;
+  display: inline-block;
+  border: 1px solid rgba(96,165,250,0.4);
+  background: transparent;
+  color: #60a5fa;
+  border-radius: 7px;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.ccc-rd-engines .ccc-rd-setup:hover { background: rgba(96,165,250,0.12); }
+.ccc-rd-setup-note { margin-top: 6px; font-size: 11px; color: #8a90a6; }

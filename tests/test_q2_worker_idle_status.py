@@ -126,4 +126,4 @@ def test_rhs_status_strip_no_longer_duplicates_per_worker_rows():
     js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
     strip_fn = js.split("function _renderQueueStatusStrip(")[1].split("\n  function ", 1)[0]
     assert "fq-status-worker" not in strip_fn
-    assert "$el.innerHTML = watchHtml;" in strip_fn
+    assert "$el.innerHTML = alarmHtml + syncNoticeHtml + watchHtml;" in strip_fn

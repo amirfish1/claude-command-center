@@ -1,0 +1,268 @@
+{
+  "schema": "product-motion/v1",
+  "id": "ccc-board",
+  "take": "takes/20261010-121553-ccc-board-filter-fold-a-lane-clear-motion-source",
+  "source": {
+    "w": 3840,
+    "h": 2160,
+    "css_zoom": 3,
+    "prepare_for_seek": true
+  },
+  "expect": {
+    "clicks": 3,
+    "keys": 7
+  },
+  "duration": 31,
+  "music": {
+    "synthesis": "pulse",
+    "period": 0.5,
+    "phase": 0,
+    "offset": 0,
+    "rights": "Original deterministic synthesis from the kit's sfx.py"
+  },
+  "palette": {
+    "paper": "#f6f8fa",
+    "ink": "#161b22",
+    "deep": "#0d1117",
+    "accent": "#6e8caf",
+    "hi": "#f5a623",
+    "mute": "#8b949e",
+    "page": "#0d1117",
+    "card": "#ffffff",
+    "tag": "#46607f",
+    "herob": "#46607f"
+  },
+  "layout": {
+    "landscape": {
+      "slab": {
+        "left": 96,
+        "top": 760,
+        "h2": 70,
+        "p": 29,
+        "max_w": 1100
+      }
+    }
+  },
+  "copy": {
+    "brand": {
+      "name": "CCC",
+      "wordmark": "ccc",
+      "dot": "."
+    },
+    "window_title": "CCC &middot; Claude Command Center",
+    "hook": {
+      "a": [
+        "Issues, icebox, in progress,",
+        "[one board.]"
+      ],
+      "b": [
+        "Which cards",
+        "touch webhooks?"
+      ]
+    },
+    "storm": [
+      [
+        "Stripe webhooks",
+        "#in-progress"
+      ],
+      [
+        "Webhook retries flapping",
+        "#gh-321"
+      ],
+      [
+        "Flaky webhook tests",
+        "#codex"
+      ],
+      [
+        "Auth cookie race",
+        "#needs-attention"
+      ],
+      [
+        "Audit log for billing",
+        "#gh-318"
+      ],
+      [
+        "Pricing from billing service",
+        "#icebox"
+      ],
+      [
+        "Blog to Eleventy",
+        "#waiting"
+      ],
+      [
+        "Review PR #247",
+        "#review"
+      ],
+      [
+        "Pagination > 100 items",
+        "#gh-312"
+      ],
+      [
+        "CI lint on main",
+        "#today"
+      ],
+      [
+        "RSS feed",
+        "#blog"
+      ],
+      [
+        "Pillow 11 bump",
+        "#deps"
+      ]
+    ],
+    "storm_labels": [
+      "ICEBOX",
+      "ISSUES",
+      "WAITING",
+      "NOW"
+    ],
+    "hero": {
+      "eyebrow": "ONE BOARD",
+      "text": "Which cards touch webhooks?",
+      "accent": "#now"
+    },
+    "intro": {
+      "eyebrow": "MEET",
+      "tagline": [
+        "Every lane,",
+        "one board."
+      ],
+      "chips": [
+        "ISSUES &middot; ICEBOX &middot; IN PROGRESS",
+        "FILTER ACROSS LANES"
+      ]
+    },
+    "steps": [
+      {
+        "pill": "01 FIND",
+        "eyebrow": "01 &mdash; FIND",
+        "title": "Type a word.",
+        "sub": "GitHub issues, icebox ideas and live sessions narrow together."
+      },
+      {
+        "pill": "02 FOLD",
+        "eyebrow": "02 &mdash; FOLD",
+        "title": "Fold a lane.",
+        "sub": "One click on a column header. The board makes room."
+      },
+      {
+        "pill": "03 CLEAR",
+        "eyebrow": "03 &mdash; CLEAR",
+        "title": "Clear the filter.",
+        "sub": "Every lane fills back in, right where it was."
+      }
+    ],
+    "recap": [
+      "Find.",
+      "Fold.",
+      "Clear."
+    ],
+    "end": {
+      "tagline": [
+        "Start the next",
+        "while Claude builds the first."
+      ],
+      "url": "github.com/amirfish1/claude-command-center",
+      "chips": [
+        "BOARD VIEW",
+        "GITHUB ISSUES",
+        "SESSION LANES"
+      ],
+      "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+      "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+    },
+    "hud_label": "CCC &middot; REAL CAPTURE"
+  },
+  "edit": {
+    "reveal_src": 3,
+    "act1": {
+      "click": 0,
+      "keys": [
+        0,
+        7
+      ],
+      "type_window": [
+        13.1,
+        17.8
+      ],
+      "type_region": [
+        930,
+        150,
+        1400,
+        246
+      ]
+    },
+    "act2": {
+      "click": 1,
+      "instant_result": true,
+      "result_window": [
+        29.1,
+        33.0
+      ],
+      "result_after": 29.2,
+      "result_region": [
+        2000,
+        280,
+        3600,
+        1200
+      ],
+      "lift_region": [
+        1900,
+        320,
+        500,
+        70
+      ],
+      "lock_label": "ONE CLICK",
+      "stamp": "FOLDED"
+    },
+    "act3": {
+      "click": 2,
+      "instant_result": true,
+      "skip_load": true,
+      "result_window": [
+        40.3,
+        44.5
+      ],
+      "result_after": 40.4,
+      "result_region": [
+        230,
+        300,
+        3800,
+        1800
+      ],
+      "track_region": [
+        260,
+        320,
+        600,
+        90
+      ],
+      "track_label": "ALL LANES",
+      "label_side": "above",
+      "hold_rate": 1
+    },
+    "recap": [
+      [
+        "type_end",
+        1.0,
+        230,
+        120,
+        2000
+      ],
+      [
+        "saved_visible",
+        0.5,
+        1000,
+        300,
+        2200
+      ],
+      [
+        "filtered",
+        0.8,
+        230,
+        300,
+        2200
+      ]
+    ],
+    "recap_stills": true
+  }
+}

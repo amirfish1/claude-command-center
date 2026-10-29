@@ -3,7 +3,15 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+
+# Superseded runs on the same ref are wasted minutes (OPS-1349).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # The public checkout must not grow private planning archives or generated
@@ -30,11 +38,11 @@ jobs:
   # errors without needing to install or run anything.
   py-compile:
     name: py-compile (${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
+    # Linux only: macOS minutes bill 10x and compileall is OS-independent (OPS-1349).
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -60,8 +68,25 @@ jobs:
       - name: Install pytest and run tests
         run: |
           python -m pip install pytest
-          WATCHTOWER_REF=221260bbc5d31ae57eeacde542154c1c9ad5f3c6 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
-          python -m pytest -q --tb=no tests/
+          WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          python -m pytest -q --tb=short -rf --junitxml="$RUNNER_TEMP/junit.xml" tests/
+      # The short summary above can be cut off by log truncation when many
+      # tests fail; the junit file is the reliable list of what failed.
+      - name: List failed tests
+        if: failure()
+        run: |
+          python - <<'PY'
+          import os, sys
+          import xml.etree.ElementTree as ET
+          path = os.path.join(os.environ["RUNNER_TEMP"], "junit.xml")
+          if not os.path.exists(path):
+              sys.exit(0)
+          for case in ET.parse(path).getroot().iter("testcase"):
+              for child in case:
+                  if child.tag in ("failure", "error"):
+                      msg = (child.get("message") or "").splitlines()
+                      print("FAILED", case.get("classname"), case.get("name"), "-", (msg[0] if msg else "")[:200])
+          PY
 
   # Cheap smoke test: boot the server on a free port, hit a few read-only
   # endpoints, and verify they return 2xx. Nothing that requires gh auth.
@@ -75,10 +100,16 @@ jobs:
           python-version: "3.12"
       - name: Boot server and probe endpoints
         run: |
-          WATCHTOWER_REF=221260bbc5d31ae57eeacde542154c1c9ad5f3c6 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           PORT=18090 CCC_BIND_HOST=127.0.0.1 python server.py > /tmp/server.log 2>&1 &
           SERVER_PID=$!
-          sleep 3
+          # The server takes more than 3 s to bind on a cold runner; wait for
+          # /api/features (up to 90 s) instead of a fixed sleep.
+          for _ in $(seq 1 90); do
+            kill -0 $SERVER_PID 2>/dev/null || break
+            curl -sf -o /dev/null http://localhost:18090/api/features && break
+            sleep 1
+          done
           set -x
           # Server must still be alive — exits with non-zero if not.
           ps -p $SERVER_PID > /dev/null
@@ -101,7 +132,8 @@ jobs:
 
   python39-smoke:
     name: python 3.9 import + boot
-    runs-on: macos-latest
+    # ubuntu, not macos: 10x billing multiplier (OPS-1349); macOS is covered by macapp-install-smoke.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -109,7 +141,7 @@ jobs:
           python-version: "3.9"
       - name: Import and boot with Python 3.9
         run: |
-          WATCHTOWER_REF=221260bbc5d31ae57eeacde542154c1c9ad5f3c6 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          WATCHTOWER_REF=89d2d80099cfbba44231d7cf1f25e02cc8ce721d CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           python -c 'import server; print(server.__version__)'
           PORT=18091 CCC_BIND_HOST=127.0.0.1 python server.py >/tmp/ccc-python39.log 2>&1 &
           SERVER_PID=$!

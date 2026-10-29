@@ -24,6 +24,8 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
+from ccc_server import limit_events as _limit_events
 
 # Usage-limit auto-resume (CCC-863)
 #
@@ -57,22 +59,10 @@ def _load_usage_limit_resumes():
     In-memory cache; refreshed lazily on every write (own or a sibling
     process's, via the file). Tolerant of a missing/malformed file (both
     yield {})."""
-    with _core._usage_limit_resume_lock:
-        cached = _core._usage_limit_resume_cache["data"]
-        if cached is not None:
-            return cached
-    try:
-        data = (
-            json.loads(_core.USAGE_LIMIT_RESUME_FILE.read_text())
-            if _core.USAGE_LIMIT_RESUME_FILE.exists() else {}
-        )
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    with _core._usage_limit_resume_lock:
-        _core._usage_limit_resume_cache["data"] = data
-    return data
+    return _limit_events.load_store(
+        _core.USAGE_LIMIT_RESUME_FILE, _core._usage_limit_resume_cache,
+        _core._usage_limit_resume_lock,
+    )
 
 
 def _is_session_auto_resume_disabled(session_id):
@@ -130,6 +120,7 @@ def _usage_limit_resume_rewrite(mutate):
             os.replace(tmp, _core.USAGE_LIMIT_RESUME_FILE)
             with _core._usage_limit_resume_lock:
                 _core._usage_limit_resume_cache["data"] = new_data
+                _core._usage_limit_resume_cache["signature"] = _limit_events.signature(_core.USAGE_LIMIT_RESUME_FILE)
             return retval
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
@@ -307,7 +298,7 @@ def _disable_session_auto_resume(session_id):
     }
 
 
-def usage_limit_resume_at_for_session(session_id):
+def usage_limit_resume_at_for_session(session_id, resumes=None):
     """Cheap in-memory lookup for the row-serialization path: the epoch a
     stopped session will auto-resume at, or None if it isn't tracked, is
     already fired, or the time has passed (stale defensive cutoff so a
@@ -322,7 +313,13 @@ def usage_limit_resume_at_for_session(session_id):
     sid = str(session_id or "")
     if sid.startswith("session_"):
         sid = sid[len("session_"):]
-    entry = _core._load_usage_limit_resumes().get(sid)
+    # Bulk callers (the archive list projects thousands of rows per poll)
+    # pass one pre-loaded `resumes` dict: _load_usage_limit_resumes() does a
+    # stat() + lock per call, and under GIL contention each of those hands
+    # the GIL away, which turned a 7d list into a 20s request after restart.
+    if resumes is None:
+        resumes = _core._load_usage_limit_resumes()
+    entry = resumes.get(sid)
     if not entry or entry.get("fired") or entry.get("dismissed"):
         return None
     resume_at = entry.get("resume_at")
@@ -471,7 +468,7 @@ def _usage_limit_attach_continuation_fields(found, session_id, path):
     return found
 
 
-def continuation_retrieval_block(engine, sid, context_tokens=0):
+def continuation_retrieval_block(engine, sid, context_tokens=0, *, capture_path=None):
     """Shared "Origin session id + how to pull context selectively" block for
     every continuation-spawn path: the F2 "Continue in a new session" button
     (JS port below), unattended usage-limit auto-resume
@@ -483,6 +480,12 @@ def continuation_retrieval_block(engine, sid, context_tokens=0):
     label, note, cmd_fn = _USAGE_LIMIT_ENGINE_LOCATE.get(
         engine, _USAGE_LIMIT_ENGINE_LOCATE["claude"]
     )
+    if engine == "codex" and capture_path:
+        note = (
+            "This session has no native Codex rollout. Its transcript is the "
+            "CCC capture log at:"
+        )
+        cmd_fn = lambda _sid: f"  {capture_path}"
     size_note = (
         f" (it is ~{context_tokens / 1000:.0f}k tokens)"
         if context_tokens and context_tokens >= 1000
@@ -616,56 +619,7 @@ def _detect_codex_usage_limit_stop(session_id, path):
     Unix epoch. When both primary/secondary are null (seen for a
     credits-exhausted account on this machine, no window to read), fall
     back to detected_at + 5h, flagged estimated."""
-    lines = _tail_read_lines(path)
-    last_rate_limits = None
-    for line in lines:
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
-        ptype = payload.get("type")
-        if ptype == "token_count":
-            rl = payload.get("rate_limits")
-            if isinstance(rl, dict):
-                last_rate_limits = rl
-            continue
-        if ptype != "task_complete":
-            continue
-        if payload.get("last_agent_message") is not None:
-            last_rate_limits = None
-            continue  # a completed turn with real output supersedes any stop
-        err = payload.get("error")
-        if not isinstance(err, dict):
-            last_rate_limits = None
-            continue
-        info = str(err.get("codex_error_info") or "")
-        msg = str(err.get("message") or "")
-        if info != "usage_limit_exceeded" and not _USAGE_LIMIT_EXHAUSTED_RE.search(msg):
-            last_rate_limits = None
-            continue
-        dt = _core._stats_parse_ts(ev.get("timestamp"))
-        detected_at = dt.timestamp() if dt is not None else time.time()
-        resume_at = None
-        estimated = True
-        primary = (last_rate_limits or {}).get("primary") or {}
-        secondary = (last_rate_limits or {}).get("secondary") or {}
-        if isinstance(primary.get("resets_at"), (int, float)):
-            resume_at = float(primary["resets_at"])
-            estimated = False
-        elif isinstance(secondary.get("resets_at"), (int, float)):
-            resume_at = float(secondary["resets_at"])
-            estimated = False
-        if resume_at is None:
-            resume_at = detected_at + 5 * 3600
-        return _usage_limit_attach_continuation_fields({
-            "engine": "codex",
-            "detected_at": detected_at,
-            "resume_at": resume_at,
-            "resume_at_estimated": estimated,
-            "source_text_snippet": (msg or info)[:200],
-        }, session_id, path)
-    return None
+    return _limit_events.codex_stop(session_id, path)  # a completed turn with real output supersedes any stop
 
 
 def _detect_claude_usage_limit_stop(session_id, path):
@@ -681,42 +635,9 @@ def _detect_claude_usage_limit_stop(session_id, path):
     comes from the shared `_live_weekly_usage()` session_resets_at, not
     anything in this file -- every blocked Claude session resolves to the
     same account-level reset time."""
-    for line in reversed(_tail_read_lines(path)):
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        etype = ev.get("type")
-        if etype == "result":
-            if not ev.get("is_error"):
-                return None  # most recent result was a clean stop
-            blob = str(ev.get("result") or ev.get("error") or "")
-        else:
-            continue  # system/api_error (incl. transient 429/529) intentionally skipped
-        if "usage limit reached" not in blob.lower() and not _USAGE_LIMIT_EXHAUSTED_RE.search(blob):
-            return None
-        dt = _core._stats_parse_ts(ev.get("ts") or ev.get("timestamp"))
-        detected_at = dt.timestamp() if dt is not None else time.time()
-        live = _core._live_weekly_usage() or {}
-        resets_at_raw = live.get("session_resets_at")
-        resume_dt = _core._stats_parse_ts(resets_at_raw) if isinstance(resets_at_raw, str) else None
-        if resume_dt is not None:
-            resume_at = resume_dt.timestamp()
-            estimated = False
-        elif isinstance(resets_at_raw, (int, float)):
-            resume_at = float(resets_at_raw)
-            estimated = False
-        else:
-            resume_at = detected_at + 5 * 3600
-            estimated = True
-        return _usage_limit_attach_continuation_fields({
-            "engine": "claude",
-            "detected_at": detected_at,
-            "resume_at": resume_at,
-            "resume_at_estimated": estimated,
-            "source_text_snippet": blob[:200],
-        }, session_id, path)
-    return None
+    # most recent result was a clean stop
+    # system/api_error (incl. transient 429/529) intentionally skipped
+    return _limit_events.claude_stop(session_id, path)
 
 
 # A stopped session's mtime freezes the moment it stops -- a short window
@@ -822,22 +743,28 @@ def _usage_limit_scan_once(now=None):
     tracked = _core._load_usage_limit_resumes()
     for engine, candidates_fn, detect_fn in detectors:
         try:
-            candidates = candidates_fn(now)
+            candidates = list(candidates_fn(now))
+            if engine in ("claude", "codex"):
+                candidates += _limit_events.capture_candidates(engine, now)
         except Exception:
             continue
+        candidates = list({(sid, str(path)): (sid, path) for sid, path in candidates}.values())
         for sid, path in candidates:
             if not sid:
                 continue
             existing = tracked.get(sid)
             if existing and not existing.get("fired") and not existing.get("dismissed"):
-                continue  # already tracking an unresolved stop for this session
+                if existing.get("transcript_path") not in (None, str(path)):
+                    continue  # already tracking an unresolved stop for this session
             if existing and existing.get("dismissed"):
                 continue  # user cancelled this stop; don't re-arm from the same transcript
             try:
-                found = detect_fn(sid, path)
+                found = _limit_events.cached_stop(engine, sid, path, detect_fn)
             except Exception:
                 continue
             if not found:
+                if existing and existing.get("transcript_path") == str(path) and not existing.get("fired"):
+                    _core._clear_usage_limit_resume(sid)
                 continue
             if existing and existing.get("detected_at") == found["detected_at"]:
                 continue  # same stop already recorded (incl. already fired)
@@ -853,12 +780,17 @@ def _usage_limit_scan_once(now=None):
         # Re-check the session hasn't already resumed on its own (new
         # activity after the stop we detected) before firing.
         try:
-            path = _core._usage_limit_session_path(entry.get("engine"), sid)
+            path = Path(entry["transcript_path"]) if entry.get("transcript_path") else _core._usage_limit_session_path(entry.get("engine"), sid)
             newest_mtime = path.stat().st_mtime if path else 0
         except OSError:
             newest_mtime = 0
         if newest_mtime and newest_mtime > entry.get("detected_at", 0) + 5:
             _clear_usage_limit_resume(sid)
+            continue
+        # A user-approved auto-resume (free-failover lane) owns this entry:
+        # it fires at its staggered slot, so leave `fired` untouched here.
+        armed_fn = getattr(_core, "_free_failover_is_armed", None)
+        if callable(armed_fn) and armed_fn(sid):
             continue
         if not _mark_usage_limit_resume_fired(sid):
             continue  # a sibling thread/process won the race
@@ -876,6 +808,17 @@ def _usage_limit_scan_once(now=None):
             )
         except Exception:
             pass
+
+    # Limit-hit failover lane: Devin transcript detection, approved
+    # auto-resume slots, "always" opt-in and pending switch-backs all ride
+    # this same 45s cadence. Guarded so the module stays optional.
+    auto_pass = getattr(_core, "_free_failover_auto_pass", None)
+    if callable(auto_pass):
+        try:
+            auto_pass(now)
+        except Exception:
+            pass
+    _limit_events.flush()
 
 
 _USAGE_LIMIT_WATCHER_LOCK = threading.Lock()
@@ -1030,13 +973,48 @@ def _mutate_spawn_registry(mutator):
         return changed
 
 
+# Per-request spawn task metadata. The /api/sessions/spawn handler sets this
+# before engine dispatch so _record_spawn_to_registry can persist the dedupe
+# contract (task_key/prompt_hash/task_summary) on the registry row without
+# threading new kwargs through every engine's spawn_session_* signature —
+# and, more importantly, without changing the worker RPC arg schema (an old
+# worker would reject an unknown spawn kwarg outright). Worker-routed spawns
+# get the fields stamped after dispatch by the handler-side tag helper
+# (_tag_spawn_task_meta_in_registry); this thread-local covers every engine
+# that spawns in-process. Mirrors _CONTROL_PLANE_REQUEST_CONTEXT in server.py.
+_SPAWN_REQUEST_META = threading.local()
+
+
+def _set_spawn_request_meta(task_key="", prompt_hash="", task_summary=""):
+    _SPAWN_REQUEST_META.value = {
+        "task_key": str(task_key or "").strip()[:200],
+        "prompt_hash": str(prompt_hash or "").strip(),
+        "task_summary": str(task_summary or "").strip()[:200],
+    }
+
+
+def _clear_spawn_request_meta():
+    _SPAWN_REQUEST_META.value = None
+
+
+def _spawn_request_meta():
+    meta = getattr(_SPAWN_REQUEST_META, "value", None)
+    return meta if isinstance(meta, dict) else {}
+
+
+# Registry fields inherited across resume/re-spawn of the same task. The new
+# record keeps the dedupe identity so a re-dispatch still matches the task
+# even though the pid (and often the session id) changed.
+_SPAWN_TASK_META_FIELDS = ("task_key", "prompt_hash", "task_summary")
+
+
 def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
     reasoning_effort="", auto_compact_k=None, created_at_epoch=None,
     input_result_target=None, input_accepted_at=None, input_command_uuids=None,
-    spawned_via="",
+    spawned_via="", runtime="",
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -1075,6 +1053,15 @@ def _record_spawn_to_registry(
         "parent_session_id": parent_session_id or "",
         "spawned_via": clean_via,
     }
+    clean_runtime = str(runtime or "").strip()[:32]
+    if clean_runtime:
+        # Only stamped for non-default runtimes (e.g. "free") — paid/default
+        # rows stay field-free so old entries and new ones look alike.
+        record["runtime"] = clean_runtime
+    for _meta_key in _SPAWN_TASK_META_FIELDS:
+        _meta_val = _spawn_request_meta().get(_meta_key)
+        if _meta_val:
+            record[_meta_key] = _meta_val
     if engine and not prewarm:
         try:
             _core.record_model_picker_pick(engine, model or "", reasoning_effort or "")
@@ -1107,12 +1094,22 @@ def _record_spawn_to_registry(
         })
     def _append_record(entries):
         nonlocal record
-        if not record.get("spawned_via"):
+        if not record.get("spawned_via") or any(
+            not record.get(_k) for _k in _SPAWN_TASK_META_FIELDS
+        ):
             for entry in entries:
                 pid_match = pid is not None and str(entry.get("pid") or "") == str(pid)
                 sid_match = session_id and entry.get("session_id") == session_id
-                if (pid_match or sid_match) and entry.get("spawned_via"):
+                if not (pid_match or sid_match):
+                    continue
+                if not record.get("spawned_via") and entry.get("spawned_via"):
                     record["spawned_via"] = entry["spawned_via"]
+                for _k in _SPAWN_TASK_META_FIELDS:
+                    if not record.get(_k) and entry.get(_k):
+                        record[_k] = entry[_k]
+                if record.get("spawned_via") and all(
+                    record.get(_k) for _k in _SPAWN_TASK_META_FIELDS
+                ):
                     break
         entries[:] = [
             entry for entry in entries
@@ -1165,17 +1162,110 @@ def _reap_orphaned_claude_prewarms():
     return reaped
 
 
-def _remove_spawn_from_registry(pid):
+# Finished-spawn history: spawned-pids.json stays "live processes only"
+# (every reader assumes a row is a process we may signal), so ended rows are
+# appended to a sibling file instead. Read by /api/sessions/spawned only
+# under include_finished=1 and by the task_key dedupe lookup — a finished
+# lane answers "this task ran and exited" instead of silently vanishing and
+# inviting a duplicate spawn.
+_SPAWNED_HISTORY_FILE = _core.COMMAND_CENTER_STATE_DIR / "spawned-history.json"
+_SPAWNED_HISTORY_TTL_S = 24 * 3600
+_SPAWNED_HISTORY_MAX_ROWS = 200
+
+
+def _load_spawn_history():
+    """Finished-spawn rows, oldest first. Tolerant of missing/malformed."""
+    try:
+        data = json.loads(_SPAWNED_HISTORY_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [row for row in data if isinstance(row, dict)]
+
+
+def _archive_finished_spawn_entry(entry, exit_code=None):
+    """Move one registry entry into spawned-history.json (TTL + capped).
+
+    Called with the entry about to leave the live registry. exit_code is
+    only known to the process that owns the Popen; worker-owned and
+    reattached rows legitimately store None.
+    """
+    if not isinstance(entry, dict):
+        return
+    row = dict(entry)
+    row["ended_at"] = time.strftime("%Y%m%dT%H%M%S")
+    row["ended_at_epoch"] = time.time()
+    row["exit_code"] = exit_code
+
+    def _mutate(entries):
+        entries[:] = [
+            e for e in entries
+            if str(e.get("pid") or "") != str(row.get("pid"))
+        ]
+        entries.append(row)
+        return True
+
+    _mutate_spawn_history(_mutate)
+
+
+def _mutate_spawn_history(mutator):
+    """Locked read/modify/write of spawned-history.json. Prunes expired and
+    overflow rows on every write so the file stays bounded without a
+    background sweeper. Shares the spawn-registry flock: writes that remove
+    a row from the live registry and append it here must not interleave."""
+    with _core._spawn_registry_exclusive_lock():
+        entries = _load_spawn_history()
+        changed = bool(mutator(entries))
+        now = time.time()
+        kept = [
+            e for e in entries
+            if (now - float(e.get("ended_at_epoch") or 0)) <= _SPAWNED_HISTORY_TTL_S
+        ]
+        if len(kept) > _SPAWNED_HISTORY_MAX_ROWS:
+            kept = kept[-_SPAWNED_HISTORY_MAX_ROWS:]
+        if changed or len(kept) != len(entries):
+            _save_spawn_history_unlocked(kept)
+        return changed
+
+
+def _save_spawn_history_unlocked(entries):
+    try:
+        _SPAWNED_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _SPAWNED_HISTORY_FILE.with_suffix(
+            f".json.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            tmp.write_text(json.dumps(entries, indent=2))
+            os.replace(tmp, _SPAWNED_HISTORY_FILE)
+        finally:
+            _core._unlink_quiet(tmp)
+    except OSError as e:
+        print(f"  [spawn-registry] could not write {_SPAWNED_HISTORY_FILE} ({e})")
+
+
+def _remove_spawn_from_registry(pid, exit_code=None):
     """Drop a PID from the registry — called when a session exits gracefully
-    or is explicitly torn down. Safe to call when the entry isn't present."""
+    or is explicitly torn down. Safe to call when the entry isn't present.
+    The removed row lands in spawned-history.json so dedupe lookups can still
+    answer "this task ran and finished" after the row leaves the live set."""
+    removed = []
+
     def _remove(entries):
-        pruned = [e for e in entries if e.get("pid") != pid]
+        pruned = []
+        for e in entries:
+            if e.get("pid") == pid:
+                removed.append(e)
+            else:
+                pruned.append(e)
         if len(pruned) == len(entries):
             return False
         entries[:] = pruned
         return True
 
     _core._mutate_spawn_registry(_remove)
+    for entry in removed:
+        _archive_finished_spawn_entry(entry, exit_code=exit_code)
 
 
 def _update_spawn_session_id_in_registry(pid, session_id, spawned_via=""):
@@ -1183,6 +1273,7 @@ def _update_spawn_session_id_in_registry(pid, session_id, spawned_via=""):
     if not pid or not session_id:
         return
     clean_via = str(spawned_via or "").strip()
+    resolved_origin = []
     try:
         def _update(entries):
             updated = False
@@ -1194,11 +1285,20 @@ def _update_spawn_session_id_in_registry(pid, session_id, spawned_via=""):
                     if clean_via and entry.get("spawned_via") != clean_via:
                         entry["spawned_via"] = clean_via
                         updated = True
+                    resolved_origin.append(entry.get("spawned_via") or "")
             return updated
 
         _core._mutate_spawn_registry(_update)
     except Exception as e:
         print(f"  [spawn-registry] could not update session_id for pid {pid} ({e})")
+    # Capture the origin during the registry mutation: a short run may be
+    # retired to history before another registry read can find it.
+    try:
+        from ccc_server import idea_tickets
+        for via in resolved_origin:
+            idea_tickets.note_ui_spawn(session_id, via)
+    except Exception:
+        pass
     # Feed the unified session graph: the session_id was unknown at spawn
     # time, so the edge wasn't added in _record_spawn_to_registry. Look up
     # the parent_session_id from the registry entry we just updated.
@@ -1409,6 +1509,8 @@ def _pid_is_engine_process(pid, engine):
         return True
     if engine == "gemini":
         return any(p.rsplit("/", 1)[-1] == "gemini" for p in parts[1:4])
+    if engine == "codex":
+        return any(p.rsplit("/", 1)[-1] == "codex" for p in parts[1:4])
     if engine == "cursor":
         return any(p.rsplit("/", 1)[-1] == "cursor-agent" for p in parts[1:4])
     if engine == "antigravity":
@@ -1417,14 +1519,22 @@ def _pid_is_engine_process(pid, engine):
 
 
 def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
-    """Reattach under the same lock used by registry mutations."""
+    """Reattach under the same lock used by registry mutations. Entries the
+    sweep drops (dead/reused pids) are moved to spawned-history.json after
+    the lock is released — archiving inside the lock would re-acquire the
+    same flock on a second fd."""
+    dropped_entries = []
     with _core._spawn_registry_exclusive_lock():
-        return _reattach_spawned_orphans_locked(
+        result = _reattach_spawned_orphans_locked(
             skip_engines=skip_engines, only_engines=only_engines,
+            dropped_sink=dropped_entries,
         )
+    for entry in dropped_entries:
+        _archive_finished_spawn_entry(entry)
+    return result
 
 
-def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
+def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None, dropped_sink=None):
     """Boot-time sweep that re-populates `_spawned_sessions` from the on-disk
     registry. Verifies every entry's PID is alive AND is still a process of
     the recorded engine (PIDs can be reused), drops dead/reused ones, and rewrites the
@@ -1467,19 +1577,17 @@ def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
             continue
         if not isinstance(pid, int):
             dropped += 1
+            if dropped_sink is not None:
+                dropped_sink.append(dict(entry))
             continue
         # Step 1: is the PID alive at all?
-        try:
-            os.kill(pid, 0)
-            alive = True
-        except ProcessLookupError:
-            alive = False
-        except PermissionError:
-            # Different user owns the PID — we'd never be able to signal it
-            # anyway. Drop from registry rather than confuse the UI.
-            alive = False
+        # (PermissionError = another user's pid: not ours to signal, so
+        # the default perm_alive=False drops it from the registry.)
+        alive = _is_pid_alive(pid)
         if not alive:
             dropped += 1
+            if dropped_sink is not None:
+                dropped_sink.append(dict(entry))
             continue
         if _core._pid_is_zombie(pid):
             try:
@@ -1487,6 +1595,8 @@ def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
             except (ChildProcessError, OSError):
                 pass
             dropped += 1
+            if dropped_sink is not None:
+                dropped_sink.append(dict(entry))
             continue
         # Step 2: is it actually a process of the engine we recorded?
         # Older registry entries pre-date the `engine` field — default
@@ -1495,6 +1605,8 @@ def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
         engine = entry.get("engine", "claude")
         if not _core._pid_is_engine_process(pid, engine):
             dropped += 1
+            if dropped_sink is not None:
+                dropped_sink.append(dict(entry))
             continue
         # Step 3: try to backfill session_id from the log file if we don't
         # have it yet. Claude emits stream-json session headers; Codex emits a
@@ -1582,6 +1694,9 @@ def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
             "model": entry.get("model") or "",
             "parent_session_id": entry.get("parent_session_id") or "",
         }
+        for _meta_key in _SPAWN_TASK_META_FIELDS:
+            if entry.get(_meta_key):
+                survivor[_meta_key] = entry[_meta_key]
         if valid_input_target is not None:
             survivor["input_result_target"] = valid_input_target
         if valid_input_accepted_at is not None:
@@ -1596,10 +1711,10 @@ def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
 
 
 def list_spawned_sessions():
-    """Return spawned sessions with running/finished status. Also opportunistically
-    drops finished sessions from the on-disk spawn registry so it doesn't grow
-    forever (the in-memory list keeps them so the UI can still show 'finished'
-    state, but persistence only needs the live ones)."""
+    """Return spawned sessions with running/finished status. Finished rows are
+    moved out of the live registry into spawned-history.json on removal
+    (_remove_spawn_from_registry), so persistence only holds the live ones
+    while dedupe lookups can still answer "this task already ran"."""
     result = []
     worker_owned_registry = []
     if _core._control_plane_routes_engines():
@@ -1657,6 +1772,10 @@ def list_spawned_sessions():
                 "reasoning_effort": entry.get("reasoning_effort") or "",
                 "parent_session_id": entry.get("parent_session_id") or "",
                 "command_summary": entry.get("command_summary") or "",
+                "task_key": entry.get("task_key") or "",
+                "task_summary": entry.get("task_summary") or "",
+                "prompt_hash": entry.get("prompt_hash") or "",
+                "runtime": entry.get("runtime") or "",
                 "running": running,
                 "exit_code": None,
                 "status": "running" if running else "finished",
@@ -1687,6 +1806,10 @@ def list_spawned_sessions():
             "reasoning_effort": s.get("reasoning_effort") or "",
             "parent_session_id": s.get("parent_session_id") or "",
             "command_summary": s.get("prompt", ""),
+            "task_key": s.get("task_key") or "",
+            "task_summary": s.get("task_summary") or "",
+            "prompt_hash": s.get("prompt_hash") or "",
+            "runtime": s.get("runtime") or "",
             "running": poll is None,
             "exit_code": poll,
             "status": "running" if poll is None else f"finished (exit {poll})",
@@ -1727,6 +1850,9 @@ def list_spawned_sessions():
             "reasoning_effort": entry.get("reasoning_effort") or "",
             "parent_session_id": entry.get("parent_session_id") or "",
             "command_summary": entry.get("command_summary") or "",
+            "task_key": entry.get("task_key") or "",
+            "task_summary": entry.get("task_summary") or "",
+            "prompt_hash": entry.get("prompt_hash") or "",
             "running": running,
             "exit_code": None,
             "status": "running" if running else "finished",

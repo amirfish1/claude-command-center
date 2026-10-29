@@ -18,6 +18,10 @@ import fcntl
 import json
 import math
 import os
+try:
+    import pty
+except ImportError:  # Windows: pty pulls in termios, which does not exist
+    pty = None
 import queue
 import re
 import select
@@ -32,7 +36,12 @@ import time
 import urllib.request
 import uuid
 
+from ccc_server import antigravity_ls
+from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
+from ccc_server import free_runtime as _free_runtime
+from ccc_server import domestic_providers as _domestic_providers
 
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
@@ -1141,7 +1150,7 @@ _ANTIGRAVITY_DB_TOOL_NAME_RE = re.compile(
 )
 # Only the tail matters for the pre-transcript live view; a long-running
 # session accumulates hundreds of steps, and this fallback stops being used
-# the moment the brain transcript exists.
+# once the brain transcript contains output.
 _ANTIGRAVITY_DB_LIVE_STEP_CAP = 60
 
 
@@ -2268,6 +2277,7 @@ def _parse_antigravity_conversation(session_id, after_line=0):
     path = _core._antigravity_transcript_path(session_id)
     events = []
     line_num = 0
+    has_output = False
     if not path:
         return _parse_antigravity_cli_log_conversation(session_id, after_line=after_line)
     # One RPC call per parse — the trajectory carries per-step token usage
@@ -2281,8 +2291,6 @@ def _parse_antigravity_conversation(session_id, after_line=0):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 line_num += 1
-                if line_num <= after_line:
-                    continue
                 line = line.strip()
                 if not line:
                     continue
@@ -2290,12 +2298,52 @@ def _parse_antigravity_conversation(session_id, after_line=0):
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if ev.get("type") not in (
+                    "USER_INPUT", "CONVERSATION_HISTORY", "SYSTEM_MESSAGE",
+                    "EPHEMERAL_MESSAGE", "CHECKPOINT",
+                ):
+                    has_output = True
+                if line_num <= after_line:
+                    continue
                 parsed = _core._parse_antigravity_event(ev, line_num, usage_map=usage_map)
                 if parsed:
                     events.append(parsed)
     except OSError:
         pass
+    # A seeded brain transcript can contain only the starting prompt even
+    # after the CLI has failed. Keep its real prompt, then show live steps
+    # and diagnostics from the same fallback used before a transcript exists.
+    if not has_output:
+        fallback = _parse_antigravity_cli_log_conversation(session_id)
+        for event in fallback["events"]:
+            if event.get("type") == "user_text":
+                continue
+            event = dict(event, line=event["line"] + line_num)
+            if event["line"] > after_line:
+                events.append(event)
+        line_num += fallback["last_line"]
     return {"events": events, "last_line": line_num}
+
+
+def _antigravity_reader_cache_key(session_id):
+    """Include CLI progress/errors even when the seeded transcript is static."""
+    transcript = _core._antigravity_transcript_path(session_id)
+    meta = _antigravity_cli_log_meta_for_session(session_id)
+    log_path = meta.get("log_path")
+    db_path = _antigravity_db_path(session_id)
+    sources = [transcript, log_path, db_path]
+    if log_path and str(log_path).endswith(".agy.log"):
+        sources.append(str(log_path)[:-8])
+    if db_path:
+        sources.append(str(db_path) + "-wal")
+    stamps = []
+    for source in sources:
+        try:
+            st = Path(source).stat() if source else None
+            stamps.append((st.st_mtime_ns, st.st_size) if st else (0, 0))
+        except OSError:
+            stamps.append((0, 0))
+    return (max((s[0] for s in stamps), default=0), tuple(stamps))
 
 
 def _antigravity_usage_to_int(val):
@@ -3061,15 +3109,26 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             permission_mode=os.environ.get(
                 "CCC_DEVIN_PERMISSION_MODE", "dangerous"
             ),
+            reasoning_effort=reasoning_effort,
         )
     except Exception as exc:
         acp_spawn = {"ok": False, "error": f"devin acp spawn error: {exc}"}
     if isinstance(acp_spawn, dict) and acp_spawn.get("session_id"):
         raw_id = acp_spawn["session_id"]
+        # The uid ACP actually applied (a family request resolves to the
+        # family's offered member, e.g. swe-2 -> swe-2-high); fall back to
+        # the requested uid when no config was applied.
+        applied_model = acp_spawn.get("applied_model") or model_to_use or ""
         with open(log_path, "w") as spawn_log:
             spawn_log.write(
                 f"devin acp session/new -> {raw_id} (cwd={spawn_cwd})\n"
             )
+            if applied_model and applied_model != model_to_use:
+                spawn_log.write(
+                    f"model '{model_to_use}' applied as '{applied_model}'\n"
+                )
+            for note in acp_spawn.get("notes") or []:
+                spawn_log.write(f"config note: {note}\n")
             if not acp_spawn.get("ok"):
                 spawn_log.write(
                     f"initial prompt failed: {acp_spawn.get('error')}\n"
@@ -3084,7 +3143,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             "engine": "devin",
             "cwd": spawn_cwd,
             "repo_path": repo_for_logs,
-            "model": model_to_use or "",
+            "model": applied_model,
             "reasoning_effort": reasoning_effort or "",
             "parent_session_id": parent_session_id or "",
             "via": "devin-acp",
@@ -3102,7 +3161,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             pid=entry["spawn_id"], name=session_name, log_path=log_path,
             cwd=spawn_cwd, spawned_at=timestamp, command_summary=prompt[:200],
             fifo=None, engine="devin", session_id=entry["session_id"],
-            repo_path=repo_for_logs, model=model_to_use,
+            repo_path=repo_for_logs, model=applied_model,
             parent_session_id=parent_session_id,
             reasoning_effort=reasoning_effort or "",
         )
@@ -3128,7 +3187,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     ]
     if model_to_use:
         cmd.extend(["--model", model_to_use])
-    cmd.extend(["-p", prompt])
+    cmd.extend(["-p", _core._devin_session_state_prompt(prompt)])
     log_fh = open(log_path, "w")
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
@@ -3275,7 +3334,7 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path, *, delivery_s
 # Proof-of-delivery window. A `devin --resume -p` must write the prompt into
 # its own sessions DB (`prompt_history` table) within this many seconds of
 # the dashboard launching it; otherwise the follow-up is requeued for retry.
-_DEVIN_DELIVERY_PROOF_WINDOW_S = 30.0
+_DEVIN_DELIVERY_PROOF_WINDOW_S = 120.0  # resuming a huge session can take 45s+ before it records the prompt
 # How long to sleep between DB polls while waiting for proof.
 _DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S = 0.5
 
@@ -3293,8 +3352,25 @@ def _devin_cli_prompt_history_count(raw_id, text, since_ts):
     try:
         row = con.execute(
             "SELECT COUNT(*) AS n FROM prompt_history "
-            "WHERE session_id = ? AND content = ? AND timestamp >= ?",
-            (raw_id, text, int(since_ts)),
+            "WHERE session_id = ? AND content IN (?, ?) AND timestamp >= ?",
+            (raw_id, text, _core._devin_session_state_prompt(text), int(since_ts)),
+        ).fetchone()
+        count = int(row["n"]) if row else 0
+        if count:
+            return count
+        # A headless `devin --resume -p` turn can run without writing
+        # prompt_history at all (observed on a long-lived session), which
+        # made delivered messages look undelivered and get sent again every
+        # time the previous run exited. The user message in the session's own
+        # transcript is proof too. Newest rows only: the session index makes
+        # this a handful of rows, not a scan of the multi-GB table.
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM ("
+            " SELECT chat_message, created_at FROM message_nodes"
+            " WHERE session_id = ? ORDER BY row_id DESC LIMIT 60"
+            ") WHERE created_at >= ? AND json_extract(chat_message, '$.role') = 'user'"
+            " AND json_extract(chat_message, '$.content') IN (?, ?)",
+            (raw_id, int(since_ts), text, _core._devin_session_state_prompt(text)),
         ).fetchone()
         return int(row["n"]) if row else 0
     except sqlite3.Error:
@@ -3415,7 +3491,7 @@ def _start_devin_delivery_proof_watchdog(
     ).start()
 
 
-def resume_session_devin(session_id, text, _delivery_slot="resume"):
+def resume_session_devin(session_id, text, _delivery_slot="resume", model=None):
     """Resume a Devin CLI session with a one-shot headless prompt.
 
     Uses `devin --resume <id> -p "text" --permission-mode dangerous`.
@@ -3483,12 +3559,14 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
         "--resume", raw_id,
     ]
     override = _core._get_session_override(session_id)
-    model = (override or {}).get("model") if override else None
+    # Caller-specified model (e.g. a limit-hit failover's free pick) beats the
+    # session override, which beats the global CCC_DEVIN_MODEL default.
+    model = model or ((override or {}).get("model") if override else None)
     if not model:
         model = os.environ.get("CCC_DEVIN_MODEL")
     if model:
         cmd.extend(["--model", model])
-    cmd.extend(["-p", text])
+    cmd.extend(["-p", _core._devin_session_state_prompt(text)])
     log_fh = open(log_path, "w")
     try:
         proc = subprocess.Popen(
@@ -4040,14 +4118,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            cwd=spawn_cwd,
-            start_new_session=True,
-        )
+        proc = _antigravity_popen(cmd, spawn_cwd, log_fh, log_path)
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-spawn"}
@@ -4174,6 +4245,108 @@ def _antigravity_resume_stale_seconds():
     return _core._antigravity_print_timeout_seconds() + 60
 
 
+def _antigravity_turn_idle_seconds():
+    try:
+        return max(15.0, float(os.environ.get("CCC_ANTIGRAVITY_TURN_IDLE_S", "90")))
+    except ValueError:
+        return 90.0
+
+
+def _pid_age_seconds(pid):
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "etimes=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=5,
+        )
+        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _antigravity_turn_finished(session_id, pid=None, idle_s=None):
+    """True when the conversation's own record says its turn is over.
+
+    A headless ``agy -p`` is documented to exit when the turn ends, but a
+    process can outlive its turn (observed: alive for an hour after the final
+    answer, which made every queued message wait behind it). Process liveness
+    therefore cannot decide busy vs idle. The transcript can: the last row is
+    the model's final PLANNER_RESPONSE (DONE, no tool calls) and nothing has
+    been written for ``idle_s`` seconds. The process must also be older than
+    ``idle_s``, so a resume that has only just started (transcript still
+    showing the previous turn's answer) is never mistaken for a finished one.
+    """
+    idle_s = _antigravity_turn_idle_seconds() if idle_s is None else idle_s
+    newest = None
+    for brain_root in (_core.ANTIGRAVITY_BRAIN, _core.ANTIGRAVITY_CLI_BRAIN):
+        for name in ("transcript_full.jsonl", "transcript.jsonl"):
+            path = brain_root / str(session_id) / ".system_generated" / "logs" / name
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if newest is None or mtime > newest[0]:
+                newest = (mtime, path)
+    if newest is None or time.time() - newest[0] < idle_s:
+        return False
+    if pid is not None:
+        age = _pid_age_seconds(pid)
+        if age is None or age < idle_s:
+            return False
+    try:
+        with open(newest[1], "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 1024 * 1024))
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+        row = json.loads(lines[-1])
+    except (OSError, ValueError, IndexError):
+        return False
+    return (
+        isinstance(row, dict)
+        and row.get("source") == "MODEL"
+        and row.get("type") == "PLANNER_RESPONSE"
+        and row.get("status") == "DONE"
+        and not row.get("tool_calls")
+    )
+
+
+def _antigravity_reap_finished_process(session_id, pid):
+    """Stop an ``agy --conversation <sid>`` process that outlived its turn.
+
+    Only a process whose argv really is that conversation's agy is touched.
+    Returns True when it is gone.
+    """
+    try:
+        pid = int(pid)
+        argv = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except (OSError, TypeError, ValueError):
+        return True  # already gone
+    if f"--conversation {session_id}" not in argv or Path(argv.split(" ", 1)[0]).name != "agy":
+        return False
+    for sig, wait_s in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 2.0)):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
+        except OSError:
+            return False
+        deadline = time.time() + wait_s
+        while time.time() < deadline and Path(f"/proc/{pid}").exists():
+            try:  # a child of this server stays a zombie until reaped
+                if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                    break
+            except ChildProcessError:
+                pass
+            time.sleep(0.2)
+        if not Path(f"/proc/{pid}").exists():
+            break
+    _core._log_activity(
+        "inject", "AGY_REAP",
+        f"session={session_id} pid={pid} reason=turn_finished_process_lingered",
+    )
+    return not Path(f"/proc/{pid}").exists()
+
+
 def _antigravity_live_resume_pid(session_id):
     """Ground-truth check: is any `agy ... --conversation <sid>` process
     actually alive right now, independent of `_spawned_sessions`/the on-disk
@@ -4216,6 +4389,46 @@ def _antigravity_live_resume_pid(session_id):
     return None
 
 
+def _antigravity_terminal_holder_pid(session_id):
+    """PID of an interactive (terminal) `agy --conversation[=| ]<sid>` that owns
+    this conversation, or None. A headless `-p` resume can't be delivered while
+    a terminal agy holds the conversation: the input is never acknowledged
+    (CCC-1273). Headless resumes carry `-p`; the terminal one doesn't."""
+    if not session_id:
+        return None
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,tty=,command="],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    for line in out.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_str, tty, cmd = parts
+        words = cmd.split()
+        if not words or words[0].rsplit("/", 1)[-1] != "agy":
+            continue
+        if tty in ("?", "??"):
+            continue
+        has_conv = f"--conversation={session_id}" in words or (
+            "--conversation" in words
+            and words.index("--conversation") + 1 < len(words)
+            and words[words.index("--conversation") + 1] == session_id
+        )
+        if not has_conv or "-p" in words or any(w.startswith("-p=") for w in words):
+            continue
+        try:
+            return int(pid_str)
+        except ValueError:
+            continue
+    return None
+
+
 def _spawn_entry_started_epoch(entry):
     """Epoch seconds for a spawn entry's ``started`` stamp (``%Y%m%dT%H%M%S``,
     local time), or 0 when missing/unparseable."""
@@ -4226,6 +4439,117 @@ def _spawn_entry_started_epoch(entry):
         return time.mktime(time.strptime(str(raw), "%Y%m%dT%H%M%S"))
     except (ValueError, TypeError, OverflowError):
         return 0
+
+
+def _antigravity_auth_prompt_seen(proc, log_path, wait_seconds=4.0):
+    """True when a just-spawned headless agy printed its login prompt (it is
+    not signed in and will idle until its auth timeout). Returns early once
+    the process exits or the wait elapses."""
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        try:
+            with open(log_path, "r", errors="replace") as fh:
+                if "Authentication required" in fh.read(4000):
+                    return True
+        except OSError:
+            pass
+        if proc.poll() is not None:
+            return False
+        time.sleep(0.25)
+    return False
+
+
+# agy abandons a pending sign-in after this long ("timeout 60s").
+_ANTIGRAVITY_AUTH_CODE_WAIT_S = 60
+
+
+def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id=""):
+    """Start a headless agy run with a pseudo-terminal as stdin.
+
+    A logged-out agy prints a sign-in URL, opens the browser, and reads the
+    authorization code from a terminal. With stdin on /dev/null it can never
+    get that code. The pty gives it a terminal; _antigravity_auth_relay asks
+    the user for the code through the credential broker and types it in. The
+    pty closes once no sign-in is needed, so normal runs see no input.
+    """
+    if pty is None:
+        raise OSError("pseudo-terminals are not available on this platform")
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            start_new_session=True,
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    threading.Thread(
+        target=_antigravity_auth_relay,
+        args=(proc, master, log_path, session_id),
+        daemon=True,
+        name="agy-auth-relay",
+    ).start()
+    return proc
+
+
+def _antigravity_auth_relay(proc, master, log_path, session_id=""):
+    from ccc_server import credential_broker
+
+    try:
+        if not _antigravity_auth_prompt_seen(proc, log_path):
+            return
+        broker = credential_broker.broker()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{0,128}", session_id or ""):
+            session_id = ""
+        req = broker.request({
+            "name": "antigravity-sign-in",
+            "kind": "otp",
+            "session_id": session_id,
+            "timeout": _ANTIGRAVITY_AUTH_CODE_WAIT_S,
+            "reason": (
+                "Antigravity CLI is not signed in. A Google sign-in page opened "
+                "in your browser. Sign in, copy the authorization code it shows, "
+                "and paste it here."
+            ),
+        })
+        ticket = {"id": req["id"], "token": req["token"]}
+        deadline = time.time() + _ANTIGRAVITY_AUTH_CODE_WAIT_S
+        code = None
+        while time.time() < deadline and proc.poll() is None:
+            result = broker.take(ticket)
+            if result["status"] == "ready":
+                code = (result.get("value") or "").strip()
+                break
+            if result["status"] != "pending":
+                break
+            time.sleep(0.5)
+        else:
+            broker.take(ticket, cancel=True)
+        if not code:
+            return
+        # The code travels over the pty only: never argv, never the log.
+        size_before = os.path.getsize(log_path)
+        os.write(master, code.encode() + b"\n")
+        # Keep the pty open until agy reacts, or a closed pty could drop
+        # the line before agy reads it.
+        end = time.time() + 15
+        while time.time() < end and proc.poll() is None:
+            if os.path.getsize(log_path) > size_before:
+                break
+            time.sleep(0.25)
+    except (credential_broker.BrokerError, OSError) as e:
+        print(f"antigravity sign-in relay: {type(e).__name__}", file=sys.stderr)
+    finally:
+        try:
+            os.close(master)
+        except OSError:
+            pass
 
 
 def resume_session_antigravity(session_id, text, mode="send"):
@@ -4262,6 +4586,45 @@ def resume_session_antigravity(session_id, text, mode="send"):
     resolved = _core._resolve_antigravity_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    # A persistent stream-json process owns this conversation: its `result`
+    # event, not process liveness, says whether a turn is running.
+    stream_state = _antigravity_stream.state(session_id)
+    if stream_state is not None:
+        want_dirs = set(_core._pasted_image_parent_dirs(text))
+        have_model, have_dirs = stream_state["key"]
+        override = _core._get_session_override(session_id)
+        want_model = _core._antigravity_model_settings_label(
+            ((override or {}).get("model") if override else None)
+            or os.environ.get("CCC_ANTIGRAVITY_MODEL") or ""
+        )
+        if stream_state["busy"]:
+            if mode == "steer":
+                return {
+                    "ok": True,
+                    "queued_preserved": True,
+                    "pid": stream_state["pid"],
+                    "via": "antigravity-resume-queued",
+                    "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
+                }
+            queued = _core._apply_pending_input_operations(session_id, [{
+                "field": "resume", "action": "append_tail", "value": text,
+            }])
+            if not queued.get("ok"):
+                return {"ok": False, "error": "failed to persist queued Antigravity input"}
+            return {
+                "ok": True,
+                "queued": True,
+                "pid": stream_state["pid"],
+                "via": "antigravity-resume-queued",
+                "queued_reason": "waiting for the current Antigravity turn to finish (it can't take input mid-turn)",
+            }
+        if want_dirs <= set(have_dirs) and (not want_model or want_model == have_model):
+            sent = _antigravity_stream.send(session_id, text)
+            if sent.get("ok"):
+                return sent
+        # Settings changed (model, extra directories) or the write failed:
+        # start a fresh process below.
+        _antigravity_stream.retire(session_id)
     for s in _core._spawned_sessions:
         if s.get("engine") == "antigravity" and s.get("resumed_sid") == session_id:
             try:
@@ -4275,6 +4638,22 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     started = _spawn_entry_started_epoch(s)
                     if started and (time.time() - started) > _antigravity_resume_stale_seconds():
                         continue
+                    # The turn already ended (final answer in the transcript)
+                    # but the process lingers: free the conversation and fall
+                    # through to a fresh resume instead of queueing behind it.
+                    if (
+                        _antigravity_turn_finished(session_id, pid=s.get("pid"))
+                        and _antigravity_reap_finished_process(session_id, s.get("pid"))
+                    ):
+                        continue
+                    # Our own headless run is mid-turn. If its agent
+                    # registered the language server, hand the message to
+                    # that run directly: it handles a message queued
+                    # mid-turn before exiting (verified on agy 1.3.6).
+                    delivered = antigravity_ls.send(
+                        session_id, text, mode=mode, require_running=True)
+                    if delivered:
+                        return delivered
                     if mode == "steer":
                         # The text is already sitting in the durable queue
                         # (that's what put the Steer button in front of the
@@ -4302,7 +4681,30 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     }
             except Exception:
                 pass
-    live_pid = _antigravity_live_resume_pid(session_id)
+    # A live agy process that registered its language server (any `ccc` call
+    # from inside it does) takes the message directly, mid-turn steer
+    # included -- including a TUI the terminal-holder check below would refuse.
+    # An untracked headless `-p` run only takes it while still mid-turn.
+    term_pid = _antigravity_terminal_holder_pid(session_id)
+    live_pid = _antigravity_live_resume_pid(session_id) if term_pid is None else None
+    if (
+        live_pid is not None
+        and _antigravity_turn_finished(session_id, pid=live_pid)
+        and _antigravity_reap_finished_process(session_id, live_pid)
+    ):
+        live_pid = None
+    delivered = antigravity_ls.send(
+        session_id, text, mode=mode, require_running=live_pid is not None)
+    if delivered:
+        return delivered
+    if term_pid is not None:
+        return {
+            "ok": False,
+            "code": "terminal_owned",
+            "pid": term_pid,
+            "via": "antigravity-resume",
+            "error": f"This Antigravity conversation is open in a terminal (pid {term_pid}). Type in that terminal, or close it to send from here.",
+        }
     if live_pid is not None:
         # `_spawned_sessions` has no entry for this sid (registry reattach
         # can drop a live PID under load, CCC-1011) but a real `agy
@@ -4372,18 +4774,33 @@ def resume_session_antigravity(session_id, text, mode="send"):
         cmd.extend(["--log-file", str(cli_log_path)])
     if not _core._antigravity_has_arg(user_args, "--print-timeout"):
         cmd.extend(["--print-timeout", _core._antigravity_print_timeout()])
+    if _antigravity_stream.enabled():
+        # Documented multi-turn mode: one persistent process per conversation,
+        # NDJSON on stdin, one `result` event per turn. Any failure falls
+        # through to the one-shot `-p` run below (which also owns the
+        # sign-in relay).
+        stream_cmd = cmd + [
+            "--conversation", session_id, "--print=",
+            "--input-format", "stream-json", "--output-format", "stream-json",
+        ]
+        try:
+            _antigravity_stream.spawn(
+                session_id, stream_cmd, cwd, log_path,
+                (model_to_use or "", tuple(sorted(set(add_dirs)))),
+            )
+            sent = _antigravity_stream.send(session_id, text)
+        except (OSError, ValueError):
+            sent = None
+        if sent and sent.get("ok"):
+            return {**sent, "log": str(log_path), "resumed": True, "model": model_to_use}
+        _antigravity_stream.retire(session_id)
     cmd.extend(["--conversation", session_id, "-p", text])
 
     log_fh = open(log_path, "w")
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            start_new_session=True,
-        )
+        # A logged-out agy asks for a sign-in code (CCC-1274); the helper
+        # relays it from the dashboard instead of leaving the turn hung.
+        proc = _antigravity_popen(cmd, cwd, log_fh, log_path, session_id)
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-resume"}
@@ -5272,15 +5689,17 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
     cursor / antigravity since none of them need a special channel — they all
     can run the curl. No-op when `report_to` is falsy.
 
-    Claude children report back over native peer messaging (SendMessage to
-    CCC's own peer identity) instead, but ONLY when the uds gate is on AND
-    CCC's own peer socket is actually listening (checked via
-    _CCC_PEER_STATE, not just the env flag) -- a footer telling a child to
-    SendMessage a receiver that doesn't exist would silently black-hole the
-    report. Every other case (gate off, non-Claude engine, or the gate on
-    but CCC's own listener didn't start) keeps the curl footer byte-for-byte,
-    so this is a strict opt-in with automatic fallback, not a behavior
-    change for anyone not on the flag.
+    The curl footer is the ONLY path instructed as primary, for every engine
+    including Claude. SendMessage(agent="ccc") to CCC's own peer identity used
+    to be the primary instruction for Claude children (when the uds gate was
+    on and CCC's peer socket was listening), demoted to a best-effort mention
+    2026-10-03 (OPS-1250): CCC's own registry row publishes "kind":
+    "background", and ListAgents never lists background-kind peers, so
+    SendMessage to "ccc" reliably fails with "No agent named ... is
+    reachable" regardless of gate/socket state -- reproduced repeatedly, not
+    a flaky edge case. The gate still guards whether the best-effort mention
+    is shown at all, so a child on an engine/state where it's truly
+    unavailable isn't told to try it.
 
     `route_id` (CCC-1202): when set, the report is addressed to that route id
     instead of the dispatcher's sid, and CCC resolves it to the route's
@@ -5302,38 +5721,19 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
         "session_id": addr, "mode": "steer",
         "announced_from": "<your session name or id>", "text": "<your report>",
     })
-    use_sendmessage = (
+    sendmessage_hint_available = (
         engine == "claude"
         and _core._uds_messaging_enabled()
         and bool(_core._CCC_PEER_STATE.get("socket_path"))
     )
-    if use_sendmessage:
-        return prompt + (
-            "\n\n---\n"
-            "## Return address — report back when done\n"
-            f"You were dispatched by another CCC session (id `{rid}`). When this "
-            "task is fully complete — whether it SUCCEEDED or FAILED — send exactly "
-            "ONE completion report back via Claude Code's native peer messaging.\n\n"
-            "RECIPIENT: call SendMessage with agent=\"ccc\" — CCC's own peer name "
-            "(run ListAgents and it appears as `ccc`). NEVER address SendMessage "
-            "to a session id/UUID or to the dispatcher's session name: peers are "
-            "addressed by their registered peer name only, and anything else fails "
-            "with \"No agent named ... is reachable\". The dispatcher's session id "
-            "belongs INSIDE the message JSON below, not in the address.\n\n"
-            f"{route_note}"
-            "The message's ENTIRE content must be exactly this JSON (fill in your "
-            "own values, keep it valid JSON, escape quotes/newlines in \"text\"):\n\n"
-            f"```\n{envelope}\n```\n\n"
-            "The report text must contain, in this order:\n"
-            "- STATUS: SUCCEEDED or FAILED\n"
-            "- SUMMARY: 1-3 sentence summary of what you did\n"
-            "- FILES: relevant file paths touched/created (or \"none\")\n"
-            "- REASON: if FAILED, the reason and what blocked you (omit if succeeded)\n\n"
-            "Send the report once, at the very end — not progress updates mid-task. "
-            "If SendMessage to \"ccc\" still fails after one retry, fall back to "
-            f"curl POST http://127.0.0.1:{port or _core.PORT}/api/inject-input with "
-            "the same JSON as the request body.\n"
-        )
+    sendmessage_hint = (
+        "As a best-effort shortcut, you may first try Claude Code's native "
+        "peer messaging: SendMessage with agent=\"ccc\". This often fails "
+        "with \"No agent named ... is reachable\" (CCC's own peer identity "
+        "is not always visible to ListAgents) -- if it does, do NOT retry "
+        "it, just use the curl command below, which always works.\n\n"
+        if sendmessage_hint_available else ""
+    )
     p = port or _core.PORT
     footer = (
         "\n\n---\n"
@@ -5341,6 +5741,7 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
         f"You were dispatched by another CCC session (id `{rid}`). When this "
         "task is fully complete — whether it SUCCEEDED or FAILED — send exactly "
         "ONE completion report back to that session via CCC's inject-input API. "
+        f"{sendmessage_hint}"
         "Run the curl with the network sandbox disabled (localhost IPC):\n\n"
         f"{route_note}"
         "```bash\n"
@@ -5358,6 +5759,17 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
         "- REASON: if FAILED, the reason and what blocked you (omit if succeeded)\n\n"
         "Send the report once, at the very end — not progress updates mid-task. "
         "Remember to JSON-escape the text (quotes, newlines) so the payload is valid.\n"
+        "\nWaiting for delegated work: give each child your session id as "
+        "`report_to`; its completion report will resume you through CCC. Finish "
+        "any independent work, then end your current turn while waiting. Do not "
+        "repeatedly call sleep or poll child status to keep the turn alive. "
+        "Waiting is not task completion: send your own completion report only "
+        "after the required child results arrive and you have checked them.\n"
+        "For external deployments or checks without callbacks, use one bounded "
+        "CLI watcher (for example `gh run watch <run-id> --exit-status`) rather "
+        "than alternating model turns, sleep calls, and status checks. Give the "
+        "watcher a timeout and retain its process handle; resume on completion "
+        "or a meaningful change, not on a fixed stream of short polling turns.\n"
     )
     return prompt + footer
 
@@ -5583,6 +5995,8 @@ def _start_claude_prewarm(
         claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
         effort=reasoning_effort,
     )
+    from sender_envelope import child_env as scrub_sender_env
+    child_env = scrub_sender_env(child_env)
     popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,
@@ -5809,12 +6223,20 @@ def _unexpected_keyword_argument(result):
     return match.group(1) if match else ""
 
 
-def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_key=None):
+def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_key=None, required_keys=()):
     """Route one Claude engine call, shedding args an older worker rejects.
 
     Returns (result, dropped_keys). Each retry gets a fresh action id so the
     previous worker's durable failed work item is not replayed.
+
+    ``required_keys`` are args the caller must NOT shed: when an older worker
+    rejects one, the call returns a synthetic ``engine_kwarg_unsupported``
+    failure instead of silently retrying without it — a dropped "runtime" key
+    would otherwise launch the session on the paid path the caller opted out
+    of. The rejection happens at Python call binding, before any work ran, so
+    refusing here is clean.
     """
+    required = frozenset(required_keys or ())
     result = _core._control_plane_engine_call(
         "claude", operation, dict(route_args), idempotency_key=idempotency_key,
     )
@@ -5826,6 +6248,16 @@ def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_ke
         stale_key = _unexpected_keyword_argument(result)
         if not stale_key or stale_key not in retry_args:
             return result, dropped
+        if stale_key in required:
+            return {
+                "ok": False,
+                "error": (
+                    f"the running CCC worker does not support the '{stale_key}' "
+                    "spawn option - restart CCC so the worker picks up this version"
+                ),
+                "code": "engine_kwarg_unsupported",
+                "missing_kwarg": stale_key,
+            }, dropped
         retry_args.pop(stale_key)
         dropped.append(stale_key)
         retried = _core._control_plane_engine_call(
@@ -5838,7 +6270,7 @@ def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_ke
 
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
                   parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None,
-                  auto_compact_k=None, reasoning_effort=""):
+                  auto_compact_k=None, reasoning_effort="", runtime=""):
     """Spawn a headless Claude Code session and return tracking info.
 
     The spawned subprocess requires an explicit cwd or repo_path.
@@ -5847,12 +6279,28 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     is fixed at launch: headless Claude has no live effort switch, so the
     picker's later changes take effect on the next resume.
 
+    `runtime="free"` launches the child on the CCC free router ($0) instead of
+    the user's paid Anthropic credentials. A free spawn never claims a prewarm
+    reservation (those launch with paid env) and never silently falls back —
+    an unready router is an error, not a paid run.
+
     If `worktree=True`, create a fresh git worktree off the launch cwd on a
     `feat/<slug>` branch and run the spawned session there. The worktree path
     + branch are returned in the response under
       `worktree_path` / `worktree_branch` so the UI can show them.
     """
     reasoning_effort = _core._validate_reasoning_effort(reasoning_effort, "claude")
+    runtime = str(runtime or "").strip().lower()
+    # Free spawns never inherit the saved default: it may be a paid preset.
+    requested_model = model if runtime else _core._spawn_model_for_engine("claude", model)
+    preset_error = _domestic_providers.request_error(
+        "claude", requested_model, runtime, remote=bool(os.environ.get("CCC_SSH_HOST")),
+    )
+    if preset_error:
+        return preset_error
+    is_preset = bool(_domestic_providers.resolve_model(requested_model))
+    if is_preset:
+        model = requested_model
     route_args = {
         "prompt": prompt,
         "name": name,
@@ -5866,10 +6314,21 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "auto_compact_k": auto_compact_k,
         "reasoning_effort": reasoning_effort,
     }
+    if runtime:
+        # Only sent when non-empty: an older worker without the kwarg rejects
+        # it (loudly) rather than every spawn paying one compat retry.
+        route_args["runtime"] = runtime
     routed, dropped = _route_claude_call_with_kwarg_fallback(
         "spawn", route_args, idempotency_key=_core._take_control_plane_action_id(),
+        required_keys=("runtime",) if runtime else (),
     )
     if routed is not None:
+        if isinstance(routed, dict) and routed.get("code") == "engine_kwarg_unsupported":
+            # The worker predates the runtime kwarg — refusing is the only
+            # honest answer; the shed-and-retry path would have run paid.
+            return _free_runtime.unavailable_result(
+                "claude", "the CCC worker needs a restart to run sessions free",
+            )
         if isinstance(routed, dict) and routed.get("ok") and "prewarm_id" in dropped:
             # The retry that succeeded ran cold, so the UI can explain why this
             # spawn was slower than the reserved one it was promised.
@@ -5879,6 +6338,12 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         try:
             import ssh_multiplexer
             if ssh_multiplexer.get_global_multiplexer():
+                if runtime:
+                    # The free router binds 127.0.0.1 on THIS host — a remote
+                    # child could never reach it. Refuse, not fall back.
+                    return _free_runtime.unavailable_result(
+                        "claude", "the free runtime only works for local sessions",
+                    )
                 return spawn_session_remote(
                     prompt, name=name, cwd=cwd, repo_path=repo_path, worktree=worktree,
                     model=model, parent_session_id=parent_session_id,
@@ -5887,7 +6352,22 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         except Exception:
             pass
     prompt = _core._strip_ccc_session_state_instruction(prompt)
-    model_to_use = _core._cli_model_flag(_core._spawn_model_for_engine("claude", model) or "opus")
+    try:
+        paid_preset = _domestic_providers.resolve_spawn(requested_model, cwd or repo_path)
+    except _domestic_providers.DomesticProviderError as error:
+        return error.as_payload()
+    free_overlay = {}
+    if paid_preset:
+        model_to_use = paid_preset["model"]
+    elif runtime:
+        free_overlay = _free_runtime.spawn_env("claude", model=model)
+        if not free_overlay:
+            return _free_runtime.unavailable_result("claude")
+        model_to_use = _core._cli_model_flag(
+            _free_runtime.model_for("claude", model, env=free_overlay)
+        )
+    else:
+        model_to_use = _core._cli_model_flag(_core._spawn_model_for_engine("claude", model) or "opus")
     # The reservation launches with this exact native Claude name. Claiming is
     # therefore name-sensitive as well as cwd/model-sensitive: a stale process
     # must never surface under the wrong title in Claude's own resume picker or
@@ -5895,7 +6375,9 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     session_name = _core._slugify(name or prompt)
     if not session_name:
         session_name = "unnamed"
-    entry = None if worktree else _core._take_claude_prewarm_for_request(
+    # A prewarm reservation launched with paid env — claiming one for a $0
+    # spawn would bill the user's plan on a session sold as free.
+    entry = None if (worktree or runtime or paid_preset) else _core._take_claude_prewarm_for_request(
         prewarm_id,
         cwd=cwd,
         repo_path=repo_path,
@@ -6006,13 +6488,36 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         # Claude process starts. No-op when not a worktree spawn. See #47.
         if worktree_path:
             _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+        if runtime:
+            # Head-of-log marker: the spawned log is the closest thing to a
+            # transcript a headless run has before the projects jsonl exists.
+            try:
+                log_fh.write(json.dumps(
+                    _free_runtime.spawn_log_marker_event(model_to_use)
+                ) + "\n")
+                log_fh.flush()
+            except OSError:
+                pass
+        child_env = _core._spawn_env(auto_compact_k=auto_compact_k)
+        if paid_preset:
+            try:
+                _domestic_providers._check_settings(spawn_cwd, paid_preset["env"])
+            except _domestic_providers.DomesticProviderError as error:
+                log_fh.close()
+                return error.as_payload()
+            _domestic_providers.apply_env(child_env, paid_preset["env"])
+        if runtime:
+            # apply_to_env also scrubs inherited Anthropic credentials so the
+            # child's only auth is the router's unified key.
+            _free_runtime.scrub_paid_env(child_env)
+            child_env.update(free_overlay)
         fifo_path, child_stdin_fd = _core._make_stdin_fifo(log_path)
         popen_kwargs = dict(
             stdout=log_fh,
             stderr=subprocess.STDOUT,
             cwd=spawn_cwd,
             start_new_session=True,
-            env=_core._spawn_env(auto_compact_k=auto_compact_k),
+            env=child_env,
         )
         popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
         if session_id:
@@ -6059,7 +6564,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "engine": "claude",
             "cwd": spawn_cwd,
             "repo_path": ctx["repo_path"],
-            "model": model_to_use,
+            "model": model if paid_preset else model_to_use,
             "parent_session_id": parent_session_id or "",
             "session_id": session_id,
             "partial_messages": bool(capabilities.get("partial_messages")),
@@ -6067,6 +6572,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "prewarmed": False,
             "reasoning_effort": reasoning_effort,
             "auto_compact_k": auto_compact_k,
+            "runtime": runtime,
         }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
@@ -6124,10 +6630,11 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         engine="claude",
         session_id=session_id,
         repo_path=ctx["repo_path"],
-        model=model_to_use,
+        model=model if paid_preset else model_to_use,
         parent_session_id=parent_session_id,
         reasoning_effort=reasoning_effort,
         auto_compact_k=auto_compact_k,
+        runtime=runtime,
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
         input_command_uuids=entry.get("input_command_uuids"),
@@ -6157,34 +6664,42 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     if session_id:
         _core._spawn_timeline_mark(session_id, "spawn_response_sent")
         _core._spawn_timeline_save()
-    return _finalize_spawn_response(
+    final = _finalize_spawn_response(
         resp,
         entry,
         ctx,
         wait_for_session_id=not bool(session_id),
     )
+    if runtime:
+        # Marker + registry tag: the archive overlay and /api/sessions/spawned
+        # rows both read these. Works here (dashboard) and in the worker.
+        _free_runtime.mark_spawned(
+            final.get("session_id") or session_id, pid=proc.pid,
+        )
+        final["runtime"] = runtime
+    return final
 
 
 def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None):
     """Spawn a headless Codex run and return tracking info.
 
-    Prefer the Codex app-server for fresh durable threads when available. If
-    that is disabled or unavailable before a thread is created, fall back to the
-    legacy Codex CLI `exec` path. `codex exec` is one-shot: the prompt comes
-    from argv and the process exits when the model is done, so it uses
-    `subprocess.DEVNULL` for stdin (no FIFO, no mid-run inject support).
+    Spawning goes through the Codex app-server exclusively: it creates fresh
+    durable threads (native rollout + state-DB row) that stay resumable and
+    steerable. There is no `codex exec` fallback — when the app-server cannot
+    create the thread, the error is returned to the caller rather than
+    launching a one-shot process.
 
     Tested against codex-cli 0.125.0-alpha.3.
 
-    The spawned subprocess requires an explicit cwd or repo_path. Codex `--cd`
-    is set so the agent's workspace root matches that concrete directory.
+    The spawn requires an explicit cwd or repo_path. Codex `--cd` is set so
+    the agent's workspace root matches that concrete directory.
 
     If `worktree=True`, create a fresh git worktree off the launch cwd on a
     `feat/<slug>` branch (same shape as the Claude path) and run codex there.
 
     Returns the same shape as spawn_session:
       {ok: True,  pid, name, log}                       — success
-      {ok: False, error}                                — resolver failed
+      {ok: False, error}                                — spawn failed
     """
     routed = _core._control_plane_engine_call(
         "codex", "spawn", {
@@ -6215,9 +6730,6 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     model_to_use = _core._spawn_model_for_engine("codex", model) or _core._spawn_fallback_model_for_engine("codex")
     if model_to_use:
         _core._set_session_model(log_filename[:-4], model_to_use, False)
-    log_dir = _core.repo_log_dir(repo_for_logs)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / log_filename
 
     worktree_path = None
     worktree_branch = None
@@ -6247,146 +6759,15 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     if app_server_spawn is not None:
         return app_server_spawn
 
-    exec_total_start = time.monotonic()
-    resolved = _core._resolve_codex_bin()
-    if not resolved["available"]:
-        _core._codex_telemetry_append(
-            "codex_spawn",
-            ok=False,
-            via="codex-spawn",
-            stage="resolve",
-            error=resolved["reason"],
-            code=resolved.get("code"),
-            total_ms=_core._codex_elapsed_ms(exec_total_start),
-            cwd=spawn_cwd,
-            model=model_to_use,
-        )
-        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
-    bin_path = resolved["bin"]
-
-    cmd = [
-        bin_path, *_core._codex_context_window_args(), "exec",
-        "--json",
-        "--skip-git-repo-check",
-        "--dangerously-bypass-approvals-and-sandbox",
-        # This fallback only runs when the app-server path (native
-        # thread/turn persistence) is unavailable, so it's already a
-        # fire-and-forget one-shot CCC tracks via its own spawn log, not a
-        # resumable native thread. Racing the same holder that caused the
-        # fallback to write ~/.codex's shared rollout/sqlite state produces
-        # a permanently orphaned thread the Codex desktop app can't open
-        # (OPS-1275) even though the run itself completes correctly.
-        # --ephemeral skips that disk persistence entirely.
-        "--ephemeral",
-        "--model", model_to_use,
-        "--cd", spawn_cwd,
-    ]
-    if reasoning_effort:
-        cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
-    for image_path in image_paths:
-        cmd.extend(["--image", image_path])
-    cmd.extend(["--", prompt])
-
-    log_fh = open(log_path, "w")
-    if worktree_path:
-        _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
-    try:
-        launch_start = time.monotonic()
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            cwd=spawn_cwd,
-            start_new_session=True,
-        )
-        launch_ms = _core._codex_elapsed_ms(launch_start)
-    except (FileNotFoundError, OSError) as e:
-        log_fh.close()
-        _core._codex_telemetry_append(
-            "codex_spawn",
-            ok=False,
-            via="codex-spawn",
-            stage="popen",
-            error=str(e),
-            code="codex_launch_failed",
-            total_ms=_core._codex_elapsed_ms(exec_total_start),
-            cwd=spawn_cwd,
-            model=model_to_use,
-        )
-        return {"ok": False, "error": str(e), "code": "codex_launch_failed", "via": "codex-spawn"}
-    failure = _spawn_early_failure_payload(
-        proc, log_path, log_fh, engine="codex", via="codex-spawn",
-    )
-    if failure:
-        _core._codex_telemetry_append(
-            "codex_spawn",
-            ok=False,
-            via="codex-spawn",
-            stage="early-failure",
-            error=failure.get("error"),
-            code=failure.get("code"),
-            launch_ms=launch_ms,
-            total_ms=_core._codex_elapsed_ms(exec_total_start),
-            pid=proc.pid,
-            cwd=spawn_cwd,
-            model=model_to_use,
-        )
-        return failure
-
-    entry = {
-        "pid": proc.pid,
-        "name": session_name,
-        "log": str(log_path),
-        "prompt": prompt[:200],
-        "started": timestamp,
-        "proc": proc,
-        "log_fh": log_fh,
-        "fifo": None,         # Codex exec is one-shot; no inject FIFO.
-        "stdin_fd": None,
-        "engine": "codex",
-        "cwd": spawn_cwd,
-        "repo_path": repo_for_logs,
-        "model": model_to_use or "",
-        "parent_session_id": parent_session_id or "",
+    # _codex_spawn_via_app_server always returns a payload now — there is no
+    # one-shot `codex exec` fallback. A None return would mean a new exit
+    # path was added without one; fail visibly rather than spawn a process.
+    return {
+        "ok": False,
+        "via": "codex-app-spawn",
+        "code": "codex_app_spawn_unavailable",
+        "error": "Codex app-server spawn returned no result",
     }
-    _core._spawned_sessions.append(entry)
-    _core._record_spawn_to_registry(
-        pid=proc.pid,
-        name=session_name,
-        log_path=log_path,
-        cwd=spawn_cwd,
-        spawned_at=timestamp,
-        command_summary=prompt[:200],
-        fifo=None,
-        engine="codex",
-        repo_path=repo_for_logs,
-        model=model_to_use,
-        parent_session_id=parent_session_id,
-        reasoning_effort=reasoning_effort,
-    )
-
-    resp = {
-        "ok": True,
-        "pid": proc.pid,
-        "name": session_name,
-        "log": str(log_path),
-        "via": "codex-spawn",
-    }
-    if worktree_path:
-        resp["worktree_path"] = worktree_path
-        resp["worktree_branch"] = worktree_branch
-    _core._codex_telemetry_append(
-        "codex_spawn",
-        ok=True,
-        via="codex-spawn",
-        launch_ms=launch_ms,
-        total_ms=_core._codex_elapsed_ms(exec_total_start),
-        pid=proc.pid,
-        cwd=spawn_cwd,
-        model=model_to_use,
-    )
-    return _finalize_spawn_response(resp, entry, ctx)
 
 
 def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
@@ -6454,14 +6835,19 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None):
+def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None, runtime=""):
     """Spawn a headless OpenCode CLI run and return tracking info.
 
     ``env``, when given, is merged over the inherited process environment —
     used by the BYOK layer (ccc_server/byok.py) to hand OpenCode a
     provider API key for this one spawn without touching global state.
+
+    ``runtime="free"`` points the run at the CCC free router's OpenAI endpoint
+    (``/v1``) instead of the user's paid provider. An unready router refuses
+    the spawn outright — never a silent paid run.
     """
     prompt = _core._strip_ccc_session_state_instruction(prompt)
+    runtime = str(runtime or "").strip().lower()
     resolved = _core._resolve_opencode_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
@@ -6471,7 +6857,14 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
     session_name = _core._slugify(name or prompt) or "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-opencode-{session_name}-{timestamp}.log"
-    model_to_use = _core._spawn_model_for_engine("opencode", model) or os.environ.get("CCC_OPENCODE_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
+    if runtime:
+        free_overlay = _free_runtime.spawn_env("opencode", model=model)
+        if not free_overlay:
+            return _free_runtime.unavailable_result("opencode")
+        model_to_use = _free_runtime.model_for("opencode", model)
+        env = {**(env or {}), **free_overlay}
+    else:
+        model_to_use = _core._spawn_model_for_engine("opencode", model) or os.environ.get("CCC_OPENCODE_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
     if model_to_use:
         _core._set_session_model(log_filename[:-4], model_to_use, False)
     log_dir = _core.repo_log_dir(repo_for_logs)
@@ -6492,7 +6885,17 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
     log_fh = open(log_path, "w")
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+    if runtime:
+        try:
+            log_fh.write(json.dumps(
+                _free_runtime.spawn_log_marker_event(model_to_use)
+            ) + "\n")
+            log_fh.flush()
+        except OSError:
+            pass
     popen_env = {**os.environ, **env} if env else None
+    if runtime and popen_env is not None:
+        _free_runtime.scrub_paid_env(popen_env)
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
@@ -6510,19 +6913,24 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
         "log_fh": log_fh, "fifo": None, "stdin_fd": None,
         "engine": "opencode", "cwd": spawn_cwd, "repo_path": repo_for_logs,
         "model": model_to_use or "", "parent_session_id": parent_session_id or "",
+        "runtime": runtime,
     }
     _core._spawned_sessions.append(entry)
     _core._record_spawn_to_registry(
         pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
         spawned_at=timestamp, command_summary=prompt[:200],
         fifo=None, engine="opencode", repo_path=repo_for_logs, model=model_to_use,
-        parent_session_id=parent_session_id,
+        parent_session_id=parent_session_id, runtime=runtime,
     )
     resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "opencode-spawn"}
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
-    return _finalize_spawn_response(resp, entry, ctx)
+    final = _finalize_spawn_response(resp, entry, ctx)
+    if runtime:
+        _free_runtime.mark_spawned(final.get("session_id"), pid=proc.pid)
+        final["runtime"] = runtime
+    return final
 
 
 def spawn_session_kimi(
@@ -6946,6 +7354,8 @@ def _make_stdin_fifo(log_path):
     to subprocess.PIPE in that case — same behavior as before this
     feature shipped.
     """
+    if not hasattr(os, "mkfifo"):
+        return None, None
     try:
         log_path = Path(log_path)
         fifo_dir = _core.COMMAND_CENTER_STATE_DIR / "fifos"
@@ -6964,7 +7374,7 @@ def _make_stdin_fifo(log_path):
         # would deadlock the spawn flow.
         fd = os.open(str(fifo_path), os.O_RDWR | os.O_CLOEXEC)
         return str(fifo_path), fd
-    except OSError as e:
+    except (OSError, AttributeError) as e:
         print(f"  [spawn-fifo] mkfifo failed for {log_path} ({e}); falling back to PIPE")
         return None, None
 
@@ -7060,6 +7470,10 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
     if not isinstance(entry, dict):
         return
     pid = entry.get("pid")
+    if terminate:
+        # A deliberate stop, so its open turn must not be toasted as a death.
+        from ccc_server import session_death
+        session_death.note_stop(entry.get("resumed_sid") or entry.get("session_id"), reason)
     # Diagnostic: record whether the child was still alive at retire time so we
     # can distinguish "we killed a live process" from "cleaned up a dead one".
     alive = None
@@ -7095,7 +7509,10 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
     )
     if terminate and pid is not None:
         try:
-            os.killpg(int(pid), signal.SIGTERM)
+            if sys.platform == "win32":
+                os.kill(int(pid), signal.SIGTERM)
+            else:
+                os.killpg(int(pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
         except (PermissionError, OSError, ValueError):
@@ -7104,12 +7521,34 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
             except (ProcessLookupError, PermissionError, OSError, ValueError):
                 pass
     _cleanup_finished_entry(entry)
+    if terminate and isinstance(_proc, subprocess.Popen):
+        threading.Thread(target=_proc.wait, daemon=True, name=f"retired-spawn-{pid}").start()
     if pid is not None:
         _core._remove_spawn_from_registry(pid)
     try:
         _core._spawned_sessions.remove(entry)
     except ValueError:
         pass
+
+
+def _proc_less_entry_poll(entry):
+    """None while a proc-less entry's pid is alive, else -1.
+
+    No waitpid here: the same pid may belong to a real Popen in another entry,
+    and reaping it would steal that handle's exit status.
+    """
+    pid = entry.get("pid") if isinstance(entry, dict) else None
+    if pid is None:
+        return -1
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return -1
+    if pid <= 0 or not _paths_is_pid_alive(pid, perm_alive=True):
+        return -1
+    if _core._pid_is_zombie(pid):
+        return -1
+    return None
 
 
 def _poll_spawn_entry(entry):
@@ -7129,7 +7568,14 @@ def _poll_spawn_entry(entry):
     else:
         proc = entry.get("proc") if isinstance(entry, dict) else None
         try:
-            poll = proc.poll() if proc is not None else -1
+            if proc is not None:
+                poll = proc.poll()
+            else:
+                # Proc-less entries with a pid (raw spawn-registry rows merged in
+                # by the Antigravity/Devin sid lookups) must not read as exited
+                # while the child runs, or the registry row is dropped early
+                # and the live row turns "(external)" (CCC-166).
+                poll = _proc_less_entry_poll(entry)
         except Exception:
             poll = -1
     # Devin's CLI wrapper can exit while the real agent child (recorded in
@@ -7171,12 +7617,16 @@ def _poll_spawn_entry(entry):
         _cleanup_finished_entry(entry)
         pid = entry.get("pid")
         if pid is not None:
-            _core._remove_spawn_from_registry(pid)
+            _core._remove_spawn_from_registry(pid, exit_code=poll)
         entry["_cleanup_done"] = True
     return poll
 
 
 def _set_fd_nonblocking(fd):
+    # The Windows fcntl shim is a no-op and O_NONBLOCK is unavailable.
+    # Refuse this POSIX FIFO transport instead of risking a blocking write.
+    if sys.platform == "win32":
+        return False
     try:
         flags = fcntl.fcntl(fd, fcntl.F_GETFL)
         if not (flags & os.O_NONBLOCK):
@@ -7216,14 +7666,31 @@ def _write_fd_nonblocking(fd, line_bytes, timeout=0.25):
     return True
 
 
-def _write_via_pipe(proc, line_bytes):
+def _write_via_pipe(proc, line_bytes, timeout=0.25):
     if proc is None or getattr(proc, "stdin", None) is None:
         return False
+    if sys.platform == "win32":
+        box = [False]
+        def _worker():
+            try:
+                if hasattr(proc.stdin, "buffer"):
+                    proc.stdin.buffer.write(line_bytes)
+                    proc.stdin.buffer.flush()
+                else:
+                    proc.stdin.write(line_bytes)
+                    proc.stdin.flush()
+                box[0] = True
+            except (OSError, ValueError):
+                box[0] = False
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        return box[0]
     try:
         fd = proc.stdin.fileno()
     except (OSError, ValueError, AttributeError):
         return False
-    return _write_fd_nonblocking(fd, line_bytes)
+    return _write_fd_nonblocking(fd, line_bytes, timeout=timeout)
 
 
 def _write_via_spawn_fd(target, line, timeout=0.25):
@@ -7286,7 +7753,7 @@ def _write_stream_json_user_message(target, text, timeout=0.25):
             pending_commands = _pending_input_command_uuids(target)
             delivered = _core._write_via_spawn_fd(target, line, timeout=timeout)
             if not delivered:
-                delivered = _core._write_via_pipe(target.get("proc"), line)
+                delivered = _core._write_via_pipe(target.get("proc"), line, timeout=timeout)
             if not delivered:
                 return False
 
@@ -7300,7 +7767,7 @@ def _write_stream_json_user_message(target, text, timeout=0.25):
             )
             return True
 
-    return _core._write_via_pipe(target, line)
+    return _core._write_via_pipe(target, line, timeout=timeout)
 
 
 def _write_fifo_line_once(fifo_path, text, timeout=0.25):
@@ -7353,9 +7820,9 @@ def _write_stream_json_interrupt(target, timeout=0.25):
     if isinstance(target, dict):
         if _core._write_via_spawn_fd(target, line, timeout=timeout):
             return True
-        return _core._write_via_pipe(target.get("proc"), line)
+        return _core._write_via_pipe(target.get("proc"), line, timeout=timeout)
 
-    return _core._write_via_pipe(target, line)
+    return _core._write_via_pipe(target, line, timeout=timeout)
 
 
 def inject_into_spawned(pid, text):
@@ -7816,7 +8283,8 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     # loses the in-flight response just as much as killing a tool call would.
     # `_headless_log_result_count` covers the whole window (no output yet AND
     # output streaming but not yet complete) with one check.
-    if spawn.get("prompt") and _headless_log_result_count(spawn) == 0:
+    completed_results = _headless_log_result_count(spawn)
+    if spawn.get("prompt") and completed_results == 0:
         if defer_if_busy:
             spawn["retire_when_idle"] = True
             spawn["retire_requires_approval"] = require_approval
@@ -7834,7 +8302,7 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     # until the browser gives up — "session doesn't load, times out").
     _STARTUP_GRACE_S = 60
     started_epoch = _spawn_entry_started_epoch(spawn)
-    if started_epoch and (time.time() - started_epoch) < _STARTUP_GRACE_S:
+    if not completed_results and started_epoch and (time.time() - started_epoch) < _STARTUP_GRACE_S:
         sid_for_timeline = _spawn_entry_session_id(spawn)
         timeline = _core._spawn_timeline_get(sid_for_timeline) if sid_for_timeline else None
         marks = (timeline or {}).get("marks") or {}
@@ -8049,11 +8517,21 @@ def _start_headless_staleness_watcher() -> None:
     ).start()
 
 
-def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
+def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, runtime="", extra_env=None):
     """Resume a dormant session headlessly (`claude --resume`) and send text.
 
     If we already resumed this session and the process is still alive, reuse it.
     Optional `cwd` parameter allows bypassing session lookup (useful in remote envs).
+
+    `runtime="free"` runs the resumed process on the free router. When left
+    empty, the session's born-with runtime (recorded in its spawn marker) is
+    inherited — a session created for $0 stays $0 across resumes, and an
+    unavailable router refuses rather than silently billing the user.
+
+    `extra_env` (e.g. a free-router env for a limit-hit failover) is merged
+    into the child env on a FRESH resume only — a live process can't change
+    its env, so passing it also skips the warm-reuse path entirely rather
+    than silently answering on the old env.
     """
     # Claude Task-tool children have their own JSONL transcripts but cannot be
     # resumed independently. Some automatic callers invoke this lower-level
@@ -8063,12 +8541,25 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     # Resolved before control-plane routing so a remote node receives the
     # parent id too.
     session_id = _core._claude_subagent_parent_session_id(session_id) or session_id
+    runtime = str(runtime or "").strip().lower()
+    if not runtime:
+        try:
+            runtime = _free_runtime.session_runtime(session_id)
+        except Exception:
+            runtime = ""
+    routed_args = {
+        "session_id": session_id,
+        "text": text,
+        "cwd": cwd,
+    }
+    if runtime:
+        routed_args["runtime"] = runtime
+    if extra_env:
+        # The worker owns engine processes; the failover env has to ride the
+        # control-plane call or the child would spawn with the paid endpoint.
+        routed_args["extra_env"] = dict(extra_env)
     routed = _core._control_plane_engine_call(
-        "claude", "resume", {
-            "session_id": session_id,
-            "text": text,
-            "cwd": cwd,
-        },
+        "claude", "resume", routed_args,
         idempotency_key=idempotency_key,
     )
     if routed is not None:
@@ -8076,12 +8567,43 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     text = _core._strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
-    # Reuse existing resumed process
+    # A session mid limit-hit failover keeps every later turn on the router
+    # until it switches back. Applied to a FRESH spawn only (below), so the
+    # warm free process is still reused turn after turn.
+    failover_env = None
+    if not runtime and not extra_env:
+        try:
+            failover_env = _core._free_failover_session_env(session_id)
+        except Exception:
+            failover_env = None
+    preset_override = _core._get_session_override(session_id) or {}
+    preset_model = _domestic_providers.session_model(session_id, preset_override)
+    if not runtime and not extra_env and not failover_env:
+        preset_error = _domestic_providers.request_error(
+            "claude", preset_model, remote=bool(os.environ.get("CCC_SSH_HOST")),
+        )
+        if preset_error:
+            return preset_error
+    # Reuse existing resumed process — but only when it runs the requested
+    # runtime (a warm paid process must never serve a turn sold as $0), and
+    # never for an extra_env resume: the live process still carries the old
+    # env, so reuse would answer on the wrong meter.
     for s in list(_core._spawned_sessions):
         if (
-            (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
+            not extra_env
+            and (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
             and _core._poll_spawn_entry(s) is None
         ):
+            if runtime and str(s.get("runtime") or "") != runtime:
+                return _free_runtime.unavailable_result(
+                    "claude",
+                    "this session already has a live process on a different "
+                    "runtime — let it finish or start a new session",
+                )
+            if not runtime and (str(preset_model).startswith("byok/") or str(s.get("model") or "").startswith("byok/")):
+                if preset_model != s.get("model"):
+                    return {"ok": False, "code": "preset_live_model_changed",
+                            "error": "This session is still running with a different model. Start a new session to use your new choice."}
             ok = _core._write_stream_json_user_message(s, text)
             if ok:
                 _se = _core._resume_entry_started_epoch(s)
@@ -8101,6 +8623,18 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
             _core._retire_unresponsive_spawn_entry(s, terminate=True, reason="write_failed")
             break
 
+    if failover_env is not None:
+        if not failover_env:
+            # Running free until the plan resets, but the router is down:
+            # refuse instead of silently resuming on the limited plan.
+            return {
+                "ok": False, "code": "free_router_unavailable",
+                "error": "This session is on your router until your Claude "
+                         "limit resets, and the router isn't answering. "
+                         "Start it again, or switch the session back.",
+            }
+        extra_env = failover_env
+
     if cwd:
         try:
             ctx = _core._resolve_cwd_context(cwd)
@@ -8112,6 +8646,11 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         except _core.RepoContextError as e:
             return e.as_payload()
     cwd = ctx["cwd"]
+    try:
+        paid_preset = (None if runtime or extra_env else
+                       _domestic_providers.resolve_spawn(preset_model, cwd))
+    except _domestic_providers.DomesticProviderError as error:
+        return error.as_payload()
     rebucket = _core._ensure_session_jsonl_for_cwd(session_id, cwd)
     if not rebucket.get("ok"):
         return {
@@ -8120,7 +8659,9 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
             "code": rebucket.get("error") or "session_jsonl_unavailable",
         }
     timestamp = time.strftime("%Y%m%dT%H%M%S")
-    log_filename = f"resume-{session_id[:8]}-{timestamp}.log"
+    # Rapid cold resumes can share a second (for example a router switch).
+    # Keep their output and stdin FIFO separate instead of truncating a turn.
+    log_filename = f"resume-{session_id[:8]}-{timestamp}-{uuid.uuid4().hex}.log"
     log_dir = _core.repo_log_dir(ctx["repo_path"])
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
@@ -8153,8 +8694,17 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     # header (`--betas`), not a model-id suffix. Use _cli_model_flag() which
     # also expands versioned short aliases (e.g. sonnet-4-6 → claude-sonnet-4-6)
     # since the --model flag does not accept bare versioned aliases for 4.x models.
-    override = _core._get_session_override(session_id)
-    if override and override.get("model"):
+    override = preset_override
+    if paid_preset:
+        cmd.extend(["--model", paid_preset["model"]])
+        effort = str(override.get("reasoning_effort") or "").strip().lower()
+        if effort in _core.CLAUDE_REASONING_EFFORTS and effort:
+            cmd.extend(["--effort", effort])
+    elif override and override.get("model") and not extra_env and not runtime:
+        # extra_env (a limit-hit failover's free-router wiring) or a free
+        # runtime owns the model
+        # selection for this child — passing the session's paid --model alias
+        # too would send a paid-only id to the free endpoint.
         alias = _core._cli_model_flag(override["model"])  # strips [1m], normalizes to full ID
         if alias:
             cmd.extend(["--model", alias])
@@ -8169,14 +8719,53 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     _core._resume_ledger_append("reuse_miss", sid=session_id, reason="no_live_entry")
     _spawn_started_epoch = time.time()
 
+    free_overlay = {}
+    if runtime:
+        free_overlay = _free_runtime.spawn_env("claude")
+        if not free_overlay:
+            return _free_runtime.unavailable_result("claude")
     log_fh = open(log_path, "w")
+    if runtime:
+        try:
+            log_fh.write(json.dumps(
+                _free_runtime.spawn_log_marker_event()
+            ) + "\n")
+            log_fh.flush()
+        except OSError:
+            pass
+    # A cold resume is a new process, so it must carry the autocompact window
+    # too -- otherwise it silently falls back to Claude Code's own default.
+    # Use the current Settings value (the user-facing key, passed explicitly:
+    # this runs in the worker, whose role default is the WatchTower one), so
+    # changing Settings and restarting a session applies the new threshold.
+    resume_auto_compact_k = _core._validate_auto_compact_k(
+        (_core._load_spawn_defaults() or {}).get("auto_compact_k", 250)
+    )
+    child_env = _core._spawn_env(auto_compact_k=resume_auto_compact_k)
+    if paid_preset:
+        _domestic_providers.apply_env(child_env, paid_preset["env"])
+    if runtime:
+        _free_runtime.scrub_paid_env(child_env)
+        child_env.update(free_overlay)
     fifo_path, child_stdin_fd = _core._make_stdin_fifo(log_path)
+    if extra_env:
+        # Caller-provided child env wins (e.g. the free-router ANTHROPIC_*
+        # vars of a limit-hit failover). Scrub the inherited Anthropic vars
+        # first so only the caller's values apply — a stray ANTHROPIC_API_KEY
+        # in the parent shell must never leak into router-bound traffic.
+        _free_runtime.scrub_paid_env(child_env)
+        for _k in (
+            "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+        ):
+            child_env.pop(_k, None)
+        child_env.update(extra_env)
     popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         cwd=cwd,
         start_new_session=True,
-        env=_core._question_relay_env(),
+        env=child_env,
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
@@ -8212,6 +8801,9 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         "engine": "claude",
         "cwd": cwd,
         "repo_path": ctx["repo_path"],
+        "runtime": runtime,
+        "model": preset_model if paid_preset else "",
+        "auto_compact_k": resume_auto_compact_k,
     }
     ok = _core._write_stream_json_user_message(entry, text, timeout=30)
     if not ok:
@@ -8244,10 +8836,14 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         engine="claude",
         session_id=session_id,
         repo_path=ctx["repo_path"],
+        runtime=runtime,
+        model=preset_model if paid_preset else "",
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
         input_command_uuids=entry.get("input_command_uuids"),
     )
+    if runtime:
+        _free_runtime.mark_spawned(session_id, pid=proc.pid)
     # Diagnostic: a fresh warm process is now live. Record the gap since this
     # sid's last exit/cold_resume — a short gap right after `server_start`
     # implicates a restart-EOF killing the previous warm process.

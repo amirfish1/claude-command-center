@@ -33,7 +33,7 @@
   .card .ctx { color: var(--mute); margin: 6px 0 12px; }
   .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--mute); white-space: nowrap; }
   .tag.board { color: #c9a6ff; border-color: #4b3a72; }
-  .tag.wt { color: #ffd27a; border-color: #6b5320; }
+  .tag.wt, .tag.wt_review { color: #ffd27a; border-color: #6b5320; }
   .tag.session { color: #7ad0ff; border-color: #24506b; }
   .tag.governor { color: var(--warn); border-color: #6b4a14; }
   .tag.external { color: #9fe0b8; border-color: #235c3a; }
@@ -132,7 +132,8 @@
 
   function actionVerb(a) {
     var k = (a && a.kind) || "human";
-    return { spawn: "Spawn session", inject: "Steer session", pause: "Pause", kill: "Kill", human: "I'll do it", snooze: "Snooze" }[k] || k;
+    return { spawn: "Spawn session", inject: "Steer session", pause: "Pause", kill: "Kill", human: "I'll do it", snooze: "Snooze",
+      wt_accept: "Accept", wt_reject: "Reject…" }[k] || k;
   }
 
   var REF_RE = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+\b|\bBECKY(?:-DESIGN|-TEACH)?#\d+\b/g;
@@ -178,10 +179,11 @@
     }).join("");
     var src = c.source || {};
     var srcLine = c.kind === "wt" ? (src.tickets || []).join("\n") :
+      c.kind === "wt_review" ? ["Reviewer: " + (src.reviewer || "submitter"), src.commit ? "Commit: " + src.commit : ""].filter(Boolean).join("\n") :
       c.kind === "session" ? (src.goal || src.last_assistant_text || "") :
       c.kind === "board" ? [src.category, src.status, src.eta, src.notes].filter(Boolean).join(" · ") : (src.detail || "");
     var analyst = c.analyst ? (c.analyst.error ? "analyst failed (" + esc(c.analyst.error) + "), generic options" :
-      esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : "governor";
+      esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : c.kind === "wt_review" ? "WatchTower review gate" : "governor";
     var dres = c.decided && c.decided.result;
     var money = (String(c.title || "") + " " + String(c.context || "")).match(/\$\s?\d[\d,]*(?:\.\d+)?/);
     return '<div class="card' + (closed ? " closed" : "") + '" id="card-' + esc(c.id) + '">' +
@@ -198,7 +200,7 @@
       (srcLine ? '<details><summary>source</summary><pre>' + esc(srcLine) + "</pre></details>" : "") +
       '<span class="grow"></span>' +
       (dres ? '<span class="result' + (dres.ok ? "" : " bad") + '">' + esc(dres.effect || "") + (dres.session_id ? " · " + esc(String(dres.session_id).slice(0, 8)) : "") + (dres.error ? " · " + esc(dres.error) : "") + "</span>" : "") +
-      (closed ? "" : '<button class="ghost" data-dismiss="' + esc(c.id) + '">Close</button>') +
+      (closed || c.live ? "" : '<button class="ghost" data-dismiss="' + esc(c.id) + '">Close</button>') +
       "</div></div>";
   }
 
@@ -217,7 +219,7 @@
     }).join("");
   }
 
-  var DECISION_KINDS = { external: 1, wt: 1, board: 1 };
+  var DECISION_KINDS = { external: 1, wt: 1, board: 1, wt_review: 1 };
 
   function render(data) {
     state.cards = data.cards || [];
@@ -255,8 +257,15 @@
     if (b.dataset.decide) {
       var cid = b.dataset.decide, idx = +b.dataset.idx;
       if (b.classList.contains("danger") && !confirm("Kill this session's process?")) return;
+      var card = state.cards.filter(function (c) { return c.id === cid; })[0];
+      var act = card && card.options && card.options[idx] && card.options[idx].action;
+      var reason = "";
+      if (act && act.kind === "wt_reject") {
+        reason = (prompt("What must change before " + (act.ref || "this ticket") + " can be accepted?") || "").trim();
+        if (!reason) return;
+      }
       b.disabled = true; b.textContent = "…";
-      var res = await post("/api/decision-inbox/decide", { card_id: cid, option: idx });
+      var res = await post("/api/decision-inbox/decide", { card_id: cid, option: idx, reason: reason });
       toast(res.ok ? "Done: " + ((res.result && res.result.effect) || "ok") : "Failed: " + (res.error || (res.result && res.result.error) || "?"), !res.ok);
       load();
     } else if (b.dataset.dismiss) {

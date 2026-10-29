@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Effects kit · Claude Command Center</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/fx.css">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #1c2330;
+    --border: #2d333f;
+    --text: #e8e6e3;
+    --text-dim: #9aa4b0;
+    --accent: #d97757;
+    --accent-soft: rgba(217, 119, 87, 0.16);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 500px at 50% -10%, #1b2432 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    padding: 48px 20px 80px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 40px; }
+  h1 {
+    font-size: 34px;
+    letter-spacing: -0.02em;
+    margin: 0 0 10px;
+  }
+  h1 .star { color: var(--accent); }
+  .sub { color: var(--text-dim); font-size: 15px; margin: 0 0 18px; }
+  .status { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .pill {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+  }
+  .pill.on { color: #7bd88f; border-color: rgba(123, 216, 143, 0.4); }
+  .pill.warn { color: #f2b544; border-color: rgba(242, 181, 68, 0.4); }
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px;
+    margin-bottom: 18px;
+  }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  .hint { color: var(--text-dim); font-size: 13px; margin: 0 0 16px; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 10px; }
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 9px 16px;
+    cursor: pointer;
+    transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+  button:hover { border-color: var(--accent); transform: translateY(-1px); }
+  button:active { transform: translateY(0) scale(0.98); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .card {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 14px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+  .big-number {
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: #7bd88f;
+    text-align: center;
+    margin: 8px 0 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  .big-number small { font-size: 20px; color: var(--text-dim); font-weight: 600; }
+  code {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 2px 6px;
+    border-radius: 5px;
+  }
+  footer { text-align: center; color: var(--text-dim); font-size: 13px; margin-top: 28px; line-height: 1.7; }
+  @media (prefers-reduced-motion: reduce) {
+    button { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="star">✦</span> The little celebration kit</h1>
+    <p class="sub">Every sound and sparkle your agents get to play with. Press things. Smile.</p>
+    <div class="status">
+      <span class="pill" id="soundPill">sound: …</span>
+      <span class="pill" id="motionPill">motion: …</span>
+      <button id="muteBtn" type="button">toggle sound</button>
+    </div>
+  </header>
+
+  <section>
+    <h2>Sounds</h2>
+    <p class="hint">Six tiny cues, synthesized on the spot. No audio files anywhere.</p>
+    <div class="btn-row" id="soundRow"></div>
+  </section>
+
+  <section>
+    <h2>Confetti</h2>
+    <p class="hint">A canvas burst for the big moments.</p>
+    <div class="btn-row">
+      <button type="button" data-confetti="burst">Big burst</button>
+      <button type="button" data-confetti="left">Left cannon</button>
+      <button type="button" data-confetti="right">Right cannon</button>
+      <button type="button" data-confetti="rain">Rain</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Count-up</h2>
+    <p class="hint">Numbers that climb to their total. This is how savings will feel.</p>
+    <div class="big-number"><small>$</small><span id="countTarget">0.00</span></div>
+    <div class="btn-row">
+      <button type="button" id="countBtn">Count to $12.40</button>
+      <button type="button" id="countSmallBtn">Add 35 cents</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Shimmer, glow, pop</h2>
+    <p class="hint">Three classes from <code>fx.css</code>: <code>.fx-shimmer</code>, <code>.fx-glow</code>, <code>.fx-pop</code>.</p>
+    <div class="cards">
+      <div class="card fx-shimmer">shimmer</div>
+      <div class="card fx-glow">glow</div>
+      <div class="card" id="popCard">pop</div>
+    </div>
+    <div class="btn-row" style="margin-top:14px">
+      <button type="button" id="popBtn">Pop it again</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>The whole moment</h2>
+    <p class="hint">What a finished task feels like: a chime, confetti, and the savings rolling up.</p>
+    <div class="big-number"><small>$</small><span id="celebrateTarget">0.00</span> <small>saved</small></div>
+    <div class="btn-row">
+      <button type="button" class="primary" id="celebrateBtn">Celebrate a $0 run</button>
+    </div>
+  </section>
+
+  <footer>
+    All of this lives in <code>window.cccFx</code> from <code>static/fx.js</code>.<br>
+    <code>cccFx.play('success')</code> · <code>cccFx.confetti()</code> · <code>cccFx.countUp(el, 12.40, {prefix:'$'})</code>
+  </footer>
+</div>
+
+<script src="/static/fx.js"></script>
+<script>
+(function () {
+  var fx = window.cccFx;
+
+  function refreshPills() {
+    var soundPill = document.getElementById('soundPill');
+    var motionPill = document.getElementById('motionPill');
+    var muted = fx ? fx.muted() : true;
+    var reduced = fx ? fx.reducedMotion() : false;
+    soundPill.textContent = muted ? 'sound: off' : 'sound: on';
+    soundPill.className = 'pill ' + (muted ? 'warn' : 'on');
+    motionPill.textContent = reduced ? 'motion: reduced (your OS asked)' : 'motion: full';
+    motionPill.className = 'pill ' + (reduced ? 'warn' : 'on');
+  }
+  refreshPills();
+
+  document.getElementById('muteBtn').addEventListener('click', function () {
+    try {
+      var off = localStorage.getItem('ccc-sounds-enabled') === '0';
+      localStorage.setItem('ccc-sounds-enabled', off ? '1' : '0');
+    } catch (_) {}
+    refreshPills();
+    if (fx && !fx.muted()) fx.play('step');
+  });
+
+  var labels = {
+    welcome: 'Welcome',
+    step: 'Step done',
+    success: 'Success',
+    coin: 'Coin',
+    error: 'Gentle error',
+    whoosh: 'Whoosh',
+  };
+  var row = document.getElementById('soundRow');
+  (fx ? fx.names : Object.keys(labels)).forEach(function (name) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = labels[name] || name;
+    b.addEventListener('click', function () { fx.play(name); });
+    row.appendChild(b);
+  });
+
+  document.querySelectorAll('[data-confetti]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var kind = b.getAttribute('data-confetti');
+      if (kind === 'left') {
+        fx.confetti({ origin: { x: 0.05, y: 0.7 }, angle: -60, spread: 45, count: 90 });
+      } else if (kind === 'right') {
+        fx.confetti({ origin: { x: 0.95, y: 0.7 }, angle: -120, spread: 45, count: 90 });
+      } else if (kind === 'rain') {
+        fx.confetti({ origin: { x: 0.5, y: -0.05 }, angle: 90, spread: 55, count: 160, speed: 7 });
+      } else {
+        fx.confetti({ count: 160 });
+      }
+    });
+  });
+
+  document.getElementById('countBtn').addEventListener('click', function () {
+    fx.countUp(document.getElementById('countTarget'), 12.40, {
+      prefix: '', decimals: 2, duration: 1200, from: 0,
+    });
+  });
+  document.getElementById('countSmallBtn').addEventListener('click', function () {
+    var el = document.getElementById('countTarget');
+    var now = parseFloat(el.textContent.replace(/,/g, '')) || 0;
+    fx.countUp(el, now + 0.35, { decimals: 2, duration: 500 });
+  });
+
+  document.getElementById('popBtn').addEventListener('click', function () {
+    var card = document.getElementById('popCard');
+    card.classList.remove('fx-pop');
+    void card.offsetWidth;
+    card.classList.add('fx-pop');
+  });
+
+  document.getElementById('celebrateBtn').addEventListener('click', function () {
+    var el = document.getElementById('celebrateTarget');
+    var now = parseFloat(el.textContent.replace(/,/g, '')) || 0;
+    var next = now + 1.80;
+    fx.play('success');
+    fx.confetti({ count: 180 });
+    fx.countUp(el, next, { decimals: 2, duration: 1400 });
+    setTimeout(function () { fx.play('coin'); }, 700);
+  });
+})();
+</script>
+</body>
+</html>

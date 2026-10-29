@@ -14,7 +14,7 @@ test('allocated cost leads with percentage second and API price secondary',()=>{
 });
 test('missing quota does not promote API cost into the allocated cost position',()=>{
  const out=ctx.railCostHeadline({state:'unavailable'},66.654);
- assert.equal(out.headline,'Unavailable');
+ assert.equal(out.headline,'');
  assert.equal(out.apiLabel,'$66.65 API list-price equivalent');
  const pending=ctx.railCostHeadline({state:'calibrating'},null);
  assert.equal(pending.headline,'Calibrating…');

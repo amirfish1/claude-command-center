@@ -5,7 +5,8 @@ const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const html = fs.readFileSync(require('node:path').join(__dirname, '../static/throughput.html'), 'utf8');
 const helpers = html.slice(html.indexOf('    function chartRowTimeMs('), html.indexOf('    function updateChartZoomButton('));
-const zoomScript = html.slice(html.indexOf('  // ── W87 zoom ladder:'), html.lastIndexOf('  </script>'));
+const zoomStart = html.indexOf('  // ── W87 zoom ladder:');
+const zoomScript = html.slice(zoomStart, html.indexOf('  </script>', zoomStart));
 
 (async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });

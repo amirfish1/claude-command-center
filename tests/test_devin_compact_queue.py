@@ -16,7 +16,7 @@ def test_busy_devin_compact_is_queued_not_crashed(monkeypatch):
     monkeypatch.setattr(_core, "_devin_cli_raw_id", lambda sid: "raw-" + sid)
     monkeypatch.setattr(_core, "find_session_cwd", lambda sid: "")
     monkeypatch.setattr(_core, "_acp_prompt",
-                        lambda h, sid, text: {"ok": False, "code": "busy"})
+                        lambda h, sid, text, **kw: {"ok": False, "code": "busy"})
     monkeypatch.setattr(_core, "_queue_devin_steer",
                         lambda sid, text: queued.append((sid, text)) or True)
 

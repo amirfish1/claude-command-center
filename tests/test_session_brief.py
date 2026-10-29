@@ -176,10 +176,15 @@ def mock_brief_env(tmp_path, monkeypatch):
     # that hasn't finished by the time the test reads sdoc.
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "0")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(fts_db))
+    # Keep the host's real ~/.hermes sessions out of search results.
+    from ccc_server import hermes as _hermes
+    monkeypatch.setattr(_hermes, "search_hermes_messages", lambda *a, **k: [])
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
     monkeypatch.setenv("CCC_SESSION_FTS_EMBED", "0")

@@ -1,1 +1,0 @@
-- Sessions started by a script (`claude -p`) now record who launched them at startup: the launching script or app is shown as "via: <caller>" instead of "via: Terminal", and when the launcher was a Claude session it is linked as the parent.

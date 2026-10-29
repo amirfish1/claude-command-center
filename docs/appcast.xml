@@ -8,6 +8,71 @@
         <description>Sparkle update feed for CCC.app.</description>
         <language>en</language>
         <item>
+            <title>v5.41.0</title>
+            <pubDate>Wed, 28 Oct 2026 07:13:26 +0000</pubDate>
+            <sparkle:version>5.41.0</sparkle:version>
+            <sparkle:shortVersionString>5.41.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.0</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v5.41.0/ccc-v5.41.0.dmg"
+                length="3615525"
+                type="application/octet-stream"
+                sparkle:edSignature="m+7MawdByB3tUNYlruz6co0MR+Z3z1WCEtrpelQdzxfxHQAEpsZhaGENLIGRbG+4as4Aeuqc513CCw7HFs9BDg==" />
+        </item>
+<item>
+            <title>v5.39.0</title>
+            <pubDate>Mon, 19 Oct 2026 06:55:59 +0000</pubDate>
+            <sparkle:version>5.39.0</sparkle:version>
+            <sparkle:shortVersionString>5.39.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v5.39.0</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v5.39.0/ccc-v5.39.0.dmg"
+                length="3614187"
+                type="application/octet-stream"
+                sparkle:edSignature="9YnvdlrV8Q8/dhxAn9uUzhDHteZeR+y9pi5CdExo+VTiAuKgoXEIrEr7ayPRcmGwbv2LdMAG9jdG9UBpSeyRAA==" />
+        </item>
+<item>
+            <title>v5.38.0</title>
+            <pubDate>Sat, 17 Oct 2026 20:27:01 +0000</pubDate>
+            <sparkle:version>5.38.0</sparkle:version>
+            <sparkle:shortVersionString>5.38.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v5.38.0</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v5.38.0/ccc-v5.38.0.dmg"
+                length="3649460"
+                type="application/octet-stream"
+                sparkle:edSignature="W/L1WZc2iHekhyjGeolC2Fkth/LeB05u30AMlzF1dSbrBaJCXM15p+vlGUgMXDoL2cIS/csuCDrqy8edkjbICQ==" />
+        </item>
+<item>
+            <title>v5.37.0</title>
+            <pubDate>Mon, 05 Oct 2026 01:18:30 +0000</pubDate>
+            <sparkle:version>5.37.0</sparkle:version>
+            <sparkle:shortVersionString>5.37.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v5.37.0</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v5.37.0/ccc-v5.37.0.dmg"
+                length="3534507"
+                type="application/octet-stream"
+                sparkle:edSignature="oufkp4tRvh4jfcn5IwMtNgzxG2DvoSBNl9bQBVgmfsyoXGGp6te67BQ5vTuN73qcXq+Ei5ZBBkmGzuQ5SP76CA==" />
+        </item>
+<item>
+            <title>v5.36.0</title>
+            <pubDate>Fri, 02 Oct 2026 13:06:48 +0000</pubDate>
+            <sparkle:version>5.36.0</sparkle:version>
+            <sparkle:shortVersionString>5.36.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v5.36.0</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v5.36.0/ccc-v5.36.0.dmg"
+                length="1177376"
+                type="application/octet-stream"
+                sparkle:edSignature="CxTV5cU9f7DHNoAtPo4zjCKM+ItfS2BYzAMhMzLHBUH9EsGphKTOsddg0UsdRYQGxwcGWu6NvkXH22Ho+UCeAA==" />
+        </item>
+<item>
             <title>v5.35.0</title>
             <pubDate>Tue, 29 Sep 2026 02:59:42 +0000</pubDate>
             <sparkle:version>5.35.0</sparkle:version>

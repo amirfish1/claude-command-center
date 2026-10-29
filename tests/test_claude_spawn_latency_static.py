@@ -41,9 +41,11 @@ def test_claude_placeholder_attaches_to_replayed_spawn_stream():
     assert "pendingConversationId: placeholder.id" in body
     assert "replay: true" in body
     assert "knownLog: !!data.log" in body
-    assert body.index("stopConvStream(activePaneId())") < body.index(
+    assert "const spawnPaneId = activePaneId();" in body
+    assert body.index("stopConvStream(spawnPaneId)") < body.index(
         "startSpawnStream(data.session_id"
     )
+    assert "startSpawnStream(data.session_id, spawnPaneId" in body
 
 
 def test_claude_placeholder_defers_the_full_sidebar_rebuild():
@@ -133,7 +135,7 @@ def test_late_boot_restore_cannot_replace_new_session_user_intent():
     assert "startsWith('spawning-')" in restore
     assert "claudeFastSpawnAwaitingPaint()" in restore
 
-    select = _function_source("selectConversation", 18000)
+    select = _function_source("selectConversation", 22000)
     fetch_at = select.index("await fetchConversationEvents(paneId)")
     guard_at = select.index("pane.conversationId !== id", fetch_at)
     spawn_stream_at = select.index("startSpawnStream(sid, paneId)", fetch_at)
@@ -156,7 +158,7 @@ def test_critical_spawn_can_preempt_background_api_reads():
     assert "function backgroundApiFetch(" in source
     assert "new AbortController()" in source
     assert "window.fetch = function trackedApiFetch" not in source
-    assert "backgroundApiFetch(" in _function_source("loadArchiveAll", 2600)
+    assert "backgroundApiFetch(" in _function_source("loadArchiveAll", 4000)
     assert "backgroundApiFetch(repoUrl('/api/sessions'" in _function_source(
         "loadConversationList", 1200,
     )
@@ -164,7 +166,7 @@ def test_critical_spawn_can_preempt_background_api_reads():
     assert "activeConversation === '__new__'" in pause
     assert "startsWith('spawning-')" in pause
     assert "claudeFastSpawnAwaitingPaint()" in pause
-    enter = _function_source("enterNewSessionMode", 1800)
+    enter = _function_source("enterNewSessionMode").split("\n  function ", 1)[0]
     assert "abortBackgroundApiReadsForSpawn()" in enter
 
 

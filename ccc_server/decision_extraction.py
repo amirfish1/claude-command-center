@@ -163,6 +163,10 @@ def _init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id);
         CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_dir);
     """)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)")}
+    if "source_line" not in cols:
+        conn.execute("ALTER TABLE decisions ADD COLUMN source_line INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_source ON decisions(source_path)")
     conn.commit()
 
 
@@ -405,57 +409,58 @@ def _codex_user_text(entry: dict) -> str | None:
 
 
 def extract_decisions_from_file(path: str, engine: str):
-    """Every decision hit in one transcript file. Never raises -- a
-    malformed line or file is skipped, not fatal to the run."""
+    """Every decision hit in one transcript file; malformed lines are skipped.
+
+    Read errors propagate so the background scan can retain its previous
+    extraction and retry this file instead of caching a failed read.
+    """
     sid = Path(path).stem
     cwd = ""
     out = []
     seen = set()
-    try:
-        with open(path, "rb") as f:
-            for raw in f:
-                try:
-                    d = json.loads(raw)
-                except Exception:
+    with open(path, "rb") as f:
+        for line_number, raw in enumerate(f, 1):
+            try:
+                d = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if engine == "claude":
+                cwd = cwd or d.get("cwd") or ""
+                text = _genuine_user_text(d)
+                ts = _ts(d.get("timestamp"))
+            else:  # codex
+                payload = d.get("payload") or {}
+                if d.get("type") == "session_meta":
+                    sid = payload.get("id") or payload.get("session_id") or sid
+                    cwd = payload.get("cwd") or cwd
                     continue
-                if not isinstance(d, dict):
+                if d.get("type") == "turn_context" and not cwd:
+                    cwd = payload.get("cwd") or cwd
+                text = _codex_user_text(d)
+                ts = _ts(d.get("timestamp"))
+            if not text:
+                continue
+            for quote, pattern, confidence in extract_decisions_from_text(text):
+                key = quote.lower()
+                if key in seen:
                     continue
-                if engine == "claude":
-                    cwd = cwd or d.get("cwd") or ""
-                    text = _genuine_user_text(d)
-                    ts = _ts(d.get("timestamp"))
-                else:  # codex
-                    payload = d.get("payload") or {}
-                    if d.get("type") == "session_meta":
-                        sid = payload.get("id") or payload.get("session_id") or sid
-                        cwd = payload.get("cwd") or cwd
-                        continue
-                    if d.get("type") == "turn_context" and not cwd:
-                        cwd = payload.get("cwd") or cwd
-                    text = _codex_user_text(d)
-                    ts = _ts(d.get("timestamp"))
-                if not text:
-                    continue
-                for quote, pattern, confidence in extract_decisions_from_text(text):
-                    key = quote.lower()
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append({
-                        "id": "dec_" + uuid.uuid4().hex[:12],
-                        "session_id": sid or Path(path).stem,
-                        "repo": _repo_of(cwd),
-                        "engine": engine,
-                        "ts": ts or 0.0,
-                        "date": _date_of(ts) if ts else "",
-                        "quote": quote,
-                        "pattern": pattern,
-                        "confidence": confidence,
-                        "source_path": path,
-                        "project_dir": Path(path).parent.name if engine == "claude" else "",
-                    })
-    except OSError:
-        return []
+                seen.add(key)
+                out.append({
+                    "id": "dec_" + uuid.uuid4().hex[:12],
+                    "session_id": sid or Path(path).stem,
+                    "repo": _repo_of(cwd),
+                    "engine": engine,
+                    "ts": ts or 0.0,
+                    "date": _date_of(ts) if ts else "",
+                    "quote": quote,
+                    "pattern": pattern,
+                    "confidence": confidence,
+                    "source_path": path,
+                    "source_line": line_number,
+                    "project_dir": Path(path).parent.name if engine == "claude" else "",
+                })
     return out
 
 
@@ -513,7 +518,7 @@ def run_once(*, cfg=None, now=None, persist=True, files=None, model_classifier=N
             found = extract_decisions_from_file(path, engine=eng)
         except Exception as e:  # never let one bad file kill the run
             errors.append(f"{path}: {e}"[:200])
-            found = []
+            continue
         new_decisions.extend(found)
         scan_rows.append((path, mt, sz))
 
@@ -539,12 +544,19 @@ def run_once(*, cfg=None, now=None, persist=True, files=None, model_classifier=N
     inserted = 0
     if persist:
         with conn:
+            # A changed transcript replaces its previous extraction. Otherwise
+            # every append duplicates old quotes and edits leave stale rulings.
+            conn.executemany("DELETE FROM decisions WHERE source_path = ?",
+                             [(p,) for p, _, _ in scan_rows])
             for d in new_decisions:
                 conn.execute(
-                    "INSERT OR REPLACE INTO decisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO decisions "
+                    "(id, session_id, repo, engine, ts, date, quote, pattern, confidence, "
+                    "source_path, project_dir, extracted_at, source_line) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (d["id"], d["session_id"], d["repo"], d["engine"], d["ts"], d["date"],
                      d["quote"], d["pattern"], d["confidence"], d["source_path"],
-                     d["project_dir"], now),
+                     d["project_dir"], now, d.get("source_line")),
                 )
                 inserted += 1
             conn.executemany("INSERT OR REPLACE INTO scan_state VALUES (?,?,?)", scan_rows)
@@ -621,6 +633,75 @@ def decision_extraction_loop(initial_delay_s=180):
 
 
 # ── query surface: the function a decisions UI (MEMO-FIX-5) can call ────────
+
+_QUERY_STOPWORDS = frozenset("""
+    a an and are as at be been but by did do does for from had has have how i
+    in is it its me my of on or our that the their this to was we were what
+    when where which who why will with you your about decide decided decision
+    decisions remember please tell use using
+""".split())
+
+
+def _read_decisions(where: str, params: list, order: str, limit: int) -> list[dict]:
+    """Read existing records only: never create/migrate a DB or start a scan.
+
+    Older stores remain usable before the background writer adds source_line.
+    A missing/locked store leaves callers free to use the session fallback.
+    """
+    try:
+        conn = sqlite3.connect(_get_db_path().resolve().as_uri() + "?mode=ro",
+                               uri=True, timeout=0.1)
+        try:
+            conn.row_factory = sqlite3.Row
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)")}
+            line = "source_line" if "source_line" in cols else "NULL AS source_line"
+            rows = conn.execute(
+                "SELECT id, session_id, repo, engine, ts, date, quote, pattern, "
+                f"confidence, source_path, {line} FROM decisions WHERE {where} "
+                f"ORDER BY {order} LIMIT ?", [*params, max(1, min(int(limit), 50))],
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return []
+
+
+def search_decisions(topic: str, *, repo: str | None = None, limit: int = 10) -> list[dict]:
+    """Keyword matches in stored user quotes, ranked by coverage then recency.
+
+    This is evidence retrieval, not a verdict that a ruling is still current.
+    Search the full store before LIMIT so older decisions remain discoverable.
+    """
+    terms = list(dict.fromkeys(w for w in re.findall(r"[^\W_]+", (topic or "")[:512].lower())
+                              if len(w) > 1 and w not in _QUERY_STOPWORDS))[:12]
+    if not terms:
+        return []
+    score = " + ".join("(instr(lower(quote), ?) > 0)" for _ in terms)
+    where = f"({score}) > 0"
+    params = list(terms)
+    if repo:
+        where += " AND repo = ?"
+        params.append(repo)
+    return _read_decisions(where, params + terms,
+                           f"({score}) DESC, ts DESC, confidence DESC, id", limit)
+
+
+def lookup_decision_sessions(ids: list[str]) -> dict[str, dict]:
+    """Resolve Ask citations by indexed session id, without opening transcripts."""
+    ids = list(dict.fromkeys(ids))[:12]
+    if not ids:
+        return {}
+    # One row per requested session; a chatty session must not crowd out others.
+    placeholders = ",".join("?" for _ in ids)
+    rows = _read_decisions(
+        f"id IN (SELECT id FROM (SELECT id, row_number() OVER "
+        f"(PARTITION BY session_id ORDER BY ts DESC, id) AS n FROM decisions "
+        f"WHERE session_id IN ({placeholders})) WHERE n = 1)", ids, "ts DESC, id", len(ids))
+    return {r["session_id"]: {"session_id": r["session_id"], "repo": r["repo"],
+            "title": "Decision: " + r["quote"], "snippet": r["quote"],
+            "harness": r["engine"], "ts_unix": r["ts"]} for r in rows}
+
 
 def list_decisions(*, repo=None, since_ts=None, limit=100):
     """Recent decisions, newest first. This is the plain function contract

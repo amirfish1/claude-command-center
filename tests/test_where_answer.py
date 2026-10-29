@@ -182,7 +182,9 @@ def mock_where_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex-empty"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "0")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(fts_db))
@@ -190,6 +192,10 @@ def mock_where_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
     monkeypatch.setenv("CCC_SESSION_FTS_EMBED", "0")
     monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path / "state"))
+    # Isolate the Hermes messages_fts channel so a real ~/.hermes can't
+    # answer an unrelated query.
+    monkeypatch.setattr(server, "HERMES_STATE_DB", tmp_path / "hermes" / "state.db")
+    monkeypatch.setattr(server, "HERMES_PROFILES_DIR", tmp_path / "hermes" / "profiles")
 
     for mod in (ship_graph, session_fts):
         if hasattr(mod._tls, "conn") and mod._tls.conn:

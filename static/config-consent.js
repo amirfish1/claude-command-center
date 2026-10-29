@@ -350,7 +350,11 @@
         Object.entries((res && res.results) || {}).forEach(([id, r]) => {
           if (!r.ok) failed.push(id + ': ' + (r.error || 'failed'));
         });
-        if (res && res.ok === false && !res.results) failed.push(res.error || 'request failed');
+        if (res && res.ok === false && !res.results) {
+          failed.push(/local-only/.test(res.error || '')
+            ? 'Changing agent config is only allowed from the machine CCC runs on. Open CCC there (or via localhost) to do this.'
+            : (res.error || 'request failed'));
+        }
       });
       return load().then(() => {
         setBusy(false);

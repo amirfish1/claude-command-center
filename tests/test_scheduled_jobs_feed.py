@@ -14,7 +14,9 @@ LastTriggerUSec=Tue 2026-09-29 16:00:01 UTC
 ActiveState=active
 UnitFileState=enabled
 @@CCCJOB:SVC
-Description=BYM scheduled release
+Description=BYM scheduled release — pin next, PR to main
+WorkingDirectory=/home/hermes/Apps/BYM+Finie
+ExecStart={ path=/bin/bash ; argv[]=/bin/bash scripts/x.sh ; ignore_errors=no }
 ActiveState=inactive
 Result=success
 ExecMainStatus=0
@@ -27,8 +29,17 @@ InvocationID=abc
 1790697700.6 host systemd[1]: bym-ship.service: Deactivated successfully.
 @@CCCJOB:OUT
 starting
+Finished bym-ship.service - x.
+bym-ship.service: Consumed 3s CPU time.
+filed BECKY-TEACH-4 and BECKY-12 -> https://github.com/acme/repo/issues/125
+opened https://github.com/acme/repo/pull/1857 and PR #9; SHA-256 UTF-8 2026-09-29 v1.2.3-4
 CCC_OUTCOME: merged PR #12
 \x1b[32mdone\x1b[0m
+@@CCCJOB:EVENTS
+1790695000.4 host bym-ship.service[411]: 2026-09-29T16:10:00Z CCC_EVENT: PR #2148 pinned at d6bd723 (87 commits)
+1790696000.7 host bym-ship.service[412]: CCC_EVENT: Release r-20260929-0210: CI -> MERGING (PR #2148)
+1790697000.2 host bym-ship.service[413]: \x1b[32m2026-09-29T16:30:00Z CCC_EVENT: PR #2148 live in production\x1b[0m
+1790697001.2 host bym-ship.service[413]: a line without the marker
 @@CCCJOB:ENDUNIT
 @@CCCJOB:TIMER off.timer
 Unit=off.service
@@ -39,6 +50,7 @@ ActiveState=inactive
 UnitFileState=disabled
 @@CCCJOB:SVC
 Description=off
+ExecStart={ path=/bin/bash ; argv[]=/bin/bash /opt/ccc-cloud/scripts/backup.sh ; ignore_errors=no }
 ActiveState=inactive
 Result=success
 ExecMainStatus=0
@@ -82,18 +94,89 @@ class HermesParse(unittest.TestCase):
 
     def test_outcome_prefers_ccc_outcome_and_strips_ansi(self):
         self.assertEqual(self.jobs["bym-ship"]["outcome"], "merged PR #12")
-        self.assertEqual(f.pick_outcome(["a", "\x1b[32mdone\x1b[0m", ""]), "done")
+        self.assertEqual(self.jobs["bym-ship"]["outcome_kind"], "summary")
+        self.assertEqual(f.pick_outcome(["a", "\x1b[32mdone\x1b[0m", ""]), ("done", "output"))
+
+    def test_events_parsed_sorted_and_stripped(self):
+        ev = self.jobs["bym-ship"]["events"]
+        self.assertEqual(len(ev), 3)
+        self.assertEqual([e["text"] for e in ev], [
+            "PR #2148 pinned at d6bd723 (87 commits)",
+            "Release r-20260929-0210: CI -> MERGING (PR #2148)",
+            "PR #2148 live in production",
+        ])
+        self.assertEqual(ev[0]["at"], "2026-09-29T15:16:40.400000+00:00")
+        self.assertEqual(ev[2]["at"], "2026-09-29T15:50:00.200000+00:00")
+        # ANSI stripped; the leading journal epoch drives `at`, not the
+        # ISO prefix inside the message.
+        self.assertNotIn("\x1b", ev[2]["text"])
+
+    def test_events_absent_for_other_jobs(self):
+        self.assertEqual(self.jobs["off"]["events"], [])
+        self.assertEqual(self.jobs["bad"]["events"], [])
+
+    def test_events_from_log_lines(self):
+        now = 1_790_700_000.0  # 2026-09-29T16:40:00Z
+        lines = [
+            "2026-09-29T15:32:33Z CCC_EVENT: PR #2148 pinned at d6bd723 (87 commits)",
+            "[2026-09-29 15:48:00+00:00] CCC_EVENT: bracketed ts works",
+            "\x1b[32m2026-09-29T15:49:30Z CCC_EVENT: ansi line\x1b[0m",
+            "CCC_EVENT: no timestamp, cannot be placed",
+            "2026-09-28T00:00:00Z CCC_EVENT: too old, dropped",
+            "2026-09-29T15:50:00Z just a normal log line",
+        ]
+        ev = f.events_from_log_lines(lines, now=now)
+        self.assertEqual([e["text"] for e in ev],
+                         ["PR #2148 pinned at d6bd723 (87 commits)", "bracketed ts works", "ansi line"])
+
+    def test_outcome_behind_log_timestamp(self):
+        # CCC-1240: bym-ship's log() stamps every line, so the marker sits behind
+        # a timestamp; it must still win over the chip/raw-output fallback.
+        lines = ["2026-09-30T14:27:37Z CCC_OUTCOME: Shipped PR #1884 (3 commits).", "trailing noise"]
+        self.assertEqual(f.pick_outcome(lines), ("Shipped PR #1884 (3 commits).", "summary"))
+        self.assertEqual(f.pick_outcome(["[2026-09-30 14:27:37.1+00:00] CCC_OUTCOME: ok"]), ("ok", "summary"))
+        self.assertEqual(f.pick_outcome(["NOTIFY: CCC_OUTCOME: nope"]), ("NOTIFY: CCC_OUTCOME: nope", "output"))
+
+    def test_outcome_drops_systemd_lines(self):
+        lines = ["Finished x.service - y.", "x.service: Deactivated successfully.", "x.service: Consumed 3s CPU time."]
+        self.assertEqual(f.pick_outcome(lines), ("", ""))
+        self.assertEqual(self.jobs["bad"]["outcome"], "")
+
+    def test_description_project_and_dashes(self):
+        j = self.jobs["bym-ship"]
+        self.assertEqual(j["description"], "BYM scheduled release: pin next, PR to main")
+        self.assertEqual((j["project"], j["repo_path"]), ("BYM+Finie", "/home/hermes/Apps/BYM+Finie"))
+        self.assertEqual(self.jobs["off"]["project"], "ccc-cloud")
+        self.assertEqual(self.jobs["bad"]["project"], "Other")
+
+    def test_ticket_extraction(self):
+        refs = {(t["kind"], t["ref"]) for t in self.jobs["bym-ship"]["tickets"]}
+        self.assertIn(("watchtower", "BECKY-TEACH-4"), refs)
+        self.assertIn(("watchtower", "BECKY-12"), refs)
+        self.assertIn(("issue", "#125"), refs)
+        self.assertIn(("pr", "PR #1857"), refs)
+        self.assertIn(("pr", "PR #9"), refs)
+        self.assertNotIn(("watchtower", "SHA-256"), refs)
+        self.assertNotIn(("watchtower", "UTF-8"), refs)
+        self.assertFalse([r for k, r in refs if k == "watchtower" and r.startswith(("v1", "2026"))])
+        self.assertEqual(len(refs), len(self.jobs["bym-ship"]["tickets"]))
+
+    def test_timeline(self):
+        tl = self.jobs["bym-ship"]["timeline"]
+        self.assertEqual(tl["kind"], "times")
+        self.assertEqual(len(tl["minutes"]), 2)
+        self.assertEqual(self.jobs["bad"]["timeline"], {"kind": "interval", "interval_s": 3600, "minutes": [], "weekdays": []})
 
     def test_disabled_and_failed(self):
         self.assertEqual(self.jobs["off"]["status"], "disabled")
         self.assertIsNone(self.jobs["off"]["next_run_at"])
         self.assertEqual(self.jobs["bad"]["status"], "failed")
-        self.assertIn("exit 3", self.jobs["bad"]["outcome"])
+        self.assertEqual(self.jobs["bad"]["exit_code"], 3)
         self.assertEqual(self.jobs["bad"]["schedule"], "Every 1h")
 
-    def test_sorting_failed_first_disabled_last(self):
+    def test_sorting_recent_first_disabled_last(self):
         order = [j["name"] for j in f.sort_jobs(list(self.jobs.values()))]
-        self.assertEqual(order[0], "bad")
+        self.assertEqual(order[0], "bad")  # same start, name tie-break
         self.assertEqual(order[-1], "off")
 
     def test_summary(self):
@@ -116,6 +199,16 @@ class Schedules(unittest.TestCase):
         self.assertEqual(
             f.format_launchd_schedule({"StartCalendarInterval": {"Weekday": 0, "Hour": 7, "Minute": 15}}),
             "Weekly Sun 07:15")
+
+    def test_launchd_wrapper_and_project(self):
+        d = {"Label": "com.x.job", "ProgramArguments": [
+            "/Users/u/dev/ops/launchd-jobs/job", "com.x.job", "/bin/bash", "/Users/u/dev/ops/job.sh"]}
+        self.assertEqual(f.script_path(d), "/Users/u/dev/ops/job.sh")
+        self.assertEqual(f.project_from_paths(f.launchd_program_paths(d))[0], "ops")
+        self.assertEqual(f.project_from_paths(["/Users/u/dev/tools/indexing/.venv/bin/x"])[0], "indexing")
+        self.assertEqual(f.project_from_paths(["/etc/foo"]), ("Other", None))
+        tl = f.launchd_timeline({"StartCalendarInterval": {"Weekday": 0, "Hour": 7, "Minute": 15}})
+        self.assertEqual((tl["minutes"], tl["weekdays"]), ([435], ["Sun"]))
 
     def test_laptop_filter_drops_daemons(self):
         self.assertTrue(f.is_scheduled_plist({"StartInterval": 60}))
@@ -140,7 +233,8 @@ class PerfBudget(unittest.TestCase):
             calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, stdout=CANNED, stderr="")
 
-        with mock.patch.object(f.subprocess, "run", fake_run):
+        with mock.patch("platform.system", return_value="Darwin"), \
+                mock.patch.object(f.subprocess, "run", fake_run):
             jobs, err = f.collect_hermes()
         self.assertIsNone(err)
         self.assertEqual(len(jobs), 3)
@@ -159,5 +253,89 @@ class PerfBudget(unittest.TestCase):
         self.assertEqual(len(p["jobs"]), 1)
 
 
+class LocalHostTest(unittest.TestCase):
+    def test_payload_names_the_local_host(self):
+        with mock.patch.object(f.platform, "system", return_value="Linux"):
+            self.assertEqual(f.build_payload()["local_host"], "hermes")
+        with mock.patch.object(f.platform, "system", return_value="Darwin"):
+            self.assertEqual(f.build_payload()["local_host"], "laptop")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class UserScopeAndCronTests(unittest.TestCase):
+    USER = """@@CCCJOB:TIMER user/bym-outreach-replies.timer
+Unit=bym-outreach-replies.service
+TimersMonotonic={ OnUnitActiveUSec=5min ; next_elapse=3w 2d }
+NextElapseUSecRealtime=
+LastTriggerUSec=Mon 2026-10-19 03:47:23 UTC
+ActiveState=active
+UnitFileState=enabled
+@@CCCJOB:SVC
+Description=BYM outreach reply capture
+ActiveState=inactive
+Result=success
+ExecMainStatus=0
+ExecMainStartTimestamp=@{start}
+ExecMainExitTimestamp=@{start}
+@@CCCJOB:HIST
+1.0 host systemd[9]: bym-outreach-replies.service: Failed with result 'exit-code'.
+2.0 host systemd[9]: Finished bym-outreach-replies.service - x.
+@@CCCJOB:OUT
+ok
+@@CCCJOB:EVENTS
+@@CCCJOB:ENDUNIT
+@@CCCJOB:CRON
+MAILTO=x
+# comment
+*/5 * * * * /home/u/scripts/auto_pull.sh
+17 */6 * * * /home/u/scripts/backup.py >> /home/u/logs/backup.log 2>&1
+@@CCCJOB:CRONLOGS
+1792369022 /home/u/logs/backup.log
+@@CCCJOB:END
+"""
+
+    def _parse(self, age_s=120):
+        import time
+        now = time.time()
+        return f.parse_hermes_output(self.USER.replace("{start}", str(int(now - age_s))), now=now), now
+
+    def test_user_timer_gets_scope_and_distinct_id(self):
+        jobs, _ = self._parse()
+        j = next(x for x in jobs if x["name"] == "bym-outreach-replies")
+        self.assertEqual(j["scope"], "user")
+        self.assertEqual(j["id"], "hermes:user/bym-outreach-replies.service")
+        self.assertEqual([h["ok"] for h in j["history"]], [False, True])
+
+    def test_interval_timer_without_realtime_next_is_ok_when_recent(self):
+        jobs, _ = self._parse(age_s=120)
+        j = next(x for x in jobs if x["name"] == "bym-outreach-replies")
+        self.assertEqual(j["status"], "ok")
+        self.assertTrue(j["next_run_estimated"] and j["next_run_at"])
+
+    def test_interval_timer_is_stale_when_last_run_is_long_ago(self):
+        jobs, _ = self._parse(age_s=86400)
+        j = next(x for x in jobs if x["name"] == "bym-outreach-replies")
+        self.assertEqual(j["status"], "stale")
+
+    def test_crontab_entries_become_jobs_with_honest_status(self):
+        jobs, now = self._parse()
+        cron = [x for x in jobs if x["manager"] == "cron"]
+        self.assertEqual([c["name"] for c in cron], ["auto_pull.sh", "backup.py"])
+        self.assertEqual(cron[0]["schedule"], "Every 5min")
+        self.assertTrue(all(c["status"] == "unknown" for c in cron))
+        self.assertIn("unverifiable", cron[0]["outcome"])
+        self.assertIsNone(cron[0]["last_run_at"])
+        self.assertTrue(cron[1]["last_run_at"])  # from the redirected log's mtime
+        self.assertEqual(cron[1]["schedule"], "Every 6h at :17")
+
+    def test_cron_next_run(self):
+        # 2026-10-19 03:50:30 UTC
+        now = 1792381830.0
+        nxt = f.cron_next_run(["*/5", "*", "*", "*", "*"], now)
+        self.assertEqual(nxt, 1792382100.0)  # 03:55:00
+        self.assertIsNone(f.cron_next_run(["bad", "*", "*", "*", "*"], now))
+        daily = f.cron_next_run(["23", "4", "*", "*", "*"], now)
+        self.assertEqual(int(daily) % 86400, 4 * 3600 + 23 * 60)

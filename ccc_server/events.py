@@ -35,6 +35,7 @@ class DashboardEventHub:
         self._events = deque(maxlen=capacity)
         self._entity_versions = {}
         self._seq = 0
+        self._last_poll = 0.0  # monotonic time of the last subscriber read
         self._condition = threading.Condition()
 
     @property
@@ -88,13 +89,22 @@ class DashboardEventHub:
             self._condition.notify_all()
             return copy.deepcopy(event)
 
+    def listener_active(self, window=45.0):
+        """True when a dashboard read the hub within `window` seconds. The SSE
+        stream re-enters wait_since about every 15s, so a connected page keeps
+        this fresh; a closed app lets it lapse."""
+        with self._condition:
+            return bool(self._last_poll) and time.monotonic() - self._last_poll < window
+
     def snapshot_since(self, seq, *, boot_id=None):
         with self._condition:
+            self._last_poll = time.monotonic()
             return self._snapshot_since_locked(seq, boot_id=boot_id)
 
     def wait_since(self, seq, *, boot_id=None, timeout=15.0):
         deadline = time.monotonic() + max(0.0, float(timeout))
         with self._condition:
+            self._last_poll = time.monotonic()
             while True:
                 snapshot = self._snapshot_since_locked(seq, boot_id=boot_id)
                 if snapshot.resync_required or snapshot.events:

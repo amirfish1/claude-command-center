@@ -1,0 +1,19 @@
+{
+  "name": "CCC — find a session across the fleet (motion source)",
+  "url": "http://127.0.0.1:8892/static/index.html?demo=1",
+  "viewport": {"width": 3840, "height": 2160},
+  "wait_for": "#convSearch",
+  "seeds": {"ccc-session-view": "list", "ccc-kanban-view": "false", "ccc-sidebar-width": "470"},
+  "stage": {},
+  "steps": [
+    {"do": "wait", "s": 5},
+    {"do": "click", "selector": "#convSearch"},
+    {"do": "type", "text": "stripe", "delay": 0.45},
+    {"do": "wait", "s": 3.5},
+    {"do": "click", "selector": ".conv-item[data-id^=\"ffffffff\"]", "settle": 0.3},
+    {"do": "assert", "selector": ".conv-pane-title", "text": "Scaffold Stripe webhooks", "screenshot": "opened.png"},
+    {"do": "wait", "s": 4.5},
+    {"do": "click", "selector": ".conv-tab[data-conv-tab=\"inprogress\"]", "settle": 0.3},
+    {"do": "wait", "s": 9}
+  ]
+}

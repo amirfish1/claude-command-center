@@ -109,17 +109,30 @@ def open_receipt(sid, inject_id, text, *, source="", now=None, path=None):
             "sent_ts": now,
         }
 
-    _mutate(path, fn)
+    import sender_envelope as attribution
+    attr = attribution.from_text(text)
+    original_fn = fn
+    def with_attr(state):
+        original_fn(state)
+        if attr and isinstance(state.get(sid), dict):
+            state[sid].update(attr=attr, message_id=attr["message_id"])
+    _mutate(path, with_attr)
 
 
-def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None):
-    """Mark whatever is outstanding for `sid` as landed.
+def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,
+                  outcome="landed"):
+    """Settle an outstanding receipt after landing or a terminal discard.
 
     When `inject_id` or `text` is given, only close a matching receipt --
     guards against a late confirmation for an old inject closing a newer,
     still-genuinely-outstanding one for the same session.
+
+    A discarded continuation must not be recorded as proven delivery.
     """
+    if outcome not in ("landed", "dropped"):
+        raise ValueError("unknown receipt outcome")
     now = time.time() if now is None else now
+    import sender_envelope as attribution
 
     def fn(state):
         e = state.get(sid)
@@ -127,13 +140,20 @@ def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None):
             return
         if inject_id is not None and e.get("inject_id") != str(inject_id):
             return
-        if text is not None and e.get("text_preview") != str(text or "")[:160]:
+        # Queue drains close with the attribution-carrying text, while the
+        # composer opened the receipt with the header-free text.
+        if text is not None and (
+            attribution.strip_header(e.get("text_preview") or "")
+            != attribution.strip_header(str(text or ""))[:160]
+        ):
             return
         state.pop(sid, None)
-        landed = state.setdefault("_landed", [])
-        landed.append({"sid": sid, "inject_id": e.get("inject_id"),
-                        "sent_ts": e.get("sent_ts"), "landed_ts": now})
-        state["_landed"] = landed[-_KEEP_LANDED:]
+        bucket = "_landed" if outcome == "landed" else "_dropped"
+        timestamp = "landed_ts" if outcome == "landed" else "dropped_ts"
+        settled = state.setdefault(bucket, [])
+        settled.append({"sid": sid, "inject_id": e.get("inject_id"),
+                        "sent_ts": e.get("sent_ts"), timestamp: now})
+        state[bucket] = settled[-_KEEP_LANDED:]
 
     _mutate(path, fn)
 

@@ -27,7 +27,7 @@ RUN_SCRIPT = PROJECT_ROOT / "run.sh"
 INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install.sh"
 README = PROJECT_ROOT / "README.md"
 CI_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
-CI_WATCHTOWER_REF = "221260bbc5d31ae57eeacde542154c1c9ad5f3c6"
+CI_WATCHTOWER_REF = "89d2d80099cfbba44231d7cf1f25e02cc8ce721d"
 
 
 FAKE_PYTHON = r"""#!/usr/bin/env bash
@@ -602,7 +602,7 @@ class TestWiring(unittest.TestCase):
             "CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh"
         )
         targets = {
-            "unittest": ("python -m pytest -q --tb=no tests/", "smoke"),
+            "unittest": ("python -m pytest -q --tb=short -rf", "smoke"),
             "smoke": ("python server.py > /tmp/server.log", "python39-smoke"),
             "python39-smoke": (
                 "python -c 'import server; print(server.__version__)'",

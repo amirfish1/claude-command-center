@@ -45,7 +45,7 @@ def test_child_exit_fails_pending_request_immediately(tmp_path):
         reader.join(timeout=2)
     assert elapsed < 3, f"waited {elapsed:.1f}s for a dead child"
     assert result["ok"] is False and result.get("exited") is True
-    assert result["fallback"] == "exec"
+    assert result["fallback"] == "queue"
     verbs = [(a[0], a[1]) for a in logged]
     assert ("app-server", "EXITED") in verbs
     assert ("app-server", "TIMEOUT") not in verbs

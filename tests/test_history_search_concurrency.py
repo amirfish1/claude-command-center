@@ -166,6 +166,7 @@ def _set_session_fts_env(tmp_dir: Path) -> None:
     os.environ["CCC_KIMI_SESSIONS_ROOT"] = str(tmp_dir / "kimi-empty")
     os.environ["CCC_GEMINI_TMP_ROOT"] = str(tmp_dir / "gemini-empty")
     os.environ["CCC_CURSOR_PROJECTS_ROOT"] = str(tmp_dir / "cursor-empty")
+    os.environ["CCC_DEVIN_TRANSCRIPTS_ROOT"] = str(tmp_dir / "devin-empty")
     os.environ["CCC_SESSION_FTS_DAYS"] = "0"
     os.environ["CCC_SESSION_FTS_ALLOW_SCRATCH"] = "1"
     os.environ["CCC_SESSION_FTS_EMBED"] = "0"
@@ -211,7 +212,11 @@ def _run_concurrent_searches():
     def worker():
         try:
             barrier.wait(timeout=_THREAD_TIMEOUT_SECONDS)
-            for _ in range(15):
+            # 24 threads stepping SQLite convoy on the GIL: plain sqlite3 FTS
+            # reads run ~4.5x slower than serial at this width, so 15 rounds
+            # each took ~19s on a 16-core host. Five rounds still overlap
+            # every thread's reads; the deadline only guards against hangs.
+            for _ in range(5):
                 out = server.search_conversation_history(
                     "widget refactor",
                     limit=20,
@@ -294,6 +299,10 @@ def _run_history_case(case, tmp_dir):
     server._HISTORY_INDEX_PATH = tmp_dir / "index.db"
     _reset_history_conn()
     _set_session_fts_env(tmp_dir)
+    # Isolate the Hermes channel too: otherwise the searches scan this host's
+    # real ~/.hermes DBs and blow the thread deadline on a busy machine.
+    server.HERMES_STATE_DB = tmp_dir / "hermes" / "state.db"
+    server.HERMES_PROFILES_DIR = tmp_dir / "hermes" / "profiles"
     _prewarm_session_fts("widget refactor")
     succeeded = False
     try:

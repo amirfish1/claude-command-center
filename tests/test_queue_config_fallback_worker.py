@@ -96,13 +96,17 @@ def test_duplicate_shaped_save_copies_the_toggle(api):
     assert stored("COPY")["fallback_to_default_worker"] is True
 
 
-def test_both_settings_uis_expose_the_toggle():
-    q2 = (ROOT / "static" / "q2.js").read_text(encoding="utf-8")
-    assert 'data-q2-cfg="fallback_to_default_worker"' in q2
-    assert "Revert to CCC default worker if current model is exhausted" in q2
-    assert "payload.fallback_to_default_worker = payload.fallback_to_default_worker === 'true'" in q2
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-    assert "fqConfigFallback" in app
-    assert "Revert to CCC default worker if current model is exhausted" in app
-    assert "fallback_to_default_worker: fields.fallback.checked" in app
-    assert "fields.fallback.checked = !!c.fallback_to_default_worker" in app
+def test_null_clears_override_and_preserves_queue_pin(api):
+    post, stored = api
+    assert post({"queue": "PQ", "fallback_to_default_worker": False, "engine": "codex", "model": "gpt-6.1-sol", "effort": "high"})[0] == 200
+    assert post({"queue": "PQ", "fallback_to_default_worker": None, "engine": "codex", "model": "gpt-6.1-sol", "effort": "high"})[0] == 200
+    assert "fallback_to_default_worker" not in stored("PQ")
+    assert stored("PQ")["model"] == "gpt-6.1-sol"
+    assert stored("PQ")["effort"] == "high"
+
+
+def test_both_settings_uis_expose_inheritance():
+    for filename in ("q2.js", "app.js"):
+        text = (ROOT / "static" / filename).read_text(encoding="utf-8")
+        assert "Use machine default" in text
+        assert "fallback_to_default_worker" in text

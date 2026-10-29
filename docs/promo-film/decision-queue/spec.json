@@ -1,0 +1,51 @@
+{
+  "schema": "product-motion/v1",
+  "id": "ccc-decision-queue",
+  "take": "takes/20261009-074140-ccc-decision-queue-find-a-ticket-and-run-it-moti",
+  "source": {"w": 3840, "h": 2160, "css_zoom": 3, "prepare_for_seek": true},
+  "expect": {"clicks": 3, "keys": 5},
+  "duration": 31,
+  "music": {"synthesis": "pulse", "period": 0.5, "phase": 0, "offset": 0, "rights": "Original deterministic synthesis from the kit's sfx.py"},
+  "palette": {"paper": "#f6f8fa", "ink": "#161b22", "deep": "#0d1117", "accent": "#6e8caf", "hi": "#f5a623", "mute": "#8b949e", "page": "#0d1117", "card": "#ffffff", "tag": "#46607f", "herob": "#46607f"},
+  "layout": {"landscape": {"slab": {"left": 96, "top": 760, "h2": 70, "p": 29, "max_w": 1100}}},
+  "copy": {
+    "brand": {"name": "CCC", "wordmark": "ccc", "dot": "."},
+    "window_title": "CCC &middot; Claude Command Center",
+    "hook": {"a": ["Eleven tickets, three queues,", "[one to run.]"], "b": ["Which fix", "goes next?"]},
+    "storm": [
+      ["OAuth 401 after deploy", "#bugs"], ["Webhook double-fire", "#p0"], ["Pagination count", "#bugs"],
+      ["Alt text backfill", "#content"], ["Shortcodes to Eleventy", "#content"], ["Hero video 4K or 1080p", "#needs-input"],
+      ["Cut v2.4", "#release"], ["Contact form in Safari", "#website"], ["Per-tag RSS feeds", "#features"],
+      ["srcset pipeline", "#shape"], ["Footnote anchors", "#done"], ["Changelog page", "#later"]
+    ],
+    "storm_labels": ["LATER", "OPEN", "P0", "NOW"],
+    "hero": {"eyebrow": "ONE PICK", "text": "Which fix goes next?", "accent": "#now"},
+    "intro": {"eyebrow": "MEET", "tagline": ["Every ticket,", "one queue."], "chips": ["BUGS &middot; FEATURES &middot; CONTENT", "RUN FROM THE BOARD"]},
+    "steps": [
+      {"pill": "01 FIND", "eyebrow": "01 &mdash; FIND", "title": "Type a word.", "sub": "Bugs, features, content. One search across every project queue."},
+      {"pill": "02 OPEN", "eyebrow": "02 &mdash; OPEN", "title": "One click to open.", "sub": "Prompt, priority, worker and origin. The whole ticket on one card."},
+      {"pill": "03 RUN", "eyebrow": "03 &mdash; RUN", "title": "Run it now.", "sub": "Queued for the next free worker. No terminal, no copy and paste."}
+    ],
+    "recap": ["Find.", "Open.", "Run."],
+    "end": {
+      "tagline": ["Start the next", "while Claude builds the first."],
+      "url": "github.com/amirfish1/claude-command-center",
+      "chips": ["QUEUES", "TICKETS", "RUN NOW"],
+      "limit": "Recorded on the CCC demo dashboard with sample tickets.",
+      "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+    },
+    "hud_label": "CCC &middot; REAL CAPTURE"
+  },
+  "edit": {
+    "reveal_src": 3,
+    "act1": {"click": 0, "keys": [0, 5], "type_window": [10.3, 13.4], "type_region": [1030, 625, 1250, 680]},
+    "act2": {"click": 1, "instant_result": true, "result_window": [19.2, 23.0], "result_after": 19.5,
+             "result_region": [390, 140, 3450, 2010], "lift_region": [285, 1480, 1980, 100],
+             "lock_label": "ONE CLICK", "stamp": "OPENED"},
+    "act3": {"click": 2, "instant_result": true, "skip_load": true, "result_window": [27.2, 31.0], "result_after": 27.6,
+             "result_region": [390, 1800, 3450, 2160], "track_region": [2680, 1885, 420, 100],
+             "track_label": "QUEUED", "label_side": "above", "hold_rate": 1},
+    "recap": [["type_end", 1.0, 300, 450, 1500], ["saved_visible", 0.5, 390, 140, 2180], ["filtered", 0.8, 1900, 1050, 1900]],
+    "recap_stills": true
+  }
+}

@@ -57,7 +57,7 @@ class TestSearchUiStatic(unittest.TestCase):
             app_js,
         )
         self.assertIn(
-            "const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';",
+            "const _currentSessionsLabel = _ipSearchActive ? 'Search results' : simpleLabel('Current sessions');",
             app_js,
         )
         self.assertIn(
@@ -73,7 +73,11 @@ class TestSearchUiStatic(unittest.TestCase):
             "_mergeHistoryResults(qLower, (recallData && recallData.results) || []);",
             app_js,
         )
-        self.assertIn("repaintIfCurrent();", app_js)
+        # Recall no longer repaints on its own: history, recall and repo
+        # fetches settle together and the sidebar repaints exactly once
+        # (per-fetch repaints rebuilt the whole DOM three times per keystroke).
+        self.assertIn("return Promise.all([historyDone, recallDone, repoDone]).then(() => {", app_js)
+        self.assertIn("_renderConversationSearchResults(q);", app_js)
         self.assertIn("function _renderConversationSearchResults(query) {", app_js)
         self.assertIn(
             "renderSidebar(filterConversations(query), { force: true });",

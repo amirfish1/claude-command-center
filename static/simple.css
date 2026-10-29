@@ -512,6 +512,10 @@ body.ccc-simple-mode .simple-loading {
   color: var(--text-muted);
   padding: 14px 4px;
 }
+body.ccc-simple-mode .simple-loading-detail {
+  font-size: 13px;
+  margin-top: 2px;
+}
 body.ccc-simple-mode .simple-spinner {
   width: 16px;
   height: 16px;
@@ -900,7 +904,7 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar:has(.
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
   flex-basis: 0;
 }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#mobileBackBtn):not(#simpleConvTitle):not(.mobile-actions-wrap) {
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#mobileBackBtn):not(#simpleConvTitle):not(.mobile-actions-wrap):not(.mobile-view-seg) {
   display: none !important;
 }
 /* Advanced pane chrome: pane header (proc pills, verbose/replay/annotate
@@ -977,7 +981,6 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-vie
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInputBar {
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
 }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convExpandBtn,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conv-input-selectors,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convEscBtn,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convSteerBtn,

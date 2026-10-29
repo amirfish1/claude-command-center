@@ -79,7 +79,7 @@ class McpProtocolTest(unittest.TestCase):
             names = [t["name"] for t in self.rpc("tools/list")["result"]["tools"]]
         self.assertEqual(names, ["list_sessions", "live_activity", "throughput_window", "queue_status",
                                  "session_detail", "fleet_diagnostics", "inject_diagnostics", "daily_checkin", "daily_brief",
-                                 "propose_spawn_session", "propose_inject",
+                                 "decisions", "propose_spawn_session", "propose_inject",
                                  "propose_wt_add", "propose_wt_comment"])
 
     def test_tools_call_and_errors(self):
@@ -140,7 +140,8 @@ class RunMazkirTest(unittest.TestCase):
         with mock.patch.object(mazkir, "INDEX_BIN", "/x/claude-index"):
             body, status = mazkir.run_mazkir("Where did I work on the Ask tab?", [{"q": "hi", "a": "yo"}], "7d",
                                              runner=runner, base="http://x", claude_bin="/x/claude",
-                                             fetch=fake_fetch, prefetch_runner=prefetch, db_path=dbp)
+                                             fetch=fake_fetch, prefetch_runner=prefetch, db_path=dbp,
+                                             peer_fan_out=lambda a, b: [])
         self.assertEqual(status, 200)
         self.assertEqual(body["agent"], "mazkir")
         self.assertEqual(body["cited"], ["c-100001", "kimi-1"])
@@ -165,7 +166,8 @@ class RunMazkirTest(unittest.TestCase):
         prefetch = lambda argv, **kw: _Proc(stdout="[]")
         body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(returncode=1, stderr="boom"),
                                          base="http://x", claude_bin="/x/claude", fetch=fake_fetch,
-                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db",
+                                         peer_fan_out=lambda a, b: [])
         self.assertEqual((status, body["code"]), (502, "ask_engine_error"))
         body, status = mazkir.run_mazkir("", base="http://x", fetch=fake_fetch)
         self.assertEqual(status, 400)
@@ -178,7 +180,8 @@ class RunMazkirTest(unittest.TestCase):
         out = json.dumps({"result": "Not logged in · Please run /login", "is_error": True})
         body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=out), base="http://x",
                                          claude_bin="/x/claude", fetch=fake_fetch,
-                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db",
+                                         peer_fan_out=lambda a, b: [])
         self.assertEqual((status, body["code"]), (401, "ask_engine_unauthenticated"))
         self.assertIn("/login", body["error"])
         self.assertFalse(body["ok"])
@@ -186,7 +189,8 @@ class RunMazkirTest(unittest.TestCase):
                               "is_error": True})
         body, status = mazkir.run_mazkir("q", runner=lambda a, **k: _Proc(stdout=expired), base="http://x",
                                          claude_bin="/x/claude", fetch=fake_fetch,
-                                         prefetch_runner=prefetch, db_path="/nonexistent.db")
+                                         prefetch_runner=prefetch, db_path="/nonexistent.db",
+                                         peer_fan_out=lambda a, b: [])
         self.assertEqual(status, 401)
 
     def test_warm_up_reports_optional_features(self):
@@ -351,6 +355,39 @@ class SourceHygieneTest(unittest.TestCase):
         kept, _ = mazkir.prepare_candidates(cands, "how did the eval runs go", {})
         self.assertIn("e1", [c["session_id"] for c in kept])
 
+    def test_prepare_candidates_hides_worker_sessions_unless_asked(self):
+        cands = [
+            {"session_id": "w1", "title": "Drain the FEAT-NEXT WatchTower queue and keep it empty."},
+            {"session_id": "w2", "title": "Trash speed fix"},
+            {"session_id": "w3", "title": "lane-w3 bym receipts"},
+            {"session_id": "w4", "title": "raw first prompt"},
+            {"session_id": "u1", "title": "Quiet-hours receipts fix"},
+        ]
+        out, stats = mazkir.prepare_candidates(cands, "show me the receipts fix", {"w4": "[wt] OPS-12 fix"},
+                                               worker_ids={"w2"})
+        self.assertEqual([c["session_id"] for c in out], ["u1"])
+        self.assertEqual(stats["workers_hidden"], 4)
+        kept, _ = mazkir.prepare_candidates(cands, "what did the queue workers do", {}, worker_ids={"w2"})
+        self.assertEqual(len(kept), 5)
+        trace = mazkir.build_trace("x", 5, 1, 100, stats, [])
+        self.assertIn("4 worker sessions hidden", trace[0]["detail"])
+
+    def test_worker_session_ids_reads_ledgers_and_worker_markers(self):
+        tmp = Path(tempfile.mkdtemp())
+        markers = tmp / "markers"
+        markers.mkdir()
+        (markers / "m1.json").write_text(json.dumps({"spawned_via": "watchtower", "lane": "workers"}))
+        (markers / "m2.json").write_text(json.dumps({"lane": "other", "spawned_via": "ccc-ask"}))
+        fake = mock.Mock(SPAWN_MARKERS_DIR=markers,
+                         _wt_read_worker_session_ids=lambda: ["l1"],
+                         _wt_read_session_origins=lambda: {"o1": {"role": "verifier"}},
+                         _decode_spawn_marker_file=lambda path: (
+                             json.loads(path.read_text()) if path.exists() else None))
+        import ccc_server
+        with mock.patch.object(ccc_server, "core", fake):
+            got = mazkir.worker_session_ids(["l1", "o1", "m1", "m2", "u1", ""])
+        self.assertEqual(got, {"l1", "o1", "m1"})
+
     def test_titles_cut_inside_a_preamble_use_the_first_message(self):
         cut = "Heads-up: this may already be shipped: feat(x): y (wt 1), confidence 0.9. Verify before rebuilding. You ar"
         out, _ = mazkir.prepare_candidates(
@@ -392,6 +429,12 @@ class FocusedSessionAndInjectTest(unittest.TestCase):
         self.assertIn(f'ON SCREEN: the user is viewing session {sid} ("Fix the lane map")', prompt)
         self.assertIn("the ON SCREEN session", mazkir.system_prompt())
         self.assertIn("inject_diagnostics", mazkir.system_prompt())
+
+    def test_git_requests_route_to_a_spawn_proposal(self):
+        # FEAT-NEXT-148: "push bym" got "I can't push" instead of a Confirm card.
+        prompt = mazkir.system_prompt()
+        self.assertIn('Git work ("push bym"', prompt)
+        self.assertIn("Never ask it to force-push or skip hooks", prompt)
 
     def test_bad_or_missing_focus_is_dropped(self):
         for focused in (None, {}, {"session_id": ""}, {"session_id": "x y; rm"}, "abc"):
@@ -450,6 +493,32 @@ class FocusedSessionAndInjectTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"CCC_ASK_MODE": "mazkir"}):
             ask.handle_assistant_ask({"question": "q", "focused": {"session_id": "abc12345"}})
         self.assertEqual(seen["focused"], {"session_id": "abc12345"})
+
+
+
+class TurnUsageTests(unittest.TestCase):
+    """Ask shows each answer's cost in cache-adjusted tokens (FEAT-NEXT-150)."""
+
+    def setUp(self):
+        import server  # noqa: F401 -- usage_stats resolves helpers through it
+
+    def test_cache_adjusted_weights_reads_and_1h_writes(self):
+        res = mazkir.parse_result(json.dumps({
+            "result": "ok",
+            "usage": {"input_tokens": 2, "cache_creation_input_tokens": 1379,
+                      "cache_read_input_tokens": 35259, "output_tokens": 10,
+                      "cache_creation": {"ephemeral_1h_input_tokens": 1379,
+                                         "ephemeral_5m_input_tokens": 0}},
+            "modelUsage": {"claude-sonnet-5-5": {}},
+        }))
+        u = mazkir.turn_usage(res)
+        self.assertEqual(u["model"], "claude-sonnet-5-5")
+        self.assertEqual(u["cache_read_input_tokens"], 35259)
+        # 2 fresh + 1379 x 2.0 (1h write) + 35259 x 0.1 (read) + 10 out
+        self.assertEqual(u["cache_adjusted_tokens"], 6296)
+
+    def test_missing_usage_is_none(self):
+        self.assertIsNone(mazkir.turn_usage(mazkir.parse_result("plain text")))
 
 
 if __name__ == "__main__":

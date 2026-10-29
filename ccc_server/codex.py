@@ -46,7 +46,7 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 8
+_CODEX_META_VERSION = 10
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
 _CODEX_THREAD_VISIBILITY_RANK = {
@@ -83,17 +83,6 @@ _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD = 2
 # path. Callers must fall back rather than waiting behind that stale flag
 # forever; a normal initialize request itself has a 10-second deadline.
 _CODEX_APP_SERVER_INITIALIZING_WAIT_S = 15.0
-_CODEX_SHARED_STATE_BLOCK_RETRY_S = 30.0
-_CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 0.0
-# OpenAI's own codex-rs hit this same shared-sqlite conflict class (Desktop vs.
-# an IDE extension, github.com/openai/codex#30105) and mitigated it with a WAL
-# busy_timeout rather than a hard refuse -- a momentary second holder (a
-# browser extension's app-server touching the file for one poll) resolves
-# itself within a few seconds instead of needing the user to go kill it.
-# Mirror that here: retry the holder check for a few seconds before treating
-# it as the durable, "go quit the other process" conflict.
-_CODEX_SHARED_STATE_CONFLICT_RETRY_BUDGET_S = 5.0
-_CODEX_SHARED_STATE_CONFLICT_POLL_S = 0.5
 _CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
 # `thread/list` is a GLOBAL call -- one reply carries every thread the
 # app-server knows -- so it must be throttled globally too. It used to be
@@ -897,6 +886,84 @@ def _codex_filter_own_ccc_holders(holders):
     return [h for h in foreign if h["pid"] not in ours]
 
 
+_CODEX_HOLDER_ARGV_CACHE = {"pids": None, "at": 0.0, "argv": {}}
+_CODEX_HOLDER_ARGV_LOCK = threading.Lock()
+_CODEX_HOLDER_ARGV_TTL_S = 5.0
+
+
+def _codex_holder_argv_cached(pids):
+    """argv per holder pid from ONE batched /bin/ps, cached by (pid tuple, TTL)
+    so the per-row writer attribution never shells out per session."""
+    now = time.monotonic()
+    with _CODEX_HOLDER_ARGV_LOCK:
+        c = _CODEX_HOLDER_ARGV_CACHE
+        if c["pids"] == pids and now - c["at"] < _CODEX_HOLDER_ARGV_TTL_S:
+            return dict(c["argv"])
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-p", ",".join(str(p) for p in pids), "-o", "pid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3.0,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    argv_by_pid = {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        head, _, cmd = line.partition(" ")
+        try:
+            argv_by_pid[int(head)] = cmd
+        except ValueError:
+            continue
+    with _CODEX_HOLDER_ARGV_LOCK:
+        _CODEX_HOLDER_ARGV_CACHE.update(pids=pids, at=now, argv=dict(argv_by_pid))
+    return argv_by_pid
+
+
+def _codex_classify_state_holders(holders, session_id=None):
+    """Classify shared-state-DB holders so callers can tell CCC's own
+    `codex exec`/`exec resume` children (legitimate writers, not competitors)
+    from the desktop app or unrelated Codex processes.
+
+    One batched `/bin/ps` for all holder pids — never one subprocess per
+    holder. Returns [{pid, command, argv, kind, this_thread}] where kind is
+    "ccc-exec-resume" | "ccc-exec" | "app-server" | "desktop" | "other" and
+    this_thread is True when `session_id` literally appears in argv."""
+    holders = [h for h in (holders or []) if isinstance(h, dict) and h.get("pid")]
+    if not holders:
+        return []
+    pids = tuple(sorted({h["pid"] for h in holders}))
+    argv_by_pid = _codex_holder_argv_cached(pids)
+    sid = str(session_id or "")
+    classified = []
+    for h in holders:
+        pid = h["pid"]
+        argv = argv_by_pid.get(pid, str(h.get("command") or ""))
+        if " exec resume" in argv:
+            kind = "ccc-exec-resume"
+        elif " exec " in argv:
+            kind = "ccc-exec"
+        elif "app-server" in argv:
+            kind = "desktop" if ".app/Contents/" in argv else "app-server"
+        elif ".app/Contents/" in argv:
+            kind = "desktop"
+        else:
+            kind = "other"
+        classified.append({
+            "pid": pid,
+            "command": h.get("command"),
+            "argv": argv[:200],
+            "kind": kind,
+            "this_thread": bool(sid) and sid in argv,
+        })
+    return classified
+
+
 
 def _codex_shared_state_db_holders(now=None, force=False):
     """Processes other than CCC's own app-server that hold the shared state DBs.
@@ -977,6 +1044,47 @@ def _codex_shared_state_db_holders(now=None, force=False):
     return unique
 
 
+_CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+
+
+def _codex_shared_state_db_holders_stale_ok(now=None):
+    """Holder list for read-only status paths: never forks lsof inline once warm.
+
+    lsof scans every process on the host (~1.6s on a busy 16-core box), and the
+    5s TTL always expires between live-activity builds, so every build paid a
+    fresh fork -- 95% of build_live_sessions_activity time (CCC-168). Status
+    rows tolerate a holder list a few seconds old: serve the last sample and
+    refresh it on one background thread. Only the very first call (no sample
+    yet) waits. Spawn/send gates keep calling _codex_shared_state_db_holders.
+    """
+    global _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+    now = time.time() if now is None else float(now)
+    with _CODEX_SHARED_STATE_HOLDER_LOCK:
+        cached = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
+        fresh = now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S
+        kick = cached is not None and not fresh and not _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+        if kick:
+            _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = True
+    if cached is None:
+        return _core._codex_shared_state_db_holders(now)
+    if kick:
+        def _refresh():
+            global _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+            try:
+                _core._codex_shared_state_db_holders(force=True)
+            except Exception:
+                pass
+            finally:
+                with _CODEX_SHARED_STATE_HOLDER_LOCK:
+                    _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+        try:
+            threading.Thread(target=_refresh, name="codex-holder-refresh", daemon=True).start()
+        except Exception:
+            with _CODEX_SHARED_STATE_HOLDER_LOCK:
+                _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+    return list(cached)
+
+
 def _codex_shared_state_conflict(now=None, force=False):
     """Return a human-readable conflict summary if another Codex writer holds the shared DBs."""
     holders = _core._codex_shared_state_db_holders(now, force=force)
@@ -994,45 +1102,6 @@ def _codex_shared_state_conflict(now=None, force=False):
             f"Codex process and retry."
         ),
     }
-
-
-def _codex_app_server_stdio_safe_to_spawn(now=None):
-    """True when no foreign Codex process holds the shared state DBs.
-
-    CCC's private stdio app-server must be the only persistent writer against
-    ~/.codex/state_5.sqlite. If a terminal `codex` TUI, the managed daemon, or
-    another integration already holds those files, spawning a second private
-    app-server risks cross-posting input between sessions.
-    """
-    return _core._codex_shared_state_conflict(now) is None
-
-
-def _codex_wait_for_shared_state_clear(timeout_s=None, poll_interval_s=None):
-    """Retry the shared-state holder check briefly before calling it a conflict.
-
-    A momentary second holder -- a browser extension's app-server touching
-    ~/.codex/state_5.sqlite for one poll, a terminal `codex` command that ran
-    and exited -- clears on its own within a couple seconds. Blocking CCC's
-    own spawn on the very first lsof sample turns that into a hard "quit the
-    other Codex process" error for something that was never actually a
-    sustained conflict. Poll for a short, bounded window instead; a conflict
-    that is still present at the end of it is durable and should block.
-
-    Uses time.monotonic() rather than time.time() for the retry deadline:
-    callers elsewhere in this module freeze time.time() to a fixed value in
-    tests (for the unrelated _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL cooldown),
-    which would make a time.time()-based deadline here never elapse.
-    """
-    if timeout_s is None:
-        timeout_s = _CODEX_SHARED_STATE_CONFLICT_RETRY_BUDGET_S
-    if poll_interval_s is None:
-        poll_interval_s = _CODEX_SHARED_STATE_CONFLICT_POLL_S
-    deadline = time.monotonic() + max(0.0, float(timeout_s))
-    conflict = _core._codex_shared_state_conflict(force=True)
-    while conflict is not None and time.monotonic() < deadline:
-        time.sleep(poll_interval_s)
-        conflict = _core._codex_shared_state_conflict(force=True)
-    return conflict
 
 
 class _CodexAppServerTransport:
@@ -1433,13 +1502,17 @@ def _codex_app_server_record_thread(thread_id, thread):
         # A thread/read after CCC restarts is observation, not progress. Keep
         # the persisted activity timestamp when it rediscovers the same turn;
         # otherwise every watcher reconciliation would make a silent turn look
-        # newly active and it could sleep forever.
+        # newly active and it could sleep forever. For a genuinely different
+        # turn the true start is unknowable - "at least since now" is honest.
         if previous_turn_id != turn_id or not state.get("last_activity_at"):
             state["last_activity_at"] = state["last_event_at"]
+        if previous_turn_id != turn_id:
+            state["turn_started_at"] = time.time()
         _core._CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
     elif str(status or "").lower() == "idle":
         state.pop("active_turn_id", None)
         state.pop("active_writer", None)
+        state.pop("turn_started_at", None)
         state["thread_needs_approval"] = False
         state["active_flags"] = []
     for turn in turns:
@@ -2002,6 +2075,29 @@ def _codex_compaction_recovery_note_notification_unlocked(
     if str(recovery.get("status") or "") in _CODEX_COMPACTION_RECOVERY_TERMINAL:
         return
 
+    # Compaction recovery only bridges the gap until execution resumes. Once
+    # Codex is producing output or running tools, later silence belongs to the
+    # normal silent-turn watchdog, not this old compaction episode.
+    resumed = (
+        method.startswith("item/")
+        and item_type != "contextCompaction"
+        and (
+            (method in ("item/started", "item/completed")
+             and item_type not in ("", "userMessage"))
+            or bool(str(params.get("delta") or "").strip())
+        )
+    )
+    if resumed and not _codex_recovery_is_silent_turn(recovery):
+        recovery["status"] = "recovered"
+        recovery["reason"] = "Codex resumed execution after compaction"
+        recovery["recovered_at"] = float(now)
+        recovery["last_progress_at"] = float(now)
+        _core._codex_coordination_event_unlocked(
+            state, "compaction_recovery_recovered",
+            detail=recovery["reason"], now=now,
+        )
+        return
+
     if method == "turn/started":
         if turn_id and str(turn_id) != str(recovery.get("compaction_turn_id") or ""):
             recovery["status"] = "recovering"
@@ -2296,6 +2392,10 @@ def _codex_app_server_activity_fields(session_id):
     if not active:
         return fields
     item = state.get("active_item") if isinstance(state.get("active_item"), dict) else None
+    # WIP timer epoch for the open-session badge — the stamped turn start,
+    # not last_activity (which advances on every delta and would pin the
+    # timer near zero).
+    turn_start = state.get("turn_started_at") or state.get("ccc_turn_start_pending_at")
     if item and item.get("tool") and item.get("tool") != "Thinking":
         fields.update({
             "sidecar_status": "active",
@@ -2305,6 +2405,8 @@ def _codex_app_server_activity_fields(session_id):
             "sidecar_ts": item.get("ts") or state.get("last_activity_at") or time.time(),
             "sidecar_in_flight": bool(item.get("in_flight", True)),
         })
+        if turn_start:
+            fields["working_since"] = turn_start
         return fields
     fields.update({
         "sidecar_status": "active",
@@ -2313,6 +2415,8 @@ def _codex_app_server_activity_fields(session_id):
         "sidecar_ts": state.get("last_activity_at") or state.get("last_event_at") or time.time(),
         "sidecar_in_flight": True,
     })
+    if turn_start:
+        fields["working_since"] = turn_start
     return fields
 
 
@@ -2547,6 +2651,7 @@ def _codex_app_server_handle_notification(method, params):
                 pump_after_notification = True
                 state.pop("active_turn_id", None)
                 state.pop("active_writer", None)
+                state.pop("turn_started_at", None)
                 state.pop("active_item", None)
                 state.pop("active_items", None)
                 state["thread_needs_approval"] = False
@@ -2562,6 +2667,11 @@ def _codex_app_server_handle_notification(method, params):
             and str(state.get("active_turn_id") or "") == str(turn_id)
         )
         if turn_id:
+            if str(state.get("active_turn_id") or "") != str(turn_id):
+                # Genuine new turn - stamp its start so the UI's WIP timer
+                # reads "working for Ns" off a real boundary, not off the
+                # poll that happened to notice it.
+                state["turn_started_at"] = now
             state["active_turn_id"] = turn_id
             state["last_activity_at"] = now
         # A notification without our transient start marker proves that a turn
@@ -2569,7 +2679,16 @@ def _codex_app_server_handle_notification(method, params):
         # reconnects after a restart while its own earlier turn is still
         # running. Treat unproven ownership as unknown; the writer gate still
         # serializes behind it.
-        writer = "ccc" if state.get("ccc_turn_start_pending") or known_ccc_turn else "unknown"
+        # Missing turn_id (notification params carry none in this protocol
+        # revision) must not downgrade an already-CCC-stamped writer: the
+        # response path marks active_writer=ccc before this notification is
+        # dispatched, and turn/started without an id can't point at a
+        # different turn either.
+        writer = "ccc" if (
+            state.get("ccc_turn_start_pending")
+            or known_ccc_turn
+            or (not turn_id and state.get("active_writer") == "ccc")
+        ) else "unknown"
         if writer == "ccc" and turn_id:
             _bind_codex_queued_delivery_ack_suppression(
                 thread_id,
@@ -2612,6 +2731,11 @@ def _codex_app_server_handle_notification(method, params):
         if not late_completed_turn:
             state["last_activity_at"] = now
             if turn_id:
+                if str(state.get("active_turn_id") or "") != str(turn_id):
+                    # First sighting of this turn without a turn/started
+                    # (e.g. CCC reconnected mid-turn) - the real start is
+                    # unknown, so "at least since now" is the honest stamp.
+                    state["turn_started_at"] = now
                 state["active_turn_id"] = turn_id
         if method == "thread/tokenUsage/updated":
             usage = params.get("tokenUsage") or params.get("token_usage") or params.get("usage")
@@ -2628,8 +2752,8 @@ def _codex_app_server_handle_notification(method, params):
         ):
             _codex_app_server_record_item_notification(state, method, params, now)
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
-            if method == "item/completed" and item.get("type") == "userMessage":
-                delivered_user_text = str(item.get("text") or "").strip()
+            if method == "item/completed":
+                delivered_user_text = _codex_user_message_item_text(item).strip()
                 if delivered_user_text:
                     state["last_delivered_user_text"] = delivered_user_text
                     state["last_delivered_user_turn_id"] = str(turn_id or "")
@@ -2642,6 +2766,7 @@ def _codex_app_server_handle_notification(method, params):
         if not turn_id or state.get("active_turn_id") == turn_id:
             state.pop("active_turn_id", None)
             state.pop("active_writer", None)
+            state.pop("turn_started_at", None)
         state.pop("active_item", None)
         state.pop("active_items", None)
         state["status"] = "idle"
@@ -2673,6 +2798,25 @@ def _codex_app_server_handle_notification(method, params):
             )
     if pump_after_notification:
         _core._schedule_codex_queue_pump(thread_id)
+        _core._schedule_codex_idle_unsubscribe(thread_id)
+
+
+def _codex_user_message_item_text(item):
+    """User text from an item whose type is a user message, any casing/shape.
+
+    Codex versions disagree on the wire shape: older builds emit
+    `userMessage` items carrying `.text`, current builds emit `UserMessage`
+    items carrying `content[].text`. Both mean "the exact user input durably
+    entered the thread" — that is the delivery ack the confirm window waits
+    on, and mismatching either shape leaves every send burning the full
+    confirm timeout.
+    """
+    if not isinstance(item, dict):
+        return ""
+    if str(item.get("type") or "").lower() != "usermessage":
+        return ""
+    from ccc_server.codex_live_events import _item_text
+    return _item_text(item)
 
 
 def _codex_app_server_handle_message(payload):
@@ -2738,6 +2882,72 @@ def _codex_app_server_thread_state(session_id):
         return {}
     with _core._CODEX_APP_SERVER_LOCK:
         return dict(_core._CODEX_APP_SERVER_THREAD_STATE.get(session_id) or {})
+
+
+# Short-TTL memo for the routed whole-map fetch. _codex_state_fields runs
+# per row in bulk session paths, so a per-session routed query would be an
+# IPC round-trip per row per sweep. One fetch per window serves them all.
+_CODEX_THREAD_STATE_REMOTE_TTL_S = 1.5
+_codex_thread_state_remote_lock = threading.Lock()
+_codex_thread_state_remote = {"ts": 0.0, "map": {}}
+
+
+def _codex_thread_state_map_resolved():
+    """{session_id: state} merged across this process and the worker."""
+    with _core._CODEX_APP_SERVER_LOCK:
+        local = {
+            str(sid): dict(state)
+            for sid, state in (
+                _core._CODEX_APP_SERVER_THREAD_STATE or {}
+            ).items()
+        }
+    if not _core._control_plane_routes_engines():
+        return local
+    now = time.time()
+    remote = None
+    with _codex_thread_state_remote_lock:
+        if (now - _codex_thread_state_remote["ts"]) < _CODEX_THREAD_STATE_REMOTE_TTL_S:
+            remote = _codex_thread_state_remote["map"]
+    if remote is None:
+        try:
+            routed = _core._control_plane_engine_call(
+                "codex", "thread_states", {}, mutate=False,
+            )
+        except Exception:
+            routed = None
+        remote = {}
+        if isinstance(routed, dict) and routed.get("ok"):
+            states = routed.get("states")
+            if isinstance(states, dict):
+                remote = states
+        with _codex_thread_state_remote_lock:
+            _codex_thread_state_remote["ts"] = time.time()
+            _codex_thread_state_remote["map"] = remote
+    # Remote (owner) wins per key: routed call responses like thread/list
+    # refresh get recorded into the CALLER's map too, so a dashboard-local
+    # entry is usually a stale snapshot while the worker's copy tracks
+    # notifications live.
+    merged = dict(local)
+    merged.update(remote)
+    return merged
+
+
+def _codex_thread_state_resolved(session_id):
+    """Thread state from whichever process owns the app-server connection.
+
+    Engine operations route to the control-plane worker, so daemon
+    notifications land in the worker's thread-state map — the dashboard's
+    local map stays empty for routed threads (or carries only stale
+    snapshots recorded from routed call responses). Readers that attribute
+    writes (writer gate, diagnostics verdict, wake fast-path) must consult
+    the owner or they misread a fresh rollout written by CCC's own turn as
+    an external writer.
+    """
+    if not session_id:
+        return {}
+    remote = _codex_thread_state_map_resolved()
+    state = remote.get(str(session_id))
+    return dict(state) if isinstance(state, dict) else {}
 
 
 def _codex_app_server_int(value):
@@ -3024,6 +3234,10 @@ def _codex_app_server_request_to_transport(
     sent_at = None
     try:
         with _core._CODEX_APP_SERVER_LOCK:
+            from ccc_server.codex_handover import in_progress
+            from ccc_server.codex_capabilities import codex_method_is_mutating
+            if in_progress() and codex_method_is_mutating(method):
+                return {"ok": False, "code": "codex_handover_pending", "error": "Desktop handover has an active writer gate; retry when it finishes."}
             req_id = _CODEX_APP_SERVER_NEXT_ID
             _CODEX_APP_SERVER_NEXT_ID += 1
             try:
@@ -3076,7 +3290,7 @@ def _codex_app_server_request_to_transport(
                 "app-server", "SENDFAIL",
                 f"method={method} id={req_id} send failed: {send_error!r}",
             )
-            return {"ok": False, "error": str(send_error), "fallback": "exec"}
+            return {"ok": False, "error": str(send_error), "fallback": "queue"}
         if exited:
             proc = transport.proc
             exit_code = proc.poll() if proc is not None else None
@@ -3094,8 +3308,9 @@ def _codex_app_server_request_to_transport(
             return {
                 "ok": False,
                 "error": f"Codex app-server exited before replying: {method}",
-                "fallback": "exec",
+                "fallback": "queue",
                 "exited": True,
+                "ambiguous": True,
             }
         if timed_out is not None:
             _core._app_server_trace(
@@ -3111,7 +3326,9 @@ def _codex_app_server_request_to_transport(
             return {
                 "ok": False,
                 "error": f"Codex app-server request timed out: {method}",
-                "fallback": "exec",
+                "fallback": "queue",
+                # The request was written; the server may have applied it.
+                "ambiguous": True,
             }
     finally:
         if count_as_inflight:
@@ -3119,23 +3336,38 @@ def _codex_app_server_request_to_transport(
                 _core._CODEX_APP_SERVER_INFLIGHT -= 1
 
 
-def _codex_context_window_args():
-    """Opt every Codex invocation into the model's full context window.
+def _codex_context_config():
+    """Apply the configured CCC context budget to Codex, with compaction headroom.
 
-    Codex CLAMPS `model_context_window` to the model's advertised
-    `max_context_window`, so passing 1M is a safe "give me the max" request, not
-    a foot-gun — it is silently capped per model:
-      - gpt-5.4: 272K default, 1M max -> reports ~950K effective context.
-      - gpt-5.5: 272K max -> clamped to ~258K after reserved output/system
-        tokens.
-      - gpt-6-astra (CCC default): 272K default, 872K advertised maximum.
-    Passed as a global `-c` override on spawn, resume, and the app-server so the
-    window is consistent across a session's whole life. Set CCC_CODEX_CONTEXT_1M=0
-    to fall back to the model default.
+    The shared spawn preference used to reach Claude only. Codex instead
+    requested its maximum window, allowing hundreds of thousands of tokens
+    beyond that preference. Keep a 10% margin for the next response/tool
+    results. The legacy CCC_CODEX_CONTEXT_1M flag no longer lifts this budget;
+    larger windows require an explicit numeric CCC_CODEX_CONTEXT_TOKENS.
     """
-    if not _core._codex_context_1m_enabled():
-        return []
-    return ["-c", "model_context_window=1000000"]
+    configured = _core._spawn_auto_compact_k_tokens()
+    window = configured or 250000
+    override = os.environ.get("CCC_CODEX_CONTEXT_TOKENS", "").strip()
+    if override:
+        try:
+            requested = int(override)
+        except ValueError:
+            requested = 0
+        if 10000 <= requested <= 1000000:
+            window = requested
+    return {
+        "model_context_window": window,
+        "model_auto_compact_token_limit": window * 9 // 10,
+        "model_auto_compact_token_limit_scope": "total",
+    }
+
+
+def _codex_context_window_args():
+    """Use the same explicit budget for the daemon and CLI invocations."""
+    args = []
+    for key, value in _codex_context_config().items():
+        args.extend(["-c", f"{key}={json.dumps(value)}"])
+    return args
 
 
 _CODEX_APP_SERVER_FALSE_MISS_LIMIT = 3
@@ -3211,8 +3443,150 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
 
     The app-server is the only local Codex interface that can append input to
     a loaded thread; `codex exec resume` can only start a one-shot process.
+
+    A multi-agent v2 sub-agent thread can only be resumed after its parent is
+    loaded; that rejection is repaired here, at the one choke point every
+    resume passes through, so no send/steer/pump path can bounce on it.
     """
+    response = _codex_app_server_request_once(
+        method, params, timeout,
+        _route=_route, _null_params=_null_params,
+        _expected_generation=_expected_generation,
+    )
+    if method == "thread/resume" and _codex_error_needs_parent_resume(response):
+        response = _codex_resume_subagent_via_parent(
+            params, response, timeout,
+            _route=_route, _expected_generation=_expected_generation,
+        )
+    return response
+
+
+_CODEX_SUBAGENT_PARENT_RESUME_MAX_DEPTH = 8
+
+
+def _codex_error_needs_parent_resume(response):
+    """True for Codex's 'cannot resume an unloaded multi-agent v2 sub-agent
+    through its parent; resume the parent first' rejection."""
+    lowered = _codex_error_text(response).lower()
+    return "sub-agent" in lowered and "resume the parent first" in lowered
+
+
+def _codex_error_is_subagent_input_forbidden(response):
+    """True when Codex refused input because the thread is a multi-agent v2
+    sub-agent ('direct app-server input is not allowed for multi-agent v2
+    sub-agents', or a resume rejection naming a v2 sub-agent/child). Such a
+    thread only takes input through its parent, never directly."""
+    lowered = _codex_error_text(response).lower()
+    return "multi-agent v2" in lowered and ("sub-agent" in lowered or "child" in lowered)
+
+
+def _codex_subagent_meta(thread_id):
+    """{"parent", "agent_path", "nickname"} from a sub-agent rollout's
+    session_meta line; empty strings when absent. Error path only."""
+    out = {"parent": "", "agent_path": "", "nickname": ""}
+    try:
+        path = _core._resolve_codex_rollout_path(thread_id)
+    except Exception:
+        path = None
+    if not path:
+        return out
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            first = json.loads(fh.readline() or "{}")
+    except (OSError, ValueError):
+        return out
+    payload = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
+    if not isinstance(payload, dict):
+        return out
+    source = payload.get("source")
+    sub = source.get("subagent") if isinstance(source, dict) else None
+    spawn = sub.get("thread_spawn") if isinstance(sub, dict) else None
+    spawn = spawn if isinstance(spawn, dict) else {}
+    parent = str(payload.get("parent_thread_id") or spawn.get("parent_thread_id") or "").strip()
+    out["parent"] = parent if parent != thread_id else ""
+    out["agent_path"] = str(payload.get("agent_path") or spawn.get("agent_path") or "").strip()
+    out["nickname"] = str(payload.get("agent_nickname") or spawn.get("agent_nickname") or "").strip()
+    return out
+
+
+def _codex_thread_parent_id(thread_id):
+    """Parent thread of a Codex sub-agent thread, or ''.
+
+    The rollout's session_meta line names it (``parent_thread_id``, or
+    ``source.subagent.thread_spawn.parent_thread_id``); the state DB's
+    ``thread_spawn_edges`` is the fallback. Error path only, so the file read
+    and DB scan never run per row.
+    """
+    parent = _codex_subagent_meta(thread_id)["parent"]
+    if parent:
+        return parent
+    try:
+        parent = _codex_spawn_parent_by_child().get(thread_id) or ""
+    except Exception:
+        parent = ""
+    return parent if parent != thread_id else ""
+
+
+def _codex_resume_subagent_via_parent(params, response, timeout, *, _route=True, _expected_generation=None):
+    """Load a sub-agent's ancestor chain, then retry its thread/resume.
+
+    Walks up parents until one resumes (nested sub-agents need their whole
+    chain loaded), then resumes back down to the original thread. Returns the
+    original rejection when no parent is known or an ancestor fails, so the
+    caller's durable-queue fallback still applies.
+    """
+    child = str((params or {}).get("threadId") or "").strip()
+    if not child:
+        return response
+    chain = []
+    seen = {child}
+    current = child
+    for _ in range(_CODEX_SUBAGENT_PARENT_RESUME_MAX_DEPTH):
+        parent = _codex_thread_parent_id(current)
+        if not parent or parent in seen:
+            return response
+        seen.add(parent)
+        chain.append(parent)
+        try:
+            _core._resume_ledger_append(
+                "codex_wake_stage", sid=child, stage="parent-resume", parent=parent,
+            )
+        except Exception:
+            pass
+        loaded = _codex_app_server_request_once(
+            "thread/resume", {"threadId": parent, "excludeTurns": True}, timeout,
+            _route=_route, _expected_generation=_expected_generation,
+        )
+        if not _codex_error_needs_parent_resume(loaded):
+            if loaded.get("error"):
+                return response
+            break
+        current = parent
+    else:
+        return response
+    # chain[-1] is now loaded; load the intermediate ancestors top-down.
+    for ancestor in reversed(chain[:-1]):
+        loaded = _codex_app_server_request_once(
+            "thread/resume", {"threadId": ancestor, "excludeTurns": True}, timeout,
+            _route=_route, _expected_generation=_expected_generation,
+        )
+        if loaded.get("error"):
+            return response
+    return _codex_app_server_request_once(
+        "thread/resume", params, timeout,
+        _route=_route, _expected_generation=_expected_generation,
+    )
+
+
+def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=True, _null_params=False, _expected_generation=None):
     params = params or {}
+    if method in ("thread/start", "thread/resume"):
+        params = dict(params)
+        params["config"] = {**(params.get("config") or {}), **_codex_context_config()}
+        reminder = _core._CCC_SESSION_STATE_SYSTEM_PROMPT
+        instructions = params.get("developerInstructions") or ""
+        if reminder not in instructions:
+            params["developerInstructions"] = (instructions + "\n\n" + reminder).strip()
     from ccc_server.codex_capabilities import codex_method_is_mutating
     mutating = codex_method_is_mutating(method)
     routed = _core._control_plane_engine_call(
@@ -3233,8 +3607,12 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
         return {
             "ok": False,
             "error": routed.get("error") or "Codex worker returned no response",
-            "fallback": "exec",
+            "fallback": "queue",
         }
+    from ccc_server.codex_handover import in_progress
+    with _core._CODEX_APP_SERVER_LOCK:
+        if in_progress() and mutating:
+            return {"ok": False, "code": "codex_handover_pending", "error": "Desktop handover has an active writer gate; retry when it finishes."}
     thread_id = _codex_app_server_request_thread_id(method, params)
     if method == "turn/start" and thread_id:
         with _core._CODEX_APP_SERVER_LOCK:
@@ -3261,7 +3639,7 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
         return {
             "ok": False,
             "error": error,
-            "fallback": "exec",
+            "fallback": "queue",
         }
     if _expected_generation is not None:
         from ccc_server.codex_conversation import CODEX_CONVERSATIONS
@@ -3291,6 +3669,7 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
                 if turn_id:
                     state["active_turn_id"] = turn_id
                     state["active_writer"] = "ccc"
+                    state["turn_started_at"] = time.time()
                     _core._CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
     return response
 
@@ -3481,26 +3860,17 @@ def _codex_app_server_reap_stray_children():
 def _codex_app_server_dump_stacks_on_liveness_miss(reason):
     """Capture every thread's current frame when a liveness check misses.
 
-    Reuses the existing SIGUSR2 stack-dump handler (see
-    _install_python_stack_dump_handler) instead of duplicating dump logic --
-    this just writes a locating marker into the same python-stacks.log and
-    then raises the signal against our own process so faulthandler produces
-    an all-thread traceback right at the moment of the miss. That's the
-    evidence needed to identify which thread was actually holding the GIL
-    (or otherwise busy) when the app-server reader thread should have been
-    running, rather than guessing at a cause.
+    Appends an all-thread traceback to python-stacks.log via
+    _dump_python_stacks (see _install_python_stack_dump_handler) right at the
+    moment of the miss. That's the evidence needed to identify which thread
+    was actually holding the GIL (or otherwise busy) when the app-server
+    reader thread should have been running, rather than guessing at a cause.
     """
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None or _core._PYTHON_STACK_DUMP_FILE is None:
+    if _core._PYTHON_STACK_DUMP_FILE is None:
         return
     try:
-        _core._PYTHON_STACK_DUMP_FILE.write(
-            f"\n=== app-server liveness miss ({reason}) pid={os.getpid()} "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC ===\n"
-        )
-        _core._PYTHON_STACK_DUMP_FILE.flush()
-        os.kill(os.getpid(), sigusr2)
-    except OSError:
+        _core._dump_python_stacks(f"app-server liveness miss ({reason})")
+    except Exception:
         pass
 
 
@@ -3536,7 +3906,7 @@ def _codex_app_server_active_turn_fresh(now):
 
 def _ensure_codex_app_server(*, allow_stdio=True):
     """Start and initialize a persistent Codex app-server if needed."""
-    global _CODEX_APP_SERVER_READER, _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
+    global _CODEX_APP_SERVER_READER
     # _log_activity and the stack-dump marker both do file I/O, and any
     # syscall can stall for seconds under memory pressure. Holding
     # _CODEX_APP_SERVER_LOCK across that I/O starves the reader thread that
@@ -3550,6 +3920,9 @@ def _ensure_codex_app_server(*, allow_stdio=True):
     initialization_wait_timed_out = False
     initialization_wait_started = time.monotonic()
     with _core._CODEX_APP_SERVER_LOCK:
+        from ccc_server.codex_handover import in_progress
+        if in_progress():
+            return _core._CODEX_APP_SERVER_TRANSPORT
         while _core._CODEX_APP_SERVER_INITIALIZING:
             remaining = _CODEX_APP_SERVER_INITIALIZING_WAIT_S - (
                 time.monotonic() - initialization_wait_started
@@ -3720,19 +4093,6 @@ def _ensure_codex_app_server(*, allow_stdio=True):
         return keep_transport
 
     managed_path = _core._codex_managed_app_server_socket_path()
-    # A foreign Codex writer is a durable safety block, not a transient
-    # transport failure. Rechecking it on every status poll produced a noisy
-    # 2–3s retry loop. Keep managed-daemon attachment eligible, but wait before
-    # retrying private stdio when it is the only available transport.
-    if (
-        allow_stdio
-        and time.time() < _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
-        and not (_core._codex_managed_app_server_enabled() and managed_path.exists())
-    ):
-        with _core._CODEX_APP_SERVER_LOCK:
-            _core._CODEX_APP_SERVER_INITIALIZING = False
-            _core._CODEX_APP_SERVER_LOCK.notify_all()
-        return None
     candidates = []
     if _core._codex_managed_app_server_enabled() and managed_path.exists():
         if _codex_managed_in_cooldown():
@@ -3743,23 +4103,13 @@ def _ensure_codex_app_server(*, allow_stdio=True):
         else:
             candidates.append(("managed-unix", managed_path))
     if allow_stdio:
-        conflict = _core._codex_wait_for_shared_state_clear()
-        if conflict is None:
-            candidates.append(("stdio", None))
-        else:
-            _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = (
-                time.time() + _CODEX_SHARED_STATE_BLOCK_RETRY_S
-            )
-            _core._app_server_trace(
-                "shared-state-block",
-                reason="foreign codex process holds shared state db",
-                conflict=conflict["summary"],
-            )
-            _core._log_activity(
-                "codex",
-                "SHARED_STATE_BLOCK",
-                f"private stdio app-server blocked: {conflict['summary']}",
-            )
+        # Codex treats the shared state DBs as multi-process by design (WAL +
+        # per-thread writer records). A foreign Codex process holding them --
+        # Codex Desktop's embedded host, a terminal TUI -- is normal, so it no
+        # longer gates CCC's private stdio app-server. Contention surfaces as
+        # per-thread "active writer" errors, which queue durably instead of
+        # dropping to a one-shot `codex exec`.
+        candidates.append(("stdio", None))
 
     for kind, arg in candidates:
         transport = None
@@ -4786,6 +5136,109 @@ def _codex_error_text(response):
     return message
 
 
+def _codex_error_is_active_writer(response):
+    """Codex refuses to load a thread another process is already driving."""
+    return "active writer" in _codex_error_text(response).lower()
+
+
+def _codex_describe_writer_command(cmd):
+    """Short human label for a process holding a Codex rollout. Pure."""
+    cmd = cmd or ""
+    if ".app/Contents/" in cmd and "app-server" in cmd:
+        return "the Codex desktop app"
+    if " exec" in f" {cmd}" and "codex" in cmd:
+        worker = re.search(r"--worker\s+([\w.-]+)", cmd)
+        if worker:
+            return f"WatchTower worker {worker.group(1)}, a headless `codex exec`"
+        return "a headless `codex exec` run"
+    if "app-server" in cmd:
+        return "another Codex app-server"
+    if "codex" in cmd:
+        return "a Codex terminal session"
+    return "another process"
+
+
+def _codex_rollout_writer_holders(rollout_path):
+    """Processes (other than CCC's own app-server) holding a rollout open.
+
+    One `lsof` on one file, only called on the active-writer failure path of a
+    user action, never per session row.
+    """
+    if not rollout_path:
+        return []
+    lsof_bin = shutil.which("lsof") or "/usr/sbin/lsof"
+    if not os.path.isfile(lsof_bin):
+        return []
+    try:
+        out = subprocess.run(
+            [lsof_bin, "-w", "-t", "--", str(rollout_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3.0,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    own = {os.getpid()}
+    proc = _core._CODEX_APP_SERVER_PROC
+    if proc is not None:
+        own.add(proc.pid)
+    pids = sorted({int(p) for p in out.split() if p.isdigit()} - own)
+    if not pids:
+        return []
+    commands = {}
+    try:
+        ps_out = subprocess.run(
+            ["/bin/ps", "-p", ",".join(str(p) for p in pids), "-o", "pid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3.0,
+            check=False,
+        ).stdout
+        for line in ps_out.splitlines():
+            head, _, cmd = line.strip().partition(" ")
+            if head.isdigit():
+                commands[int(head)] = cmd.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return [
+        {"pid": pid, "command": commands.get(pid, "")[:200],
+         "label": _codex_describe_writer_command(commands.get(pid, ""))}
+        for pid in pids
+    ]
+
+
+def _codex_active_writer_result(sid, response, via):
+    """Actionable failure for "thread already has an active writer" (CCC-1246).
+
+    The raw Codex text names no process and the card's "try again" suggests a
+    transient glitch. Name the process that owns the thread instead.
+    """
+    try:
+        holders = _core._codex_rollout_writer_holders(_core._resolve_codex_rollout_path(sid))
+    except Exception:
+        holders = []
+    if holders:
+        who = holders[0]
+        subject = f"{who['label']} (pid {who['pid']})"
+    else:
+        subject = "another Codex process"
+    return {
+        "ok": False,
+        "via": via,
+        "code": "codex_active_writer",
+        "session_id": sid,
+        "writers": holders,
+        "error": (
+            f"This thread is still being driven by {subject}. Codex allows one "
+            "writer per thread, so compact after that process finishes or stop it first."
+        ),
+        "detail": _codex_error_text(response),
+    }
+
+
 def _codex_error_is_not_steerable(response):
     text = _codex_error_text(response)
     lowered = text.lower()
@@ -4847,12 +5300,23 @@ def _codex_rollout_contains_user_text_since(baseline, session_id, text):
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
                 payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-                if event.get("type") != "event_msg" or payload.get("type") != "user_message":
+                if event.get("type") != "event_msg":
                     continue
-                actual = _core._strip_ccc_session_state_instruction(
-                    str(payload.get("message") or "")
-                ).strip()
-                if actual == expected:
+                if payload.get("type") == "user_message":
+                    actual = _core._strip_ccc_session_state_instruction(
+                        str(payload.get("message") or "")
+                    ).strip()
+                elif payload.get("type") == "item_completed":
+                    # Current codex records app-server-sent input as an
+                    # item_completed/UserMessage item (content[].text), not a
+                    # user_message event — matching only the legacy shape
+                    # makes the confirm window always time out.
+                    actual = _core._strip_ccc_session_state_instruction(
+                        _codex_user_message_item_text(payload.get("item"))
+                    ).strip()
+                else:
+                    continue
+                if actual and actual == expected:
                     return True
     except OSError:
         return False
@@ -4993,8 +5457,8 @@ def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
         # observe the answer. Codex writes ~85KB of preamble into a fresh
         # rollout before the user_message row lands, which the old 5s budget
         # regularly lost to -- a confirmation that is almost always "no" cannot
-        # flag a genuinely dropped prompt. The inject path keeps its own 5s
-        # budget, because a human is waiting on that one.
+        # flag a genuinely dropped prompt. The inject path now confirms
+        # asynchronously for the same reason (see _codex_finalize_wake_async).
         try:
             confirm_timeout = float(
                 os.environ.get("CCC_CODEX_SPAWN_CONFIRM_TIMEOUT", "30")
@@ -5093,6 +5557,83 @@ def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
     return thread
 
 
+def _codex_finalize_wake_async(session_id, turn_id, *, expected_text,
+                               baseline_state, baseline_rollout,
+                               model="", cwd=""):
+    """Run the inject-path durability confirmation off the send's critical
+    path.
+
+    Same reasoning as _codex_finalize_spawn_async: once turn/start is
+    accepted the turn is already running inside Codex, and nothing
+    downstream branches on `confirmed` -- the queue transaction only reads
+    ok/queued/disabled/turn_id and the browser only reads `confirmed` for
+    desktop-routed sends. Meanwhile the rollout-echo check costs ~1.5-5s the
+    user counts as send latency (it was the entire stall behind "every send
+    takes a lot of time"). Report the send as accepted-pending and land the
+    answer in telemetry + the wake ledger a few seconds later.
+
+    The default window is 30s not 5s for the same reason as the spawn path:
+    a fresh rollout gets ~85KB of preamble before the user_message row, so a
+    confirmation that almost always reports "no" cannot flag a genuinely
+    dropped input.
+    """
+    def worker():
+        try:
+            confirm_timeout = float(
+                os.environ.get("CCC_CODEX_WAKE_CONFIRM_TIMEOUT", "30")
+            )
+        except ValueError:
+            confirm_timeout = 30.0
+        confirm_at = time.monotonic()
+        confirmation = _core._codex_wait_for_turn_activity(
+            session_id,
+            turn_id,
+            baseline_state=baseline_state,
+            baseline_rollout=baseline_rollout,
+            expected_text=expected_text,
+            timeout=confirm_timeout,
+        )
+        confirm_ms = _codex_elapsed_ms(confirm_at)
+        if not confirmation.get("confirmed"):
+            try:
+                _core._resume_ledger_append(
+                    "codex_wake_warn", sid=session_id,
+                    via="codex-app-turn", turn_id=turn_id,
+                    warning=confirmation.get("warning"),
+                )
+            except Exception:
+                pass
+        _core._codex_telemetry_append(
+            "codex_wake_confirm",
+            ok=True,
+            via="codex-app-turn",
+            session_id=session_id,
+            turn_id=turn_id,
+            confirm_ms=confirm_ms,
+            confirmed=bool(confirmation.get("confirmed")),
+            confirmation_source=confirmation.get("source"),
+            warning=confirmation.get("warning"),
+            transport=_core._codex_app_server_transport_kind(),
+            cwd=cwd,
+            model=model,
+        )
+
+    thread = threading.Thread(
+        target=worker,
+        daemon=True,
+        name=f"ccc-codex-wake-confirm-{str(session_id)[:8]}",
+    )
+    # Published so tests can join the confirmer instead of racing it; nothing
+    # in production reads this. The worker context has no server module to
+    # hold the name, so tolerate that rather than crash a real wake.
+    try:
+        _core._CODEX_LAST_WAKE_CONFIRMER = thread
+    except AttributeError:
+        pass
+    thread.start()
+    return thread
+
+
 def _codex_reconcile_thread_idle(session_id):
     """Clear volatile ownership after Codex authoritatively reports idle."""
     cleared_phantom = False
@@ -5123,6 +5664,7 @@ def _codex_reconcile_thread_idle(session_id):
         state["status"] = "idle"
         state.pop("active_turn_id", None)
         state.pop("active_writer", None)
+        state.pop("turn_started_at", None)
         state.pop("active_item", None)
         state.pop("active_items", None)
         if cleared_phantom:
@@ -5172,12 +5714,13 @@ def _codex_app_server_thread_is_active(session_id, *, start_if_needed=False):
             return False
     try:
         resumed = _core._codex_app_server_request(
-            "thread/resume",
-            {"threadId": session_id, "excludeTurns": False},
+            "thread/read",
+            {"threadId": session_id, "includeTurns": True},
             timeout=5,
         )
     except Exception:
-        return False
+        state = _core._codex_app_server_thread_state(session_id)
+        return bool(state.get("active_turn_id") or str(state.get("status") or "").lower() == "active")
     if not _core._codex_response_succeeded(resumed):
         state = _core._codex_app_server_thread_state(session_id)
         return bool(state.get("active_turn_id") or str(state.get("status") or "").lower() == "active")
@@ -5185,14 +5728,99 @@ def _codex_app_server_thread_is_active(session_id, *, start_if_needed=False):
     status = ((thread.get("status") or {}).get("type") or "").lower()
     if status == "active" or bool(_codex_latest_active_turn(thread)):
         return True
+    if status != "idle":
+        # notLoaded is local to this app-server, not proof that another
+        # writer ended. Keep any known ownership until idle is confirmed.
+        state = _core._codex_app_server_thread_state(session_id)
+        return bool(state.get("active_turn_id") or str(state.get("status") or "").lower() == "active")
 
-    # `thread/resume` is an authoritative re-read from Codex. If it says the
+    # `thread/read` observes Codex without loading/subscribing to the thread
+    # or acquiring its writer lock. If it says the
     # thread is idle, discard any volatile active/unknown writer left behind by
     # a lost notification, server restart, or ended app-server client. Keeping
     # the stale local marker here made FIFO input wait forever until somebody
     # opened the thread in a CLI and caused a fresh status transition.
     _codex_reconcile_thread_idle(session_id)
     return False
+
+
+_CODEX_IDLE_UNSUBSCRIBE_PENDING = set()
+_CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT = None
+
+
+def _codex_unsubscribe_idle_thread(session_id):
+    """Drop an unused local subscription; Codex controls its unload grace."""
+    global _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT
+    if not _core._codex_app_server_is_live():
+        return False
+    lock = _core._codex_thread_turn_lock(session_id)
+    if not lock.acquire(blocking=False):
+        return False
+    def needs_subscription():
+        state = _core._codex_app_server_thread_state(session_id)
+        if (str(state.get("status") or "").lower() != "idle"
+                or state.get("active_turn_id") or state.get("ccc_turn_start_pending")
+                or state.get("thread_needs_approval")):
+            return True
+        with _core._pending_resume_lock:
+            if _core._pending_resume_queue.get(session_id):
+                return True
+        goal = _core._codex_goals_snapshot().get(session_id) or {}
+        return bool(goal and str(goal.get("status") or "active").lower() == "active")
+
+    try:
+        if needs_subscription():
+            return False
+        # Recheck on the wire, under the same mutex as resume -> turn/start.
+        # Do not start a replacement transport solely to release an old one.
+        transport = _core._CODEX_APP_SERVER_TRANSPORT
+        if transport is None or transport is _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT:
+            return False
+        response = _core._codex_app_server_request_to_transport(
+            transport, "thread/read", {"threadId": session_id, "includeTurns": False},
+            timeout=5,
+        )
+        thread = (response.get("result") or {}).get("thread") or {}
+        if (not _core._codex_response_succeeded(response)
+                or (thread.get("status") or {}).get("type") != "idle"
+                or transport is not _core._CODEX_APP_SERVER_TRANSPORT
+                or not _core._codex_app_server_is_live()):
+            return False
+        if needs_subscription():
+            return False
+        response = _core._codex_app_server_request_to_transport(
+            transport, "thread/unsubscribe", {"threadId": session_id}, timeout=5,
+        )
+        if not _core._codex_response_succeeded(response):
+            error = response.get("error")
+            if isinstance(error, dict) and error.get("code") == -32601:
+                _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT = transport
+            _core._log_activity("codex", "WARN", f"Idle unsubscribe failed for {session_id}: {_codex_error_text(response)}")
+            return False
+        return True
+    except Exception as exc:
+        _core._log_activity("codex", "WARN", f"Idle unsubscribe failed for {session_id}: {exc}")
+        return False
+    finally:
+        lock.release()
+
+
+def _schedule_codex_idle_unsubscribe(session_id):
+    """Run outside the notification reader, which must receive RPC replies."""
+    with _core._CODEX_APP_SERVER_LOCK:
+        if session_id in _CODEX_IDLE_UNSUBSCRIBE_PENDING:
+            return
+        _CODEX_IDLE_UNSUBSCRIBE_PENDING.add(session_id)
+
+    def release():
+        try:
+            _core._codex_unsubscribe_idle_thread(session_id)
+        finally:
+            with _core._CODEX_APP_SERVER_LOCK:
+                _CODEX_IDLE_UNSUBSCRIBE_PENDING.discard(session_id)
+
+    threading.Thread(target=release, daemon=True,
+                     name=f"codex-idle-unsubscribe-{session_id[:8]}").start()
 
 
 # ── Codex desktop ↔ CCC single-writer coordination ──────────────────────────
@@ -5387,20 +6015,31 @@ def _codex_desktop_attached_rollouts(now=None):
 
 
 def _codex_ccc_exec_child_running(session_id):
-    """True when a CCC-spawned `codex exec resume` child owns this sid."""
+    """True when a CCC-spawned `codex exec resume` child owns this sid.
+
+    The in-process `_spawned_sessions` scan only sees children THIS process
+    launched. The control-plane worker spawns its own exec-resume children,
+    which surface to the dashboard only via the on-disk spawn registry —
+    check it too or a worker-owned child reads as an external writer."""
     try:
-        return any(
+        if any(
             s.get("resumed_sid") == session_id and _core._poll_spawn_entry(s) is None
             for s in _core._spawned_sessions
             if s.get("engine") == "codex"
-        )
+        ):
+            return True
+    except Exception:
+        return False
+    try:
+        entry = _core._disk_spawn_entry_for_session(session_id)
+        return bool(entry and entry.get("engine") == "codex")
     except Exception:
         return False
 
 
 def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
                                   app_state=None, attached=None,
-                                  exec_child=None):
+                                  exec_child=None, holders=None):
     """Attribute the current writer of one Codex thread.
 
     Returns {writer, desktop_attached, external_active, mtime_age_s}:
@@ -5411,7 +6050,7 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
     snap = {"writer": None, "desktop_attached": False, "external_active": False}
     if not session_id:
         return snap
-    state = app_state if app_state is not None else _core._codex_app_server_thread_state(session_id)
+    state = app_state if app_state is not None else _core._codex_thread_state_resolved(session_id)
     state = state or {}
     active_turn_id = state.get("active_turn_id")
     active_status = str(state.get("status") or "").strip().lower() == "active"
@@ -5429,6 +6068,21 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
             ccc_recent = False
     if exec_child is None:
         exec_child = _codex_ccc_exec_child_running(session_id)
+    if not ccc_turn_active and not exec_child:
+        # A worker-spawned `codex exec resume` can be invisible to both
+        # in-process and registry lookups (registry written late, or pid
+        # wiped by a stale reattach sweep) while still holding the shared
+        # state DB — its argv carries the thread id, so the holder scan is
+        # the last-resort ownership check before calling this external.
+        try:
+            if holders is None:
+                holders = _core._codex_shared_state_db_holders(now)
+            classified = _codex_classify_state_holders(holders, session_id)
+            if any(h.get("this_thread") and str(h.get("kind") or "").startswith("ccc-exec")
+                   for h in classified):
+                exec_child = True
+        except Exception:
+            pass
     if rollout is None:
         rollout = _core._codex_rollout_stat(session_id)
     path = (rollout or {}).get("path")
@@ -5855,7 +6509,9 @@ def _codex_app_server_thread_start_params(cwd=None, model=None):
     params = {
         "approvalPolicy": "never",
         "sandbox": "danger-full-access",
-        "threadSource": "ccc",
+        # Desktop's project sidebar lists user threads. CCC provenance is
+        # tracked separately in our spawn/thread registries.
+        "threadSource": "user",
         "sessionStartSource": "startup",
         "ephemeral": False,
     }
@@ -5864,8 +6520,7 @@ def _codex_app_server_thread_start_params(cwd=None, model=None):
         params["runtimeWorkspaceRoots"] = [cwd]
     if model:
         params["model"] = model
-    if _core._codex_context_1m_enabled():
-        params["config"] = {"model_context_window": 1000000}
+    params["config"] = _codex_context_config()
     return params
 
 
@@ -6065,24 +6720,25 @@ def _codex_spawn_via_app_server(
 ):
     """Start a fresh Codex thread through the app-server.
 
-    Returns None when callers should fall back to the legacy `codex exec` path.
-    Once a durable thread has been created, errors are returned to the caller
-    instead of launching a second session for the same requested task — except
-    "thread not found" from turn/start, which proves the turn was never
-    accepted (even after reattach + recreate recovery), so the exec fallback
-    is safe and preferred over rejecting the user's submission.
+    The legacy `codex exec` fallback is gone — every failure here is returned
+    to the caller as an error payload instead of launching a one-shot process.
     """
     if not _codex_app_server_spawn_enabled():
         _core._codex_telemetry_append(
             "codex_spawn",
             ok=False,
             via="codex-app-spawn",
-            fallback="codex-exec",
+            fallback="none",
             fallback_reason="app-server-disabled",
             cwd=spawn_cwd,
             model=model_to_use,
         )
-        return None
+        return {
+            "ok": False,
+            "via": "codex-app-spawn",
+            "code": "codex_app_server_disabled",
+            "error": "Codex app-server spawning is disabled (CCC_CODEX_SPAWN_APP_SERVER=0)",
+        }
     timestamp = timestamp or time.strftime("%Y%m%dT%H%M%S")
     total_start = time.monotonic()
     app_server_warm = _core._codex_app_server_is_live()
@@ -6098,14 +6754,15 @@ def _codex_spawn_via_app_server(
     )
     thread_start_ms = _codex_elapsed_ms(thread_start_at)
     if not _core._codex_response_succeeded(start):
+        error = _codex_app_server_response_error(start)
         _core._codex_telemetry_append(
             "codex_spawn",
             ok=False,
             via="codex-app-spawn",
-            fallback="codex-exec",
+            fallback="none",
             fallback_reason="thread/start failed",
             stage="thread/start",
-            error=_codex_app_server_response_error(start),
+            error=error,
             app_server_warm=app_server_warm,
             thread_start_ms=thread_start_ms,
             total_ms=_codex_elapsed_ms(total_start),
@@ -6113,11 +6770,21 @@ def _codex_spawn_via_app_server(
             cwd=spawn_cwd,
             model=model_to_use,
         )
-        return None
+        return {
+            "ok": False,
+            "via": "codex-app-spawn",
+            "code": "codex_app_spawn_failed",
+            "error": error,
+        }
     thread = ((start.get("result") or {}).get("thread") or {})
     thread_id = thread.get("id")
     if not thread_id:
-        return None
+        return {
+            "ok": False,
+            "via": "codex-app-spawn",
+            "code": "codex_app_spawn_failed",
+            "error": "Codex app-server thread/start returned no thread id",
+        }
     thread_id = str(thread_id)
     _core._codex_app_server_record_thread(thread_id, thread)
     # Backdate t0 to the start of the spawn so thread_start is measured from
@@ -6251,18 +6918,15 @@ def _codex_spawn_via_app_server(
         turn_start_ms = _codex_elapsed_ms(turn_start_at)
         if not _core._codex_response_succeeded(started):
             error = _codex_app_server_response_error(started)
-            # "thread not found" is definitive: the app-server never accepted
-            # the turn, so no work ran on this thread. After the reattach +
-            # recreate recovery above has also failed, the app-server is
-            # persistently unable to run turns (wedged child, broken shared
-            # state) — falling back to the one-shot `codex exec` path cannot
-            # duplicate the task, unlike other errors (e.g. a lost response
-            # after the turn was accepted) where a second session could.
+            # "thread not found" survives the reattach + recreate recovery:
+            # the app-server is persistently unable to run turns (wedged
+            # child, broken shared state). The durable thread still exists —
+            # report it so the caller can surface the failure on it.
             thread_lost = "thread not found" in error.lower()
             log_fh.write(json.dumps({
                 "event": "codex_app_server_turn_failed",
                 "error": error,
-                "fallback": "codex-exec" if thread_lost else "none",
+                "fallback": "none",
             }, sort_keys=True) + "\n")
             log_fh.flush()
             if thread_lost:
@@ -6270,7 +6934,7 @@ def _codex_spawn_via_app_server(
                     "codex_spawn",
                     ok=False,
                     via="codex-app-spawn",
-                    fallback="codex-exec",
+                    fallback="none",
                     fallback_reason="turn/start thread-not-found after recovery",
                     stage="turn/start",
                     error=error,
@@ -6287,7 +6951,14 @@ def _codex_spawn_via_app_server(
                     cwd=spawn_cwd,
                     model=model_to_use,
                 )
-                return None
+                return {
+                    "ok": False,
+                    "error": error,
+                    "code": "codex_app_spawn_failed",
+                    "via": "codex-app-spawn",
+                    "session_id": thread_id,
+                    "log": str(log_path),
+                }
             _core._codex_telemetry_append(
                 "codex_spawn",
                 ok=False,
@@ -6471,6 +7142,208 @@ def _codex_spawn_via_app_server(
     return _core._finalize_spawn_response(resp, entry, {"cwd": spawn_cwd, "repo_path": repo_for_logs}, wait_for_session_id=False)
 
 
+# Slack between "the daemon last reported on this thread" (last_event_at,
+# stamped only by notification/response handlers) and the rollout file mtime.
+# The daemon writes a rollout row then notifies, so its own writes land at or
+# below the watermark; the slack absorbs flush-vs-notify ordering jitter. A
+# foreign writer (a bare `codex exec` run, an app-server that doesn't share
+# our daemon) appends without notifying us — its mtime lands above the
+# watermark and sends the caller down the full resume path.
+_CODEX_THREAD_FRESH_SLACK_S = 5.0
+
+
+def _codex_app_server_thread_fresh(session_id, *, state=None, rollout=None):
+    """True when the app-server's in-memory view of this thread is current.
+
+    Skipping thread/resume is only safe when (a) the daemon has provably
+    reported on this thread in this process (`last_event_at`, set exclusively
+    by notification/response handlers — never by request bookkeeping), and
+    (b) the rollout has not moved since that report: the file is append-only,
+    so an mtime at/below the watermark means no turn landed that the daemon
+    cannot see. Anything else — no state, no rollout, moved file, busy
+    markers — returns False and the caller takes the full resume path, which
+    is also the authority that reports a busy thread.
+    """
+    state = state if state is not None else _core._codex_thread_state_resolved(session_id)
+    if not state:
+        return False
+    heard = 0.0
+    for key in ("last_event_at", "last_activity_at"):
+        try:
+            heard = max(heard, float(state.get(key) or 0))
+        except (TypeError, ValueError):
+            continue
+    if heard <= 0:
+        return False
+    if (
+        str(state.get("status") or "").strip().lower() == "active"
+        or state.get("active_turn_id")
+        or state.get("ccc_turn_start_pending")
+        or state.get("active_flags")
+        or state.get("pending_approval_request")
+        or state.get("active_items")
+    ):
+        return False
+    if rollout is None:
+        rollout = _core._codex_rollout_stat(session_id)
+    try:
+        mtime = float((rollout or {}).get("mtime_ns") or 0) / 1e9
+    except (TypeError, ValueError):
+        return False
+    if mtime <= 0:
+        return False
+    return mtime <= heard + _CODEX_THREAD_FRESH_SLACK_S
+
+
+def _codex_error_is_thread_unloaded(response):
+    """Definite 'the daemon does not have this thread' replies — safe to
+    retry after thread/resume reloads it."""
+    lowered = _codex_error_text(response).lower()
+    return any(
+        token in lowered
+        for token in ("thread not found", "not loaded", "unknown thread", "no such thread")
+    )
+
+
+def _codex_wake_turn_accepted(
+    session_id,
+    text,
+    started,
+    *,
+    total_start,
+    turn_start_at,
+    turn_start_ms,
+    resume_ms,
+    cwd,
+    model,
+    baseline_state,
+    baseline_rollout,
+    app_server_warm,
+    resume_skipped=False,
+):
+    turn = ((started.get("result") or {}).get("turn") or {})
+    _turn_id = turn.get("id")
+    _core._codex_telemetry_register_turn(
+        session_id,
+        _turn_id,
+        path="wake",
+        started_at_monotonic=turn_start_at,
+        transport=_core._codex_app_server_transport_kind(),
+        cwd=cwd,
+        model=model,
+    )
+    _core._resume_ledger_append(
+        "codex_wake_ok", sid=session_id,
+        via="codex-app-turn", turn_id=_turn_id,
+    )
+    # The turn is accepted and already running. Proving the prompt durably
+    # landed is diagnostics-only -- nothing downstream branches on
+    # `confirmed`, and the rollout echo costs ~1.5-5s the user counts as
+    # send latency. Same treatment as the spawn path: report pending and
+    # finish the check on a daemon thread (see _codex_finalize_wake_async).
+    _codex_finalize_wake_async(
+        session_id,
+        _turn_id,
+        expected_text=text,
+        baseline_state=baseline_state,
+        baseline_rollout=baseline_rollout,
+        model=model,
+        cwd=cwd,
+    )
+    total_ms = _codex_elapsed_ms(total_start)
+    _core._codex_telemetry_append(
+        "codex_wake",
+        ok=True,
+        via="codex-app-turn",
+        app_server_warm=app_server_warm,
+        resume_ms=resume_ms,
+        resume_skipped=bool(resume_skipped),
+        turn_start_ms=turn_start_ms,
+        confirm_ms=None,
+        total_ms=total_ms,
+        confirmed=None,
+        confirmation_source="pending",
+        warning=None,
+        transport=_core._codex_app_server_transport_kind(),
+        session_id=session_id,
+        turn_id=_turn_id,
+        cwd=cwd,
+        model=model,
+    )
+    return {
+        "ok": True,
+        "via": "codex-app-turn",
+        "accepted": True,
+        # None (not False) until _codex_finalize_wake_async lands: the turn
+        # was accepted, the durability check just has not reported yet.
+        "confirmed": None,
+        "confirmation_source": "pending",
+        "warning": None,
+        "turn_id": _turn_id,
+        "session_id": session_id,
+        "app_server_transport": _core._codex_app_server_transport_kind(),
+        "app_server_warm": app_server_warm,
+        "resume_ms": resume_ms,
+        "resume_skipped": bool(resume_skipped),
+        "turn_start_ms": turn_start_ms,
+        "confirm_ms": None,
+        "latency_ms": total_ms,
+    }
+
+
+def _codex_wake_turn_start_failed(
+    session_id,
+    started,
+    *,
+    total_start,
+    turn_start_ms,
+    resume_ms,
+    cwd,
+    model,
+    app_server_warm,
+    resume_skipped=False,
+):
+    _err = _codex_error_text(started)
+    # Same policy as thread/resume failures: the exec fallback is gone, so a
+    # failed turn/start parks the message in the durable queue for the pump
+    # to retry through the app-server. An ambiguous transport failure is
+    # NEVER retried inline — the turn may have started server-side.
+    _core._resume_ledger_append(
+        "codex_wake_queued", sid=session_id,
+        stage="turn/start", reason=_err,
+    )
+    _core._codex_telemetry_append(
+        "codex_wake",
+        ok=False,
+        via="codex-app-server",
+        fallback="queue",
+        fallback_reason="turn/start failed",
+        stage="turn/start",
+        error=_err,
+        app_server_warm=app_server_warm,
+        resume_ms=resume_ms,
+        resume_skipped=bool(resume_skipped),
+        turn_start_ms=turn_start_ms,
+        total_ms=_codex_elapsed_ms(total_start),
+        transport=_core._codex_app_server_transport_kind(),
+        session_id=session_id,
+        cwd=cwd,
+        model=model,
+    )
+    return {
+        "ok": False,
+        "via": "codex-app-server",
+        "stage": "turn/start",
+        "fallback": "queue",
+        "error": _err,
+        "app_server_warm": app_server_warm,
+        "resume_ms": resume_ms,
+        "resume_skipped": bool(resume_skipped),
+        "turn_start_ms": turn_start_ms,
+        "latency_ms": _codex_elapsed_ms(total_start),
+    }
+
+
 def _codex_resume_or_steer_via_app_server(
     session_id,
     text,
@@ -6530,16 +7403,78 @@ def _codex_resume_or_steer_via_app_server_locked(
             "codex_wake",
             ok=False,
             via="codex-app-server",
-            fallback="exec",
+            fallback="queue",
             fallback_reason="app-server-disabled",
             stage="disabled",
             session_id=session_id,
             cwd=cwd,
             model=model,
         )
-        return {"ok": False, "fallback": "exec", "error": "Codex app-server disabled"}
+        return {"ok": False, "fallback": "queue", "error": "Codex app-server disabled"}
     total_start = time.monotonic()
     app_server_warm = _core._codex_app_server_is_live()
+    # Fast path: when the daemon's in-memory view of the thread is provably
+    # current (it has reported on the thread and the append-only rollout has
+    # not moved since), turn/start alone is enough — the same shape as the
+    # codex-client/desktop send path (thread/read + turn/start, no resume).
+    # thread/resume re-reads the whole thread and costs ~100-700ms per send.
+    # A definite "thread not found"/busy reply falls through to resume below;
+    # an ambiguous transport failure returns the queue response immediately —
+    # never retry a maybe-started turn inline.
+    fast_baseline_state = None
+    fast_baseline_rollout = None
+    if allow_start and app_server_warm:
+        fast_baseline_state = _core._codex_thread_state_resolved(session_id)
+        fast_baseline_rollout = _core._codex_rollout_stat(session_id)
+        if _codex_app_server_thread_fresh(
+            session_id, state=fast_baseline_state, rollout=fast_baseline_rollout,
+        ):
+            try:
+                _core._resume_ledger_append(
+                    "codex_wake_stage", sid=session_id, stage="turn-start-fast",
+                )
+            except Exception:
+                pass
+            turn_start_at = time.monotonic()
+            started = _core._codex_app_server_request(
+                "turn/start",
+                _codex_turn_params(
+                    session_id, text, cwd=cwd, model=model,
+                    image_paths=image_paths, effort=reasoning_effort,
+                ),
+                timeout=20,
+            )
+            turn_start_ms = _codex_elapsed_ms(turn_start_at)
+            if _core._codex_response_succeeded(started):
+                return _codex_wake_turn_accepted(
+                    session_id, text, started,
+                    total_start=total_start,
+                    turn_start_at=turn_start_at,
+                    turn_start_ms=turn_start_ms,
+                    resume_ms=0,
+                    cwd=cwd, model=model,
+                    baseline_state=fast_baseline_state,
+                    baseline_rollout=fast_baseline_rollout,
+                    app_server_warm=app_server_warm,
+                    resume_skipped=True,
+                )
+            if _codex_error_is_thread_unloaded(started) or _core._codex_error_is_not_steerable(started):
+                try:
+                    _core._resume_ledger_append(
+                        "codex_wake_stage", sid=session_id, stage="fast-miss-resume",
+                    )
+                except Exception:
+                    pass
+            else:
+                return _codex_wake_turn_start_failed(
+                    session_id, started,
+                    total_start=total_start,
+                    turn_start_ms=turn_start_ms,
+                    resume_ms=None,
+                    cwd=cwd, model=model,
+                    app_server_warm=app_server_warm,
+                    resume_skipped=True,
+                )
     resume_params = {
         "threadId": session_id,
         "excludeTurns": False,
@@ -6559,17 +7494,22 @@ def _codex_resume_or_steer_via_app_server_locked(
     resume_at = time.monotonic()
     resumed = _core._codex_app_server_request("thread/resume", resume_params, timeout=20)
     resume_ms = _codex_elapsed_ms(resume_at)
+    if resumed.get("code") == "codex_handover_pending":
+        return {"ok": False, "fallback": "queue", "via": "codex-app-server", "error": resumed["error"]}
     if resumed.get("error"):
         _err = _codex_error_text(resumed)
+        # The one-shot `codex exec` fallback is gone: a resume failure parks
+        # the message in the durable queue so the pump retries the app-server
+        # when the transport (or the thread's writer) frees up.
         _core._resume_ledger_append(
-            "codex_wake_fail", sid=session_id,
-            stage="thread/resume", error=_err, fallback="exec",
+            "codex_wake_queued", sid=session_id,
+            stage="thread/resume", reason=_err,
         )
         _core._codex_telemetry_append(
             "codex_wake",
             ok=False,
             via="codex-app-server",
-            fallback="exec",
+            fallback="queue",
             fallback_reason="thread/resume failed",
             stage="thread/resume",
             error=_err,
@@ -6585,7 +7525,7 @@ def _codex_resume_or_steer_via_app_server_locked(
             "ok": False,
             "via": "codex-app-server",
             "stage": "thread/resume",
-            "fallback": "exec",
+            "fallback": "queue",
             "error": _err,
             "app_server_warm": app_server_warm,
             "resume_ms": resume_ms,
@@ -6717,76 +7657,17 @@ def _codex_resume_or_steer_via_app_server_locked(
     )
     turn_start_ms = _codex_elapsed_ms(turn_start_at)
     if _core._codex_response_succeeded(started):
-        turn = ((started.get("result") or {}).get("turn") or {})
-        _turn_id = turn.get("id")
-        _core._codex_telemetry_register_turn(
-            session_id,
-            _turn_id,
-            path="wake",
-            started_at_monotonic=turn_start_at,
-            transport=_core._codex_app_server_transport_kind(),
-            cwd=cwd,
-            model=model,
-        )
-        _core._resume_ledger_append(
-            "codex_wake_ok", sid=session_id,
-            via="codex-app-turn", turn_id=_turn_id,
-        )
-        try:
-            confirm_timeout = float(os.environ.get("CCC_CODEX_WAKE_CONFIRM_TIMEOUT", "5"))
-        except ValueError:
-            confirm_timeout = 5.0
-        confirm_at = time.monotonic()
-        confirmation = _core._codex_wait_for_turn_activity(
-            session_id,
-            _turn_id,
+        return _codex_wake_turn_accepted(
+            session_id, text, started,
+            total_start=total_start,
+            turn_start_at=turn_start_at,
+            turn_start_ms=turn_start_ms,
+            resume_ms=resume_ms,
+            cwd=cwd, model=model,
             baseline_state=baseline_state,
             baseline_rollout=baseline_rollout,
-            expected_text=text,
-            timeout=confirm_timeout,
-        )
-        confirm_ms = _codex_elapsed_ms(confirm_at)
-        if not confirmation.get("confirmed"):
-            _core._resume_ledger_append(
-                "codex_wake_warn", sid=session_id,
-                via="codex-app-turn", turn_id=_turn_id,
-                warning=confirmation.get("warning"),
-            )
-        total_ms = _codex_elapsed_ms(total_start)
-        _core._codex_telemetry_append(
-            "codex_wake",
-            ok=True,
-            via="codex-app-turn",
             app_server_warm=app_server_warm,
-            resume_ms=resume_ms,
-            turn_start_ms=turn_start_ms,
-            confirm_ms=confirm_ms,
-            total_ms=total_ms,
-            confirmed=bool(confirmation.get("confirmed")),
-            confirmation_source=confirmation.get("source"),
-            warning=confirmation.get("warning"),
-            transport=_core._codex_app_server_transport_kind(),
-            session_id=session_id,
-            turn_id=_turn_id,
-            cwd=cwd,
-            model=model,
         )
-        return {
-            "ok": True,
-            "via": "codex-app-turn",
-            "accepted": True,
-            "confirmed": bool(confirmation.get("confirmed")),
-            "confirmation_source": confirmation.get("source"),
-            "warning": confirmation.get("warning"),
-            "turn_id": _turn_id,
-            "session_id": session_id,
-            "app_server_transport": _core._codex_app_server_transport_kind(),
-            "app_server_warm": app_server_warm,
-            "resume_ms": resume_ms,
-            "turn_start_ms": turn_start_ms,
-            "confirm_ms": confirm_ms,
-            "latency_ms": total_ms,
-        }
     if _core._codex_error_is_not_steerable(started):
         _err = _codex_error_text(started)
         _core._resume_ledger_append(
@@ -6821,39 +7702,14 @@ def _codex_resume_or_steer_via_app_server_locked(
             "turn_start_ms": turn_start_ms,
             "latency_ms": _codex_elapsed_ms(total_start),
         }
-    _err = _codex_error_text(started)
-    _core._resume_ledger_append(
-        "codex_wake_fail", sid=session_id,
-        stage="turn/start", error=_err, fallback="exec",
-    )
-    _core._codex_telemetry_append(
-        "codex_wake",
-        ok=False,
-        via="codex-app-server",
-        fallback="exec",
-        fallback_reason="turn/start failed",
-        stage="turn/start",
-        error=_err,
-        app_server_warm=app_server_warm,
-        resume_ms=resume_ms,
+    return _codex_wake_turn_start_failed(
+        session_id, started,
+        total_start=total_start,
         turn_start_ms=turn_start_ms,
-        total_ms=_codex_elapsed_ms(total_start),
-        transport=_core._codex_app_server_transport_kind(),
-        session_id=session_id,
-        cwd=cwd,
-        model=model,
+        resume_ms=resume_ms,
+        cwd=cwd, model=model,
+        app_server_warm=app_server_warm,
     )
-    return {
-        "ok": False,
-        "via": "codex-app-server",
-        "stage": "turn/start",
-        "fallback": "exec",
-        "error": _err,
-        "app_server_warm": app_server_warm,
-        "resume_ms": resume_ms,
-        "turn_start_ms": turn_start_ms,
-        "latency_ms": _codex_elapsed_ms(total_start),
-    }
 
 
 def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_paths=None):
@@ -6869,6 +7725,45 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
     # external/unknown merely because CCC has not observed its owning client.
     # Ask Codex to resume the thread and use its actual turn id below; the
     # native RPC is the authority on whether the active turn can be steered.
+    #
+    # Fast path first: when the daemon has already reported this thread's
+    # active turn, expectedTurnId makes turn/steer self-verifying — a stale
+    # turn id is rejected, not steered. Only a definite miss falls through to
+    # the resume below; an ambiguous transport failure returns immediately —
+    # the input may already have been injected, and a retry could double-post.
+    try:
+        _state = _core._codex_thread_state_resolved(session_id)
+    except Exception:
+        _state = {}
+    _fast_turn_id = str((_state or {}).get("active_turn_id") or "").strip()
+    if _fast_turn_id and _core._codex_app_server_is_live():
+        _bind_codex_queued_steer_ack_suppression(
+            session_id, text, _fast_turn_id,
+        )
+        baseline = _core._codex_rollout_stat(session_id)
+        steered = _core._codex_app_server_request(
+            "turn/steer",
+            {
+                "threadId": session_id,
+                "expectedTurnId": _fast_turn_id,
+                "input": _codex_user_input(text, image_paths=image_paths),
+            },
+            timeout=20,
+        )
+        if _core._codex_response_succeeded(steered):
+            return {
+                "ok": True,
+                "via": "codex-steer",
+                "turn_id": (steered["result"] or {}).get("turnId") or _fast_turn_id,
+                "session_id": session_id,
+                "resume_skipped": True,
+            }
+        if _codex_error_is_thread_unloaded(steered) or _core._codex_error_is_not_steerable(steered):
+            pass  # stale fast-path state — resume below is the authority
+        else:
+            return _codex_steer_failure_result(
+                session_id, text, steered, baseline, _fast_turn_id,
+            )
     resume_params = {
         "threadId": session_id,
         "excludeTurns": False,
@@ -6898,6 +7793,7 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
     _bind_codex_queued_steer_ack_suppression(
         session_id, text, active_turn.get("id"),
     )
+    baseline = _core._codex_rollout_stat(session_id)
     steered = _core._codex_app_server_request(
         "turn/steer",
         {
@@ -6914,11 +7810,62 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
             "turn_id": (steered["result"] or {}).get("turnId") or active_turn["id"],
             "session_id": session_id,
         }
+    return _codex_steer_failure_result(
+        session_id, text, steered, baseline, active_turn["id"],
+    )
+
+
+# How long a timed-out turn/steer may take to show up in the rollout. Codex
+# writes the steered UserMessage when it accepts the input, usually well
+# before the RPC reply, so a short look is enough.
+_CODEX_STEER_RECONCILE_S = 3.0
+
+
+def _codex_steer_failure_result(session_id, text, steered, baseline, turn_id):
+    """Turn a failed turn/steer reply into an honest delivery outcome.
+
+    A timeout or app-server exit happens AFTER the request was written, so
+    Codex may already have applied the steer (CCC-238: the rollout held the
+    message 20s before the RPC timed out, and the reply arrived 10s late).
+    Reporting that as a failure makes senders resend a duplicate. Check the
+    rollout first; if the message is not there, report the outcome as
+    unknown instead of rejected.
+    """
+    if not (isinstance(steered, dict) and steered.get("ambiguous")):
+        return {
+            "ok": False,
+            "via": "codex-steer",
+            "code": "codex_steer_failed",
+            "error": _codex_error_text(steered) or "Codex steer failed",
+        }
+    deadline = time.monotonic() + _CODEX_STEER_RECONCILE_S
+    while True:
+        if _core._codex_rollout_contains_user_text_since(baseline, session_id, text):
+            _core._log_activity(
+                "app-server", "STEER_RECONCILED",
+                f"session={session_id} turn/steer reply missing "
+                f"({_codex_error_text(steered)}) but the rollout recorded the input",
+            )
+            return {
+                "ok": True,
+                "via": "codex-steer",
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "reconciled": "rollout",
+            }
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
     return {
         "ok": False,
         "via": "codex-steer",
-        "code": "codex_steer_failed",
-        "error": _codex_error_text(steered) or "Codex steer failed",
+        "code": "codex_steer_unknown",
+        "uncertain": True,
+        "ambiguous": True,
+        "error": (
+            f"{_codex_error_text(steered) or 'Codex steer failed'}; delivery is "
+            "unknown (it may still land) - check the session before resending"
+        ),
     }
 
 
@@ -6965,7 +7912,7 @@ _CODEX_COMPACT_POLL_S = 0.4
 # Once the compaction marker lands, wait a moment longer for the token_count
 # that reports the rebuilt context size so the UI can print the real number
 # instead of "reading the new size...".
-_CODEX_COMPACT_POST_GRACE_S = 6.0
+_CODEX_COMPACT_POST_GRACE_S = 12.0
 _CODEX_COMPACT_MARKER = b'"context_compacted"'
 
 
@@ -6981,13 +7928,17 @@ def _codex_compaction_post_tokens(payload):
     """Rebuilt-context size off one post-compaction `token_count` payload."""
     info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
     usage = info.get("last_token_usage")
-    if not isinstance(usage, dict) or not usage:
-        usage = info.get("total_token_usage")
     if not isinstance(usage, dict):
         return 0
-    # Codex zeroes the per-turn fields on the compaction turn and reports the
-    # new context size in total_tokens (see `_extract_codex_usage`).
-    return _core._codex_int(usage.get("input_tokens")) or _core._codex_int(usage.get("total_tokens"))
+    # Codex zeroes every per-turn field on the compaction turn and reports
+    # the rebuilt context size in total_tokens only (same rule as
+    # codex_parse._codex_compact_post_tokens_from_usage). A reading with
+    # input_tokens set is a NORMAL turn's pre-compact size, and the
+    # cumulative total_token_usage block counts the whole session -- both
+    # must be rejected so the card never prints a garbage "post" figure.
+    if _core._codex_int(usage.get("input_tokens")):
+        return 0
+    return _core._codex_int(usage.get("total_tokens"))
 
 
 def _codex_scan_compaction_tail(path, offset, seen_marker=False):
@@ -7101,6 +8052,8 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
     if model:
         resume_params["model"] = model
     resumed = _core._codex_app_server_request("thread/resume", resume_params, timeout=20)
+    if _codex_error_is_active_writer(resumed):
+        return _codex_active_writer_result(sid, resumed, "codex-compact")
     if resumed.get("error"):
         return {
             "ok": False,
@@ -7150,7 +8103,13 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
         post_grace_until = 0.0
         while True:
             now = time.time()
-            if now >= deadline:
+            # The deadline must not cut a grace window that is still open:
+            # the app-server's item/completed notification (state_done) lands
+            # BEFORE the rollout flush writes compacted+token_count, so a
+            # compaction that finishes near the 180s mark would otherwise
+            # return post_tokens=0 the moment the deadline passes — observed
+            # as the card's permanent "reading the new size…" state.
+            if now >= deadline and not (post_grace_until and now < post_grace_until):
                 break
             if rollout_path:
                 seen_marker, found_post, scan_offset = _codex_scan_compaction_tail(
@@ -7203,6 +8162,8 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
             "code": "codex_compact_unavailable",
             "error": compacted.get("error") or "Codex app-server unavailable",
         }
+    if _codex_error_is_active_writer(compacted):
+        return _codex_active_writer_result(sid, compacted, "codex-compact")
     return {
         "ok": False,
         "via": "codex-compact",
@@ -7377,6 +8338,84 @@ def _codex_grab_back_via_app_server(
     return result
 
 
+def _codex_headless_exec_refusal(session_id, action):
+    """Fail-fast result when a Codex thread is owned by a live headless
+    `codex exec` process CCC did not spawn.
+
+    `codex exec` has no stdin channel and the thread must not be loaded into
+    the app-server as a second writer (an active goal would auto-continue it),
+    so steer/compact cannot be delivered. Returns None when not applicable."""
+    try:
+        owner = _core.find_headless_codex_exec_owner(session_id)
+    except Exception:
+        owner = None
+    if not owner:
+        return None
+    return {
+        "ok": False,
+        "code": "codex_headless_exec",
+        "via": "codex-headless-exec",
+        "pid": owner.get("pid"),
+        "error": (
+            f"Headless codex exec worker (pid {owner.get('pid')}) - it can't "
+            f"be {action}. Use Stop to interrupt it."
+        ),
+    }
+
+
+def _codex_wt_app_worker_delivery(session_id, text):
+    """Steer a Codex thread hosted by a WatchTower app-server worker.
+
+    Such a worker (`wt config --codex-transport app-server`, CODEX-CCC-WT-10)
+    owns the thread on its own `codex app-server --listen unix://`; CCC's
+    app-server must not resume it (second writer, -32600). WatchTower owns the
+    socket protocol, so this shells out to `wt codex-app steer` -- but only
+    when WatchTower has advertised a worker for this thread, so every other
+    Codex send pays one stat(). Returns None when no such worker exists."""
+    record = Path(_core._WT_HOME) / "codex-app" / f"{session_id}.json"
+    if not session_id or "/" in str(session_id) or not record.exists():
+        return None
+    wt = _core._wt_cli_path()
+    if not wt:
+        return None
+    try:
+        proc = subprocess.run(
+            [wt, "codex-app", "steer", str(session_id)],
+            input=str(text or ""), capture_output=True, text=True, timeout=45,
+        )
+    except subprocess.TimeoutExpired:
+        # The steer may have landed; reporting a rejection would invite a
+        # double-post retry (CCC-238).
+        return {
+            "ok": False, "code": "codex_steer_unknown", "uncertain": True,
+            "via": "wt-app-worker", "error": "wt codex-app steer timed out",
+        }
+    except OSError as exc:
+        return {"ok": False, "code": "codex_app_worker_unreachable",
+                "via": "wt-app-worker", "error": str(exc)}
+    if proc.returncode == 2:
+        return None
+    try:
+        result = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        result = {"ok": False, "error": (proc.stderr or proc.stdout or "").strip()[-300:]}
+    result["via"] = "wt-app-worker-steer"
+    if not result.get("ok"):
+        result.setdefault("code", "codex_app_worker_steer_failed")
+    return result
+
+
+def _codex_interrupt_needs_local_transport():
+    """Whether this process must hold the app-server transport itself.
+
+    The dashboard does not host the app-server: the worker does, and the RPCs
+    below reach it through the control plane. Gating on the dashboard's own
+    (always absent) transport reported every worker-hosted thread as "not
+    live" and Stop did nothing. Only a process that talks to the app-server
+    directly (the worker, or routing disabled) needs the local check."""
+    return not _core._control_plane_routes_engines()
+
+
 def _codex_interrupt_via_app_server(session_id, cwd=None):
     if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
         return {
@@ -7385,7 +8424,7 @@ def _codex_interrupt_via_app_server(session_id, cwd=None):
             "code": "codex_interrupt_unavailable",
             "error": "Codex app-server disabled",
         }
-    if not _core._codex_app_server_is_live() and not (
+    if _codex_interrupt_needs_local_transport() and not _core._codex_app_server_is_live() and not (
         _core._codex_managed_app_server_enabled() and _core._codex_managed_app_server_socket_path().exists()
     ):
         return {
@@ -7500,6 +8539,9 @@ def _mark_codex_rollout_user_visible(thread_id, rollout_path):
         thread_source = payload.get("thread_source")
         if source and source not in ("exec", "cli", "vscode"):
             return False
+        # Older CCC app-server threads may still have an open rollout writer,
+        # even while idle. Replacing its inode would strand later writes.
+        # Repair their SQLite sidebar marker only; leave the rollout intact.
         if thread_source and thread_source != "user":
             return False
         if source != "vscode":
@@ -7558,12 +8600,13 @@ def _restore_codex_rollout_mtime_from_row(row):
 
 
 def _mark_codex_thread_user_visible(thread_id, update_rollout=True):
-    """Mark a CCC-created Codex exec thread as visible in Codex.app.
+    """Mark a CCC-created Codex thread as visible in Codex Desktop.
 
     Codex Desktop starts sidebar-visible threads with `thread_source='user'`.
     Its sidebar also treats IDE-originated rows as `source='vscode'`; plain
     `codex exec` rows can otherwise stay hidden. Codex can rebuild SQLite from
-    the rollout JSONL, so we patch the rollout metadata when it is safe too.
+    the rollout JSONL, so we patch legacy exec metadata too. CCC-tagged
+    app-server rollouts are left intact because their writer may remain open.
     """
     sid = str(thread_id or "").strip()
     if not sid:
@@ -7592,7 +8635,7 @@ def _mark_codex_thread_user_visible(thread_id, update_rollout=True):
             values_by_col = dict(zip(selected, row))
             current = values_by_col.get("thread_source")
             source = values_by_col.get("source", "vscode")
-            if current and current != "user":
+            if current and current not in ("user", "ccc"):
                 return False
             if source and source not in ("exec", "cli", "vscode"):
                 return False
@@ -8256,7 +9299,8 @@ def _codex_display_name(row, override=None, title="", first_message=""):
     # straight off the thread row rather than through
     # _extract_user_prompt_text, so the shared stripper is applied here.
     def visible_prompt(value):
-        return _core._strip_host_system_instruction(value)
+        import sender_envelope as attribution
+        return attribution.strip_header(_core._strip_host_system_instruction(value))
 
     return (
         _core._truncate_session_name(override)
@@ -8292,6 +9336,7 @@ def _codex_rollout_path_from_row(row):
         p = Path(os.path.expanduser(raw))
         if p.is_file():
             return p
+        return None
     tid = row.get("id") or ""
     if tid and _core.CODEX_SESSIONS_ROOT.is_dir():
         try:
@@ -8396,7 +9441,7 @@ def _find_ccc_spawn_log_for_thread(thread_id, repo_path):
 
 
 def _is_codex_session(session_id):
-    return bool(_core._codex_thread_row(session_id))
+    return bool(_core._codex_thread_row(session_id) or _core._codex_capture_thread_row(session_id))
 
 
 _KIMI_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -9103,7 +10148,13 @@ def _codex_logs_for_session(session_id):
     if not session_id:
         return []
     repo_paths = []
-    row = _core._codex_thread_row(session_id) or {}
+    row = _core._codex_thread_row(session_id) or _core._codex_capture_thread_row(session_id) or {}
+    capture = row.get("_ccc_capture")
+    if capture and _core._codex_capture_header_id(capture) == session_id:
+        try:
+            return [(Path(capture).stat().st_mtime, capture)]
+        except OSError:
+            return []
     cwd = row.get("cwd") or ""
     if cwd:
         try:
@@ -9307,12 +10358,12 @@ def _codex_sidebar_project_roots_from_values(repo_paths):
 
 
 def _codex_backfill_candidate_rows(days=None, repo_paths=None, now=None, limit=1000):
-    """Recent Codex exec/cli rows that can be made sidebar-visible.
+    """Recent Codex exec/cli or CCC-tagged rows needing sidebar visibility.
 
     This complements CCC spawn logs: the Codex DB is the durable index, while
     old CCC logs/registry entries can be pruned or missed. Keep the candidate
-    set narrow so we only rewrite rows that Codex itself classifies as
-    non-interactive and otherwise user-owned.
+    set narrow so we only rewrite non-interactive user-owned rows or roots
+    explicitly marked by CCC's older app-server spawn path.
     """
     if days is None:
         days = _codex_sidebar_backfill_window_days()
@@ -9334,9 +10385,11 @@ def _codex_backfill_candidate_rows(days=None, repo_paths=None, now=None, limit=1
     for row in _core._codex_fetch_threads(limit=limit):
         source = row.get("source")
         thread_source = row.get("thread_source")
-        if source not in ("exec", "cli"):
+        if source not in ("exec", "cli") and not (
+            source == "vscode" and thread_source == "ccc"
+        ):
             continue
-        if thread_source and thread_source != "user":
+        if thread_source and thread_source not in ("user", "ccc"):
             continue
         ts = _core._codex_ts_seconds(row, "updated") or _core._codex_ts_seconds(row, "created")
         if ts and ts < cutoff:
@@ -9826,7 +10879,49 @@ def backfill_claude_desktop_visibility(
     }
 
 
+def _claude_desktop_startup_backfill_interval_s():
+    raw = os.environ.get("CCC_CLAUDE_DESKTOP_STARTUP_BACKFILL_INTERVAL_S", "43200")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 43200.0
+
+
+def _claude_desktop_backfill_marker_path():
+    return _core.COMMAND_CENTER_STATE_DIR / "claude-desktop-backfill.json"
+
+
+def _claude_desktop_startup_backfill_due(now=None):
+    """False when a startup sweep already ran within the interval (CCC-1248).
+
+    Every app restart restarts server.py, and the sweep (prune every Desktop
+    metadata row + glob every repo's spawn logs) costs ~6 s CPU with load 8-10
+    on a big store. New spawns are made visible live by
+    _spawn_session_id_from_entry, so the sweep is only a safety net; it does not
+    need to run on every restart.
+    """
+    now = time.time() if now is None else float(now)
+    try:
+        last = float(json.loads(_claude_desktop_backfill_marker_path().read_text()).get("last_run") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return True
+    return not (0 < now - last < _claude_desktop_startup_backfill_interval_s())
+
+
+def _claude_desktop_note_backfill_ran(now=None):
+    path = _claude_desktop_backfill_marker_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"last_run": time.time() if now is None else float(now)}))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _claude_desktop_visibility_backfill_once():
+    if not _claude_desktop_startup_backfill_due():
+        return
     try:
         result = _core.backfill_claude_desktop_visibility(
             max_logs=_claude_desktop_startup_backfill_max_logs(),
@@ -9835,6 +10930,7 @@ def _claude_desktop_visibility_backfill_once():
     except Exception as e:
         print(f"  [claude-desktop] backfill skipped ({e})")
         return
+    _claude_desktop_note_backfill_ran()
     if result.get("updated"):
         print(
             "  [claude-desktop] added "
@@ -10030,6 +11126,12 @@ def _extract_codex_tail_meta(path):
             "pending_tool": None,
             "pending_file": None,
             "pending_tool_ts": 0,
+            # Turn-boundary timestamps for the sidebar WIP timer. task_started
+            # stamps the live turn's real start; user_message stamps the last
+            # submitted prompt (covers turns whose task_started is absent or
+            # hasn't flushed yet); both clear semantics differ so both kept.
+            "turn_started_ts": 0,
+            "last_user_ts": 0,
             "needs_approval": False,
             "needs_approval_message": "",
             "pending_approval_call_id": "",
@@ -10169,6 +11271,13 @@ def _extract_codex_tail_meta(path):
                     meta["model"] = payload.get("model") or meta["model"]
                     continue
                 if ev_type == "event_msg":
+                    if ptype == "task_started":
+                        # The turn's own durable start marker — cleared by
+                        # task_complete below. Drives the sidebar WIP timer.
+                        if ts_epoch:
+                            meta["turn_started_ts"] = ts_epoch
+                            meta["last_meaningful_ts"] = ts_epoch
+                        continue
                     if ptype == "user_message":
                         text = _core._strip_ccc_session_state_instruction(
                             payload.get("message") or ""
@@ -10186,6 +11295,7 @@ def _extract_codex_tail_meta(path):
                         pending_calls.clear()
                         if ts_epoch:
                             meta["last_meaningful_ts"] = ts_epoch
+                            meta["last_user_ts"] = ts_epoch
                     elif ptype == "agent_message":
                         text = (payload.get("message") or "").strip()
                         if text:
@@ -10197,11 +11307,13 @@ def _extract_codex_tail_meta(path):
                     elif ptype == "task_complete":
                         text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
                         if text:
+                            meta["last_assistant_text"] = text
                             meta.update(_extract_codex_summary_signals(text, pr_url_re))
                         meta["last_event_type"] = "result"
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
+                        meta["turn_started_ts"] = 0
                         meta["needs_approval"] = False
                         meta["needs_approval_message"] = ""
                         meta["pending_approval_call_id"] = ""
@@ -10211,7 +11323,42 @@ def _extract_codex_tail_meta(path):
                     continue
                 if ev_type != "response_item":
                     continue
-                if ptype in ("function_call", "custom_tool_call"):
+                if ptype == "message":
+                    # Current Codex rollouts persist messages directly rather
+                    # than emitting the older user_message/agent_message events.
+                    role = payload.get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    text = "\n".join(
+                        part.get("text", "")
+                        for part in (payload.get("content") or [])
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    ).strip()
+                    if role == "user":
+                        if text.startswith(("# AGENTS.md instructions", "<environment_context>")):
+                            continue
+                        text = _core._strip_ccc_session_state_instruction(text).strip()
+                        if text:
+                            meta["first_message"] = meta["first_message"] or text
+                            meta["last_prompt"] = text
+                        meta["last_event_type"] = "user"
+                        meta["pending_tool"] = None
+                        meta["pending_file"] = None
+                        meta["pending_tool_ts"] = 0
+                        meta["needs_approval"] = False
+                        meta["needs_approval_message"] = ""
+                        meta["pending_approval_call_id"] = ""
+                        pending_calls.clear()
+                        if ts_epoch:
+                            meta["last_user_ts"] = ts_epoch
+                    else:
+                        if text:
+                            meta["last_assistant_text"] = text
+                            meta.update(_extract_codex_summary_signals(text, pr_url_re))
+                        meta["last_event_type"] = "assistant"
+                    if ts_epoch:
+                        meta["last_meaningful_ts"] = ts_epoch
+                elif ptype in ("function_call", "custom_tool_call"):
                     name = payload.get("name") or ""
                     is_custom_tool = ptype == "custom_tool_call"
                     raw_input = payload.get("input") if isinstance(payload.get("input"), str) else ""
@@ -10578,7 +11725,7 @@ def _codex_state_fields(
         rollout = {}
     snap = {}
     try:
-        app_state = _core._codex_app_server_thread_state(sid)
+        app_state = _core._codex_thread_state_resolved(sid)
     except Exception:
         app_state = {}
     tail = rollout_tail if isinstance(rollout_tail, dict) else {}
@@ -10612,7 +11759,10 @@ def _codex_state_fields(
         # Writer attribution (desktop ↔ CCC coordination): reuses the rollout
         # stat above + the TTL-cached desktop-attachment map. Also feeds the
         # durable external-turn transition events.
-        snap = _core._codex_thread_writer_snapshot(sid, now, app_state=app_state, rollout=rollout)
+        snap = _core._codex_thread_writer_snapshot(
+            sid, now, app_state=app_state, rollout=rollout,
+            holders=_core._codex_shared_state_db_holders_stale_ok(now),
+        )
         if note_writer_transition:
             _core._codex_note_external_writer_transition(sid, snap)
         if snap.get("writer"):
@@ -10621,6 +11771,26 @@ def _codex_state_fields(
             fields["codex_desktop_attached"] = True
     except Exception:
         snap = {}
+
+    def _working_since():
+        """Epoch the current turn began, for the UI's WIP timer. Preference:
+        the app-server's stamped turn start (exact), then the rollout's own
+        task_started/user_message markers (what the dashboard can read even
+        when the worker owns the transport)."""
+        for v in (
+            app_state.get("turn_started_at"),
+            app_state.get("ccc_turn_start_pending_at"),
+            tail.get("turn_started_ts"),
+            tail.get("last_user_ts"),
+        ):
+            try:
+                f = float(v or 0)
+            except (TypeError, ValueError):
+                continue
+            if f > 0:
+                return f
+        return 0.0
+
     try:
         if app_state and (app_state.get("active_turn_id") or str(app_state.get("status") or "").lower() == "active"):
             try:
@@ -10632,6 +11802,9 @@ def _codex_state_fields(
             if not (tail_ts > app_ts + 2 and (tail or {}).get("last_event_type") == "result"):
                 fields["codex_state"] = "working"
                 fields["codex_fresh"] = True
+                ws = _working_since()
+                if ws:
+                    fields["working_since"] = ws
                 return fields
     except Exception:
         pass
@@ -10645,6 +11818,9 @@ def _codex_state_fields(
             if snap.get("writer") == "desktop"
             else "An active Codex turn is writing this thread"
         )
+        ws = _working_since()
+        if ws:
+            fields["working_since"] = ws
         return fields
     if not path or mtime is None:
         return fields
@@ -10661,6 +11837,9 @@ def _codex_state_fields(
     fields["codex_state"] = state
     if state == "working":
         fields["codex_fresh"] = (now - float(mtime)) < _codex_fresh_threshold_s()
+        ws = _working_since()
+        if ws:
+            fields["working_since"] = ws
     elif state == "stuck":
         fields["codex_state_reason"] = _codex_stuck_reason(tail, mtime, now)
     return fields
@@ -10732,6 +11911,14 @@ def build_codex_stuck_summary(now=None, force=False):
         sid = row.get("id") or ""
         if not sid:
             continue
+        try:
+            up = float(row.get("updated_at") or row.get("created_at") or 0)
+            if up > 100000000000:
+                up /= 1000.0
+            if up and max(0.0, now - up) > (recent_window + 300):
+                continue
+        except (TypeError, ValueError):
+            pass
         path = _core._codex_rollout_path_from_row(row)
         if not path:
             continue

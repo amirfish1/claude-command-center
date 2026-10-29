@@ -21,6 +21,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
 
 # How many trailing assistant turns /usage ships for the status-rail
@@ -221,11 +222,7 @@ def _resolve_spawn_log_for_session(session_id):
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, ValueError):
-        return False
+    return _is_pid_alive(pid)
 
 
 class _SpawnEventNormalizer:
@@ -1162,7 +1159,7 @@ def _worktree_dirty_cached(path, event_ts):
     return dirty
 
 
-def list_repo_worktrees(repo_top, include_prs=True):
+def list_repo_worktrees(repo_top, include_prs=True, fresh=False):
     """Return all worktrees for a repo with a `dirty` flag (uncommitted
     changes). Powers the topbar's "open worktrees" modal.
 
@@ -1175,8 +1172,16 @@ def list_repo_worktrees(repo_top, include_prs=True):
     Fleet view's first pass uses it: `gh` is a network round-trip (~5s
     cold) and a fleet scan touches every mapped repo, so PR data is
     fetched in a second, enriching pass rather than blocking first paint.
+
+    `fresh=True` drops the short-TTL `git worktree list` cache first. Fleet
+    inventory scans are explicit "look now" operations whose recommendations
+    (e.g. removing a merged worktree) must not miss a worktree created within
+    the last few seconds.
     """
     repo_top = _core.resolve_repo_path(repo_top)
+    if fresh:
+        with _WORKTREE_LIST_LOCK:
+            _WORKTREE_LIST_CACHE.pop(str(repo_top), None)
     wts = _list_worktrees(repo_top)
     dirty_n = 0
     agent_n = 0
@@ -1731,6 +1736,9 @@ _MODEL_RATES = {
     "claude-haiku-4-5-20251001": (1.00, 1.25, 0.10, 5.00),
     # https://developers.openai.com/api/docs/models/gpt-6-astra (2026-09).
     "gpt-6-astra": (10.00, 0.00, 1.00, 50.00),
+    # Standard short-context API equivalent (not subscription quota pricing).
+    # https://developers.openai.com/api/docs/pricing (checked 2026-10-18).
+    "gpt-6.1-sol": (2.00, 2.50, 0.10, 10.00),
     "gpt-5.5": (5.00, 0.00, 0.50, 30.00),
     # GPT-5.6 cache writes are 1.25x input and cache reads are 10% of input.
     # https://openai.com/index/gpt-5-6/ (checked 2026-08)

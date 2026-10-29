@@ -1,4 +1,6 @@
 import pathlib
+import shutil
+import subprocess
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -69,15 +71,28 @@ def test_chart_shows_week_of_history_and_short_capped_forecast():
     assert "expected 100%" in throughput_html
 
 
-def test_chart_draws_a_zero_based_pre_reset_quota_trace():
+def test_chart_draws_the_previous_cycle_from_its_own_start():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
     assert "function buildPreviousQuotaSeries(" in throughput_html
     assert "row._prePeriod" in throughput_html
     assert "lastPreResetIndex" in throughput_html
-    assert "startAtZero: true" in throughput_html
+    assert "const start = periodStartMs - 7 * 86400000" in throughput_html
+    assert "event.at < periodStartMs" in throughput_html
     assert "drawQuotaSeries(svg, previousSeries" in throughput_html
     assert "Previous cycle" in throughput_html
+
+
+def test_week_and_zoomed_views_agree_on_where_the_previous_cycle_ended():
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node not installed")
+    r = subprocess.run(
+        [node, "tests/throughput_previous_cycle.cjs"],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_codex_quota_series_uses_local_summary_hour_boundaries():
@@ -116,5 +131,6 @@ def test_provider_quota_context_survives_a_stale_snapshot_refresh():
     assert "function stabilizeWeeklyQuota(" in throughput_html
     assert "function isUsableWeeklyQuota(" in throughput_html
     assert "ccc-throughput-last-quota" in throughput_html
-    assert "weeklyData = stabilizeWeeklyQuota(model.weekly)" in throughput_html
+    assert "weeklyData = stabilizeWeeklyQuota(overlayLiveCodexWeeklyQuota(" in throughput_html
+    assert "model.weekly, latestLiveCodexWeeklyQuota" in throughput_html
     assert "weeklyData = stabilizeWeeklyQuota(d && typeof d === 'object' ? d : {})" in throughput_html

@@ -1,0 +1,10 @@
+[Unit]
+Description=CCC free-model leaderboard refresh, weekly (Mondays 06:00 UTC)
+
+[Timer]
+OnCalendar=Mon *-*-* 06:00:00 UTC
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

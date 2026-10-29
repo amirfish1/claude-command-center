@@ -102,7 +102,7 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 ## Conventions
 
 - `server.py` is stdlib-only on purpose — no pip dependencies at runtime. Don't import `requests`, `pydantic`, `fastapi`, etc. `urllib` + `http.server` + `json` cover it.
-- `ccc` (repo root) is the stdlib-only CLI for a running server — `ccc sessions` reads the live census from `GET /api/sessions/census`, `ccc spawn` posts to `/api/sessions/spawn` (repo-scoped to the caller's cwd by default), and `ccc models` renders the `GET /api/engines/models` catalog, all finding the server via `--server` / `$CCC_SERVER` / `~/.claude/command-center/port.txt`. With no known subcommand it passes through to `run.sh` (same name/behaviour as the Homebrew launcher). `scripts/install.sh` symlinks it to `~/.local/bin/ccc`. Same stdlib-only rule as `server.py`.
+- `ccc` (repo root) is the stdlib-only CLI for a running server — `ccc sessions` reads the live census from `GET /api/sessions/census`, `ccc spawn` posts to `/api/sessions/spawn` (repo-scoped to the caller's cwd by default), and `ccc models` renders the `GET /api/engines/models` catalog, all finding the server via `--server` / `$CCC_SERVER` / `~/.claude/command-center/port.txt` (that file holds a full base URL such as `http://127.0.0.1:8090`, not a bare port — use it as-is, e.g. `curl "$(cat ~/.claude/command-center/port.txt)/api/sessions/census"`). With no known subcommand it passes through to `run.sh` (same name/behaviour as the Homebrew launcher). `scripts/install.sh` symlinks it to `~/.local/bin/ccc`. Same stdlib-only rule as `server.py`.
 - `static/index.html` is a single-file app by design (no bundler, no npm). Inline CSS/JS is expected. Don't split it into modules without a strong reason.
 - In zsh, lowercase `path` is a special array tied directly to `PATH`. Never use
   `path` as a scratch, local, or loop variable in shell diagnostics; use a
@@ -119,6 +119,16 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
   bypass with `CCC_EPHEMERAL=1` (also skips the shared `port.txt` claim) or
   `CCC_ALLOW_DUPLICATE_REPO=1`.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
+
+## Credential requests
+
+When a task needs a credential, use the [credential broker](docs/credential-broker.md)
+to show a masked dashboard prompt instead of asking for the value in chat or
+asking the user to SSH in. Pipe `ccc secret request NAME --reason "..." --stdout`
+directly into a program that accepts credentials on stdin; never let a tool
+capture the value into a transcript. Keep names/reasons free of secrets. This
+first slice requires explicit consumer integration; it does not intercept login
+prompts automatically.
 
 ## Testing
 
@@ -165,6 +175,12 @@ processes. State it clearly in the final summary, e.g.:
 - Worker: **no restart needed**
 - WatchTower: **no restart needed**
 
+To restart, run `ccc restart` (or `ccc restart dashboard` / `ccc restart worker`).
+Never run `systemctl --user restart ccc*` or `launchctl kickstart` yourself:
+`ccc restart` uses the drain-aware restart endpoints and merges restarts within
+5 minutes of the last one into a single deferred restart (OPS-150). See
+`docs/agent-rules.md`.
+
 ## How users get changes
 
 Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.
@@ -176,12 +192,14 @@ Most changes ship the moment you `git push origin main`. Only `.app`-shell chang
 | `docs/appcast.xml` | Same as `docs/` — but this is what Sparkle reads. | Push, then verify `curl -s https://ccc.amirfish.ai/appcast.xml` returns the new entry. |
 | `scripts/macapp/main.swift`, `scripts/build-dmg.sh`, `scripts/release-dmg.sh`, `scripts/macapp/vendor/Sparkle.framework` (the .app shell or DMG build flow) | **DMG users get it ONLY via Sparkle auto-update**, which only fires when you ship a new versioned DMG with an EdDSA signature in the appcast. | Bump version → `./scripts/release-dmg.sh X.Y.Z` → `gh release create vX.Y.Z` with the DMG attached → commit + push `docs/appcast.xml`. See `docs/RELEASING.md` for the full sequence. |
 | `infra/telemetry-worker/` (Cloudflare Worker) | The Worker is independent of `main`. Pushing the repo does NOT deploy it. | `cd infra/telemetry-worker && npx wrangler deploy`. |
-| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-ccc`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
+| `infra/card-worker/` (Cloudflare Worker) | Independent of `main`; pushing does NOT deploy it. Hosts the share card page (Workers KV `CARDS`). | `cd infra/card-worker && npx wrangler deploy`. |
+| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-tap`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
 | `changelog.d/*`, `tests/`, `README.md`, `CLAUDE.md`, `AGENTS.md`, `pyproject.toml`/`server.py` version bumps | On push to main | Just `git push origin main`. Bumping versions touches a release cycle — see `docs/RELEASING.md`. |
 
 **Quick rule of thumb:**
 - Touched anything in `scripts/macapp/` or `scripts/build-dmg.sh`? → **You owe a Sparkle release** (`docs/RELEASING.md`).
 - Touched `infra/telemetry-worker/`? → **Run `wrangler deploy`** separately.
+- Touched `infra/card-worker/`? → **Run `wrangler deploy`** separately.
 - Everything else? → **`git push origin main`** and you're done.
 
 If you're unsure, default to pushing then checking the table — `git push` is reversible (`git revert`); a half-shipped release is harder to clean up.

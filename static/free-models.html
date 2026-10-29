@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
+<meta name="theme-color" content="#0d1117">
+<title>CCC — Free model leaderboard</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/free-models.css">
+</head>
+<body class="fm-body">
+  <div class="fm-page">
+    <div class="fm-topbar">
+      <div class="fm-brand">
+        <span class="fm-brand-mark">⌘</span>
+        <span>Free model leaderboard</span>
+      </div>
+      <a class="fm-back" href="/">Back to dashboard</a>
+    </div>
+
+    <div class="fm-hero">
+      <h1 id="fmTitle">Which free model should run your team?</h1>
+      <p id="fmSub">
+        Every model your router can reach races through five tiny coding
+        tasks. The fastest tool-capable finisher becomes your default free
+        model. The whole race costs $0.
+      </p>
+      <button type="button" class="fm-run-btn" id="fmRunBtn">Run the race</button>
+      <div class="fm-run-note" id="fmRunNote"></div>
+    </div>
+
+    <div class="fm-notice" id="fmNotice" hidden></div>
+
+    <div class="fm-race" id="fmRace" hidden>
+      <div class="fm-race-head">
+        <div class="fm-race-title"><span class="fm-flag">⚑</span><span id="fmRaceStep">The race is on</span></div>
+        <div class="fm-race-count" id="fmRaceCount"></div>
+      </div>
+      <div class="fm-progress"><div class="fm-progress-fill" id="fmProgress"></div></div>
+      <div class="fm-race-log" id="fmRaceLog"></div>
+    </div>
+
+    <div class="fm-tasks" id="fmTasks" hidden></div>
+
+    <div class="fm-list" id="fmList"></div>
+
+    <div class="fm-empty" id="fmEmpty" hidden></div>
+
+    <div class="fm-footer" id="fmFooter">
+      Scores come from real runs on this machine.<br>
+      Free models can be slow or rate-limited for a while. That is part of
+      the race, and a good reason to run it again on a different day.
+    </div>
+  </div>
+
+  <div class="fm-toast" id="fmToast"></div>
+
+  <script src="/static/fx.js"></script>
+  <script src="/static/free-models.js"></script>
+</body>
+</html>

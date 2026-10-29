@@ -67,3 +67,52 @@ real account or start billable model turns.
 
 Changes to the service require restarting both the CCC dashboard and control-plane
 worker, then reloading the dashboard. WatchTower requires no restart.
+
+## Cloud (dot / aeon) threads
+
+Codex Desktop dots are persistent cloud agents. A dot delegates work to
+threads — `aeon` root threads, `aeon_child` worker threads, plus `dreaming`
+and plain `user` threads. Those threads live in OpenAI's cloud: even when a
+child thread "runs on your computer", its record and transcript never touch
+`~/.codex/sessions/**/rollout-*.jsonl` or Codex's local state databases, so
+a file scanner cannot see them.
+
+CCC discovers cloud threads through the cloud backend the desktop app itself
+talks to, reusing your existing Codex login (`~/.codex/auth.json`). Cloud
+threads appear in the session list and archive alongside local Codex
+conversations, carry a `cloud` badge, and nest under their dot's root
+thread. Opening one renders the full turn history in the same transcript
+view: messages, reasoning, command executions with output, tool calls, file
+diffs, compaction markers, and placeholders for images and other large
+attachments.
+
+Cloud threads are **read-only** in CCC. The composer is disabled with a
+"read-only" note; input injection, interrupt, force-restart, and terminal
+launch all refuse cloud threads. To reply, open the thread in the Codex app
+(the "Open in Codex" action resolves cloud threads too).
+
+### Transport caveat
+
+The cloud backend protocol is undocumented and internal to OpenAI. It may
+change without notice. CCC sends read-only requests only (thread catalog,
+metadata, turn lists); it never sends a mutating method. Large attachments
+inside turn payloads are replaced with byte-size placeholders before
+anything is cached or served.
+
+### Degraded modes
+
+Everything fails soft — the session list never blocks on the network:
+
+- **No login or expired token** — rows still appear from the desktop app's
+  own local sidebar cache; the badge and a typed API field explain that the
+  transcript is unavailable until you open the Codex app or run
+  `codex login`. CCC never stores your token, never logs it, and never
+  attempts to refresh it.
+- **Backend unreachable** — the last fetched catalog is served from disk
+  and retries back off exponentially.
+- **Protocol change** — schema-level errors are detected and reported as a
+  typed reason instead of a hard failure; cached data keeps rendering.
+
+Turn bodies are fetched only when a thread is opened and are cached on disk
+in CCC's state directory (outside the repo), keyed by the thread's cloud
+`updatedAt`; repeat opens serve the cache in well under 100 ms.

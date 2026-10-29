@@ -1,0 +1,278 @@
+{
+ "schema": "product-motion/v1",
+ "id": "ccc-orchestration",
+ "take": "takes/20261010-161632-ccc-orchestrate-delegate-and-critique-from-the-s",
+ "source": {
+  "w": 3840,
+  "h": 2160,
+  "css_zoom": 3,
+  "prepare_for_seek": true
+ },
+ "expect": {
+  "clicks": 3,
+  "keys": 22
+ },
+ "duration": 31,
+ "music": {
+  "synthesis": "pulse",
+  "period": 0.5,
+  "phase": 0,
+  "offset": 0,
+  "rights": "Original deterministic synthesis from the kit's sfx.py"
+ },
+ "palette": {
+  "paper": "#f6f8fa",
+  "ink": "#161b22",
+  "deep": "#0d1117",
+  "accent": "#6e8caf",
+  "hi": "#f5a623",
+  "mute": "#8b949e",
+  "page": "#0d1117",
+  "card": "#ffffff",
+  "tag": "#46607f",
+  "herob": "#46607f"
+ },
+ "layout": {
+  "landscape": {
+   "slab": {
+    "left": 96,
+    "top": 90,
+    "h2": 70,
+    "p": 29,
+    "max_w": 1100
+   }
+  },
+  "portrait": {
+   "slab": {
+    "left": 56,
+    "top": 1640,
+    "h2": 84,
+    "p": 27,
+    "max_w": 900
+   }
+  }
+ },
+ "copy": {
+  "brand": {
+   "name": "CCC",
+   "wordmark": "ccc",
+   "dot": "."
+  },
+  "window_title": "CCC &middot; Claude Command Center",
+  "hook": {
+   "a": [
+    "One session,",
+    "[a team of workers.]"
+   ],
+   "b": [
+    "Who is doing",
+    "which part?"
+   ]
+  },
+  "storm": [
+   [
+    "Plan the auth rework",
+    "#planner"
+   ],
+   [
+    "Worker: rail tabs",
+    "#step-1"
+   ],
+   [
+    "Worker: lane map",
+    "#step-2"
+   ],
+   [
+    "Worker: prompts",
+    "#step-3"
+   ],
+   [
+    "Fix auth cookie race",
+    "#needs-attention"
+   ],
+   [
+    "Review PR #247",
+    "#review"
+   ],
+   [
+    "Webhook retries flapping",
+    "#gh-321"
+   ],
+   [
+    "Verify with fresh eyes",
+    "#verify"
+   ],
+   [
+    "Blog to Eleventy",
+    "#waiting"
+   ],
+   [
+    "CI lint on main",
+    "#today"
+   ],
+   [
+    "Critique before landing",
+    "#later"
+   ],
+   [
+    "Pricing from billing service",
+    "#icebox"
+   ]
+  ],
+  "storm_labels": [
+   "PARENT",
+   "WORKER",
+   "WORKER",
+   "YOU"
+  ],
+  "hero": {
+   "eyebrow": "ORCHESTRATION",
+   "text": "Delegate from one session",
+   "accent": "#lanes"
+  },
+  "intro": {
+   "eyebrow": "MEET",
+   "tagline": [
+    "One orchestrator,",
+    "every worker under it."
+   ],
+   "chips": [
+    "PARENT &middot; WORKERS NESTED",
+    "DELEGATE IN ONE TAP"
+   ]
+  },
+  "steps": [
+   {
+    "pill": "01 BRIEF",
+    "eyebrow": "01 &mdash; BRIEF",
+    "title": "Brief the parent.",
+    "sub": "Write the task in the session that will orchestrate."
+   },
+   {
+    "pill": "02 LANES",
+    "eyebrow": "02 &mdash; LANES",
+    "title": "Workers nest under it.",
+    "sub": "The lane map hangs each worker off the parent as it spawns."
+   },
+   {
+    "pill": "03 DRAFTED",
+    "eyebrow": "03 &mdash; DRAFTED",
+    "title": "Pick a play.",
+    "sub": "One tap drafts the orchestration prompt in the composer."
+   }
+  ],
+  "recap": [
+   "Brief.",
+   "Spawn.",
+   "Draft."
+  ],
+  "end": {
+   "tagline": [
+    "Run a team of agents",
+    "from one session."
+   ],
+   "url": "github.com/amirfish1/claude-command-center",
+   "chips": [
+    "ORCHESTRATION",
+    "LANE MAP",
+    "ANY MODEL"
+   ],
+   "limit": "Recorded on the CCC demo dashboard with sample sessions.",
+   "foot": "CCC &mdash; THE CODING-AGENT COMMAND CENTER"
+  },
+  "hud_label": "CCC &middot; REAL CAPTURE"
+ },
+ "edit": {
+  "reveal_src": 3,
+  "act1": {
+   "click": 0,
+   "keys": [
+    0,
+    21
+   ],
+   "type_window": [
+    9.4,
+    17.0
+   ],
+   "type_region": [
+    1830,
+    1710,
+    2900,
+    1790
+   ]
+  },
+  "act2": {
+   "click": 1,
+   "instant_result": true,
+   "result_window": [
+    23.2,
+    27.5
+   ],
+   "result_after": 23.2,
+   "result_region": [
+    3070,
+    900,
+    3840,
+    2100
+   ],
+   "lift_region": [
+    3600,
+    1895,
+    240,
+    90
+   ],
+   "lock_label": "ONE CLICK",
+   "stamp": "NESTED"
+  },
+  "act3": {
+   "click": 2,
+   "instant_result": true,
+   "skip_load": true,
+   "result_window": [
+    34.6,
+    38.4
+   ],
+   "result_after": 34.6,
+   "result_region": [
+    1700,
+    1500,
+    3000,
+    1850
+   ],
+   "track_region": [
+    1740,
+    1540,
+    1260,
+    260
+   ],
+   "track_label": "DRAFTED",
+   "label_side": "above",
+   "hold_rate": 1,
+   "label_side_portrait": "below"
+  },
+  "recap": [
+   [
+    "type_end",
+    1.0,
+    1700,
+    1500,
+    1300
+   ],
+   [
+    "saved_visible",
+    0.5,
+    3080,
+    900,
+    760
+   ],
+   [
+    "filtered",
+    0.8,
+    1700,
+    1500,
+    1300
+   ]
+  ],
+  "recap_stills": true
+ }
+}

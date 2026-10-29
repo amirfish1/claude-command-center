@@ -5,7 +5,7 @@
 Sources (read-only; CCC surfaces scheduling, it does not own execution):
 1. Hermes VM systemd timers whose ``.timer`` file lives in /etc/systemd/system
    (vendor timers live in /lib or /usr/lib and are ignored). Everything is
-   collected with ONE ssh round-trip per refresh; per-unit loops run remotely.
+   collected with one local subprocess on Linux or one ssh round-trip elsewhere.
 2. Laptop launchd agents that are actually scheduled (StartInterval or
    StartCalendarInterval). Always-on daemons (RunAtLoad/KeepAlive only) are
    dropped.
@@ -17,6 +17,8 @@ thread never waits on ssh (except the very first call, bounded).
 
 from __future__ import annotations
 
+import os
+import platform
 import plistlib
 import re
 import subprocess
@@ -29,7 +31,7 @@ from ccc_server import scheduled_jobs as _sj
 
 FEED_TTL_S = 45.0
 SSH_CONNECT_TIMEOUT_S = 5
-SSH_TOTAL_TIMEOUT_S = 25
+SSH_TOTAL_TIMEOUT_S = 60
 FIRST_LOAD_WAIT_S = 8.0
 
 _MARK = "@@CCCJOB:"
@@ -37,24 +39,49 @@ _MARK = "@@CCCJOB:"
 # Runs on the Hermes VM. One ssh, all units. Kept POSIX-ish (bash on Ubuntu).
 REMOTE_SCRIPT = r"""
 export LC_ALL=C SYSTEMD_COLORS=0 TZ=UTC
-for t in /etc/systemd/system/*.timer; do
-  [ -e "$t" ] || continue
-  tn=${t##*/}
-  echo "@@CCCJOB:TIMER $tn"
-  systemctl show "$tn" -p Unit,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec,TimersCalendar,TimersMonotonic 2>/dev/null
-  svc=$(systemctl show "$tn" -p Unit --value 2>/dev/null)
-  [ -n "$svc" ] || continue
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# probe <systemctl-scope-flag> <journalctl-scope-flag> <timer-name> <tag-prefix> <history-grep>
+probe() {
+  sc=$1; jc=$2; tn=$3; tp=$4; hg=$5
+  echo "@@CCCJOB:TIMER $tp$tn"
+  systemctl $sc show "$tn" -p Unit,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec,TimersCalendar,TimersMonotonic 2>/dev/null
+  svc=$(systemctl $sc show "$tn" -p Unit --value 2>/dev/null)
+  [ -n "$svc" ] || return
   echo "@@CCCJOB:SVC"
-  systemctl show "$svc" --timestamp=unix -p Description,ActiveState,Result,ExecMainStatus,ExecMainStartTimestamp,ExecMainExitTimestamp,InvocationID 2>/dev/null
+  systemctl $sc show "$svc" --timestamp=unix -p Description,ActiveState,Result,ExecMainStatus,ExecMainStartTimestamp,ExecMainExitTimestamp,InvocationID,WorkingDirectory,ExecStart 2>/dev/null
   echo "@@CCCJOB:HIST"
-  journalctl -u "$svc" --since -7d _PID=1 -o short-unix --no-pager -q 2>/dev/null \
-    | grep -E "Deactivated successfully|Failed with result" | cut -c1-400 | tail -n 60
-  inv=$(systemctl show "$svc" -p InvocationID --value 2>/dev/null)
+  # Reverse + capped so a once-a-minute timer's week of logs is not scanned.
+  if [ -z "$jc" ]; then
+    journalctl -r -n 3000 -u "$svc" --since -7d _PID=1 -o short-unix --no-pager -q 2>/dev/null \
+      | grep -E "$hg" | cut -c1-400 | head -n 60 | tac
+  else
+    journalctl $jc -r -n 3000 -u "$svc" --since -7d -o short-unix --no-pager -q 2>/dev/null \
+      | grep -E "$hg" | cut -c1-400 | head -n 60 | tac
+  fi
+  inv=$(systemctl $sc show "$svc" -p InvocationID --value 2>/dev/null)
   echo "@@CCCJOB:OUT"
   if [ -n "$inv" ]; then
-    journalctl "_SYSTEMD_INVOCATION_ID=$inv" -o cat --no-pager -q 2>/dev/null | tail -n 60 | cut -c1-400
+    journalctl $jc "_SYSTEMD_INVOCATION_ID=$inv" -o cat --no-pager -q 2>/dev/null | tail -n 150 | cut -c1-400
   fi
+  echo "@@CCCJOB:EVENTS"
+  journalctl $jc -r -n 5000 -u "$svc" --since -24h -o short-unix --no-pager -q 2>/dev/null \
+    | grep "CCC_EVENT:" | cut -c1-400 | head -n 200 | tac
   echo "@@CCCJOB:ENDUNIT"
+}
+for t in /etc/systemd/system/*.timer; do
+  [ -e "$t" ] || continue
+  probe "" "" "${t##*/}" "" "Deactivated successfully|Failed with result"
+done
+for t in "$HOME"/.config/systemd/user/*.timer; do
+  [ -e "$t" ] || continue
+  case "${t##*/}" in *@.timer) continue;; esac
+  probe "--user" "--user" "${t##*/}" "user/" "Finished |Failed with result|Failed to start"
+done
+echo "@@CCCJOB:CRON"
+crontab -l 2>/dev/null | cut -c1-400
+echo "@@CCCJOB:CRONLOGS"
+crontab -l 2>/dev/null | grep -v '^#' | grep -oE '>>? *[^ ]+' | sed -E 's/>>? *//' | sort -u | while read -r f; do
+  [ -e "$f" ] && echo "$(stat -c %Y "$f") $f"
 done
 echo "@@CCCJOB:END"
 """
@@ -105,15 +132,159 @@ def human_seconds(sec):
     return f"{sec}s"
 
 
+_SYSTEMD_NOISE_RE = re.compile(
+    r"^(Finished|Started|Starting|Stopped|Stopping|Deactivated|Consumed)\b|"
+    r": (Deactivated successfully|Consumed .* CPU time|Failed with result)|"
+    r"^\S+\.(service|timer): ")
+
+
+def _authored(lines):
+    out = [_ANSI_RE.sub("", ln).rstrip() for ln in lines]
+    return [ln for ln in out if ln.strip() and not _SYSTEMD_NOISE_RE.search(ln.strip())]
+
+
+# A job's own log() helper often stamps each line, so `CCC_OUTCOME:` may sit
+# behind an ISO timestamp (bym-ship: "2026-09-30T14:27:37Z CCC_OUTCOME: ...").
+_OUTCOME_RE = re.compile(
+    r"^(?:\[?\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:?\d\d)?\]?\s+)?CCC_OUTCOME:\s*(.*)$")
+
+
 def pick_outcome(lines):
-    """Last CCC_OUTCOME: line (prefix stripped), else last non-empty line."""
-    cleaned = [_ANSI_RE.sub("", ln).rstrip() for ln in lines]
-    cleaned = [ln for ln in cleaned if ln.strip()]
+    """(text, kind): last CCC_OUTCOME: line -> ('..','summary'); else the last
+    job-authored line -> ('..','output'); else ('', '')."""
+    cleaned = _authored(lines)
     for ln in reversed(cleaned):
-        s = ln.strip()
-        if s.startswith("CCC_OUTCOME:"):
-            return s[len("CCC_OUTCOME:"):].strip()[:300]
-    return cleaned[-1].strip()[:300] if cleaned else ""
+        m = _OUTCOME_RE.match(ln.strip())
+        if m:
+            return m.group(1).strip()[:300], "summary"
+    return (cleaned[-1].strip()[:300], "output") if cleaned else ("", "")
+
+
+# A run reports each meaningful thing it did as `CCC_EVENT: <text>` (optionally
+# behind an ISO timestamp, like CCC_OUTCOME). High-frequency jobs use this so
+# real work (a pin, a merge, an escalation) shows up on the day timeline instead
+# of hiding behind the single last-tick outcome.
+_EVENT_RE = re.compile(r"CCC_EVENT:\s*(.*)$")
+_EVENT_LOG_RE = re.compile(
+    r"^\[?(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?)\]?\s+CCC_EVENT:\s*(.*)$")
+
+
+def _iso_epoch(s):
+    """'2026-10-10T15:32:33Z' -> epoch seconds, or None."""
+    try:
+        dt = datetime.fromisoformat(s.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _event_from_journal_line(ln):
+    """short-unix journal line -> (epoch, text) or None."""
+    parts = ln.split(None, 1)
+    if len(parts) < 2:
+        return None
+    try:
+        at = float(parts[0])
+    except ValueError:
+        return None
+    m = _EVENT_RE.search(parts[1])
+    if not m:
+        return None
+    text = _ANSI_RE.sub("", m.group(1)).strip()[:300]
+    return (at, text) if text else None
+
+
+def events_from_log_lines(lines, now=None, limit=200):
+    """Timestamped CCC_EVENT: lines in a plain log file -> events, newest last.
+
+    Only lines that carry their own ISO timestamp can be placed on the day
+    timeline; anything else (or older than 24h) is dropped.
+    """
+    now = now if now is not None else time.time()
+    out = []
+    for ln in lines:
+        m = _EVENT_LOG_RE.match(_ANSI_RE.sub("", ln).strip())
+        if not m:
+            continue
+        at = _iso_epoch(m.group(1))
+        if at is None or now - at > 86400 or at - now > 3600:
+            continue
+        text = m.group(2).strip()[:300]
+        if text:
+            out.append({"at": _iso(at), "text": text})
+    out.sort(key=lambda e: e["at"])
+    return out[-limit:]
+
+
+_NOT_WT_PREFIX = {
+    "UTF", "SHA", "ISO", "MD", "AES", "RSA", "HTTP", "HTTPS", "TLS", "SSL", "TCP", "UDP", "GPT",
+    "CVE", "UTC", "GMT", "IPV", "RFC", "PDF", "JSON", "USD", "EUR", "HTML", "CSS", "UUID", "TS",
+    "ES", "X", "PR", "HTTP", "ECMA", "WGS", "EXIT", "PID", "SIG", "ERR", "ENOENT", "TZ", "GB", "MB",
+}
+_WT_RE = re.compile(r"(?<![\w./#:=-])([A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*)-(\d{1,5})(?![\w.-]|/)")
+_GH_RE = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/(pull|issues)/(\d+)")
+_PR_RE = re.compile(r"\bPR #(\d+)")
+
+
+def extract_tickets(lines, limit=12):
+    """Ticket/PR/issue refs a run printed: GitHub URLs, bare 'PR #N', WatchTower refs."""
+    text = "\n".join(_ANSI_RE.sub("", ln) for ln in lines)
+    found, seen = [], set()
+
+    def add(ref, kind, url=None, repo=None):
+        key = (kind, ref, repo)
+        if key in seen or len(found) >= limit:
+            return
+        seen.add(key)
+        d = {"ref": ref, "kind": kind}
+        if url:
+            d["url"] = url
+        if repo:
+            d["repo"] = repo
+        found.append(d)
+
+    urls = {}
+    for m in _GH_RE.finditer(text):
+        owner, repo, typ, num = m.groups()
+        kind = "pr" if typ == "pull" else "issue"
+        urls[(kind, num)] = True
+        add(f"PR #{num}" if kind == "pr" else f"#{num}", kind, m.group(0).rstrip(".,)"), f"{owner}/{repo}")
+    for m in _PR_RE.finditer(text):
+        if ("pr", m.group(1)) not in urls:
+            add(f"PR #{m.group(1)}", "pr")
+    stripped = _GH_RE.sub(" ", text)
+    for m in _WT_RE.finditer(stripped):
+        if m.group(1).split("-")[0] in _NOT_WT_PREFIX or len(m.group(1)) < 2:
+            continue
+        add(m.group(0), "watchtower")
+    return found
+
+
+def nodash(s):
+    """No em-dashes in user copy: ' \u2014 ' -> ': '."""
+    return (s or "").replace(" \u2014 ", ": ").replace("\u2014", ":")
+
+
+_PROJ_RE = re.compile(r"/(?:Apps|dev|opt|srv|repos|src|projects|code)/([^/]+)")
+_CONTAINER_DIRS = {"tools", "_test-demos", "scratch", "clients"}
+
+
+def project_from_paths(paths):
+    """(project, repo_path) from candidate absolute paths; ('Other', None) if unknown."""
+    for path in paths:
+        if not path or not path.startswith("/"):
+            continue
+        m = _PROJ_RE.search(path)
+        if m:
+            name, end = m.group(1), m.end()
+            if name in _CONTAINER_DIRS:
+                nxt = re.match(r"/([^/]+)", path[end:])
+                if nxt and "." not in nxt.group(1)[-4:]:
+                    name, end = nxt.group(1), end + nxt.end()
+            return name, path[:end]
+    return "Other", None
 
 
 def _fmt_hhmm(hour, minute, tzname, ref=None):
@@ -197,6 +368,52 @@ def format_systemd_schedule(timers_calendar, timers_monotonic=None):
     return "On demand"
 
 
+
+def _local_minutes(hour, minute, tzname):
+    hhmm = _fmt_hhmm(hour, minute, tzname)
+    return int(hhmm[:2]) * 60 + int(hhmm[3:])
+
+
+def systemd_timeline(timers_calendar, timers_monotonic=None):
+    """Structured schedule for the 24h strip: {kind, minutes[], weekdays[], interval_s}."""
+    minutes, weekdays, interval = [], [], None
+    for line in timers_calendar or []:
+        m = re.search(r"OnCalendar=(.*?)\s*;", line)
+        if not m:
+            continue
+        wd, date, tm, tz = _parse_calendar_spec(m.group(1).strip())
+        if wd and wd not in weekdays:
+            weekdays.append(wd.replace("..", "-"))
+        tmm = re.match(r"^(\d{1,2}):(\d{2})(?::\d{2})?$", tm or "")
+        step = re.match(r"^\*:(?:\d+)/(\d+)(?::\d{2})?$", tm or "")
+        if tmm:
+            minutes.append(_local_minutes(int(tmm.group(1)), int(tmm.group(2)), tz))
+        elif step:
+            interval = int(step.group(1)) * 60
+        elif re.match(r"^\*:\d{2}", tm or ""):
+            interval = 3600
+    if not minutes and interval is None:
+        for line in timers_monotonic or []:
+            m = re.search(r"OnUnitActiveUSec=(.*?)\s*;", line)
+            if m:
+                interval = _parse_span_s(m.group(1))
+                break
+    if interval:
+        return {"kind": "interval", "interval_s": interval, "minutes": [], "weekdays": []}
+    if minutes:
+        return {"kind": "times", "minutes": sorted(set(minutes)), "weekdays": weekdays, "interval_s": None}
+    return {"kind": "none", "minutes": [], "weekdays": [], "interval_s": None}
+
+
+def _parse_span_s(val):
+    """'1h 30min' / '5min' / '30s' -> seconds (None if unparseable)."""
+    total, hit = 0, False
+    for n, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(d|h|min|m|s)\b", val or ""):
+        hit = True
+        total += float(n) * {"d": 86400, "h": 3600, "min": 60, "m": 60, "s": 1}[unit]
+    return int(total) if hit and total else None
+
+
 # ── Hermes parsing ──────────────────────────────────────────────────────────
 
 def _parse_show(block_lines):
@@ -217,30 +434,42 @@ def parse_hermes_output(text, now=None):
     """Parse the REMOTE_SCRIPT stdout into job dicts (pure; no I/O)."""
     now = now if now is not None else time.time()
     units = []
+    cron_lines, cron_logs = [], []
     cur = None
     section = None
     for ln in text.splitlines():
         if ln.startswith(_MARK):
             tag = ln[len(_MARK):]
             if tag.startswith("TIMER "):
-                cur = {"timer": tag[6:].strip(), "TIMER": [], "SVC": [], "HIST": [], "OUT": []}
+                cur = {"timer": tag[6:].strip(), "TIMER": [], "SVC": [], "HIST": [], "OUT": [], "EVENTS": []}
                 units.append(cur)
                 section = "TIMER"
-            elif tag in ("SVC", "HIST", "OUT"):
+            elif tag in ("CRON", "CRONLOGS"):
+                cur = None
+                section = tag
+            elif tag == "END":
+                cur = None
+                section = None
+            elif tag in ("SVC", "HIST", "OUT", "EVENTS"):
                 section = tag
             elif tag == "ENDUNIT":
                 section = None
             continue
-        if cur is not None and section:
+        if section in ("CRON", "CRONLOGS"):
+            (cron_lines if section == "CRON" else cron_logs).append(ln)
+        elif cur is not None and section:
             cur[section].append(ln)
 
     jobs = []
     for u in units:
         t = _parse_show(u["TIMER"])
         s = _parse_show(u["SVC"])
-        svc = t.get("Unit") or u["timer"].replace(".timer", ".service")
+        scope = "user" if u["timer"].startswith("user/") else "system"
+        timer_file = u["timer"].split("/", 1)[-1]
+        svc = t.get("Unit") or timer_file.replace(".timer", ".service")
         name = svc[:-8] if svc.endswith(".service") else svc
         timer_enabled = t.get("UnitFileState") == "enabled"
+        next_estimated = False
 
         history = []
         for ln in u["HIST"]:
@@ -251,8 +480,16 @@ def parse_hermes_output(text, now=None):
                 at = float(parts[0])
             except ValueError:
                 continue
-            history.append({"at": _iso(at), "ok": "Deactivated successfully" in parts[1]})
+            history.append({"at": _iso(at), "ok": "Deactivated successfully" in parts[1]
+                            or ("Finished " in parts[1] and "Failed" not in parts[1])})
         history = history[-30:]
+
+        events = []
+        for ln in u["EVENTS"]:
+            ev = _event_from_journal_line(ln)
+            if ev:
+                events.append({"at": _iso(ev[0]), "text": ev[1]})
+        events = sorted(events, key=lambda e: e["at"])[-200:]
 
         start = parse_systemd_ts(s.get("ExecMainStartTimestamp")) or parse_systemd_ts(t.get("LastTriggerUSec"))
         exit_ts = parse_systemd_ts(s.get("ExecMainExitTimestamp"))
@@ -271,41 +508,60 @@ def parse_hermes_output(text, now=None):
         elif history and not history[-1]["ok"]:
             status = "failed"
         elif nxt is None:
-            status = "stale"
+            # Interval timers (OnUnitActiveSec/OnBootSec) report no realtime
+            # next-elapse; judge them by whether the last run is recent enough.
+            interval_s = (systemd_timeline(t.get("TimersCalendar"), t.get("TimersMonotonic")) or {}).get("interval_s")
+            if (interval_s and t.get("ActiveState") == "active" and start
+                    and now - start <= max(3 * interval_s, interval_s + 600)):
+                status = "ok"
+                nxt = start + interval_s
+                next_estimated = True
+            else:
+                status = "stale"
         else:
             status = "ok"
 
-        outcome = pick_outcome(u["OUT"])
-        if not outcome and status == "failed":
-            outcome = f"Failed ({result or 'error'}, exit {exit_code})"
-        if not outcome and start is None and status != "disabled":
-            outcome = "Not run yet"
+        outcome, outcome_kind = pick_outcome(u["OUT"])
+        wd = (s.get("WorkingDirectory") or "").lstrip("!-")
+        exec_paths = re.findall(r"(?:path=|argv\[\]=|\s)(/[^\s;]+)", s.get("ExecStart") or "")
+        exec_paths = [x for x in exec_paths if not x.startswith(("/bin", "/usr", "/sbin"))]
+        project, repo_path = project_from_paths([wd] + exec_paths)
+        if project == "Other" and wd and wd not in ("/", "~") and wd.startswith("/") and wd.count("/") > 1:
+            project, repo_path = wd.rstrip("/").rsplit("/", 1)[-1], wd
 
         jobs.append({
-            "id": f"hermes:{svc}",
+            "id": f"hermes:{svc}" if scope == "system" else f"hermes:user/{svc}",
             "name": name,
             "host": "hermes",
             "manager": "systemd",
-            "description": s.get("Description", ""),
+            "scope": scope,
+            "description": nodash(s.get("Description", "")),
+            "project": project,
+            "repo_path": repo_path,
             "schedule": format_systemd_schedule(t.get("TimersCalendar"), t.get("TimersMonotonic")),
+            "timeline": systemd_timeline(t.get("TimersCalendar"), t.get("TimersMonotonic")),
             "enabled": timer_enabled,
             "status": status,
             "last_run_at": _iso(start),
             "last_duration_s": duration,
             "exit_code": exit_code,
             "next_run_at": _iso(nxt) if timer_enabled else None,
+            "next_run_estimated": next_estimated,
             "history": history,
             "outcome": outcome,
+            "outcome_kind": outcome_kind,
+            "tickets": extract_tickets(u["OUT"]),
+            "events": events,
         })
+    jobs.extend(parse_crontab(cron_lines, cron_logs, now))
     return jobs
 
 
 def collect_hermes(timeout_s=SSH_CONNECT_TIMEOUT_S):
-    """ONE ssh round-trip. Returns (jobs, error_or_None)."""
+    """One local Linux subprocess or SSH round-trip. Returns (jobs, error)."""
     try:
         res = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout_s}",
-             "hermes", "bash -s"],
+            _sj._systemd_command(["bash", "-s"], timeout_s),
             input=REMOTE_SCRIPT, capture_output=True, text=True,
             timeout=SSH_TOTAL_TIMEOUT_S, check=False,
         )
@@ -319,6 +575,123 @@ def collect_hermes(timeout_s=SSH_CONNECT_TIMEOUT_S):
 # ── Laptop ──────────────────────────────────────────────────────────────────
 
 _WEEKDAY_NAMES = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
+
+
+
+_INTERPRETERS = {"bash", "sh", "zsh", "env", "python", "python3", "node", "caffeinate", "nice", "open", "osascript", "ruby", "perl", "uv", "npx"}
+_SCRIPT_DESC_CACHE = {}  # path -> (mtime, text)
+
+
+def _expand(path):
+    return os.path.expanduser(path.replace("$HOME", "~")) if path else path
+
+
+def launchd_program_paths(data):
+    """ProgramArguments minus the launchd-jobs wrapper and its label argument."""
+    args = data.get("ProgramArguments") or ([data["Program"]] if data.get("Program") else [])
+    label = data.get("Label")
+    out = []
+    for a in args:
+        if not isinstance(a, str):
+            continue
+        if a == label or a.startswith("com.") and "/" not in a:
+            continue
+        a = _expand(a)
+        if os.path.basename(os.path.dirname(a)) == "launchd-jobs":
+            continue
+        out.append(a)
+    return out
+
+
+def script_path(data):
+    """First ProgramArguments entry that is a script/binary, not an interpreter or flag."""
+    for a in launchd_program_paths(data):
+        base = os.path.basename(a)
+        if a.startswith("-") or base in _INTERPRETERS or base.rstrip("0123456789.") in _INTERPRETERS:
+            continue
+        if "/" in a or re.search(r"\.(sh|py|js|mjs|rb|pl)$", a):
+            return a
+    return None
+
+
+def _script_first_comment(path):
+    """One-line purpose from a script's leading comment/docstring (mtime-cached)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ""
+    hit = _SCRIPT_DESC_CACHE.get(path)
+    if hit and hit[0] == st.st_mtime:
+        return hit[1]
+    text = ""
+    try:
+        with open(path, "rb") as fb:
+            raw = fb.read(2048)
+        if b"\0" in raw:
+            return ""
+        head = raw.decode("utf-8", "replace").splitlines()[:25]
+        for i, ln in enumerate(head):
+            t = ln.strip()
+            if not t or t.startswith("#!") or t.startswith("# -*-") or t.startswith("# Copyright") or t.startswith("# SPDX"):
+                continue
+            if t.startswith("#") and not t.startswith("#!/"):
+                t = t.lstrip("#").strip()
+            elif t.startswith(('"""', "\'\'\'")):
+                t = t.strip("\"'").strip()
+            elif t.startswith("//"):
+                t = t.lstrip("/").strip()
+            else:
+                break
+            if t and not t.lower().startswith(("usage", "set ", "shellcheck")):
+                text = re.sub(r"^[\w./-]+\.(sh|py|js|mjs)\s*[:\u2014-]+\s*", "", t)
+                break
+    except Exception:
+        text = ""
+    text = nodash(text)[:110]
+    _SCRIPT_DESC_CACHE[path] = (st.st_mtime, text)
+    return text
+
+
+def launchd_description(data):
+    if data.get("Comment"):
+        return nodash(str(data["Comment"]))[:110]
+    sp = script_path(data)
+    if not sp:
+        return "Runs a shell command"
+    base = os.path.basename(sp)
+    if re.search(r"\.(sh|py|js|mjs|rb|pl)$", base):
+        got = _script_first_comment(sp)
+        if got:
+            return got
+    args = launchd_program_paths(data)
+    rest = [a for a in args[args.index(sp) + 1:] if not a.startswith("-")][:1] if sp in args else []
+    return "Runs " + " ".join([base] + rest)
+
+
+def launchd_timeline(data):
+    interval = data.get("StartInterval")
+    if interval:
+        try:
+            return {"kind": "interval", "interval_s": int(interval), "minutes": [], "weekdays": []}
+        except Exception:
+            pass
+    cal = data.get("StartCalendarInterval")
+    items = [cal] if isinstance(cal, dict) else [c for c in (cal or []) if isinstance(c, dict)]
+    minutes, weekdays, hourly = [], [], False
+    for it in items:
+        h, m = it.get("Hour"), it.get("Minute", 0)
+        if isinstance(h, int) and isinstance(m, int):
+            minutes.append(h * 60 + m)
+        else:
+            hourly = True
+        wd = it.get("Weekday")
+        if wd is not None and _WEEKDAY_NAMES.get(wd) and _WEEKDAY_NAMES[wd] not in weekdays:
+            weekdays.append(_WEEKDAY_NAMES[wd])
+    if hourly and not minutes:
+        return {"kind": "interval", "interval_s": 3600, "minutes": [], "weekdays": []}
+    if minutes:
+        return {"kind": "times", "minutes": sorted(set(minutes)), "weekdays": weekdays, "interval_s": None}
+    return {"kind": "none", "minutes": [], "weekdays": [], "interval_s": None}
 
 
 def is_scheduled_plist(data):
@@ -423,7 +796,8 @@ def collect_laptop(now=None):
         info = lc.get(label)
         logs = [x for x in (data.get("StandardOutPath"), data.get("StandardErrorPath")) if x]
         last_run = None
-        outcome = ""
+        outcome, outcome_kind, tickets = "", "", []
+        events = {}
         for lp in logs:
             try:
                 path = Path(lp).expanduser()
@@ -434,20 +808,31 @@ def collect_laptop(now=None):
                 last_run = mt
                 tail = _sj._read_file_tail(path, max_lines=20)
                 if tail and tail.strip():
-                    outcome = pick_outcome(tail.splitlines())
+                    outcome, outcome_kind = pick_outcome(tail.splitlines())
+                    tickets = extract_tickets(tail.splitlines())
+            ev_tail = _sj._read_file_tail(path, max_lines=400)
+            if ev_tail and ev_tail.strip():
+                for e in events_from_log_lines(ev_tail.splitlines(), now=now):
+                    events[(e["at"], e["text"])] = e
+        events = sorted(events.values(), key=lambda e: e["at"])[-200:]
         exit_code = info.get("status") if info else None
         status = laptop_status(
             pid=info.get("pid") if info else None, exit_code=exit_code, loaded=info is not None,
             last_run_epoch=last_run, period_s=_expected_period_s(data), now=now)
-        if not outcome and status == "failed":
-            outcome = f"Exited with status {exit_code}"
+        wd = _expand(data.get("WorkingDirectory") or "")
+        project, repo_path = project_from_paths(launchd_program_paths(data) + [wd])
+        if project == "Other" and wd.startswith("/") and wd.count("/") > 2 and wd != str(Path.home()):
+            project, repo_path = wd.rstrip("/").rsplit("/", 1)[-1], wd
         jobs.append({
             "id": f"laptop:{label}",
             "name": label,
             "host": "laptop",
             "manager": "launchd",
-            "description": "",
+            "description": launchd_description(data),
+            "project": project,
+            "repo_path": repo_path,
             "schedule": format_launchd_schedule(data),
+            "timeline": launchd_timeline(data),
             "enabled": info is not None,
             "status": status,
             "last_run_at": _iso(last_run),
@@ -456,19 +841,136 @@ def collect_laptop(now=None):
             "next_run_at": None,
             "history": [],
             "outcome": outcome,
+            "outcome_kind": outcome_kind,
+            "tickets": tickets,
+            "events": events,
         })
     return jobs
 
 
 # ── Ordering + payload ──────────────────────────────────────────────────────
 
-_STATUS_RANK = {"failed": 0, "stale": 1, "running": 2, "unknown": 3, "ok": 3, "disabled": 9}
+# ── crontab ─────────────────────────────────────────────────────────────────
+
+_CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
+
+
+def _cron_field(spec, lo, hi):
+    """Cron field -> set of ints, or None when unparseable."""
+    out = set()
+    for part in spec.split(","):
+        step = 1
+        if "/" in part:
+            part, st = part.split("/", 1)
+            if not st.isdigit() or int(st) < 1:
+                return None
+            step = int(st)
+        if part == "*":
+            a, b = lo, hi
+        elif "-" in part:
+            x, y = part.split("-", 1)
+            if not (x.isdigit() and y.isdigit()):
+                return None
+            a, b = int(x), int(y)
+        elif part.isdigit():
+            a = int(part)
+            b = hi if step > 1 else a
+        else:
+            return None
+        if a < lo - (1 if hi == 6 else 0) or b > hi + (1 if hi == 6 else 0) or a > b:
+            return None
+        out.update(range(a, b + 1, step))
+    if hi == 6:
+        out = {v % 7 for v in out}
+    return out
+
+
+def cron_next_run(fields, now):
+    """Next fire epoch (UTC) within 8 days for a 5-field spec, else None."""
+    sets = [_cron_field(f, lo, hi) for f, (lo, hi) in zip(fields, _CRON_RANGES)]
+    if any(x is None for x in sets):
+        return None
+    t = int(now // 60 + 1) * 60
+    for _ in range(8 * 1440):
+        dt = datetime.fromtimestamp(t, timezone.utc)
+        if (dt.minute in sets[0] and dt.hour in sets[1] and dt.month in sets[3]
+                and dt.day in sets[2] and (dt.weekday() + 1) % 7 in sets[4]):
+            return float(t)
+        t += 60
+    return None
+
+
+def _cron_schedule_text(fields):
+    m, h, dom, mon, dow = fields
+    if fields == ["*"] * 5:
+        return "Every minute"
+    if m.startswith("*/") and fields[1:] == ["*"] * 4 and m[2:].isdigit():
+        return f"Every {m[2:]}min"
+    if m.isdigit() and h.isdigit() and (dom, mon, dow) == ("*", "*", "*"):
+        return f"Daily {int(h):02d}:{int(m):02d} UTC"
+    if m.isdigit() and h.startswith("*/") and (dom, mon, dow) == ("*", "*", "*"):
+        return f"Every {h[2:]}h at :{int(m):02d}"
+    return "cron " + " ".join(fields)
+
+
+def parse_crontab(lines, log_lines, now=None):
+    """Crontab lines -> job dicts (pure). Cron keeps no run history, so the
+    last run is known only when the entry redirects to a log file we can stat."""
+    now = now if now is not None else time.time()
+    logs = {}
+    for ln in log_lines:
+        parts = ln.split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            logs[parts[1].strip()] = float(parts[0])
+    jobs = []
+    for ln in lines:
+        raw = ln.strip()
+        if not raw or raw.startswith("#") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", raw):
+            continue
+        parts = raw.split(None, 5)
+        if len(parts) < 6:
+            continue
+        fields, cmd = parts[:5], parts[5]
+        paths = re.findall(r"(/[^\s;>|&]+)", cmd)
+        script = next((x for x in paths if not x.startswith(("/bin", "/usr", "/sbin"))), paths[0] if paths else cmd)
+        name = os.path.basename(script) or cmd[:40]
+        log_m = re.search(r">>?\s*(\S+)", cmd)
+        last = logs.get(log_m.group(1)) if log_m else None
+        nxt = cron_next_run(fields, now)
+        jobs.append({
+            "id": f"hermes:cron/{len(jobs) + 1}-{name}",
+            "name": name,
+            "host": "hermes",
+            "manager": "cron",
+            "scope": "cron",
+            "description": cmd[:200],
+            "project": project_from_paths(paths)[0],
+            "repo_path": project_from_paths(paths)[1],
+            "schedule": _cron_schedule_text(fields),
+            "timeline": {"kind": "cron", "interval_s": None, "minutes": [], "weekdays": []},
+            "enabled": True,
+            "status": "unknown",
+            "last_run_at": _iso(last) if last else None,
+            "last_duration_s": None,
+            "exit_code": None,
+            "next_run_at": _iso(nxt) if nxt else None,
+            "history": [],
+            "outcome": ("cron keeps no run history; last run is the log file's modified time"
+                        if last else "cron keeps no run history and this entry has no log file, so success is unverifiable"),
+            "outcome_kind": "",
+            "tickets": [],
+            "events": [],
+        })
+    return jobs
 
 
 def sort_jobs(jobs):
-    def key(j):
-        return (_STATUS_RANK.get(j["status"], 5), j.get("next_run_at") or "9999", j["name"])
-    return sorted(jobs, key=key)
+    """Most recent run first; disabled at the bottom. (The UI groups by project.)"""
+    return sorted(jobs, key=lambda j: (
+        j["status"] == "disabled",
+        # newest first: invert the ISO string ordering via negative epoch
+        -(datetime.fromisoformat(j["last_run_at"]).timestamp() if j.get("last_run_at") else 0),
+        j["name"]))
 
 
 def summarize(jobs):
@@ -542,6 +1044,9 @@ def build_payload(now=None):
         "ok": True,
         "collected_at": _iso(now),
         "hosts": hosts,
+        # Which of the two hosts is THIS machine: on Linux the systemd timers
+        # are local and there is no launchd, so the UI hides the Laptop view.
+        "local_host": "hermes" if platform.system() == "Linux" else "laptop",
         "jobs": jobs,
         "summary": {
             "total": len(jobs),

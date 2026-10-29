@@ -1,1 +1,0 @@
-- Fixed the dashboard showing a blank transcript for a Codex session whose native history got stuck at "task started" (the `codex exec` fallback bug fixed in the previous release); it now falls back to CCC's own spawn log so the real conversation still renders.

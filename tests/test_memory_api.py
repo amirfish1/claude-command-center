@@ -69,10 +69,16 @@ def mock_memory_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "0")  # disable cutoff for tests
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(fts_db))
+    monkeypatch.setenv("CCC_DECISIONS_DB", str(tmp_path / "decisions.sqlite"))
+    # Keep the host's real ~/.hermes sessions out of search results.
+    from ccc_server import hermes as _hermes
+    monkeypatch.setattr(_hermes, "search_hermes_messages", lambda *a, **k: [])
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")  # disable cutoff for tests
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")  # tmp_path looks scratch-y
     # These tests exercise the FTS/graph enrichment path, not the optional
@@ -119,8 +125,10 @@ def test_recall_enriches_hits_with_title_repo_date_snippet(mock_memory_env):
     assert row["date"] == "2026-09-20"
     assert row["snippet"]
     assert isinstance(row["title"], str)
-    # Every result carries exactly the ticket's four enrichment fields.
-    assert set(row) == {"session_id", "title", "repo", "date", "snippet"}
+    # Every result carries the ticket's four enrichment fields, plus the
+    # last-activity time the multi-machine merge (S4) dedupes on. Lease
+    # fields appear only for sessions that were handed off.
+    assert set(row) == {"session_id", "title", "repo", "date", "snippet", "last_activity_ts"}
 
 
 def test_recall_empty_query_returns_no_results(mock_memory_env):

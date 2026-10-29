@@ -42,6 +42,7 @@ class CodexItemCompletedTests(unittest.TestCase):
 
         self.assertEqual(parsed["type"], "assistant")
         self.assertEqual(parsed["blocks"], [{"kind": "text", "text": "hi back"}])
+        self.assertEqual(parsed["codex_item_id"], "msg_1")
 
     def test_command_execution_item_is_ignored_to_avoid_duplicate_tool_cards(self):
         # CommandExecution/McpToolCall/FileChange items are dual-emitted as

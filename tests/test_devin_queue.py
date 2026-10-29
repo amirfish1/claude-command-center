@@ -3,13 +3,14 @@
 import importlib
 import json
 import os
+import pathlib
 import shutil
 import sqlite3
 import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest import mock
 
 
@@ -61,6 +62,7 @@ class DevinQueueTests(unittest.TestCase):
              mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
              mock.patch.object(server, "_save_pending_inputs") as save, \
              mock.patch.object(server, "resume_session_devin") as resume, \
+             mock.patch.object(server, "_devin_acp_try_steer", return_value=None), \
              mock.patch.object(server, "_control_plane_engine_call") as cp:
             result = server._inject_text_into_session(sid, "follow up")
 
@@ -701,6 +703,12 @@ class DevinListPerfTests(unittest.TestCase):
         server = importlib.import_module("server")
         import ccc_server.devin as devin_mod
 
+        # A cold /list overlay miss rebuilds on a background thread (CCC-1244);
+        # never let one from an earlier test run into this test's DB and spies.
+        deadline = time.monotonic() + 5
+        while devin_mod._DEVIN_CLI_LIST_REBUILD_LOCK.locked() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
         tmpdir = tempfile.mkdtemp()
         db_path = os.path.join(tmpdir, "sessions.db")
         memo_path = os.path.join(tmpdir, "row_memo.json")
@@ -1061,7 +1069,7 @@ class DevinListPerfTests(unittest.TestCase):
         )
         con.commit()
         con.close()
-        rows = server._archive_overlay_devin_cli_sessions([])
+        rows = _overlay_after_cold_build(server, devin_mod)
         ids = sorted(r["id"] for r in rows)
         self.assertEqual(ids, ["devincli-alpha-one", "devincli-beta-two"])
         self.assertTrue(all(r["source"] == "devin-cli" for r in rows))
@@ -1113,7 +1121,7 @@ class DevinListPerfTests(unittest.TestCase):
         with mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_TTL_SEC", 3600), \
              mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
             # Warm the overlay's own cache variant (repo_path=None).
-            server._archive_overlay_devin_cli_sessions([])
+            _overlay_after_cold_build(server, devin_mod)
             self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
             for entry in devin_mod._DEVIN_CLI_LIST_CACHE.values():
                 entry["ts"] = 0.0
@@ -1132,24 +1140,39 @@ class DevinListPerfTests(unittest.TestCase):
         server, devin_mod, db_path, now = self._setup()
         held = threading.Event()
         release = threading.Event()
+        # A fresh lock: an earlier test's background rebuild can still hold
+        # the module-wide one for many seconds in a full-suite run.
+        lock = threading.Lock()
 
         def holder():
-            with devin_mod._DEVIN_CLI_LIST_REBUILD_LOCK:
+            with lock:
                 held.set()
                 release.wait(timeout=5)
 
-        worker = threading.Thread(target=holder)
-        worker.start()
-        self.assertTrue(held.wait(timeout=1))
-        try:
-            t0 = time.perf_counter()
-            rows = server._archive_overlay_devin_cli_sessions([])
-            elapsed = time.perf_counter() - t0
-            self.assertEqual(rows, [])
-            self.assertLess(elapsed, 0.5)
-        finally:
-            release.set()
-            worker.join(timeout=2)
+        with mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_REBUILD_LOCK", lock):
+            worker = threading.Thread(target=holder)
+            worker.start()
+            self.assertTrue(held.wait(timeout=1))
+            try:
+                t0 = time.perf_counter()
+                rows = server._archive_overlay_devin_cli_sessions([])
+                elapsed = time.perf_counter() - t0
+                self.assertEqual(rows, [])
+                self.assertLess(elapsed, 0.5)
+            finally:
+                release.set()
+                worker.join(timeout=2)
+
+def _overlay_after_cold_build(server, devin_mod):
+    """A cold overlay miss returns [] and builds in the background (CCC-1244);
+    wait for that build, then read the overlay the next /list poll sees."""
+    first = server._archive_overlay_devin_cli_sessions([])
+    assert first == []
+    deadline = time.monotonic() + 5
+    while devin_mod._DEVIN_CLI_LIST_REBUILD_LOCK.locked() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return server._archive_overlay_devin_cli_sessions([])
+
 
 class DevinSpawnIdentityTests(unittest.TestCase):
     """Two Devin spawns with the same prompt must resolve to two sessions.
@@ -1801,6 +1824,7 @@ class DevinCompactorSummaryTests(unittest.TestCase):
         self.addCleanup(env_patch.stop)
         for p in (
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_PARSE_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_USAGE_CACHE", {}),
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_LIST_CACHE", {}),
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_ID_CACHE", {}),
             mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
@@ -1868,6 +1892,312 @@ class DevinCompactorSummaryTests(unittest.TestCase):
         self.assertEqual(usage["model"], "swarm-1")
         # The compactor's tokens are still real spend — totals include them.
         self.assertEqual(usage["total_output_tokens"], 5000)
+
+    def _add_node(self, node_id, msg):
+        con = sqlite3.connect(self.db_path)
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)", ("sum-test", node_id, msg, node_id))
+        con.commit()
+        con.close()
+
+    def test_usage_folds_only_new_nodes_and_rereads_streaming_tail(self):
+        """CCC-141: a poll must not re-decode the whole session; totals are
+        cached up to the second-newest node, and the newest node (possibly
+        still streaming) is re-read every time."""
+        m = self.devin_mod
+        first = m._extract_devin_cli_usage("devincli-sum-test")
+        self.assertEqual(first["total_output_tokens"], 5000)
+        self.assertEqual(len(m._DEVIN_CLI_USAGE_CACHE), 1)
+        self._add_node(4, self._msg("assistant", "next", generation_model="swarm-2",
+                                    metrics={"input_tokens": 10, "output_tokens": 7}))
+        usage = m._extract_devin_cli_usage("devincli-sum-test")
+        self.assertEqual(usage["total_output_tokens"], 5007)
+        self.assertEqual(usage["latest_input_tokens"], 10)
+        self.assertEqual(usage["peak_input_tokens"], 60000)
+        self.assertEqual(usage["model"], "swarm-2")
+        # The newest node is rewritten in place as it streams.
+        con = sqlite3.connect(self.db_path)
+        con.execute("UPDATE message_nodes SET chat_message = ? WHERE node_id = 4",
+                    (self._msg("assistant", "next!", generation_model="swarm-2",
+                               metrics={"input_tokens": 10, "output_tokens": 50}),))
+        con.commit()
+        con.close()
+        self.assertEqual(m._extract_devin_cli_usage("devincli-sum-test")["total_output_tokens"], 5050)
+
+    def test_usage_rescans_when_history_is_rewritten(self):
+        m = self.devin_mod
+        self._add_node(4, self._msg("assistant", "tail", metrics={"output_tokens": 1}))
+        self.assertEqual(m._extract_devin_cli_usage("devincli-sum-test")["total_output_tokens"], 5001)
+        con = sqlite3.connect(self.db_path)
+        con.execute("DELETE FROM message_nodes WHERE node_id = 3")
+        con.commit()
+        con.close()
+        self.assertEqual(m._extract_devin_cli_usage("devincli-sum-test")["total_output_tokens"], 1)
+
+
+class DevinCliAcpTranscriptMergeTests(unittest.TestCase):
+    """`devin acp` writes user/assistant/tool content into sessions.db but
+    a turn's terminal `result` row (quota error, cancel, end_turn) only
+    lands on CCC's own ACP transcript. `_parse_devin_cli_conversation`
+    must splice those rows in — negated line ids, timestamp order — or a
+    failed turn renders nothing and the pane stays stuck in Thinking."""
+
+    SCHEMA = DevinCompactorSummaryTests.SCHEMA
+
+    def _msg(self, role, content, **meta):
+        return json.dumps({"role": role, "content": content, "metadata": meta})
+
+    def _write_transcript(self, raw_id, events):
+        path = self.server._acp_transcript_path("devin", raw_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            for ev in events:
+                fh.write(json.dumps(ev) + "\n")
+
+    def setUp(self):
+        self.server = importlib.import_module("server")
+        self.devin_mod = importlib.import_module("ccc_server.devin")
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
+        self.db_path = os.path.join(self.tmpdir, "sessions.db")
+        self.transcript_dir = pathlib.Path(self.tmpdir) / "acp"
+        now = int(time.time() * 1000)
+        con = sqlite3.connect(self.db_path)
+        con.executescript(self.SCHEMA)
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, '', ?, '', ?, ?, NULL, NULL)",
+            ("merge-test", "/tmp/ccc", "swe-2-high", now, now),
+        )
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, "
+            "created_at) VALUES (?, ?, ?, ?)",
+            ("merge-test", 1, self._msg("user", "hello devin",
+                                       is_user_input=True), now),
+        )
+        con.commit()
+        con.close()
+
+        env_patch = mock.patch.dict(
+            os.environ,
+            {
+                "CCC_DEVIN_DB": self.db_path,
+                "CCC_DEVIN_NEXT_DB": os.path.join(self.tmpdir, "next-sessions.db"),
+            },
+        )
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        for p in (
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_PARSE_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_LIST_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ID_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO_LOADED", False),
+            mock.patch.object(
+                self.devin_mod,
+                "_devin_cli_row_memo_path",
+                lambda: self.devin_mod.Path(os.path.join(self.tmpdir, "row_memo.json")),
+            ),
+            mock.patch.object(
+                self.devin_mod, "_DEVIN_CLI_ROW_MEMO_BG", {"pending": {}, "thread": None}
+            ),
+            mock.patch.object(self.server, "_spawned_sessions", []),
+            mock.patch.object(
+                self.server, "_ACP_TRANSCRIPT_DIR", self.transcript_dir
+            ),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.devin_mod._devin_cli_row_memo_background_join, 10)
+
+    def test_acp_error_result_splices_into_db_events(self):
+        later = datetime.fromtimestamp(
+            time.time() + 60, tz=timezone.utc
+        ).isoformat().replace("+00:00", "Z")
+        self._write_transcript("merge-test", [
+            {"type": "user_text", "text": "hello devin", "line": 1,
+             "ts": later},
+            {"type": "result", "subtype": "error",
+             "error": "Your daily usage quota has been exhausted",
+             "line": 2, "ts": later},
+        ])
+        parsed = self.server._parse_devin_cli_conversation("devincli-merge-test")
+        events = parsed["events"]
+        result = next(e for e in events if e.get("type") == "result")
+        self.assertEqual(result["subtype"], "error")
+        self.assertEqual(
+            result["error"], "Your daily usage quota has been exhausted")
+        # Negative, stable, collision-free — never overlaps a DB line.
+        self.assertLess(result["line"], 0)
+        self.assertEqual(result["line"], -2)
+        # Spliced after the DB-derived user row by timestamp.
+        self.assertEqual(events[-1], result)
+
+    def test_acp_result_survives_incremental_parse(self):
+        """An incremental poll (after_line past every DB row) must still
+        surface a transcript result that arrived without any DB write."""
+        later = datetime.fromtimestamp(
+            time.time() + 60, tz=timezone.utc
+        ).isoformat().replace("+00:00", "Z")
+        self._write_transcript("merge-test", [
+            {"type": "result", "subtype": "error", "error": "cancelled",
+             "line": 1, "ts": later},
+        ])
+        parsed = self.server._parse_devin_cli_conversation(
+            "devincli-merge-test", after_line=99)
+        events = parsed["events"]
+        self.assertEqual([e["type"] for e in events], ["result"])
+        self.assertEqual(events[0]["line"], -1)
+
+    def test_incremental_parse_excludes_historical_acp_results_and_orders_microseconds(self):
+        """Historical ACP result rows from earlier turns must not be re-emitted
+        on incremental polls (which would flood the tail of a ?tail=N pane with
+        orphaned DONE / STOPPED cards), and microsecond ACP timestamps must
+        sort after same-second whole-second DB assistant rows."""
+        base = 1_760_000_000
+        con = sqlite3.connect(self.db_path)
+        con.execute("DELETE FROM message_nodes WHERE session_id = 'merge-test'")
+        con.executemany(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, "
+            "created_at) VALUES (?, ?, ?, ?)",
+            [
+                ("merge-test", 1, self._msg("user", "turn 1", is_user_input=True),
+                 base * 1000),
+                ("merge-test", 2, self._msg("assistant", "reply 1"),
+                 (base + 5) * 1000),
+                ("merge-test", 3, self._msg("user", "turn 2", is_user_input=True),
+                 (base + 20) * 1000),
+                ("merge-test", 4, self._msg("assistant", "reply 2"),
+                 (base + 25) * 1000),
+            ],
+        )
+        con.commit()
+        con.close()
+
+        t1_res = datetime.fromtimestamp(
+            base + 5, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S.651630Z")
+        t2_res = datetime.fromtimestamp(
+            base + 25, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S.922121Z")
+        self._write_transcript("merge-test", [
+            {"type": "result", "subtype": "error",
+             "error": "Agent communication channel closed",
+             "line": 10, "ts": t1_res},
+            {"type": "result", "subtype": "end_turn",
+             "line": 20, "ts": t2_res},
+        ])
+
+        full = self.server._parse_devin_cli_conversation("devincli-merge-test")
+        self.assertEqual(
+            [(e["type"], e["line"]) for e in full["events"]],
+            [
+                ("user_text", 1),
+                ("assistant", 2),
+                ("result", -10),
+                ("user_text", 3),
+                ("assistant", 4),
+                ("result", -20),
+            ],
+        )
+
+        inc = self.server._parse_devin_cli_conversation(
+            "devincli-merge-test", after_line=4)
+        self.assertEqual(
+            [(e["type"], e["line"]) for e in inc["events"]],
+            [("result", -20)],
+        )
+
+    def test_parse_cache_key_tracks_the_transcript(self):
+        conv = "devincli-merge-test"
+        key_no_tr = self.server._conv_parse_jsonl_mtime(conv)
+        self.assertEqual(len(key_no_tr), 4)
+        self.assertEqual(key_no_tr[2:], (0, 0))
+        later = datetime.fromtimestamp(
+            time.time() + 60, tz=timezone.utc
+        ).isoformat().replace("+00:00", "Z")
+        self._write_transcript("merge-test", [
+            {"type": "result", "subtype": "success", "line": 1,
+             "ts": later},
+        ])
+        key_tr = self.server._conv_parse_jsonl_mtime(conv)
+        self.assertNotEqual(key_tr, key_no_tr)
+        size = self.server._acp_transcript_path(
+            "devin", "merge-test").stat().st_size
+        self.assertEqual(key_tr[3], size)
+
+    def test_session_model_falls_back_to_sessions_row(self):
+        """No assistant row has reported generation_model yet — the
+        sessions.model slug (e.g. the concrete variant ACP applied) is
+        still the session's real model."""
+        self.assertEqual(
+            self.devin_mod._devin_cli_session_model("merge-test"),
+            "swe-2-high")
+        usage = self.devin_mod._extract_devin_cli_usage("devincli-merge-test")
+        self.assertEqual(usage["model"], "swe-2-high")
+
+    def test_acp_result_rows_memoized_on_mtime_size(self):
+        """CCC-1255: the merge ran on every open/poll and re-decoded a
+        289 MB transcript each time (~0.8 s). Unchanged file -> same rows
+        object; an append -> re-read."""
+        ts = "2026-10-04T00:00:00Z"
+        self._write_transcript("merge-test", [
+            {"type": "assistant", "text": "not a result", "line": 1, "ts": ts},
+            {"type": "result", "subtype": "success", "line": 2, "ts": ts},
+        ])
+        first = self.devin_mod._devin_acp_result_rows("merge-test")
+        self.assertEqual([e["line"] for e in first], [2])
+        self.assertIs(self.devin_mod._devin_acp_result_rows("merge-test"), first)
+        path = self.server._acp_transcript_path("devin", "merge-test")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "result", "subtype": "error",
+                                 "line": 3, "ts": ts}) + "\n")
+        self.assertEqual(
+            [e["line"] for e in self.devin_mod._devin_acp_result_rows("merge-test")],
+            [2, 3])
+
+    def test_parse_cache_persists_across_process_restart(self):
+        """CCC-1255: a cold full parse of a 1.9 GB session cost 5-11 s after
+        every restart. A slow parse is persisted; a fresh process resumes
+        from disk and reads only rows past the persisted max_row_id."""
+        m = self.devin_mod
+        with mock.patch.object(m, "_DEVIN_CLI_PARSE_DISK_MIN_PARSE_S", 0):
+            first = self.server._parse_devin_cli_conversation("devincli-merge-test")
+        self.assertEqual(first["last_line"], 1)
+        disk = pathlib.Path(self.db_path + ".ccc-parse-cache") / "merge-test.json"
+        self.assertTrue(disk.is_file())
+
+        con = sqlite3.connect(self.db_path)
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, "
+            "created_at) VALUES (?, ?, ?, ?)",
+            ("merge-test", 2, self._msg("user", "second turn",
+                                       is_user_input=True),
+             int(time.time() * 1000)),
+        )
+        con.commit()
+        con.close()
+
+        m._DEVIN_CLI_PARSE_CACHE.clear()  # simulate a new process
+        real_parse_row = m._devin_cli_parse_message_row
+        with mock.patch.object(
+            m, "_devin_cli_parse_message_row", side_effect=real_parse_row
+        ) as parse_row:
+            second = self.server._parse_devin_cli_conversation("devincli-merge-test")
+        self.assertEqual(parse_row.call_count, 1)  # only the new row
+        self.assertEqual(second["last_line"], 2)
+        self.assertEqual(
+            [e.get("text") for e in second["events"] if e["type"] == "user_text"],
+            ["hello devin", "second turn"])
+
+    def test_persisted_parse_cache_ignored_when_parser_changes(self):
+        m = self.devin_mod
+        with mock.patch.object(m, "_DEVIN_CLI_PARSE_DISK_MIN_PARSE_S", 0):
+            self.server._parse_devin_cli_conversation("devincli-merge-test")
+        self.assertIsNotNone(m._devin_cli_parse_disk_load("merge-test", ""))
+        with mock.patch.object(m, "_devin_cli_parse_disk_code_sig", return_value="other"):
+            self.assertIsNone(m._devin_cli_parse_disk_load("merge-test", ""))
+        self.assertIsNone(m._devin_cli_parse_disk_load("merge-test", "sidekick"))
 
 
 class DevinCliFusionLaneTests(unittest.TestCase):

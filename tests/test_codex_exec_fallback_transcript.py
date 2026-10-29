@@ -108,7 +108,7 @@ def test_resolve_conversation_reader_falls_back_to_spawn_log(tmp_path, monkeypat
     monkeypatch.setattr(server, "_resolve_codex_rollout_path", lambda tid: rollout)
     filepath, parser = server._resolve_conversation_reader(thread_id, repo_path=str(repo))
     assert filepath == spawn_log
-    assert parser is codex_parse._parse_codex_exec_log_event
+    assert parser is server._parse_codex_exec_log_event
 
 
 def _stub_reader_fixture(tmp_path, monkeypatch):

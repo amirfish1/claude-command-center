@@ -317,3 +317,21 @@ def test_desktop_steer_never_falls_through_to_a_second_transport(tmp_path, reply
         result=queue_events.resume_session_codex('task','Hold on',steer=True,_native_delivery=True)
     assert result==reply
     desktop_send.assert_called_once()
+
+
+def test_owner_discovery_waits_for_router_negative_receipt():
+    client = desktop.DesktopClient()
+    client.connect = lambda: None
+
+    def router_request(method, params, *, timeout=8, **kwargs):
+        assert method == 'thread-owner-discovery'
+        # The desktop router's discovery deadline is ten seconds. A caller
+        # expiring first loses the definitive no-owner receipt and cannot
+        # safely select its native session transport.
+        if timeout + 1 <= 10:
+            raise TimeoutError('Desktop request timed out; it will not be retried')
+        raise ValueError('Desktop: no-client-found')
+
+    client.request = router_request
+    with pytest.raises(ValueError, match='no-client-found'):
+        client.snapshot('unowned-task')

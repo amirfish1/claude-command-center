@@ -1,8 +1,17 @@
 import pathlib
+import re
 import unittest
+import xml.etree.ElementTree as ET
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _current_version():
+    """(full 'X.Y.Z', 'X.Y') of the current release, from pyproject.toml."""
+    text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"', text, re.M)
+    return f"{m.group(1)}.{m.group(2)}.{m.group(3)}", f"{m.group(1)}.{m.group(2)}"
 
 
 class WhatsNewNoticeStaticTests(unittest.TestCase):
@@ -59,25 +68,28 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         self.assertIn("every-model-in-one-place", features)
         self.assertIn("find-recent-work-fast", features)
         self.assertNotIn("mobile-responsiveness-pass", features)
-        self.assertIn('<span class="ver">v5.29.0</span>', landing_page)
-        self.assertIn("Simple Mode for the whole fleet", landing_page)
-        self.assertIn('<span class="version">v5.29</span>', landing_page)
-        self.assertIn('<span class="badge">v5.29</span>', landing_page)
-        self.assertIn("https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0", landing_page)
-        self.assertIn("v5.29.0 source and Homebrew release", landing_page)
+        full, mm = _current_version()
+        self.assertIn(f'<span class="ver">v{full}</span>', landing_page)
+        self.assertIn(f'<span class="version">v{mm}</span>', landing_page)
+        self.assertIn(f'<span class="badge">v{mm}</span>', landing_page)
+        dmg_version = ET.parse(PROJECT_ROOT / "docs" / "appcast.xml").findtext(
+            "./channel/item/{http://www.andymatuschak.org/xml-namespaces/sparkle}version"
+        )
+        self.assertIn(f"macOS app v{dmg_version} &middot; source and Homebrew v{full}", landing_page)
 
     def test_current_release_screenshot_is_used_on_public_surfaces(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         landing_page = (PROJECT_ROOT / "docs" / "index.html").read_text(
             encoding="utf-8"
         )
-        screenshot = (
-            PROJECT_ROOT / "docs" / "images" / "ccc-v5-29-orchestration-final.png"
-        )
-
-        self.assertTrue(screenshot.exists())
-        self.assertIn("docs/images/ccc-v5-29-orchestration-final.png", readme)
-        self.assertIn("./images/ccc-v5-29-orchestration-final.png", landing_page)
+        # A screenshot describes its capture, which can predate the release.
+        match = re.search(r'src="\./(images/ccc-v[0-9-]+-hero\.png)"', landing_page)
+        self.assertIsNotNone(match)
+        rel = match.group(1)
+        self.assertTrue((PROJECT_ROOT / "docs" / rel).exists())
+        self.assertIn(f"docs/{rel}", readme)
+        captured = re.search(r"ccc-v(\d+)-(\d+)-hero", rel)
+        self.assertIn(f"CCC v{captured.group(1)}.{captured.group(2)} showing", landing_page)
 
 
 if __name__ == "__main__":

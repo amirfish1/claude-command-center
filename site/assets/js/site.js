@@ -15,4 +15,26 @@
       if(d&&typeof d.stargazers_count==='number'){
         el.textContent=Intl.NumberFormat().format(d.stargazers_count);
       }}).catch(function(){});}
+  // copy buttons: <button data-copy="text to copy">
+  document.querySelectorAll('[data-copy]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var text=btn.getAttribute('data-copy')||'';
+      var done=function(){
+        var old=btn.textContent;
+        btn.textContent='Copied!';
+        btn.classList.add('copied-flash');
+        setTimeout(function(){btn.textContent=old;btn.classList.remove('copied-flash')},1600);
+      };
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done).catch(function(){fallback()});
+      }else{fallback()}
+      function fallback(){
+        var ta=document.createElement('textarea');
+        ta.value=text;ta.style.position='fixed';ta.style.opacity='0';
+        document.body.appendChild(ta);ta.select();
+        try{document.execCommand('copy')}catch(e){}
+        document.body.removeChild(ta);done();
+      }
+    });
+  });
 })();

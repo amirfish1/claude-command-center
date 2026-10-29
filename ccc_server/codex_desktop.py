@@ -217,7 +217,10 @@ class DesktopClient:
             current = self.states.get(tid)
             if current and cached_owner and now - self.seen_at.get(tid, 0) < 5:
                 return copy.deepcopy(current)
-        response = self.request("thread-owner-discovery", {"hostId": "local", "conversationId": tid})
+        # The router waits ten seconds for discovery clients before returning
+        # no-client-found. Let that definitive read-only receipt arrive so
+        # native-owned sessions can fall back without a premature timeout.
+        response = self.request("thread-owner-discovery", {"hostId": "local", "conversationId": tid}, timeout=12)
         owner = response["handledByClientId"]
         with self.lock:
             if cached_owner and cached_owner != owner:

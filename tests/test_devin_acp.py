@@ -20,6 +20,13 @@ def _server():
     return importlib.import_module("server")
 
 
+@pytest.fixture(autouse=True)
+def _run_as_conn_owner(monkeypatch):
+    """These tests exercise the conn owner's logic (the worker, in a running
+    CCC). Never route to a live worker on the test host."""
+    monkeypatch.setenv("CCC_CONTROL_PLANE_ENGINES", "0")
+
+
 # ---------------------------------------------------------------------------
 # Harness registration
 # ---------------------------------------------------------------------------
@@ -35,11 +42,9 @@ def test_devin_harness_is_registered():
     # authenticate handshake once a request comes back auth-required.
     assert cfg["auth_method"] == "devin-browser"
     assert cfg["auth_lazy"] is True
-    # Devin is deliberately NOT worker-routed (see the comment above
-    # _ACP_WORKER_HARNESSES in acp.py): its ACP connection is
-    # attach-on-demand, owned by whichever process first steers/loads --
-    # the same posture as "glm".
-    assert "devin" not in server._ACP_WORKER_HARNESSES
+    # Devin's ACP conn lives in the worker, like kimi/grok: owned by the
+    # dashboard, every dashboard restart killed its running turns (CCC-48).
+    assert "devin" in server._ACP_WORKER_HARNESSES
     assert server._acp_harness_enabled("devin") is True
 
 
@@ -133,6 +138,7 @@ def test_devin_acp_try_steer_happy_path():
     assert result == ok_result
     prompt.assert_called_once_with(
         "devin", "raw-1", "steer this", mode="steer", idempotency_key="inject:1",
+        cwd=None,
     )
 
 
@@ -150,6 +156,7 @@ def test_devin_acp_try_steer_send_mode_passes_send_through():
     assert result == ok_result
     prompt.assert_called_once_with(
         "devin", "raw-1", "follow up", mode="send", idempotency_key=None,
+        cwd=None,
     )
 
 
@@ -187,7 +194,7 @@ def test_devin_acp_try_steer_cancels_and_retries_on_busy():
     retried_ok = {"ok": True, "via": "acp-prompt", "harness": "devin"}
     prompt_calls = []
 
-    def fake_prompt(harness, sid, text, mode=None, idempotency_key=None):
+    def fake_prompt(harness, sid, text, mode=None, idempotency_key=None, cwd=None):
         prompt_calls.append((harness, sid, text, mode, idempotency_key))
         return busy if len(prompt_calls) == 1 else retried_ok
 
@@ -298,7 +305,7 @@ def test_devin_steer_falls_back_to_queue_when_acp_declines():
          mock.patch.object(server, "_queue_devin_steer", return_value=True) as queue_steer, \
          mock.patch.object(server, "_note_pending_queued") as note_queued, \
          mock.patch.object(server, "resume_session_devin") as resume, \
-         mock.patch.object(server, "_control_plane_engine_call") as cp:
+         mock.patch.object(server, "_control_plane_engine_call", return_value=None) as cp:
         _enter_stack(stack)
         try:
             result = server._inject_text_into_session(sid, "steer text", mode="steer")
@@ -308,7 +315,11 @@ def test_devin_steer_falls_back_to_queue_when_acp_declines():
     assert result["ok"] is True
     assert result["via"] == "devin-resume-queued"
     resume.assert_not_called()
-    cp.assert_not_called()
+    # Background snapshot watchers may share this mock during the full suite.
+    # This dispatch must not send our session through the control plane.
+    assert not [call for call in cp.call_args_list
+                if len(call.args) > 2 and isinstance(call.args[2], dict)
+                and call.args[2].get("session_id") == sid]
     pump.assert_called_once_with(sid)
     queue_steer.assert_called_once_with(sid, "steer text")
     note_queued.assert_called_once()
@@ -633,9 +644,12 @@ def test_spawn_session_devin_falls_back_to_cli_when_acp_fails(tmp_path):
         server._spawned_sessions.extend(original_spawns)
         _exit_stack(stack)
 
-    popen.assert_called_once()
-    cmd = popen.call_args.args[0]
-    assert cmd[0] == "/usr/bin/devin-test"
+    # subprocess.Popen is process-wide: another test's background thread
+    # (e.g. a `gh issue list` refresh) can land in this mock too.
+    devin_calls = [c for c in popen.call_args_list
+                   if c.args and c.args[0] and c.args[0][0] == "/usr/bin/devin-test"]
+    assert len(devin_calls) == 1, popen.call_args_list
+    cmd = devin_calls[0].args[0]
     assert "-p" in cmd
     assert result["ok"] is True
     assert result["engine"] == "devin"
@@ -774,3 +788,218 @@ def test_devin_generic_server_error_is_not_an_auth_demand():
     out = run("Authentication required")
     assert out.get("auth_required") is True
     assert conn.get("auth_demanded") is True
+
+
+# ---------------------------------------------------------------------------
+# _devin_acp_model_config -- map family/variant uids to ACP option values
+# ---------------------------------------------------------------------------
+
+# Mirrors the shape observed on the live `devin acp` wire: `model` options
+# are concrete variant uids only (a bare family like "swe-2" is rejected
+# -32602), `thought_level` is a separate select.
+_DEVIN_ACP_CONFIG_OPTIONS = [
+    {
+        "id": "model",
+        "type": "select",
+        "currentValue": "swe-2-high",
+        "options": [
+            {"value": v, "name": v}
+            for v in (
+                "adaptive",
+                "swe-2-high",
+                "claude-fable-5-1-medium",
+                "claude-opus-5-5-medium",
+            )
+        ],
+    },
+    {
+        "id": "thought_level",
+        "type": "select",
+        "currentValue": "max",
+        "options": [
+            {"value": v, "name": v} for v in ("medium", "high", "max")
+        ],
+    },
+]
+
+_DEVIN_MODEL_LIST = {
+    "uid_to_family": {
+        "swe-2-high": "swe-2",
+        "swe-2-medium": "swe-2",
+        "swe-2-max": "swe-2",
+        "claude-fable-5-1-medium": "claude-fable-5-1",
+        "claude-opus-5-5-medium": "claude-opus-5-5",
+    },
+    "family_to_uids": {
+        "swe-2": ["swe-2-high", "swe-2-medium", "swe-2-max"],
+        "claude-fable-5-1": ["claude-fable-5-1-medium"],
+        "claude-opus-5-5": ["claude-opus-5-5-medium"],
+    },
+    "families": [],
+}
+
+
+def _acp_mod():
+    import ccc_server.acp as acp_mod
+
+    return acp_mod
+
+
+def test_model_config_direct_value_carries_suffix_effort():
+    acp = _acp_mod()
+    out = acp._devin_acp_model_config(
+        "swe-2-high", _DEVIN_ACP_CONFIG_OPTIONS
+    )
+    assert out == {"model": "swe-2-high", "thought_level": "high"}
+
+
+def test_model_config_reasoning_effort_overrides_uid_suffix():
+    acp = _acp_mod()
+    out = acp._devin_acp_model_config(
+        "swe-2-high", _DEVIN_ACP_CONFIG_OPTIONS, reasoning_effort="low"
+    )
+    assert out == {"model": "swe-2-high", "thought_level": "low"}
+
+
+def test_model_config_family_uid_maps_to_offered_member():
+    acp = _acp_mod()
+    with mock.patch.object(
+        acp._core, "_devin_model_list_json", return_value=_DEVIN_MODEL_LIST
+    ):
+        out = acp._devin_acp_model_config(
+            "swe-2", _DEVIN_ACP_CONFIG_OPTIONS
+        )
+    assert out == {"model": "swe-2-high"}
+
+
+def test_model_config_unlisted_variant_maps_via_thought_level():
+    acp = _acp_mod()
+    with mock.patch.object(
+        acp._core, "_devin_model_list_json", return_value=_DEVIN_MODEL_LIST
+    ):
+        out = acp._devin_acp_model_config(
+            "swe-2-max", _DEVIN_ACP_CONFIG_OPTIONS
+        )
+    assert out == {"model": "swe-2-high", "thought_level": "max"}
+
+
+def test_model_config_unknown_family_returns_none():
+    acp = _acp_mod()
+    with mock.patch.object(
+        acp._core, "_devin_model_list_json", return_value=_DEVIN_MODEL_LIST
+    ):
+        out = acp._devin_acp_model_config(
+            "bogus-model", _DEVIN_ACP_CONFIG_OPTIONS
+        )
+    assert out is None
+
+
+def test_model_config_no_model_option_sends_request_verbatim():
+    acp = _acp_mod()
+    out = acp._devin_acp_model_config("swe-2", [])
+    assert out == {"model": "swe-2"}
+
+
+def _spawn_patches(acp, raw_id, set_fn=None, prompt_fn=None):
+    return [
+        mock.patch.object(
+            acp, "_devin_acp_steer_capable", return_value=True
+        ),
+        mock.patch.object(
+            acp._core, "_acp_new_session",
+            return_value={
+                "ok": True, "session_id": raw_id,
+                "config_options": _DEVIN_ACP_CONFIG_OPTIONS,
+            },
+        ),
+        mock.patch.object(
+            acp._core, "_devin_model_list_json",
+            return_value=_DEVIN_MODEL_LIST,
+        ),
+        mock.patch.object(
+            acp._core, "_acp_set_config",
+            side_effect=set_fn
+            or (lambda *a, **k: {"ok": True, "result": {}}),
+        ),
+        mock.patch.object(
+            acp._core, "_acp_prompt",
+            side_effect=prompt_fn
+            or (lambda *a, **k: {"ok": True, "result": {"turnId": "t-1"}}),
+        ),
+    ]
+
+
+def test_devin_acp_spawn_new_session_maps_family_to_offered_uid():
+    """The picker sends the family uid "swe-2"; Devin's model option only
+    accepts a concrete member. Spawn must translate before the wire set
+    (observed live: session/new defaulted to fusion and the -32602 for the
+    bare family was swallowed)."""
+    acp = _acp_mod()
+    set_calls = []
+
+    def fake_set(h, sid, k, v):
+        set_calls.append((k, v))
+        return {"ok": True, "result": {}}
+
+    patches = _spawn_patches(acp, "raw-family-test", set_fn=fake_set)
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        result = acp._devin_acp_spawn_new_session(
+            "hello", "/tmp/ccc", model="swe-2",
+        )
+
+    assert result["ok"] is True
+    assert result["session_id"] == "raw-family-test"
+    assert result["applied_model"] == "swe-2-high"
+    assert ("model", "swe-2-high") in set_calls
+
+
+def test_devin_acp_spawn_new_session_rejected_model_aborts():
+    """A model the wire refuses must fail the spawn (caller falls back to
+    headless `devin -p`) instead of silently keeping the session/new
+    default."""
+    acp = _acp_mod()
+    prompted = []
+
+    def fake_set(h, sid, k, v):
+        if k == "model":
+            return {"ok": False, "error": "Invalid value 'swe-2-high'"}
+        return {"ok": True, "result": {}}
+
+    def fake_prompt(*a, **k):
+        prompted.append(True)
+        return {"ok": True, "result": {"turnId": "t-1"}}
+
+    patches = _spawn_patches(
+        acp, "raw-reject-test", set_fn=fake_set, prompt_fn=fake_prompt
+    )
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        result = acp._devin_acp_spawn_new_session(
+            "hello", "/tmp/ccc", model="swe-2",
+        )
+
+    assert result["ok"] is False
+    assert result["code"] == "model_rejected"
+    assert "session_id" not in result
+    assert prompted == []
+
+
+def test_devin_acp_spawn_new_session_unoffered_family_aborts():
+    """A uid that maps to no offered member never reaches the wire."""
+    acp = _acp_mod()
+    prompted = []
+
+    def fake_prompt(*a, **k):
+        prompted.append(True)
+        return {"ok": True}
+
+    patches = _spawn_patches(
+        acp, "raw-unknown-test", prompt_fn=fake_prompt
+    )
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        result = acp._devin_acp_spawn_new_session(
+            "hello", "/tmp/ccc", model="bogus-model",
+        )
+
+    assert result["ok"] is False
+    assert result["code"] == "model_unavailable"
+    assert prompted == []

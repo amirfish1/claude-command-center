@@ -111,7 +111,7 @@ class Approve(ConsentTestBase):
         self.assertTrue(res["ok"], res)
         text = self.settings.read_text()
         data = json.loads(text)
-        self.assertEqual(len(self.ccc_commands()), 7)
+        self.assertEqual(len(self.ccc_commands()), 8)
         self.assertEqual(data["hooks"]["PreToolUse"][0], USER_SETTINGS["hooks"]["PreToolUse"][0])
         self.assertEqual(list(data)[:2], ["model", "permissions"])
         self.assertEqual(data["statusLine"], USER_SETTINGS["statusLine"])
@@ -148,7 +148,7 @@ class Approve(ConsentTestBase):
         self.settings.symlink_to(real)
         cc.decide({"claude-hooks": "approve"}, ctx=self.ctx)
         self.assertTrue(self.settings.is_symlink())
-        self.assertEqual(len(self.ccc_commands()), 7)
+        self.assertEqual(len(self.ccc_commands()), 8)
         self.assertIn(cc.HOOK_MARKER, real.read_text())
 
     def test_invalid_json_is_never_touched(self):
@@ -214,28 +214,22 @@ class Decline(ConsentTestBase):
         self.assertFalse(self.skill_file("fleet-verify").exists())
 
 
-class ContentChangeReprompt(ConsentTestBase):
-    def test_changed_skill_is_not_rewritten_until_reapproved(self):
+class ContentChangeKeepsApproval(ConsentTestBase):
+    def test_changed_skill_is_applied_without_reprompt(self):
         cc.decide({"skill:fleet-verify": "approve"}, ctx=self.ctx)
         (self.ccc_root / "skills" / "fleet-verify.md").write_text("---\nname: fleet-verify\n---\nv2\n")
-        view = cc.overview(self.ctx)
-        item = self.item(view, "skill:fleet-verify")
-        self.assertEqual(item["status"], "changed")
-        self.assertTrue(item["needs_review"])
-        self.assertIn("-v1", item["changes"][0]["diff"])
-        self.assertIn("+v2", item["changes"][0]["diff"])
+        item = self.item(cc.overview(self.ctx), "skill:fleet-verify")
+        self.assertEqual(item["status"], "enabled")
+        self.assertFalse(item["needs_review"])
         summary = cc.startup(self.ctx, log=None)
-        self.assertIn("skill:fleet-verify", summary["changed"])
-        self.assertTrue(self.skill_file("fleet-verify").read_text().endswith("v1\n"))
-        cc.decide({"skill:fleet-verify": "approve"}, ctx=self.ctx)
+        self.assertIn("skill:fleet-verify", summary["applied"])
         self.assertTrue(self.skill_file("fleet-verify").read_text().endswith("v2\n"))
-        self.assertEqual(self.item(cc.overview(self.ctx), "skill:fleet-verify")["status"], "enabled")
 
-    def test_changed_hook_command_reprompts(self):
+    def test_changed_hook_command_keeps_approval(self):
         self.write_settings(USER_SETTINGS)
         cc.decide({"claude-hooks": "approve"}, ctx=self.ctx)
         self.ctx.hook_command = lambda name: f"/opt/py3 {self.scripts / name}"
-        self.assertEqual(self.item(cc.overview(self.ctx), "claude-hooks")["status"], "changed")
+        self.assertEqual(self.item(cc.overview(self.ctx), "claude-hooks")["status"], "enabled")
 
 
 class Revoke(ConsentTestBase):
@@ -350,7 +344,7 @@ class ExistingInstalls(ConsentTestBase):
         summary = cc.startup(self.ctx, log=None)
         self.assertIn("claude-hooks", summary["applied"])
         self.assertIn("skill:ccc-orchestration", summary["applied"])
-        self.assertEqual(len(self.ccc_commands()), 7)
+        self.assertEqual(len(self.ccc_commands()), 8)
         view = cc.overview(self.ctx)
         self.assertTrue(view["notice"]["pending"])
         self.assertEqual({i["id"] for i in view["notice"]["items"]},
@@ -380,7 +374,7 @@ class InstalledEngines(ConsentTestBase):
         self.assertFalse(by["claude-hooks"]["auto_review"])
         self.assertTrue(by["claude-hooks"]["needs_review"])
         self.assertTrue(by["codex-hooks"]["auto_review"])
-        self.assertEqual(by["claude-hooks"]["hook_count"], 7)
+        self.assertEqual(by["claude-hooks"]["hook_count"], 8)
         self.assertEqual(ov["engines_present"], {"claude": False, "codex": True})
 
     def test_nothing_installed_means_no_auto_review(self):

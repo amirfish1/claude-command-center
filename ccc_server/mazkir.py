@@ -35,6 +35,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -76,6 +77,8 @@ MAZKIR_MAX_TURNS = int(os.environ.get("CCC_ASK_MAX_TURNS", "8"))
 MAZKIR_TIMEOUT_SEC = int(os.environ.get("CCC_ASK_TIMEOUT_SEC", "75"))
 PREFETCH_TIMEOUT_SEC = 15
 PREFETCH_LIMIT = 8
+# Fan-out deadline is 1.5 s per peer; a little slack for thread scheduling.
+PEER_PREFETCH_TIMEOUT_SEC = 2.5
 HTTP_TIMEOUT_SEC = 12
 
 STUCK_IDLE_SEC = 600          # live but transcript idle > 10 min
@@ -474,9 +477,19 @@ TOOLS = [
                     "(dry run; nothing filed). Call for 'daily brief', 'what happened overnight', "
                     "'what's stuck', or before filing a brief proposal.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "decisions",
+     "description": "What did we decide about a topic? Searches stored user decision quotes, "
+                    "with session, date, transcript line and provenance. If none match, returns "
+                    "unverified session snippets. Quotes are candidate evidence, not proof of "
+                    "current policy; report conflicting or newer rulings. Read-only; no scan or model call.",
+     "inputSchema": {"type": "object", "properties": {
+         "topic": {"type": "string"},
+         "repo": {"type": "string", "description": "Exact repository name (optional)."},
+         "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20}},
+         "required": ["topic"]}},
     {"name": "propose_spawn_session",
-     "description": "PROPOSE starting a new agent session. Does not start anything: the user must "
-                    "click Confirm in CCC. Returns an action_id to cite as [[action:confirm:ID]].",
+     "description": "PROPOSE starting a new agent session (also how git work like a push gets done). "
+                    "Does not start anything: the user must click Confirm in CCC. Returns an action_id to cite as [[action:confirm:ID]].",
      "inputSchema": {"type": "object", "properties": {
          "cwd": {"type": "string", "description": "Absolute repo/work directory."},
          "prompt": {"type": "string", "description": "The first message for the new session."},
@@ -567,6 +580,14 @@ class CccState:
             return tool_daily_checkin(include_closed=bool(args.get("include_closed")))
         if name == "daily_brief":
             return tool_daily_brief()
+        if name == "decisions":
+            topic = str(args.get("topic") or "").strip()
+            if not topic:
+                raise ValueError("topic is required")
+            query = {"topic": topic, "limit": max(1, min(int(args.get("limit", 5)), 20))}
+            if args.get("repo"):
+                query["repo"] = str(args["repo"]).strip()
+            return self.get("/api/memory/decisions?" + urllib.parse.urlencode(query))
         if name in PROPOSE_TOOLS:
             # Proposal only: CCC stores it and keeps the confirm token to itself.
             params = {k: v for k, v in args.items() if k != "reason"}
@@ -659,22 +680,26 @@ Tools:
 - claude-index: search_sessions (find which sessions are about X), search (specific facts/strings), session_info (confirm a session, see how it ended), show_message, recent_sessions.
 - ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail, inject_diagnostics (why a session won't accept a message).
 - ccc-state (brief): daily_brief (the proactive morning brief: changes, stuck items, numbered proposed tickets).
+- ccc-state (memory): decisions (stored user decision quotes with provenance and source citations; unverified snippets only when no quotes match). Available even without claude-index.
 - ccc-state (actions, propose only): propose_spawn_session, propose_inject, propose_wt_add, propose_wt_comment. These never act; the user confirms in CCC.
 
 Method:
-1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages, best match first, with currently-live sessions already excluded (a session still open right now cannot be where past work "already happened" — it's likely the very session asking). If they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
-2. Otherwise call search_sessions once (rephrase with 2-4 topic words), then at most one or two follow-ups. Never loop.
-3. Trust the candidate order: it already ranks by relevance with only a small recency tie-break, and demotes planning-only/self-referential sessions. Don't override it just because a lower-ranked candidate is more recent.
-4. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
-5. "This session", "the session on (the) screen", "this one": the ON SCREEN session named in the prompt. Use its id; never guess another. If the user says it won't take a message, call inject_diagnostics on it and report its findings.
-6. Be honest: if nothing matches, say what you searched and that you found nothing.
-7. For a daily brief / "what happened overnight", call daily_brief once and lead with its headline, then stuck items, then the numbered proposals.
-8. Acting: you cannot start, send, file, or post anything yourself. When the user asks you to (start a session, steer or message a session, file or comment on a ticket, "file proposal 2"), call the matching propose_* tool once with complete parameters, put [[action:confirm:ACTION_ID]] on its own line, and say it is waiting for their Confirm. Never say it was done. Don't propose actions the user did not ask for.
+1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages, best match first, with currently-live sessions already excluded (a session still open right now cannot be where past work "already happened" — it's likely the very session asking). Except for decision questions (step 2), if they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
+2. For "what did we decide" call decisions once with 2-4 topic words, even if CANDIDATES mention that topic. Cite the returned session and date, distinguish extracted user quotes from unverified snippets, and surface conflicting rulings instead of inventing a current policy. Otherwise call search_sessions once, then at most one or two follow-ups. Never loop.
+3. Candidates marked machine=NAME were found on another of the user's CCC machines (e.g. the VM), not this one. Cite them the same way and say which machine the work happened on.
+4. Trust the candidate order: it already ranks by relevance with only a small recency tie-break, and demotes planning-only/self-referential sessions. Don't override it just because a lower-ranked candidate is more recent.
+5. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
+6. "This session", "the session on (the) screen", "this one": the ON SCREEN session named in the prompt. Use its id; never guess another. If the user says it won't take a message, call inject_diagnostics on it and report its findings.
+7. Be honest: if nothing matches, say what you searched and that you found nothing.
+8. For a daily brief / "what happened overnight", call daily_brief once and lead with its headline, then stuck items, then the numbered proposals.
+9. Acting: you cannot start, send, file, or post anything yourself. When the user asks you to (start a session, steer or message a session, file or comment on a ticket, "file proposal 2"), call the matching propose_* tool once with complete parameters, put [[action:confirm:ACTION_ID]] on its own line, and say it is waiting for their Confirm. Never say it was done. Don't propose actions the user did not ask for.
+10. Git work ("push bym", commit, merge, open a PR): don't say you can't. Call propose_spawn_session once with cwd = that repo's absolute path (take it from a candidate's or list_sessions' cwd; if unsure, ask which repo) and a prompt asking the session to do exactly that, following the repo's own git rules. Never ask it to force-push or skip hooks.
 
 Answer format (plain text, no markdown headers):
 - Lead with the answer in one or two sentences, then 1-4 short supporting lines.
 - When the answer spans several threads of work, make it a numbered list: each item starts with a **bold 2-5 word topic**, then one short line, then its citations and date at the end of that same line.
 - Skip evaluation/test runs (prompts marked "Evaluation run") unless the user asks about them. Treat repeated runs of the same loop or worker prompt as one thread and cite its most recent run once.
+- Skip WatchTower worker sessions (queue drains like "Drain the X WatchTower queue", ticket fixers, planners, verifiers) unless the user asks about workers or queues; the user nearly always means work they did directly.
 - Name up to 3 distinct sessions that actually did the work (skip near-duplicates like a continuation of a session you already named), each with its date, ranked best match first — not just the most recent.
 - Cite every session you rely on inline as [[session:SESSION_ID]] using the exact id from the tool output or the candidate list. Cite Gmail threads the same way with the thread id.
 - Give dates as YYYY-MM-DD and name the harness (Claude, Codex, Kimi, Antigravity, Gmail) when it is not Claude.
@@ -687,7 +712,7 @@ Daily check-in: ccc-state also has daily_checkin (the user's standing agenda). F
 
 _NO_INDEX_PROMPT = """
 
-claude-index is not installed on this machine, so the search_sessions/search/session_info tools do not exist. CANDIDATES come from CCC's built-in keyword search (titles and short snippets only) and you cannot search further. Answer from them when they fit; otherwise say what was searched and that nothing matched, and mention once that installing claude-index enables deeper history search. Never invent past sessions."""
+claude-index is not installed on this machine, so the search_sessions/search/session_info tools do not exist. CANDIDATES come from CCC's built-in keyword search (titles and short snippets only). The ccc-state decisions tool still searches stored user quotes: use it for decision questions. For other history questions, answer from candidates when they fit; otherwise say what was searched and that nothing matched. Never invent past sessions."""
 
 
 def system_prompt(index_bin: str | None = INDEX_BIN) -> str:
@@ -719,6 +744,49 @@ def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: 
     except ValueError:
         return []
     return [d for d in data if isinstance(d, dict) and d.get("session_id")] if isinstance(data, list) else []
+
+
+PEER_PREFETCH_LIMIT = 5
+
+
+def peer_prefetch(question: str, limit: int = PEER_PREFETCH_LIMIT, fan_out=None) -> tuple[list[dict], list[dict]]:
+    """Candidates from paired CCC machines (multi-machine S4): each peer's
+    own local recall, asked in parallel under the fan-out deadline. Returns
+    (candidates, peer statuses). No peers, or any failure, means ([], ...):
+    another machine must never break the local answer."""
+    try:
+        if fan_out is None:
+            import federation
+            if not federation.load_peers():
+                return [], []
+            from ccc_server import memory_fanout as _mf
+            fan_out = _mf.fan_out
+        entries = fan_out("memory_recall", {"q": question[:500], "limit": limit})
+    except Exception:
+        return [], []
+    cands: list[dict] = []
+    statuses: list[dict] = []
+    for e in entries:
+        statuses.append({"name": e.get("name"), "status": e.get("status"),
+                         "stale": bool(e.get("stale")), "rows": 0})
+        for row in ((e.get("result") or {}).get("results") or [])[:limit]:
+            sid = row.get("session_id") if isinstance(row, dict) else None
+            if not sid:
+                continue
+            match = row.get("match") if isinstance(row.get("match"), dict) else {}
+            date = str(row.get("date") or "")
+            cands.append({
+                "session_id": sid,
+                "title": row.get("title") or "",
+                "snippet": match.get("snippet") or row.get("snippet") or "",
+                "first_ts": date,
+                "last_ts": date,
+                "cwd": row.get("repo") or "",
+                "node": e.get("name") or "",
+                "node_id": e.get("node_id") or "",
+            })
+            statuses[-1]["rows"] += 1
+    return cands, statuses
 
 
 def builtin_prefetch(question: str, range_key: str | None, exclude_session_ids=None,
@@ -792,8 +860,9 @@ def _fmt_candidate(i: int, s: dict) -> str:
     title = " ".join(str(s.get("title") or "").split())[:140]
     snip = " ".join(str(s.get("best_snippet") or s.get("snippet") or "").split())[:220]
     runs = f" runs={s['runs']}" if (s.get("runs") or 1) > 1 else ""
+    node = f" machine={s['node']}" if s.get("node") else ""
     out = (f"{i}. [[session:{s['session_id']}]] {s.get('harness') or 'claude'} {when} "
-           f"hits={s.get('hits', '?')}{runs} cwd={s.get('cwd') or '?'}\n"
+           f"hits={s.get('hits', '?')}{runs}{node} cwd={s.get('cwd') or '?'}\n"
            f"   title: {title}\n   match: {snip}")
     for e in (s.get("excerpts") or [])[:3]:
         if not isinstance(e, dict):
@@ -899,8 +968,42 @@ def parse_result(stdout: str) -> dict:
     if isinstance(data, dict):
         return {"answer": str(data.get("result") or "").strip(), "num_turns": data.get("num_turns"),
                 "cost_usd": data.get("total_cost_usd"), "is_error": bool(data.get("is_error")),
-                "duration_ms": data.get("duration_ms"), "claude_session_id": data.get("session_id")}
+                "duration_ms": data.get("duration_ms"), "claude_session_id": data.get("session_id"),
+                "usage": data.get("usage"), "model_usage": data.get("modelUsage")}
     return {"answer": text, "num_turns": None, "cost_usd": None, "is_error": False}
+
+
+def turn_usage(res: dict) -> dict | None:
+    """Per-answer token usage, cache-adjusted the same way as the throughput views.
+
+    The result event's `usage` is per turn even in the warm multi-turn
+    process (`total_cost_usd` there is cumulative, so it can't be reused).
+    """
+    usage = res.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    flat = dict(usage)
+    # The 5m/1h cache-write split is nested; the normalizer reads top-level keys.
+    split = usage.get("cache_creation")
+    if isinstance(split, dict):
+        for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"):
+            if key in split:
+                flat[key] = split[key]
+    model_usage = res.get("model_usage")
+    model = next(iter(model_usage), "") if isinstance(model_usage, dict) and model_usage else MAZKIR_MODEL
+    from ccc_server.usage_stats import _throughput_normalize_usage
+    try:
+        norm = _throughput_normalize_usage(flat, engine="claude", model=model)
+    except Exception:  # a usage footer must never fail the answer
+        return None
+    return {
+        "input_tokens": int(usage.get("input_tokens") or 0),
+        "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),
+        "cache_read_input_tokens": int(usage.get("cache_read_input_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "cache_adjusted_tokens": int(round(norm["effective_total_tokens"])),
+        "model": model,
+    }
 
 
 def _harness_from_project_dir(pd: str | None) -> str:
@@ -1001,20 +1104,62 @@ def is_eval_run(s: dict) -> bool:
     return bool(_EVAL_RE.search(f"{s.get('title') or ''} {s.get('best_snippet') or ''}"))
 
 
+# WatchTower worker sessions (the sidebar's Workers tab). Asks are almost always
+# about work the user did directly, so these are hidden unless the question is
+# about workers/queues. Title shapes mirror app.js _WT_LAUNCH_PROMPT_RE and
+# server._infer_session_spawned_via; the ledgers catch everything else.
+_WT_WORKER_TITLE_RE = re.compile(
+    r"^(?:🧵\s*)?(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b"
+    r"|fix ticket \S+ on the \S+ watchtower queue\b"
+    r"|you are the planner for watchtower ticket "
+    r"|you are an independent (?:plan reviewer|verifier) for watchtower ticket "
+    r"|you are the independent post-fix assessor for the bug ticket "
+    r"|lane-[we]|wt-|.*\[(?:watchtower|wt)\])", re.I)
+_WORKER_QUESTION_RE = re.compile(r"\b(?:workers?|watchtower|queues?)\b", re.I)
+
+
+def is_worker_session(c: dict, worker_ids=None, title: str | None = None) -> bool:
+    if worker_ids and c.get("session_id") in worker_ids:
+        return True
+    return any(_WT_WORKER_TITLE_RE.match(" ".join(str(t or "").split()))
+               for t in (c.get("title"), title) if t)
+
+
+def worker_session_ids(ids) -> set:
+    """The subset of `ids` that WatchTower or a spawn marker records as a
+    worker: the worker-sessions ledger, the session-origins ledger, and
+    workers-lane spawn markers. Per-candidate marker reads only, so the cost
+    is the candidate count, not the session count. Empty outside CCC."""
+    want = {i for i in ids or () if i}
+    if not want:
+        return set()
+    try:
+        from ccc_server import core as _core
+        found = want & (set(_core._wt_read_worker_session_ids()) | set(_core._wt_read_session_origins()))
+        for sid in want - found:
+            m = _core._decode_spawn_marker_file(Path(_core.SPAWN_MARKERS_DIR) / f"{sid}.json")
+            if m and m.get("lane") == "workers":
+                found.add(sid)
+        return found
+    except Exception:
+        return set()
+
+
 def prepare_candidates(cands: list[dict], question: str, titles: dict | None = None,
-                       full_title=None) -> tuple[list[dict], dict]:
+                       full_title=None, worker_ids=None) -> tuple[list[dict], dict]:
     """Label, filter and merge pre-fetched candidates before Mazkir sees them.
 
     CCC's own session titles win over the index's (often a raw first prompt).
-    Eval runs are dropped unless the question is about evals, and repeated
-    runs of one loop prompt collapse into the best-ranked run (`runs=N`) so
-    one worker loop can't fill every slot."""
+    Eval runs and WatchTower worker sessions are dropped unless the question
+    is about them, and repeated runs of one loop prompt collapse into the
+    best-ranked run (`runs=N`) so one worker loop can't fill every slot."""
     titles = dict(titles or {})
     if full_title:
         cut = [c["session_id"] for c in cands
                if not titles.get(c["session_id"]) and _needs_full_title(c.get("title"))]
         titles.update(full_title(cut) if cut else {})
     keep_evals = bool(re.search(r"\beval", question or "", re.I))
+    keep_workers = bool(_WORKER_QUESTION_RE.search(question or ""))
     out: list[dict] = []
     by_title: dict[str, dict] = {}
     stats = {"evals_hidden": 0, "runs_merged": 0}
@@ -1023,6 +1168,9 @@ def prepare_candidates(cands: list[dict], question: str, titles: dict | None = N
         raw = c.get("title") or ""
         if not keep_evals and (is_eval_run(c) or _EVAL_RE.search(raw)):
             stats["evals_hidden"] += 1
+            continue
+        if not keep_workers and is_worker_session(c, worker_ids, titles.get(c["session_id"])):
+            stats["workers_hidden"] = stats.get("workers_hidden", 0) + 1
             continue
         c["title"] = clean_title(titles.get(c["session_id"]) or raw)
         key = c["title"].lower()
@@ -1048,7 +1196,7 @@ def _short_args(inp) -> str:
 
 
 def build_trace(prefetch_src: str, n_raw: int, n_kept: int, prefetch_ms: int, stats: dict,
-                tool_calls: list | None) -> list[dict]:
+                tool_calls: list | None, peers: list | None = None) -> list[dict]:
     """What Mazkir looked at, in order, for the small trace above the answer."""
     detail = f"{n_raw} candidates"
     if n_kept != n_raw:
@@ -1056,12 +1204,22 @@ def build_trace(prefetch_src: str, n_raw: int, n_kept: int, prefetch_ms: int, st
     extra = []
     if stats.get("evals_hidden"):
         extra.append(f"{stats['evals_hidden']} eval run{'s' if stats['evals_hidden'] > 1 else ''} hidden")
+    if stats.get("workers_hidden"):
+        extra.append(f"{stats['workers_hidden']} worker session{'s' if stats['workers_hidden'] > 1 else ''} hidden")
     if stats.get("runs_merged"):
         extra.append(f"{stats['runs_merged']} repeat run{'s' if stats['runs_merged'] > 1 else ''} merged")
     if extra:
         detail += " (" + ", ".join(extra) + ")"
-    trace = [{"tool": prefetch_src, "detail": f"{detail} · {prefetch_ms / 1000:.1f}s"},
-             {"tool": "ccc-state · fleet snapshot", "detail": "census"}]
+    trace = [{"tool": prefetch_src, "detail": f"{detail} · {prefetch_ms / 1000:.1f}s"}]
+    for p in peers or []:
+        if p.get("status") == "ok":
+            d = f"{p.get('rows', 0)} sessions"
+        else:
+            d = str(p.get("status") or "?").replace("_", " ")
+            if p.get("stale"):
+                d += f", {p.get('rows', 0)} cached"
+        trace.append({"tool": f"{p.get('name') or 'peer'} · memory recall", "detail": d})
+    trace.append({"tool": "ccc-state · fleet snapshot", "detail": "census"})
     for call in tool_calls or []:
         name = str(call.get("name") or "?")
         if name.startswith("mcp__"):
@@ -1081,16 +1239,22 @@ def source_row(s: dict, live_ids: set | None = None) -> dict:
         title = f"[{harness}] {title}"
     elif harness != "claude":
         title = f"[{harness}] {sid}"
-    return {
+    if s.get("node"):
+        title = f"[{s['node']}] {title or sid}"
+    row = {
         "id": sid,
         "title": title or (sid or "")[:8],
-        "repo": Path(str(s.get("cwd") or "")).name or None,
+        "repo": Path(str(s.get("cwd") or "")).name or s.get("repo") or None,
         "status": "live" if live_ids and sid in live_ids else s.get("status") or "idle",
         "ts_unix": _ts_unix(s.get("last_ts")) or s.get("ts_unix"),
         "cwd": s.get("cwd"),
         "snippet": " ".join(str(s.get("best_snippet") or s.get("snippet") or "").split())[:300],
         "harness": harness,
     }
+    if s.get("node"):
+        # Lives on a paired machine: the UI can't open it locally.
+        row.update(node=s["node"], node_id=s.get("node_id"), local=False)
+    return row
 
 
 def assemble_sources(answer: str, candidates: list[dict], db_path: str = INDEX_DB,
@@ -1102,6 +1266,10 @@ def assemble_sources(answer: str, candidates: list[dict], db_path: str = INDEX_D
             cited.append(sid)
     missing = [sid for sid in cited if sid not in by_id]
     by_id.update(lookup_sessions(missing, db_path))
+    missing = [sid for sid in missing if sid not in by_id]
+    if missing:
+        from ccc_server.decision_extraction import lookup_decision_sessions
+        by_id.update(lookup_decision_sessions(missing))
     valid = [sid for sid in cited if sid in by_id]
     sources = [dict(source_row(by_id[sid], live_ids), cited=True) for sid in valid]
     sources += [dict(source_row(c, live_ids), cited=False) for c in candidates if c["session_id"] not in valid]
@@ -1113,7 +1281,7 @@ def assemble_sources(answer: str, candidates: list[dict], db_path: str = INDEX_D
 def run_mazkir(question: str, history: list | None = None, range_key: str | None = None,
                runner=None, base: str | None = None, claude_bin: str | None = None,
                fetch=None, prefetch_runner=None, db_path: str = INDEX_DB,
-               focused=None) -> tuple[dict, int]:
+               focused=None, peer_fan_out=None) -> tuple[dict, int]:
     """Full Ask pipeline. Returns (response dict, HTTP status)."""
     t0 = time.time()
     question = (question or "").strip()
@@ -1136,24 +1304,37 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     # the "live" status badge on sources below.
     live_ids = _live_ids()
 
-    prefetch_info: dict = {"raw": 0, "stats": {}}
+    prefetch_info: dict = {"raw": 0, "stats": {}, "peers": []}
 
     def do_prefetch() -> tuple[list[dict], str]:
         # The census fetch and the index search are independent; overlap them
         # (round 3 lost 12 s on Q3 waiting for a restarting CCC).
         import concurrent.futures as _cf
-        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        with _cf.ThreadPoolExecutor(max_workers=2) as ex:
             snap_f = ex.submit(fleet_snapshot, base, fetch)
+            peer_f = ex.submit(peer_prefetch, question, fan_out=peer_fan_out)
+            # Over-fetch so hidden worker sessions don't starve the slots;
+            # trimmed back to PREFETCH_LIMIT local rows after filtering.
             if INDEX_BIN or prefetch_runner is not None:
                 cands = prefetch_sessions(question, since, runner=prefetch_runner,
                                           index_bin=INDEX_BIN or "claude-index",
-                                          exclude_session_ids=live_ids)
+                                          limit=PREFETCH_LIMIT * 2, exclude_session_ids=live_ids)
             else:
-                cands = builtin_prefetch(question, range_key, exclude_session_ids=live_ids)
+                cands = builtin_prefetch(question, range_key, exclude_session_ids=live_ids,
+                                         limit=PREFETCH_LIMIT * 2)
+            try:
+                peer_cands, prefetch_info["peers"] = peer_f.result(timeout=PEER_PREFETCH_TIMEOUT_SEC)
+            except Exception:
+                peer_cands = []
+            local_ids = {c.get("session_id") for c in cands}
+            cands = cands + [c for c in peer_cands if c["session_id"] not in local_ids]
             prefetch_info["raw"] = len(cands)
             cands, prefetch_info["stats"] = prepare_candidates(
                 cands, question, _ccc_titles(c.get("session_id") for c in cands),
-                full_title=lambda ids: full_titles(ids, db_path))
+                full_title=lambda ids: full_titles(ids, db_path),
+                worker_ids=worker_session_ids(local_ids))
+            local = [c for c in cands if not c.get("node")][:PREFETCH_LIMIT]
+            cands = local + [c for c in cands if c.get("node")]
             try:
                 snap = snap_f.result(timeout=SNAPSHOT_TIMEOUT_SEC + 1)
             except Exception:
@@ -1246,7 +1427,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     prefetch_src = ("claude-index · sessions search" if (INDEX_BIN or prefetch_runner is not None)
                     else "CCC built-in session search")
     trace = build_trace(prefetch_src, prefetch_info["raw"], len(candidates), prefetch_ms,
-                        prefetch_info["stats"], res.get("tool_calls"))
+                        prefetch_info["stats"], res.get("tool_calls"), prefetch_info["peers"])
     return {
         "ok": True,
         "answer": answer,
@@ -1263,6 +1444,7 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         "tools_used": True,
         "turns": res.get("num_turns"),
         "cost_usd": res.get("cost_usd"),
+        "usage": turn_usage(res),
         "process_mode": res.get("mode"),
         "warm_fallback": res.get("fallback"),
         "ttft_ms": res.get("ttft_ms"),

@@ -231,10 +231,13 @@ def _known_repo_paths():
     if fresh:
         return list(hit)
     if hit is not None:
-        # Expired but present: only one thread rebuilds, the rest serve the
-        # last list instead of queueing behind the walk.
-        if not _KNOWN_REPO_PATHS_REBUILD_LOCK.acquire(blocking=False):
-            return list(hit)
+        # Expired but present: rebuild off-thread and serve the last list.
+        # Rebuilding inline made whichever request came next pay the whole
+        # walk every 30 s, e.g. a 15 s click on an image link (CCC-1227).
+        if _KNOWN_REPO_PATHS_REBUILD_LOCK.acquire(blocking=False):
+            threading.Thread(target=_rebuild_known_repo_paths_locked, daemon=True,
+                             name="known-repo-paths").start()
+        return list(hit)
     else:
         # Nothing cached yet (startup or explicit invalidation): wait for the
         # one rebuild rather than each caller walking the disk.
@@ -248,6 +251,19 @@ def _known_repo_paths():
             _core._KNOWN_REPO_PATHS_CACHE["at"] = time.time()
             _core._KNOWN_REPO_PATHS_CACHE["paths"] = out
         return list(out)
+    finally:
+        _KNOWN_REPO_PATHS_REBUILD_LOCK.release()
+
+
+def _rebuild_known_repo_paths_locked():
+    """Background rebuild; the caller already holds the rebuild lock."""
+    try:
+        out = _core._known_repo_paths_uncached()
+        with _KNOWN_REPO_PATHS_LOCK:
+            _core._KNOWN_REPO_PATHS_CACHE["at"] = time.time()
+            _core._KNOWN_REPO_PATHS_CACHE["paths"] = out
+    except Exception:
+        pass
     finally:
         _KNOWN_REPO_PATHS_REBUILD_LOCK.release()
 
@@ -284,12 +300,14 @@ def _has_project_marker(path):
         p = Path(path).expanduser().resolve()
     except (OSError, ValueError, RuntimeError):
         return False
+    if p.parent == p or p == Path(p.anchor) or p == Path.home().resolve():
+        return False
     try:
         if (p / ".git").exists():
             return True
         if not (p / ".claude").is_dir():
             return False
-        return p != Path.home().resolve()
+        return True
     except (OSError, ValueError, RuntimeError):
         return False
 

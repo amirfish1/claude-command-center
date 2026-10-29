@@ -25,6 +25,8 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import fleet_receipts
+from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 
 # ---------------------------------------------------------------------------
 # Fleet executor — reviewed plan, persisted resumable jobs
@@ -106,15 +108,21 @@ def _fleet_revalidate_and_execute(action):
     """Execute ONE action on its owning node, revalidating first. Cross-node
     steps route through the idempotent peer envelope."""
     me = federation.node_id()
+    action = {**action, "coordinator_node": action.get("coordinator_node") or me}
     if action.get("node_id") and action["node_id"] != me:
-        args = {"action": action,
-                "req_id": f"{action.get('plan_id', '')}:{action['id']}"}
         return _core._federation_proxy_session_action(
-            action["node_id"], "fleet_step", args, timeout=180.0)
+            action["node_id"], "fleet_step", {"action": action}, timeout=180.0,
+            req_id=fleet_receipts.request_id(action))
     return _fleet_execute_local_step(action)
 
 
 def _fleet_execute_local_step(action):
+    """Apply a confirmed step once on its owning node, even after a restart."""
+    return fleet_receipts.execute(
+        FLEET_JOBS_DIR / "receipts", action, _fleet_apply_local_step)
+
+
+def _fleet_apply_local_step(action):
     """The single-step executor. Precondition → end-state-already? → mutate."""
     kind = action.get("kind")
     ident = action.get("repo_identity") or ""
@@ -295,6 +303,7 @@ def _fleet_run_job(plan_id):
         if action.get("status") not in ("selected", "running"):
             continue
         action["plan_id"] = plan_id
+        action["coordinator_node"] = job.get("created_by_node") or federation.node_id()
         action["status"] = "running"
         _fleet_job_log(job, action, f"running {action['kind']} on "
                        f"{action.get('node_name') or 'this node'}: "
@@ -1170,11 +1179,7 @@ def _is_pid_alive(pid):
         return False
     if pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return _paths_is_pid_alive(pid)
 
 
 def _prune_registry_entries(entries):
@@ -1273,7 +1278,7 @@ def _other_instance_responding(port):
 # Nothing in service.err.log or python-stacks.log recorded the transition; the
 # only thing that ever noticed was `run.sh`'s duplicate-guard, ~10 minutes
 # later, on an unrelated fresh invocation (see `_check_duplicate_repo_instance`
-# above). The existing SIGUSR2 stack dumper (`_install_python_stack_dump_handler`)
+# above). The existing stack dumper (`_install_python_stack_dump_handler`)
 # only ever fires from the Codex app-server's own liveness probe -- a
 # different subsystem entirely -- so a hang in the dashboard's own HTTP accept
 # loop had no monitor and left no evidence.
@@ -1283,7 +1288,7 @@ def _other_instance_responding(port):
 # systematic-debugging this adds cheap, periodic self-probing instead of
 # guessing at a patch. It reuses the exact same probe `_other_instance_responding`
 # already makes against a *peer* CCC instance at startup, aimed at this
-# process's own port, plus the existing SIGUSR2 all-thread dump on repeated
+# process's own port, plus the existing all-thread stack dump on repeated
 # misses. One local HTTP GET every 5 minutes is negligible next to the
 # 30s-2h loops already running (idle reaper, telemetry, engine maintenance).
 _SELF_HEALTH_CHECK_INTERVAL_S = 300  # 5 min between self-probes.
@@ -1296,24 +1301,20 @@ _SELF_HEALTH_CHECK_FAIL_THRESHOLD = 2
 def _dump_stacks_on_self_health_miss(port, consecutive_misses):
     """All-thread traceback dump when the dashboard misses its own probe.
 
-    Reuses the SIGUSR2 handler installed by `_install_python_stack_dump_handler`
-    (see also `_codex_app_server_dump_stacks_on_liveness_miss`, the same
-    pattern for the Codex app-server subprocess) instead of duplicating dump
-    logic. Best-effort and silent on failure -- this must never be able to
-    take down the process it's trying to diagnose.
+    Reuses `_dump_python_stacks` (see also
+    `_codex_app_server_dump_stacks_on_liveness_miss`, the same pattern for the
+    Codex app-server subprocess) instead of duplicating dump logic.
+    Best-effort and silent on failure -- this must never be able to take down
+    the process it's trying to diagnose.
     """
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None or _core._PYTHON_STACK_DUMP_FILE is None:
+    if _core._PYTHON_STACK_DUMP_FILE is None:
         return
     try:
-        _core._PYTHON_STACK_DUMP_FILE.write(
-            f"\n=== dashboard self-health-check miss (port={port}, "
-            f"{consecutive_misses} consecutive) pid={os.getpid()} "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC ===\n"
+        _core._dump_python_stacks(
+            f"dashboard self-health-check miss (port={port}, "
+            f"{consecutive_misses} consecutive)"
         )
-        _core._PYTHON_STACK_DUMP_FILE.flush()
-        os.kill(os.getpid(), sigusr2)
-    except OSError:
+    except Exception:
         pass
 
 
@@ -1383,8 +1384,11 @@ def _self_health_check_loop(port):
         consecutive_misses = _core._self_health_check_once(port, consecutive_misses)
 
 
-def _kill_stale_duplicate(pid, port):
+def _kill_stale_duplicate(pid, port, verify=None):
     """Best-effort reclaim of a hung duplicate: SIGTERM, wait briefly, SIGKILL.
+
+    `verify()` (optional) is re-run immediately before EACH signal; a False
+    aborts, so a pid that exited and was recycled mid-wait is never signalled.
 
     Mirrors the stale-worker reap in run.sh (kill, poll for death, replace)
     rather than inventing a new pattern. Never raises -- worst case the pid
@@ -1394,6 +1398,8 @@ def _kill_stale_duplicate(pid, port):
         pid = int(pid)
     except (TypeError, ValueError):
         return
+    if verify is not None and not verify():
+        return
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError:
@@ -1402,13 +1408,15 @@ def _kill_stale_duplicate(pid, port):
         if not _is_pid_alive(pid):
             return
         time.sleep(0.1)
+    if verify is not None and not verify():
+        return
     try:
         os.kill(pid, signal.SIGKILL)
     except OSError:
         pass
 
 
-def _check_duplicate_repo_instance():
+def _check_duplicate_repo_instance(on_duplicate=None):
     """Refuse to start when another live CCC server already serves this repo.
 
     Multi-repo peers (different repos, each with its own CCC) are a supported
@@ -1424,6 +1432,13 @@ def _check_duplicate_repo_instance():
     A registry entry that is OS-alive but not answering HTTP is treated as
     stale rather than a real duplicate: it's reaped and startup proceeds,
     instead of refusing forever until someone manually kills it.
+
+    Entries registered with CCC_ALLOW_DUPLICATE_REPO=1 are intentional
+    second instances and never block the primary (2026-10-18: a verification
+    server on :18095 made ccc.service crash-loop 35 times). When
+    `on_duplicate(entry)` is given, a live duplicate is handed to it (the
+    "second server is up -- kill it?" page) instead of exiting; startup
+    continues once it returns.
     """
     if os.environ.get("CCC_EPHEMERAL") or os.environ.get("CCC_ALLOW_DUPLICATE_REPO"):
         return
@@ -1439,6 +1454,8 @@ def _check_duplicate_repo_instance():
             # survives the exec). We aren't listening yet, so the reap below
             # would SIGTERM this very process.
             continue
+        if entry.get("allow_duplicate"):
+            continue
         other = entry.get("repo_common_dir")
         if not other:
             # Entry written by an older version without the field -- derive
@@ -1452,6 +1469,9 @@ def _check_duplicate_repo_instance():
                 # a dead CCC look alive). Not a real duplicate.
                 continue
             if _other_instance_responding(entry.get("port")):
+                if on_duplicate is not None:
+                    on_duplicate(entry)
+                    continue
                 print(
                     f"FATAL: another CCC server for this repo is already running: "
                     f"pid {entry.get('pid')} ({entry.get('install_path')}, "
@@ -1468,6 +1488,186 @@ def _check_duplicate_repo_instance():
                 file=sys.stderr,
             )
             _kill_stale_duplicate(entry.get("pid"), entry.get("port"))
+
+
+def _pid_cwd(pid):
+    """Working directory of `pid` ("" if unreadable). /proc first, lsof on macOS."""
+    try:
+        return os.readlink(f"/proc/{int(pid)}/cwd")
+    except (OSError, ValueError):
+        pass
+    try:
+        out = subprocess.run(
+            ["lsof", "-a", "-p", str(int(pid)), "-d", "cwd", "-Fn"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return ""
+    for line in out.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return ""
+
+
+def _pid_start_stamp(pid):
+    """Process start time string (stable for the life of a pid, differs on reuse)."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "lstart="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return ""
+    return (proc.stdout or "").strip() if proc.returncode == 0 else ""
+
+
+def _is_this_repos_server(pid, entry, start_stamp=None):
+    """True only if `pid` is alive, still the process first seen (same start
+    time), runs THIS checkout's server.py, and has a cwd in this repo. Run
+    before every signal: a registry entry alone proves nothing about who
+    owns the pid now."""
+    import shlex
+    if not _is_pid_alive(pid):
+        return False
+    if start_stamp is not None and _pid_start_stamp(pid) != start_stamp:
+        return False
+    try:
+        argv = shlex.split(_pid_command(pid))
+    except ValueError:
+        return False
+    cwd = _pid_cwd(pid)
+    if not argv or not cwd:
+        return False
+    want = os.path.realpath(os.path.join(str(entry.get("install_path") or ""), "server.py"))
+    ours = _git_common_dir(_core.CCC_ROOT)
+    if not ours or entry.get("repo_common_dir") != ours or _git_common_dir(cwd) != ours:
+        return False
+    for tok in argv[1:4]:
+        if os.path.basename(tok) == "server.py":
+            return os.path.realpath(os.path.join(cwd, tok)) == want
+    return False
+
+
+def _gate_request_allowed(headers):
+    """Loopback-only policy for the kill page (stricter than the app's
+    allow-list on purpose: this endpoint signals a process). Host must be
+    loopback (DNS-rebinding), Origin must be absent or loopback (any port,
+    per SECURITY.md), and nothing that arrived through a reverse proxy."""
+    from urllib.parse import urlsplit
+
+    def loopback(host):
+        return (host or "").lower() in ("localhost", "127.0.0.1", "::1")
+
+    if any(headers.get(h) for h in (
+            "X-Forwarded-For", "X-Forwarded-Host", "Forwarded", "Tailscale-User-Login",
+            "Cf-Connecting-Ip", "X-Real-Ip")):
+        return False
+    try:
+        if not loopback(urlsplit("//" + (headers.get("Host") or "")).hostname):
+            return False
+        origin = headers.get("Origin")
+        if origin is not None and not loopback(urlsplit(origin).hostname):
+            return False
+    except ValueError:
+        return False
+    return headers.get("Sec-Fetch-Site") in (None, "same-origin", "none")
+
+
+def _duplicate_gate_page(entry, token, note=""):
+    from html import escape
+    pid = entry.get("pid")
+    port = entry.get("port")
+    cmd = _pid_command(pid)
+    try:
+        cwd = os.readlink(f"/proc/{int(pid)}/cwd")
+    except (OSError, ValueError):
+        cwd = ""
+    try:
+        ppid = int(Path(f"/proc/{int(pid)}/stat").read_text().rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        ppid = None
+    pcmd = _pid_command(ppid) if ppid else ""
+    rows = [
+        ("pid", pid), ("port", port), ("started", entry.get("started_at")),
+        ("command", cmd), ("cwd", cwd), ("parent", f"{ppid} {pcmd}".strip() if ppid else ""),
+    ]
+    table = "".join(f"<tr><th>{k}</th><td>{escape(str(v or '-'))}</td></tr>" for k, v in rows)
+    return f"""<!doctype html><meta charset=utf-8>
+<meta http-equiv=refresh content=3>
+<title>CCC: second server is up</title>
+<style>body{{font:16px system-ui;max-width:42rem;margin:4rem auto;padding:0 1rem}}
+th{{text-align:left;padding-right:1rem;color:#666}}td{{word-break:break-all}}
+button{{font:inherit;padding:.5rem 1rem;background:#c0392b;color:#fff;border:0;border-radius:6px;cursor:pointer}}</style>
+<h1>A second CCC server is up. Kill it?</h1>
+<p>This server (for the same repo) is waiting to start, but another one is already running. It will start by itself as soon as the other one is gone.</p>
+<table>{table}</table>
+<p><a href="http://127.0.0.1:{escape(str(port))}/">Open the other server</a></p>
+<form method=post action=/kill><input type=hidden name=token value="{token}">
+<button>Kill pid {escape(str(pid))} and start this server</button></form>
+<p>{escape(note)}</p>"""
+
+
+def _serve_duplicate_gate(server, entry, handler_cls):
+    """Serve a "second server is up -- kill it?" page on the already-bound
+    `server` socket until the other instance is gone, then return so startup
+    continues. Only the registry-recorded pid can be killed, and only while it
+    is still the same server.py process for this repo (re-verified before each
+    signal); loopback Host/Origin plus a per-process token gate the POST."""
+    import secrets
+    from http.server import BaseHTTPRequestHandler
+    from urllib.parse import parse_qs
+
+    token = secrets.token_urlsafe(16)
+    state = {"note": ""}
+    pid = entry.get("pid")
+
+    start_stamp = _pid_start_stamp(pid)
+
+    def still_there():
+        return _is_this_repos_server(pid, entry, start_stamp)
+
+    class Gate(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, body, ctype="text/html; charset=utf-8", extra=()):
+            data = body.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            for k, v in extra:
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if not _gate_request_allowed(self.headers):
+                return self._send(403, "forbidden")
+            self._send(200, _duplicate_gate_page(entry, token, state["note"]))
+
+        def do_POST(self):
+            if not _gate_request_allowed(self.headers):
+                return self._send(403, "forbidden")
+            n = int(self.headers.get("Content-Length") or 0)
+            form = parse_qs(self.rfile.read(min(n, 4096)).decode())
+            if self.path != "/kill" or form.get("token", [""])[0] != token:
+                return self._send(403, "bad token")
+            if still_there():
+                _kill_stale_duplicate(pid, entry.get("port"), verify=still_there)
+                state["note"] = f"Sent kill to pid {pid}."
+            self._send(303, "", extra=(("Location", "/"),))
+
+    print(f"  duplicate-gate: pid {pid} (port {entry.get('port')}) is already serving "
+          f"this repo; serving a kill-it page and waiting.", file=sys.stderr)
+    server.RequestHandlerClass = Gate
+    server.timeout = 2
+    try:
+        while still_there() and _other_instance_responding(entry.get("port")):
+            server.handle_request()
+    finally:
+        server.RequestHandlerClass = handler_cls
+        server.timeout = None
+    print("  duplicate-gate: other instance gone, continuing startup.", file=sys.stderr)
 
 
 def _register_self(port, bind_host):
@@ -1493,6 +1693,8 @@ def _register_self(port, bind_host):
         "version": _core.__version__,
         "pending_input_protocol": 1,
     }
+    if os.environ.get("CCC_ALLOW_DUPLICATE_REPO"):
+        payload["allow_duplicate"] = True
 
     def replace(entries):
         out = [e for e in entries if not (isinstance(e, dict) and e.get("pid") == self_pid)]

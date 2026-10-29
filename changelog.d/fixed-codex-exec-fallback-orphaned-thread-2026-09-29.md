@@ -1,1 +1,0 @@
-- Fixed a Codex spawn falling back to the plain CLI (because another Codex process held the shared state database) leaving a broken, permanently-stuck thread in the Codex desktop app even though the run itself completed successfully; the fallback now runs `--ephemeral` so it no longer writes that native state at all.

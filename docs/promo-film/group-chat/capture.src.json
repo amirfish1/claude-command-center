@@ -1,0 +1,56 @@
+{
+ "name": "CCC \u2014 group chat with the fleet (motion source)",
+ "url": "http://127.0.0.1:8892/static/index.html?demo=1",
+ "viewport": {
+  "width": 3840,
+  "height": 2160
+ },
+ "wait_for": "body",
+ "seeds": {
+  "ccc-session-view": "list",
+  "ccc-kanban-view": "false",
+  "ccc-sidebar-width": "470"
+ },
+ "stage": {
+  "init_scripts": [
+   "document.addEventListener('DOMContentLoaded',function(){var st=document.createElement('style');st.textContent='div[style*=\"z-index: 9999\"][style*=\"bottom: 20px\"]{bottom:140px!important;font-size:15px!important;padding:12px 22px!important;max-width:620px!important;border-radius:10px!important}.gc-addpart-dialog{background:#161b22!important;border:1px solid #30363d!important;border-radius:10px!important;padding:10px!important;box-shadow:0 12px 40px rgba(0,0,0,.6)!important}.gc-addpart-modal{background:rgba(13,17,23,.55)!important}html,body,.sidebar,.main,#sidebarResizer{height:720px!important;max-height:720px!important;overflow-y:hidden}.sidebar .conv-list-panel{max-height:640px}';document.head.appendChild(st);setTimeout(function(){var b=[].find.call(document.querySelectorAll('button'),function(x){return /active coordination/.test(x.textContent)});if(b)b.click();document.documentElement.scrollTop=0},4000)});"
+  ]
+ },
+ "steps": [
+  {
+   "do": "wait",
+   "s": 7
+  },
+  {
+   "do": "click",
+   "selector": "#gcHumanInput"
+  },
+  {
+   "do": "type",
+   "text": "Ship the fix today",
+   "delay": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 3
+  },
+  {
+   "do": "click",
+   "selector": "#gcAddPartBtn",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 4
+  },
+  {
+   "do": "click",
+   "selector": ".gc-addpart-row:has-text(\"Scaffold Stripe webhooks\")",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 6
+  }
+ ]
+}

@@ -122,19 +122,13 @@ _ACP_HARNESSES = {
     },
 }
 
-# Harnesses whose ACP subprocess lives in the persistent worker (same
-# control-plane hop as Kimi). Dashboard HTTP handlers must route through
-# _control_plane_engine_call so they do not start a second grok/kimi agent.
-#
-# Devin is deliberately NOT here even though it is a registered ACP harness
-# above: kimi/grok are worker-routed because CCC drives them EXCLUSIVELY
-# through ACP (there is no other transport, so every session lives on one
-# connection the worker must own to avoid a second agent process). Devin's
-# canonical transport is still the one-shot CLI, which already runs
-# wherever the request lands (dashboard or worker) with no control-plane
-# hop, and its ACP connection is attach-on-demand: whichever process runs
-# the first steer/load owns it, exactly like "glm".
-_ACP_WORKER_HARNESSES = frozenset({"kimi", "grok"})
+# Harnesses whose ACP subprocess lives in the persistent worker. Dashboard
+# HTTP handlers must route through _control_plane_engine_call so they do not
+# start a second agent. The ACP server talks over stdio pipes to the process
+# that spawned it, so it dies with that process: owned by the dashboard, every
+# dashboard restart (each CCC auto-pull) cut off its running turns. Devin's
+# one-shot `devin -p` CLI path still runs wherever the request lands.
+_ACP_WORKER_HARNESSES = frozenset({"kimi", "grok", "devin"})
 
 _ACP_LOCK = threading.Condition()
 _ACP_CONNS = {}          # harness -> {"proc","reader","initialized","initializing","next_id","caps","send_lock"}
@@ -473,12 +467,27 @@ def _acp_resume_next_line(harness, sid):
     it silently, so a restart mid-conversation could make new replies vanish
     from the UI while landing fine in the transcript file. Count the file
     instead of assuming.
+
+    Counted in 1 MB binary chunks: this runs under _ACP_LOCK for every
+    persisted session at boot, and iterating text lines over ~135 MB of
+    Devin transcripts held the lock for 15s+ under GIL load, stalling the
+    sidebar list, live builds and conversation opens behind it (CCC-142).
     """
     try:
-        with _core._acp_transcript_path(harness, sid).open() as f:
-            return sum(1 for _ in f) + 1
+        with _core._acp_transcript_path(harness, sid).open("rb") as f:
+            count = 0
+            last = b""
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                count += chunk.count(b"\n")
+                last = chunk[-1:]
     except OSError:
         return 1
+    if last and last != b"\n":
+        count += 1  # unterminated final line still holds a line number
+    return count + 1
 
 
 def _acp_new_session_state(harness, sid, cwd=""):
@@ -512,6 +521,12 @@ def _acp_session(harness, sid, create=False, cwd=""):
     if state is None and create:
         state = _acp_new_session_state(harness, sid, cwd=cwd)
         sessions[sid] = state
+    elif state is not None and create and cwd and not state.get("cwd"):
+        # A state recreated without a cwd (after a worker restart, by a
+        # snapshot read) must still accept the cwd a caller knows, or the
+        # attach fails with "session cwd unknown" and the queue falls back to
+        # one-shot runs that re-send the message.
+        state["cwd"] = cwd
     return state
 
 
@@ -567,15 +582,9 @@ def _devin_acp_session_loaded(sid):
     right now" flag to the UI (Devin, unlike Kimi/Grok, has a large
     population of sessions with NO ACP connection at all -- most Devin
     sessions run one-shot CLI turns only)."""
-    with _core._ACP_LOCK:
-        conn = _core._ACP_CONNS.get("devin")
-        if conn is None:
-            return False
-        transport = conn.get("transport")
-        if transport is None or not transport.alive():
-            return False
-        state = _core._acp_session("devin", sid)
-        return state is not None and state.get("loaded_conn") == id(conn)
+    # Asked of the conn owner (the worker), which computes "loaded" locally.
+    snap = _core._acp_session_snapshot("devin", sid)
+    return bool((snap or {}).get("loaded"))
 
 
 def _devin_acp_steer_capable():
@@ -623,11 +632,9 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, mode="steer",
     if not _devin_acp_steer_capable():
         return None
     try:
-        if cwd:
-            with _core._ACP_LOCK:
-                _core._acp_session("devin", raw_id, create=True, cwd=cwd)
         result = _core._acp_prompt(
             "devin", raw_id, text, mode=mode, idempotency_key=idempotency_key,
+            cwd=cwd,
         )
         if mode == "steer" and result.get("code") == "busy":
             # Same cancel-then-resend primitive as the generic kimi/grok
@@ -646,6 +653,15 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, mode="steer",
             retry_key = f"{idempotency_key}:steer-retry" if idempotency_key else None
             result = _core._acp_prompt(
                 "devin", raw_id, text, mode="steer", idempotency_key=retry_key,
+                cwd=cwd,
+            )
+        if not result.get("ok"):
+            # Falling back to a one-shot CLI run is slower and can re-send;
+            # say why instead of doing it silently.
+            _core._log_activity(
+                "inject", "DEVIN_ACP_FALLBACK",
+                f"session={session_id} mode={mode} code={result.get('code')} "
+                f"error=\"{str(result.get('error'))[:160]}\"",
             )
         return result if result.get("ok") else None
     except Exception as exc:
@@ -656,7 +672,105 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, mode="steer",
         return None
 
 
-def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None):
+def _devin_acp_select_option_values(option):
+    """Selectable values of one ACP session config option (select type)."""
+    values = []
+    if not isinstance(option, dict):
+        return values
+    for item in option.get("options") or option.get("values") or []:
+        if isinstance(item, dict):
+            value = item.get("value")
+        else:
+            value = item
+        if value:
+            values.append(str(value))
+    return values
+
+
+_DEVIN_EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max", "minimal", "none"}
+
+
+def _devin_uid_effort_suffix(model_uid):
+    """Trailing effort level encoded in a Devin model uid, or ''.
+
+    ``swe-2-max`` -> "max", ``claude-opus-5-5-medium`` -> "medium";
+    bare family uids (``swe-2``) and unrelated suffixes return ''.
+    """
+    tokens = str(model_uid or "").strip().lower().split("-")
+    while tokens and tokens[-1] in ("fast", "priority"):
+        tokens.pop()
+    if tokens and tokens[-1] in _DEVIN_EFFORT_LEVELS:
+        return tokens[-1]
+    return ""
+
+
+def _devin_acp_model_config(model, config_options, reasoning_effort=None):
+    """Resolve a requested Devin model onto a session's ACP config options.
+
+    `devin acp` exposes ``model`` as a curated select — one concrete uid per
+    family (``swe-2-high``, never the bare family ``swe-2``) — and the effort
+    axis separately as ``thought_level``. Sending a family uid or a variant
+    the account's list does not offer (``swe-2-max`` when only
+    ``swe-2-high`` is listed) is rejected with -32602; callers must map the
+    request onto the offered values or the session silently keeps the
+    session/new default.
+
+    Returns {"model": uid, "thought_level": effort?} to apply, or None when
+    no member of the requested family is offered — the caller then aborts the
+    ACP spawn so the `devin -p` fallback (which honors catalog uids natively)
+    can take over instead of silently running the account default.
+    """
+    requested = str(model or "").strip()
+    if not requested:
+        return None
+    options_by_id = {
+        str(o.get("id")): o
+        for o in (config_options or [])
+        if isinstance(o, dict) and o.get("id")
+    }
+    model_option = options_by_id.get("model")
+    if model_option is None:
+        # The session never advertised a model select (older agent build) —
+        # send the request verbatim; the wire's own validation answers and
+        # the caller surfaces a rejection instead of swallowing it.
+        return {"model": requested}
+    values = _devin_acp_select_option_values(model_option)
+    if not values:
+        return None
+    target = requested if requested in values else None
+    effort = str(reasoning_effort or "").strip().lower()
+    if not effort:
+        effort = _devin_uid_effort_suffix(requested)
+    if target is None:
+        # Map family uids and unlisted variants onto the family's member in
+        # the offered list (the wire exposes at most one uid per family).
+        try:
+            data = _core._devin_model_list_json() or {}
+        except Exception:
+            data = {}
+        uid_to_family = data.get("uid_to_family") or {}
+        family_to_uids = data.get("family_to_uids") or {}
+        family = uid_to_family.get(requested.lower())
+        if not family and requested in family_to_uids:
+            family = requested
+        if not family:
+            return None
+        members = [v for v in values if uid_to_family.get(v.lower()) == family]
+        if not members:
+            return None
+        # Prefer the member whose own suffix matches the wanted effort.
+        target = next(
+            (v for v in members if _devin_uid_effort_suffix(v) == effort),
+            members[0],
+        )
+    pairs = {"model": target}
+    if effort and options_by_id.get("thought_level") is not None:
+        pairs["thought_level"] = effort
+    return pairs
+
+
+def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None,
+                                 reasoning_effort=None):
     """Spawn a new Devin session through `devin acp` session/new.
 
     This is the same path Devin Desktop uses: the sessionId arrives in-band
@@ -667,11 +781,31 @@ def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None):
 
     ``permission_mode`` maps the one-shot CLI flag onto the ACP session
     mode: ``dangerous`` (CCC's devin-spawn default) is Bypass Permissions.
-    Config/mode failures degrade gracefully — the session keeps its
-    session/new defaults rather than aborting a spawn that already exists.
+    Mode/effort failures degrade gracefully (note recorded in ``notes``);
+    a ``model`` the session's config cannot honor is a hard failure with no
+    session_id so the caller falls back to `devin -p` — silently running the
+    session/new default (Fusion on some accounts) is the failure this
+    boundary exists to prevent.
     """
     if not prompt:
         return {"ok": False, "error": "empty prompt"}
+    if _core._control_plane_routes_engines():
+        routed = _core._control_plane_engine_call(
+            "devin", "acp_spawn", {
+                "prompt": _core._devin_session_state_prompt(prompt), "cwd": cwd, "model": model,
+                "permission_mode": permission_mode,
+                "reasoning_effort": reasoning_effort,
+            },
+            timeout_ms=120000,
+        )
+        if routed is not None:
+            if routed.get("ambiguous") and not routed.get("session_id"):
+                # The worker may have created the session: never let the
+                # caller fall back to `devin -p` and start a second one.
+                raise RuntimeError(
+                    "devin acp spawn: worker did not answer in time"
+                )
+            return routed
     if not _devin_acp_steer_capable():
         return {"ok": False, "code": "acp_unavailable",
                 "error": _core._acp_conn_error("devin")}
@@ -679,6 +813,7 @@ def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None):
     if not created.get("ok"):
         return created
     raw_id = created["session_id"]
+    notes = []
     mode_map = {
         "dangerous": "bypass", "bypass": "bypass", "ask": "ask",
         "plan": "plan", "smart": "smart", "accept-edits": "accept-edits",
@@ -686,15 +821,42 @@ def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None):
     }
     target_mode = mode_map.get(str(permission_mode or "").strip().lower())
     if target_mode:
-        try:
-            _core._acp_set_config("devin", raw_id, "mode", target_mode)
-        except Exception:
-            pass
+        resp = _core._acp_set_config("devin", raw_id, "mode", target_mode)
+        if not resp.get("ok"):
+            notes.append(
+                "mode '%s' not applied: %s"
+                % (target_mode, resp.get("error") or "set_config_option failed")
+            )
+    applied_model = ""
     if model:
-        try:
-            _core._acp_set_config("devin", raw_id, "model", model)
-        except Exception:
-            pass
+        pairs = _devin_acp_model_config(
+            model, created.get("config_options"), reasoning_effort,
+        )
+        if not pairs:
+            return {
+                "ok": False, "code": "model_unavailable",
+                "error": (
+                    "model '%s' is not offered by this account's Devin ACP "
+                    "session config" % model
+                ),
+            }
+        for config_id, value in pairs.items():
+            resp = _core._acp_set_config("devin", raw_id, config_id, value)
+            if resp.get("ok"):
+                continue
+            if config_id == "model":
+                return {
+                    "ok": False, "code": "model_rejected",
+                    "error": (
+                        "Devin ACP rejected model '%s': %s"
+                        % (value, resp.get("error") or "set_config_option failed")
+                    ),
+                }
+            notes.append(
+                "%s '%s' not applied: %s"
+                % (config_id, value, resp.get("error") or "set_config_option failed")
+            )
+        applied_model = pairs["model"]
     sent = _core._acp_prompt("devin", raw_id, prompt, mode="send")
     if not sent.get("ok"):
         # The session exists and is attached — report it so the caller can
@@ -703,8 +865,12 @@ def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None):
             "ok": False, "session_id": raw_id, "session_created": True,
             "error": sent.get("error") or "initial prompt failed",
             "code": sent.get("code"),
+            "applied_model": applied_model, "notes": notes,
         }
-    return {"ok": True, "session_id": raw_id, "req_id": sent.get("req_id")}
+    return {
+        "ok": True, "session_id": raw_id, "req_id": sent.get("req_id"),
+        "applied_model": applied_model, "notes": notes,
+    }
 
 
 _grok_external_writer_cache = {}
@@ -804,6 +970,7 @@ def _acp_load_state(harness):
     for sid, meta in sessions.items():
         if not isinstance(meta, dict):
             continue
+        existed = sid in (_core._ACP_SESSION_STATE.get(harness) or {})
         state = _core._acp_session(harness, sid, create=True, cwd=meta.get("cwd") or "")
         state["status"] = "idle"
         state["turn_seq"] = int(meta.get("turn_seq") or 0)
@@ -814,7 +981,9 @@ def _acp_load_state(harness):
         # most recent activity, or the sid was never captured in a save at
         # all -- see _acp_resume_next_line), so never trust it below what the
         # transcript file actually holds.
-        next_line = max(int(meta.get("next_line") or 1), _acp_resume_next_line(harness, sid))
+        on_disk = (_acp_resume_next_line(harness, sid) if existed
+                   else int(state.get("next_line") or 1))  # just counted on create
+        next_line = max(int(meta.get("next_line") or 1), on_disk)
         state["next_line"] = max(1, next_line)
 
 
@@ -956,6 +1125,12 @@ def _acp_request(harness, method, params=None, timeout=20, sid=None):
     if isinstance(error, dict):
         code = error.get("code")
         out = {"ok": False, "error": error.get("message") or f"ACP error {code}", "code": code}
+        # Servers that put the real reason in `data` (devin returns
+        # -32602 "Invalid params" + data "Invalid value 'x' for config
+        # option 'model'") — surface it or every rejection reads alike.
+        detail = error.get("data")
+        if isinstance(detail, str) and detail and detail not in out["error"]:
+            out["error"] = f"{out['error']}: {detail}"
         _cfg = _core._ACP_HARNESSES.get(harness) or {}
         # -32000 is JSON-RPC's generic server-error code. For auth_lazy
         # harnesses an auth demand opens a browser tab, so only honour it
@@ -1685,19 +1860,24 @@ def _acp_tool_content_text(update):
     return text
 
 
+_ACP_DIFF_TEXT_MAX_CHARS = 65536
+
+
 def _acp_tool_content_diff(update):
     """First {type:'diff', path, oldText, newText} content block, if any.
 
     Edit/Write calls carry these (see docs/kimi-code-reference.md §Content
-    shapes); kept in full so the client can render the diff."""
+    shapes); kept in full up to _ACP_DIFF_TEXT_MAX_CHARS per side so the
+    client can render the diff without multi-MB whole-file payloads bloating
+    the session JSONL transcript."""
     for c in update.get("content") or []:
         if isinstance(c, dict) and c.get("type") == "diff":
             old = c.get("oldText")
             new = c.get("newText")
             return {
                 "path": str(c.get("path") or ""),
-                "oldText": old if isinstance(old, str) else "",
-                "newText": new if isinstance(new, str) else "",
+                "oldText": old[:_ACP_DIFF_TEXT_MAX_CHARS] if isinstance(old, str) else "",
+                "newText": new[:_ACP_DIFF_TEXT_MAX_CHARS] if isinstance(new, str) else "",
             }
     return None
 
@@ -2345,27 +2525,46 @@ def _kimi_goal_prompt_text(text):
 
 def _acp_prompt(
     harness, sid, text, mode="send", from_queue=False, idempotency_key=None,
+    cwd=None,
 ):
     """Async session/prompt: ACK returns immediately; the turn streams via
-    session/update notifications and finishes in _acp_finalize_turn."""
+    session/update notifications and finishes in _acp_finalize_turn.
+
+    ``cwd`` seeds the session's working directory when the conn owner has
+    no state for it yet (a dormant session it must session/load)."""
     if harness in _core._ACP_WORKER_HARNESSES:
         routed = _core._control_plane_engine_call(
             harness, "prompt", {
                 "session_id": sid,
-                "text": text,
+                "text": _core._devin_session_state_prompt(text) if harness == "devin" else text,
                 "mode": mode,
                 "from_queue": bool(from_queue),
+                "cwd": cwd or "",
             },
             idempotency_key=idempotency_key,
+            # The worker may have to session/load a long-lived session first
+            # (~27s+ for Devin); the default 45s call budget timed out before
+            # the load could finish and sent the queue down the CLI fallback.
+            timeout_ms=(
+                int(_acp_load_timeout(harness) * 1000) + 15000
+                if harness == "devin" else None
+            ),
         )
         if routed is not None:
             return routed
+    if cwd:
+        with _core._ACP_LOCK:
+            _core._acp_session(harness, sid, create=True, cwd=cwd)
     if harness == "grok" and _core._grok_external_writer_active(sid):
         return {"ok": False, "error": "Grok session is active in a terminal — close it before sending.", "code": "grok_external_active"}
     if not text:
         return {"ok": False, "error": "empty prompt"}
     text = _core._strip_lone_surrogates(str(text))
+    if harness == "devin":
+        text = _core._strip_ccc_session_state_instruction(text)
     visible_text = text
+    if harness == "devin":
+        text = _core._devin_session_state_prompt(text)
     if harness == "kimi":
         text = _core._kimi_goal_prompt_text(text)
     if harness in ("kimi", "grok") and re.match(r"^\s*/context(\s|$)", text, re.IGNORECASE):
@@ -2558,6 +2757,18 @@ def _acp_cancel(harness, sid):
     return {"ok": sent, "via": "acp-cancel"}
 
 
+def _acp_load_timeout(harness):
+    """session/load replays the whole history: a long-lived Devin session
+    takes ~27s on an idle box and longer under load, so 30s made the ACP
+    drain fail and fall back to one-shot CLI runs that re-sent the message."""
+    if harness == "devin":
+        try:
+            return max(30.0, float(os.environ.get("CCC_DEVIN_ACP_LOAD_TIMEOUT_S", "120")))
+        except ValueError:
+            return 120.0
+    return 30
+
+
 def _acp_load(harness, sid, cwd):
     """Attach to an existing harness session in the current ACP connection.
 
@@ -2588,7 +2799,7 @@ def _acp_load(harness, sid, cwd):
             state["replay"] = {"kind": None, "text": "", "drop": drop_replay}
     resp = _core._acp_request(harness, method, {
         "sessionId": sid, "cwd": cwd, "mcpServers": [],
-    }, timeout=30, sid=sid)
+    }, timeout=_acp_load_timeout(harness), sid=sid)
     # A harness that doesn't implement session/resume at all (-32601) —
     # the generic version of cfg["no_resume"] for harnesses we haven't
     # annotated — falls back to session/load with the replay dropped.
@@ -2600,7 +2811,7 @@ def _acp_load(harness, sid, cwd):
                 state["replay"] = {"kind": None, "text": "", "drop": True}
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=30, sid=sid)
+        }, timeout=_acp_load_timeout(harness), sid=sid)
     # A dormant harness session can be mid-write from another live consumer
     # of its own on-disk store (e.g. a native TUI the user has open outside
     # CCC) right as we attach — the harness's own resume handler can trip
@@ -2615,7 +2826,7 @@ def _acp_load(harness, sid, cwd):
         time.sleep(0.75)
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=30, sid=sid)
+        }, timeout=_acp_load_timeout(harness), sid=sid)
     with _core._ACP_LOCK:
         state = _core._acp_session(harness, sid, create=True, cwd=cwd)
         desired_mode = state.get("desired_mode")
@@ -2901,9 +3112,16 @@ def _acp_session_snapshot(harness, sid):
                         )
                     ],
                 }
+        conn = _core._ACP_CONNS.get(harness)
+        transport = (conn or {}).get("transport")
+        loaded = bool(
+            conn is not None and transport is not None and transport.alive()
+            and state.get("loaded_conn") == id(conn)
+        )
         return {
             "sid": sid,
             "harness": harness,
+            "loaded": loaded,
             "cwd": state.get("cwd") or "",
             "status": state.get("status") or "idle",
             "model": state.get("model"),
@@ -2913,6 +3131,47 @@ def _acp_session_snapshot(harness, sid):
             "config_options": state.get("config_options") or [],
             "updated_at": state.get("updated_at") or 0,
         }
+
+
+def _acp_conn_pid(harness):
+    """Pid of the harness's shared ACP server, wherever its conn lives."""
+    if harness in _core._ACP_WORKER_HARNESSES:
+        routed = _core._control_plane_engine_call(
+            harness, "conn_pid", {}, mutate=False,
+        )
+        if routed is not None:
+            return routed.get("pid")
+    with _core._ACP_LOCK:
+        conn = _core._ACP_CONNS.get(harness) or {}
+        proc = conn.get("proc")
+    return getattr(proc, "pid", None) if proc is not None else None
+
+
+def _acp_close_idle_conn(harness):
+    """Close the harness's shared ACP conn unless a session is mid-turn.
+
+    The conn is shared by every session of the harness, so closing it while
+    one is mid-turn would kill that turn. Returns {"ok", "busy", "closed"}.
+    """
+    if harness in _core._ACP_WORKER_HARNESSES:
+        routed = _core._control_plane_engine_call(
+            harness, "close_idle_conn", {},
+        )
+        if routed is not None:
+            return routed
+    with _core._ACP_LOCK:
+        busy = [
+            sid for sid, st in (_core._ACP_SESSION_STATE.get(harness) or {}).items()
+            if isinstance(st, dict) and st.get("status") == "active"
+        ]
+        conn = _core._ACP_CONNS.get(harness)
+        transport = (conn or {}).get("transport") if conn else None
+    if busy:
+        return {"ok": True, "busy": len(busy), "closed": False}
+    if transport is None:
+        return {"ok": True, "busy": 0, "closed": False}
+    transport.close()
+    return {"ok": True, "busy": 0, "closed": True}
 
 
 def _acp_is_session(harness, sid):

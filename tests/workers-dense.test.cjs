@@ -37,7 +37,7 @@ async function measure(page, dense) {
 // clicking Dense left the list byte-identical. Assert the layout actually
 // moves rather than asserting the source text says it should.
 test('dense mode measurably shortens worker rows without dropping any', async () => {
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
     // Desktop width on purpose: the mobile breakpoint sets row padding with
@@ -147,7 +147,7 @@ test('coding migrates wrap/details and never changes workers or other tabs', () 
 });
 
 test('Coding and Workers display modes control actual title wrapping and outcomes', async () => {
-  const browser=await puppeteer.launch({headless:true});
+  const browser=await puppeteer.launch({headless:true,args:['--no-sandbox']});
   try {
     const page=await browser.newPage();
     await page.setViewport({width:1400,height:900});
@@ -162,15 +162,19 @@ test('Coding and Workers display modes control actual title wrapping and outcome
         },{'compact-rows':ctx.compactRowsOn(),'wrap-titles':ctx.wrapTitlesOn(),'workers-dense':ctx.workersDenseTabActive()});
         measured.push(await page.evaluate(()=>{
           const title=document.querySelector('.conv-title'),outcome=document.querySelector('.conv-outcome');
-          return {whiteSpace:getComputedStyle(title).whiteSpace,height:title.getBoundingClientRect().height,details:getComputedStyle(outcome).display!=='none',layout:getComputedStyle(title.closest('.conv-item')).display};
+          return {whiteSpace:getComputedStyle(title).whiteSpace,clamp:getComputedStyle(title).webkitLineClamp,height:title.getBoundingClientRect().height,details:getComputedStyle(outcome).display!=='none',layout:getComputedStyle(title.closest('.conv-item')).display};
         }));
       }
       assert.equal(measured[0].layout,'grid',`${lane}: Compact must use the shared dense row layout`);
-      assert.equal(measured[0].whiteSpace,'nowrap',lane);
+      // CCC-135 (118eed30): Compact wraps titles up to three lines instead of
+      // ellipsizing one; Cozy and Detailed keep the two-line Wrap clamp.
+      assert.equal(measured[0].whiteSpace,'normal',lane);
+      assert.equal(measured[0].clamp,'3',lane);
       assert.equal(measured[1].whiteSpace,'normal',lane);
+      assert.equal(measured[1].clamp,'2',lane);
       assert.equal(measured[2].whiteSpace,'normal',lane);
       assert.deepEqual(measured.map(m=>m.details),[false,false,true],lane);
-      assert(measured[1].height>measured[0].height,`${lane}: Cozy must actually wrap`);
+      assert(measured[1].height>25,`${lane}: Cozy must actually wrap (got ${measured[1].height}px)`);
     }
   }finally{await browser.close();}
 });

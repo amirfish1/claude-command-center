@@ -460,8 +460,10 @@ class TestFindConversationsOnMockFixture(unittest.TestCase):
         # real user's command-center state — no test pollution.
         cls._prev_env = {
             "HOME": os.environ.get("HOME"),
+            "USERPROFILE": os.environ.get("USERPROFILE"),
         }
         os.environ["HOME"] = str(resolved_home)
+        os.environ["USERPROFILE"] = str(resolved_home)
 
         cls.server = _fresh_server()
         cls.resolved_home = resolved_home
@@ -1277,6 +1279,70 @@ class TestCodexConversationAdapter(unittest.TestCase):
         self.assertEqual(meta.get("thread_source"), "user")
         self.assertEqual(meta.get("source"), "vscode")
         self.assertEqual(self.rollout.stat().st_mtime, old_mtime)
+
+    def test_codex_thread_start_is_desktop_user_visible(self):
+        params = self.server._codex_app_server_thread_start_params(
+            cwd=str(self.fake_repo), model="test-model",
+        )
+        self.assertEqual(params["threadSource"], "user")
+        self.assertFalse(params["ephemeral"])
+
+    def test_codex_visibility_stamp_repairs_ccc_index_without_replacing_rollout(self):
+        original = self.rollout.read_bytes()
+        try:
+            lines = original.decode("utf-8").splitlines(keepends=True)
+            meta = json.loads(lines[0])
+            meta["payload"].update(source="vscode", thread_source="ccc")
+            lines[0] = json.dumps(meta) + "\n"
+            self.rollout.write_text("".join(lines), encoding="utf-8")
+            self._set_codex_thread_source(CODEX_SESSION_ID, "ccc")
+            self._set_codex_source(CODEX_SESSION_ID, "vscode")
+            old_mtime = 1777680005.0
+            os.utime(self.rollout, (old_mtime, old_mtime))
+            before = self.rollout.read_bytes()
+            inode = self.rollout.stat().st_ino
+
+            self.assertTrue(self.server._mark_codex_thread_user_visible(CODEX_SESSION_ID))
+            self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+            self.assertEqual(self._codex_rollout_meta()["thread_source"], "ccc")
+            self.assertEqual(self._codex_rollout_meta()["id"], CODEX_SESSION_ID)
+            self.assertEqual(self.rollout.read_bytes(), before)
+            self.assertEqual(self.rollout.stat().st_ino, inode)
+            self.assertEqual(self.rollout.stat().st_mtime, old_mtime)
+            repaired = self.rollout.read_bytes()
+            self.assertTrue(self.server._mark_codex_thread_user_visible(CODEX_SESSION_ID))
+            self.assertEqual(self.rollout.read_bytes(), repaired)
+        finally:
+            self.rollout.write_bytes(original)
+
+    def test_codex_visibility_stamp_preserves_other_thread_sources(self):
+        original = self.rollout.read_bytes()
+        try:
+            for thread_source in ("subagent", "other-integration"):
+                with self.subTest(thread_source=thread_source):
+                    self._set_codex_thread_source(CODEX_SESSION_ID, thread_source)
+                    self._set_codex_source(CODEX_SESSION_ID, "vscode")
+                    self.assertFalse(self.server._mark_codex_thread_user_visible(CODEX_SESSION_ID))
+                    self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), thread_source)
+                    self.assertEqual(self.rollout.read_bytes(), original)
+        finally:
+            self._set_codex_thread_source(CODEX_SESSION_ID, "user")
+
+    def test_codex_sidebar_backfill_repairs_recent_ccc_row_without_log(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, "ccc")
+        self._set_codex_source(CODEX_SESSION_ID, "vscode")
+        self._set_codex_updated_at(CODEX_SESSION_ID, 1777680005)
+        self._set_codex_thread_source(CODEX_TRAILER_SESSION_ID, "ccc")
+        self._set_codex_source(CODEX_TRAILER_SESSION_ID, "vscode")
+        self._set_codex_updated_at(CODEX_TRAILER_SESSION_ID, 1)
+        with mock.patch.object(self.server, "_append_codex_sidebar_project_roots", return_value=0):
+            result = self.server.backfill_codex_sidebar_visibility(
+                days=7, repo_paths=[str(self.fake_repo)], now=1777680100,
+            )
+        self.assertEqual(result["found"], 1)
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+        self.assertEqual(self._codex_thread_source(CODEX_TRAILER_SESSION_ID), "ccc")
 
     def test_codex_visibility_stamp_repairs_user_exec_thread(self):
         self._set_codex_thread_source(CODEX_SESSION_ID, "user")

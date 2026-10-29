@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 
@@ -88,14 +89,15 @@ def test_every_campaign_page_has_canonical_social_and_shared_navigation():
 
 def test_homepage_current_facts_and_campaign_links():
     page = _read(DOCS / "index.html")
-    assert "v5.29" in page
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    major, minor = re.search(r'^version = "(\d+)\.(\d+)\.', pyproject, re.M).groups()
+    assert f"v{major}.{minor}" in page
     assert "v5.8" not in page
-    assert "seven engines" in page
-    # Main relicensed to MIT after this campaign was written; the homepage
-    # states that, so pin the current licensing rather than the old terms.
-    assert "Open source" in page
-    assert "MIT &copy;" in page
-    assert "Source-available" not in page
+    assert "nine engines" in page
+    # The homepage must match LICENSE, including its future MIT grant.
+    assert "Functional Source License" in (ROOT / "LICENSE").read_text()
+    assert "Source-available" in page
+    assert "FSL-1.1-MIT &copy;" in page
     assert 'href="/captain/"' in page
     assert 'href="/watchtower/"' in page
     assert 'href="/receipts/"' in page

@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free engine · Claude Command Center</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --card: #121826;
+    --card-edge: #232c42;
+    --text: #e8ecf5;
+    --muted: #8b96b0;
+    --ok: #3ddc97;
+    --warn: #ffcf5c;
+    --err: #ff6b6b;
+    --accent: #7c8cff;
+    --accent2: #4cc9f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(124,140,255,.18), transparent 60%),
+      radial-gradient(900px 500px at 10% 110%, rgba(76,201,240,.12), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    padding: 32px 16px;
+  }
+  .wrap { width: 100%; max-width: 560px; }
+  .hero { text-align: center; margin-bottom: 28px; }
+  .orb {
+    width: 88px; height: 88px; margin: 0 auto 18px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #aab4ff, var(--accent) 55%, #4a56c9);
+    box-shadow: 0 0 42px rgba(124,140,255,.45);
+    position: relative;
+  }
+  .orb::after {
+    content: "$0";
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 26px; color: #fff; letter-spacing: -.5px;
+  }
+  .orb.ok { background: radial-gradient(circle at 35% 30%, #8ff0c8, var(--ok) 55%, #1d9e6c); box-shadow: 0 0 42px rgba(61,220,151,.45); }
+  .orb.busy { animation: pulse 1.6s ease-in-out infinite; }
+  .orb.warn { background: radial-gradient(circle at 35% 30%, #ffe9a8, var(--warn) 55%, #d19a1f); box-shadow: 0 0 42px rgba(255,207,92,.4); }
+  .orb.err { background: radial-gradient(circle at 35% 30%, #ffb3b3, var(--err) 55%, #c73e3e); box-shadow: 0 0 42px rgba(255,107,107,.4); }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.06); }
+  }
+  h1 { font-size: 30px; margin: 0 0 8px; letter-spacing: -.5px; }
+  .sub { color: var(--muted); font-size: 15px; margin: 0; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 18px;
+    padding: 24px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.35);
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .label { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+  .value { font-size: 15px; font-weight: 600; }
+  .value.ok { color: var(--ok); }
+  .value.warn { color: var(--warn); }
+  .value.busy { color: var(--accent2); }
+  .divider { height: 1px; background: var(--card-edge); margin: 18px -24px; }
+  .detail { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 4px 0 0; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+  .meta .label { margin-bottom: 4px; }
+  .meta .value { font-weight: 500; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  button {
+    border: 0; border-radius: 12px; padding: 12px 20px;
+    font-size: 15px; font-weight: 700; cursor: pointer;
+    transition: transform .12s ease, filter .12s ease;
+  }
+  button:hover { transform: translateY(-1px); filter: brightness(1.08); }
+  button:disabled { opacity: .5; cursor: default; transform: none; }
+  .primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; }
+  .ghost { background: transparent; color: var(--text); border: 1px solid var(--card-edge); }
+  .danger { background: transparent; color: var(--err); border: 1px solid rgba(255,107,107,.35); }
+  .logbox {
+    display: none; margin-top: 20px;
+    background: #090d15; border: 1px solid var(--card-edge); border-radius: 12px;
+    padding: 14px; height: 190px; overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; line-height: 1.55; color: #a9b4d0;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .logbox.on { display: block; }
+  .progress {
+    display: none; margin-top: 16px; height: 8px; border-radius: 99px;
+    background: #0a0e18; overflow: hidden;
+  }
+  .progress.on { display: block; }
+  .progress > i {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 99px; transition: width .5s ease;
+  }
+  .err-box {
+    display: none; margin-top: 16px; padding: 12px 14px; border-radius: 10px;
+    background: rgba(255,107,107,.1); border: 1px solid rgba(255,107,107,.35);
+    color: #ffb3b3; font-size: 13px; line-height: 1.5;
+  }
+  .err-box.on { display: block; }
+  .keys { margin-top: 14px; }
+  .key-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 4px 6px 0 0; padding: 5px 12px; border-radius: 99px;
+    background: rgba(124,140,255,.1); border: 1px solid rgba(124,140,255,.25);
+    font-size: 12px; color: var(--text);
+  }
+  .key-chip.off { opacity: .45; }
+  .foot { text-align: center; margin-top: 20px; font-size: 12px; color: var(--muted); }
+  .foot a { color: var(--accent2); text-decoration: none; }
+  .foot a:hover { text-decoration: underline; }
+  @media (prefers-reduced-motion: reduce) {
+    .orb.busy { animation: none; }
+    button { transition: none; }
+    .progress > i { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="orb" id="orb"></div>
+    <h1>Free engine</h1>
+    <p class="sub">A tiny local router that lets your agents run for $0.</p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span class="label">Status</span>
+      <span class="value" id="stateValue">checking…</span>
+    </div>
+    <p class="detail" id="stateDetail">Looking for your free engine.</p>
+
+    <div class="meta" id="meta" style="display:none">
+      <div><div class="label">Address</div><div class="value" id="mUrl">—</div></div>
+      <div><div class="label">Version</div><div class="value" id="mVer">—</div></div>
+      <div><div class="label">Node.js</div><div class="value" id="mNode">—</div></div>
+      <div><div class="label">Providers</div><div class="value" id="mKeys">0</div></div>
+    </div>
+    <div class="keys" id="keys"></div>
+
+    <div class="progress" id="progress"><i id="progressBar"></i></div>
+    <div class="logbox" id="logbox"></div>
+    <div class="err-box" id="errbox"></div>
+
+    <div class="actions">
+      <button class="primary" id="btnInstall" style="display:none">Set up my free engine</button>
+      <button class="primary" id="btnStart" style="display:none">Start it</button>
+      <button class="ghost" id="btnStop" style="display:none">Stop</button>
+      <button class="ghost" id="btnDash" style="display:none">Open its dashboard</button>
+      <button class="danger" id="btnUninstall" style="display:none">Remove</button>
+    </div>
+  </div>
+
+  <div class="foot">
+    Everything runs on this machine. Your keys stay in
+    <code>~/.ccc</code> with owner-only permissions.
+    <span id="dashLink" style="display:none">· <a id="dashA" href="#" target="_blank" rel="noopener">engine dashboard</a></span>
+  </div>
+</div>
+
+<script src="/static/free-router.js"></script>
+<script>
+(function () {
+  "use strict";
+  var FR = window.cccFreeRouter;
+  var $ = function (id) { return document.getElementById(id); };
+  var lastState = null;
+  var installing = false;
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function celebrate() {
+    if (reduced) return;
+    if (window.cccFx && window.cccFx.confetti) {
+      try { window.cccFx.confetti({ count: 80 }); } catch (e) {}
+      try { window.cccFx.play && window.cccFx.play("success"); } catch (e) {}
+    }
+  }
+
+  function show(id, on) { $(id).style.display = on ? "" : "none"; }
+
+  function setErr(msg) {
+    var box = $("errbox");
+    if (msg) { box.textContent = msg; box.classList.add("on"); }
+    else { box.classList.remove("on"); }
+  }
+
+  function logLine(text) {
+    var box = $("logbox");
+    box.classList.add("on");
+    box.textContent += text + "\n";
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function render(st) {
+    var d = FR.describe(st);
+    $("stateValue").textContent = installing ? "Setting up…" : d.headline;
+    $("stateValue").className = "value " + (d.tone === "ok" ? "ok" : d.tone === "busy" ? "busy" : d.tone === "warn" || d.tone === "error" ? "warn" : "");
+    $("stateDetail").textContent = installing ? "Hang tight, this takes a couple of minutes the first time." : d.detail;
+
+    var orb = $("orb");
+    orb.className = "orb" + (installing ? " busy" : d.tone === "ok" ? " ok" : d.tone === "busy" ? " busy" : d.tone === "warn" ? " warn" : d.tone === "error" ? " err" : "");
+
+    show("meta", !!st.installed);
+    if (st.installed) {
+      $("mUrl").textContent = st.base_url || "—";
+      $("mVer").textContent = st.version || "—";
+      $("mNode").textContent = st.node_version ? "v" + st.node_version : (st.node_ok ? "yes" : "missing");
+      $("mKeys").textContent = String((st.keys || []).length);
+      var dash = $("dashLink");
+      if (st.base_url && st.running) {
+        dash.style.display = "";
+        $("dashA").href = st.base_url;
+      } else {
+        dash.style.display = "none";
+      }
+    }
+
+    var keysEl = $("keys");
+    keysEl.innerHTML = "";
+    (st.keys || []).forEach(function (k) {
+      var chip = document.createElement("span");
+      chip.className = "key-chip" + (k.enabled ? "" : " off");
+      chip.textContent = k.platform + (k.label && k.label !== "env" ? " · " + k.label : "");
+      keysEl.appendChild(chip);
+    });
+
+    show("btnInstall", !st.installed && !installing);
+    show("btnStart", st.installed && !st.running && !installing);
+    show("btnStop", st.installed && st.running && !installing);
+    show("btnDash", st.installed && st.running);
+    show("btnUninstall", st.installed && !installing);
+
+    if (!installing) {
+      $("progress").classList.remove("on");
+    }
+
+    if (lastState && lastState !== "ready" && st.state === "ready") celebrate();
+    lastState = st.state;
+  }
+
+  async function refresh() {
+    try {
+      var st = await FR.status();
+      render(st);
+    } catch (e) {
+      $("stateValue").textContent = "Can't reach CCC";
+      $("stateDetail").textContent = "Is the CCC server still running?";
+    }
+  }
+
+  async function doInstall() {
+    if (installing) return;
+    installing = true;
+    setErr(null);
+    $("logbox").textContent = "";
+    $("logbox").classList.add("on");
+    $("progress").classList.add("on");
+    $("btnInstall").disabled = true;
+    render(lastRender || {});
+    try {
+      var res = await FR.install();
+      if (!res.job_id) throw new Error(res.error || "install did not start");
+      var job = await FR.pollJob(res.job_id, {
+        onLine: logLine,
+        onUpdate: function (j) {
+          $("progressBar").style.width = Math.round((j.progress || 0) * 100) + "%";
+          var step = j.step_label || j.step;
+          if (step) $("stateDetail").textContent = step;
+        },
+      });
+      if (job.status === "done") {
+        $("progressBar").style.width = "100%";
+        celebrate();
+      } else {
+        setErr(job.error || "Something went wrong. Try again.");
+      }
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+    installing = false;
+    refresh();
+  }
+  var lastRender = null;
+
+  async function wrap(fn) {
+    setErr(null);
+    try {
+      var r = await fn();
+      if (r && r.ok === false) setErr(r.error || "That did not work.");
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+    refresh();
+  }
+
+  $("btnInstall").addEventListener("click", doInstall);
+  $("btnStart").addEventListener("click", function () { wrap(FR.start); });
+  $("btnStop").addEventListener("click", function () { wrap(FR.stop); });
+  $("btnUninstall").addEventListener("click", function () {
+    if (window.confirm("Remove the free engine from this machine?")) wrap(FR.uninstall);
+  });
+  $("btnDash").addEventListener("click", function () {
+    var a = $("dashA");
+    if (a && a.href) window.open(a.href, "_blank", "noopener");
+  });
+
+  var _render = render;
+  render = function (st) { lastRender = st; _render(st); };
+
+  refresh();
+  var timer = setInterval(function () {
+    if (!document.hidden) refresh();
+  }, 3000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) refresh();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,10 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const puppeteer = require('puppeteer');
+const puppeteer = require('../require-puppeteer.js');
+const { findChromePath } = require('../puppeteer-browser-config.js');
 
 const app = fs.readFileSync('static/app.js', 'utf8');
-const sourceStart = app.indexOf('  function f2ModelsForEngine(');
+const sourceStart = app.indexOf('  function f2AllLaunchEngines(');
 const sourceEnd = app.indexOf('\n  // CCC-823:', sourceStart);
 const pickerSource = app.slice(sourceStart, sourceEnd);
 const handlerStart = app.indexOf("  document.addEventListener('click', (ev) => {", app.indexOf('  function f2InterceptEnterSend('));
@@ -12,10 +13,10 @@ const handlerEnd = app.indexOf('\n\n  // Launch-spec overrides.', handlerStart);
 const quickPickHandlerSource = app.slice(handlerStart, handlerEnd);
 let browser;
 
-test.before(async () => { browser = await puppeteer.launch({ headless: true }); });
+test.before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 test.after(async () => { await browser?.close(); });
 
-test('continuation launch picker offers usage-ranked engine, model, and effort chips', async () => {
+test('continuation launch picker offers usage-ranked chips except the current selection', async () => {
   const page = await browser.newPage();
   try {
     await page.setContent('<div id="target"></div>');
@@ -54,7 +55,6 @@ test('continuation launch picker offers usage-ranked engine, model, and effort c
       label: chip.textContent,
     })));
     assert.deepEqual(picks, [
-      { engine: 'claude', model: 'sonnet-5', effort: 'high', label: 'Claude · Sonnet 5 · High' },
       { engine: 'codex', model: 'gpt-5.3-codex', effort: 'medium', label: 'Codex · GPT-5.3 Codex · Medium' },
     ]);
     await page.click('[data-engine="codex"][data-f2-launch-pick]');

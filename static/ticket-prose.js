@@ -98,6 +98,50 @@
     return s;
   }
 
+  // ---------------------------------------------------- dense question split --
+  // A worker's `wt block --question` is often one wall of text: context, then
+  // inline options "(a) … (b) … (c) …", then a follow-up question and a
+  // recommendation. Lift that structure out so a human can scan it (CCC-64).
+  // Returns HTML, or null when the text has no inline options to lift.
+  function renderDense(text) {
+    var flat = String(text || '').replace(/\s+/g, ' ').trim();
+    var marks = [];
+    var re = /\(([a-z])\)\s/g;
+    var m, want = 'a';
+    while ((m = re.exec(flat))) {
+      if (m[1] !== want) continue;
+      marks.push({ at: m.index, end: re.lastIndex });
+      want = String.fromCharCode(want.charCodeAt(0) + 1);
+    }
+    if (marks.length < 2) return null;
+    var out = [];
+    var lead = flat.slice(0, marks[0].at).trim();
+    if (lead) out.push('<p class="tp-p">' + decorate(esc(lead)) + '</p>');
+    var items = [];
+    var tail = '';
+    for (var k = 0; k < marks.length; k++) {
+      var body = flat.slice(marks[k].end, k + 1 < marks.length ? marks[k + 1].at : flat.length).trim();
+      if (k + 1 === marks.length) {
+        // the last option swallows whatever follows it; cut at the first
+        // sentence break so the follow-up question gets its own paragraph
+        var cut = body.search(/[.?!]\s+(?=[A-Z])/);
+        if (cut !== -1) { tail = body.slice(cut + 1).trim(); body = body.slice(0, cut + 1); }
+      }
+      items.push('<li><span class="tp-opt-k">' + String.fromCharCode(97 + k) + '</span>'
+        + decorate(esc(body.replace(/[,;]\s*$/, ''))) + '</li>');
+    }
+    out.push('<ol class="tp-opts">' + items.join('') + '</ol>');
+    if (tail) {
+      // "My recommendation: …" is the part a busy reader wants first
+      var rec = tail.search(/\b(?:My )?recommendation:/i);
+      var before = rec === -1 ? tail : tail.slice(0, rec).trim();
+      var recText = rec === -1 ? '' : tail.slice(rec).trim();
+      if (before) out.push('<p class="tp-p">' + decorate(esc(before)) + '</p>');
+      if (recText) out.push('<p class="tp-p tp-rec">' + decorate(esc(recText)) + '</p>');
+    }
+    return out.join('');
+  }
+
   // ------------------------------------------------------------ body render --
   // Turns a raw ticket body into readable HTML: hidden machine comments, a
   // key/value meta strip (Studio: / Evidence time: …), then paragraphs,
@@ -136,6 +180,8 @@
     var para = [];
     function flushPara() {
       if (!para.length) return;
+      var dense = renderDense(para.join(' '));
+      if (dense) { out.push(dense); para = []; return; }
       out.push('<p class="tp-p">' + decorate(esc(para.join('\n'))).replace(/\n/g, '<br>') + '</p>');
       para = [];
     }

@@ -1,0 +1,57 @@
+{
+ "name": "CCC \u2014 orchestrate: delegate and critique from the status rail (motion source)",
+ "url": "http://127.0.0.1:8892/static/index.html?demo=1",
+ "viewport": {
+  "width": 3840,
+  "height": 2160
+ },
+ "wait_for": "body",
+ "seeds": {
+  "ccc-session-view": "list",
+  "ccc-kanban-view": "false",
+  "ccc-sidebar-width": "470",
+  "ccc-status-rail-collapsed": "0"
+ },
+ "stage": {
+  "init_scripts": [
+   "document.addEventListener('DOMContentLoaded',function(){var st=document.createElement('style');st.textContent='html,body,.sidebar,.main,#sidebarResizer{height:720px!important;max-height:720px!important;overflow-y:hidden}.sidebar .conv-list-panel{max-height:640px}';document.head.appendChild(st);setTimeout(function(){var e=document.querySelector('.conv-item[data-id^=\"22222222\"]');if(e)e.click();document.documentElement.scrollTop=0},4000)});"
+  ]
+ },
+ "steps": [
+  {
+   "do": "wait",
+   "s": 7
+  },
+  {
+   "do": "click",
+   "selector": "#convInput"
+  },
+  {
+   "do": "type",
+   "text": "Review the retry logic",
+   "delay": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 3
+  },
+  {
+   "do": "click",
+   "selector": "#statusRail :text('Preview')",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 6
+  },
+  {
+   "do": "click",
+   "selector": "#statusRail button:has-text('Delegate')",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 6
+  }
+ ]
+}

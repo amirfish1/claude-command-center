@@ -1,0 +1,76 @@
+{
+ "name": "CCC \u2014 file a ticket from the dashboard (motion source)",
+ "url": "http://127.0.0.1:8892/static/index.html?demo=1",
+ "viewport": {
+  "width": 3840,
+  "height": 2160
+ },
+ "wait_for": "#sidebarNewTicketBtn",
+ "stage": {
+  "init_scripts": [
+   "// Promo-film staging for the CCC static demo. Runs at document start on every page.\n// {\"ccc-last-seen-version\": \"5.37\", \"ccc-whats-new-dismissed-version\": \"5.37\", \"ccc-pwa-install-dismissed\": \"9999999999999\", \"ccc-telemetry-bar-dismissed\": \"1\", \"ccc-tour-done\": \"1\", \"ccc-archive-window\": \"all\", \"ccc-status-rail-collapsed\": \"1\", \"ccc-spawn-cwd\": \"/home/demo/code/widgets-api\", \"ccc-separate-tabs\": \"on\", \"ccc-sidebar-tab\": \"queues\", \"ccc-sidebar-width\": \"700\", \"ccc-uxq-selected-scope\": \"{\\\"__queue_global__\\\":\\\"ALL\\\"}\", \"uxq-selected-scope\": \"{\\\"__queue_global__\\\":\\\"ALL\\\"}\"} is replaced by build-capture.py with the film's localStorage seeds.\n(function () {\n  window.__CCC_DEMO__ = true;\n  window.__CCC_DEMO_FIXTURE_BASE__ = '/api';\n  var seeds = {\"ccc-last-seen-version\": \"5.37\", \"ccc-whats-new-dismissed-version\": \"5.37\", \"ccc-pwa-install-dismissed\": \"9999999999999\", \"ccc-telemetry-bar-dismissed\": \"1\", \"ccc-tour-done\": \"1\", \"ccc-archive-window\": \"all\", \"ccc-status-rail-collapsed\": \"1\", \"ccc-spawn-cwd\": \"/home/demo/code/widgets-api\", \"ccc-separate-tabs\": \"on\", \"ccc-sidebar-tab\": \"queues\", \"ccc-sidebar-width\": \"700\", \"ccc-uxq-selected-scope\": \"{\\\"__queue_global__\\\":\\\"ALL\\\"}\", \"uxq-selected-scope\": \"{\\\"__queue_global__\\\":\\\"ALL\\\"}\"};\n  try { Object.keys(seeds).forEach(function (k) { localStorage.setItem(k, seeds[k]); }); } catch (e) {}\n  var nativeFetch = window.fetch.bind(window);\n  var UUID = /^\\/api\\/conversations\\/([0-9a-f]{8})-[0-9a-f-]{27}$/i;\n  document.addEventListener('DOMContentLoaded', function () {\n    // Per-session transcripts: /api/conversations/<uuid> -> staged t-<prefix>.json (falls back to the demo mapping).\n    var demoFetch = window.fetch;\n    window.fetch = function (input, init) {\n      try {\n        var u = typeof input === 'string' ? input : (input && input.url) || '';\n        var m = UUID.exec(u.split('?')[0]);\n        if (m && (!init || !init.method || init.method === 'GET')) {\n          var staged = '/api/conversations/t-' + m[1].toLowerCase() + '.json';\n          return nativeFetch(staged).then(function (r) { return r.ok ? r : demoFetch(input, init); });\n        }\n      } catch (e) {}\n      return demoFetch(input, init);\n    };\n    var s = document.createElement('style');\n    s.textContent = '[data-hf-overlay]{display:none!important}' +\n      '#__ccc_demo_ro_banner__,#hiOobePrompt,.hi-oobe,.hi-retention-warning{display:none!important}' +\n      'html,body,*{scroll-behavior:auto!important}' +\n      '*{caret-color:auto}' +\n      // CSS zoom breaks sticky offsets inside the scrolled list; the film never scrolls it.\n      '#convList .conv-archived-tools{position:static!important}' +\n      // The optimistic \"Thinking\u2026\" pill after a send never resolves in the static demo.\n      '.conv-live-tool-inline.optimistic{display:none!important}' +\n      // Search-progress banner under the sidebar search while typing.\n      '#convSearchStatus{display:none!important}';\n    document.head.appendChild(s);\n    document.documentElement.style.zoom = '3';\n    // The demo repo list renders one unlabeled folder chip; drop it.\n    var scrub = function () {\n      document.querySelectorAll('.spawn-cwd-chip').forEach(function (b) {\n        if (b.textContent.trim() === '[object Object]') b.remove();\n      });\n    };\n    new MutationObserver(scrub).observe(document.body, { childList: true, subtree: true });\n    scrub();\n  });\n})();\n",
+   "// Static demo: mutating calls are no-ops, so mirror the real enqueue by prepending the new ticket\n// to the next /api/queue/list read (same shape as the fixture rows).\nvar added = null;\n(function () {\n  var oj = Response.prototype.json;\n  Response.prototype.json = function () {\n    var url = this.url || '';\n    return oj.call(this).then(function (d) {\n      if (added && /\\/api\\/queue\\/list/.test(url) && d && Array.isArray(d.items) && d.items.indexOf(added) < 0) {\n        d.items = [added].concat(d.items); d.count = d.items.length;\n      }\n      return d;\n    });\n  };\n})();\ndocument.addEventListener('DOMContentLoaded', function () {\n  var f = window.fetch;\n  window.fetch = function (input, init) {\n    var u = typeof input === 'string' ? input : (input && input.url) || '';\n    if (/\\/api\\/ux-fixes\\/enqueue/.test(u) && init && init.body) {\n      try {\n        var b = JSON.parse(init.body);\n        added = { ref: (b.project || 'BUGS') + '-113', number: 113, project: b.project || 'BUGS', status: 'open',\n          note: b.note, text: b.note, type: 'feature', priority: 'p0', source: 'ccc',\n          created_at: '2026-10-09T08:00:00Z', updated_at: '2026-10-09T08:00:00Z', claimable: true, watchtower_runnable: true };\n      } catch (e) {}\n    }\n    return f(input, init);\n  };\n});\n// Software-rendered 4K cannot afford the modal's backdrop blur (video froze in 8 s bursts); keep the dim, drop the blur.\ndocument.addEventListener('DOMContentLoaded', function () {\n  var s = document.createElement('style');\n  s.textContent = '*{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}';\n  document.head.appendChild(s);\n});\n"
+  ],
+  "chrome_args": [
+   "--disable-gpu",
+   "--disable-smooth-scrolling",
+   "--disable-gpu-vsync"
+  ]
+ },
+ "steps": [
+  {
+   "do": "wait",
+   "s": 5
+  },
+  {
+   "do": "click",
+   "selector": "#sidebarNewTicketBtn",
+   "settle": 0.8
+  },
+  {
+   "do": "type",
+   "text": "Rate-limit API",
+   "delay": 0.45
+  },
+  {
+   "do": "wait",
+   "s": 1.5
+  },
+  {
+   "do": "click",
+   "selector": "#fqTicketQueue",
+   "settle": 0.4
+  },
+  {
+   "do": "type",
+   "text": "W",
+   "delay": 0.4
+  },
+  {
+   "do": "key",
+   "key": "Enter"
+  },
+  {
+   "do": "wait",
+   "s": 2.5
+  },
+  {
+   "do": "click",
+   "selector": "[data-fq-ticket-submit]",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 4
+  },
+  {
+   "do": "click",
+   "selector": "#convList >> text=Rate-limit API",
+   "settle": 0.3
+  },
+  {
+   "do": "wait",
+   "s": 6
+  }
+ ]
+}

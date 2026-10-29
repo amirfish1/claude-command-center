@@ -43,6 +43,8 @@ def test_delivered_peer_row_renders_as_user_text_with_peer_block():
         "from": "uds:/tmp/cc-socks/4242.sock",
         "from_mode": "bypass",
         "msg_id": "11111111-2222-4333-8444-555555555555",
+        "verifiedPeerPid": None,
+        "verifiedPeerProcStart": None,
     }
 
 

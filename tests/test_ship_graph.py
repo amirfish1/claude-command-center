@@ -4,12 +4,14 @@ import json
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
 import ccc_server.ship_graph as ship_graph
+import server  # binds the hermes channel's lazy `_core` proxy
 
 
 @pytest.fixture
@@ -105,13 +107,19 @@ def mock_graph_env(tmp_path, monkeypatch):
     # tmp_path too, or it syncs (and migrates) the real on-disk one.
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(tmp_path / "session_fts.sqlite"))
     monkeypatch.setenv("CCC_SESSION_FTS_EMBED", "0")
+    # Isolate the Hermes messages_fts channel: search_sessions() merges it in,
+    # so a real ~/.hermes would inject foreign session ids.
+    monkeypatch.setattr(server, "HERMES_STATE_DB", tmp_path / "hermes" / "state.db")
+    monkeypatch.setattr(server, "HERMES_PROFILES_DIR", tmp_path / "hermes" / "profiles")
     monkeypatch.setattr(ship_graph, "_base_search_sessions", None)
     monkeypatch.setenv("WATCHTOWER_DB", str(wt_db_path))
     monkeypatch.setenv("CCC_PROJECTS_ROOT", str(projects_dir))
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
 
@@ -194,6 +202,19 @@ def test_search_sessions_cold_start_offloads_to_background(mock_graph_env, monke
     # monkeypatched env var wouldn't take effect here -- set the module
     # attribute directly instead.
     monkeypatch.setattr(ship_graph, "_BG_SYNC_THRESHOLD", 2)
+    # Hold the actual background sync until we observe it. A tiny fixture
+    # can otherwise finish before the caller checks is_indexing().
+    entered = threading.Event()
+    release = threading.Event()
+    sync_all = ship_graph._sync_all
+
+    def held_sync(conn, force=False):
+        if threading.current_thread().name == "ship-graph-warm":
+            entered.set()
+            assert release.wait(5), "test did not release the background sync"
+        return sync_all(conn, force=force)
+
+    monkeypatch.setattr(ship_graph, "_sync_all", held_sync)
 
     projects_dir = Path(os.environ["CCC_PROJECTS_ROOT"])
     repo_dir = projects_dir / "another-repo"
@@ -212,11 +233,15 @@ def test_search_sessions_cold_start_offloads_to_background(mock_graph_env, monke
 
     assert ship_graph.is_indexing() is False
     t0 = time.time()
-    res = ship_graph.search_sessions("biometric webauthn login", limit=10)
-    elapsed = time.time() - t0
-    assert elapsed < 2.0, f"cold-start search_sessions() blocked for {elapsed:.2f}s instead of offloading"
-    assert isinstance(res, list)
-    assert ship_graph.is_indexing() is True
+    try:
+        res = ship_graph.search_sessions("biometric webauthn login", limit=10)
+        elapsed = time.time() - t0
+        assert elapsed < 2.0, f"cold-start search_sessions() blocked for {elapsed:.2f}s instead of offloading"
+        assert isinstance(res, list)
+        assert entered.wait(2), "cold-start sync did not start in the background"
+        assert ship_graph.is_indexing() is True
+    finally:
+        release.set()
 
     deadline = time.time() + 15.0
     while ship_graph.is_indexing() and time.time() < deadline:
@@ -341,7 +366,9 @@ def mock_trap_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", repos_str)
 
@@ -603,7 +630,9 @@ def mock_coverage_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", repos_str)
 

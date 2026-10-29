@@ -2,7 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const puppeteer = require('puppeteer');
+const puppeteer = require('../require-puppeteer.js');
+const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
 const source = app.slice(app.indexOf('  function _uxFixesIdentityKey('), app.indexOf('  function _uxFixesQueueProgressForRow('));
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
@@ -101,7 +102,7 @@ test('changes to attributed ticket history invalidate the sidebar content signat
 });
 
 test('worker history expands all records and ticket clicks do not select the session row', async () => {
-  const browser = await puppeteer.launch({headless: true});
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
     await page.setContent('<div class="conv-item" id="row"></div>');

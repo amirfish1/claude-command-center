@@ -313,3 +313,38 @@ class AstraGuardrailPromptTests(_PolicyFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeedModelPolicyOnceTests(unittest.TestCase):
+    """A fresh install gets an empty policy once; a later deletion stays loud."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._tmp.name)
+        self.policy = self.root / "model-policy.json"
+        self._patches = [
+            patch.object(server, "MODEL_POLICY_FILE", self.policy),
+            patch.object(server, "COMMAND_CENTER_STATE_DIR", self.root),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+        self._tmp.cleanup()
+
+    def test_fresh_install_seeds_empty_policy(self):
+        server._seed_model_policy_once()
+        self.assertEqual(json.loads(self.policy.read_text()), {"blocked_models": []})
+
+    def test_existing_policy_untouched(self):
+        self.policy.write_text(json.dumps({"blocked_models": ["gpt-6-astra"]}))
+        server._seed_model_policy_once()
+        self.assertEqual(json.loads(self.policy.read_text())["blocked_models"], ["gpt-6-astra"])
+
+    def test_deleted_after_seed_is_not_reseeded(self):
+        server._seed_model_policy_once()
+        self.policy.unlink()
+        server._seed_model_policy_once()
+        self.assertFalse(self.policy.exists())

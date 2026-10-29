@@ -51,7 +51,24 @@ KIMI_WEB_SYSTEMD_UNIT_NAME="ccc-kimi-web.service"
 KIMI_WEB_SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${KIMI_WEB_SYSTEMD_UNIT_NAME}"
 
 is_port_bound() {
-  (echo > "/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
+  local p="$1"
+  local explicit_host="${2:-}"
+  if [ -n "$explicit_host" ]; then
+    (echo > "/dev/tcp/$explicit_host/$p") >/dev/null 2>&1 && return 0
+  fi
+  if (echo > "/dev/tcp/127.0.0.1/$p") >/dev/null 2>&1; then
+    return 0
+  fi
+  local host="${CCC_BIND_HOST:-}"
+  if [ -z "$host" ] && [ -f "$HOME/.claude/command-center/network.json" ]; then
+    host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+  fi
+  if [ -n "$host" ] && [ "$host" != "127.0.0.1" ] && [ "$host" != "0.0.0.0" ]; then
+    if (echo > "/dev/tcp/$host/$p") >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 service_domain() {
@@ -333,6 +350,28 @@ systemd_available() {
   command -v systemctl >/dev/null 2>&1
 }
 
+# True when the systemd user unit owns the worker. Then every worker start or
+# restart goes through systemd: a worker started any other way holds
+# worker.sock while the unit's own copy crash-loops "already running"
+# (thousands of failed starts on a Linux VM, Oct 2026).
+worker_systemd_managed() {
+  systemd_available \
+    && [ "$(systemctl --user show -p LoadState --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null)" = "loaded" ]
+}
+
+# Restart the systemd-managed worker. A stray worker outside the unit (pid
+# given, not the unit's MainPID) is stopped first so the unit's copy can bind
+# the socket. KillMode=process keeps the sessions the worker launched alive.
+restart_worker_via_systemd() {
+  local stray_pid="${1:-0}" main_pid
+  main_pid="$(systemctl --user show -p MainPID --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null || echo 0)"
+  if [ "${stray_pid:-0}" -gt 1 ] 2>/dev/null && [ "$stray_pid" != "${main_pid:-0}" ]; then
+    kill "$stray_pid" >/dev/null 2>&1 || true
+    sleep 0.5
+  fi
+  systemctl --user restart "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1
+}
+
 write_systemd_unit() {
   local target_port="$1"
   mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")" "$SERVICE_LOG_DIR"
@@ -357,6 +396,7 @@ write_systemd_unit() {
 Description=Claude Command Center
 After=network-online.target $WORKER_SYSTEMD_UNIT_NAME
 Wants=network-online.target $WORKER_SYSTEMD_UNIT_NAME
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -365,6 +405,11 @@ ExecStart=$HERE/run.sh
 Restart=on-failure
 RestartSec=2
 LimitNOFILE=2048
+# Signal only the dashboard on stop/restart, like the system unit. Engine
+# CLIs it spawned (Devin, Gemini, ... one-shot turns) write to on-disk logs
+# and finish their turn; the default (control-group) killed them mid-turn
+# on every dashboard restart.
+KillMode=process
 ${env_lines}
 [Install]
 WantedBy=default.target
@@ -375,6 +420,7 @@ EOF
 Description=Claude Command Center persistent execution worker
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -383,6 +429,10 @@ ExecStart=/usr/bin/env python3 $HERE/ccc_worker.py
 Restart=always
 RestartSec=2
 LimitNOFILE=2048
+# Signal only the worker on stop/restart. The sessions it launched talk to it
+# through on-disk FIFOs and logs, and a new worker reattaches them; the default
+# (control-group) killed every live session on each worker restart.
+KillMode=process
 ${env_lines}
 [Install]
 WantedBy=default.target
@@ -465,10 +515,20 @@ EOF
     systemctl --user enable --now "$KIMI_WEB_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
   fi
 
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 40); do
     sleep 0.5
     if is_port_bound "$target_port"; then
-      echo "✓ Service started. Open: http://localhost:$target_port"
+      local display_host="localhost"
+      if [ -n "${CCC_BIND_HOST:-}" ] && [ "$CCC_BIND_HOST" != "127.0.0.1" ] && [ "$CCC_BIND_HOST" != "0.0.0.0" ]; then
+        display_host="$CCC_BIND_HOST"
+      elif [ -f "$HOME/.claude/command-center/network.json" ]; then
+        local net_host
+        net_host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+        if [ -n "$net_host" ] && [ "$net_host" != "127.0.0.1" ] && [ "$net_host" != "0.0.0.0" ]; then
+          display_host="$net_host"
+        fi
+      fi
+      echo "✓ Service started. Open: http://$display_host:$target_port"
       echo "  Status   : systemctl --user status $SYSTEMD_UNIT_NAME"
       echo "  Logs     : journalctl --user -u $SYSTEMD_UNIT_NAME -f"
       echo "  Uninstall: ./run.sh --uninstall-service"
@@ -478,9 +538,10 @@ EOF
       echo "  sudo loginctl enable-linger $USER"
       return 0
     fi
+    systemctl --user is-failed --quiet "$SYSTEMD_UNIT_NAME" 2>/dev/null && break
   done
 
-  echo "⚠ Unit started but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Unit didn't bind port $target_port within 20s." >&2
   echo "  Check: journalctl --user -u $SYSTEMD_UNIT_NAME" >&2
   exit 1
 }
@@ -574,16 +635,29 @@ EOF
     load_kimi_web_service
   fi
 
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 40); do
     sleep 0.5
     if is_port_bound "$target_port"; then
-      echo "✓ Service started. Open: http://localhost:$target_port"
+      local display_host="localhost"
+      if [ -n "${CCC_BIND_HOST:-}" ] && [ "$CCC_BIND_HOST" != "127.0.0.1" ] && [ "$CCC_BIND_HOST" != "0.0.0.0" ]; then
+        display_host="$CCC_BIND_HOST"
+      elif [ -f "$HOME/.claude/command-center/network.json" ]; then
+        local net_host
+        net_host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+        if [ -n "$net_host" ] && [ "$net_host" != "127.0.0.1" ] && [ "$net_host" != "0.0.0.0" ]; then
+          display_host="$net_host"
+        fi
+      fi
+      echo "✓ Service started. Open: http://$display_host:$target_port"
       echo "  Uninstall: ./run.sh --uninstall-service"
       return 0
     fi
+    if ! launchctl print "$(service_target)" >/dev/null 2>&1; then
+      break
+    fi
   done
 
-  echo "⚠ Plist loaded but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Plist loaded but port $target_port didn't bind within 20s." >&2
   echo "  Check: $SERVICE_LOG_DIR/service.err.log" >&2
   exit 1
 }
@@ -750,6 +824,7 @@ echo "→ Command Center"
 echo "  port     : $PORT"
 echo "  bind     : ${CCC_BIND_HOST:-(default 127.0.0.1, or from network.json)}"
 echo "  url      : http://localhost:$PORT"
+echo "  community: https://discord.gg/aK325db94M"
 
 # A launchd service has a minimal PATH, so select a known-compatible Python
 # 3.9+ interpreter explicitly instead of relying on its inherited environment.
@@ -822,6 +897,16 @@ if [ -f "$link_ccc_cli_script" ]; then
 fi
 unset link_ccc_cli_script
 
+# Another program on $PORT used to surface as a bind traceback, after the
+# worker below had already started. Check first and say it in one line.
+# Only a non-CCC owner stops us; a CCC already on the port keeps the
+# server's own duplicate-instance handling.
+if [ -f "$HERE/scripts/port_preflight.py" ] \
+  && [ "$("$PYTHON" "$HERE/scripts/port_preflight.py" "$PORT" --host "${CCC_BIND_HOST:-}" 2>/dev/null || true)" = "busy" ]; then
+  echo "Error: port $PORT is in use by another program. Start CCC on a free port, e.g. PORT=$((PORT + 1)) ./run.sh" >&2
+  exit 1
+fi
+
 # Foreground installs do not have launchd/systemd to start the independent
 # execution worker. Ensure one is healthy before replacing this shell with the
 # restartable dashboard. `nohup` + a separate session keeps it alive across the
@@ -876,6 +961,20 @@ raise SystemExit(0 if "engine-execution-v1" in caps else 1)
     if [ "${worker_compatible:-0}" != "1" ] \
       && "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
       echo "⚠ Older persistent worker still has unresolved work; using compatibility execution." >&2
+    elif [ "${worker_compatible:-0}" != "1" ] && worker_systemd_managed; then
+      # Never start a second worker beside the unit's own: (re)start the unit.
+      if [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
+        restart_worker_via_systemd "$existing_worker_pid" || true
+      else
+        systemctl --user start "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+      fi
+      for _ in $(seq 1 50); do
+        if "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+          echo "  worker   : persistent ($WORKER_SYSTEMD_UNIT_NAME)"
+          break
+        fi
+        sleep 0.2
+      done
     elif [ "${worker_compatible:-0}" != "1" ]; then
       nohup "$PYTHON" "$HERE/ccc_worker.py" \
         >>"$SERVICE_LOG_DIR/worker.out.log" \
@@ -927,6 +1026,12 @@ EOF
         worker_stale_hash=1
       fi
       if { [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; } \
+        && [ "${CCC_WORKER_AUTO_RESTART:-1}" = "0" ]; then
+        # Owner opted out of automatic rolls (CCC_WORKER_AUTO_RESTART=0).
+        # By default an idle stale worker is restarted below: the worker
+        # units use KillMode=process, so the sessions it launched survive.
+        echo "→ Worker code is stale — left running (CCC_WORKER_AUTO_RESTART=0); restart it from Settings → Maintenance"
+      elif { [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; } \
         && [ "${existing_worker_idle:-0}" != "1" ]; then
         # Never roll a worker that owns active/queued/uncertain work: source
         # files change far more often than worker behaviour, and a restart
@@ -939,7 +1044,16 @@ EOF
           echo "→ Worker runs an older copy of server.py — restarting worker"
         fi
         echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
-        if ! launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+        worker_kicked=0
+        if worker_systemd_managed; then
+          # Even if the restart call fails, never fall through to a
+          # detached spawn: the unit's Restart=always owns recovery.
+          restart_worker_via_systemd "${existing_worker_pid:-0}" || true
+          worker_kicked=1
+        elif launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+          worker_kicked=1
+        fi
+        if [ "$worker_kicked" != "1" ]; then
           # No launchd worker service on this install path (brew service or
           # DMG app spawn): kill the stale worker AND immediately replace it,
           # or the dashboard runs workerless (legacy execution) until the

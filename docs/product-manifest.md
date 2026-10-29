@@ -54,8 +54,8 @@ not yet wired.
 
 ## How we ship it
 
-- **Source-available.** Public repo; free for non-commercial use, commercial by permission
-  (see LICENSE). Companion-tool ethos — runs behind the scenes
+- **Source-available.** Public repo; FSL-1.1-MIT: free to use and modify, including at work;
+  no resale or competing hosted service; MIT after two years (see LICENSE). Companion-tool ethos — runs behind the scenes
   and you forget it's there (in a good way), like Token Optimizer / Total Recall.
 - **Zero-dependency core.** Server is stdlib-only Python; frontend is a single static file.
   No bundler, no npm, no pip at runtime.

@@ -37,6 +37,29 @@ If you expose the port to the network, the LAN, or the internet, you are giving 
 - **No encryption at rest.** State files (`~/.claude/command-center/*.json`) are plaintext.
 - **No rate limiting.** A misbehaving local script can spam the API.
 
+## Credential requests
+
+The [credential broker](docs/credential-broker.md) lets local programs ask for a
+value through a masked dashboard prompt. Broker values and retrieval tokens are
+excluded from request logs, transcripts, activity feeds and browser storage.
+Responses bypass generic event hooks and use `Cache-Control: no-store`. Request
+metadata (name, kind, reason and reported session ID) is public to dashboard
+users and must not contain credentials. Submission inherits the Origin and PIN
+gates; remotely submitted values additionally require an HTTPS Origin. Creation,
+retrieval, cancellation and deletion require a direct loopback program without
+Origin/proxy headers. A random per-request token is required to retrieve or
+cancel; retrieval is atomic and one-shot. This remains a single-OS-user tool,
+not a sandbox between agents. A consumer can still leak a value it receives.
+
+Ephemeral values expire in memory after at most 15 minutes. Explicitly remembered
+values use owner-only plaintext files (`0600`) under the owner-only `secrets/`
+directory (`0700`), separate from Vault/BYOK. Existing symlinks, foreign owners
+and permissive modes are rejected. This portable fallback provides no encryption
+at rest; other programs running as the same OS user and administrators can read
+it. One-time codes cannot be remembered. `ccc secret forget NAME` deletes all
+saved kinds for that alias and revokes outstanding deliveries. No askpass hooks,
+remote listener, keychain integration or cloud/federation forwarding is installed.
+
 ## Logs may contain secrets
 
 Spawn logs under `<repo>/.claude/logs/spawn-*.log` capture the full prompt and Claude output. If Claude reads a file containing a token or credential, it ends up in that log. The `.gitignore` excludes `.claude/logs/`, but the files are local and readable by other users on the same machine. `chmod 700` the logs directory if that's a concern.
@@ -50,6 +73,49 @@ For non-sensitive issues, open a GitHub issue. For anything that could enable ar
 - The commit hash you tested against.
 
 We'll respond within a week. If the report is valid we'll cut a fix release before disclosing.
+
+## Optional outbound call: new-session repo guess
+
+When you start a new session, CCC guesses the right folder from your first prompt. Path and folder-name matching is local and never touches the network. Only if you add a TypeSafe Jev key (the new-session **Add Jev token** button, Settings > Engines provider profiles, or the `JEV_API_KEY` environment variable) does CCC also send the prompt (up to 3000 characters, with likely secrets such as tokens, API keys and passwords replaced by `[REDACTED]`) plus opaque repo labels, short repo descriptions (from each repo's README / CLAUDE.md / AGENTS.md) and up to a dozen of your past session titles per repo (scrubbed the same way) to `https://api.typesafe.ai/v1/systemone`. Vault entries named `jev-api-key`, `jev-api-key.password`, or `jev-api-key.token`, or marked with env var `JEV_API_KEY`, enable matching too. Environment keys take precedence over provider profiles, then Vault entries. No key means no call. The configured indicator checks key availability, not provider validity. The key is used only for this call and is not passed to spawned agent sessions unless you explicitly choose that BYOK profile at spawn; failures and timeouts (3 seconds) silently fall back to the local result.
+
+## Session row reply suggestions
+
+The model answering a session can include a `NEXT_ACTION` label and scoped
+reply in its `<session-state>` footer. CCC validates those fields and renders
+them directly for idle sessions with a pending request. Rendering makes no
+additional model call and sends no session text to another provider. Answers
+without valid action metadata keep their normal summary text. Hovering the
+chip shows the exact reply; clicking sends it through the normal session input
+API with the same `source:"composer"` provenance as a typed human reply,
+so Claude receives the click as user input rather than an agent peer message.
+Rendering the chip alone never sends that reply. Automated API and peer sends
+keep their existing provenance. The older `/api/conversations/<id>/quick-action` suggestion endpoint
+returns a no-action response for compatibility and never invokes a model.
+
+## Optional outbound call: share card upload
+
+The Throughput page has a Share button that renders a card image (totals only, never prompts, code, paths, session names or project names). Posting to X, LinkedIn, Bluesky or Threads, or clicking Copy link, uploads that one PNG and its one-line headline (for example "2.28B tokens processed this week") from your browser to the card worker at `https://ccc-card.claude-command-center.workers.dev` (source: [`infra/card-worker/`](infra/card-worker/)). Nothing is uploaded until you click one of those buttons, Copy image and Download PNG stay fully local, and CCC's own server makes no call. The worker stores the PNG and headline under a random unguessable id, serves them at a public page so social networks can show your card, and deletes them after one year. It accepts only real PNGs of exactly 1200x630 or 1080x1080, up to 1.5 MB, at most 10 uploads per IP per hour (the rate limiter keeps a salted hash of the IP for under an hour; no IP, user agent or account identifier is stored with a card). Browser uploads are accepted only from `localhost`, `127.0.0.1` and `[::1]` origins. Anyone with the link can view the card, so share it only if you are happy to share the numbers on it. If the upload fails, CCC falls back to text plus the repo link and copies the image so you can paste it. To use a different host, set `localStorage["ccc.share.cardBase"]` to an `https://` origin.
+
+## Optional outbound relay: CCC Cloud
+
+CCC can pair with a CCC Cloud relay service so you can see sessions and answer questions from a phone without exposing this machine. It is off until you pair, and CCC ships no service URL: you type the relay URL (or set `CCC_CLOUD_SERVICE_URL`). Unpaired installs make no relay calls and create no relay state. Protocol: [`docs/cloud-relay/PROTOCOL.md`](docs/cloud-relay/PROTOCOL.md); privacy detail: [`docs/cloud-relay/SECURITY-AND-PRIVACY.md`](docs/cloud-relay/SECURITY-AND-PRIVACY.md).
+
+- **Outbound only.** The client (`ccc_server/cloud_relay.py`) opens no listener. It pushes a state snapshot every 20 s and long-polls for commands over `https://` (plain `http://` only to a loopback relay). The device secret is sent only to the origin you chose; a pairing answer that names another origin is ignored. It does not change the bind address, the origin allowlist, `network.json`, or Tailscale.
+- **Localhost-only control.** `/api/cloud-relay/{status,config,pair,pair/confirm,pair/abandon,unpair}` require a loopback `Origin` for this server's port (or none) **and** a request that did not arrive from off the machine or through a reverse proxy (same check as `/api/network-config`). A tailnet peer cannot pair this machine, enable the relay, or read pairing state. Credentials are saved only after you confirm the masked account email.
+- **Closed command list.** The relay can only ask for `session.send_input`, `question.answer`, `session.wake`, `session.detail` and `session.history`. Everything else is rejected locally as `unknown_capability`. Commands run against CCC's own loopback API, so they get the same validation as local callers. Each command expires within 10 minutes, runs at most once (reserved before dispatch, deduplicated by `request_id` for 24 h), and is logged to `~/.claude/command-center/cloud/audit.jsonl` without payloads.
+- **Minimized data.** Titles, repo labels, question text, summaries and transcript turns pass through a redactor (paths, emails, credentialed URLs, long tokens) and fixed length caps before they leave the machine. Turn off **Share session titles** to send opaque labels instead. The redactor is best-effort, not a guarantee.
+- **Kill switch and revocation.** `CCC_CLOUD_DISABLED=1` stops the loop unconditionally. Unpair asks the relay to revoke the device, then wipes local credentials. A revoked device, a deleted account, or repeated credential rejection stops the loop and wipes the local credential. The secret is stored mode `0600` in `~/.claude/command-center/cloud/credentials`, separate from `config.json`, and is never logged or returned by the API.
+
+## Free router (free models)
+
+The optional free router — [freellmapi](https://github.com/tashfeenahmed/freellmapi), MIT — is a managed local subprocess that proxies "Free ($0)" sessions to free-tier LLM providers:
+
+- **Loopback only.** It binds `HOST=127.0.0.1`, `PORT=3017` (chosen over freellmapi's default 3001 so it never collides with a freellmapi you run yourself). It opens no listener on any other interface; it is supervised by a per-user LaunchAgent on macOS and a managed child process elsewhere.
+- **Credentials.** The router's admin password and unified API key are stored in `~/.ccc/free-router.json` written mode `0600`. Provider keys are submitted to the router over loopback and live in its own encrypted store under `~/.ccc/freellmapi/`; CCC never logs them, never echoes them in an API response, and never includes them in diagnostics.
+- **Per-child env only.** Free routing is `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL` injected into the spawned child's environment. CCC never writes these to `~/.claude/settings.json`, and a Claude subscription OAuth token is never routed through it — the router carries strictly non-Anthropic traffic, and only inside sessions you explicitly spawned as free.
+- **Prompts leave the machine.** A $0 session's prompts, file contents, and outputs are sent to whichever external provider serves the model — the same exposure class as any API call, except free tiers are paid for in data-use terms rather than money. Each provider card carries a data-use note; the keyless provider (Kilo) **logs prompts and outputs for training** and stays disabled until you click that specific disclosure.
+- **Install provenance.** The source is cloned from the upstream repo pinned to a fixed commit (`CCC_FREELLMAPI_SRC` substitutes a local checkout for development), and the Node runtime it needs is downloaded from nodejs.org and verified against the published `SHASUMS256.txt`.
+- **Existing-router detection is read-only.** Probing well-known loopback ports for a freellmapi/Ollama you already run never mutates those installs.
 
 ## Private queue diagnostics
 

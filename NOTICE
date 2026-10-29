@@ -1,9 +1,13 @@
 Claude Command Center
 Copyright (c) 2026 Amir Fish. All rights reserved.
 
-This project is licensed under the Claude Command Center Software License
-(see LICENSE): source-available, free for non-commercial use, commercial
-use by permission.
+This project is licensed under the Functional Source License, Version 1.1,
+MIT Future License (FSL-1.1-MIT; see LICENSE). Each release becomes
+available under the MIT License two years after it is published.
+
+Versions released from 2026-07-28 until the switch to FSL-1.1-MIT were
+published under the Claude Command Center Software License included with
+those versions.
 
 Versions released before 2026-07-28 were published under the MIT License
 (see LICENSE-MIT) and remain available under those terms.

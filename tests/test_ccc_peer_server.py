@@ -339,3 +339,30 @@ def test_from_addr_stays_empty_when_ccc_peer_server_not_running(monkeypatch, tmp
     server._try_uds_peer_delivery("target-sid", "go", source="group-chat-coordinate", peer_sender_sid="sender-sid")
     user = sent[0][-1]
     assert "from" not in user
+
+
+def test_inbound_message_from_relay_thread_becomes_relay_reply(monkeypatch, tmp_path, sock_dir):
+    from ccc_server import cloud_relay
+    from ccc_server import watchtower_msg
+    socket_path, token = _start_real_peer(monkeypatch, tmp_path, sock_dir)
+    paths = cloud_relay.CloudPaths(str(tmp_path / "cloud"))
+    pushes = []
+
+    class FakeManager:
+        def __init__(self):
+            self.paths = paths
+            self.loop = type("L", (), {"request_push": lambda _self: pushes.append(1)})()
+
+    monkeypatch.setattr(server, "cloud_relay_manager", lambda *a, **k: FakeManager())
+    monkeypatch.setattr(watchtower_msg, "_ccc_sid_for_socket_addr", lambda addr: "sess-relay")
+    cloud_relay.open_reply_thread(paths, "sess-relay")
+    s = _send_frame(socket_path, token, "Done. Tests pass.")
+    for _ in range(50):
+        if cloud_relay.pending_replies(paths):
+            break
+        time.sleep(0.05)
+    s.close()
+    replies = cloud_relay.pending_replies(paths)
+    assert [r["text"] for r in replies] == ["Done. Tests pass."]
+    assert replies[0]["session_ref"] == "sess-relay"
+    assert pushes == [1]

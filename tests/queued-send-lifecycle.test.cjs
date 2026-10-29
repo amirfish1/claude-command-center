@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { before, after, test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
-const puppeteer = require('puppeteer');
+const puppeteer = require('../require-puppeteer.js');
+const { findChromePath } = require('../puppeteer-browser-config.js');
 
 const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 function between(start, end) {
@@ -14,6 +15,8 @@ function between(start, end) {
   return source.slice(first, last);
 }
 const lifecycle = [
+  between('  function queuedSteerSource(', '  function syncUserMessageSteerButtons('),
+  between('  function takeQueuedSendAcknowledgement(', '  // Queued sends are actionable steer candidates'),
   between('  function syncPendingSendsMapForConv(', '  function removePendingSendEcho('),
   between('  function markPendingSendQueued(', '  // State 2 of the echo lifecycle:'),
   between('  function removePendingSendEcho(', '  // A send the server *queued*'),
@@ -23,13 +26,13 @@ const reconciliation = between(
   '        const normed = _normSend(ev.text);\n        let _reconciledExact',
   '        // Webui panes: collapse a durable user bubble');
 const renderedUserReconciliation = between(
-  '      if (_pendingSends.length) {\n        const _durableUserTexts',
+  '      if (_pendingSends.length) {\n        const _durableUserRows',
   '\n    }\n    if (!opts.provisionalOverlay) {\n      for (const p of _pendingSends) {');
 const renderTail = between(
   '    // The app-server live overlay is agent-output-only.',
   '    // Re-evaluate the end-of-session outcome banner');
 let browser;
-before(async () => { browser = await puppeteer.launch({ headless: true }); });
+before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
 
 async function fixture(run, input) {
@@ -93,7 +96,16 @@ async function fixture(run, input) {
         return row;
       };
       (0, eval)(lifecycle);
-      window.reconcileUserEvent = new Function('ev', 'paneId', '$view', reconciliation);
+      const reconcileEvent = new Function('ev', 'paneId', '$view', 'div', reconciliation);
+      window.reconcileUserEvent = (ev, paneId, view) => {
+        const row = document.createElement('div');
+        row.className = 'event user_text';
+        if (ev.ts) row.dataset.tsEpoch = String(Date.parse(ev.ts));
+        row.innerHTML = '<div class="user-msg"></div>';
+        row.firstChild.textContent = ev.text;
+        reconcileEvent(ev, paneId, view, row);
+        return row;
+      };
       window.reconcileRenderedUserRows = new Function('$view', 'paneId', renderedUserReconciliation);
       window.runRenderTail = new Function('$view', 'paneId', 'opts', 'events', renderTail);
     }, { lifecycle, reconciliation, renderedUserReconciliation, renderTail });
@@ -120,6 +132,40 @@ test('restoration consumes existing occurrences only once for repeated genuine s
     return getConvView().querySelectorAll('.event.user_text').length;
   });
   assert.equal(result, 2);
+});
+
+test('rebuilding queued cards reuses pending records across repeated restores', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Rebuild this queue', 'session', 'main');
+    markPendingSendQueued(pending, 'Waiting for this turn');
+    for (let i = 0; i < 6; i++) {
+      document.querySelector('.queued-steer-tray')?.remove();
+      restorePendingSendEchoes('conversation', 'main');
+      restorePendingSendEchoes('conversation', 'main');
+    }
+    return { cards: document.querySelectorAll('.queued-steer-tray .send-queued').length,
+      tracked: _pendingSends.length, saved: fixturePane.pendingSendsByConv.conversation.length,
+      original: _pendingSends[0] === pending.entry,
+      liveReference: pending.element.isConnected && pending.element === pending.entry.element };
+  });
+  assert.deepEqual(result, { cards: 1, tracked: 1, saved: 1, original: true, liveReference: true });
+});
+
+test('rebuilding genuine identical queued sends preserves each occurrence', async () => {
+  const result = await fixture(() => {
+    for (let i = 0; i < 2; i++) {
+      markPendingSendQueued(appendPendingSendEcho('Again', 'session', 'main'), 'Waiting');
+    }
+    const originals = _pendingSends.slice();
+    for (let i = 0; i < 4; i++) {
+      document.querySelector('.queued-steer-tray')?.remove();
+      restorePendingSendEchoes('conversation', 'main');
+    }
+    return { cards: document.querySelectorAll('.queued-steer-tray .send-queued').length,
+      tracked: _pendingSends.length, saved: fixturePane.pendingSendsByConv.conversation.length,
+      original: originals.every(entry => _pendingSends.includes(entry)) };
+  });
+  assert.deepEqual(result, { cards: 2, tracked: 2, saved: 2, original: true });
 });
 
 test('a tray belonging to another conversation cannot satisfy restoration', async () => {
@@ -173,6 +219,50 @@ test('one durable event acknowledges only one of two repeated queued sends', asy
     markPendingSendQueued(first, '', { sync: false });
     markPendingSendQueued(second, '', { sync: false });
     reconcileUserEvent({ text: 'Again' }, 'main', getConvView());
+    return { first: first.element.isConnected, second: second.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { first: false, second: true, tracked: 1 });
+});
+
+test('event reconciliation and repeated render sweeps share one delivery receipt', async () => {
+  const result = await fixture(() => {
+    const first = appendPendingSendEcho('Again', 'session', 'main');
+    const second = appendPendingSendEcho('Again', 'session', 'main');
+    const stamp = Math.max(first.entry.ts, second.entry.ts) + 1000;
+    const row = reconcileUserEvent({ text: 'Again', ts: new Date(stamp).toISOString() }, 'main', getConvView());
+    getConvView().append(row);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    reconcileRenderedUserRows(getConvView(), 'main');
+    return { first: first.element.isConnected, second: second.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { first: false, second: true, tracked: 1 });
+});
+
+test('rendered history cannot acknowledge a newer pending send', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Again', 'session', 'main');
+    const row = document.createElement('div');
+    row.className = 'event user_text';
+    row.dataset.tsEpoch = String(pending.entry.ts - 60000);
+    row.innerHTML = '<div class="user-msg">Again</div>';
+    getConvView().append(row);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    return { connected: pending.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { connected: true, tracked: 1 });
+});
+
+test('one rendered durable occurrence clears one pending send across repeated sweeps', async () => {
+  const result = await fixture(() => {
+    const first = appendPendingSendEcho('Again', 'session', 'main');
+    const second = appendPendingSendEcho('Again', 'session', 'main');
+    const row = document.createElement('div');
+    row.className = 'event user_text';
+    row.dataset.tsEpoch = String(Math.max(first.entry.ts, second.entry.ts) + 1000);
+    row.innerHTML = '<div class="user-msg">Again</div>';
+    getConvView().append(row);
+    reconcileRenderedUserRows(getConvView(), 'main');
+    reconcileRenderedUserRows(getConvView(), 'main');
     return { first: first.element.isConnected, second: second.element.isConnected, tracked: _pendingSends.length };
   });
   assert.deepEqual(result, { first: false, second: true, tracked: 1 });
@@ -293,7 +383,7 @@ test('provisional agent output does not reorder pending input or clear sending s
   });
 });
 
-test('durable agent output still clears live indicators and reconciles pending placement', async () => {
+test('durable agent output clears sending state without clearing the live turn indicator', async () => {
   const result = await fixture(() => {
     const pending = appendPendingSendEcho('Injected fixture', 'session', 'main');
     const sentinel = document.createElement('div');
@@ -311,7 +401,7 @@ test('durable agent output still clears live indicators and reconciles pending p
     pendingAtTail: true,
     tracked: 1,
     cleared: 1,
-    generatingClears: 1,
+    generatingClears: 0,
   });
 });
 
@@ -338,6 +428,16 @@ for (const incomingText of ['Again', 'Older different message']) {
     assert.deepEqual(result, { beforeDelivery: { connected: true, tracked: 1 }, afterDelivery: { connected: false, tracked: 0 } });
   });
 }
+
+test('a whole-second durable timestamp acknowledges a send made later in that second', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('what is the status', 'session', 'main');
+    pending.entry.ts = Math.floor(pending.entry.ts / 1000) * 1000 + 900;
+    reconcileUserEvent({ text: 'what is the status', ts: new Date(Math.floor(pending.entry.ts / 1000) * 1000).toISOString().replace(/\.\d+Z$/, 'Z') }, 'main', getConvView());
+    return { connected: pending.element.isConnected, tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { connected: false, tracked: 0 });
+});
 
 test('a late original queue ACK preserves the optimistic steering presentation', async () => {
   const result = await fixture(() => {
@@ -374,4 +474,24 @@ test('a restored server queue card remains cancellable without resurrecting save
     return { tracked, cards: document.querySelectorAll('.event.user_text').length };
   });
   assert.deepEqual(result, { tracked: true, cards: 0 });
+});
+
+test('Devin reply chunks preserve the generating row until live status settles the turn', async () => {
+  const result = await fixture(() => {
+    window.clearLiveGeneratingIndicator = view => {
+      view.querySelectorAll('.conv-live-tool-inline.is-generating').forEach(node => node.remove());
+    };
+    currentSession.source = 'devin-cli';
+    const indicator = document.createElement('div');
+    indicator.className = 'conv-live-tool-inline is-generating';
+    indicator.textContent = 'Generating…';
+    getConvView().append(indicator);
+    const connected = [];
+    for (const type of ['assistant', 'tool_result', 'assistant']) {
+      runRenderTail(getConvView(), 'main', {}, [{ type }]);
+      connected.push(indicator.isConnected);
+    }
+    return connected;
+  });
+  assert.deepEqual(result, [true, true, true]);
 });

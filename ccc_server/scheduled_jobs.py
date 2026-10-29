@@ -6,7 +6,7 @@ Reads job state read-only from:
 1. macOS launchd (local host / laptop): inspecting ~/Library/LaunchAgents/*.plist
    and querying `launchctl list`.
 2. Linux systemd (hermes VM): querying `systemctl list-timers --output=json` and
-   `systemctl show` via ssh.
+   `systemctl show` locally on Linux or via ssh elsewhere.
 
 CCC surfaces scheduling state, it does NOT own execution.
 """
@@ -17,8 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
+import platform
 import plistlib
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -26,6 +28,14 @@ import time
 _CACHE_LOCK = threading.Lock()
 _CACHE = {"ts": 0.0, "payload": None}
 _CACHE_TTL_S = 15.0
+
+
+def _systemd_command(argv, timeout_s=4):
+    """Read local systemd on Linux; use the configured SSH host elsewhere."""
+    if platform.system() == "Linux":
+        return list(argv)
+    return ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout_s}",
+            "hermes", shlex.join(argv)]
 
 
 def _parse_iso(ts_val):
@@ -201,20 +211,14 @@ def _collect_local_launchd_jobs():
 
 
 def _collect_hermes_systemd_jobs(timeout_s=4):
-    """Queries systemd timers and services on hermes via ssh."""
+    """Queries systemd timers locally on Linux or on the SSH host elsewhere."""
     jobs = []
     host_info = {"status": "offline", "error": None}
 
     # Step 1: list-timers JSON
     try:
         res = subprocess.run(
-            [
-                "ssh",
-                "-o", "BatchMode=yes",
-                "-o", f"ConnectTimeout={timeout_s}",
-                "hermes",
-                "systemctl list-timers --output=json",
-            ],
+            _systemd_command(["systemctl", "list-timers", "--output=json"], timeout_s),
             capture_output=True,
             text=True,
             timeout=timeout_s + 2,
@@ -249,7 +253,7 @@ def _collect_hermes_systemd_jobs(timeout_s=4):
                 "--property=Id,ActiveState,SubState,Result,ExecMainStatus,ExecMainExitTimestamp"
             )
             res2 = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout_s}", "hermes", cmd],
+                _systemd_command(shlex.split(cmd), timeout_s),
                 capture_output=True,
                 text=True,
                 timeout=timeout_s + 2,
@@ -365,6 +369,61 @@ def collect_scheduled_jobs(force=False, timeout_s=3):
     return payload
 
 
+_CURSOR_RE = re.compile(r"[A-Za-z0-9=;_.\-]{1,300}")
+_UNIT_RE = re.compile(r"[A-Za-z0-9@_.\-]+")
+
+# Runs on the VM. $1 = unit, $2 = max lines, $3 = cursor or "-". One ssh.
+# Tails only the unit's CURRENT/LAST invocation (so a live view never mixes in
+# earlier runs) and reports whether it is still running plus a resume cursor.
+_LIVE_SCRIPT = (
+    'unit="$1"; n="$2"; cur="$3"; '
+    'st=$(systemctl show "$unit" -p ActiveState --value 2>/dev/null); '
+    'inv=$(systemctl show "$unit" -p InvocationID --value 2>/dev/null); '
+    'echo "@@STATE:$st"; '
+    'if [ -n "$inv" ]; then '
+    'if [ "$cur" = "-" ]; then a=""; else a="--after-cursor=$cur"; fi; '
+    'journalctl "_SYSTEMD_INVOCATION_ID=$inv" -o cat --show-cursor --no-pager -q $a 2>/dev/null | tail -n "$n" | cut -c1-600; '
+    'fi'
+)
+
+
+def get_scheduled_job_log_live(job_id, cursor="", max_lines=200):
+    """Incremental log for one Hermes unit's current invocation.
+
+    Returns {ok, id, log, cursor, running}. `log` holds only lines after
+    `cursor` (whole tail when no cursor); pass the returned `cursor` back to
+    get the next slice. One local subprocess or ssh per call. Systemd units only.
+    """
+    if not job_id or not job_id.startswith("hermes:"):
+        return {"ok": False, "id": job_id, "error": "Live log is for hermes jobs", "log": "", "cursor": "", "running": False}
+    unit = job_id.split(":", 1)[1]
+    if not _UNIT_RE.fullmatch(unit):
+        return {"ok": False, "id": job_id, "error": "Invalid unit name", "log": "", "cursor": "", "running": False}
+    cursor = (cursor or "").strip()
+    if cursor and not _CURSOR_RE.fullmatch(cursor):
+        return {"ok": False, "id": job_id, "error": "Invalid cursor", "log": "", "cursor": "", "running": False}
+    n = max(1, min(500, int(max_lines)))
+    try:
+        res = subprocess.run(
+            _systemd_command(["bash", "-s", "--", unit, str(n), cursor or "-"]),
+            input=_LIVE_SCRIPT, capture_output=True, text=True, timeout=8, check=False,
+        )
+    except Exception as e:
+        return {"ok": False, "id": job_id, "error": str(e), "log": "", "cursor": cursor, "running": False}
+    if res.returncode != 0:
+        return {"ok": False, "id": job_id, "error": (res.stderr.strip() or "ssh failed")[:200],
+                "log": "", "cursor": cursor, "running": False}
+    running, new_cursor, lines = False, cursor, []
+    for ln in res.stdout.splitlines():
+        if ln.startswith("@@STATE:"):
+            running = ln[8:].strip() in ("active", "activating", "reloading")
+        elif ln.startswith("-- cursor: "):
+            new_cursor = ln[len("-- cursor: "):].strip()
+        else:
+            lines.append(ln)
+    return {"ok": True, "id": job_id, "log": "\n".join(lines), "cursor": new_cursor, "running": running}
+
+
 def get_scheduled_job_log(job_id, max_lines=50):
     """Fetches the log tail for a given job id (laptop:<label> or hermes:<unit>)."""
     if not job_id:
@@ -376,13 +435,7 @@ def get_scheduled_job_log(job_id, max_lines=50):
             return {"ok": False, "id": job_id, "error": "Invalid unit name", "log": ""}
         try:
             res = subprocess.run(
-                [
-                    "ssh",
-                    "-o", "BatchMode=yes",
-                    "-o", "ConnectTimeout=4",
-                    "hermes",
-                    f"journalctl -u {unit} -n {max_lines} --no-pager",
-                ],
+                _systemd_command(["journalctl", "-u", unit, "-n", str(max_lines), "--no-pager"]),
                 capture_output=True,
                 text=True,
                 timeout=6,

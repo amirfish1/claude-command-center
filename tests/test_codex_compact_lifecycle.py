@@ -273,3 +273,132 @@ def test_codex_compact_reports_compact_timeout_on_the_deadline(tmp_path, monkeyp
     assert result["status"] == "compacting"
     assert result["pre_tokens"] == 282_000
     assert "still compacting" in result["error"]
+
+
+def test_codex_compact_names_the_process_holding_an_active_writer(tmp_path, monkeypatch):
+    """CCC-1246: a foreign `codex exec` owned the thread and the card only said
+    "try again". The failure must name the process that holds the rollout."""
+    import subprocess
+    import sys
+
+    rollout = _write_rollout(tmp_path / "rollout.jsonl", [
+        _token_count(282_000, 282_900, output_tokens=900),
+    ])
+    _stub_app_server(monkeypatch, rollout)
+    monkeypatch.setattr(
+        server, "_codex_app_server_request",
+        lambda method, params, timeout=None: {
+            "error": {"code": -32600, "message": "thread abc already has an active writer"},
+        },
+    )
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys, time; f = open(sys.argv[1], 'a'); print('ready', flush=True); time.sleep(30)",
+         str(rollout)],
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "ready"
+        result = server._codex_compact_via_app_server("codex-writer-session")
+    finally:
+        holder.kill()
+        holder.wait(timeout=5)
+
+    assert result["ok"] is False
+    assert result["code"] == "codex_active_writer"
+    assert [w["pid"] for w in result["writers"]] == [holder.pid]
+    assert f"pid {holder.pid}" in result["error"]
+    assert "active writer" in result["detail"]
+
+
+def test_codex_compaction_post_tokens_reads_the_zeroed_turn(tmp_path):
+    post_tokens = server._codex_compaction_post_tokens
+
+    # The compaction turn zeroes every per-turn field and reports the rebuilt
+    # context size in total_tokens only.
+    assert post_tokens(
+        _token_count(0, 13_828)["payload"]
+    ) == 13_828
+    # A NORMAL turn's token_count carries input_tokens - reading its
+    # total_tokens would print the pre-compact context as the "post" size.
+    assert post_tokens(_token_count(282_000, 282_900)["payload"]) == 0
+    # A fully zeroed turn carries no size at all.
+    assert post_tokens(_token_count(0, 0)["payload"]) == 0
+    # The cumulative total_token_usage block counts the WHOLE session (115M
+    # in the real incident) - it must never be mistaken for the rebuilt size.
+    only_lifetime = {
+        "type": "token_count",
+        "info": {
+            "total_token_usage": {
+                "input_tokens": 115_079_393,
+                "total_tokens": 120_000_000,
+            },
+        },
+    }
+    assert post_tokens(only_lifetime) == 0
+    assert post_tokens({}) == 0
+    assert post_tokens({"info": {"last_token_usage": "nope"}}) == 0
+
+
+def test_codex_scan_compaction_tail_only_counts_tokens_after_the_marker(tmp_path):
+    rollout = _write_rollout(tmp_path / "rollout.jsonl", [
+        _token_count(282_000, 282_900, output_tokens=900),
+    ])
+    seen, post, offset = server._codex_scan_compaction_tail(str(rollout), 0)
+    # No marker yet: the pre-compact turn's count must not be adopted as post.
+    assert (seen, post) == (False, 0)
+
+    with rollout.open("a", encoding="utf-8") as handle:
+        for event in (COMPACTED_RECORD, _token_count(0, 12_211)):
+            handle.write(json.dumps(event) + "\n")
+    seen, post, offset = server._codex_scan_compaction_tail(str(rollout), offset)
+    assert (seen, post) == (True, 12_211)
+
+
+def test_codex_compact_post_grace_survives_the_main_deadline(tmp_path, monkeypatch):
+    """The app-server's item/completed lands BEFORE the rollout flush writes
+    compacted+token_count. When that gap crosses the wait deadline the old loop
+    broke on the deadline anyway and returned post_tokens=0 - the card's
+    permanent "reading the new size..." state. The open grace window must
+    outlive the deadline.
+    """
+    rollout = _write_rollout(tmp_path / "rollout.jsonl", [
+        _token_count(282_000, 282_900, output_tokens=900),
+    ])
+    _stub_app_server(monkeypatch, rollout)
+    # state_done (the item/completed latch) fires immediately; the rollout
+    # rows land after the deadline but inside the grace window. This helper is
+    # called through the ccc_server.codex module globals, not the _core proxy,
+    # so it must be patched there rather than on `server`.
+    import ccc_server.codex as codex_mod
+    monkeypatch.setattr(
+        codex_mod, "_codex_compaction_finished_in_state", lambda _sid, _since: True
+    )
+    monkeypatch.setenv("CCC_CODEX_COMPACT_WAIT_S", "0.5")
+
+    def _late_flush():
+        time.sleep(0.8)
+        with rollout.open("a", encoding="utf-8") as handle:
+            for event in (COMPACTED_RECORD, _token_count(0, 12_211)):
+                handle.write(json.dumps(event) + "\n")
+
+    writer = threading.Thread(target=_late_flush, daemon=True)
+    writer.start()
+    result = server._codex_compact_via_app_server("codex-grace-session")
+    writer.join(timeout=5)
+
+    assert result["ok"] is True
+    assert result["compact_result"] == "success"
+    assert result["post_tokens"] == 12_211
+
+
+def test_codex_describe_writer_command_labels_known_holders():
+    describe = server._codex_describe_writer_command
+    assert describe(
+        "/x/bin/codex exec --model m Drain it. --worker vm-next-cbd39468 more"
+    ) == "WatchTower worker vm-next-cbd39468, a headless `codex exec`"
+    assert describe("/x/bin/codex exec --model m hello") == "a headless `codex exec` run"
+    assert describe(
+        "/Applications/ChatGPT.app/Contents/Resources/codex app-server --listen stdio://"
+    ) == "the Codex desktop app"
+    assert describe("/usr/bin/vim") == "another process"

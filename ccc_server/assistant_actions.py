@@ -77,6 +77,17 @@ def validate(kind: str, params: dict) -> dict:
             raise ActionError("model has unexpected characters")
         if model:
             out["model"] = model
+        effort = _text(params, "effort", 16, required=False).lower()
+        if effort:
+            # Keep this contract aligned with the server's per-engine ladder.
+            # Import lazily because assistant_actions is also loaded during
+            # server module assembly.
+            from ccc_server import core as _core
+            normalized = _core._validate_reasoning_effort(effort, engine, strict=True)
+            if normalized is None:
+                raise ActionError(f"effort is not supported by {engine}")
+            if normalized:
+                out["effort"] = normalized
         name = _text(params, "name", 120, required=False)
         if name:
             out["name"] = name
@@ -239,7 +250,7 @@ def _post_json(base: str, path: str, body: dict, timeout: float = EXEC_TIMEOUT_S
 def make_executor(base: str, run=subprocess.run, post=_post_json):
     def execute(kind: str, p: dict) -> dict:
         if kind == "spawn_session":
-            body = {k: p[k] for k in ("cwd", "prompt", "engine", "model", "name") if p.get(k)}
+            body = {k: p[k] for k in ("cwd", "prompt", "engine", "model", "effort", "name") if p.get(k)}
             data = post(base, "/api/sessions/spawn", body)
             ok = bool(data.get("ok", True)) and not data.get("error")
             return {"ok": ok, "session_id": data.get("session_id") or data.get("sid"),

@@ -1,0 +1,16 @@
+{
+  "name": "claude-command-center",
+  "owner": {
+    "name": "Amir Fish"
+  },
+  "metadata": {
+    "description": "Claude Command Center's Claude Code plugin: skills for orchestrating coding-agent sessions."
+  },
+  "plugins": [
+    {
+      "name": "ccc-dashboard",
+      "source": "./plugin",
+      "description": "Skills for running a fleet of coding-agent sessions through Claude Command Center (CCC). Needs CCC running locally."
+    }
+  ]
+}

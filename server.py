@@ -16,17 +16,19 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.35.0"
+__version__ = "5.41.0"
 
+import sender_envelope as _attribution
 import ast
 import base64
-import faulthandler
+import traceback
 import fcntl
 import gzip
 import html
 import hashlib
 import collections
 import contextlib
+import errno
 import http.server
 import ipaddress
 import json
@@ -62,6 +64,18 @@ try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
     tomllib = None
+
+if sys.platform == "win32":
+    if not os.environ.get("PYTHONUTF8"):
+        os.environ["PYTHONUTF8"] = "1"
+    if not os.environ.get("PYTHONIOENCODING"):
+        os.environ["PYTHONIOENCODING"] = "utf-8"
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 # run.sh execs this file directly, so it runs as __main__. Extracted
 # ccc_server/* modules do `import server` to reach names still living here;
@@ -113,6 +127,17 @@ from ccc_server import test_isolation_active, register as _ccc_core_register
 from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
+from ccc_server import wt_review as _wt_review
+from ccc_server import cpu_accounting as _cpu_accounting
+from ccc_server import conv_reader as _conv_reader
+_cpu_accounting.install_thread_exit_accounting()
+from ccc_server import idea_tickets as _idea_tickets
+from ccc_server import headroom as _headroom
+from ccc_server import spawn_advisor as _spawn_advisor
+from ccc_server import approval_evidence as _approval_evidence
+# Namespace import (not adopted): the $0 spawn runtime's helpers stay behind
+# one name so its spawn_env/readiness don't collide with engine globals.
+from ccc_server import free_runtime as _free_runtime
 from ccc_server.events import DashboardEventHub
 
 # Pure helpers and path constants moved to leaf modules (slice 3)
@@ -264,6 +289,11 @@ def _dashboard_session_watch_tick(previous):
         if isinstance(values, dict)
     }
     if previous is None:
+        try:
+            from ccc_server import notify as _notify
+            _notify.observe_session_states(None, current)
+        except Exception:
+            pass
         return current
     previous = previous or {}
     for sid, fields in current.items():
@@ -275,6 +305,11 @@ def _dashboard_session_watch_tick(previous):
                 "session.patch", "session", sid,
                 {"state": "ended", "question_waiting": False, "needs_approval": False},
             )
+    try:
+        from ccc_server import notify as _notify
+        _notify.observe_session_states(previous, current)
+    except Exception:
+        pass
     return current
 
 
@@ -526,9 +561,7 @@ def _retire_wedged_control_plane_worker():
         else:
             deadline = time.time() + 5
             while time.time() < deadline:
-                try:
-                    os.kill(pid, 0)
-                except OSError:
+                if not _is_pid_alive(pid):
                     stopped = True
                     break
                 time.sleep(0.1)
@@ -598,14 +631,106 @@ def _start_control_plane_worker():
         }
 
 
+# Python stack diagnostics. These used to be faulthandler.register(SIGUSR2,
+# all_threads=True), which walks every thread's frames from inside a C signal
+# handler while the other threads keep running; repeated SIGUSR2 segfaulted
+# the live dashboard (CCC-145). Everything below runs as ordinary Python under
+# the GIL: sys._current_frames() is a consistent snapshot, and the signal only
+# wakes a dumper thread.
+_PYTHON_STACK_DUMP_LOCK = threading.Lock()
+_PYTHON_STACK_DUMP_EVENT = threading.Event()
+PYTHON_STACK_SAMPLES_MAX = 50
+PYTHON_STACK_INTERVAL_MAX_S = 2.0
+
+
+def _python_stack_snapshot():
+    """Every live thread's current Python stack, as plain data."""
+    names = {t.ident: t.name for t in threading.enumerate()}
+    current = threading.get_ident()
+    threads = []
+    for ident, frame in sys._current_frames().items():
+        threads.append({
+            "ident": ident,
+            "name": names.get(ident, "?"),
+            "current": ident == current,
+            "stack": "".join(traceback.format_stack(frame)),
+        })
+    threads.sort(key=lambda t: (not t["current"], t["name"]))
+    return threads
+
+
+def _format_python_stack_snapshot(threads, header):
+    lines = [f"\n=== {header} ===\n"]
+    for t in threads:
+        mark = " (current thread)" if t["current"] else ""
+        lines.append(f"Thread 0x{t['ident']:x} [{t['name']}]{mark}:\n{t['stack']}\n")
+    return "".join(lines)
+
+
+def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5):
+    """Append all-thread stacks to python-stacks.log; return the samples.
+
+    Safe to call from any thread, any number of times. Callers that need the
+    stacks at a specific moment (liveness misses) call this directly instead
+    of signalling their own process.
+    """
+    try:
+        samples = max(1, min(int(samples), PYTHON_STACK_SAMPLES_MAX))
+    except (TypeError, ValueError):
+        samples = 1
+    try:
+        interval_s = max(0.0, min(float(interval_s), PYTHON_STACK_INTERVAL_MAX_S))
+    except (TypeError, ValueError):
+        interval_s = 0.5
+    out = []
+    for i in range(samples):
+        if i:
+            time.sleep(interval_s)
+        at = datetime.now(tz=timezone.utc).isoformat()
+        threads = _python_stack_snapshot()
+        out.append({"at": at, "threads": threads})
+        dump_file = _PYTHON_STACK_DUMP_FILE
+        if dump_file is None:
+            continue
+        text = _format_python_stack_snapshot(
+            threads,
+            f"{reason} sample {i + 1}/{samples} {at} pid={os.getpid()}",
+        )
+        try:
+            with _PYTHON_STACK_DUMP_LOCK:
+                dump_file.write(text)
+                dump_file.flush()
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def _python_stack_dump_loop():
+    while True:
+        _PYTHON_STACK_DUMP_EVENT.wait()
+        _PYTHON_STACK_DUMP_EVENT.clear()
+        try:
+            _dump_python_stacks("SIGUSR2")
+        except Exception:
+            pass
+
+
+def _on_python_stack_signal(_signum, _frame):
+    # Only set a flag: a burst of signals coalesces into one dump.
+    _PYTHON_STACK_DUMP_EVENT.set()
+
+
 def _install_python_stack_dump_handler(log_path=None):
-    """Append all-thread Python tracebacks to a log when SIGUSR2 arrives."""
+    """Open python-stacks.log and dump all-thread stacks on SIGUSR2.
+
+    The log opens from any thread. The SIGUSR2 handler can only be installed
+    from the main thread (a Python restriction); the worker imports server
+    from a request thread, so it gets the log (for liveness-miss dumps)
+    without the signal.
+    """
     global _PYTHON_STACK_DUMP_FILE
     if _PYTHON_STACK_DUMP_FILE is not None:
         return True
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None:
-        return False
     path = Path(log_path) if log_path is not None else PYTHON_STACK_DUMP_LOG
     dump_file = None
     try:
@@ -616,8 +741,7 @@ def _install_python_stack_dump_handler(log_path=None):
             f"{datetime.now(tz=timezone.utc).isoformat()} pid={os.getpid()} ===\n"
         )
         dump_file.flush()
-        faulthandler.register(sigusr2, file=dump_file, all_threads=True, chain=False)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except OSError as exc:
         if dump_file is not None:
             try:
                 dump_file.close()
@@ -626,6 +750,15 @@ def _install_python_stack_dump_handler(log_path=None):
         print(f"⚠️  Could not install Python stack diagnostics: {exc}", file=sys.stderr)
         return False
     _PYTHON_STACK_DUMP_FILE = dump_file
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is not None and threading.current_thread() is threading.main_thread():
+        try:
+            signal.signal(sigusr2, _on_python_stack_signal)
+        except (OSError, RuntimeError, ValueError):
+            return True
+        threading.Thread(
+            target=_python_stack_dump_loop, daemon=True, name="ccc-stack-dump",
+        ).start()
     return True
 
 
@@ -1320,9 +1453,10 @@ def _watchtower_service_status(*, probe_api=True, include_queues=False):
     pid_alive = False
     try:
         pid = int(_watchtower_daemon_pid_path().read_text().strip())
-        os.kill(pid, 0)
-        pid_alive = True
-    except (OSError, ValueError, ProcessLookupError):
+        pid_alive = _is_pid_alive(pid)
+        if not pid_alive:
+            pid = None
+    except (OSError, ValueError):
         pid = None
     argv = _watchtower_process_argv(pid) if pid_alive else []
     command_verified = bool(pid_alive and _watchtower_daemon_command(argv))
@@ -1435,48 +1569,81 @@ def _watchtower_service_action(action):
                     "ok": False,
                     "error": "WatchTower process identity could not be verified",
                 }
-            try:
-                stopped = subprocess.run(
-                    [wt_cli, "stop"],
-                    capture_output=True, text=True, timeout=20,
-                )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                return {"ok": False, "error": f"WatchTower stop failed: {exc}"}
-            if stopped.returncode != 0:
-                return {
-                    "ok": False,
-                    "error": (
-                        (stopped.stderr or stopped.stdout or "").strip()
-                        or f"WatchTower stop exited {stopped.returncode}"
-                    ),
-                }
-            # The pid is dead now, so its memoised argv is the one thing that
-            # could survive into a pid-reuse false positive. Drop it.
-            _watchtower_forget_process_argv(before.get("pid"))
-            _watchtower_forget_api_probe()
+            if sys.platform == "win32":
+                pid = before.get("pid")
+                if pid:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+                _watchtower_forget_process_argv(pid)
+                _watchtower_forget_api_probe()
+                try:
+                    _watchtower_daemon_pid_path().unlink()
+                except OSError:
+                    pass
+            else:
+                try:
+                    stopped = subprocess.run(
+                        [wt_cli, "stop"],
+                        capture_output=True, text=True, timeout=20,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    return {"ok": False, "error": f"WatchTower stop failed: {exc}"}
+                if stopped.returncode != 0:
+                    return {
+                        "ok": False,
+                        "error": (
+                            (stopped.stderr or stopped.stdout or "").strip()
+                            or f"WatchTower stop exited {stopped.returncode}"
+                        ),
+                    }
+                # The pid is dead now, so its memoised argv is the one thing that
+                # could survive into a pid-reuse false positive. Drop it.
+                _watchtower_forget_process_argv(before.get("pid"))
+                _watchtower_forget_api_probe()
             deadline = time.time() + 5
             while time.time() < deadline:
                 if not _watchtower_service_status(probe_api=False).get("running"):
                     break
                 time.sleep(0.1)
-        command = [wt_cli, "start"]
-        if platform.system() != "Darwin":
-            command.extend(_watchtower_restart_options(old_argv))
-        try:
-            started = subprocess.run(
-                command,
-                capture_output=True, text=True, timeout=25,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {"ok": False, "error": f"WatchTower start failed: {exc}"}
-        if started.returncode != 0:
-            return {
-                "ok": False,
-                "error": (
-                    (started.stderr or started.stdout or "").strip()
-                    or f"WatchTower start exited {started.returncode}"
-                ),
-            }
+        if sys.platform == "win32":
+            detached_flag = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            group_flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            creationflags = detached_flag | group_flag
+            command = [
+                sys.executable, "-m", "watchtower.cli", "start", "--foreground",
+                *_watchtower_restart_options(old_argv),
+            ]
+            try:
+                subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                )
+            except OSError as exc:
+                return {"ok": False, "error": f"WatchTower start failed: {exc}"}
+        else:
+            command = [wt_cli, "start"]
+            if platform.system() != "Darwin":
+                command.extend(_watchtower_restart_options(old_argv))
+            try:
+                started = subprocess.run(
+                    command,
+                    capture_output=True, text=True, timeout=25,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return {"ok": False, "error": f"WatchTower start failed: {exc}"}
+            if started.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": (
+                        (started.stderr or started.stdout or "").strip()
+                        or f"WatchTower start exited {started.returncode}"
+                    ),
+                }
         deadline = time.time() + 8
         current = _watchtower_service_status(probe_api=False)
         while time.time() < deadline and not current.get("running"):
@@ -1949,7 +2116,7 @@ def _wt_queue_attend_session_running(session_id):
     """Same liveness primitive the idle-reaper and interrupt-ask endpoints
     use for claude sessions: resolve the spawn registry entry for the
     session id, then verify its pid is still an actual claude process (pids
-    get recycled, so a bare os.kill(pid, 0) is not enough)."""
+    get recycled, so a bare liveness probe is not enough)."""
     sid = str(session_id or "").strip()
     if not sid:
         return False
@@ -2367,7 +2534,9 @@ def _queue_config_from_payload(payload):
     # fallback_to_default_worker on a full-replace save (CCC-1161).
     if "fallback_to_default_worker" in payload:
         raw_fallback = payload.get("fallback_to_default_worker")
-        if isinstance(raw_fallback, str):
+        if raw_fallback is None:
+            config["fallback_to_default_worker"] = None
+        elif isinstance(raw_fallback, str):
             config["fallback_to_default_worker"] = raw_fallback.strip().lower() in (
                 "1", "true", "yes", "on",
             )
@@ -2586,8 +2755,9 @@ def _build_queue_diagnostic_snapshot(queue_name, *, now=None):
             "matched_ticket": matched,
         })
     counts = {
-        "open": sum(item.get("status") not in {"closed", "in_progress"} for item in items),
+        "open": sum(item.get("status") not in {"closed", "in_progress", "in_review"} for item in items),
         "in_progress": len(in_progress),
+        "in_review": sum(item.get("status") == "in_review" for item in items),
         "closed": sum(item.get("status") == "closed" for item in items),
         "claimable": sum(item.get("status") == "open" and item.get("claimable") is not False for item in items),
         "needs_input": sum(item.get("status") == "blocked" or bool(item.get("needs_input")) for item in items),
@@ -2719,17 +2889,7 @@ def _wt_read_workers(include_activity=True):
             pid = int(w.get("pid", 0) or 0)
         except (TypeError, ValueError, OverflowError):
             continue
-        alive = False
-        if pid:
-            try:
-                os.kill(pid, 0)
-                alive = True
-            except ProcessLookupError:
-                alive = False
-            except PermissionError:
-                alive = True
-            except OSError:
-                alive = False
+        alive = bool(pid and _is_pid_alive(pid))
         if not alive:
             continue
         row = dict(w)
@@ -2811,6 +2971,8 @@ def _wt_live_worker_guard():
     heuristics to them."""
     pids, sids = set(), set()
     for w in _wt_read_workers():
+        if isinstance(w, dict) and w.get("released_at"):
+            continue
         try:
             pid = int(w.get("pid", 0) or 0)
         except (TypeError, ValueError):
@@ -2847,6 +3009,62 @@ def _wt_read_worker_session_ids():
     if not isinstance(ids, list):
         return []
     return [str(s) for s in ids if isinstance(s, str)]
+
+
+def _wt_session_origins_path():
+    return Path(os.environ.get("WATCHTOWER_SESSION_ORIGINS_FILE")
+                or (_WT_HOME / "session-origins.json"))
+
+
+_WT_ORIGINS_CACHE = {"sig": None, "rows": {}}
+
+_WT_ORIGIN_ROLE_LABELS = {
+    "worker": "Worker", "planner": "Worker planner",
+    "plan_reviewer": "Worker plan reviewer", "verifier": "Worker verifier",
+    "assessor": "Worker assessor", "probe": "Worker probe",
+    "helper": "Worker helper", "adhoc": "Worker helper",
+}
+
+
+def _wt_read_session_origins():
+    """{session_id: origin} from WatchTower's durable session-origins.json.
+
+    The ledger records who spawned a session (worker, ticket, role, parent
+    session) and outlives the spawner, its pruned worker record and title
+    changes. Cached on (mtime, size); empty dict if absent/unreadable."""
+    path = _wt_session_origins_path()
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    sig = (st.st_mtime_ns, st.st_size)
+    if _WT_ORIGINS_CACHE["sig"] == sig:
+        return _WT_ORIGINS_CACHE["rows"]
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        rows = data.get("origins") if isinstance(data, dict) else None
+        rows = {str(k): v for k, v in rows.items() if isinstance(v, dict)} if isinstance(rows, dict) else {}
+    except (OSError, ValueError):
+        rows = {}
+    _WT_ORIGINS_CACHE.update(sig=sig, rows=rows)
+    return rows
+
+
+def _wt_origin_badge(origin):
+    """Normalize a ledger record into the row's ``worker_origin`` field:
+    {role, ref, queue, label, parent_session_id}. label is the visible badge
+    text, e.g. "Worker verifier · WT-24"."""
+    role = str(origin.get("role") or "worker")
+    ref = str(origin.get("ref") or "")
+    label = _WT_ORIGIN_ROLE_LABELS.get(role) or ("Worker " + role.replace("_", " "))
+    if ref:
+        label += " · " + ref
+    return {
+        "role": role, "ref": ref, "queue": str(origin.get("queue") or ""),
+        "label": label,
+        "parent_session_id": str(origin.get("parent_session_id") or ""),
+    }
 
 
 def _wt_clip_title(text, limit=60):
@@ -3010,6 +3228,29 @@ def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
     return items
 
 
+_wt_snapshot_file_memo = {"mtime": None, "items": []}
+
+
+def _wt_list_items_snapshot_only():
+    """Non-blocking ticket list for census identity: memory memo or disk snapshot only."""
+    with _wt_items_memo_lock:
+        if _wt_items_memo["items"] is not None:
+            return _wt_items_memo["items"]
+    try:
+        mtime = _WT_ITEMS_SNAPSHOT_FILE.stat().st_mtime
+        if _wt_snapshot_file_memo["mtime"] == mtime:
+            return _wt_snapshot_file_memo["items"]
+        with _WT_ITEMS_SNAPSHOT_FILE.open("r") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            _wt_snapshot_file_memo["mtime"] = mtime
+            _wt_snapshot_file_memo["items"] = data["items"]
+            return data["items"]
+    except (OSError, ValueError):
+        pass
+    return _wt_snapshot_file_memo["items"]
+
+
 def _apply_watchtower_worker_display_names(rows):
     """Layer WT ticket names onto live WT worker session rows.
 
@@ -3048,7 +3289,11 @@ def _apply_watchtower_worker_display_names(rows):
         if not isinstance(it, dict):
             continue
         status = str(it.get("status") or "")
-        if status not in ("in_progress", "closed"):
+        if status not in ("in_progress", "in_review", "closed"):
+            continue
+        # Idea tickets are claimed by the session they describe; that session
+        # is not a worker and keeps its own title.
+        if str(it.get("project") or "") in _idea_tickets.QUEUE_TYPES:
             continue
         sid = str(it.get("claimed_session_id") or "").strip()
         if not sid:
@@ -3076,17 +3321,42 @@ def _apply_watchtower_worker_display_names(rows):
             _wt_display_name(it.get("project"), it.get("ref"), clipped_context),
             rest_context,
         )
-    if not titles_by_sid and not sid_to_worker and not worker_session_ids:
+    if not titles_by_sid and not sid_to_worker and not worker_session_ids \
+            and not _wt_read_session_origins():
         return rows
+    try:
+        origins = _wt_read_session_origins()
+    except Exception:
+        origins = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
         sid = str(row.get("session_id") or row.get("id") or "").strip()
+        origin = origins.get(sid)
+        # WT-27: recorded spawn provenance. A session with an established
+        # worker lineage (managed spawn, or a descendant that inherited the
+        # worker env markers) gets a visible badge and its spawner as parent.
+        # A user-run `wt spawn` (role adhoc, no parent worker) stays unmarked.
+        if origin and (origin.get("role") != "adhoc" or origin.get("parent_worker_id")):
+            row["worker_origin"] = _wt_origin_badge(origin)
+            if not row.get("parent_session_id") and origin.get("parent_session_id") \
+                    and origin["parent_session_id"] != sid:
+                row["parent_session_id"] = origin["parent_session_id"]
+            if not row.get("continued_from_session_id"):
+                row["is_watchtower_worker"] = True
+        elif origin and not row.get("parent_session_id") \
+                and origin.get("parent_session_id") and origin["parent_session_id"] != sid:
+            # A session's own `wt spawn` (reviewer, critic) stays unbadged but
+            # still nests under its spawner, so it joins the spawner's idea.
+            row["parent_session_id"] = origin["parent_session_id"]
         if sid in worker_session_ids:
             # Continuation sessions (F2) are user interactive sessions continuing
             # prior work; they must not be classified as WatchTower background workers.
             if not row.get("continued_from_session_id"):
                 row["is_watchtower_worker"] = True
+                # Pre-ledger workers: the worker-sessions ledger is the only
+                # evidence, so badge them plainly and invent no ticket.
+                row.setdefault("worker_origin", _wt_origin_badge({"role": "worker"}))
         if row.get("name_overridden"):
             continue
         titled = titles_by_sid.get(sid)
@@ -3105,8 +3375,16 @@ def _apply_watchtower_worker_display_names(rows):
             # bootstrapping, or between tickets) — without this a fresh
             # spawn shows whatever generic fallback the row's ai_title/
             # first_message logic produces (WT-104) instead of a name
-            # that actually says what it is.
-            row["display_name"] = _wt_display_name(queue, None)
+            # that actually says what it is. Preserve an existing <QUEUE>#<N>
+            # custom title if the ticket was later re-claimed by another session.
+            raw = str(row.get("display_name") or "").strip()
+            low = raw.lower().lstrip("🧵").strip()
+            qlow = str(queue or "").strip().lower()
+            if qlow and low.startswith(f"{qlow}#"):
+                if not raw.startswith("🧵"):
+                    row["display_name"] = f"🧵 {raw}"
+            else:
+                row["display_name"] = _wt_display_name(queue, None)
     return rows
 
 
@@ -3466,6 +3744,30 @@ def _uxq_item_payload(item):
         return item
     out = dict(item)
     out["timeline"] = _uxq_item_timeline(item)
+    # WT-5 checks in gate order: the ticket's own `gates` override, else the
+    # queue default from `wt config --gate` (not stored on the ticket). One
+    # config read per detail payload; the list rows never pay it.
+    eff = getattr(_q, "effective_gates", None)
+    if callable(eff):
+        try:
+            out["effective_gates"] = list(eff(item) or [])
+        except Exception:
+            pass
+    # CCC-1236: the stage pipeline, plus the planner/reviewer/verifier
+    # sessions so the detail timeline can link each transcript.
+    try:
+        from ccc_server import ticket_stages as _ts
+        if not isinstance(item.get("waiting_on"), list) and item.get("blocked_by"):
+            wo = getattr(_q, "waiting_on", None)
+            if callable(wo):
+                by_ref = {str(i.get("ref")): i for i in (_q.list_items() or []) if i.get("ref")}
+                out["waiting_on"] = wo(item, by_ref)
+        sp = _ts.stage_pipeline(out)
+        if sp is not None:
+            sp["sessions"] = _ts.detail_stage_sessions(item)
+            out["stages"] = sp
+    except Exception:
+        pass
     return out
 
 
@@ -4653,6 +4955,20 @@ def _archive_load_begin():
         })
 
 
+def _archive_load_begin_if_idle():
+    """Start a progress run unless one is already reporting.
+
+    Concurrent cold callers would otherwise reset the running N/M count back
+    to zero; only the caller that started the run reports and completes it.
+    """
+    with _ARCHIVE_LOAD_STATUS_LOCK:
+        if _ARCHIVE_LOAD_STATUS.get("active"):
+            return False
+        _ARCHIVE_LOAD_STATUS["active"] = True
+    _archive_load_begin()
+    return True
+
+
 def _archive_load_set_step(key, *, label=None, state=None, detail=None, count=_LOAD_MISSING, total=_LOAD_MISSING):
     now = time.time()
     with _ARCHIVE_LOAD_STATUS_LOCK:
@@ -4940,6 +5256,9 @@ def _apply_session_lane_overrides(rows, overrides=None):
 SPAWN_MARKERS_DIR = COMMAND_CENTER_STATE_DIR / "spawn-markers"  # <session_id>.json -> {"spawned_via": "<tool>"}
 _SPAWN_MARKER_VALUE_MAX_CHARS = 64
 _SPAWN_MARKER_LANES = frozenset({"workers", "other"})
+# Non-default spawn runtimes a marker may declare. Only "free" exists today;
+# the set (not a bool) leaves room for future runtimes without a schema bump.
+_SPAWN_MARKER_RUNTIMES = frozenset({"free"})
 
 
 # Decoded marker per file path, keyed on (mtime_ns, size). Markers are
@@ -4950,6 +5269,8 @@ _SPAWN_MARKER_LANES = frozenset({"workers", "other"})
 # otherwise replays a cached body. One scandir plus a stat per entry now; a
 # file is decoded only when its (mtime_ns, size) changed.
 _SPAWN_MARKER_FILE_CACHE = {}
+# A spawner starting this many temp-dir headless runs in an hour raises an alert.
+BACKGROUND_RUNS_HOURLY_ALERT = 30
 
 
 def _decode_spawn_marker_file(path):
@@ -4968,7 +5289,12 @@ def _decode_spawn_marker_file(path):
     # launched the session and must never move it between lanes.
     caller = str(data.get("caller") or "").strip()[:80]
     parent = str(data.get("parent_session_id") or "").strip()[:166]
-    if not lane and not caller and not parent:
+    # Runtime-only markers (a $0 spawn stamped before the hook's caller write
+    # lands) are valid too — "free" is what the UI's $0 chip reads.
+    runtime = str(data.get("runtime") or "").strip().lower()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    if runtime not in _SPAWN_MARKER_RUNTIMES:
+        runtime = ""
+    if not lane and not caller and not parent and not runtime:
         return None
     marker = {"lane": lane} if lane else {}
     if caller:
@@ -4980,18 +5306,162 @@ def _decode_spawn_marker_file(path):
         marker["kind"] = kind
     if via:
         marker["spawned_via"] = via
+    if runtime:
+        marker["runtime"] = runtime
     return marker
 
 
+_SPAWN_MARKER_MEMO = {"ts": 0.0, "dir": None, "out": {}}
+_SPAWN_MARKER_MEMO_TTL_S = 2.0
+# Every marker writer (server + session-start hook) renames into the
+# directory, so an unchanged directory mtime means unchanged markers. Once
+# that mtime is older than the scan by more than the timestamp granularity,
+# the memo is trusted for this long instead of re-stat'ing ~4k files every
+# 2s (CCC-142: each stat hands the GIL away; under load a /list poll waited
+# seconds here).
+_SPAWN_MARKER_MEMO_SETTLED_TTL_S = 300.0
+_SPAWN_MARKER_SETTLE_MARGIN_NS = 1_000_000_000
+_SPAWN_MARKER_MEMO_LOCK = threading.Lock()
+_SPAWN_MARKER_SCAN_LOCK = threading.Lock()
+_SPAWN_MARKER_INDEX_LOADED = set()
+_SPAWN_MARKER_INDEX_DIR_MTIME = {}
+_SPAWN_MARKER_REVALIDATING = threading.Event()
+
+
+def _spawn_marker_index_path():
+    return SPAWN_MARKERS_DIR.with_name(SPAWN_MARKERS_DIR.name + "-index.json")
+
+
+def _load_spawn_marker_index():
+    """Seed the (mtime_ns, size) decode cache from disk, once per process.
+
+    A cold process used to open and decode every marker file (thousands, tens
+    of MB); under GIL contention each read hands the GIL away, so the first
+    sidebar list after any restart took 15s+ just here."""
+    marker_dir = str(SPAWN_MARKERS_DIR)
+    if marker_dir in _SPAWN_MARKER_INDEX_LOADED:
+        return
+    _SPAWN_MARKER_INDEX_LOADED.add(marker_dir)
+    try:
+        data = json.loads(_spawn_marker_index_path().read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or data.get("v") != 1:
+        return
+    _SPAWN_MARKER_INDEX_DIR_MTIME[marker_dir] = data.get("dir_mtime_ns")
+    for path, row in (data.get("files") or {}).items():
+        try:
+            version = (int(row[0]), int(row[1]))
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        marker = row[2] if len(row) > 2 and isinstance(row[2], dict) else None
+        _SPAWN_MARKER_FILE_CACHE.setdefault(path, (version, marker))
+
+
+def _save_spawn_marker_index(dir_mtime_ns=None):
+    snapshot = {
+        "v": 1,
+        "dir_mtime_ns": dir_mtime_ns,
+        "files": {
+            path: [version[0], version[1], marker]
+            for path, (version, marker) in list(_SPAWN_MARKER_FILE_CACHE.items())
+        },
+    }
+    path = _spawn_marker_index_path()
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(snapshot))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _load_spawn_markers():
-    """Return typed metadata from SPAWN_MARKERS_DIR/<sid>.json files."""
+    """Return typed metadata from SPAWN_MARKERS_DIR/<sid>.json files.
+
+    Revalidating means a stat per marker file, so the result is memoized for a
+    few seconds (callers poll continuously) and decoded markers persist to a
+    disk index so a restart does not re-read every file."""
+    now = time.monotonic()
+    try:
+        # Directory mtime moves on every create/delete/rename-over, so new
+        # markers invalidate the memo at once; only an in-place rewrite of an
+        # existing file can lag, by at most the TTL.
+        marker_dir = (str(SPAWN_MARKERS_DIR), SPAWN_MARKERS_DIR.stat().st_mtime_ns)
+    except OSError:
+        marker_dir = (str(SPAWN_MARKERS_DIR), None)
+    with _SPAWN_MARKER_MEMO_LOCK:
+        ttl = (_SPAWN_MARKER_MEMO_SETTLED_TTL_S if _SPAWN_MARKER_MEMO.get("settled")
+               else _SPAWN_MARKER_MEMO_TTL_S)
+        if (
+            _SPAWN_MARKER_MEMO["dir"] == marker_dir
+            and now - _SPAWN_MARKER_MEMO["ts"] < ttl
+        ):
+            return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+    # Single-flight: concurrent pollers reuse the last map for one call
+    # instead of each re-stat'ing every marker file at once.
+    if not _SPAWN_MARKER_SCAN_LOCK.acquire(blocking=False):
+        with _SPAWN_MARKER_MEMO_LOCK:
+            if _SPAWN_MARKER_MEMO["dir"] is not None:
+                return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+        _SPAWN_MARKER_SCAN_LOCK.acquire()
+    try:
+        return _load_spawn_markers_locked(now, marker_dir)
+    finally:
+        _SPAWN_MARKER_SCAN_LOCK.release()
+
+
+def _load_spawn_markers_locked(now, marker_dir):
+    with _SPAWN_MARKER_MEMO_LOCK:
+        if (
+            _SPAWN_MARKER_MEMO["dir"] == marker_dir
+            and now - _SPAWN_MARKER_MEMO["ts"] < _SPAWN_MARKER_MEMO_TTL_S
+        ):
+            return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+    _load_spawn_marker_index()
+    with _SPAWN_MARKER_MEMO_LOCK:
+        cold = _SPAWN_MARKER_MEMO["dir"] is None
+    if (
+        cold
+        and marker_dir[1] is not None
+        and _SPAWN_MARKER_INDEX_DIR_MTIME.get(marker_dir[0]) == marker_dir[1]
+        and _SPAWN_MARKER_FILE_CACHE
+    ):
+        # Cold process, directory unchanged since the index was written: serve
+        # the persisted map now (zero per-file syscalls) and let a background
+        # thread re-stat the files. A stat per marker is a GIL hand-off each,
+        # which is what made the first post-restart list take 15s+.
+        out = {
+            Path(path).name[: -len(".json")].strip(): dict(marker)
+            for path, (_version, marker) in list(_SPAWN_MARKER_FILE_CACHE.items())
+            if marker and path.endswith(".json")
+        }
+        with _SPAWN_MARKER_MEMO_LOCK:
+            _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out, settled=False)
+        if not _SPAWN_MARKER_REVALIDATING.is_set():
+            _SPAWN_MARKER_REVALIDATING.set()
+
+            def _revalidate():
+                try:
+                    time.sleep(_SPAWN_MARKER_MEMO_TTL_S)
+                    with _SPAWN_MARKER_MEMO_LOCK:
+                        _SPAWN_MARKER_INDEX_DIR_MTIME.pop(marker_dir[0], None)
+                        _SPAWN_MARKER_MEMO["ts"] = 0.0
+                    _load_spawn_markers()
+                finally:
+                    _SPAWN_MARKER_REVALIDATING.clear()
+
+            threading.Thread(target=_revalidate, daemon=True).start()
+        return {sid: dict(m) for sid, m in out.items()}
     out = {}
+    scan_started_ns = time.time_ns()
     try:
         with os.scandir(SPAWN_MARKERS_DIR) as it:
             entries = list(it)
     except OSError:
         return out
     seen = set()
+    decoded = 0
     for entry in entries:
         name = entry.name
         if not name.endswith(".json"):
@@ -5011,12 +5481,20 @@ def _load_spawn_markers():
         if hit is None or hit[0] != version:
             hit = (version, _decode_spawn_marker_file(Path(entry.path)))
             _SPAWN_MARKER_FILE_CACHE[entry.path] = hit
+            decoded += 1
         if hit[1]:
             out[sid] = dict(hit[1])
-    if len(_SPAWN_MARKER_FILE_CACHE) != len(seen):
-        for stale in [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]:
-            _SPAWN_MARKER_FILE_CACHE.pop(stale, None)
-    return out
+    stale = [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]
+    for k in stale:
+        _SPAWN_MARKER_FILE_CACHE.pop(k, None)
+    settled = (marker_dir[1] is not None
+               and scan_started_ns - marker_dir[1] >= _SPAWN_MARKER_SETTLE_MARGIN_NS)
+    with _SPAWN_MARKER_MEMO_LOCK:
+        _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out, settled=settled)
+    if decoded or stale or _SPAWN_MARKER_INDEX_DIR_MTIME.get(marker_dir[0]) != marker_dir[1]:
+        _save_spawn_marker_index(marker_dir[1])
+        _SPAWN_MARKER_INDEX_DIR_MTIME[marker_dir[0]] = marker_dir[1]
+    return {sid: dict(m) for sid, m in out.items()}
 
 
 def _apply_spawn_markers(rows, markers=None):
@@ -5049,6 +5527,9 @@ def _apply_spawn_markers(rows, markers=None):
             mparent = marker.get("parent_session_id")
             if mparent and mparent != str(sid) and not row.get("parent_session_id"):
                 row["parent_session_id"] = mparent
+            mruntime = marker.get("runtime")
+            if mruntime and not row.get("runtime"):
+                row["runtime"] = mruntime
     return rows
 
 
@@ -5069,6 +5550,56 @@ def _write_spawn_marker(session_id, *, lane, kind="", spawned_via=""):
         payload["spawned_via"] = clean_via
     SPAWN_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
     marker_path = SPAWN_MARKERS_DIR / f"{sid}.json"
+    tmp_path = marker_path.with_suffix(f".json.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        tmp_path.replace(marker_path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _merge_spawn_marker(session_id, *, lane="", kind="", spawned_via="",
+                        caller="", parent_session_id="", runtime=""):
+    """Merge fields into one marker without clobbering fields other writers own.
+
+    `_write_spawn_marker` is a whole-file replace for the single-writer case.
+    A free-runtime stamp and the session-start hook's caller tag can land in
+    either order, so each writer merges only the keys it knows — empty values
+    are skipped rather than erasing an earlier writer's data.
+    """
+    sid = str(session_id or "").strip()
+    if not sid or Path(sid).name != sid:
+        raise ValueError("invalid session_id")
+    clean_lane = str(lane or "").strip().lower()
+    if clean_lane and clean_lane not in _SPAWN_MARKER_LANES:
+        raise ValueError("invalid spawn marker lane")
+    clean_runtime = str(runtime or "").strip().lower()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    if clean_runtime and clean_runtime not in _SPAWN_MARKER_RUNTIMES:
+        raise ValueError("invalid spawn marker runtime")
+    marker_path = SPAWN_MARKERS_DIR / f"{sid}.json"
+    try:
+        payload = json.loads(marker_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    fields = {
+        "lane": clean_lane,
+        "kind": str(kind or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS],
+        "spawned_via": str(spawned_via or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS],
+        "caller": str(caller or "").strip()[:80],
+        "parent_session_id": str(parent_session_id or "").strip()[:166],
+        "runtime": clean_runtime,
+    }
+    for key, value in fields.items():
+        if value:
+            payload[key] = value
+    if not payload:
+        return
+    SPAWN_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
     tmp_path = marker_path.with_suffix(f".json.{uuid.uuid4().hex}.tmp")
     try:
         tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
@@ -5139,16 +5670,193 @@ def _tag_spawned_via_in_registry(pid=None, session_id=None, via=""):
     clean_via = str(via or "").strip()
     if not clean_via or (pid is None and not session_id):
         return
+    session_ids = {session_id} if session_id else set()
     def _mutator(entries):
         changed = False
         for entry in entries:
             pid_match = pid is not None and entry.get("pid") == pid
             sid_match = session_id and entry.get("session_id") == session_id
-            if (pid_match or sid_match) and entry.get("spawned_via") != clean_via:
-                entry["spawned_via"] = clean_via
+            if pid_match or sid_match:
+                if entry.get("session_id"):
+                    session_ids.add(entry["session_id"])
+                if entry.get("spawned_via") != clean_via:
+                    entry["spawned_via"] = clean_via
+                    changed = True
+        return changed
+    _mutate_spawn_registry(_mutator)
+    # The native ID may have arrived between the spawn response and this
+    # PID-based tag. Register it even when the response had no session_id.
+    for sid in session_ids:
+        try:
+            _idea_tickets.note_ui_spawn(sid, clean_via)
+        except Exception:
+            pass
+
+
+def _tag_spawn_runtime_in_registry(pid=None, session_id=None, runtime=""):
+    """Persist a spawn runtime ("free") onto the spawn registry entry.
+
+    Same lookup-by-pid-or-sid contract as _tag_spawned_via_in_registry; also
+    patches the live in-memory spawn entry so list_spawned_sessions' local
+    branch reports the runtime before the next registry reload.
+    """
+    clean = str(runtime or "").strip()[:32]
+    if not clean or (pid is None and not session_id):
+        return
+    for entry in _spawned_sessions:
+        pid_match = pid is not None and entry.get("pid") == pid
+        sid_match = session_id and entry.get("session_id") == session_id
+        if pid_match or sid_match:
+            entry["runtime"] = clean
+    def _mutator(entries):
+        changed = False
+        for entry in entries:
+            pid_match = pid is not None and entry.get("pid") == pid
+            sid_match = session_id and entry.get("session_id") == session_id
+            if (pid_match or sid_match) and entry.get("runtime") != clean:
+                entry["runtime"] = clean
                 changed = True
         return changed
     _mutate_spawn_registry(_mutator)
+
+
+def _tag_spawn_task_meta_in_registry(pid=None, session_id=None, meta=None):
+    """Stamp task_key/prompt_hash/task_summary onto a spawn registry entry.
+
+    Fallback path for spawns whose registry row was written without the
+    per-request meta — worker-routed engines (the thread-local set in this
+    process does not cross the engine.execute RPC) and any engine that
+    records the row before meta was set. Also patches the live in-memory
+    entry so list_spawned_sessions' local branch sees the key immediately.
+    """
+    if not isinstance(meta, dict) or (pid is None and not session_id):
+        return
+    clean = {
+        k: str(meta.get(k) or "").strip()
+        for k in ("task_key", "prompt_hash", "task_summary")
+    }
+    clean = {k: v for k, v in clean.items() if v}
+    if not clean:
+        return
+
+    def _stamp(entry):
+        changed = False
+        for k, v in clean.items():
+            if entry.get(k) != v:
+                entry[k] = v
+                changed = True
+        return changed
+
+    for entry in _spawned_sessions:
+        pid_match = pid is not None and str(entry.get("pid") or "") == str(pid)
+        sid_match = session_id and (
+            entry.get("session_id") == session_id
+            or entry.get("resumed_sid") == session_id
+        )
+        if pid_match or sid_match:
+            _stamp(entry)
+
+    def _mutator(entries):
+        changed = False
+        for entry in entries:
+            pid_match = pid is not None and str(entry.get("pid") or "") == str(pid)
+            sid_match = session_id and entry.get("session_id") == session_id
+            if pid_match or sid_match:
+                changed = _stamp(entry) or changed
+        return changed
+    _mutate_spawn_registry(_mutator)
+
+
+# Idempotent-spawn guard. Two requests carrying the same dedupe key race
+# check-then-spawn: the registry row is written by whichever process owns
+# the engine (often the worker) seconds after the dashboard's check, and
+# the registry flock cannot be held across dispatch (the worker needs it
+# to record the row). Every /api/sessions/spawn lands in THIS process
+# though, so an in-process in-flight map closes the window: the second
+# request waits on the first's result instead of spawning a twin.
+_SPAWN_DEDUPE_LOCK = threading.Lock()
+_SPAWN_DEDUPE_INFLIGHT = {}  # (key, scope) -> {"event": Event, "result": dict|None}
+_SPAWN_DEDUPE_WAIT_S = 120.0
+
+
+def _spawn_dedupe_lookup(task_key="", prompt_hash="", scope=""):
+    """Return (live_row, finished_row) matching the dedupe contract.
+
+    task_key matches exactly; prompt_hash matches exactly (only used when
+    the caller passes dedupe:true). scope is the caller's repo scope —
+    resolved cwd or repo_path — and must equal the row's repo_path/cwd when
+    non-empty, so the same task_key on a different repo cannot collide.
+    Live rows additionally pass an engine-process liveness check (the
+    registry is live-only but stale between sweeps; pids get reused).
+    """
+    def _scope_of(entry):
+        return str(entry.get("repo_path") or entry.get("cwd") or "")
+
+    def _matches(entry):
+        if task_key:
+            if (entry.get("task_key") or "") != task_key:
+                return False
+        elif prompt_hash:
+            if (entry.get("prompt_hash") or "") != prompt_hash:
+                return False
+        else:
+            return False
+        return not scope or _scope_of(entry) == scope
+
+    live = None
+    for entry in reversed(_load_spawn_registry()):
+        if not isinstance(entry, dict) or not _matches(entry):
+            continue
+        pid = entry.get("pid")
+        if pid is None:
+            live = entry
+            break
+        try:
+            if _pid_is_engine_process(int(pid), entry.get("engine") or "claude"):
+                live = entry
+                break
+        except (TypeError, ValueError):
+            continue
+    finished = None
+    if live is None and task_key:
+        for entry in reversed(_load_spawn_history()):
+            if _matches(entry):
+                finished = entry
+                break
+    return live, finished
+
+
+def _dedupe_existing_response(row, finished=False):
+    """Response for a dedupe-matched spawn: the caller is told explicitly
+    that no NEW session was spawned, what the existing lane is, and — the
+    sharp edge — that any report-back goes to the ORIGINAL dispatcher, not
+    to this request's report_to."""
+    sid = row.get("session_id") or row.get("resumed_sid") or ""
+    return {
+        "ok": True,
+        "existing": True,
+        "finished": bool(finished),
+        "pid": row.get("pid"),
+        "session_id": sid,
+        "session_id_pending": not bool(sid),
+        "name": row.get("name") or "",
+        "engine": row.get("engine") or "claude",
+        "model": row.get("model") or "",
+        "cwd": row.get("cwd") or "",
+        "repo_path": row.get("repo_path") or "",
+        "task_key": row.get("task_key") or "",
+        "spawned_at": row.get("spawned_at") or "",
+        "ended_at": row.get("ended_at") or "",
+        "exit_code": row.get("exit_code"),
+        "parent_session_id": row.get("parent_session_id") or "",
+        "log": row.get("log") or "",
+        "report_back": "original_dispatcher",
+        "note": (
+            "a lane already carries this dedupe key — no new session was "
+            "spawned; completion reports (if any) go to the lane's original "
+            "dispatcher, not to this request's report_to"
+        ),
+    }
 
 
 def _load_session_overrides():
@@ -6177,6 +6885,13 @@ def _detect_session_engine(session_id):
     return engine
 
 
+def _engine_known_non_claude(session_id):
+    """True when the engine memo already holds a non-Claude verdict. No detection."""
+    with _engine_detect_lock:
+        hit = _ENGINE_DETECT_CACHE.get(session_id)
+    return bool(hit) and hit[0] != "claude"
+
+
 def _resolve_local_spawn_session_prefix(session_id):
     """Expand an unambiguous displayed spawn-id prefix to its native ID.
 
@@ -6211,6 +6926,8 @@ def _detect_session_engine_uncached(session_id):
     if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "grok"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
+        return "codex"
+    if is_cloud_thread_id(session_id):
         return "codex"
     if _is_cursor_session(session_id):
         return "cursor"
@@ -6330,6 +7047,58 @@ def _list_dirs_for_picker(raw_path):
         return {"ok": False, "error": str(e)}
     parent = str(p.parent) if p.parent != p else None
     return {"ok": True, "path": str(p), "parent": parent, "dirs": dirs[:500]}
+
+
+def _browse_folder_for_viewer(raw_path):
+    """Read-only listing (dirs + files) for the in-browser folder viewer.
+
+    Used when the server host has no desktop to open a folder on (headless
+    Linux viewed from another machine, CCC-62). Same posture as
+    /api/fs/list: listing only, hidden entries skipped, capped. A file path
+    lists its parent with `selected` set. File bytes are never served here;
+    previews go through /api/media, which keeps its extension whitelist.
+    """
+    target = (raw_path or "").strip() or str(Path.home())
+    try:
+        p = Path(target).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return {"ok": False, "error": f"not found: {target}"}
+    selected = ""
+    if p.is_file():
+        selected = p.name
+        p = p.parent
+    if not p.is_dir():
+        return {"ok": False, "error": f"not a directory: {target}"}
+    dirs, files = [], []
+    try:
+        for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+            if child.name.startswith("."):
+                continue
+            try:
+                if child.is_dir():
+                    dirs.append({"name": child.name, "path": str(child)})
+                elif child.is_file():
+                    files.append({
+                        "name": child.name,
+                        "path": str(child),
+                        "size": child.stat().st_size,
+                        "category": _categorize_file_target(child.name),
+                    })
+            except OSError:
+                continue
+    except PermissionError:
+        return {"ok": False, "error": f"permission denied: {p}"}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    parent = str(p.parent) if p.parent != p else None
+    return {
+        "ok": True, "path": str(p), "parent": parent, "selected": selected,
+        "dirs": dirs[:500], "files": files[:1000],
+        # /api/media needs *a* repo context; the server's own checkout is
+        # always valid, so the viewer works even with no session open.
+        "media_repo_path": str(Path(__file__).resolve().parent),
+        "truncated": len(dirs) > 500 or len(files) > 1000,
+    }
 
 
 def _native_pick_folder(prompt_text="Pick a repo folder for Command Center"):
@@ -6936,6 +7705,13 @@ def repo_from_session(session_id):
         except Exception:
             cwd = None
     if not cwd:
+        cap_fn = globals().get("_codex_capture_thread_row")
+        if cap_fn:
+            try:
+                cwd = (cap_fn(sid) or {}).get("cwd")
+            except Exception:
+                cwd = None
+    if not cwd:
         raise RepoContextError("repo_required", f"could not derive repo context for session {sid}")
     try:
         return _resolve_cwd_context(cwd)
@@ -7117,7 +7893,7 @@ def _clean_spawn_default_model(value):
 
 
 def _codex_context_1m_enabled():
-    return os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no")
+    return _codex_context_config()["model_context_window"] >= 1000000
 
 
 def _codex_default_model():
@@ -7442,6 +8218,24 @@ MODEL_POLICY_FILE = COMMAND_CENTER_STATE_DIR / "model-policy.json"
 _MODEL_POLICY_CACHE = {"sig": None, "blocked": frozenset()}
 
 
+def _seed_model_policy_once():
+    """Write an empty model-policy.json on a fresh install, exactly once.
+
+    A missing policy file is a loud health error (MEMO-FIX-25), so a brand-new
+    user would otherwise see that error on first launch. The marker keeps a
+    later deletion loud instead of being silently re-seeded.
+    """
+    marker = COMMAND_CENTER_STATE_DIR / "model-policy.seeded"
+    if MODEL_POLICY_FILE.exists() or marker.exists():
+        return
+    try:
+        COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        MODEL_POLICY_FILE.write_text('{"blocked_models": []}\n')
+        marker.write_text("")
+    except OSError as e:
+        print(f"[model-policy] could not seed {MODEL_POLICY_FILE}: {e}", file=sys.stderr)
+
+
 def _model_policy_blocked_models():
     """Return the frozenset of blocked catalog keys (env + policy file)."""
     blocked = set()
@@ -7619,16 +8413,37 @@ def _first_allowed_curated_model(engine):
     return ""
 
 
+_MODEL_CATALOG_OWNER_INDEX = {"sig": None, "index": {}}
+
+
+def _model_catalog_owner_index():
+    """key -> engines index over _ENGINE_CURATED_MODELS, rebuilt only when the
+    curated table changes. The per-model scan it replaces ran ~120k key
+    normalisations per catalog build (~1.7s of a 2.5s rebuild, CCC-143)."""
+    sig = tuple(
+        (engine, tuple(option.get("id") for option in options))
+        for engine, options in _ENGINE_CURATED_MODELS.items()
+    )
+    cached = _MODEL_CATALOG_OWNER_INDEX
+    if cached["sig"] == sig:
+        return cached["index"]
+    index = {}
+    for engine, options in _ENGINE_CURATED_MODELS.items():
+        for option in options:
+            key = _model_catalog_key(option.get("id"))
+            if key:
+                index.setdefault(key, set()).add(engine)
+    cached["index"] = index
+    cached["sig"] = sig
+    return index
+
+
 def _model_catalog_known_engines(model):
     """Return curated engines that explicitly own a model id."""
     key = _model_catalog_key(model)
     if not key:
         return set()
-    return {
-        engine
-        for engine, options in _ENGINE_CURATED_MODELS.items()
-        if any(_model_catalog_key(option.get("id")) == key for option in options)
-    }
+    return set(_model_catalog_owner_index().get(key, ()))
 
 
 def _model_catalog_allows_model(engine, model):
@@ -7708,6 +8523,9 @@ def _model_catalog_add(catalog, engine, model, *, label=None, source="observed",
 
 def _codex_home():
     return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+
+
+codex_home = _codex_home
 
 
 def _codex_configured_model():
@@ -8407,14 +9225,34 @@ def _prune_antigravity_models_to_latest_tiers(models, default_id=None):
     return kept
 
 
+_MODEL_CATALOG_REFRESHING = threading.Event()
+
+
+def _refresh_engine_model_catalog_bg():
+    try:
+        _build_engine_model_catalog(force_refresh=True)
+    except Exception:
+        pass
+    finally:
+        _MODEL_CATALOG_REFRESHING.clear()
+
+
 def _build_engine_model_catalog(force_refresh=False):
     now = time.monotonic()
-    if (
-        not force_refresh
-        and _MODEL_CATALOG_CACHE["data"] is not None
-        and now - _MODEL_CATALOG_CACHE["ts"] < _MODEL_CATALOG_TTL_SEC
-    ):
-        return copy.deepcopy(_MODEL_CATALOG_CACHE["data"])
+    cached = _MODEL_CATALOG_CACHE["data"]
+    if not force_refresh and cached is not None:
+        # Stale-while-revalidate: an expired catalog is served at once and one
+        # background thread rebuilds it. The synchronous rebuild on expiry
+        # took 2-17s under load and competed with conversation opens for the
+        # GIL (CCC-143). Explicit invalidation sets data=None, so a settings
+        # change still rebuilds synchronously below.
+        if now - _MODEL_CATALOG_CACHE["ts"] >= _MODEL_CATALOG_TTL_SEC and not _MODEL_CATALOG_REFRESHING.is_set():
+            _MODEL_CATALOG_REFRESHING.set()
+            threading.Thread(
+                target=_refresh_engine_model_catalog_bg, daemon=True,
+                name="model-catalog-refresh",
+            ).start()
+        return copy.deepcopy(cached)
 
     catalog = {}
     for engine in _ORCHESTRATION_SPAWN_ENGINES:
@@ -8700,6 +9538,9 @@ def _build_engine_model_catalog(force_refresh=False):
             default_id=catalog["antigravity"].get("default"),
         )
 
+    from ccc_server import domestic_providers
+    domestic_providers.add_to_model_catalog(catalog)
+
     for bucket in catalog.values():
         bucket.pop("_index", None)
         bucket["models"] = [
@@ -8756,6 +9597,90 @@ def _validate_codex_model(model, *, require_available=False, confirm_blocked=Fal
     return model, None
 
 
+_WORKER_FALLBACK_ENGINES = ("claude", "codex", "kimi", "grok")
+_MODEL_PROFILE_ENGINES = ("claude",)
+
+
+def _worker_fallback_catalog_models(engine):
+    """Use the catalog's local records; a settings save never probes providers."""
+    cached = (_MODEL_CATALOG_CACHE.get("data") or {}).get("catalog", {}).get(engine, {}).get("models")
+    if cached is not None:
+        return cached
+    rows = list(_ENGINE_CURATED_MODELS.get(engine, ()))
+    if engine == "codex":
+        rows += _codex_model_catalog_records()
+        rows += [{"id": item} for item in _codex_cli_visible_model_ids()]
+    elif engine == "claude":
+        rows += _claude_model_catalog_records()
+    return rows
+
+
+def _validate_worker_fallback(value, *, strict=False, distinct_engines=True):
+    """Ordered provider alternatives for workers and managed model runs.
+
+    Worker fallback is one entry per engine (an exhausted account cannot
+    recover on its own provider). Model profiles pass distinct_engines=False:
+    WatchTower's runner falls back across models on one engine for transient
+    faults and skips same-engine entries after a quota failure."""
+    def invalid(message):
+        if strict:
+            raise ValueError(message)
+        return {"enabled": False, "models": []}
+    if not isinstance(value, dict) or not isinstance(value.get("enabled"), bool):
+        return invalid("worker_fallback requires a boolean enabled")
+    rows = value.get("models")
+    if not isinstance(rows, list) or len(rows) > len(_WORKER_FALLBACK_ENGINES):
+        return invalid("worker_fallback.models must be a list of at most four providers")
+    models, seen = [], set()
+    for row in rows:
+        if not isinstance(row, dict):
+            return invalid("worker_fallback model entries must be objects")
+        engine = str(row.get("engine") or "").strip()
+        model = _clean_spawn_default_model(row.get("model"))
+        key = engine if distinct_engines else (engine, model)
+        if engine not in _WORKER_FALLBACK_ENGINES or key in seen:
+            return invalid("Each fallback engine must be supported and appear only once"
+                           if distinct_engines else "Each profile model must be supported and appear only once")
+        if not model or len(model) > 200:
+            return invalid("Each fallback entry needs an explicit model")
+        effort = _validate_reasoning_effort(row.get("effort"), engine, strict=True)
+        if effort is None:
+            return invalid(_reasoning_effort_error("fallback effort", engine))
+        if strict:
+            catalog = _worker_fallback_catalog_models(engine)
+            if not any(item.get("id") == model for item in catalog):
+                return invalid(f"Choose a catalog model for {engine}")
+            if _model_policy_blocks(model):
+                return invalid(f"Fallback model {model} is blocked by model policy")
+        models.append({"engine": engine, "model": model, "effort": effort})
+        seen.add(key)
+    if value["enabled"] and not models:
+        return invalid("Add at least one fallback model before enabling fallback")
+    return {"enabled": value["enabled"], "models": models}
+
+
+def _validate_model_profiles(value, *, strict=False):
+    if not isinstance(value, dict) or any(key not in ("fast", "standard", "deep") for key in value):
+        if strict:
+            raise ValueError("model_profiles must map fast, standard, or deep to model lists")
+        return {}
+    result = {}
+    for name, profile in value.items():
+        if not isinstance(profile, dict):
+            if strict:
+                raise ValueError(f"Profile {name} must contain a models list")
+            continue
+        rows = profile.get("models")
+        if isinstance(rows, list) and any(not isinstance(row, dict) or row.get("engine") not in _MODEL_PROFILE_ENGINES for row in rows):
+            if strict:
+                raise ValueError("Managed model profiles currently require Claude for schema and no-tools guarantees; Codex remains supported for worker fallback")
+        result[name] = {"models": _validate_worker_fallback(
+            {"enabled": False, "models": profile.get("models")}, strict=strict,
+            distinct_engines=False,
+        )["models"]}
+    return result
+
+
 def _factory_spawn_defaults():
     """The one place factory literals live: seeds a brand-new defaults file,
 
@@ -8771,6 +9696,8 @@ def _factory_spawn_defaults():
         "worker_model": "",
         "worker_reasoning_effort": "",
         "worker_auto_compact_k": 250,
+        "worker_fallback": {"enabled": False, "models": []},
+        "model_profiles": {},
         "disabled_engines": [],
         "models": {
             engine: _spawn_fallback_model_for_engine(engine)
@@ -8799,11 +9726,15 @@ def _clean_disabled_engines(value, keep_enabled=()):
 
 def _write_spawn_defaults_file(payload):
     COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = SPAWN_DEFAULTS_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-    tmp.replace(SPAWN_DEFAULTS_FILE)
+    fd, tmp_name = tempfile.mkstemp(prefix="spawn-defaults-", suffix=".tmp", dir=SPAWN_DEFAULTS_FILE.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write("\n")
+        tmp.replace(SPAWN_DEFAULTS_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _load_spawn_defaults():
@@ -8880,6 +9811,8 @@ def _load_spawn_defaults():
         "worker_model": worker_model,
         "worker_reasoning_effort": worker_reasoning_effort,
         "worker_auto_compact_k": worker_auto_compact_k,
+        "worker_fallback": _validate_worker_fallback(raw.get("worker_fallback", {"enabled": False, "models": []})),
+        "model_profiles": _validate_model_profiles(raw.get("model_profiles", {})),
         "disabled_engines": _clean_disabled_engines(
             raw.get("disabled_engines"), (engine, worker_engine),
         ),
@@ -8888,7 +9821,12 @@ def _load_spawn_defaults():
         # A new engine was added to _ORCHESTRATION_SPAWN_ENGINES after this
         # file was written. Backfill it once and persist so every future
         # read is complete without re-touching the literals in this function.
-        _write_spawn_defaults_file(result)
+        migrated = dict(result)
+        if "worker_fallback" not in raw:
+            migrated.pop("worker_fallback", None)
+        if "model_profiles" not in raw:
+            migrated.pop("model_profiles", None)
+        _write_spawn_defaults_file(migrated)
     return result
 
 
@@ -8896,6 +9834,12 @@ def _save_spawn_defaults(config):
     if not isinstance(config, dict):
         return {"ok": False, "error": "expected JSON object"}
     current = _load_spawn_defaults()
+    try:
+        stored_keys = json.loads(SPAWN_DEFAULTS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        stored_keys = {}
+    if not isinstance(stored_keys, dict):
+        stored_keys = {}
     if "engine" in config:
         engine = _normalize_orchestration_spawn_engine(config.get("engine"))
         if engine not in _ORCHESTRATION_SPAWN_ENGINES:
@@ -8962,6 +9906,18 @@ def _save_spawn_defaults(config):
     if "worker_auto_compact_k" in config:
         current["worker_auto_compact_k"] = _validate_auto_compact_k(config.get("worker_auto_compact_k"))
 
+    if "worker_fallback" in config:
+        try:
+            current["worker_fallback"] = _validate_worker_fallback(config["worker_fallback"], strict=True)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    if "model_profiles" in config:
+        try:
+            current["model_profiles"] = _validate_model_profiles(config["model_profiles"], strict=True)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
     raw_models = config.get("models")
     if raw_models is not None and not isinstance(raw_models, dict):
         return {"ok": False, "error": "models must be an object"}
@@ -8995,6 +9951,8 @@ def _save_spawn_defaults(config):
         "auto_compact_k": current.get("auto_compact_k", 250),
         "worker_engine": current.get("worker_engine", ""),
         "worker_model": current.get("worker_model", ""),
+        "worker_fallback": current["worker_fallback"],
+        "model_profiles": current["model_profiles"],
         "worker_reasoning_effort": current.get("worker_reasoning_effort", ""),
         "worker_auto_compact_k": current.get("worker_auto_compact_k", 250),
         "models": {
@@ -9002,6 +9960,9 @@ def _save_spawn_defaults(config):
             for engine in _ORCHESTRATION_SPAWN_ENGINES
         },
     }
+    for routing_key in ("worker_fallback", "model_profiles"):
+        if routing_key not in config and routing_key not in stored_keys:
+            payload.pop(routing_key, None)
     _write_spawn_defaults_file(payload)
     return {"ok": True, **payload}
 
@@ -9017,10 +9978,13 @@ def _spawn_auto_compact_k_tokens(auto_compact_k=None):
 
 def _spawn_env(auto_compact_k=None):
     """Child env for a new spawned session, including autocompact window."""
-    env = _question_relay_env()
+    env = _attribution.child_env(_question_relay_env())
     tokens = _spawn_auto_compact_k_tokens(auto_compact_k=auto_compact_k)
     if tokens:
         env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(tokens)
+    if sys.platform == "win32":
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
     return env
 
 
@@ -9052,7 +10016,10 @@ def _spawn_request_engine_and_model(payload):
     if engine not in _ORCHESTRATION_SPAWN_ENGINES:
         return None, None
     model = _clean_spawn_default_model(payload.get("model"))
-    if not model:
+    # A $0 spawn with no explicit model lets the free router pick its best
+    # free model; the paid spawn default (e.g. Opus) must not be sent there.
+    free_runtime = str(payload.get("runtime") or "").strip().lower() == "free"
+    if not model and not free_runtime:
         model = _spawn_default_model_for_engine(engine, defaults)
     return engine, model or None
 
@@ -9523,6 +10490,16 @@ def _archive_session_is_live_uncached(session_id):
                     return True
         except OSError:
             pass
+    if not is_non_claude_engine:
+        # Idle-but-open interactive sessions stop firing hooks, so their sidecar
+        # ages out of the window above while the process is still running (and
+        # carries no resume-arg for the engine scan). Claude's own pid registry,
+        # filtered to pids that are still `claude` processes, is the proof.
+        try:
+            if session_id in _load_session_registry():
+                return True
+        except Exception:
+            pass
     if session_id in _live_engine_session_ids():
         return True
     # Pool-model codex (Codex.app `codex app-server`) puts no session id on
@@ -9566,6 +10543,7 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
     "stale_tool_age_s",
     "stale_tool_threshold_s",
     "acp_status",
+    "working_since",
 )
 
 
@@ -9641,8 +10619,16 @@ def _discover_live_session_ids():
             try:
                 if not _acp_harness_enabled(harness):
                     continue
-                with _ACP_LOCK:
-                    _acp_load_state(harness)
+                # CCC-142: a busy lock means another thread is loading or
+                # mutating ACP state (~18-30s at boot); take a lock-free
+                # copy and let a later poll load, instead of stalling here.
+                if _ACP_LOCK.acquire(timeout=0.05):
+                    try:
+                        _acp_load_state(harness)
+                        acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+                    finally:
+                        _ACP_LOCK.release()
+                else:
                     acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
             except Exception:
                 continue
@@ -9743,6 +10729,16 @@ def _acp_live_activity_fields(harness, session_id):
         with _ACP_LOCK:
             _acp_load_state(harness)
             state = dict(_ACP_SESSION_STATE.get(harness, {}).get(session_id) or {})
+        if harness == "devin":
+            # Devin has no wire file to read a turn from: its live status
+            # and parked approvals live with the conn owner (the worker).
+            snap = _acp_session_snapshot("devin", session_id)
+            if snap is not None:
+                state = {
+                    "status": snap.get("status"),
+                    "pending_permissions": snap.get("pending_permissions"),
+                    "updated_at": snap.get("updated_at"),
+                }
     except Exception:
         state = {}
     out["needs_approval"] = bool(state.get("pending_permissions"))
@@ -9787,6 +10783,10 @@ def _acp_live_activity_fields(harness, session_id):
     out["turn_age_s"] = (
         max(0.0, now - track["turn_started_at"]) if track["turn_started_at"] else None
     )
+    # Epoch the current turn started, for the UI's persistent WIP timer.
+    # Suppressed while parked on an approval — that's "waiting", not working.
+    if track["turn_started_at"] and not out["needs_approval"]:
+        out["working_since"] = track["turn_started_at"]
     try:
         threshold = float(_stale_tool_threshold_s())
     except Exception:
@@ -9811,12 +10811,13 @@ def _devin_live_acp_status(raw_id):
     Mirrors session-status's kind=acp branch; in-memory registry plus one
     kill(pid, 0) on the lock pid, no subprocess.
     """
-    if _devin_cli_session_live(raw_id) and not _devin_acp_session_loaded(raw_id):
-        return None
     with _ACP_LOCK:
         _acp_load_state("devin")
-        state = _ACP_SESSION_STATE.get("devin", {}).get(raw_id) or {}
-    return "running" if state.get("status") == "active" else "idle"
+    # The worker owns the conn; its snapshot carries the live turn status.
+    snap = _acp_session_snapshot("devin", raw_id) or {}
+    if _devin_cli_session_live(raw_id) and not snap.get("loaded"):
+        return None
+    return "running" if snap.get("status") == "active" else "idle"
 
 
 def _live_activity_entry_for_session(session_id):
@@ -9869,6 +10870,8 @@ def _live_activity_entry_for_session(session_id):
                 entry["needs_approval_message"] = acp_fields.get(
                     "needs_approval_message")
             entry["acp_status"] = _devin_live_acp_status(raw_id)
+            if acp_fields.get("working_since"):
+                entry["working_since"] = acp_fields["working_since"]
         except Exception:
             pass
     elif engine == "hermes":
@@ -9877,6 +10880,16 @@ def _live_activity_entry_for_session(session_id):
         pass
     else:
         _add_sidecar_fields(entry)
+        # sidecar_ts is the in-flight tool's started_at — an honest "working
+        # since" epoch. Parked states (a question or permission prompt waiting
+        # on the human) are waiting, not working, so they get no timer.
+        if (
+            entry.get("sidecar_in_flight")
+            and entry.get("sidecar_ts")
+            and not entry.get("question_waiting")
+            and not entry.get("needs_approval")
+        ):
+            entry["working_since"] = entry["sidecar_ts"]
     return entry
 
 
@@ -11021,30 +12034,50 @@ def _sys_parse_cputime(s):
 
 
 def _sys_launchd_jobs():
-    """pid -> launchd label for every job launchd itself is supervising.
+    """pid -> service label for every job launchd / systemd --user is supervising.
 
     On macOS a PPID of 1 means either 'launchd started this on purpose' or
-    'the real parent died and launchd adopted it'. `launchctl list` is the
-    only cheap way to tell those apart, and it is one subprocess per snapshot
-    rather than one per row."""
-    out = _sys_run(["/bin/launchctl", "list"], timeout=3) if platform.system() == "Darwin" else ""
+    'the real parent died and launchd adopted it'. On Linux `systemd --user`
+    is the subreaper that both starts user services and adopts orphaned user
+    processes. One subprocess per snapshot (`launchctl list` or
+    `systemctl --user show`) tells supervised jobs apart from orphans."""
+    sys_name = platform.system()
     jobs = {}
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        try:
-            jobs[int(parts[0])] = parts[2].strip()
-        except ValueError:
-            continue
+    if sys_name == "Darwin":
+        out = _sys_run(["/bin/launchctl", "list"], timeout=3)
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            try:
+                jobs[int(parts[0])] = parts[2].strip()
+            except ValueError:
+                continue
+    elif sys_name == "Linux":
+        out = _sys_run(["systemctl", "--user", "show", "--property=Id,MainPID", "*.service"], timeout=3)
+        cur_pid = 0
+        cur_id = ""
+        for line in (out + "\n").splitlines():
+            if not line.strip():
+                if cur_pid > 0 and cur_id:
+                    jobs[cur_pid] = cur_id
+                cur_pid, cur_id = 0, ""
+            elif line.startswith("MainPID="):
+                try:
+                    cur_pid = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    cur_pid = 0
+            elif line.startswith("Id="):
+                cur_id = line.split("=", 1)[1].strip()
     return jobs
 
 
 def _sys_ccc_session_pids():
     """PIDs of sessions CCC itself spawned (spawn registry on disk + this
-    process's in-memory list). A `claude -p` reparented to launchd because the
-    worker restarted is still a live, tracked session — an anchor, not an
-    orphan root. Cheap: one small JSON read per snapshot, no RPC."""
+    process's in-memory list + live WatchTower workers). A `claude -p`
+    reparented to launchd / systemd --user because the worker restarted is
+    still a live, tracked session — an anchor, not an orphan root. Cheap:
+    small JSON reads per snapshot, no RPC."""
     pids = set()
     try:
         for entry in _load_spawn_registry():
@@ -11059,6 +12092,17 @@ def _sys_ccc_session_pids():
             pid = entry.get("pid") if isinstance(entry, dict) else None
             if pid:
                 pids.add(int(pid))
+    except Exception:
+        pass
+    try:
+        wt_pids, _ = _wt_live_worker_guard()
+        pids.update(wt_pids)
+    except Exception:
+        pass
+    try:
+        for data in _load_session_registry().values():
+            if isinstance(data, dict) and data.get("pid"):
+                pids.add(int(data["pid"]))
     except Exception:
         pass
     pids.discard(0)
@@ -11105,11 +12149,15 @@ def _sys_worktree_gitdir_missing(cwd, _memo):
 def _build_system_processes_uncached():
     now = time.time()
     uid = os.getuid() if hasattr(os, "getuid") else None
+    sys_name = platform.system()
 
     ps_fmt = "pid=,ppid=,rss=,pcpu=,etime=,time=,stat=,tty=,command="
     ps_cmd = [_SYS_PS, "-axo", ps_fmt]
-    if uid is not None and platform.system() == "Darwin":
-        ps_cmd = [_SYS_PS, "-u", str(uid), "-o", ps_fmt]
+    if uid is not None:
+        if sys_name == "Darwin":
+            ps_cmd = [_SYS_PS, "-u", str(uid), "-o", ps_fmt]
+        elif sys_name == "Linux":
+            ps_cmd = [_SYS_PS, "-U", str(uid), "-u", str(uid), "-o", ps_fmt]
 
     ps_out = _sys_run(ps_cmd, timeout=5)
 
@@ -11148,22 +12196,36 @@ def _build_system_processes_uncached():
                 cur_type = val
             elif tag == "n":
                 if cur_fd == "cwd":
-                    pid_files[cur_pid]["cwd"] = val
-                    pid_files[cur_pid]["cwd_exists"] = os.path.exists(val)
+                    if cur_type == "unknown" or "(readlink:" in val:
+                        pid_files[cur_pid]["cwd"] = None
+                        pid_files[cur_pid]["cwd_exists"] = True
+                    elif val.endswith(" (deleted)"):
+                        pid_files[cur_pid]["cwd"] = val[:-10]
+                        pid_files[cur_pid]["cwd_exists"] = False
+                    else:
+                        pid_files[cur_pid]["cwd"] = val
+                        pid_files[cur_pid]["cwd_exists"] = os.path.exists(val)
                 elif cur_fd == "0":
                     pid_files[cur_pid]["fd0"] = val
                     pid_files[cur_pid]["fd0_type"] = cur_type
                     if cur_type == "FIFO":
-                        pid_files[cur_pid]["fd0_exists"] = os.path.exists(val)
+                        if val.endswith(" (deleted)"):
+                            pid_files[cur_pid]["fd0_exists"] = False
+                        elif val.startswith("/") and "(readlink:" not in val:
+                            pid_files[cur_pid]["fd0_exists"] = os.path.exists(val)
+                        else:
+                            pid_files[cur_pid]["fd0_exists"] = True
 
     my_pid = os.getpid()
     parent_pid = os.getppid()
     ccc_server_path = os.path.join(_CCC_SOURCE_DIR, "server.py")
     ccc_worker_path = os.path.join(_CCC_SOURCE_DIR, "ccc_worker.py")
+    ccc_tts_path = os.path.join(_CCC_SOURCE_DIR, "scripts", "local_tts_server.py")
     empty_files = {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True}
 
     # ── pass 1: parse + classify every row (no scoring yet) ──────────────
     rows = {}
+    reaper_pids = {1}
     for line in ps_out.splitlines():
         parts = line.strip().split(None, 8)
         if len(parts) < 9:
@@ -11178,9 +12240,12 @@ def _build_system_processes_uncached():
         etime_str, cputime_str, stat, tty, cmd = parts[4], parts[5], parts[6], parts[7], parts[8]
         cmd_base = cmd.split(None, 1)[0].rsplit("/", 1)[-1]
         label = launchd_jobs.get(pid)
+        if cmd_base == "systemd" and "--user" in cmd:
+            reaper_pids.add(pid)
 
         is_system_daemon = (
-            cmd.startswith(("/usr/libexec/", "/usr/sbin/", "/System/", "/Library/"))
+            cmd.startswith(("/usr/libexec/", "/usr/sbin/", "/System/", "/Library/", "/lib/systemd/", "/usr/lib/systemd/", "/sbin/", "sshd:"))
+            or cmd_base in ("systemd", "(sd-pam)", "sshd", "sshd:")
             or "LAUNCHED_BY_LAUNCHD" in cmd
             or "/System/Library/" in cmd
         )
@@ -11191,19 +12256,14 @@ def _build_system_processes_uncached():
         is_dev_server = bool(_PROC_DEV_SERVER_RE.search(cmd))
         is_mp_worker = bool(_PROC_MP_WORKER_RE.search(cmd))
         is_gui = ("/Applications/" in cmd or "Contents/MacOS" in cmd)
-        # A GUI path is only a shield while the app that owns it is alive.
-        # Automation browsers (Puppeteer/Playwright/chrome-devtools) and any
-        # app *helper* / LSP / MCP that has been reparented to launchd are the
-        # leak we are hunting, not a desktop app.
-        if is_automation or (ppid == 1 and (is_helper or is_lsp or is_mcp)):
-            is_gui = False
         is_ccc = (
             pid in (my_pid, parent_pid)
             or ccc_server_path in cmd
             or ccc_worker_path in cmd
+            or ccc_tts_path in cmd
             or cmd_base == "ccc_worker.py"
             or "watchtower.cli" in cmd
-            or (label or "").startswith(("com.github.claude-command-center", "ai.watchtower"))
+            or (label or "").startswith(("com.github.claude-command-center", "ai.watchtower", "ccc.", "ccc-", "watchtower."))
         )
         is_known_daemon = (
             cmd_base in _PROC_KNOWN_DAEMON_BASES
@@ -11212,10 +12272,6 @@ def _build_system_processes_uncached():
         )
         has_tty = bool(tty) and tty not in ("??", "?", "-", "")
         is_ccc_session = pid in ccc_session_pids
-        # Anchored = something is deliberately keeping this alive; an orphan
-        # tree never roots at an anchored process.
-        anchored = (bool(label) or is_system_daemon or is_gui or is_ccc or is_known_daemon
-                    or has_tty or is_ccc_session)
 
         rows[pid] = {
             "pid": pid, "ppid": ppid, "cmd": cmd, "cmd_base": cmd_base, "cpu": cpu, "rss_mb": rss_mb,
@@ -11226,19 +12282,33 @@ def _build_system_processes_uncached():
             "is_automation": is_automation, "is_helper": is_helper, "is_lsp": is_lsp,
             "is_mcp": is_mcp, "is_dev_server": is_dev_server, "is_mp_worker": is_mp_worker,
             "is_ccc_session": is_ccc_session,
-            "anchored": anchored, "files": pid_files.get(pid, empty_files),
+            "anchored": False, "files": pid_files.get(pid, empty_files),
         }
 
+    for r in rows.values():
+        # A GUI path is only a shield while the app that owns it is alive.
+        # Automation browsers (Puppeteer/Playwright/chrome-devtools) and any
+        # app *helper* / LSP / MCP that has been reparented to launchd or
+        # systemd --user are the leak we are hunting, not a desktop app.
+        if r["is_automation"] or (r["ppid"] in reaper_pids and (r["is_helper"] or r["is_lsp"] or r["is_mcp"])):
+            r["is_gui"] = False
+        # Anchored = something is deliberately keeping this alive; an orphan
+        # tree never roots at an anchored process.
+        r["anchored"] = (
+            bool(r["label"]) or r["is_system_daemon"] or r["is_gui"] or r["is_ccc"]
+            or r["is_known_daemon"] or r["has_tty"] or r["is_ccc_session"]
+        )
+
     # ── pass 2: orphan trees ─────────────────────────────────────────────
-    # A row whose ancestry ends at an un-anchored PPID-1 process inherits
-    # that process's "launcher is gone" status: `npm exec next dev` (PPID 1)
+    # A row whose ancestry ends at an un-anchored reaper-parented process
+    # inherits that process's "launcher is gone" status: `npm exec next dev`
     # -> `next dev` -> `next-server` at 90% CPU is one leak, not three rows.
     def _orphan_root(pid):
         seen = 0
         cur = rows.get(pid)
         while cur is not None and seen < 64:
             seen += 1
-            if cur["ppid"] == 1:
+            if cur["ppid"] in reaper_pids:
                 return cur["pid"] if not cur["anchored"] else None
             if cur["anchored"]:
                 return None
@@ -11259,7 +12329,7 @@ def _build_system_processes_uncached():
         files = r["files"]
         etime_min = r["etime_min"]
         has_tty = r["has_tty"]
-        is_orphan = ppid == 1 and not r["anchored"]
+        is_orphan = ppid in reaper_pids and not r["anchored"]
         tree_orphan = r["tree_orphan"]
         detached = is_orphan or tree_orphan
         score = 0.0
@@ -11302,7 +12372,7 @@ def _build_system_processes_uncached():
         m = _PROC_PARENT_PID_RE.search(cmd)
         if m:
             declared = int(m.group(1))
-            if declared not in rows and declared != 1:
+            if declared not in rows and declared not in reaper_pids:
                 score += 4.0
                 reasons.append("Declared parent pid %d is gone" % declared)
 
@@ -11322,7 +12392,7 @@ def _build_system_processes_uncached():
         elif r["is_automation"] and r["is_helper"] and detached:
             score += 3.0
             reasons.append("Helper of leaked headless browser (root pid %s)" % r["tree_root"])
-        elif r["is_helper"] and ppid == 1:
+        elif r["is_helper"] and ppid in reaper_pids:
             score += 4.0
             reasons.append("Orphaned app helper (main app gone)")
 
@@ -11490,8 +12560,9 @@ def _reap_orphaned_automation_browsers():
             continue
         pid = process.get("pid")
         age_min = float(process.get("etime_min") or 0)
+        reasons = process.get("reasons") or ()
         exact = (
-            process.get("ppid") == 1
+            (process.get("ppid") == 1 or "Leaked headless browser (launcher gone)" in reasons)
             and not process.get("has_tty")
             and age_min > 60
         )
@@ -11534,7 +12605,8 @@ def _reap_orphaned_automation_browsers():
 def system_process_kill(pids, force=False):
     my_pid = os.getpid()
     parent_pid = os.getppid()
-    sig = signal.SIGKILL if force else signal.SIGTERM
+    # Windows has no SIGKILL; os.kill(..., SIGTERM) already terminates it.
+    sig = getattr(signal, "SIGKILL", signal.SIGTERM) if force else signal.SIGTERM
     sig_name = "SIGKILL" if force else "SIGTERM"
     killed, blocked, errors = [], [], {}
     for p in pids:
@@ -11580,8 +12652,17 @@ def build_live_sessions_activity():
         # Time the REAL build — this is the truest health signal for the hot
         # path, and the only place an actual (non-cached) build happens.
         _t0 = time.perf_counter()
+        _c0 = time.thread_time()
         data = _build_live_sessions_activity_uncached()
-        _record_live_build_ms((time.perf_counter() - _t0) * 1000.0)
+        _build_ms = (time.perf_counter() - _t0) * 1000.0
+        # Thread CPU next to wall time: cpu << ms means the build was waiting
+        # (GIL convoy, saturated host, subprocess), not computing (CCC-168).
+        _cpu_ms = (time.thread_time() - _c0) * 1000.0
+        _record_live_build_ms(_build_ms)
+        try:
+            record_event("live_build", _build_ms, detail={"cpu_ms": int(round(_cpu_ms)), "rows": len(data or {})})
+        except Exception:
+            pass
         snap["data"] = data
         snap["ts"] = time.time()
         return data
@@ -11640,6 +12721,121 @@ def _sessions_state_snapshot():
 
 _CENSUS_IDENTITY_CACHE_LOCK = threading.Lock()
 _CENSUS_IDENTITY_CACHE = {"token": None, "map": {}}
+_CONTINUATION_BOILERPLATE_PREFIX = "you are continuing a task from an earlier "
+
+
+def _is_continuation_boilerplate_title(text):
+    if not isinstance(text, str):
+        return False
+    return text.strip().lower().startswith(_CONTINUATION_BOILERPLATE_PREFIX)
+
+
+def _is_wt_drain_prompt(text):
+    if not isinstance(text, str):
+        return False
+    low = text.strip().lower()
+    return low.startswith("drain the ") and "watchtower queue" in low
+
+
+def _is_empty_wt_worker_poll(ident):
+    if not isinstance(ident, dict) or ident.get("continued_from_session_id"):
+        return False
+    name = str(ident.get("name") or "").strip()
+    low = name.lower().lstrip("🧵").strip()
+    if "#" in low:
+        return False
+    if low.startswith("drain the ") and "watchtower queue" in low:
+        return True
+    if ident.get("wt_drain_prompt"):
+        return True
+    if ident.get("is_watchtower_worker") and low.endswith(" worker"):
+        return True
+    return False
+
+
+def _overlay_wt_worker_display_names_on_census(out):
+    """Overlay WatchTower ticket titles and worker flags onto census identity map
+    without ever blocking on a GitHub `gh` subprocess."""
+    if not out or not any(v.get("has_conversation_row") for v in out.values()):
+        return
+    try:
+        worker_session_ids = set(_wt_read_worker_session_ids())
+    except Exception:
+        worker_session_ids = set()
+    try:
+        workers = _wt_read_workers(include_activity=False) or []
+    except Exception:
+        workers = []
+    try:
+        origins = _wt_read_session_origins() or {}
+    except Exception:
+        origins = {}
+    sid_to_worker = {}
+    worker_ids = {}
+    for w in workers:
+        sid = str(w.get("session_id") or "").strip()
+        wid = str(w.get("worker_id") or "").strip()
+        if sid:
+            sid_to_worker[sid] = w
+        if wid and sid:
+            worker_ids[wid] = sid
+    items = _wt_list_items_snapshot_only()
+    titles_by_sid = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        status = str(it.get("status") or "")
+        if status not in ("in_progress", "in_review", "closed"):
+            continue
+        if str(it.get("project") or "") in _idea_tickets.QUEUE_TYPES:
+            continue
+        sid = str(it.get("claimed_session_id") or "").strip()
+        if not sid:
+            sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
+        if not sid or sid not in out:
+            continue
+        rank = 1 if status == "in_progress" else 0
+        score = (rank, _wt_item_ts(it))
+        prev = titles_by_sid.get(sid)
+        if prev and prev[0] >= score:
+            continue
+        full_context = _wt_ticket_context(it, limit=0)
+        clipped_context = _wt_clip_title(full_context, limit=60)
+        titles_by_sid[sid] = (
+            score,
+            str(it.get("project") or ""),
+            _wt_display_name(it.get("project"), it.get("ref"), clipped_context),
+        )
+    for sid, ident in out.items():
+        origin = origins.get(sid)
+        if origin and (origin.get("role") != "adhoc" or origin.get("parent_worker_id")):
+            if not ident.get("parent_session_id") and origin.get("parent_session_id") \
+                    and origin["parent_session_id"] != sid:
+                ident["parent_session_id"] = origin["parent_session_id"]
+            if not ident.get("continued_from_session_id"):
+                ident["is_watchtower_worker"] = True
+        if sid in worker_session_ids and not ident.get("continued_from_session_id"):
+            ident["is_watchtower_worker"] = True
+        if ident.get("name_overridden"):
+            continue
+        titled = titles_by_sid.get(sid)
+        worker = sid_to_worker.get(sid)
+        if not titled and not worker:
+            continue
+        queue = (worker or {}).get("queue") or (titled[1] if titled else "")
+        if not _wt_row_name_is_generic({"display_name": ident.get("name") or ""}, queue):
+            continue
+        if titled:
+            ident["name"] = titled[2]
+        else:
+            raw = str(ident.get("name") or "").strip()
+            low = raw.lower().lstrip("🧵").strip()
+            qlow = str(queue or "").strip().lower()
+            if qlow and low.startswith(f"{qlow}#"):
+                if not raw.startswith("🧵"):
+                    ident["name"] = f"🧵 {raw}"
+            else:
+                ident["name"] = _wt_display_name(queue, None)
 
 
 def _census_identity_map():
@@ -11666,7 +12862,9 @@ def _census_identity_map():
             (key, float((entry or {}).get("cached_at") or 0))
             for key, entry in _ARCHIVE_RESPONSE_CACHE.items()
         )))
-    if cache_empty:
+    def _kick_cold_archive_refresh():
+        if not cache_empty:
+            return
         try:
             cold_key = _archive_response_cache_key(
                 include_prs=False, resolve_pr_states=False,
@@ -11678,36 +12876,75 @@ def _census_identity_map():
             })
         except Exception:
             pass
+
     with _CENSUS_IDENTITY_CACHE_LOCK:
         if _CENSUS_IDENTITY_CACHE["token"] == token:
-            return _CENSUS_IDENTITY_CACHE["map"]
+            cached_map = _CENSUS_IDENTITY_CACHE["map"]
+            _kick_cold_archive_refresh()
+            return cached_map
     try:
         spawn_markers = _load_spawn_markers()
     except Exception:
         spawn_markers = {}
+    raw_registry = _load_spawn_registry() or []
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        ordered_entries = sorted(
+            _ARCHIVE_RESPONSE_CACHE.values(),
+            key=lambda e: float((e or {}).get("cached_at") or 0),
+            reverse=True,
+        )
+        snapshots = [
+            list((entry or {}).get("conversations") or [])
+            for entry in ordered_entries
+        ]
+    if raw_registry or snapshots:
+        try:
+            name_overrides = _load_session_name_overrides() or {}
+        except Exception:
+            name_overrides = {}
+        try:
+            archived_set, trashed_set = _load_conversation_lifecycle_sets()
+        except Exception:
+            archived_set, trashed_set = set(), set()
+    else:
+        name_overrides = {}
+        archived_set, trashed_set = set(), set()
     out = {}
-    for entry in _load_spawn_registry():
+    for entry in raw_registry:
         if not isinstance(entry, dict):
             continue
+        prompt = str(entry.get("prompt") or entry.get("command_summary") or "").strip()
+        cont = str(
+            entry.get("continued_from_session_id")
+            or _continued_from_session_id_from_text(prompt)
+            or ""
+        ).strip()
+        raw_parent = str(entry.get("parent_session_id") or "").strip() or None
+        if not cont and _is_continuation_boilerplate_title(prompt) and raw_parent:
+            cont = raw_parent
+        if cont and raw_parent == cont:
+            raw_parent = None
         ident = {
             "name": entry.get("name") or entry.get("command_summary") or None,
             "engine": entry.get("engine") or None,
             "model": entry.get("model") or None,
             "effort": entry.get("effort") or entry.get("reasoning_effort") or None,
             "repo_path": entry.get("repo_path") or entry.get("cwd") or None,
-            "parent_session_id": entry.get("parent_session_id") or None,
+            "parent_session_id": raw_parent,
+            "continued_from_session_id": cont or None,
             "spawned_via": _infer_session_spawned_via(entry, markers=spawn_markers),
             "has_conversation_row": False,
+            "archived": False,
+            "trashed": False,
+            "is_watchtower_worker": False,
+            "name_overridden": False,
         }
         for key in ("session_id", "resumed_sid"):
             sid = (entry.get(key) or "").strip()
             if sid:
+                if sid in name_overrides:
+                    ident = dict(ident, name=name_overrides[sid], name_overridden=True)
                 out.setdefault(sid, ident)
-    with _ARCHIVE_RESPONSE_CACHE_LOCK:
-        snapshots = [
-            list((entry or {}).get("conversations") or [])
-            for entry in _ARCHIVE_RESPONSE_CACHE.values()
-        ]
     for rows in snapshots:
         for row in rows:
             if not isinstance(row, dict):
@@ -11718,11 +12955,44 @@ def _census_identity_map():
             existing = out.get(sid) or {}
             if existing.get("has_conversation_row"):
                 continue
-            name = row.get("display_name") or row.get("first_message") or existing.get("name")
+            override = name_overrides.get(sid)
+            disp = str(row.get("display_name") or "").strip()
+            ai = str(row.get("ai_title") or "").strip()
+            fm = str(row.get("first_message") or "").strip()
+            name_overridden = bool(override or (row.get("name_overridden") and disp))
+            if override:
+                name = override
+            elif row.get("name_overridden") and disp:
+                name = disp
+            elif disp and disp != ai and disp != fm and not _is_continuation_boilerplate_title(disp):
+                name = disp
+            elif ai:
+                name = ai
+            else:
+                name = disp or fm or existing.get("name")
             if isinstance(name, str):
                 name = " ".join(name.split())[:120] or None
             else:
                 name = existing.get("name")
+            cont = str(
+                row.get("continued_from_session_id")
+                or _continued_from_session_id_from_text(fm)
+                or existing.get("continued_from_session_id")
+                or ""
+            ).strip()
+            raw_parent = str(
+                row.get("parent_session_id") or existing.get("parent_session_id") or ""
+            ).strip() or None
+            if not cont and (_is_continuation_boilerplate_title(fm) or _is_continuation_boilerplate_title(disp)):
+                if raw_parent:
+                    cont = raw_parent
+                elif row.get("jsonl_path"):
+                    try:
+                        cont = _continued_from_session_id_from_transcript(row.get("jsonl_path")) or ""
+                    except Exception:
+                        cont = ""
+            if cont and raw_parent == cont:
+                raw_parent = None
             resolved_via = (
                 existing.get("spawned_via")
                 or _infer_session_spawned_via(row, sid=sid, markers=spawn_markers)
@@ -11733,11 +13003,17 @@ def _census_identity_map():
                 "model": row.get("model") or existing.get("model"),
                 "effort": row.get("reasoning_effort") or row.get("effort") or existing.get("effort"),
                 "repo_path": row.get("session_cwd") or existing.get("repo_path"),
-                "parent_session_id": row.get("parent_session_id") or existing.get("parent_session_id"),
+                "parent_session_id": raw_parent,
+                "continued_from_session_id": cont or None,
                 "spawned_via": resolved_via,
                 "has_conversation_row": True,
                 "mtime": row.get("mtime") or row.get("modified") or None,
                 "jsonl_path": row.get("jsonl_path") or None,
+                "archived": bool(row.get("archived") or sid in archived_set),
+                "trashed": bool(row.get("trashed") or sid in trashed_set),
+                "is_watchtower_worker": bool(row.get("is_watchtower_worker") or existing.get("is_watchtower_worker")),
+                "wt_drain_prompt": bool(_is_wt_drain_prompt(fm) or _is_wt_drain_prompt(disp)),
+                "name_overridden": name_overridden,
             }
     # Codex pool threads (Codex.app app-server) reach liveness via
     # _codex_pool_candidate_sids but are in neither the spawn registry nor
@@ -11751,7 +13027,19 @@ def _census_identity_map():
             if not isinstance(row, dict):
                 continue
             sid = str(row.get("id") or "").strip()
-            if not sid or sid in out:
+            if not sid:
+                continue
+            if sid in out:
+                existing = out[sid]
+                if existing.get("has_conversation_row") and not existing.get("name_overridden"):
+                    t_title = str(row.get("title") or "").strip()
+                    t_first = str(row.get("first_user_message") or "").strip()
+                    if t_title and t_title != t_first:
+                        clean_t = " ".join(t_title.split())[:120]
+                        cur_name = str(existing.get("name") or "")
+                        clean_first = " ".join(t_first.split())[:120]
+                        if not cur_name or cur_name == clean_first or _is_continuation_boilerplate_title(cur_name):
+                            existing["name"] = clean_t
                 continue
             name = row.get("title") or row.get("first_user_message") or None
             if isinstance(name, str):
@@ -11765,15 +13053,56 @@ def _census_identity_map():
                 "effort": row.get("reasoning_effort") or None,
                 "repo_path": row.get("cwd") or None,
                 "parent_session_id": None,
+                "continued_from_session_id": None,
                 "has_conversation_row": False,
+                "archived": sid in archived_set,
+                "trashed": sid in trashed_set,
+                "is_watchtower_worker": False,
+                "name_overridden": False,
                 "mtime": _codex_ts_seconds(row, prefix="updated")
                 or _codex_ts_seconds(row, prefix="created") or None,
             }
     except Exception:
         pass
+    try:
+        _overlay_wt_worker_display_names_on_census(out)
+    except Exception:
+        pass
+    # Walk continuation chains so sessions whose prompt starts with CCC's
+    # continuation preamble inherit their origin session's resolved title (and
+    # subagent parent link, if the origin was itself a subagent), matching
+    # rowRawTitle / _continuationFoldMaps in static/app.js.
+    for sid, ident in out.items():
+        cont = ident.get("continued_from_session_id")
+        if not cont:
+            continue
+        cur = cont
+        seen = {sid}
+        inherited_name = None
+        inherited_parent = None
+        for _ in range(8):
+            if not cur or cur in seen:
+                break
+            seen.add(cur)
+            anc = out.get(cur)
+            if not anc:
+                break
+            anc_name = anc.get("name")
+            if not inherited_name and anc_name and not _is_continuation_boilerplate_title(anc_name):
+                inherited_name = anc_name
+            if not inherited_parent and anc.get("parent_session_id"):
+                inherited_parent = anc.get("parent_session_id")
+            cur = anc.get("continued_from_session_id")
+        if inherited_name and (not ident.get("name") or _is_continuation_boilerplate_title(ident.get("name"))):
+            ident["name"] = inherited_name
+        if inherited_parent and not ident.get("parent_session_id"):
+            ident["parent_session_id"] = inherited_parent
+    for ident in out.values():
+        ident["empty_worker_poll"] = _is_empty_wt_worker_poll(ident)
     with _CENSUS_IDENTITY_CACHE_LOCK:
         _CENSUS_IDENTITY_CACHE["token"] = token
         _CENSUS_IDENTITY_CACHE["map"] = out
+    _kick_cold_archive_refresh()
     return out
 
 
@@ -11978,11 +13307,6 @@ def build_session_census(since_s=None):
         spawn_markers = _load_spawn_markers()
     except Exception:
         spawn_markers = {}
-    children_of = {}
-    for sid in activity:
-        parent = (identity.get(sid) or {}).get("parent_session_id") or ""
-        if parent:
-            children_of.setdefault(parent, []).append(sid)
     rows = []
     for sid, fields in activity.items():
         entry = dict(fields or {})
@@ -12032,16 +13356,21 @@ def build_session_census(since_s=None):
             "name": ident.get("name"),
             "repo_path": ident.get("repo_path"),
             "parent_session_id": parent,
+            "continued_from_session_id": ident.get("continued_from_session_id") or None,
             "spawned_via": _infer_session_spawned_via(ident, sid=sid, markers=spawn_markers),
-            "children": sorted(children_of.get(sid) or ()),
+            "children": [],
             "last_event_age_s": age,
             "pending_tool": entry.get("pending_tool") or entry.get("sidecar_tool") or None,
             "question_waiting": bool(entry.get("question_waiting")),
             "needs_approval": bool(entry.get("needs_approval")),
             "has_conversation_row": bool(ident.get("has_conversation_row")),
             "helper": helper,
+            "archived": bool(ident.get("archived")),
+            "trashed": bool(ident.get("trashed")),
+            "empty_worker_poll": bool(ident.get("empty_worker_poll")),
             "unanswered_input": False,
             "turn_age_s": entry.get("turn_age_s"),
+            "working_since": entry.get("working_since"),
             "stuck": bool(entry.get("stale_tool_call")),
             "stuck_age_s": entry.get("stale_tool_age_s") or None,
         })
@@ -12069,6 +13398,7 @@ def build_session_census(since_s=None):
                 "name": ident.get("name"),
                 "repo_path": ident.get("repo_path"),
                 "parent_session_id": ident.get("parent_session_id") or None,
+                "continued_from_session_id": ident.get("continued_from_session_id") or None,
                 "spawned_via": _infer_session_spawned_via(ident, sid=sid, markers=spawn_markers),
                 "children": [],
                 "last_event_age_s": max(0.0, now - mtime),
@@ -12077,11 +13407,22 @@ def build_session_census(since_s=None):
                 "needs_approval": False,
                 "has_conversation_row": True,
                 "helper": False,
+                "archived": bool(ident.get("archived")),
+                "trashed": bool(ident.get("trashed")),
+                "empty_worker_poll": bool(ident.get("empty_worker_poll")),
                 "unanswered_input": _census_unanswered_input(sid, ident.get("jsonl_path")),
                 "turn_age_s": None,
+                "working_since": None,
                 "stuck": False,
                 "stuck_age_s": None,
             })
+    children_of = {}
+    for r in rows:
+        parent = r.get("parent_session_id") or ""
+        if parent:
+            children_of.setdefault(parent, []).append(r["session_id"])
+    for r in rows:
+        r["children"] = sorted(children_of.get(r["session_id"]) or ())
     rows.sort(key=lambda r: (
         r["last_event_age_s"] is None,
         r["last_event_age_s"] if r["last_event_age_s"] is not None else 0.0,
@@ -12102,6 +13443,29 @@ def _decode_project_slug(slug):
     """
     if not slug.startswith("-"):
         return None
+    # Memoized per slug (CCC-1227): the known-repo scan decodes every project
+    # folder (~2k) and each fresh walk costs dozens of stats, ~70k per scan.
+    # A hit re-checks only the answer (one stat); misses retry after a TTL.
+    now = time.time()
+    hit = _DECODE_SLUG_MEMO.get(slug)
+    if hit is not None:
+        path, at = hit
+        if path is not None and path.is_dir():
+            return path
+        if path is None and now - at < _DECODE_SLUG_MISS_TTL_S:
+            return None
+    result = _decode_project_slug_walk(slug)
+    if len(_DECODE_SLUG_MEMO) > 20000:
+        _DECODE_SLUG_MEMO.clear()
+    _DECODE_SLUG_MEMO[slug] = (result, now)
+    return result
+
+
+_DECODE_SLUG_MEMO = {}
+_DECODE_SLUG_MISS_TTL_S = 600.0
+
+
+def _decode_project_slug_walk(slug):
     parts = slug[1:].split("-")
 
     def search(prefix, remaining):
@@ -12123,6 +13487,7 @@ def _decode_project_slug(slug):
 
 
 _GENERATED_HELPER_SESSION_PREFIXES = (
+    "Produce a one-word session action chip",
     "Produce a concise 4-8 word title summarizing what the user is trying to do",
     "Produce a concise 4-8 word title for the GitHub issue below",
 )
@@ -12242,7 +13607,7 @@ def _extract_user_prompt_text(ev):
     if ev.get("type") != "user" or ev.get("isMeta"):
         return ""
     msg = _safe_parse_message(ev.get("message", {}))
-    text = _extract_text_from_content(msg.get("content", ""))
+    text = _attribution.strip_header(_extract_text_from_content(msg.get("content", "")))
     if _is_transcript_control_text(text):
         # A slash command like "/goal ..." is still control-prefixed
         # bookkeeping (<command-name>...), but it carries a real,
@@ -13544,6 +14909,17 @@ def find_all_conversations(
     except Exception:
         pass
 
+    # Codex cloud (dot/aeon) threads: catalog is cache-served (TTL/disk/local
+    # sidebar cache), so this never blocks the archive on a network fetch.
+    try:
+        out.extend(find_codex_cloud_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+        ))
+    except Exception:
+        pass
+
     # Add Gemini sessions to the archive too. They live in ~/.gemini/tmp/
     # and have their own JSON format, but find_gemini_conversations returns
     # rows compatible with the archive renderer.
@@ -13733,7 +15109,10 @@ def find_all_conversations(
 # permanently reusing their stale (cost-less) dict.
 # v9: Codex subagent rows (guardian auto-reviews) now carry parent_session_id
 # from the rollout's session_meta; cached v8 rows would stay parent-less.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 9
+# v10: Rebuild Codex rows to recover replies from response_item messages.
+# v11: Exclude injected setup messages from Codex prompt/title metadata.
+# v12: Reparse session footers so cached rows retain short action labels.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 13
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
@@ -13795,12 +15174,32 @@ def _archive_response_cache_key(
     )
 
 
+_ARCHIVE_RESPONSE_CACHE_LOAD_LOCK = threading.Lock()
+
+
 def _load_archive_response_cache():
+    """Load the persisted archive payload once, single-flight.
+
+    The loaded flag flips only after the file is in memory, and concurrent
+    first callers wait on the load instead of returning early (CCC-1244).
+    Setting it before the read let a boot-time census/live-activity poll
+    and the first sidebar list race: the loser saw an empty cache, so the
+    list fell through to a synchronous full rebuild (18-35s after every
+    restart) and census kicked a GIL-heavy background build on top.
+    """
     global _ARCHIVE_RESPONSE_CACHE_LOADED
-    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+    if _ARCHIVE_RESPONSE_CACHE_LOADED:
+        return
+    with _ARCHIVE_RESPONSE_CACHE_LOAD_LOCK:
         if _ARCHIVE_RESPONSE_CACHE_LOADED:
             return
-        _ARCHIVE_RESPONSE_CACHE_LOADED = True
+        try:
+            _read_archive_response_cache_file()
+        finally:
+            _ARCHIVE_RESPONSE_CACHE_LOADED = True
+
+
+def _read_archive_response_cache_file():
     try:
         with _ARCHIVE_RESPONSE_CACHE_FILE.open("r") as f:
             data = json.load(f)
@@ -13868,6 +15267,7 @@ def _load_archive_response_cache():
 
 _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S = 30.0
 _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = 0.0
+_ARCHIVE_RESPONSE_CACHE_SAVE_LOCK = threading.Lock()
 
 
 def _save_archive_response_cache(force=False):
@@ -13875,11 +15275,23 @@ def _save_archive_response_cache(force=False):
     this per merge and the snapshot is ~17MB, so every live session used to
     cost a ~180ms disk write on the request thread. It's a rebuildable cache
     — losing ≤30s of merges to a crash only costs one rebuild."""
+    # A process-local gate avoids duplicate serializations; the persistence
+    # helper also locks across detached refresh workers before merging.
+    if not _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.acquire(blocking=False):
+        return
+    try:
+        _persist_archive_response_cache(force=force)
+    finally:
+        _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.release()
+
+
+def _persist_archive_response_cache(force=False):
+    from ccc_server import archive_snapshot
+
     global _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT
     now = time.time()
     if not force and now - _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT < _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S:
         return
-    _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = now
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         entries = dict(_ARCHIVE_RESPONSE_CACHE)
     referenced_signatures = {
@@ -13906,11 +15318,8 @@ def _save_archive_response_cache(force=False):
         "signature_maps": signature_maps,
     }
     try:
-        _ARCHIVE_RESPONSE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".json.tmp")
-        with tmp.open("w") as f:
-            json.dump(snapshot, f)
-        tmp.replace(_ARCHIVE_RESPONSE_CACHE_FILE)
+        if archive_snapshot.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot):
+            _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = time.time()
     except OSError as e:
         print(f"  [archive-cache] save failed: {e}")
 
@@ -14210,8 +15619,9 @@ def _archive_codex_extra_keys():
     Must stay in lockstep with what _archive_corpus_signature_parts folds in
     for Codex, or a codex-only delta silently falls back to a full rebuild.
     """
-    keys = {str(Path.home() / ".codex" / "sessions")}
+    keys = {str(codex_home() / "sessions"), "ccc-codex-captures"}
     keys.update(str(p) for p in _codex_rollout_day_dirs())
+    keys.add(str(cloud_catalog_signature_path()))
     return keys
 
 
@@ -14226,7 +15636,7 @@ def _codex_rollout_day_dirs():
     transcript growing does not. Yesterday is included so a session started
     just before midnight still invalidates the cache.
     """
-    root = Path.home() / ".codex" / "sessions"
+    root = codex_home() / "sessions"
     now = time.time()
     return [
         root / time.strftime("%Y/%m/%d", time.localtime(now - offset))
@@ -14336,7 +15746,7 @@ def _archive_corpus_signature_parts():
         # registers, but it CANNOT see new threads on its own: Codex nests
         # rollouts by date, so _codex_rollout_day_dirs() below is what actually
         # detects a session being added.
-        Path.home() / ".codex" / "sessions",
+        codex_home() / "sessions",
         *_codex_rollout_day_dirs(),
         Path.home() / ".cursor" / "projects",
         # Antigravity, both stores: the desktop app's brain AND the CLI brain
@@ -14358,6 +15768,10 @@ def _archive_corpus_signature_parts():
         # rewrites when the session list actually changes, so its mtime is
         # exactly the add/remove signal the archive needs.
         _devin_sessions_cache_path(),
+        # Codex cloud threads have no local transcript files at all; the
+        # disk catalog rewrites only when the fetched thread set actually
+        # changes, so its mtime is the add/remove signal for cloud rows.
+        cloud_catalog_signature_path(),
         # Devin CLI: NOT sessions.db / its WAL (both flip on every streamed
         # token, which would force a full archive rebuild per poll while a
         # session runs). The CLI creates one lock file per session at start
@@ -14375,6 +15789,9 @@ def _archive_corpus_signature_parts():
             continue
         parts.append(f"{extra}|{mt}")
         extras_map[str(extra)] = mt
+    capture_signature = _codex_capture_corpus_signature()
+    parts.append(f"ccc-codex-captures|{capture_signature}")
+    extras_map["ccc-codex-captures"] = capture_signature
     # VS Code Copilot Chat stores: one chatSessions dir per workspace plus
     # each app's empty-window store. Dir mtimes flip on session add/remove,
     # which is exactly the granularity the archive needs.
@@ -14430,7 +15847,8 @@ _archive_serve_version = 0       # monotonic per store; tags prebuilt response b
 # content change always misses and rebuilds.
 _ARCHIVE_LIST_BODY_CACHE = {}  # (cache_key, window, from_cache) -> {"ver", "raw", "gzip", "etag"}
 _ARCHIVE_LIST_BODY_LOCK = threading.Lock()
-_ARCHIVE_LIST_BODY_CACHE_MAX = 24
+_ARCHIVE_LIST_BODY_CACHE_MAX = 96
+_ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
 
 def _archive_refresh_slot_available(key, now):
@@ -14451,6 +15869,13 @@ def _archive_refresh_slot_available(key, now):
 # a saturated box doesn't also spam service.out.log on every poll.
 _ARCHIVE_REFRESH_LOAD_LOG_TS = [0.0]
 _ARCHIVE_REFRESH_LOAD_LOG_INTERVAL_S = 300.0
+# Gate earlier than the perf-ticket saturation line (2.0/core): a box idling at
+# 1.9/core flapped the gate and still spawned workers. Env-tunable.
+try:
+    _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU = float(
+        os.environ.get("CCC_ARCHIVE_REFRESH_GATE_LOAD_PER_CPU", "1.5"))
+except ValueError:
+    _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU = 1.5
 
 
 def _archive_refresh_load_blocked(now):
@@ -14458,7 +15883,8 @@ def _archive_refresh_load_blocked(now):
     machine. Any probe failure means "not blocked" — a broken load check must
     never freeze refresh spawning or the request path."""
     try:
-        if not machine_saturated():
+        load1, ncpu = _machine_load()
+        if float(load1) < _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU * float(ncpu):
             return False
     except Exception:
         return False
@@ -14490,12 +15916,261 @@ def _archive_serve_cache_store(key, rows, generation, ts=None):
     with _archive_serve_lock:
         if generation != _archive_serve_generation:
             return False
+        prev = _archive_serve_cache.get(key)
+    # CCC-142: diff against the previous snapshot outside the lock. Rows that
+    # compare equal keep the previous dict (so derived caches keyed by row
+    # identity stay warm) and a refresh that changed nothing keeps the old
+    # version, so the prebuilt /list body still replays (~356 rebuilds/day,
+    # most of them no-ops, used to force a full 11MB body rebuild each).
+    diff = _archive_serve_diff(prev, rows) if prev is not None else None
+    with _archive_serve_lock:
+        if generation != _archive_serve_generation:
+            return False
+        if _archive_serve_cache.get(key) is not prev:
+            prev, diff = _archive_serve_cache.get(key), None
+        stamp = ts if ts is not None else time.time()
+        if diff is not None and isinstance(rows, list):
+            # Keep the caller's list object (identity-keyed version lookups
+            # on the rows it just built) but with the reused row dicts.
+            rows[:] = diff["rows"]
+            diff["rows"] = rows
+        if diff is not None and diff["identical"]:
+            prev["ts"] = stamp
+            prev["rows"] = diff["rows"]
+            return True
         _archive_serve_version += 1
-        _archive_serve_cache[key] = {
-            "ts": ts if ts is not None else time.time(),
-            "rows": rows, "ver": _archive_serve_version,
-        }
+        ver = _archive_serve_version
+        # row_rev: session id -> version its row last changed (absent = at or
+        # before track_since). Feeds the ?since= delta /list.
+        entry = {"ts": stamp, "rows": rows, "ver": ver, "track_since": ver, "row_rev": {}}
+        if diff is not None:
+            entry["rows"] = diff["rows"]
+            if prev.get("track_since") and prev.get("row_rev") is not None and not diff["untracked"]:
+                row_rev = dict(prev["row_rev"])
+                for sid in diff["changed"]:
+                    row_rev[sid] = ver
+                for sid in diff["removed"]:
+                    row_rev.pop(sid, None)
+                entry.update(track_since=prev["track_since"], row_rev=row_rev)
+        _archive_serve_cache[key] = entry
         return True
+
+
+# Delta tokens are only meaningful within one process: versions restart at 0.
+_ARCHIVE_DELTA_NONCE = os.urandom(4).hex()
+
+
+def _archive_row_sid(row):
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("session_id") or row.get("id") or "")
+
+
+def _archive_serve_diff(prev, rows):
+    """Row-level diff of a new snapshot against the stored one."""
+    old_rows = prev.get("rows") or []
+    old_by = {}
+    for r in old_rows:
+        sid = _archive_row_sid(r)
+        if sid:
+            old_by[sid] = r
+    out, changed, seen, untracked = [], [], set(), False
+    for r in rows or []:
+        sid = _archive_row_sid(r)
+        o = old_by.get(sid) if sid else None
+        if o is not None and o == r:
+            out.append(o)
+        else:
+            out.append(r)
+            if sid:
+                changed.append(sid)
+            else:
+                untracked = True
+        if sid:
+            # A repeated id can't be merged by id on the client.
+            untracked = untracked or sid in seen
+            seen.add(sid)
+    removed = [sid for sid in old_by if sid not in seen]
+    identical = (not changed and not removed and not untracked
+                 and len(out) == len(old_rows)
+                 and all(a is b for a, b in zip(out, old_rows)))
+    return {"rows": out, "changed": changed, "removed": removed,
+            "untracked": untracked, "identical": identical}
+
+
+def _archive_list_delta_state(key, rows, window, from_cache):
+    """Current delta token for a /list response, plus what a ?since= delta
+    needs. None when this response can't be expressed as a delta (rows are
+    not the stored snapshot plus appended overlay rows)."""
+    with _archive_serve_lock:
+        sc = _archive_serve_cache.get(key)
+        if sc is None or not sc.get("track_since") or sc.get("row_rev") is None:
+            return None
+        base = sc.get("rows") or []
+        ver, track_since, row_rev = sc.get("ver", 0), sc["track_since"], sc["row_rev"]
+    rows = rows or []
+    if len(rows) < len(base) or (rows is not base and any(a is not b for a, b in zip(rows, base))):
+        return None
+    extra = rows[len(base):]
+    try:
+        resumes = _load_usage_limit_resumes()
+    except Exception:
+        resumes = None
+    try:
+        ideas = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        ideas = None
+    # Inputs of the row projection that are not part of the row itself: any
+    # change invalidates every older token (the client gets a full body).
+    # Overlay rows stay out: every delta resends them whole.
+    ctx = hashlib.sha1(json.dumps(
+        [key, window, _session_graph.parent_revision(), resumes, ideas],
+        sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()).hexdigest()[:12]
+    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas)
+    ovl = hashlib.sha1(json.dumps(
+        extra, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()).hexdigest()[:8] if extra else "0"
+    return {
+        "token": f"{_ARCHIVE_DELTA_NONCE}.{ver}.{ctx}.{ovl}",
+        "nonce": _ARCHIVE_DELTA_NONCE, "ver": ver, "ctx": ctx,
+        "track_since": track_since, "row_rev": row_rev,
+        "base": base, "extra": extra,
+    }
+
+
+# CCC-201: a ctx change used to invalidate every client token, so each idea
+# ticket / parent link / usage-limit resume change cost every open page a
+# full 3MB /list body. Remember the per-sid projection inputs of the last few
+# ctx states; an older-ctx token then gets a delta that also resends the rows
+# whose inputs differ between its ctx and the current one.
+_ARCHIVE_DELTA_CTX_HIST = collections.OrderedDict()
+_ARCHIVE_DELTA_CTX_HIST_MAX = 8
+_archive_delta_ctx_lock = threading.Lock()
+
+
+def _archive_delta_ctx_fingerprints(mapping):
+    if not isinstance(mapping, dict):
+        return None
+    out = {}
+    for sid, v in mapping.items():
+        out[str(sid)] = json.dumps(v, sort_keys=True, separators=(",", ":"), default=str)
+    return out
+
+
+def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas):
+    with _archive_delta_ctx_lock:
+        if ctx in _ARCHIVE_DELTA_CTX_HIST:
+            _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
+            return
+    entry = {
+        "scope": (key, window),
+        "parents": _session_graph.parent_snapshot(),
+        "resumes": _archive_delta_ctx_fingerprints(resumes),
+        "ideas": _archive_delta_ctx_fingerprints(ideas),
+    }
+    with _archive_delta_ctx_lock:
+        _ARCHIVE_DELTA_CTX_HIST[ctx] = entry
+        _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
+        while len(_ARCHIVE_DELTA_CTX_HIST) > _ARCHIVE_DELTA_CTX_HIST_MAX:
+            _ARCHIVE_DELTA_CTX_HIST.popitem(last=False)
+
+
+def _archive_delta_ctx_changed_sids(old_ctx, new_ctx):
+    """Session ids whose projection inputs differ between two remembered ctx
+    states (both forms of kimi's "session_" prefix), or None if either state
+    is unknown or they belong to different list scopes."""
+    with _archive_delta_ctx_lock:
+        old = _ARCHIVE_DELTA_CTX_HIST.get(old_ctx)
+        new = _ARCHIVE_DELTA_CTX_HIST.get(new_ctx)
+    if old is None or new is None or old["scope"] != new["scope"]:
+        return None
+    changed = set()
+    for field in ("parents", "resumes", "ideas"):
+        a, b = old[field], new[field]
+        if a is None or b is None:
+            if a is not b:
+                return None
+            continue
+        for sid in a.keys() | b.keys():
+            if a.get(sid) != b.get(sid):
+                changed.add(sid)
+    out = set(changed)
+    for sid in changed:
+        out.add(sid[len("session_"):] if sid.startswith("session_") else "session_" + sid)
+    return out
+
+
+def _archive_list_delta_reject(state, since):
+    """Why token `since` can't be answered with a delta, or None if it can.
+    Logged on list_server diag rows so repeat full bodies are attributable
+    (CCC-201): restart (nonce), projection inputs moved (ctx), or snapshot
+    tracking reset/trimmed (range)."""
+    try:
+        nonce, ver_s, ctx, _ovl = str(since).split(".")
+        since_ver = int(ver_s)
+    except (ValueError, TypeError):
+        return "malformed"
+    if nonce != state["nonce"]:
+        return "nonce"
+    if ctx != state["ctx"] and _archive_delta_ctx_changed_sids(ctx, state["ctx"]) is None:
+        return "ctx"
+    if not (state["track_since"] <= since_ver <= state["ver"]):
+        return "range"
+    return None
+
+
+def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None):
+    """Rows changed after token `since`, plus the window's full ordered id
+    list so the client can drop/reorder exactly. None = send a full body."""
+    if _archive_list_delta_reject(state, since) is not None:
+        return None
+    since_ver = int(str(since).split(".")[1])
+    since_ctx = str(since).split(".")[2]
+    ctx_sids = set()
+    if since_ctx != state["ctx"]:
+        ctx_sids = _archive_delta_ctx_changed_sids(since_ctx, state["ctx"])
+        if ctx_sids is None:
+            return None
+    window = _archive_list_window(window)
+    cutoff = _archive_list_window_cutoff(window, now=now)
+    idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
+    row_rev, track_since = state["row_rev"], state["track_since"]
+    ids, changed = [], []
+    for r in state["base"]:
+        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid):
+            continue
+        sid = _archive_row_sid(r)
+        if not sid:
+            return None
+        ids.append(sid)
+        if row_rev.get(sid, track_since) > since_ver or sid in ctx_sids:
+            changed.append(r)
+    seen = set(ids)
+    for r in state["extra"]:
+        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid):
+            continue
+        sid = _archive_row_sid(r)
+        if not sid or sid in seen:
+            return None
+        ids.append(sid)
+        changed.append(r)
+    projected = _archive_list_project_rows(changed, window="all", now=now)
+    payload = {
+        "ok": True,
+        "delta": True,
+        "since": since,
+        "conversations": projected,
+        "ids": ids,
+        "count": len(ids),
+        "total_count": sum(isinstance(row, dict) for row in (rows or [])),
+        "window": window,
+        "fields": list(_ARCHIVE_LIST_FIELDS),
+        "queue_health": _queue_health_stats(rows, now=now),
+    }
+    if cached is not None:
+        payload["cached"] = bool(cached)
+    return payload
 
 
 def _archive_serve_ver_for_rows(key, rows):
@@ -14548,6 +16223,8 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                             row["archived"] = sid in arch_set
                         if trashed_set is not None:
                             row["trashed"] = sid in tr_set
+                        if entry.get("row_rev") is not None:
+                            entry["row_rev"][sid] = _archive_serve_version
                 entry["ts"] = 0.0
                 entry["ver"] = _archive_serve_version
             _archive_serve_refreshing.clear()
@@ -14568,8 +16245,12 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
         refreshed = {}
         for key, entry in _archive_serve_cache.items():
             rows = []
+            row_rev = entry.get("row_rev")
+            tracked = row_rev is not None and bool(entry.get("track_since"))
+            row_rev = dict(row_rev) if tracked else None
             for original in entry.get("rows") or []:
                 if not isinstance(original, dict):
+                    tracked = False
                     continue
                 row = dict(original)
                 sid = row.get("session_id") or row.get("id")
@@ -14577,12 +16258,18 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                     row["archived"] = sid in archived_set
                     row["trashed"] = sid in trashed_set
                     row["all_lane_override"] = lane_overrides.get(str(sid), "")
+                    # CCC-142: only rows whose lifecycle/lane actually moved
+                    # ride the next ?since= delta.
+                    if tracked and row != original:
+                        row_rev[str(sid)] = _archive_serve_version
                 rows.append(row)
             refreshed[key] = {
                 "ts": 0.0,
                 "rows": rows,
                 "ver": _archive_serve_version,
             }
+            if tracked:
+                refreshed[key].update(track_since=entry["track_since"], row_rev=row_rev)
         _archive_serve_cache.clear()
         _archive_serve_cache.update(refreshed)
         # Existing workers are for the previous generation. Their finally
@@ -14690,6 +16377,9 @@ def _archive_all_rows_cached(cache_options):
 # while /list must not serialize transcripts, parser/debug state, or JSONL paths.
 _ARCHIVE_LIST_FIELDS = (
     "id", "session_id", "source", "engine", "source_platform", "thread_source",
+    # Codex cloud (dot/aeon) markers — additive; absent on local rows.
+    "codex_cloud", "cloud", "cloud_degraded", "cloud_status",
+    "dot_name", "dot_root_id",
     "hermes_source", "hermes_origin", "hermes_profile", "hermes_chat_type",
     "hermes_tool_calls", "folder_label", "folder_path", "slug", "pinned_repo",
     "session_cwd", "session_cwd_exists", "session_cwd_is_worktree", "mtime",
@@ -14703,8 +16393,8 @@ _ARCHIVE_LIST_FIELDS = (
     "pending_tool_ts", "stale_tool_call", "stale_tool_age_s",
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
-    "goal_status", "parent_session_id", "continued_from_session_id",
-    "hermes_parent_session_id", "spawned_via", "spawn_caller",
+    "goal_status", "parent_session_id", "continued_from_session_id", "idea_ticket",
+    "hermes_parent_session_id", "spawned_via", "spawn_caller", "runtime",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
     "model", "reasoning_effort", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
@@ -14736,6 +16426,7 @@ def _archive_list_window_cutoff(window, now=None):
 
 
 def _archive_list_row_ts(row):
+    newest = 0
     for key in ("modified", "mtime", "last_interacted", "last_activity", "last_mtime",
                 "archived_at", "closed_at", "started_at"):
         try:
@@ -14743,19 +16434,87 @@ def _archive_list_row_ts(row):
         except (TypeError, ValueError):
             continue
         if math.isfinite(ts) and ts > 0:
-            return ts / 1000 if ts > 100000000000 else ts
-    return 0
+            newest = max(newest, ts / 1000 if ts > 100000000000 else ts)
+    try:
+        moved_at = float(((row or {}).get("idea_ticket") or {}).get("moved_at") or 0)
+        if math.isfinite(moved_at):
+            newest = max(newest, moved_at)
+    except (TypeError, ValueError):
+        pass
+    return newest
 
 
-def _archive_list_window_allows_row(row, cutoff):
+def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
     if not cutoff:
         return True
     engine = ((row or {}).get("engine") or (row or {}).get("source") or "").lower()
-    return bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff
+    if bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff:
+        return True
+    ticket = (idea_tickets_by_sid or {}).get(_archive_row_sid(row)) or {}
+    return _archive_list_row_ts({"idea_ticket": ticket}) >= cutoff
 
 
-def _archive_list_project_row(row):
-    out = {key: copy.deepcopy(row[key]) for key in _ARCHIVE_LIST_FIELDS if key in row}
+_PREVIEW_STATE_RE = re.compile(r"<session-state>.*?(</session-state>|$)", re.S)
+_PREVIEW_MD_RE = re.compile(r"[`*_#>|]+|\[([^\]]*)\]\([^)]*\)")
+
+
+# Most list polls re-derive the same previews from the same cached row
+# text — memoize by the source string itself (bounded; evicts oldest-first
+# by insertion order, which is fine because hot rows stay hot).
+_ARCHIVE_LIST_PREVIEW_CACHE = {}
+_ARCHIVE_LIST_PREVIEW_CACHE_MAX = 30000
+
+
+def _archive_list_preview(text, limit=140):
+    """One-line chat-list preview of an assistant reply: drops the trailing
+    <session-state> block, markdown punctuation and link targets, collapses
+    whitespace, and caps the length. Pure string work on the in-memory row."""
+    if not text:
+        return ""
+    if limit == 140:
+        cached = _ARCHIVE_LIST_PREVIEW_CACHE.get(text)
+        if cached is not None:
+            return cached
+    t = _PREVIEW_STATE_RE.sub(" ", str(text)[:2000])
+    t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
+    t = " ".join(t.split())
+    preview = t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"
+    if limit == 140:
+        cache = _ARCHIVE_LIST_PREVIEW_CACHE
+        cache[text] = preview
+        if len(cache) > _ARCHIVE_LIST_PREVIEW_CACHE_MAX:
+            del cache[next(iter(cache))]
+    return preview
+
+
+def _archive_list_project_row(row, *, resumes=None, parents=None):
+    """Project one row for the sidebar list. Bulk callers pass `resumes` /
+    `parents` snapshots so the per-row work is dict lookups, not a stat() or
+    lock acquisition each (those cost a GIL hand-off apiece)."""
+    # The cached rows are shared with other readers, so container fields
+    # still need isolation — but copy.deepcopy over ~130 mostly-scalar
+    # fields × every row was the single largest slice of
+    # /api/conversations/list CPU time. Deep-copy only dicts/lists; scalars
+    # are immutable and pass straight through.
+    # CCC-142: a dict comprehension plus a C-level copy of flat containers
+    # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
+    # runs only for the rare container that nests another container.
+    out = {key: row[key] for key in _ARCHIVE_LIST_FIELDS if key in row}
+    for key, v in out.items():
+        t = type(v)
+        if t is dict:
+            out[key] = (copy.deepcopy(v) if any(type(x) in (dict, list) for x in v.values())
+                        else dict(v))
+        elif t is list:
+            out[key] = (copy.deepcopy(v) if any(type(x) in (dict, list) for x in v)
+                        else list(v))
+        elif isinstance(v, (dict, list)):
+            out[key] = copy.deepcopy(v)
+    # Chat-list preview line (phone sidebar). The full reply text is too big
+    # to ship for every row; a short derived preview is not.
+    preview = _archive_list_preview(row.get("last_assistant_text"))
+    if preview:
+        out["last_assistant_preview"] = preview
     # CCC-863: cheap in-memory lookup (no file I/O) -- surfaces the live
     # countdown for a session parked on a usage-limit auto-resume.
     sid = row.get("session_id") or row.get("id")
@@ -14763,10 +16522,13 @@ def _archive_list_project_row(row):
         # The archive snapshot can predate family discovery. Parentage is
         # cheap live graph state and must not depend on opening the reader.
         if not out.get("parent_session_id"):
-            parent = _session_graph.parent_of(sid)
+            parent = (
+                parents.get(str(sid).strip()) if parents is not None
+                else _session_graph.parent_of(sid)
+            )
             if parent:
                 out["parent_session_id"] = parent
-        resume_at = usage_limit_resume_at_for_session(sid)
+        resume_at = usage_limit_resume_at_for_session(sid, resumes=resumes)
         if resume_at:
             out["usage_limit_resume_at"] = resume_at
     return out
@@ -14774,10 +16536,40 @@ def _archive_list_project_row(row):
 
 def _archive_list_project_rows(rows, *, window="all", now=None):
     cutoff = _archive_list_window_cutoff(window, now=now)
-    return [
-        _archive_list_project_row(row) for row in (rows or [])
-        if isinstance(row, dict) and _archive_list_window_allows_row(row, cutoff)
+    resumes = _load_usage_limit_resumes()
+    parents = _session_graph.parent_snapshot()
+    # Experimental idea tickets: the list serves a persisted snapshot, so the
+    # ticket is stamped here from one mtime-cached read ({} when flag is off).
+    try:
+        idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        idea_tickets_by_sid = {}
+
+    projected = [
+        _archive_list_project_row(row, resumes=resumes, parents=parents)
+        for row in (rows or [])
+        if isinstance(row, dict)
+        and _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid)
     ]
+    # Engines without a Stop hook (Codex etc.) get their ticket step here,
+    # gated to pending UI spawns and children of ticketed sessions.
+    try:
+        _idea_tickets.sweep_rows(projected)
+    except Exception:
+        pass
+    # One-time catch-up for an install where the flag just turned on: ticket
+    # the last 2 days of sessions from these same rows (marker-gated, so this
+    # body only runs once ever per machine).
+    try:
+        _idea_tickets.backfill_recent_once(projected)
+    except Exception:
+        pass
+    if idea_tickets_by_sid:
+        for out in projected:
+            ticket = idea_tickets_by_sid.get(out.get("session_id") or out.get("id"))
+            if ticket:
+                out["idea_ticket"] = dict(ticket)
+    return projected
 
 
 def _archive_list_rows_cached(cache_options, *, window="all", now=None):
@@ -14785,7 +16577,7 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
     return _archive_list_project_rows(rows, window=window, now=now), from_cache
 
 
-def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
+def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
@@ -14796,6 +16588,15 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     stale_ok=0 requests schedule freshness after a mutation or new-session
     landing without making the HTTP request wait for the archive scan.
     """
+    _pt = time.perf_counter()
+
+    def _phase(name):
+        nonlocal _pt
+        if phases is not None:
+            now = time.perf_counter()
+            phases[name] = round((now - _pt) * 1000.0, 1)
+            _pt = now
+
     key = _archive_response_cache_key(**cache_options)
     rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
         key,
@@ -14803,6 +16604,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
         copy_rows=False,
         force_refresh=force_refresh,
     )
+    _phase("serve_ms")
     # ACP sessions (Kimi/GLM) live in memory before their first transcript
     # lands and before the archive background refresh picks them up. Without
     # this overlay, a brand-new ACP session appears in the UI via the pending
@@ -14813,6 +16615,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     overlay = _archive_overlay_acp_sessions(rows)
     if overlay:
         rows = list(rows or []) + overlay
+    _phase("acp_ms")
     # Same gap for Devin CLI: the session row exists in sessions.db within a
     # second of spawn, but the archive snapshot only picks it up after the
     # next full background rebuild (~20s+ on a large corpus). The Devin CLI
@@ -14821,13 +16624,17 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     devin_overlay = _archive_overlay_devin_cli_sessions(rows)
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
+    _phase("devin_ms")
     # WatchTower already knows the engine session before the archive scan.
     # Keep that worker in its normal session/queue group during the gap.
     worker_overlay = _archive_overlay_wt_worker_sessions(rows)
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
+    _phase("wt_ms")
     extra = (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
-    return rows, from_cache, _archive_list_body_ver(key, rows, extra)
+    body_ver = _archive_list_body_ver(key, rows, extra)
+    _phase("ver_ms")
+    return rows, from_cache, body_ver
 
 
 
@@ -15017,28 +16824,35 @@ def _archive_overlay_acp_sessions(rows):
     refresh."""
     if not _ACP_HARNESSES:
         return []
-    try:
-        spawn_markers = _load_spawn_markers()
-    except Exception:
-        spawn_markers = {}
-    existing = set()
-    for r in (rows or []):
-        sid = r.get("session_id") or r.get("id")
-        if sid:
-            existing.add(str(sid))
-    try:
-        name_overrides = _load_session_name_overrides()
-    except Exception:
-        name_overrides = {}
-    try:
-        archived_set, trashed_set = _load_conversation_lifecycle_sets()
-    except Exception:
-        archived_set, trashed_set = set(), set()
-    try:
-        pinned_list = _load_pinned_conversations()
-    except Exception:
-        pinned_list = []
-    pinned_rank = _pinned_rank_map(pinned_list)
+    existing = None
+    # Gate by candidacy (CCC-142): the sidecar loads below cost O(all spawn
+    # markers) -- ~4k files, re-stat'd on nearly every poll behind a 2s memo
+    # -- yet are only needed to build a row for an attached ACP session that
+    # the snapshot is missing. Normally there is none, so load them lazily.
+    ctx = {}
+
+    def _overlay_ctx():
+        if ctx:
+            return ctx
+        try:
+            ctx["spawn_markers"] = _load_spawn_markers()
+        except Exception:
+            ctx["spawn_markers"] = {}
+        try:
+            ctx["name_overrides"] = _load_session_name_overrides()
+        except Exception:
+            ctx["name_overrides"] = {}
+        try:
+            ctx["archived_set"], ctx["trashed_set"] = _load_conversation_lifecycle_sets()
+        except Exception:
+            ctx["archived_set"], ctx["trashed_set"] = set(), set()
+        try:
+            pinned_list = _load_pinned_conversations()
+        except Exception:
+            pinned_list = []
+        ctx["pinned_rank"] = _pinned_rank_map(pinned_list)
+        return ctx
+
     out = []
     now = time.time()
     for harness in _ACP_HARNESSES:
@@ -15050,14 +16864,30 @@ def _archive_overlay_acp_sessions(rows):
         # the durable row and renders the same session twice (CCC-1176).
         if not (_ACP_HARNESSES.get(harness) or {}).get("archive_overlay", True):
             continue
-        with _ACP_LOCK:
+        # CCC-142: never queue a sidebar poll behind _ACP_LOCK (held ~18s
+        # while ACP state loads at boot). The overlay is a best-effort gap
+        # filler; a lock-free shallow copy (atomic under the GIL) is enough.
+        if _ACP_LOCK.acquire(timeout=0.05):
+            try:
+                sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+            finally:
+                _ACP_LOCK.release()
+        else:
             sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
         if not sessions:
             continue
         label = (_ACP_HARNESSES.get(harness) or {}).get("label", harness)
         for sid, state in sessions.items():
             sid = str(sid)
-            if not sid or sid in existing:
+            if not sid:
+                continue
+            if existing is None:
+                existing = set()
+                for r in (rows or []):
+                    rsid = r.get("session_id") or r.get("id")
+                    if rsid:
+                        existing.add(str(rsid))
+            if sid in existing:
                 continue
             if not (state and state.get("attached")):
                 continue
@@ -15067,6 +16897,11 @@ def _archive_overlay_acp_sessions(rows):
             cwd = str((state.get("cwd") or "")).strip()
             if not cwd:
                 continue
+            c = _overlay_ctx()
+            spawn_markers = c["spawn_markers"]
+            name_overrides = c["name_overrides"]
+            archived_set, trashed_set = c["archived_set"], c["trashed_set"]
+            pinned_rank = c["pinned_rank"]
             try:
                 cwd_exists = Path(cwd).is_dir()
             except OSError:
@@ -15256,6 +17091,42 @@ def _trace_row_flicker(rows, now=None):
         pass
 
 
+def _queue_health_stats(rows, *, now=None):
+    """Queue-vs-turn stats for the perf pane: how many sessions still have a
+    turn in flight, and how long queued inputs have been sitting for
+    sessions whose turn already finished (the drain-lag signal)."""
+    now = time.time() if now is None else now
+    unfinished = 0
+    working_by_sid = {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        sid = r.get("session_id") or r.get("id")
+        working = r.get("state") == "working" or r.get("codex_state") == "working"
+        if working:
+            unfinished += 1
+        if sid and sid not in working_by_sid:
+            working_by_sid[sid] = working
+    try:
+        waits = queued_wait_snapshot(now=now)
+    except Exception:
+        waits = {}
+    queued_items = 0
+    stale_items = 0
+    stale_wait_s = 0.0
+    for sid, w in waits.items():
+        queued_items += w["items"]
+        if not working_by_sid.get(sid):
+            stale_items += w["items"]
+            stale_wait_s += w["wait_s"]
+    return {
+        "unfinished_turns": unfinished,
+        "queued_items": queued_items,
+        "stale_queued_items": stale_items,
+        "stale_queued_wait_s": round(stale_wait_s, 1),
+    }
+
+
 def _archive_list_payload(rows, *, window="all", now=None, cached=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now)
@@ -15268,6 +17139,7 @@ def _archive_list_payload(rows, *, window="all", now=None, cached=None):
         "total_count": sum(isinstance(row, dict) for row in (rows or [])),
         "window": window,
         "fields": list(_ARCHIVE_LIST_FIELDS),
+        "queue_health": _queue_health_stats(rows, now=now),
     }
     if cached is not None:
         payload["cached"] = bool(cached)
@@ -15320,7 +17192,10 @@ def _stamp_archive_goals(rows):
     return rows
 
 
-def _archive_compute_rows(key, cache_options, serve_generation=None):
+_ARCHIVE_COMPUTE_LAST_PHASES = {}
+
+
+def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None):
     """Produce archive rows under the per-key build lock (single-flight).
 
     Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
@@ -15332,14 +17207,25 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
     if serve_generation is None:
         with _archive_serve_lock:
             serve_generation = _archive_serve_generation
+    # CCC-142: per-phase timings, shipped back by the refresh worker.
+    phases = _ARCHIVE_COMPUTE_LAST_PHASES
+    phases.clear()
+    _ph = time.perf_counter()
     sig = _archive_corpus_signature()
+    phases["signature_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
     lock = _archive_build_lock(key)
     with lock:
+        _ph = time.perf_counter()
         entry = _archive_response_cache_get(key)
+        phases["cache_get_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
+        _ph = time.perf_counter()
         if entry and entry.get("signature") == sig:
+            phases["tier"] = "match"
             rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
+            phases["rehydrate_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
             from_cache = True
         else:
+            phases["tier"] = "full"
             rows = None
             # Incremental tier: the corpus changed, but if we know exactly
             # WHICH transcripts changed (both signatures' stat maps are still
@@ -15353,7 +17239,10 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                 delta = _archive_signature_delta(entry.get("signature"), sig)
                 if delta is not None:
                     changed, removed, refresh_engines = delta
+                    phases["tier"] = "incremental"
+                    phases["changed"] = len(changed)
                     try:
+                        _sp = time.perf_counter()
                         fresh = find_all_conversations(
                             resolve_pr_states=cache_options.get("resolve_pr_states", False),
                             resolve_effective=cache_options.get("resolve_effective", False),
@@ -15363,6 +17252,9 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                         merged = _archive_merge_incremental_rows(
                             entry.get("conversations") or [], fresh, removed,
                         )
+                        phases["parse_merge_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        phases["engines"] = sorted(refresh_engines)
+                        _sp = time.perf_counter()
                         if "hermes" in refresh_engines:
                             merged = _archive_merge_engine_rows(
                                 merged,
@@ -15375,6 +17267,10 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                                 ),
                             )
                         if "codex" in refresh_engines:
+                            # Cloud rows carry engine="codex" too, so the
+                            # codex merge would otherwise drop them: include
+                            # them in the rebuilt set. Catalog-served, so no
+                            # network wait here.
                             merged = _archive_merge_engine_rows(
                                 merged,
                                 "codex",
@@ -15383,20 +17279,32 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                                     repo_only=False,
                                     resolve_pr_states=cache_options.get("resolve_pr_states", False),
                                     resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+                                ) + find_codex_cloud_conversations(
+                                    include_old=True,
+                                    repo_only=False,
                                 ),
                             )
+                        phases["engine_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         _archive_response_cache_put(key, merged, signature=sig)
+                        phases["cache_put_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         _save_conv_meta_cache()
+                        phases["meta_save_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        _sp = time.perf_counter()
                         rows = _rehydrate_archive_cached_rows(merged)
+                        phases["rehydrate_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         from_cache = True
                     except Exception as e:
                         print(f"  [archive-cache] incremental refresh failed, rebuilding: {e}")
                         rows = None
             if rows is None:
-                rows = _build_archive_conversations(**cache_options)
+                phases["tier"] = "full"
+                rows = _build_archive_conversations(**cache_options, progress_step=progress_step)
                 _archive_response_cache_put(key, rows, signature=sig)
                 _save_conv_meta_cache()
                 from_cache = False
+        phases["build_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
     if not from_cache:
         # The cache branches already ran all three stamps inside
         # _rehydrate_archive_cached_rows; the full-build branch stamps state
@@ -15464,12 +17372,16 @@ def _archive_refresh_worker_main(encoded_options, output_path):
             )
         }
         key = _archive_response_cache_key(**cache_options)
+        _wt0 = time.perf_counter()
         rows, from_cache = _archive_compute_rows(key, cache_options)
+        phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
+        phases["compute_ms"] = round((time.perf_counter() - _wt0) * 1000.0, 1)
         result = {
             "ok": True,
             "key": key,
             "rows": rows,
             "from_cache": bool(from_cache),
+            "phases": phases,
         }
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
@@ -15489,8 +17401,9 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     exit instead of permanently raising the daemon's RSS. The parent only
     decodes the completed row snapshot and publishes it atomically.
     """
+    _shm_dir = "/dev/shm" if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK) else None
     output_fd, output_name = tempfile.mkstemp(
-        prefix="ccc-archive-refresh-", suffix=".json",
+        prefix="ccc-archive-refresh-", suffix=".json", dir=_shm_dir,
     )
     os.close(output_fd)
     encoded_options = base64.urlsafe_b64encode(
@@ -15516,12 +17429,15 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     # 2026-08-04 blocked every subsequent refresh attempt forever with no
     # exception, no log line, nothing to restart into. Failing loud beats
     # hanging silent even when it can't fix the underlying stuck holder.
+    _rt0 = time.perf_counter()
+    _rphase = {}
     try:
         if not _ARCHIVE_BUILD_GLOBAL_LOCK.acquire(timeout=_ARCHIVE_REFRESH_WATCHDOG_S):
             raise RuntimeError(
                 "archive refresh worker could not acquire the build lock within "
                 f"{_ARCHIVE_REFRESH_WATCHDOG_S:.0f}s -- another refresh is stuck holding it"
             )
+        _rphase["lock_wait_ms"] = round((time.perf_counter() - _rt0) * 1000.0, 1)
         try:
             completed = subprocess.run(
                 command,
@@ -15535,8 +17451,13 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             )
         finally:
             _ARCHIVE_BUILD_GLOBAL_LOCK.release()
+        _rt1 = time.perf_counter()
+        _rphase["worker_ms"] = round((_rt1 - _rt0) * 1000.0 - _rphase["lock_wait_ms"], 1)
         try:
-            result = json.loads(Path(output_name).read_text(encoding="utf-8"))
+            _rtext = Path(output_name).read_text(encoding="utf-8")
+            _rphase["result_bytes"] = len(_rtext)
+            result = json.loads(_rtext)
+            del _rtext
         except (OSError, json.JSONDecodeError) as exc:
             detail = (completed.stderr or completed.stdout or "").strip()[-500:]
             raise RuntimeError(
@@ -15550,8 +17471,16 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         rows = result.get("rows")
         if not isinstance(rows, list):
             raise RuntimeError("archive refresh worker returned invalid rows")
+        _rt2 = time.perf_counter()
+        _rphase["decode_ms"] = round((_rt2 - _rt1) * 1000.0, 1)
         if _ARCHIVE_SERVE_TTL > 0:
             _archive_serve_cache_store(key, rows, serve_generation)
+        _rt3 = time.perf_counter()
+        _rphase["store_ms"] = round((_rt3 - _rt2) * 1000.0, 1)
+        _rphase["rows"] = len(rows)
+        _rphase["key"] = str(key)[:80]
+        _rphase["worker_phases"] = result.get("phases")
+        record_diag("archive_rebuild", (_rt3 - _rt0) * 1000.0, _rphase)
         return rows, bool(result.get("from_cache"))
     finally:
         try:
@@ -15729,8 +17658,21 @@ def _archive_serve_rows_versioned(
             ).start()
         returned_rows = [dict(r) for r in rows] if copy_rows else rows
         return returned_rows, True, _archive_serve_ver_for_rows(key, rows)
-    # Nothing persisted yet — build once synchronously.
-    rows, from_cache = _archive_compute_rows(key, cache_options, serve_generation)
+    # Nothing persisted yet — build once synchronously. On a fresh install
+    # this is the minutes-long first scan, so feed the archive progress
+    # channel (folders → transcripts N/M → …) the loading UI polls.
+    owns_progress = _archive_load_begin_if_idle()
+    try:
+        rows, from_cache = _archive_compute_rows(
+            key, cache_options, serve_generation,
+            progress_step=_archive_load_set_step if owns_progress else None,
+        )
+    except Exception as e:
+        if owns_progress:
+            _archive_load_fail(e)
+        raise
+    if owns_progress:
+        _archive_load_complete(rows)
     return rows, from_cache, _archive_serve_ver_for_rows(key, rows)
 
 
@@ -15791,6 +17733,12 @@ def _rehydrate_archive_cached_rows(rows):
         spawn_registry_by_sid = _spawn_registry_entries_by_session()
     except Exception:
         spawn_registry_by_sid = {}
+    # Experimental idea tickets: one mtime-cached file read for the whole
+    # list ({} when the flag is off), a dict lookup per row.
+    try:
+        idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        idea_tickets_by_sid = {}
     # One read for the whole list, never per row (same rule as the registry).
     try:
         spawn_markers = _load_spawn_markers()
@@ -15839,6 +17787,13 @@ def _rehydrate_archive_cached_rows(rows):
         if not isinstance(raw, dict):
             continue
         row = dict(raw)
+        # Bound the preview text here too, not only at row-build time: several
+        # emitters (live-listing builder, persisted/incremental row stores,
+        # non-Claude engines) ship the raw tail_meta value, so cached rows can
+        # carry multi-KB bodies the UI truncates to ~140 chars anyway.
+        row["last_assistant_text"] = _archive_bound_assistant_text(
+            row.get("last_assistant_text")
+        )
         sid = row.get("session_id") or row.get("id")
         if row.get("engine") == "codex" and str(sid or "") in deleted_codex:
             continue
@@ -15879,7 +17834,7 @@ def _rehydrate_archive_cached_rows(rows):
                         )
                         if row["ai_title"] is None:
                             try:
-                                _request_codex_auto_title(sid, fresh=fresh)
+                                _request_codex_auto_title(sid, fresh=fresh, mtime=row.get("mtime"))
                             except Exception:
                                 pass
 
@@ -15961,6 +17916,11 @@ def _rehydrate_archive_cached_rows(rows):
                     row.get("jsonl_path")
                 )
             row["continued_from_session_id"] = continued_from
+            idea_ticket = idea_tickets_by_sid.get(sid)
+            if idea_ticket:
+                row["idea_ticket"] = idea_ticket
+            else:
+                row.pop("idea_ticket", None)
 
             row_ts = row.get("mtime") or row.get("modified") or 0
             if _is_claude_task_agent_row(row):
@@ -16412,6 +18372,13 @@ def _restart_stale_worker():
         pass
     if not stale:
         return {"restarted": False, "reason": "current", "server_version": loaded}
+    # The worker units use KillMode=process, so the sessions the worker
+    # launched survive its restart and the new worker reattaches them. An
+    # owner can still opt out of automatic rolls with CCC_WORKER_AUTO_RESTART=0
+    # and restart from Settings -> Maintenance instead.
+    if os.environ.get("CCC_WORKER_AUTO_RESTART", "1") == "0":
+        return {"restarted": False, "reason": "stale_needs_approval",
+                "server_version": loaded}
     # Never roll a worker that owns unresolved work: the code on disk changes
     # far more often than the worker's behaviour does, and a restart cuts off
     # active turns. Defer; the next maintenance tick or run.sh launch retries.
@@ -16427,6 +18394,78 @@ def _restart_stale_worker():
         )
         return {"restarted": False, "reason": "stale_deferred_busy", **busy}
     return _restart_worker_process(worker, was=loaded, now=repo_version)
+
+
+_WORKER_SYSTEMD_UNIT = "ccc-worker.service"
+
+
+def _worker_systemd_scope(pid):
+    """Return (scope, pid_in_unit) when systemd supervises the worker.
+
+    scope is "user" or "system" when the worker's cgroup is the
+    ccc-worker.service unit, or "user" when the user unit is installed but
+    `pid` runs outside it (a stray worker). (None, False) when systemd does
+    not manage the worker at all (macOS, Docker, a bare ./run.sh).
+    """
+    if pid:
+        try:
+            cgroups = Path(f"/proc/{int(pid)}/cgroup").read_text()
+        except (OSError, ValueError):
+            cgroups = ""
+        for line in cgroups.splitlines():
+            path = line.rsplit(":", 1)[-1].strip().rstrip("/")
+            if path.endswith("/" + _WORKER_SYSTEMD_UNIT):
+                return ("user" if "/user@" in path else "system"), True
+    if not shutil.which("systemctl"):
+        return None, False
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", "show", "-p", "LoadState", "--value",
+             _WORKER_SYSTEMD_UNIT],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None, False
+    if proc.returncode == 0 and (proc.stdout or "").strip() == "loaded":
+        return "user", False
+    return None, False
+
+
+def _restart_systemd_worker(scope, pid, pid_in_unit, *, was=None, now=None):
+    """Restart a systemd-supervised worker through systemd only.
+
+    Never spawn a replacement ourselves: a worker started outside the unit
+    holds worker.sock while the unit's own copy crash-loops "already
+    running" (thousands of failed starts on a Linux VM, Oct 2026). The units
+    use KillMode=process, so the sessions the worker launched survive.
+    """
+    outcome = {"restarted": True, "was": was, "now": now, "via": "systemd"}
+    try:
+        if pid and not pid_in_unit:
+            # A stray worker outside the unit: stop it so the unit's copy can
+            # bind the socket.
+            os.kill(int(pid), signal.SIGTERM)
+            time.sleep(0.5)
+        if scope == "system":
+            # No rights to `systemctl restart` a system unit; its
+            # Restart=always replaces the worker once this pid exits.
+            if pid and pid_in_unit:
+                os.kill(int(pid), signal.SIGTERM)
+            return outcome
+        proc = subprocess.run(
+            ["systemctl", "--user", "restart", _WORKER_SYSTEMD_UNIT],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        outcome["restarted"] = False
+        outcome["reason"] = f"systemd restart failed ({e})"
+        return outcome
+    if proc.returncode != 0:
+        outcome["restarted"] = False
+        outcome["reason"] = (
+            f"systemctl restart failed: {(proc.stderr or '').strip()}"
+        )
+    return outcome
 
 
 def _restart_worker_process(worker=None, *, was=None, now=None):
@@ -16464,6 +18503,11 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
         worker = health.get("worker") if isinstance(health, dict) and isinstance(health.get("worker"), dict) else {}
     target = f"gui/{os.getuid()}/{_WORKER_LAUNCHD_LABEL}"
     pid = worker.get("pid")
+    systemd_scope, pid_in_unit = _worker_systemd_scope(pid)
+    if systemd_scope:
+        return _restart_systemd_worker(
+            systemd_scope, pid, pid_in_unit, was=was, now=now,
+        )
     kicked = False
     if _launchd_restart_targets_pid(_WORKER_LAUNCHD_LABEL, pid):
         try:
@@ -16481,9 +18525,7 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
             return outcome
         still_alive = True
         for _ in range(20):
-            try:
-                os.kill(int(pid), 0)
-            except OSError:
+            if not _is_pid_alive(pid):
                 still_alive = False
                 break
             time.sleep(0.1)
@@ -16502,9 +18544,7 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
         if pid:
             os.kill(int(pid), signal.SIGTERM)
             for _ in range(20):
-                try:
-                    os.kill(int(pid), 0)
-                except OSError:
+                if not _is_pid_alive(pid):
                     break
                 time.sleep(0.1)
         log_dir = COMMAND_CENTER_STATE_DIR / "logs"
@@ -18930,12 +20970,28 @@ def _car_mode_effective_keys():
     }
 
 
-def _car_mode_status_mode(keys):
-    """Map available keys -> capability mode string (see /api/car-mode/status)."""
+def _car_mode_speech_engine():
+    """"local" (default: whisper.cpp + Kokoro, unmetered) or "deepgram" (opt-in
+    with CCC_VOICE_ENGINE=deepgram, metered)."""
+    v = os.environ.get("CCC_VOICE_ENGINE", "").strip().lower()
+    return "deepgram" if v == "deepgram" else "local"
+
+
+_CAR_MODE_ENGINE_LABELS = {
+    "local": "Kokoro + whisper.cpp (local, free)",
+    "deepgram": "Deepgram nova-3 + aura-2 (metered)",
+}
+
+
+def _car_mode_status_mode(keys, engine=None):
+    """Map available keys + speech engine -> capability mode (see /api/car-mode/status)."""
+    engine = engine or _car_mode_speech_engine()
     if not keys["anthropic"]:
         return "unavailable_no_anthropic"
-    if not keys["deepgram"]:
+    if engine == "deepgram" and not keys["deepgram"]:
         return "degraded_no_deepgram"  # dispatcher works, but no STT/TTS -> no hands-free voice
+    if engine == "local" and not _free_runtime.local_tts_installed():
+        return "degraded_no_local_speech"  # Kokoro voice files not installed yet
     return "voice"
 
 
@@ -19418,6 +21474,12 @@ def _resolve_apps(include_disabled=False):
         apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
                      "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
                      "builtin": False})
+    # Savings: "what your agents did vs what you paid" — API-priced value,
+    # plan cost, and free-router $0 savings (ccc_server/savings.py). A
+    # satellite like the others: toggleable from the Applications page.
+    apps.append({"id": "savings", "label": "Savings",
+                 "icon": "\N{MONEY BAG}", "url": "/savings",
+                 "builtin": False})
     # Pipeline Canvas: the fleet-topology node graph over WatchTower truth
     # (spec: 2026-09-15-pipeline-canvas-design.md). Not core navigation —
     # switchable from the Applications page like the other satellites.
@@ -19799,6 +21861,26 @@ except (TypeError, ValueError):
 # called at runtime can reach it without threading the value through every
 # call site.
 BIND_HOST = "127.0.0.1"
+
+# CCC Cloud Relay manager: one per process, created lazily. Holds pairing
+# state and the outbound loop. Nothing leaves the host until the user pairs
+# and enables it from the dashboard (localhost-only endpoints below).
+_CLOUD_RELAY_MANAGER = None
+_CLOUD_RELAY_LOCK = threading.Lock()
+
+
+def cloud_relay_manager(port=None):
+    """Return the process-wide CloudRelayManager. main() creates it first with
+    the actual bound port so relayed commands hit this process's own loopback
+    API; GET handlers fall back to PORT if main() never ran (tests)."""
+    global _CLOUD_RELAY_MANAGER
+    if _CLOUD_RELAY_MANAGER is None:
+        with _CLOUD_RELAY_LOCK:
+            if _CLOUD_RELAY_MANAGER is None:
+                _CLOUD_RELAY_MANAGER = _cloud_relay.CloudRelayManager(
+                    port or PORT, ccc_version=__version__)
+    return _CLOUD_RELAY_MANAGER
+
 # Optional title-prefix noise stripper. Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
 TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "").split(",") if p]
@@ -20278,8 +22360,8 @@ SIDECAR_STATE_DIR = Path.home() / ".claude" / "command-center" / "live-state"
 HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
 HOOK_MARKER = "command-center/hooks/"
 CCC_HOOK_SCRIPT_NAMES = (
-    "pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py",
-    "pre-compact.py", "post-compact.py",
+    "pre-tool-use.py", "permission-request.py", "post-tool-use.py", "notification.py", "stop.py",
+    "pre-compact.py", "post-compact.py", "session-start.py", "_notify.py",
     # Codex hooks (installed into ~/.codex/hooks.json, not settings.json —
     # see ensure_codex_hooks_installed) share this same copy step and the
     # same HOOK_SCRIPTS_DIR location so both engines' scripts stay in sync
@@ -22020,6 +24102,19 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             progress("codex", state="error", detail=f"Codex thread scan failed: {exc}")
 
     if progress:
+        progress("codex-cloud", state="running", detail="Reading Codex cloud threads.")
+    try:
+        conversations.extend(find_codex_cloud_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+    except Exception as exc:
+        if progress:
+            progress("codex-cloud", state="error", detail=f"Codex cloud scan failed: {exc}")
+
+    if progress:
         progress("gemini", state="running", detail="Reading Gemini sessions.")
     try:
         conversations.extend(find_gemini_conversations(
@@ -22503,6 +24598,15 @@ def _resolve_conversation_path(conversation_id, repo_path=None):
                 with _CONV_PATH_CACHE_LOCK:
                     _CONV_PATH_CACHE[conversation_id] = str(cand)
                 return cand
+    # A session already detected as another engine (Codex, Gemini, ...) has no
+    # Claude transcript, and the walk below never caches a miss: each call cost
+    # ~2 stats per project dir (~9,500 on a 2,300-dir store), several times per
+    # conversation request. Under GIL contention that made a Codex open take
+    # 2-40 s (CCC-1247). Peek at the memo only; never run detection from here.
+    if _engine_known_non_claude(conversation_id):
+        if repo_path:
+            return _canonical_conversation_path(repo_path, conversation_id)
+        return PROJECTS_ROOT / "_missing" / name
     if PROJECTS_ROOT.is_dir():
         try:
             for project_dir in PROJECTS_ROOT.iterdir():
@@ -22535,6 +24639,10 @@ def _resolve_conversation_reader(conversation_id, repo_path=None):
             if exec_log:
                 return exec_log, _parse_codex_exec_log_event
         return codex_path, _parse_codex_event
+    capture_row = _codex_capture_thread_row(conversation_id) or {}
+    capture = capture_row.get("_ccc_capture")
+    if capture and _codex_capture_header_id(capture) == conversation_id:
+        return Path(capture), _parse_codex_exec_log_event
     cursor_path = _cursor_transcript_path(conversation_id)
     if cursor_path and cursor_path.is_file():
         return cursor_path, _parse_cursor_event
@@ -22663,25 +24771,46 @@ def _registry_only_conversation_stub(conversation_id, after_line=0):
 # session of clicking around different convs doesn't grow unbounded.
 _CONV_PARSE_CACHE = {}
 _CONV_PARSE_CACHE_LOCK = threading.Lock()
-_CONV_PARSE_CACHE_MAX = 96
+_CONV_PARSE_CACHE_MAX = 512
 
 
 _CONV_PATH_CACHE = {}
 _CONV_PATH_CACHE_LOCK = threading.Lock()
+# Codex reader resolution opens the Codex state DB (and may glob rollouts),
+# and live pollers stat a codex transcript several times a second (CCC-152).
+# Short TTL, not forever: a stub rollout resolves to the exec log until the
+# real rollout fills in.
+_CODEX_READER_PATH_CACHE = {}
+_CODEX_READER_PATH_TTL = 2.0
 
 
 def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
-    """Return a (mtime_ns, size) tuple for the JSONL backing this
-    conversation, or (0, 0) if we can't resolve it. Used as a cache key;
-    nanosecond precision + size catches the case where a new event lands
+    """Return a source-stat cache key for this conversation, or (0, 0)
+    if we can't resolve it. Usually a (mtime_ns, size) tuple;
+    multi-source readers include the stats of their supplemental files.
+    Nanosecond precision + size catches the case where a new event lands
     in the same second as a cache write (st_mtime float has 1s resolution
     on macOS/Linux, which let pre-baked response bytes from before the
     final event be served back, dropping the trailing message). The (sid
     → path) cache is preserved across calls; only the stat is re-run.
     """
     try:
-        if _detect_session_engine(conversation_id) == "codex":
-            resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
+        engine = _detect_session_engine(conversation_id)
+        if engine == "antigravity":
+            return _antigravity_reader_cache_key(conversation_id)
+        if engine == "codex":
+            cache_key = (conversation_id, repo_path)
+            now = time.monotonic()
+            with _CONV_PATH_CACHE_LOCK:
+                hit = _CODEX_READER_PATH_CACHE.get(cache_key)
+            if hit is not None and now < hit[1]:
+                resolved = hit[0]
+            else:
+                resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
+                with _CONV_PATH_CACHE_LOCK:
+                    if len(_CODEX_READER_PATH_CACHE) > 512:
+                        _CODEX_READER_PATH_CACHE.clear()
+                    _CODEX_READER_PATH_CACHE[cache_key] = (resolved, now + _CODEX_READER_PATH_TTL)
             st = Path(resolved).stat()
             return (st.st_mtime_ns, st.st_size)
         with _CONV_PATH_CACHE_LOCK:
@@ -22705,7 +24834,18 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         elif _is_hermes_session(conversation_id):
             return _hermes_session_cache_key(conversation_id)
         elif _is_devin_cli_session(conversation_id):
-            return _devin_cli_cache_key()
+            # Composite key: the sessions DB AND the session's CCC ACP
+            # transcript. Turn-result rows (quota errors, end_turn) are
+            # appended to the transcript without a DB write, so a
+            # DB-only key would never see them land.
+            db_key = _devin_cli_cache_key()
+            try:
+                st = _acp_transcript_path(
+                    "devin", _devin_cli_raw_id(conversation_id)
+                ).stat()
+                return (db_key[0], db_key[1], st.st_mtime_ns, st.st_size)
+            except OSError:
+                return (db_key[0], db_key[1], 0, 0)
         elif _is_grok_session(conversation_id):
             resolved = _grok_conversation_source(conversation_id)
             if not resolved.exists() or resolved.stat().st_size == 0:
@@ -22737,7 +24877,7 @@ _CONV_TAIL_DEFAULT = 150  # lines pulled for the initial tail window on open
 # only: it is stateless per line; the codex parser threads running usage.
 _WINDOW_PARSE_MEMO = {}
 _WINDOW_PARSE_MEMO_LOCK = threading.Lock()
-_WINDOW_PARSE_MEMO_MAX_FILES = 24
+_WINDOW_PARSE_MEMO_MAX_FILES = 128
 _WINDOW_PARSE_SKIP = object()
 
 
@@ -22746,7 +24886,7 @@ _WINDOW_PARSE_SKIP = object()
 # only (bytes.count, C speed); a shrink or inode change recounts from zero.
 _LINE_COUNT_CACHE = {}
 _LINE_COUNT_LOCK = threading.Lock()
-_LINE_COUNT_CACHE_MAX = 512
+_LINE_COUNT_CACHE_MAX = 2048
 _TAIL_READ_CHUNK = 256 * 1024
 
 
@@ -22761,6 +24901,55 @@ def _count_newlines(f, start, end):
         n += chunk.count(b"\n")
         remaining -= len(chunk)
     return n
+
+
+def _codex_turn_meta_before_line(filepath, first_line, total, lookback=1024):
+    """Turn meta from the nearest Codex turn_context before ``first_line``.
+
+    Bounded: scans at most ``lookback`` lines above the window, decoding only
+    rows that mention turn_context. None when there is none in range.
+    """
+    if first_line <= 1 or total < first_line:
+        return None
+    loaded = _read_tail_lines(filepath, (total - first_line + 1) + lookback)
+    if loaded is None:
+        return None
+    for number, raw in reversed(loaded[1]):
+        if number >= first_line or '"turn_context"' not in raw:
+            continue
+        try:
+            meta = _codex_turn_meta_from_event(json.loads(raw))
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if meta:
+            return meta
+    return None
+
+
+def _codex_first_prompt_event(filepath, before_line, scan_limit=4000):
+    """Parsed first user prompt of a Codex rollout, if it sits before ``before_line``.
+
+    Codex rollouts spend several JSONL lines per visible row, so a long
+    session's tail window starts well past its opening prompt (CCC-239). The
+    prompt sits near the top of the file; scan forward a bounded number of
+    lines, decoding only rows that mention user_message.
+    """
+    try:
+        with open(filepath, "r") as f:
+            for number, raw in enumerate(f, 1):
+                if number >= before_line or number > scan_limit:
+                    return None
+                if '"user_message"' not in raw and '"UserMessage"' not in raw:
+                    continue
+                try:
+                    parsed = _parse_codex_event(json.loads(raw), number)
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                if parsed and parsed.get("type") == "user_text":
+                    return parsed
+    except OSError:
+        return None
+    return None
 
 
 def _read_tail_lines(filepath, n):
@@ -22827,6 +25016,108 @@ def _read_tail_lines(filepath, n):
         return total, out
 
 
+_TS_RUNS_CACHE = {}
+_TS_RUNS_LOCK = threading.Lock()
+_TS_RUNS_CACHE_MAX = 512
+_TS_RUN_EXTRA_CAP = 2000
+_TS_RE = re.compile(rb'"timestamp": ?"([0-9T:.+\-Z]+)"')
+
+
+def _timestamp_runs(filepath):
+    """Monotonic-timestamp runs of a JSONL, scanned incrementally and cached.
+
+    Claude Code's /compact rewrites a transcript so chronologically recent rows
+    can sit at early line numbers. A run is a stretch of lines whose timestamps
+    never go backwards; ``[start_line, start_off, end_line, end_off, first_ts,
+    last_ts]`` (end exclusive, lines 1-based, ts None when the run has none).
+    Only complete lines are consumed, so a live append rescans just the new bytes.
+    """
+    try:
+        f = open(filepath, "rb")
+    except OSError:
+        return []
+    with f:
+        st = os.fstat(f.fileno())
+        key = str(filepath)
+        with _TS_RUNS_LOCK:
+            ent = _TS_RUNS_CACHE.get(key)
+        if ent is None or ent["ino"] != st.st_ino or st.st_size < ent["off"]:
+            ent = {"ino": st.st_ino, "off": 0, "line": 0, "runs": [], "last_ts": None}
+        else:
+            ent = {**ent, "runs": [list(r) for r in ent["runs"]]}
+        if st.st_size > ent["off"]:
+            f.seek(ent["off"])
+            data = f.read(st.st_size - ent["off"])
+            end_nl = data.rfind(b"\n")
+            if end_nl >= 0:
+                off = ent["off"]
+                line = ent["line"]
+                runs = ent["runs"]
+                last_ts = ent["last_ts"]
+                for raw in data[:end_nl + 1].split(b"\n")[:-1]:
+                    line += 1
+                    nxt = off + len(raw) + 1
+                    m = _TS_RE.search(raw)
+                    ts = m.group(1).decode("ascii") if m else None
+                    if not runs or (ts is not None and last_ts is not None and ts < last_ts):
+                        runs.append([line, off, line + 1, nxt, ts, ts])
+                    else:
+                        run = runs[-1]
+                        run[2], run[3] = line + 1, nxt
+                        if ts is not None:
+                            if run[4] is None:
+                                run[4] = ts
+                            run[5] = ts
+                    if ts is not None:
+                        last_ts = ts
+                    off = nxt
+                ent.update(off=off, line=line, last_ts=last_ts)
+                with _LINE_COUNT_LOCK:
+                    # Same pass counted the newlines: prime the tail reader's
+                    # cache so it need not re-read the whole file.
+                    _LINE_COUNT_CACHE[key] = (st.st_ino, off, line)
+        with _TS_RUNS_LOCK:
+            _TS_RUNS_CACHE.pop(key, None)
+            while len(_TS_RUNS_CACHE) >= _TS_RUNS_CACHE_MAX:
+                _TS_RUNS_CACHE.pop(next(iter(_TS_RUNS_CACHE)))
+            _TS_RUNS_CACHE[key] = ent
+        return ent["runs"]
+
+
+def _out_of_order_head_lines(filepath, tail_lines):
+    """(line_no, text) rows stored before the tail window but newer than it.
+
+    After /compact, recent rows can sit at early line numbers; a plain
+    last-N-lines window would drop them. Returns them in file order, capped.
+    """
+    if not tail_lines or tail_lines[0][0] <= 1:
+        return []
+    window_start = tail_lines[0][0]
+    window_ts = None
+    for _no, raw in tail_lines:
+        m = _TS_RE.search(raw.encode("utf-8", errors="replace"))
+        if m:
+            window_ts = m.group(1).decode("ascii")
+            break
+    if window_ts is None:
+        return []
+    picked = [r for r in _timestamp_runs(filepath)
+              if r[2] <= window_start and r[5] is not None and r[5] > window_ts]
+    if not picked:
+        return []
+    out = []
+    try:
+        with open(filepath, "rb") as f:
+            for r in picked:
+                f.seek(r[1])
+                chunk = f.read(r[3] - r[1])
+                for i, raw in enumerate(chunk.split(b"\n")[:-1]):
+                    out.append((r[0] + i, raw.decode("utf-8", errors="replace") + "\n"))
+    except OSError:
+        return []
+    return out[-_TS_RUN_EXTRA_CAP:]
+
+
 def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None):
     """Parse only a window of a conversation JSONL instead of the whole file.
 
@@ -22852,16 +25143,21 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     window = tail if tail else _CONV_TAIL_DEFAULT
     buf = collections.deque(maxlen=window)
     total = 0
+    extra_lines = []
     if before is None:
         # Click path: the last N lines come from the end of the file and the
         # absolute numbering from an incremental newline count. Iterating a
         # 15 MB transcript in Python to keep 120 lines cost 80-875 ms; this is
         # a few ms.
+        if not is_codex:
+            _timestamp_runs(filepath)
         loaded = _read_tail_lines(filepath, window)
         if loaded is None:
             return {"events": [], "last_line": 0, "first_line": 0, "truncated_before": False}
         total, tail_lines = loaded
         buf.extend(tail_lines)
+        if not is_codex:
+            extra_lines = _out_of_order_head_lines(filepath, tail_lines)
         starts_with_user = False
         if is_codex:
             for number, raw in tail_lines:
@@ -22909,6 +25205,12 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     events = []
     codex_token_usage = None
     codex_turn_meta = None
+    if is_codex and buf and buf[0][0] > 1:
+        # The turn_context that stamps turn_id on a turn's rows precedes its
+        # user prompt, so a window starting mid-file can miss it. Without a
+        # turn_id the client can't tell the live app-server overlay for that
+        # turn is already on screen and appends it again (CCC-219).
+        codex_turn_meta = _codex_turn_meta_before_line(filepath, buf[0][0], total)
     memo = None
     new_memo = None
     if not is_codex and before is None:
@@ -22968,6 +25270,26 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     first_line = events[0]["line"] if events else (buf[0][0] if buf else total)
+    if extra_lines:
+        # Compacted transcript: newer rows stored at early lines. Merge them
+        # in timestamp order (first_line stays the contiguous window start so
+        # "Load earlier" pages correctly; the client dedupes by line).
+        extra_events = []
+        for ln, raw_line in extra_lines:
+            try:
+                parsed = parser(json.loads(raw_line), ln)
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if parsed:
+                extra_events.append(parsed)
+        if extra_events:
+            merged = extra_events + events
+            keys, carry = [], ""
+            for e in merged:
+                carry = e.get("ts") or carry
+                keys.append(carry)
+            order = sorted(range(len(merged)), key=lambda i: keys[i])
+            events = [merged[i] for i in order]
     # A window that already covers the whole file has no earlier history at
     # all, no matter which JSONL line the first *renderable* event sits on.
     # Fresh transcripts open with non-rendered records (custom-title, system
@@ -22980,6 +25302,10 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         "first_line": first_line,
         "truncated_before": truncated,
     }
+    if is_codex and before is None and truncated:
+        first_prompt = _codex_first_prompt_event(filepath, first_line)
+        if first_prompt:
+            result["first_prompt"] = first_prompt
     if before is None:
         # The live tail also carries any optimistic queued events, same as the
         # full-parse path; an earlier-history window must not.
@@ -23000,21 +25326,55 @@ def _window_parsed_conversation_events(result, tail=None, before=None):
     all_events = list(result.get("events") or [])
     last_line = int(result.get("last_line") or 0)
     window = int(tail or _CONV_TAIL_DEFAULT)
+    # Some sources interleave rows with negated line ids (Devin's merged ACP
+    # result rows). Page by the nearest preceding source line so those rows
+    # stay with their turn instead of leaking into every older window.
+    positions = []
+    prev = 0
+    for event in all_events:
+        try:
+            line = int(event.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        if line > 0:
+            prev = line
+        positions.append(line if line > 0 else prev)
     if before is not None:
-        candidates = [
-            event for event in all_events
-            if int(event.get("line") or 0) < before
-        ]
+        keep = [i for i, pos in enumerate(positions) if pos < before]
     else:
-        candidates = all_events
-    events = candidates[-window:]
-    first_line = int(events[0].get("line") or 0) if events else 0
-    return {
+        keep = list(range(len(all_events)))
+    candidates = [all_events[i] for i in keep]
+    shown = keep[-window:]
+    events = [all_events[i] for i in shown]
+    first_line = positions[shown[0]] if shown else 0
+    # Preserve the parser's extra top-level keys (engine, codex_cloud, meta
+    # fields) — rebuilding a bare dict here would silently strip markers the
+    # viewer needs on windowed opens, e.g. the cloud-thread read-only flag.
+    out = dict(result)
+    out.update({
         "events": events,
         "last_line": last_line,
         "first_line": first_line,
         "truncated_before": bool(first_line > 1 and len(candidates) > len(events)),
-    }
+    })
+    return out
+
+
+def _finish_full_parse_conversation(conversation_id, result, tail=None, before=None):
+    """Return a full-parse engine result, honouring the tail/before window.
+
+    Store-backed engines (Devin, Gemini, Antigravity, ...) always parse the
+    whole source. Without this the open shipped every event (CCC-143: a Devin
+    session sent ~2MB/1100 events for tail=120 and paid ~1s to fetch+render).
+    """
+    if tail or before is not None:
+        result = _window_parsed_conversation_events(result, tail=tail, before=before)
+    else:
+        result = {"events": list(result.get("events") or []), "last_line": result.get("last_line", 0)}
+    if before is None:
+        result["events"] = _merge_synthetic_conversation_events(
+            list(result.get("events") or []), _get_queued_events_for_session(conversation_id))
+    return result
 
 
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True,
@@ -23061,36 +25421,36 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     # store (~160ms cold), which every codex/claude open was paying for nothing.
     # _detect_session_engine checks codex first and is cached.
     engine = _detect_session_engine(conversation_id)
+    if engine == "codex" and is_cloud_thread_id(conversation_id):
+        # Cloud (dot/aeon) thread: no local transcript file. Events come from
+        # the cached cloud fetch (thread/turns/list) mapped to the shared
+        # codex event shape. Extra keys (codex_cloud, cloud_thread, …) are
+        # additive API fields the viewer uses for the read-only treatment.
+        result = parse_cloud_conversation(
+            conversation_id, after_line=0 if windowed else after_line)
+        if windowed:
+            result = _window_parsed_conversation_events(result, tail=tail, before=before)
+        return result
     if engine == "gemini":
         result = _parse_gemini_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "antigravity":
         result = _parse_antigravity_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "kilo":
         result = _parse_kilo_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "opencode":
         result = _parse_opencode_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "aider":
         result = _parse_aider_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "hermes":
         result = _parse_hermes_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
@@ -23134,24 +25494,18 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     if engine == "copilot":
         result = _parse_copilot_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "devin":
         if _is_devin_cli_session(conversation_id):
             result = _parse_devin_cli_conversation(conversation_id, after_line=after_line)
         else:
             result = _parse_devin_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "copilotchat":
         result = _parse_copilotchat_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
-        events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     filepath, parser = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
     if parser is _parse_conversation_event and not Path(filepath).is_file():
         stub = _registry_only_conversation_stub(conversation_id, after_line=after_line)
@@ -23299,7 +25653,7 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
 # "gzip": bytes|None}. Bounded so memory doesn't blow up.
 _CONV_BYTES_CACHE = {}
 _CONV_BYTES_CACHE_LOCK = threading.Lock()
-_CONV_BYTES_CACHE_MAX = 96
+_CONV_BYTES_CACHE_MAX = 512
 
 
 def _session_has_pending_input(session_id):
@@ -23325,7 +25679,7 @@ def _session_has_dynamic_conversation_overlay(session_id):
     if _session_has_pending_input(session_id):
         return True
     try:
-        state = _codex_app_server_thread_state(session_id)
+        state = _codex_thread_state_resolved(session_id)
     except Exception:
         state = {}
     if not state:
@@ -23358,7 +25712,7 @@ def _conv_overlay_fingerprint(session_id):
         with _pending_terminal_input_lock:
             tq = list(_pending_terminal_input_queue.get(session_id) or ())
         try:
-            state = _codex_app_server_thread_state(session_id)
+            state = _codex_thread_state_resolved(session_id)
         except Exception:
             state = None
         if state is None:
@@ -23409,6 +25763,104 @@ def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
                 pass
         _CONV_BYTES_CACHE[key] = {"raw": raw, "gzip": gz}
 
+
+
+_CONV_OPEN_GZIP_MIN_BYTES = 1024
+
+
+def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False):
+    """Body for GET /api/conversations/<id> as {body, encoding, cache}.
+
+    Shared by the dashboard handler and the conversation-reader process
+    (ccc_server/conv_reader.py). In the reader, returns None for sessions
+    whose response depends on state only the dashboard holds: ACP sessions
+    (attach-on-view drives the dashboard's ACP clients) and Codex sessions
+    when engines are not routed to the worker (live thread state then lives
+    only in dashboard memory).
+    """
+    qs = urllib.parse.parse_qs(query or "")
+    after_line = int(qs.get("after", ["0"])[0])
+    # Windowed open: ?tail=N loads only the last N lines (fast first
+    # open of a long file); ?before=L loads the earlier window.
+    _tail_raw = (qs.get("tail", [""])[0] or "")
+    tail = int(_tail_raw) if _tail_raw.isdigit() else None
+    _before_raw = (qs.get("before", [""])[0] or "")
+    before = int(_before_raw) if _before_raw.isdigit() else None
+    windowed = bool(tail) or (before is not None)
+    acp_harness = _session_acp_harness(conv_id)
+    is_acp_conv = acp_harness is not None
+    if in_reader:
+        if is_acp_conv:
+            return None
+        if (not _control_plane_routes_engines()
+                and _detect_session_engine(conv_id) == "codex"):
+            return None
+        # The dashboard and worker change queued inputs in the durable file;
+        # pick that up before the overlay fingerprint keys the cache.
+        _refresh_queued_view_if_file_changed(conv_id)
+    if acp_harness:
+        # A TUI-launched ACP session has no CCC transcript until it
+        # is attached — attach on view (throttled) so the pane
+        # backfills instead of showing empty.
+        try:
+            _acp_maybe_attach_on_view(acp_harness, conv_id)
+        except Exception:
+            pass
+        if acp_harness == "kimi":
+            # A session last attached over ACP sits on the virtual
+            # acp:<sid> runtime (no fs/process capabilities) for every
+            # other consumer until rebound. Viewing is when a poisoned
+            # session gets noticed — heal it to local in the
+            # background (threaded + throttled in kap.py).
+            try:
+                from ccc_server import kap as _kap
+                _kap.kap_heal_binding_on_view(conv_id)
+            except Exception:
+                pass
+    want_gzip = "gzip" in (accept_encoding or "").lower()
+    # Look for a fully-baked response (JSON-encoded body + matching
+    # gzip variant) in the conv-bytes cache. On a hit we skip
+    # parse_conversation, json.dumps, AND gzip — the click→render
+    # path collapses to a hashmap lookup + socket write. ACP convs
+    # bypass: an attach can change the content at any time, with no
+    # file mtime to invalidate on.
+    _win_key = (tail, before) if windowed else None
+    cached_bytes = None if is_acp_conv else _conv_response_bytes_get(conv_id, after_line, window=_win_key)
+    if cached_bytes is not None:
+        if want_gzip and cached_bytes.get("gzip"):
+            return {"body": cached_bytes["gzip"], "encoding": "gzip", "cache": "hit"}
+        return {"body": cached_bytes["raw"], "encoding": None, "cache": "hit"}
+    result = parse_conversation(conv_id, after_line, tail=tail, before=before)
+    # Advertise the detected engine so view paths that opened the
+    # conversation without a row (e.g. a popout URL missing `source`)
+    # can still pick the right renderer (webui panes for kimi/codex).
+    try:
+        result["engine"] = _detect_session_engine(conv_id)
+    except Exception:
+        pass
+    # Continuation origin ("Origin session id:" marker in the first
+    # prompt) so the viewer can seamlessly load the previous session
+    # when the reader scrolls past the top of this one.
+    try:
+        _cont_fp = _resolve_conversation_path(conv_id)
+        result["continued_from_session_id"] = (
+            _continued_from_session_id_from_transcript(_cont_fp)
+            if _cont_fp and _cont_fp.is_file() else ""
+        )
+    except Exception:
+        result["continued_from_session_id"] = ""
+    raw = json.dumps(result).encode()
+    gz = None
+    if len(raw) >= _CONV_OPEN_GZIP_MIN_BYTES:
+        try:
+            gz = gzip.compress(raw, compresslevel=5)
+        except Exception:
+            gz = None
+    if not is_acp_conv:
+        _conv_response_bytes_put(conv_id, after_line, raw, gz, window=_win_key)
+    if want_gzip and gz:
+        return {"body": gz, "encoding": "gzip", "cache": "miss"}
+    return {"body": raw, "encoding": None, "cache": "miss"}
 
 # Regex for files-from-conversation extraction. Two patterns: HTTP(S)
 # URLs, and absolute Unix paths anchored to whitespace/quote/paren so
@@ -24737,6 +27189,8 @@ def _peer_block_from_origin(origin):
         "from": str(origin.get("from") or "").strip(),
         "from_mode": str(origin.get("fromMode") or "").strip(),
         "msg_id": str(origin.get("msg_id") or "").strip(),
+        "verifiedPeerPid": origin.get("verifiedPeerPid"),
+        "verifiedPeerProcStart": origin.get("verifiedPeerProcStart"),
     }
 
 
@@ -24770,7 +27224,39 @@ def _extract_attachment_text(val):
     return ""
 
 
+_SKILL_BODY_PREFIX = "Base directory for this skill: "
+
+
+def _skill_body_event(ev, line_num, ts):
+    """Return a user_text event for a Claude Code skill body, else None.
+
+    Claude Code records the content of an invoked skill as an isMeta user
+    row whose first line is ``Base directory for this skill: <dir>``. Every
+    other isMeta user row (local-command caveats, hook output) stays hidden.
+    """
+    msg = _safe_parse_message(ev.get("message", {}))
+    text = (_extract_text_from_content(msg.get("content", "")) or "").strip()
+    if not text.startswith(_SKILL_BODY_PREFIX):
+        return None
+    first_line = text.split("\n", 1)[0]
+    base_dir = first_line[len(_SKILL_BODY_PREFIX):].strip().rstrip("/")
+    name = base_dir.rsplit("/", 1)[-1] if base_dir else ""
+    return {
+        "line": line_num,
+        "ts": ts,
+        "type": "user_text",
+        "text": text,
+        "images": [],
+        "skill": name or "skill",
+    }
+
+
 def _parse_conversation_event(ev, line_num):
+    parsed = _parse_conversation_event_unattributed(ev, line_num)
+    return _attribution.decorate_event(parsed, ev.get("origin"))
+
+
+def _parse_conversation_event_unattributed(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
     ts = ev.get("timestamp", "") or ""
@@ -24932,7 +27418,12 @@ def _parse_conversation_event(ev, line_num):
                 "peer": _peer_block_from_origin(origin),
             }
         if ev.get("isMeta"):
-            return None
+            # A loaded skill's body (the rules the Skill tool pulled in) is
+            # written as an isMeta user row. The model read it and acted on
+            # it, so hiding it leaves the operator seeing only "Launching
+            # skill: X" and then the agent "citing rules shown above" that
+            # never rendered. Surface it as a collapsed Skill card.
+            return _skill_body_event(ev, line_num, ts)
         msg = _safe_parse_message(ev.get("message", {}))
         content = msg.get("content", "")
         text = _strip_mode3_instruction(_extract_text_from_content(content))
@@ -24963,13 +27454,18 @@ def _parse_conversation_event(ev, line_num):
                 # the goal text after "/goal" vanished from the transcript).
                 full_cmd = _extract_command_invocation_text(head)
                 if full_cmd:
-                    return {"line": line_num, "ts": ts, "type": "user_text", "text": full_cmd, "images": []}
+                    from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
+                    return {"line": line_num, "ts": ts, "type": "user_text", "text": full_cmd, "images": [],
+                            "bookkeeping": is_compaction_bookkeeping(ev)}
             return None
         images = _extract_images_from_content(content, line=line_num)
         if text or images:
             # Preview placeholder "[image]" shouldn't leak into the rendered message.
             display_text = "" if (text == "[image]" and images) else text
             out_ev = {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
+            from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
+            if is_compaction_bookkeeping(ev):
+                out_ev["bookkeeping"] = True
             if msg.get("model"):
                 out_ev["model"] = msg.get("model")
             return out_ev
@@ -25337,6 +27833,7 @@ _codex_coord_state_loaded = False
 # Test-patched globals kept here; ccc_server/codex.py reads them via _core.
 _CODEX_APP_SERVER_INITIALIZING = False
 _CODEX_LAST_SPAWN_FINALIZER = None
+_CODEX_LAST_WAKE_CONFIRMER = None
 
 _adopt_ccc_module("codex")
 
@@ -25349,7 +27846,12 @@ _adopt_ccc_module("wire_tail")
 _adopt_ccc_module("kimi_store")
 
 _adopt_ccc_module("codex_parse")
+# Codex cloud ("dot"/aeon) threads: live only in OpenAI's cloud, never in
+# rollout JSONLs or the state DB. Discovery + read-only transcript over the
+# cloud backend's JSON-RPC WebSocket; degrades to the local sidebar cache.
+_adopt_ccc_module("codex_cloud_threads")
 _adopt_ccc_module("codex_log_recovery")
+_adopt_ccc_module("codex_diagnostics")
 # Test-patched globals kept here; ccc_server/pending_inputs.py reads them via _core.
 _pending_terminal_input_queue: dict = {}   # session_id → [text, ...]
 
@@ -25425,6 +27927,12 @@ _adopt_ccc_module("engines")
 _adopt_ccc_module("spawn_registry")
 # ---------------------------------------------------------------------------
 _adopt_ccc_module("usage_limit")
+# Limit-hit failover with approval (continue on a $0 model / approved
+# auto-resume at reset, staggered). Rides the usage-limit watcher's cadence.
+_adopt_ccc_module("free_failover")
+# Fleet-level view of the same state: one banner per limit wall instead of
+# a card per stopped session. Same cached stores, same per-session actions.
+_adopt_ccc_module("fleet_failover")
 # ---------------------------------------------------------------------------
 # Background coordination watcher
 # Tracks active group-chat coordinations and nudges participant sessions
@@ -25442,6 +27950,15 @@ _adopt_ccc_module("watchtower_msg")
 
 _adopt_ccc_module("pkood")
 _adopt_ccc_module("byok")
+# Vault: local store for any kind of secret (Keychain service "ccc-vault").
+# The HTTP API is write-only; values are read only by the local `ccc vault`
+# CLI. See ccc_server/vault.py.
+_adopt_ccc_module("vault")
+# Realtime voice mode (experimental Codex app-server realtime lane):
+# one session at a time, WebRTC audio browser<->voice-host, CCC relays
+# only SDP + JSON-RPC events. See ccc_server/realtime_voice.py.
+_adopt_ccc_module("realtime_voice")
+_adopt_ccc_module("repo_guess")
 
 _adopt_ccc_module("github_issues")
 
@@ -25468,6 +27985,11 @@ _adopt_ccc_module("ask")
 # Session waste — on-demand `throughput analyze` from agent-throughput (/api/session/waste).
 _adopt_ccc_module("session_waste")
 
+# Free-router provider registry + guided key setup (/api/free-router/providers,
+# /api/free-router/keys). The wizard's backend; router lifecycle is L01's
+# ccc_server/free_router.py, reached here over its loopback API.
+_adopt_ccc_module("free_providers")
+
 # Test-patched globals kept here; ccc_server/usage_stats.py reads them via _core.
 _CCC_WEEKLY_CAL_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "calibration.json"
 _WEEK_START_OVERRIDE_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "week-start-override.json"
@@ -25475,6 +27997,10 @@ _WEEKLY_CAL_FILE = Path.home() / ".cache" / "claude-usage-cal.json"
 _WEEKLY_PCT_FILE = Path.home() / ".cache" / "claude-usage-pct.json"
 
 _adopt_ccc_module("usage_stats")
+
+# Savings engine — /api/savings: API-priced value of agent work, plan cost,
+# ROI, and free-router $0 savings (incremental sqlite ledger over transcripts).
+_adopt_ccc_module("savings")
 
 _adopt_ccc_module("productivity")
 
@@ -25520,6 +28046,14 @@ def _load_index_html():
             f'href="{_static_asset_url("simple.css")}"',
         )
         html_text = html_text.replace(
+            'href="/static/fx.css"',
+            f'href="{_static_asset_url("fx.css")}"',
+        )
+        html_text = html_text.replace(
+            'src="/static/fx.js"',
+            f'src="{_static_asset_url("fx.js")}"',
+        )
+        html_text = html_text.replace(
             'src="/static/app.js"',
             f'src="{_static_asset_url("app.js")}"',
         )
@@ -25560,6 +28094,7 @@ def _car_mode_running() -> bool:
 def _car_mode_snapshot() -> dict:
     """UI-facing status. Never leaks key values — only availability booleans."""
     keys = _car_mode_effective_keys()
+    engine = _car_mode_speech_engine()
     running = _car_mode_running()
     if not running:
         # clear stale slot so a crashed run doesn't look alive
@@ -25567,7 +28102,9 @@ def _car_mode_snapshot() -> dict:
     return {
         "ok": True,
         "running": running,
-        "mode": _car_mode_status_mode(keys),
+        "mode": _car_mode_status_mode(keys, engine),
+        "speech_engine": engine,
+        "speech_engine_label": _CAR_MODE_ENGINE_LABELS[engine],
         "anthropic_key_set": keys["anthropic"],
         "deepgram_key_set": keys["deepgram"],
         "pid": _CAR_MODE.get("pid") if running else None,
@@ -25590,9 +28127,13 @@ def _car_mode_start() -> dict:
         return {"ok": False, "error": "Car Mode needs an Anthropic API key (the dispatcher brain). "
                 "Add one in Car Mode settings.", "mode": mode, "running": False}
     if mode == "degraded_no_deepgram":
-        return {"ok": False, "error": "Hands-free voice needs a Deepgram API key (speech in + out). "
-                "Add one in Car Mode settings (about $0.35/hr), or use CCC's built-in browser "
-                "mic and read-aloud, which are free.", "mode": mode, "running": False}
+        return {"ok": False, "error": "CCC_VOICE_ENGINE=deepgram needs a Deepgram API key. "
+                "Add one in Car Mode settings, or unset CCC_VOICE_ENGINE to use the free "
+                "local voice (Kokoro + whisper.cpp).", "mode": mode, "running": False}
+    if mode == "degraded_no_local_speech":
+        return {"ok": False, "error": "The local voice isn't installed yet. Run "
+                "scripts/install_local_speech.sh in the CCC folder (one time, about 400 MB), "
+                "then press Start again.", "mode": mode, "running": False}
 
     launcher = _CAR_MODE_DIR / "run.sh"
     if not launcher.exists():
@@ -25604,6 +28145,7 @@ def _car_mode_start() -> dict:
         if val:
             env[env_name] = val
     env["CCC_BASE_URL"] = f"http://127.0.0.1:{PORT}"
+    env["CCC_VOICE_ENGINE"] = _car_mode_speech_engine()
 
     log_dir = COMMAND_CENTER_STATE_DIR / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -25663,6 +28205,9 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/system/scheduled-jobs",
     "/api/jobs",
     "/api/throughput/daily",
+    "/api/throughput/share",
+    "/api/titler-turns",
+    "/api/background-runs",
     "/api/vercel-deploy",
     "/api/watchtower/service/status",
 })
@@ -25724,6 +28269,13 @@ def _annotate_engine_not_installed(data, path):
     return data
 
 
+def _memory_scope(qs):
+    """`scope=all` fans /api/memory/* out to paired peers (multi-machine S4).
+    Anything else is local: the API default stays local so a caller resuming
+    by bare session_id never gets a peer's session (spec Q1)."""
+    return "all" if (qs.get("scope", ["local"])[0] or "").strip().lower() == "all" else "local"
+
+
 class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
@@ -25746,6 +28298,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
     def _do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
+
+        if path.startswith("/api/secrets/"):
+            from ccc_server import credential_broker
+            credential_broker.handle(self, self.command)
+            return
 
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
@@ -25771,6 +28328,33 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        if path.startswith("/api/free-router"):
+            # Free-model router (freellmapi) lifecycle. Falls through when
+            # the path belongs to a sibling subsystem (providers, models…).
+            from ccc_server import free_router
+            if free_router.handle_api_get(self, path):
+                return
+
+        # First-run setup (onboarding): plan, job polling, and the /setup page.
+        if path == "/setup" or path == "/setup.html" or path.startswith("/api/setup/"):
+            from ccc_server import setup_jobs as _setup_jobs_mod
+            _setup_jobs_mod.handle_get(self, parsed)
+        if path == "/api/domestic-providers":
+            from ccc_server import domestic_providers
+            domestic_providers.handle(self, "GET")
+            return
+        if path == "/api/free-router/providers":
+            # Free-key wizard catalog (L03): registry rows + live key state
+            # when the managed router answers. Contract: bare list.
+            self.send_json(free_provider_catalog())
+            return
+
+        # Settings > Free models panel (ccc_server/free_settings.py owns it).
+        if path.startswith("/api/free-settings"):
+            from ccc_server import free_settings as _free_settings
+            _free_settings.handle(self, "GET")
             return
 
         if path == "" or path == "/":
@@ -25848,7 +28432,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 lines = max(1, min(500, int((qs.get("lines", ["50"])[0] or "50").strip())))
             except Exception:
                 pass
-            self.send_json(get_scheduled_job_log(job_id, max_lines=lines))
+            if (qs.get("live", [""])[0] or "").strip() in ("1", "true"):
+                from ccc_server.scheduled_jobs import get_scheduled_job_log_live
+                self.send_json(get_scheduled_job_log_live(
+                    job_id, cursor=(qs.get("cursor", [""])[0] or ""), max_lines=lines))
+            else:
+                self.send_json(get_scheduled_job_log(job_id, max_lines=lines))
         elif path == "/api/watchtower/service/status":
             self.send_json(_watchtower_service_status())
         elif path == "/api/watchtower/alerts":
@@ -25888,11 +28477,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/voice-focus":
             # Current remote-focus target (set via POST). O(1) in-memory poll.
             self.send_json(dict(_VOICE_FOCUS))
+        elif path == "/api/voice/status":
+            # Realtime voice session snapshot (idle when none active). O(1).
+            self.send_json(voice_status())
+        elif path == "/api/voice/voices":
+            # Realtime voice catalog — live listVoices when a session has run,
+            # else the schema-derived fallback. O(1).
+            self.send_json(voice_catalog())
+        elif path == "/api/voice/config":
+            self.send_json({"ok": True, "config": voice_config_load(),
+                            "openai_profiles": _openai_profiles()})
+        elif path == "/api/voice/events":
+            # SSE stream of one voice session's transcript/state/action
+            # events. Bounded replay + Condition-wait, same shape as the ACP
+            # delta streams.
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = (qs.get("session_id", [""])[0] or "").strip()
+            try:
+                after = int((qs.get("after", ["0"])[0] or "0"))
+            except ValueError:
+                after = 0
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            else:
+                self._stream_voice_events(sid, after)
         elif path == "/api/fs/list":
             # Read-only subdirectory listing for the in-browser folder picker
             # (the headless-Linux fallback when no native GUI chooser exists).
             qs = urllib.parse.parse_qs(parsed.query)
             self.send_json(_list_dirs_for_picker(qs.get("path", [""])[0]))
+        elif path == "/api/fs/browse":
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_browse_folder_for_viewer(qs.get("path", [""])[0]))
         elif path == "/api/car-mode/status":
             # Car Mode running state + capability mode + which keys are set
             # (booleans only — never the key values). O(1).
@@ -25945,10 +28561,39 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             sid = urllib.parse.unquote(path.rsplit("/", 1)[-1])
             payload, status = compute_session_detail(sid)
             self.send_json(payload, status)
+        elif path == "/api/leftover/proposals":
+            from ccc_server import leftover
+            leftover.handle_api_get(self, parsed)
+        elif path == "/api/auto-rerun":
+            # RESIL-9: opt-in "rerun once" for dead sessions / scheduled jobs.
+            from ccc_server import auto_rerun
+            auto_rerun.handle_api_get(self)
+        elif path == "/api/restart-recovery":
+            # Sessions a machine restart cut off mid-turn (scanned once per boot).
+            from ccc_server import restart_recovery
+            restart_recovery.handle_api_get(self)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
             self.send_json(_get_onboarding_status())
+        elif path == "/api/onboarding/moment-zero":
+            # Moment Zero shell: "is this a fresh install?" — answers whether
+            # any agent session history exists, so the overlay knows whether
+            # it may auto-open. Cached on directory mtimes; bounded scan.
+            from ccc_server.moment_zero import moment_zero_state
+            self.send_json(moment_zero_state())
+        elif path == "/api/onboarding/first-task":
+            # First magic task: playground state + starter tasks + job snapshots
+            # for the onboarding step UI (static/first-task.js).
+            from ccc_server import first_task
+            self.send_json(first_task.status())
+        elif path.startswith("/api/onboarding/first-task/"):
+            from ccc_server import first_task
+            job = first_task.get_job(path.rsplit("/", 1)[-1])
+            if job:
+                self.send_json({"ok": True, "job": job})
+            else:
+                self.send_json({"ok": False, "error": "no such job"}, 404)
         elif path == "/api/onboarding/login/status":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
@@ -25958,6 +28603,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             payload = _onboarding_login_status(session_id, offset=offset)
             self.send_json(payload, 200 if payload.get("ok") else 404)
+        elif path == "/api/star":
+            from ccc_server import star_ask as _star_ask
+            self.send_json(_star_ask.status())
         elif path == "/api/flow/index":
             self.send_json(_flow_index_payload())
         elif path == "/api/flow/node":
@@ -26038,6 +28686,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/queue/roles":
+            # CCC-1235: effective engine/model per role (planner, plan
+            # reviewer, builder, verifier) + the catalog pickers may offer.
+            qs = urllib.parse.parse_qs(parsed.query)
+            from ccc_server.queue_roles import role_state
+            try:
+                result = role_state((qs.get("queue", [""])[0] or "").strip())
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            self.send_json(result, 200 if result.get("ok") else 400)
         elif path == "/api/queue/learnings":
             qs = urllib.parse.parse_qs(parsed.query)
             queue = (qs.get("queue", [""])[0] or "").strip()
@@ -26167,6 +28825,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(build_ux_fixes_health_payload())
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/queue/for-session":
+            # Which queue(s) a session created for itself (CCC-1225). The link
+            # lives on the queue config, so agents and every browser see it.
+            qs = urllib.parse.parse_qs(parsed.query)
+            from ccc_server.session_queue import queues_for_session, valid_session_id
+            try:
+                sid = valid_session_id((qs.get("session_id", [""])[0]))
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            else:
+                names = queues_for_session(_wt_read_config() or {}, sid)
+                self.send_json({"ok": True, "session_id": sid,
+                                "queue": names[0] if names else None, "queues": names})
         elif path == "/api/wt/queue/history":
             # All-queues open/needs_input/closed series for the Queues
             # dashboard's history graph (CCC-903). ?days= (default 7, cap 30),
@@ -26224,8 +28895,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "wt CLI not available"}, 503)
             else:
                 try:
+                    wt_bin = _wt_cli_path() or "wt"
                     proc = subprocess.run(
-                        ["wt", "receipts", "get", rid],
+                        [wt_bin, "receipts", "get", rid],
                         capture_output=True, text=True, timeout=15,
                     )
                 except (OSError, subprocess.TimeoutExpired, ValueError) as e:
@@ -26275,6 +28947,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "workers": rows, "counts": counts,
                                 "total": len(rows),
                                 "released_count": released_count})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path in ("/api/cloud-relay/status", "/api/cloud-relay/config"):
+            # CCC Cloud settings panel. Localhost-only like the POSTs: it
+            # reveals pairing state. No secrets (device_id is opaque, the
+            # account email is pre-masked).
+            if not self._cloud_relay_local_only():
+                return
+            try:
+                mgr = cloud_relay_manager()
+                if path.endswith("/status"):
+                    self.send_json(mgr.status())
+                else:
+                    self.send_json({"ok": True, **mgr.get_config()})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/telemetry/status":
@@ -26397,13 +29083,155 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(usage_reset_events_payload(days=raw_days))
         elif path == "/api/usage/current":
             self.send_json(usage_current_payload())
+        elif path == "/api/headroom":
+            self.send_json(_headroom.headroom_payload())
+        elif path == "/api/question-tags":
+            from ccc_server import question_tags as _question_tags
+            self.send_json(_question_tags.payload())
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()
+            include_finished = (
+                (qs.get("include_finished", [""])[0] or "").strip().lower()
+                in ("1", "true", "yes")
+            )
+            if include_finished:
+                # spawned-history.json rows shaped like list_spawned_sessions
+                # output so callers can treat finished lanes uniformly.
+                # exit_code is only known for rows the owning process
+                # reaped; worker-owned and sweep-dropped rows carry None.
+                for h in _load_spawn_history():
+                    rows.append({
+                        "pid": h.get("pid"),
+                        "spawn_id": str(h.get("spawn_id") or h.get("pid") or ""),
+                        "session_id": h.get("session_id") or h.get("resumed_sid") or "",
+                        "session_id_pending": False,
+                        "name": h.get("name") or "",
+                        "log": h.get("log") or "",
+                        "prompt": h.get("command_summary") or "",
+                        "started": h.get("spawned_at") or "",
+                        "spawned_at": h.get("spawned_at") or "",
+                        "engine": h.get("engine") or "claude",
+                        "cwd": h.get("cwd") or "",
+                        "repo_path": h.get("repo_path") or "",
+                        "model": h.get("model") or "",
+                        "reasoning_effort": h.get("reasoning_effort") or "",
+                        "parent_session_id": h.get("parent_session_id") or "",
+                        "command_summary": h.get("command_summary") or "",
+                        "task_key": h.get("task_key") or "",
+                        "task_summary": h.get("task_summary") or "",
+                        "prompt_hash": h.get("prompt_hash") or "",
+                        "runtime": h.get("runtime") or "",
+                        "running": False,
+                        "exit_code": h.get("exit_code"),
+                        "status": "finished",
+                        "ended_at": h.get("ended_at") or "",
+                        "ended_at_epoch": h.get("ended_at_epoch"),
+                    })
+            # display_name: the enriched title the sidebar shows (AI title /
+            # custom title / first message), from the cached identity map —
+            # one dict lookup per row, no transcript scan. Only emitted when
+            # an archive row actually exists; without one the "name" is just
+            # the spawn label echoed back, which is worse than absent.
+            try:
+                ident_map = _census_identity_map()
+            except Exception:
+                ident_map = {}
+            for row in rows:
+                sid = str(row.get("session_id") or "")
+                info = ident_map.get(sid) if sid else None
+                if info and info.get("has_conversation_row") and info.get("name"):
+                    row["display_name"] = info["name"]
             engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
             if engine_filter:
                 rows = [r for r in rows if (r.get("engine") or "").lower() == engine_filter]
+            task_key_filter = (qs.get("task_key", [""])[0] or "").strip()
+            if task_key_filter:
+                rows = [r for r in rows if (r.get("task_key") or "") == task_key_filter]
+            parent_filter = (qs.get("parent", [""])[0] or "").strip()
+            if parent_filter:
+                if len(parent_filter) < 8:
+                    self.send_json(
+                        {"ok": False, "error": "parent query param required (at least 8 chars of a session id)"},
+                        400,
+                    )
+                    return
+                rows = [
+                    r for r in rows
+                    if str(r.get("parent_session_id") or "").startswith(parent_filter)
+                ]
+            q_filter = (qs.get("q", [""])[0] or "").strip().lower()
+            if q_filter:
+                rows = [
+                    r for r in rows
+                    if q_filter in " ".join(
+                        str(r.get(field) or "")
+                        for field in (
+                            "name", "display_name", "command_summary",
+                            "task_summary", "task_key", "prompt",
+                        )
+                    ).lower()
+                ]
             self.send_json(rows)
+        elif path == "/api/local-speech/status":
+            from ccc_server import local_speech
+            local_speech.handle_api(self)
+        elif path == "/api/free-runtime/tts-voices":
+            self.send_json({"ok": True, "voices": _free_runtime.tts_voice_options()})
+        elif path.startswith("/api/free-runtime/tts-session/"):
+            # Continuous read (CCC-144): <id> is one mp3 stream for the whole
+            # message, played by a plain <audio src>; <id>/marks says where
+            # each clip starts, for word highlighting. The unguessable id is
+            # the capability; sessions are created by a same-origin POST.
+            rest = path[len("/api/free-runtime/tts-session/"):]
+            sid, _, sub = rest.partition("/")
+            session = _free_runtime.tts_session_get(sid)
+            if session is None:
+                self.send_json({"ok": False, "error": "unknown session"}, 404)
+            elif sub == "marks":
+                self.send_json(dict(session.info(), ok=True))
+            elif sub:
+                self.send_json({"ok": False, "error": "not found"}, 404)
+            else:
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/mpeg")
+                    self.send_header("X-CCC-Voice", session.voice)
+                    # Length is unknown while it is made: close-delimited,
+                    # no ranges (Safari then plays it like a radio stream).
+                    self.send_header("Accept-Ranges", "none")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.close_connection = True
+                    for _buf in session.iter_bytes():
+                        self.wfile.write(_buf)
+                        self.wfile.flush()
+                except Exception:
+                    pass
+        elif path == "/api/free-runtime/status":
+            # $0 spawn runtime readiness for the UI's Free chip. Cheap: one
+            # state-file read + one loopback TCP probe (400ms cap). Never
+            # reveals the router key — only whether it can serve each engine.
+            qs = urllib.parse.parse_qs(parsed.query)
+            engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
+            engines = (
+                [engine_filter]
+                if engine_filter in _free_runtime.FREE_RUNTIME_ENGINES
+                else list(_free_runtime.FREE_RUNTIME_ENGINES)
+            )
+            per_engine = {}
+            for eng in engines:
+                ready, why = _free_runtime.readiness(eng)
+                per_engine[eng] = {
+                    "ready": ready,
+                    "reason": "" if ready else why,
+                }
+            self.send_json({
+                "ok": True,
+                "ready": all(v["ready"] for v in per_engine.values()),
+                "engines": per_engine,
+            })
         elif path == "/api/sessions/children":
             # Lightweight lineage lookup: children of a dispatcher session,
             # straight from the on-disk spawn registry. No liveness probes,
@@ -26442,6 +29270,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 since_s = None
             self.send_json(build_session_census(since_s=since_s))
+        elif path == "/api/free-failover/status":
+            # ccc_server/free_failover.py — per-session limit/failover state
+            # plus free-model readiness for the approval card. Reads only the
+            # two cached JSON stores + the TTL'd router probe.
+            self.send_json(free_failover_status())
+        elif path == "/api/free-failover/fleet":
+            # ccc_server/fleet_failover.py — the same state grouped into one
+            # banner per engine limit wall, for the fleet limit view.
+            self.send_json(free_failover_fleet())
         elif re.match(r"^/api/sessions/continuation-decision/.+$", path):
             # ccc_server/continuation.py — "resume in place, or spawn a fresh
             # session that continues it?" for one session, from cached
@@ -26708,6 +29545,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "layout": load_layout()})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/debug/stacks":
+            # All-thread Python stacks, optionally N samples apart, appended
+            # to logs/python-stacks.log and returned as JSON. Local-only: the
+            # stacks show paths and arguments. Safe to call repeatedly, unlike
+            # signal-handler dumps (CCC-145).
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "stack dumps are local-only"}, 403)
+                return
+            qs = urllib.parse.parse_qs(parsed.query)
+            samples = _dump_python_stacks(
+                "api/debug/stacks",
+                samples=(qs.get("samples") or ["1"])[0],
+                interval_s=(qs.get("interval") or ["0.5"])[0],
+            )
+            self.send_json({
+                "ok": True,
+                "pid": os.getpid(),
+                "log": str(PYTHON_STACK_DUMP_LOG),
+                "samples": samples,
+            })
         elif path == "/api/perf/summary":
             # Rolled-up client perf beacons (archive load / conversation
             # open) over a trailing window, plus the self-filed-ticket
@@ -26923,6 +29780,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e), "daily": []}, 200)
             return
+        elif path == "/api/background-runs":
+            # Headless/harness `claude -p` runs from OS temp dirs, grouped by spawner.
+            try:
+                from ccc_server import background_runs
+                self.send_json(background_runs.background_runs_payload(), 200)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e), "groups": []}, 200)
+            return
+        elif path == "/api/titler-turns":
+            # Last-24h auto-titler turns + token total for the sidebar section.
+            try:
+                self.send_json(_titler_turns_payload(), 200)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e), "turns": []}, 200)
+            return
         elif path == "/api/throughput/week-rankings":
             # Per-session token contribution for the current weekly period,
             # sorted descending. Uses the turn disk cache only — skips
@@ -26949,6 +29821,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             )
             self.send_json(payload, status)
             return
+        elif path == "/api/throughput/share":
+            # Totals-only 365-day daily buckets for the share card. Never
+            # includes session names, titles, paths or repos.
+            payload, status = _throughput_share_payload()
+            self.send_json(payload, status)
+            return
         elif path == "/api/throughput/daily":
             # Daily throughput digest (sessions, tokens by model, top lanes,
             # queue-ticket counts). ?date=YYYY-MM-DD | today | yesterday.
@@ -26961,6 +29839,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload, status = _throughput_daily_payload(
                 date_str, engine_filter=engine_filter, force_refresh=force
             )
+            self.send_json(payload, status)
+            return
+        elif path == "/api/savings":
+            # Savings engine: API-priced value of agent work vs plan cost and
+            # free-router $0 savings. ?range=today|week|month|all, &refresh=1.
+            qs = urllib.parse.parse_qs(parsed.query)
+            range_key = (qs.get("range", ["today"])[0] or "today").strip()
+            force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
+                "1", "true", "yes"
+            )
+            payload, status = savings_payload(range_key, refresh=force)
             self.send_json(payload, status)
             return
         elif path == "/api/weekly_usage":
@@ -27065,6 +29954,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # pane is currently "active".
                 usage["auto_handover_enabled"] = sid in _load_auto_handover_flags()
                 usage["auto_handover_mode"] = _auto_handover_mode(sid)
+                try:
+                    usage["runtime"] = _free_runtime.session_runtime(sid) or ""
+                    if usage["runtime"] == "free":
+                        usage["free_provider"], usage["free_model"] = _free_runtime.served_by(
+                            usage.get("latest_input_tokens"))
+                        usage["free_served"] = _free_runtime.served_map()
+                except Exception:
+                    usage["runtime"] = ""
                 # extract_session_usage only sees the picker override, so a
                 # session spawned with `--effort` and never re-picked reports
                 # blank and the composer's model pill drops the effort segment
@@ -27139,6 +30036,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_workspace(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/codex-diagnostics$", path):
+            sid = path.split("/")[-2]
+            self.send_json(build_codex_session_diagnostics(sid))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/queued-inputs$", path):
             # Durable CCC-queued input for one session, shaped as the same
             # synthetic `pending` user_text events the transcript endpoint
@@ -27162,7 +30062,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "ok": True,
                 "session_id": sid,
                 "outstanding": _inject_receipts.outstanding(sid),
+                # CCC-237: queued input an explicit Stop parked. It waits for
+                # a release on purpose; it is not a stuck delivery.
+                "stop_held": len(_stop_held_inputs_view(sid)["items"]),
             })
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/stop-held$", path):
+            # CCC-237: inspect queued input held by an explicit Stop.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(dict(_stop_held_inputs_view(sid), ok=True))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/forward-target$", path):
             # MEMORY-5: read-only lookup so an external process (WatchTower,
             # over its own HTTP delegate) can ask "does this sid currently
@@ -27236,6 +30143,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # reports the same stale-transcript heuristic as the row badge; it is
             # not a claim that every labeled thread owns a live hung process.
             self.send_json(build_codex_stuck_summary())
+        elif path == "/api/notify/pending":
+            # Client catch-up for notify.request items missed while the SSE
+            # stream was down. One small JSON read, no session scan.
+            from ccc_server import notify as _notify
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_notify.pending(since_id=(qs.get("since", [""])[0] or "").strip()))
+        elif path == "/api/notify/history":
+            # Recent notifications, newest first (debug + a future bell tray).
+            from ccc_server import notify as _notify
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                limit = int((qs.get("limit", ["50"])[0] or "50"))
+            except ValueError:
+                limit = 50
+            self.send_json({"items": _notify.history(limit)})
         elif path == "/api/events":
             # Unified, replayable dashboard state stream.  Existing narrower
             # SSE routes stay available during the compatibility rollout.
@@ -27469,6 +30391,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                     )
                                 except Exception:
                                     status["stale_tool_queued_input"] = False
+                    elif spawn and status.get("sidecar_status") != "active" and _headless_turn_in_progress(spawn):
+                        # Mid-turn but between tools (thinking / streaming text):
+                        # the last Stop hook left sidecar_status "waiting" and no
+                        # PreToolUse marker exists, so the pane's "Working…" strip
+                        # vanished. The headless's own stdout log is the
+                        # authoritative open-turn signal. Stamp its mtime (not
+                        # "now") so a wedged turn still ages out client-side.
+                        status["status"] = "busy"
+                        status["sidecar_status"] = "active"
+                        status["sidecar_in_flight"] = False
+                        try:
+                            status["sidecar_ts"] = max(
+                                float(status.get("sidecar_ts") or 0),
+                                os.stat(spawn.get("log")).st_mtime,
+                            )
+                        except (OSError, TypeError, ValueError):
+                            status["sidecar_ts"] = time.time()
                 # Authoritative AskUserQuestion signal: our PreToolUse hook
                 # writes a relay request file for exactly the window it blocks
                 # waiting for an answer. Trust it over the in-flight marker
@@ -27603,6 +30542,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             }
             status["state"] = _stamp_session_state(_state_view)
             status["ended_blocked"] = _session_ended_blocked(_state_view)
+            # WIP timer epoch for the open-session header. Engine-specific
+            # providers (codex_state_fields, ACP turn tracking) already set it;
+            # the fallback derives it from an in-flight sidecar tool's
+            # started_at. Parked states (question/permission waiting on the
+            # human) are waiting, not working — no timer.
+            if "working_since" not in status:
+                if (
+                    status.get("sidecar_in_flight")
+                    and status.get("sidecar_ts")
+                    and not status.get("question_waiting")
+                    and not status.get("needs_approval")
+                ):
+                    status["working_since"] = status["sidecar_ts"]
             self.send_json(status)
         elif re.match(r"^/api/conversations/[^/]+/tool-input$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
@@ -27624,6 +30576,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
             transcript_path = conversation_transcript_path(conv_id, repo_path=repo_path)
             self.send_json({"transcript_path": transcript_path})
+        elif path == "/api/sessions/ultra-fresh":
+            from ccc_server.ultra_fresh import stream
+            stream(self, urllib.parse.parse_qs(parsed.query))
         elif re.match(r"^/api/conversations/[^/]+/stream$", path):
             conv_id = path.split("/")[-2]
             qs = urllib.parse.parse_qs(parsed.query)
@@ -27662,101 +30617,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self._stream_spawn_deltas(sid, replay=replay)
         elif re.match(r"^/api/conversations/(?!all$|list$|order$)[^/]+$", path):
             conv_id = path.split("/")[-1]
-            qs = urllib.parse.parse_qs(parsed.query)
-            after_line = int(qs.get("after", ["0"])[0])
-            # Windowed open: ?tail=N loads only the last N lines (fast first
-            # open of a long file); ?before=L loads the earlier window. These
-            # bypass the baked-bytes cache (keyed on after_line); a windowed
-            # parse is already cheap.
-            _tail_raw = (qs.get("tail", [""])[0] or "")
-            tail = int(_tail_raw) if _tail_raw.isdigit() else None
-            _before_raw = (qs.get("before", [""])[0] or "")
-            before = int(_before_raw) if _before_raw.isdigit() else None
-            windowed = bool(tail) or (before is not None)
-            acp_harness = _session_acp_harness(conv_id)
-            is_kimi_conv = acp_harness == "kimi"
-            is_acp_conv = acp_harness is not None
-            if acp_harness:
-                # A TUI-launched ACP session has no CCC transcript until it
-                # is attached — attach on view (throttled) so the pane
-                # backfills instead of showing empty.
-                try:
-                    _acp_maybe_attach_on_view(acp_harness, conv_id)
-                except Exception:
-                    pass
-                if is_kimi_conv:
-                    # A session last attached over ACP sits on the virtual
-                    # acp:<sid> runtime (no fs/process capabilities) for every
-                    # other consumer until rebound. Viewing is when a poisoned
-                    # session gets noticed — heal it to local in the
-                    # background (threaded + throttled in kap.py).
-                    try:
-                        from ccc_server import kap as _kap
-                        _kap.kap_heal_binding_on_view(conv_id)
-                    except Exception:
-                        pass
-            # Look for a fully-baked response (JSON-encoded body + matching
-            # gzip variant) in the conv-bytes cache. On a hit we skip
-            # parse_conversation, json.dumps, AND gzip — the click→render
-            # path collapses to a hashmap lookup + socket write. Kimi convs
-            # bypass: an attach can change the content at any time, with no
-            # file mtime to invalidate on.
-            _win_key = (tail, before) if windowed else None
-            cached_bytes = None if is_acp_conv else _conv_response_bytes_get(conv_id, after_line, window=_win_key)
-            if cached_bytes is not None:
-                accept = self.headers.get("Accept-Encoding", "") or ""
-                want_gzip = "gzip" in accept.lower()
-                body = cached_bytes["gzip"] if want_gzip and cached_bytes.get("gzip") else cached_bytes["raw"]
-                enc = "gzip" if (want_gzip and cached_bytes.get("gzip") and body is cached_bytes["gzip"]) else None
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                if enc:
-                    self.send_header("Content-Encoding", enc)
-                    self.send_header("Vary", "Accept-Encoding")
-                self.end_headers()
-                try:
-                    self.wfile.write(body)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-                return
-            result = parse_conversation(conv_id, after_line, tail=tail, before=before)
-            # Advertise the detected engine so view paths that opened the
-            # conversation without a row (e.g. a popout URL missing `source`)
-            # can still pick the right renderer (webui panes for kimi/codex).
-            try:
-                result["engine"] = _detect_session_engine(conv_id)
-            except Exception:
-                pass
-            # Continuation origin ("Origin session id:" marker in the first
-            # prompt) so the viewer can seamlessly load the previous session
-            # when the reader scrolls past the top of this one.
-            try:
-                _cont_fp = _resolve_conversation_path(conv_id)
-                result["continued_from_session_id"] = (
-                    _continued_from_session_id_from_transcript(_cont_fp)
-                    if _cont_fp and _cont_fp.is_file() else ""
-                )
-            except Exception:
-                result["continued_from_session_id"] = ""
-            raw = json.dumps(result).encode()
-            gz = None
-            if len(raw) >= self._GZIP_MIN_BYTES:
-                try:
-                    gz = gzip.compress(raw, compresslevel=5)
-                except Exception:
-                    gz = None
-            if not is_acp_conv:
-                _conv_response_bytes_put(conv_id, after_line, raw, gz, window=_win_key)
             accept = self.headers.get("Accept-Encoding", "") or ""
-            want_gzip = "gzip" in accept.lower()
-            body = gz if (want_gzip and gz) else raw
-            enc = "gzip" if (want_gzip and gz) else None
+            # Serve from the conversation-reader process when it is up: its
+            # own GIL keeps an open from queueing behind this process's
+            # background work (CCC-143). None = not served there; build here.
+            out = _conv_reader.forward(conv_id, parsed.query, accept)
+            if out is None:
+                out = _conversation_open_response(conv_id, parsed.query, accept)
+            body = out["body"]
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            if enc:
-                self.send_header("Content-Encoding", enc)
+            self._send_server_timing(cache=out.get("cache"))
+            if out.get("encoding"):
+                self.send_header("Content-Encoding", out["encoding"])
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             try:
@@ -27859,6 +30733,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", mt)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/pasted-image":
@@ -27929,6 +30804,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/local-image":
@@ -27967,6 +30843,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            # SECURITY: arbitrary on-disk path; a crafted .svg opened top-level must not run script in CCC's origin.
+            self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/image-cache/"):
@@ -28007,6 +30886,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/static/morning/"):
@@ -28265,6 +31145,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path in ("/free-router", "/free-router.html"):
+            # Standalone Free engine status page — same narrow-route pattern
+            # as /spawn-ledger: isolated from the main dashboard bundle.
+            try:
+                body = (STATIC_DIR / "free-router.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "free-router.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path in ("/spawn-ledger", "/spawn-ledger.html"):
             # Standalone read-only scorecard page, deliberately isolated from
             # the main dashboard bundle.
@@ -28272,6 +31170,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "spawn-ledger.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "spawn-ledger.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path in ("/savings", "/savings.html"):
+            # Standalone Savings page — "what your agents did vs what you paid".
+            # Same narrow-route pattern as /spawn-ledger.html: self-contained,
+            # no app.js/app.css, so it cannot affect the main dashboard.
+            try:
+                body = (STATIC_DIR / "savings.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "savings.html missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
@@ -28312,6 +31229,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "canvas.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "canvas.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/fx-demo.html" or path == "/fx-demo":
+            # Sound + motion kit playground (window.cccFx). Same narrow-route
+            # pattern as /q2.html: the /static/ handler refuses *.html, so a
+            # standalone page needs its own route. Loads no app.js/app.css.
+            try:
+                body = (STATIC_DIR / "fx-demo.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "fx-demo.html missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
@@ -28525,6 +31461,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/doctor/instances":
             # W9-1: read-only duplicate dashboard detector for `ccc doctor`.
             self.send_json(build_doctor_instances())
+        elif path == "/api/repo/guess/status":
+            self.send_json(repo_guess_status())
         elif path == "/api/byok/profiles":
             # BYOK (W2-2): key profiles and the provider catalog for the
             # Settings screen. Never returns secret material — set_key/
@@ -28542,6 +31480,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 days = 30
             self.send_json(byok_usage_summary(days=days))
+        elif path == "/api/free-router/detected":
+            # L20: loopback probes for routers the user already runs
+            # (freellmapi :3001, 9router/OmniRoute :20128, free-claude-code
+            # :8082, Ollama :11434, LM Studio :1234) plus OpenRouter keys in
+            # BYOK. TTL-cached, parallel, never raises. ccc_server/router_detect.py.
+            from ccc_server import router_detect as _router_detect
+            _q = urllib.parse.parse_qs(parsed.query)
+            _fresh = (_q.get("fresh") or [""])[0] in ("1", "true", "yes")
+            self.send_json(_router_detect.detect_routers(fresh=_fresh))
+        elif path == "/api/free-router/engine-config":
+            # L20: masked preview of "engine X on the free router" — env var
+            # names, generated config snippet, file it would write. No writes,
+            # no secrets. ccc_server/free_engines.py.
+            from ccc_server import free_engines as _free_engines
+            _q = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_free_engines.engine_config_preview(
+                (_q.get("engine") or [""])[0],
+                base_url=(_q.get("base_url") or [""])[0] or None,
+                model=(_q.get("model") or [""])[0] or None,
+            ))
+        elif path == "/api/vault":
+            # Vault metadata + existing BYOK keys for Settings > Vault.
+            # Write-only by design: no endpoint ever returns a secret value
+            # (the `ccc vault` CLI reads the local store directly).
+            try:
+                byok_rows = vault_list_byok()
+            except Exception:
+                byok_rows = []
+            self.send_json({
+                "backend": vault_storage_backend(),
+                "kinds": VAULT_KINDS,
+                "entries": vault_list_entries(),
+                "byok": byok_rows,
+            })
         elif path == "/api/engines/update-status":
             self.send_json(_engine_update_status())
         elif path == "/api/search-history":
@@ -28632,7 +31604,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     limit = max(1, min(int(limit_raw), 50))
                 except ValueError:
                     limit = 20
-                self.send_json(_memory_recall(q, limit=limit))
+                self.send_json(_memory_recall(q, limit=limit, scope=_memory_scope(qs)))
         elif path == "/api/memory/shipped":
             # ccc_server/ship_graph.is_shipped(), contract as-is — see
             # ccc_server/memory_api.py. Powers `ccc shipped` and any agent
@@ -28643,7 +31615,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not topic:
                 self.send_json({"error": "missing topic"}, 400)
             else:
-                self.send_json(_memory_shipped(topic))
+                self.send_json(_memory_shipped(topic, scope=_memory_scope(qs)))
         elif path == "/api/memory/file-history":
             # ccc_server/ship_graph's commits/session_meta tables, joined for
             # one path — see ccc_server/memory_api.py. Powers `ccc history`.
@@ -28659,7 +31631,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     limit = max(1, min(int(limit_raw), 50))
                 except ValueError:
                     limit = 20
-                self.send_json(_memory_file_history(file_path, repo=repo_q, limit=limit))
+                self.send_json(_memory_file_history(file_path, repo=repo_q, limit=limit,
+                                                    scope=_memory_scope(qs)))
         elif re.match(r"^/api/memory/brief/.+$", path):
             # ccc_server/session_brief.py — "where did this session leave
             # off and how do I resume it?" for one session. Powers
@@ -28667,7 +31640,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # handoff prompt's first move.
             from ccc_server.session_brief import brief as _memory_brief
             query = urllib.parse.unquote(path[len("/api/memory/brief/"):])
-            self.send_json(_memory_brief(query))
+            if _memory_scope(urllib.parse.parse_qs(parsed.query)) == "all":
+                from ccc_server.memory_fanout import brief_all as _memory_brief_all
+                self.send_json(_memory_brief_all(query, _memory_brief))
+            else:
+                self.send_json(_memory_brief(query))
         elif re.match(r"^/api/memory/where/.+$", path):
             # ccc_server/where_answer.py — "where are we?" across a session's
             # whole lineage chain: one cached, read-only headless Sonnet call
@@ -28680,9 +31657,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self.send_json({"found": True, "error": str(exc)}, 502)
         elif path == "/api/memory/decisions":
-            # Heuristic decision-shaped filter over ship_graph.search_sessions()
-            # — see ccc_server/memory_api.py. Powers `ccc decisions`. Stand-in
-            # backend for MEMO-FIX-7's dedicated decision store.
+            # Stored user quotes with provenance, then session-snippet fallback.
+            # Powers `ccc decisions` and the Ask agent's read-only memory tool.
             from ccc_server.memory_api import decisions as _memory_decisions
             qs = urllib.parse.parse_qs(parsed.query)
             topic = (qs.get("topic", [""])[0] or "").strip()
@@ -28694,13 +31670,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     limit = max(1, min(int(limit_raw), 50))
                 except ValueError:
                     limit = 10
-                self.send_json(_memory_decisions(topic, limit=limit))
+                repo = (qs.get("repo", [""])[0] or "").strip() or None
+                self.send_json(_memory_decisions(topic, limit=limit, repo=repo))
         elif path == "/api/memory/decisions/extracted":
             # ccc_server/decision_extraction.py -- explicit user rulings
-            # found by the nightly scan (distinct from the topic-search
-            # stand-in above at /api/memory/decisions; this is MEMO-FIX-7's
-            # dedicated decision store, the plain function contract a
-            # decisions UI (MEMO-FIX-5, not yet landed) can call).
+            # found by the nightly scan, listed by recency. Topic search
+            # above uses the same store with a session-snippet fallback.
             qs = urllib.parse.parse_qs(parsed.query)
             repo = (qs.get("repo", [""])[0] or "").strip() or None
             limit_raw = (qs.get("limit", ["50"])[0] or "50").strip()
@@ -28772,6 +31747,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 },
                 "tailnet": tailnet,
             })
+        elif path == "/api/spawn-advisor":
+            try:
+                config = _spawn_advisor.load(COMMAND_CENTER_STATE_DIR, _ORCHESTRATION_SPAWN_ENGINES)
+                self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
+            except (OSError, ValueError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/spawn-defaults":
             defaults = _load_spawn_defaults()
             self.send_json({
@@ -28779,6 +31760,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 **defaults,
                 "stored": SPAWN_DEFAULTS_FILE.exists(),
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+                "worker_fallback_engines": list(_WORKER_FALLBACK_ENGINES),
+                "model_profile_engines": list(_MODEL_PROFILE_ENGINES),
                 # Ladder per engine so the dialog can build its effort select
                 # for whichever engine is selected. The flat reasoning_effort /
                 # worker_reasoning_effort keys spread in above stay the stored
@@ -28786,7 +31769,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "efforts_by_engine": _reasoning_efforts_by_engine(
                     _ORCHESTRATION_SPAWN_ENGINES
                 ),
-                "codex_context_1m": os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no"),
+                "codex_context_1m": _codex_context_1m_enabled(),
+                "codex_context_tokens": _codex_context_config()["model_context_window"],
                 # Client-side gate for the spawn/queue-config confirm prompt --
                 # let the UI warn before it sends confirm_blocked_model, rather
                 # than round-tripping a 400 first.
@@ -28799,6 +31783,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # — no subprocess, no all-conversations scan. Same loopback trust as
             # every other GET.
             self.send_json(objects_store.load_state())
+        elif path in ("/api/repo/avatar", "/api/repo/avatar/info"):
+            from ccc_server import repo_avatars
+            try:
+                qs = urllib.parse.parse_qs(parsed.query)
+                repo = resolve_repo_path(qs.get("repo_path", [""])[0])
+                data, content_type, mode, source = repo_avatars.avatar(repo, COMMAND_CENTER_STATE_DIR)
+            except (RepoContextError, ValueError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            if path.endswith("/info"):
+                self.send_json({"ok": True, "mode": mode, "source": source})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=60")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+            self.end_headers()
+            self.wfile.write(data)
         elif path == "/api/repo/list":
             # List of repos the picker offers. There is no server-active repo.
             repos = load_known_repos()
@@ -28891,20 +31895,97 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
             }
             stale_ok = qs.get("stale_ok", ["0"])[0] in ("1", "true")
+            # CCC-142: per-phase server timing. wall vs thread CPU separates
+            # real work from waiting on the GIL / locks behind a rebuild.
+            _lt0 = time.perf_counter()
+            _lc0 = time.thread_time()
             # Body-cache version: snapshot version when rows ARE the stored
             # snapshot, or (snapshot version, overlay content hash) when
             # in-memory ACP/Devin overlay rows were appended — either way a
             # prebuilt body may be replayed when the version matches.
+            _src_phases = {}
             rows, from_cache, body_ver = _archive_list_source_rows_cached(
                 cache_options,
                 force_refresh=not stale_ok,
+                phases=_src_phases,
             )
+            _lt1 = time.perf_counter()
             list_cache_key = _archive_response_cache_key(**cache_options)
-            self._send_archive_list_json(
-                list_cache_key, window, from_cache,
-                lambda: _archive_list_payload(rows, window=window, cached=from_cache),
-                body_ver,
-            )
+            _payload_ms = []
+            # CCC-142: ?since=<delta_token> asks for only the rows that changed
+            # after the client's last body. Anything the token can't vouch for
+            # (restart, projection inputs moved, history trimmed) gets a full
+            # body, which carries the next token.
+            _delta = None
+            if body_ver:
+                try:
+                    _delta = _archive_list_delta_state(list_cache_key, rows, window, from_cache)
+                except Exception:
+                    _delta = None
+            since = (qs.get("since", [""])[0] or "").strip()
+            _status = None
+            # CCC-201: why a client holding a token still got a full body.
+            if not since:
+                _since_diag = "none"
+            elif _delta is None:
+                _since_diag = "no_state"
+            elif since == _delta["token"]:
+                _since_diag = "current"
+            else:
+                _since_diag = _archive_list_delta_reject(_delta, since) or "ok"
+            if _delta is not None and since:
+                if since == _delta["token"]:
+                    self.send_response(304)
+                    self.send_header("ETag", '"d-' + _delta["token"] + '"')
+                    self.end_headers()
+                    _status = 304
+                else:
+                    _pt0 = time.perf_counter()
+                    _dp = _archive_list_delta_payload(
+                        _delta, since, rows, window=window, cached=from_cache,
+                    )
+                    if _dp is not None:
+                        _dp["delta_token"] = _delta["token"]
+                        _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
+                        self.send_json(_dp)
+                        _status = "delta"
+                    elif _since_diag == "ok":
+                        _since_diag = "unmergeable"
+
+            def _timed_payload():
+                _pt0 = time.perf_counter()
+                try:
+                    payload = _archive_list_payload(rows, window=window, cached=from_cache)
+                    if _delta is not None:
+                        payload["delta_token"] = _delta["token"]
+                    return payload
+                finally:
+                    _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
+
+            if _status is None:
+                # The token's projection-context hash joins the body version so
+                # a replayed body never carries a token for other inputs.
+                _status = self._send_archive_list_json(
+                    list_cache_key, window, from_cache, _timed_payload,
+                    (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
+                )
+            _lt2 = time.perf_counter()
+            record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
+                "window": window,
+                "status": _status,
+                "rows_src": len(rows or []),
+                "source_ms": round((_lt1 - _lt0) * 1000.0, 1),
+                "payload_ms": round(_payload_ms[0], 1) if _payload_ms else None,
+                "send_ms": round((_lt2 - _lt1) * 1000.0, 1),
+                "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                "body_hit": not _payload_ms,
+                "delta": _status == "delta",
+                "since": _since_diag,
+                "from_cache": bool(from_cache),
+                "stale_ok": stale_ok,
+                "refreshing": bool(_archive_serve_refreshing),
+                "src": _src_phases,
+            })
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every
             # folder under ~/.claude/projects/, tagged with folder + reverse
@@ -29199,7 +32280,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             file_path = Path(resolved["path"])
             media_category = _categorize_file_target(str(file_path))
-            if media_category not in ("videos", "html", "images", "pdfs") or not file_path.is_file():
+            if media_category not in ("videos", "html", "images", "pdfs", "markdown") or not file_path.is_file():
                 self.send_json({"ok": False, "error": "not a streamable media file"}, 404)
                 return
             try:
@@ -29225,6 +32306,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ".webp": "image/webp",
                 ".svg": "image/svg+xml",
                 ".pdf": "application/pdf",
+                # Served as plain text, never rendered by the browser; the
+                # folder viewer fetches it and renders client-side.
+                ".md": "text/plain; charset=utf-8",
+                ".mdx": "text/plain; charset=utf-8",
             }
             content_type = ct_map.get(ext)
             if content_type is None:
@@ -29285,6 +32370,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         remaining -= len(chunk)
             except OSError:
                 pass
+        elif path == "/free-models" or path == "/free-models.html":
+            # Free-model leaderboard page (narrow route — the generic static
+            # handler refuses arbitrary *.html), mirroring /throughput.
+            try:
+                body = (STATIC_DIR / "free-models.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "free-models.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/free-router/models":
+            # L05 contract: bare list of catalog rows merged with eval scores.
+            from ccc_server import free_eval
+            self.send_json(free_eval.models_payload())
+        elif path == "/api/free-router/eval/status":
+            # Small status blob for the leaderboard page (additive).
+            from ccc_server import free_eval
+            self.send_json(free_eval.eval_info())
+        elif path.startswith("/api/free-router/eval/"):
+            from ccc_server import free_eval
+            job_id = path.rsplit("/", 1)[-1]
+            status = free_eval.job_status(job_id)
+            if status is None:
+                self.send_json({"ok": False, "error": "unknown job"}, 404)
+            else:
+                self.send_json(status)
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -29339,6 +32458,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"error": "pin_required", "pin_required": True}, 401)
         return True
 
+    def _cloud_relay_local_only(self):
+        """SECURITY: cloud-relay pairing/enable/unpair (and its status) are for
+        this machine only. A trusted tailnet peer passes _check_same_origin but
+        must not pair this machine to an account or read pairing state. Needs
+        an exact loopback Origin for this server's port (or none) AND a request
+        that did not arrive from off-machine (non-loopback peer, or a reverse
+        proxy such as `tailscale serve` on loopback). Sends the 403 itself."""
+        origin = (self.headers.get("Origin") or "").strip()
+        try:
+            port = int(self.server.server_address[1])
+        except (AttributeError, IndexError, TypeError, ValueError):
+            port = PORT
+        ok_origin = not origin
+        if origin:
+            for host in ("localhost", "127.0.0.1", "[::1]"):
+                for scheme in ("http", "https"):
+                    if origin in (f"{scheme}://{host}:{port}", f"{scheme}://{host}"):
+                        ok_origin = True
+        if ok_origin and not phone_access.is_remote_request(
+                self.client_address[0], self.headers):
+            return True
+        self.send_json({"error": "cloud-relay is localhost-only", "origin": origin}, 403)
+        return False
+
     def _phone_access_local_only(self):
         """Phone-access admin endpoints (turn on/off, PIN, test) are for this
         machine only: a tailnet peer that is allowed to use CCC must still not
@@ -29351,6 +32494,43 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return True
         self.send_json({"error": "phone-access settings are localhost-only", "origin": origin}, 403)
         return False
+
+    def _handle_vault_post(self, path):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            length = 0
+        if length > 256 * 1024:
+            self.send_json({"ok": False, "error": "request too large"}, 413)
+            return
+        body = self.rfile.read(length) if length > 0 else b""
+        try:
+            payload = json.loads(body) if body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+            return
+        if not isinstance(payload, dict):
+            self.send_json({"ok": False, "error": "invalid payload"}, 400)
+            return
+        meta_keys = ("kind", "service", "username", "env_var", "website", "notes")
+        meta = {k: payload[k] for k in meta_keys if k in payload}
+        try:
+            if path == "/api/vault/entries":
+                entry = vault_create_entry(payload.get("name"), payload.get("value"), **meta)
+            elif path == "/api/vault/entries/update":
+                entry = vault_update_entry(payload.get("name"), value=payload.get("value"), **meta)
+            elif path == "/api/vault/entries/delete":
+                existed = vault_delete_entry(payload.get("name"))
+                self.send_json({"ok": True, "deleted": existed})
+                return
+            else:
+                entry = vault_import_byok(
+                    payload.get("profile"), payload.get("provider"), payload.get("name"), **meta,
+                )
+        except VaultError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+            return
+        self.send_json({"ok": True, "entry": entry, "backend": vault_storage_backend()})
 
     def _check_same_origin(self):
         """SECURITY: reject cross-origin POSTs (CSRF defence).
@@ -29503,6 +32683,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
             return
+        if path.startswith("/api/secrets/"):
+            from ccc_server import credential_broker
+            credential_broker.handle(self, self.command)
+            return
+
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
@@ -29512,7 +32697,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # shared codex_request card; queue-owner backs the still-live
             # native-vs-CCC queue ownership feature (unrelated to the
             # deleted UI).
-            if action not in ("respond", "queue-owner"):
+            if action not in ("respond", "queue-owner", "handover"):
                 self.send_json({"ok": False, "error": "Unknown Codex action"}, 404)
                 return
             try:
@@ -29529,6 +32714,148 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             result = codex_client_call(action, data)
             self.send_json(result, 200 if result.get("ok") else 409)
             return
+        if path == "/api/local-speech/install":
+            from ccc_server import local_speech
+            local_speech.handle_api(self, install=True)
+            return
+        if path == "/api/free-runtime/tts-log":
+            # Browser-side Speak decisions (which voice, and why the Mac voice)
+            # land in activity.log next to the server's own SPEAK lines.
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                payload = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else {}
+            except (ValueError, OSError):
+                payload = {}
+            if isinstance(payload, dict):
+                _log_activity("tts", str(payload.get("verb") or "NOTE")[:9].upper(),
+                              str(payload.get("detail") or "")[:300])
+            self.send_json({"ok": True})
+            return
+        if path == "/api/free-runtime/tts-session":
+            # Continuous read for browsers without MediaSource (CCC-144):
+            # {texts: [clip, ...], voice} -> {id}; GET .../<id> plays it.
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                payload = json.loads(self.rfile.read(length)) if 0 < length <= 256 * 1024 else None
+            except (ValueError, OSError):
+                payload = None
+            texts = payload.get("texts") if isinstance(payload, dict) else None
+            if not isinstance(texts, list):
+                self.send_json({"ok": False, "error": "bad request"}, 400)
+                return
+            sid = _free_runtime.tts_session_create(texts, str(payload.get("voice") or ""))
+            if not sid:
+                self.send_json({"ok": False, "error": "local voice cannot stream"}, 503)
+                return
+            _log_activity("tts", "SESSION", "clips=%d chars=%d voice=%s" % (
+                len(texts), sum(len(str(t or "")) for t in texts), str(payload.get("voice") or "-")))
+            self.send_json({"ok": True, "id": sid})
+            return
+        if path.startswith("/api/free-runtime/tts-session/") and path.endswith("/cancel"):
+            sid = path[len("/api/free-runtime/tts-session/"):-len("/cancel")]
+            self.send_json({"ok": _free_runtime.tts_session_cancel(sid)})
+            return
+        if path == "/api/free-runtime/tts":
+            # Speak button: text -> free neural voice via the router. The
+            # router key never leaves the server; the browser gets audio only.
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                payload = json.loads(self.rfile.read(length)) if 0 < length <= 64 * 1024 else None
+            except (ValueError, OSError):
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "bad request"}, 400)
+                return
+            _t0 = time.time()
+            if payload.get("stream"):
+                # Relay mp3 as it is made: playback starts at the first bytes
+                # instead of after the whole clip. Deepgram only when explicitly
+                # enabled; otherwise local Kokoro, which streams per sentence.
+                _voice_in = str(payload.get("voice") or "")
+                # "bg" = prepare-ahead; the local voice serves "fg" reads first.
+                _prio = "bg" if payload.get("prio") == "bg" else "fg"
+                _resp, _label = _free_runtime.deepgram_open(
+                    payload.get("text"), _voice_in, "encoding=mp3")
+                if (_resp is None and _free_runtime.local_tts_installed()
+                        and _voice_in not in _free_runtime.TTS_VOICES):
+                    _resp, _label = _free_runtime.local_tts_open(payload.get("text"), _voice_in, _prio)
+                if _resp is not None:
+                    _sent = 0
+                    _first_ms = -1
+                    try:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "audio/mpeg")
+                        self.send_header("X-CCC-Voice", _label)
+                        if _label.startswith("Kokoro"):
+                            self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
+                        self.send_header("X-CCC-Stream", "1")
+                        # Perf pane "speaker cache" column: was this clip
+                        # replayed from the clip cache or made just now?
+                        self.send_header("X-CCC-Cache", "hit" if isinstance(
+                            _resp, _free_runtime._CachedClip) else "miss")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        self.close_connection = True
+                        with _resp:
+                            while True:
+                                _buf = _resp.read(4096)
+                                if not _buf:
+                                    break
+                                if _first_ms < 0:
+                                    _first_ms = int((time.time() - _t0) * 1000)
+                                self.wfile.write(_buf)
+                                self.wfile.flush()
+                                _sent += len(_buf)
+                    except Exception:
+                        pass
+                    # first = ms until the first audio bytes (the wait before
+                    # sound); ms = until the whole clip was made.
+                    _log_activity("tts", "SPEAK", "chars=%d status=200 spoke=%s ms=%d first=%d bytes=%d stream=1 prio=%s" % (
+                        len(str(payload.get("text") or "")), _label,
+                        int((time.time() - _t0) * 1000), _first_ms, _sent, _prio))
+                    return
+            status, audio, ctype, voice = _free_runtime.tts(payload.get("text"), str(payload.get("voice") or ""))
+            _log_activity("tts", "SPEAK", "chars=%d status=%d spoke=%s ms=%d bytes=%d" % (
+                len(str(payload.get("text") or "")), status, voice or "-",
+                int((time.time() - _t0) * 1000), len(audio)))
+            if status != 200:
+                self.send_json({"ok": False, "error": "tts unavailable", "voice": voice}, status)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(audio)))
+            self.send_header("X-CCC-Voice", voice)
+            if voice.startswith("Kokoro"):
+                self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(audio)
+            return
+        if path.startswith("/api/free-router"):
+            # Free-model router lifecycle (install/start/stop). Same-origin
+            # was already enforced at the top of do_POST.
+            from ccc_server import free_router
+            if free_router.handle_api_post(self, path):
+                return
+        if path == "/api/auto-rerun":
+            # Toggle a session's "rerun once if it dies" opt-in (same-origin
+            # enforced at the top of do_POST; rules are host-file only).
+            from ccc_server import auto_rerun
+            auto_rerun.handle_api_post(self)
+            return
+        if path.startswith("/api/restart-recovery/"):
+            # Dismiss / resume-prompt for sessions a restart cut off mid-turn.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import restart_recovery
+            if restart_recovery.handle_api_post(self, path):
+                return
+        if path == "/api/leftover/approve":
+            # Leftover Mode: one click queues a proposed WatchTower ticket.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import leftover
+            if leftover.handle_api_post(self, path):
+                return
         if path.startswith("/proxy/"):
             self._proxy_local_view("POST")
             return
@@ -29537,6 +32864,53 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        # First-run setup (onboarding): run steps, cancel jobs.
+        if path.startswith("/api/setup/"):
+            from ccc_server import setup_jobs as _setup_jobs_mod
+            _setup_jobs_mod.handle_post(self)
+        if path in ("/api/domestic-providers/keys", "/api/domestic-providers/keys/remove"):
+            from ccc_server import domestic_providers
+            domestic_providers.handle(self, "POST")
+            return
+        if path == "/api/free-router/keys":
+            # Free-key wizard submit (L03): {platform, key?, consent?} ->
+            # {ok, validated, error}. The key is forwarded to the managed
+            # router only; it is never logged, echoed, or stored by CCC.
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                length = 0
+            if length > 64 * 1024:
+                self.send_json({"ok": False, "error": "request too large"}, 413)
+                return
+            try:
+                body = self.rfile.read(length) if length > 0 else b""
+                payload = json.loads(body) if body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "validated": False,
+                                "error": "invalid JSON body"}, 400)
+                return
+            result = submit_free_key(
+                payload.get("platform"),
+                key=payload.get("key"),
+                consent=bool(payload.get("consent")),
+            )
+            status = 200 if result.get("ok") else {
+                "router_unavailable": 503,
+                "router_error": 502,
+                "router_rejected": 502,
+            }.get(result.get("code"), 400)
+            self.send_json(result, status)
+            return
+
+        # Settings > Free models panel (ccc_server/free_settings.py owns it).
+        if path.startswith("/api/free-settings"):
+            from ccc_server import free_settings as _free_settings
+            _free_settings.handle(self, "POST")
             return
 
         if path == "/api/assistant/ask":
@@ -29592,10 +32966,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     item = _aa.store().confirm(aid, str(data.get("token") or ""),
                                                _aa.make_executor(base))
                     _log_activity("assistant", "ACTION", f"kind={item['kind']} id={aid} status={item['status']}")
+                    notify_action_result(item)  # tell a live voice session the outcome
                     self.send_json({"ok": item["status"] == "done", "action": item})
                     return
                 if verb == "dismiss":
-                    self.send_json({"ok": True, "action": _aa.store().dismiss(aid, str(data.get("token") or ""))})
+                    item = _aa.store().dismiss(aid, str(data.get("token") or ""))
+                    notify_action_result(item)  # tell a live voice session the outcome
+                    self.send_json({"ok": True, "action": item})
                     return
                 self.send_json({"ok": False, "error": "unknown action route"}, 404)
             except PermissionError as e:
@@ -29616,6 +32993,42 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+
+        if path == "/api/star":
+            # Star-ask prompt (Q17): shown/later/never update the persisted
+            # ask ledger; "star" runs `gh api -X PUT user/starred/<repo>`.
+            # Same-origin was already enforced at the top of do_POST.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            from ccc_server import star_ask as _star_ask
+            payload, code = _star_ask.handle_action(
+                data.get("action") if isinstance(data, dict) else None)
+            self.send_json(payload, code)
+            return
+
+        if path == "/api/notify":
+            # One intake for every surface that wants to ping the user;
+            # ccc_server.notify validates, rate-limits, dedupes and fans out
+            # to connected dashboards over the /api/events hub.
+            from ccc_server import notify as _notify
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                if content_len > 64 * 1024:
+                    self.send_json({"ok": False, "error": "body too large"}, 413)
+                    return
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            resp, status = _notify.post(data)
+            self.send_json(resp, status)
             return
 
         if path == "/api/injection-health/ack":
@@ -29646,6 +33059,97 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **_set_voice_focus(sid)})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
+            return
+
+        # --- Realtime voice (Codex app-server realtime lane) ---------------
+        # Same-origin was enforced at the top of do_POST. /api/voice/* never
+        # echoes secrets: the OpenAI key lives only in the child env, and the
+        # SDP blobs are signaling data, not credentials.
+        if path == "/api/voice/start":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                if content_len > 256 * 1024:
+                    self.send_json({"ok": False, "error": "body too large",
+                                    "code": "voice_bad_request"}, 413)
+                    return
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    raise ValueError("expected object")
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body",
+                                "code": "voice_bad_request"}, 400)
+                return
+            result, status = voice_start(data)
+            self.send_json(result, status)
+            return
+
+        if path == "/api/voice/stop":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    data = {}
+            except (ValueError, OSError):
+                data = {}
+            result, status = voice_stop((data.get("session_id") or "").strip() or None,
+                                        reason=str(data.get("reason") or "user")[:64])
+            self.send_json(result, status)
+            return
+
+        if path == "/api/voice/heartbeat":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    data = {}
+            except (ValueError, OSError):
+                data = {}
+            result, status = voice_heartbeat(
+                (data.get("session_id") or "").strip(),
+                audio_ms=data.get("audio_ms"),
+                connected=data.get("connected", False))
+            self.send_json(result, status)
+            return
+
+        if path == "/api/voice/audio":
+            # Mic chunks for the websocket-transport fallback (the WebRTC
+            # path sends audio straight to the voice host and never posts
+            # here). Bounded body, session checked inside voice_audio_append.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                if content_len > 1536 * 1024:
+                    self.send_json({"ok": False, "error": "body too large",
+                                    "code": "voice_bad_request"}, 413)
+                    return
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    raise ValueError("expected object")
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body",
+                                "code": "voice_bad_request"}, 400)
+                return
+            result, status = voice_audio_append(
+                (data.get("session_id") or "").strip(),
+                data.get("data"), data.get("sampleRate"), data.get("numChannels"))
+            self.send_json(result, status)
+            return
+
+        if path == "/api/voice/config":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    raise ValueError("expected object")
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            _cfg_res = voice_config_save(data)
+            self.send_json(_cfg_res, 200 if _cfg_res.get("ok") else 400)
             return
 
         if path in (
@@ -30224,6 +33728,53 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             return
+        if path.startswith("/api/onboarding/first-task/"):
+            # First magic task (ccc_server/first_task.py). Local-only: these
+            # launch a headless agent process / `open` on the host — a phone or
+            # tunnel peer must not start them.
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "first task is local-only"}, 403)
+                return
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            from ccc_server import first_task
+            action = path.rsplit("/", 1)[-1]
+            if action == "cancel":
+                self.send_json(first_task.cancel_job(payload.get("job_id")))
+            elif action == "open":
+                res = first_task.open_result(payload.get("job_id"))
+                self.send_json(res, 200 if res.get("ok") else 400)
+            else:
+                self.send_json({"ok": False, "error": "unknown action"}, 404)
+            return
+        if path == "/api/onboarding/first-task":
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "first task is local-only"}, 403)
+                return
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            from ccc_server import first_task
+            job, err = first_task.start_task(payload.get("task_id"), require_free=payload.get("runtime") == "free")
+            if err:
+                code = err.get("code")
+                self.send_json(err, 409 if code == "busy" else 400)
+            else:
+                self.send_json({"ok": True, "job": job})
+            return
         if path == "/api/run-in-terminal":
             # "Run" on a Needs-you card (CCC-1218): types a user-confirmed
             # command into a visible terminal. Local-only, like config
@@ -30246,8 +33797,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return
         if path.startswith("/api/config-consent/"):
             # Writing to the user's agent config is local-only: a peer let in
-            # through phone access / a tunnel cannot approve it.
-            if phone_access.is_remote_request(self.client_address[0], self.headers):
+            # through phone access / a tunnel cannot approve it. The notice
+            # ack writes no agent config, so a remote viewer may dismiss it.
+            if (path != "/api/config-consent/notice-ack"
+                    and phone_access.is_remote_request(self.client_address[0], self.headers)):
                 self.send_json({"ok": False, "error": "config consent is local-only"}, 403)
                 return
             length = int(self.headers.get("Content-Length", "0") or 0)
@@ -30464,6 +34017,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
+        if path in ("/api/cloud-relay/config", "/api/cloud-relay/pair",
+                    "/api/cloud-relay/pair/confirm", "/api/cloud-relay/pair/abandon",
+                    "/api/cloud-relay/unpair"):
+            if not self._cloud_relay_local_only():
+                return
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            raw = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            try:
+                mgr = cloud_relay_manager()
+                if path == "/api/cloud-relay/config":
+                    result = mgr.set_config(enabled=payload.get("enabled"),
+                                            share_titles=payload.get("share_titles"))
+                elif path == "/api/cloud-relay/pair":
+                    result = mgr.start_pairing(payload.get("pair_code") or "",
+                                               payload.get("relay_url") or "")
+                elif path == "/api/cloud-relay/pair/confirm":
+                    result = mgr.confirm_pairing()
+                elif path == "/api/cloud-relay/pair/abandon":
+                    result = mgr.abandon_pairing()
+                else:
+                    result = mgr.unpair()
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            self.send_json(result, 200 if result.get("ok") else 400)
+            return
         if path.startswith("/api/phone-access/"):
             sub = path[len("/api/phone-access/"):]
             length = int(self.headers.get("Content-Length", "0") or 0)
@@ -30563,6 +34150,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 pass
             _schedule_restart()
             return
+        if path == "/api/spawn-advisor":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 65536:
+                    raise ValueError("Expected a preferences object of at most 64 KiB")
+                config = _spawn_advisor.save(COMMAND_CENTER_STATE_DIR,
+                    json.loads(self.rfile.read(length)), _ORCHESTRATION_SPAWN_ENGINES)
+                self.send_json({"ok": True, "config": config})
+            except (ValueError, TypeError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
         if path == "/api/spawn-defaults":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -30630,6 +34230,69 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 byok_delete_profile(profile)
             self.send_json({"ok": True})
+            return
+        if path == "/api/free-router/detected/prefer":
+            # L20: "Use this router" from the existing-router card. Persists
+            # the pick (and an optional router key, stored 0600, never
+            # echoed) so free spawns route through it. {"id": null} clears.
+            from ccc_server import router_detect as _router_detect
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid payload"}, 400)
+                return
+            rid = payload.get("id")
+            if rid is not None:
+                rid = str(rid).strip() or None
+            if rid and not _router_detect.router_by_id(rid):
+                self.send_json({"ok": False, "error": f"router not detected: {rid}"}, 404)
+                return
+            # Optional router key — persisted inside the same 0600 choice
+            # file; free_engines reads it at spawn. Never returned by API.
+            stored = _router_detect.set_preferred_router(rid, key=payload.get("key"))
+            self.send_json({"ok": True, "preferred": stored})
+            return
+        if path == "/api/free-router/engine-setup":
+            # L20: apply free-router config for one engine (codex writes a
+            # marker-delimited provider block into ~/.codex/config.toml with
+            # a backup; opencode writes a CCC-managed config file; aider and
+            # claude are env-only and need no write). User action required —
+            # nothing here runs unprompted.
+            from ccc_server import free_engines as _free_engines
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid payload"}, 400)
+                return
+            engine = (payload.get("engine") or "").strip().lower()
+            if not engine:
+                self.send_json({"ok": False, "error": "engine is required"}, 400)
+                return
+            res = _free_engines.engine_setup(
+                engine,
+                base_url=(payload.get("base_url") or "").strip() or None,
+                api_key=(payload.get("api_key") or "").strip() or None,
+                model=(payload.get("model") or "").strip() or None,
+            )
+            self.send_json(res, 200 if res.get("ok") else 400)
+            return
+        if path in ("/api/vault/entries", "/api/vault/entries/update",
+                    "/api/vault/entries/delete", "/api/vault/import-byok"):
+            # Vault writes. Same-origin already enforced at the top of
+            # do_POST (same posture as /api/byok/keys). Responses carry
+            # metadata only; the request body (which may hold a value) is
+            # never logged or echoed.
+            self._handle_vault_post(path)
             return
         if path == "/api/engines/update-now":
             self.send_json(_start_engine_update_pass(), 202)
@@ -30991,6 +34654,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/watchtower/alerts/investigate":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            alert_id = str(payload.get("id") or "").strip() if isinstance(payload, dict) else ""
+            if not alert_id:
+                self.send_json({"ok": False, "error": "id required"}, 400)
+                return
+            res = investigate_wt_alert(alert_id)
+            self.send_json(res, 200 if res.get("ok") else 502)
             return
         if path == "/api/watchtower/alerts/ack":
             # Ack (dismiss) WatchTower alerts by id, or every current one with
@@ -31370,7 +35047,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
             editable = ("note", "title", "priority", "type", "readiness",
-                        "value", "confidence", "lane")
+                        "value", "confidence", "lane", "placement")
             fields = {k: payload[k] for k in editable if k in payload}
             try:
                 item = _q.update(ref, **fields)
@@ -31477,6 +35154,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path in ("/api/ux-fixes/accept", "/api/ux-fixes/reject"):
+            # WT-5 review gate: accept closes an in_review ticket (dependents
+            # unblock); reject sends it back to open with the reason and
+            # resumes its worker. Both shell to `wt` so WatchTower's own
+            # resume path runs (see ccc_server/wt_review.py).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            res = _wt_review.run_review_verb(
+                str(payload.get("ref") or ""),
+                "accept" if path.endswith("/accept") else "reject",
+                reason=str(payload.get("reason") or ""),
+            )
+            self.send_json(res, 200 if res.get("ok") else 400)
+            return
         if path == "/api/ux-fixes/ack":
             # Dim a closed ticket's caveat/follow-up/unresolved chip without
             # rewriting the close record (parity with WatchTower's own
@@ -31516,6 +35213,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
+                _ux_fixes_cache_ack(item)
                 self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -31753,6 +35451,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
+        if path == "/api/queue/roles":
+            # CCC-1235: the UI equivalent of `wt config -q Q --<role>-engine
+            # /--<role>-model`, through the same WatchTower setter. Per-role
+            # errors come back in "errors" so the dialog shows them inline.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            from ccc_server.queue_roles import set_roles
+            try:
+                payload = json.loads(body) if body else {}
+                result = set_roles(str(payload.get("queue") or ""), payload.get("roles") or {})
+            except (json.JSONDecodeError, ValueError, AttributeError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            if result.get("ok"):
+                _log_activity("queue", "ROLES", f"queue={result.get('queue')} roles={','.join(sorted((payload.get('roles') or {}).keys()))}")
+            self.send_json(result, 200 if result.get("ok") else 400)
+            return
         if path == "/api/queue/config-options":
             # Suggestions and the current durable config for the Queue manager.
             # No subprocess: CCC reads the same WatchTower JSON file used by the
@@ -31768,6 +35486,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 payload = json.loads(body) if body else {}
                 normalized = _queue_config_from_payload(payload)
+                session_link = ""
+                if str(payload.get("session_id") or "").strip():
+                    from ccc_server.session_queue import valid_session_id
+                    session_link = valid_session_id(payload.get("session_id"))
             except (json.JSONDecodeError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
                 return
@@ -31824,11 +35546,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if "grace_s" in payload and hasattr(_wt_config, "set_grace_s"):
                         _wt_config.set_grace_s(queue_name, conf.get("grace_s"))
                     if ("fallback_to_default_worker" in payload
+                            and payload["fallback_to_default_worker"] is not None
                             and hasattr(_wt_config, "set_fallback_to_default_worker")):
                         # Older watchtower installs predate the fallback toggle
                         # (WATCHTOWER-30); they just keep it off.
                         _wt_config.set_fallback_to_default_worker(
-                            queue_name, conf.get("fallback_to_default_worker", False)
+                            queue_name, conf.get("fallback_to_default_worker")
                         )
                     _wt_config.set_repo_path(queue_name, conf.get("repo_path", ""))
                     # Blank means "CCC spawn default" (the payload normalizer
@@ -31860,14 +35583,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     if matched and matched != queue_name:
                         del cfg[matched]
-                    for kept in ("queue_label", "grace_s", "fallback_to_default_worker"):
+                    for kept in ("queue_label", "grace_s", "fallback_to_default_worker",
+                                 "session_id", "offer_workers"):
                         if kept not in payload and before_conf.get(kept) is not None:
                             normalized["config"][kept] = before_conf[kept]
+                    if normalized["config"].get("fallback_to_default_worker") is None:
+                        normalized["config"].pop("fallback_to_default_worker", None)
                     cfg[queue_name] = normalized["config"]
                     tmp = cfg_path.with_suffix(".json.tmp")
                     with open(tmp, "w") as f:
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
+                # Session -> queue link (CCC-1225): present-only, like
+                # queue_label, so a plain re-save never clears it.
+                link = {}
+                if "fallback_to_default_worker" in payload and payload["fallback_to_default_worker"] is None:
+                    link["fallback_to_default_worker"] = None
+                if "session_id" in payload:
+                    link["session_id"] = session_link or None
+                if "offer_workers" in payload:
+                    link["offer_workers"] = True if payload.get("offer_workers") else None
+                if link:
+                    from ccc_server.session_queue import patch_queue_config
+                    patch_queue_config(_wt_config_path(), queue_name, link)
                 # Activity-log the save as a before/after diff (CCC-1037).
                 after_conf = (_wt_read_config() or {}).get(queue_name)
                 if after_conf is None:
@@ -31937,6 +35675,41 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/offer-workers":
+            # Answer a session queue's one-time "start N workers?" prompt
+            # (CCC-1225). Body: {queue, workers}; 0 declines, N starts draining
+            # with N workers. Either way the offer is cleared for every browser.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            from ccc_server.session_queue import patch_queue_config, worker_offer_updates
+            try:
+                payload = json.loads(body) if body else {}
+                if not isinstance(payload, dict):
+                    raise ValueError("expected JSON object")
+                queue_name = str(payload.get("queue") or "").strip().upper()
+                if not queue_name:
+                    raise ValueError("queue required")
+                updates = worker_offer_updates(payload.get("workers", 0))
+            except (json.JSONDecodeError, ValueError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            try:
+                before = dict((_wt_read_config() or {}).get(queue_name) or {})
+                after = patch_queue_config(_wt_config_path(), queue_name, updates)
+            except KeyError:
+                self.send_json({"ok": False, "error": f"unknown queue {queue_name}"}, 404)
+                return
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            if after.get("auto_drain"):
+                _wt_log_queue_config_change(
+                    queue_name, _queue_config_diff(before, after) or "no changes")
+                _reconcile_once_async()
+            self.send_json({"ok": True, "queue": queue_name,
+                            "auto_drain": bool(after.get("auto_drain")),
+                            "desired_workers": after.get("desired_workers")})
             return
         if path == "/api/wt/queue/workers":
             # Set desired_workers for a queue (the compact status strip's
@@ -32217,6 +35990,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 400)
                 return
             self.send_json({"ok": True, "path": registered, "repos": load_known_repos()})
+            return
+        if path == "/api/repo/guess":
+            # Guess the folder a new session belongs in from its first
+            # prompt (ccc_server/repo_guess.py). Local path/name match first;
+            # the optional Jev call only happens when a key is configured.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError, TypeError):
+                body = {}
+            self.send_json(repo_guess_request(body))
+            return
+        if path == "/api/repo/avatar":
+            from ccc_server import repo_avatars
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= repo_avatars.MAX_IMAGE * 4 // 3 + 4096:
+                    self.send_json({"ok": False, "error": "Choose an image smaller than 2 MB"}, 413)
+                    return
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or "image" not in body:
+                    raise ValueError("image is required (null restores automatic detection)")
+                repo = resolve_repo_path(body.get("repo_path", ""))
+                repo_avatars.save(repo, COMMAND_CENTER_STATE_DIR, body["image"])
+                self.send_json({"ok": True})
+            except (RepoContextError, ValueError, TypeError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except OSError:
+                self.send_json({"ok": False, "error": "Could not save avatar"}, 500)
             return
         if path == "/api/repo/add":
             # Persist a user-picked repo path so it appears in the picker and
@@ -32780,7 +36582,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     rp = Path(result["path"])
                     # `open -R` reveals in Finder rather than launching.
                     launch = payload.get("launch") and not reveal_only_block_launch
-                    cmd = ["open", str(rp)] if launch else ["open", "-R", str(rp)]
+                    if sys.platform == "darwin":
+                        cmd = ["open", str(rp)] if launch else ["open", "-R", str(rp)]
+                    else:
+                        # Linux hosts (e.g. a headless VM) have no `open`;
+                        # xdg-open can't reveal, so open the containing dir.
+                        opener = shutil.which("xdg-open")
+                        if not opener:
+                            self.send_json({
+                                "ok": False,
+                                "error": "this server host has no desktop opener (xdg-open); open the path from a machine with a display",
+                                "path": str(rp),
+                            }, 501)
+                            return
+                        target = rp if (launch or rp.is_dir()) else rp.parent
+                        cmd = [opener, str(target)]
                     subprocess.Popen(cmd)
                     self.send_json({"ok": True, "path": str(rp)})
                 except Exception as e:
@@ -32822,6 +36638,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 dry_run=bool(payload.get("dry_run") or payload.get("dryRun"))
             )
             self.send_json(result)
+        elif path == "/api/jobs/add":
+            # Create a scheduled job through an agent session: validate,
+            # compose the prompt server-side, spawn via /api/sessions/spawn.
+            # Shared by the Jobs tab "+ Add" dialog and `ccc jobs add`.
+            from ccc_server.jobs_add import handle_jobs_add
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = None
+            result, status = handle_jobs_add(
+                payload, _known_repo_paths(), self.server.server_address[1],
+                str(CCC_ROOT), user_agent=(self.headers.get("User-Agent") or "").strip(),
+            )
+            if result.get("ok"):
+                _log_activity("jobs", "ADD", f"host={result['host']} repo={result['repo']} sid={result['session_id']}")
+            self.send_json(result, status)
         elif path == "/api/sessions/spawn":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -32841,6 +36675,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
+            # task_key is the caller's dedupe contract: "a lane for THIS
+            # task" — an opaque token (ticket id, slug, hash) matched
+            # exactly, repo-scoped, on /api/sessions/spawned?task_key= and by
+            # the idempotent-spawn check below. Deliberately NOT aliased to
+            # idempotency_key: that field already means "replay this exact
+            # request" at the control-plane WorkLedger layer and must keep
+            # its own semantics.
+            task_key = str(payload.get("task_key") or "").strip()[:200]
+            # prompt_hash/task_summary come from the RAW prompt — by dispatch
+            # time the prompt has grown the shipped-check heads-up, brain
+            # prefix, return-address wrapper (with a per-request route id)
+            # and astra guardrail, so hashing the dispatched prompt would
+            # never match twice. task_summary is the raw first-200 so grep
+            # hits the topic, unlike command_summary (wrapped prompt[:200]).
+            prompt_hash = (
+                hashlib.sha256(prompt.encode("utf-8", "replace")).hexdigest()[:16]
+                if prompt else ""
+            )
+            task_summary = " ".join(prompt.split())[:200]
+            spawn_request_meta = {
+                "task_key": task_key,
+                "prompt_hash": prompt_hash,
+                "task_summary": task_summary,
+            }
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
             # BYOK (W2-2): "key_profile" picks which stored profile's API
@@ -32849,6 +36707,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # straight from the environment honor this today.
             key_profile = (payload.get("key_profile") or "").strip() or None
             byok_extra_env = byok_spawn_env(engine, model, key_profile)
+            # $0 spawn runtime: "free" routes the child through the CCC free
+            # router via per-child env. Validated here — engine support is
+            # per-engine and a $0 request must never silently run paid.
+            spawn_runtime = str(payload.get("runtime") or "").strip().lower()
+            from ccc_server import domestic_providers
+            preset_error = domestic_providers.request_error(
+                engine, model, spawn_runtime, key_profile,
+                remote=bool(payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False)),
+            )
+            runtime_error = None
+            if spawn_runtime and spawn_runtime != "free":
+                runtime_error = f"unknown runtime: {spawn_runtime}"
+            elif spawn_runtime == "free":
+                if engine not in _free_runtime.FREE_RUNTIME_ENGINES:
+                    runtime_error = (
+                        f"the free runtime does not support the {engine or '?'} engine "
+                        f"(supported: {', '.join(_free_runtime.FREE_RUNTIME_ENGINES)})"
+                    )
+                elif key_profile:
+                    runtime_error = (
+                        "key_profile can't be combined with runtime=free; "
+                        "the free router supplies its own key"
+                    )
+                else:
+                    _free_ready, _free_why = _free_runtime.readiness(engine)
+                    if not _free_ready:
+                        runtime_error = (
+                            "This session was asked to run free ($0), but "
+                            + (_free_why or "the free router is not ready")
+                            + ". Start the free router in Settings > Free models, "
+                            "or send again without runtime=free."
+                        )
             reasoning_effort = _spawn_request_reasoning_effort(payload, engine)
             auto_compact_k = _load_spawn_defaults().get("auto_compact_k", 250)
             if "auto_compact_k" in payload:
@@ -32861,6 +36751,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 )
             if confirm_blocked_model and _model_policy_blocks(model):
                 _log_activity("spawn", "CONFIRM_BLOCKED", f"engine={engine} model={model}")
+            # Free runtime (L20): payload "runtime":"free" routes env-injectable
+            # engines (aider, opencode) at the chosen or CCC-managed router for
+            # this child only. Claude's free env belongs to L01/L04's
+            # free_router.spawn_env wiring; codex is config-file based
+            # (engine-setup). Never silently falls back: no router => no env
+            # merge, and the child fails visibly against its normal provider.
+            if str(payload.get("runtime") or "").strip().lower() == "free":
+                from ccc_server import free_engines as _free_engines
+                _free_spawn = _free_engines.spawn_env_for_payload(engine, model, payload)
+                if _free_spawn:
+                    model = _free_spawn.get("model") or model
+                    byok_extra_env = {**byok_extra_env, **(_free_spawn.get("env") or {})}
             report_to, report_to_error = _normalize_return_address(payload)
             parent_session_id, parent_session_error = _normalize_spawn_parent_session_id(
                 payload,
@@ -32996,6 +36898,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "error": f"unsupported engine: {engine_raw}",
                     "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
                 }, 400)
+            elif preset_error:
+                _log_activity("spawn", "REJECT", f"preset_error: {preset_error.get('code')}")
+                self.send_json(preset_error, 400)
+            elif runtime_error:
+                _log_activity("spawn", "REJECT", f"runtime_error: {runtime_error}")
+                self.send_json({
+                    "ok": False,
+                    "error": runtime_error,
+                    "code": "free_runtime_unavailable" if spawn_runtime == "free" else "invalid_runtime",
+                    "runtime": spawn_runtime,
+                }, 400)
             elif model_error:
                 _log_activity("spawn", "REJECT", f"model_error: {model_error}")
                 self.send_json({
@@ -33013,6 +36926,82 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _log_activity("spawn", "REJECT", f"parent_session error: {parent_session_error}")
                 self.send_json({"ok": False, "error": parent_session_error}, 400)
             else:
+                # Idempotent-spawn check, after validation but BEFORE any
+                # side effects (report route, shipped check, worktree). A
+                # caller opts in by sending task_key (exact-match dedupe
+                # contract) or dedupe:true (exact raw-prompt-hash match).
+                # The in-flight map closes the check-then-spawn race: every
+                # spawn lands in this process, so the second concurrent
+                # request waits on the first's result instead of twinning.
+                result = None
+                dedupe_key = None
+                dedupe_slot = None
+                if task_key or payload.get("dedupe"):
+                    dedupe_scope = str(
+                        cwd_resolved or payload.get("repo_path") or cwd_input or ""
+                    )
+                    dedupe_key = (
+                        task_key or f"prompt:{prompt_hash}",
+                        dedupe_scope,
+                    )
+                    with _SPAWN_DEDUPE_LOCK:
+                        dedupe_slot = _SPAWN_DEDUPE_INFLIGHT.get(dedupe_key)
+                        if dedupe_slot is None:
+                            dedupe_slot = {
+                                "event": threading.Event(),
+                                "result": None,
+                            }
+                            _SPAWN_DEDUPE_INFLIGHT[dedupe_key] = dedupe_slot
+                            dedupe_owner = True
+                        else:
+                            dedupe_owner = False
+                    if not dedupe_owner:
+                        if dedupe_slot["event"].wait(_SPAWN_DEDUPE_WAIT_S):
+                            waited = dict(dedupe_slot["result"] or {})
+                            # Only a lane that actually exists is a dedupe
+                            # hit — a failed first spawn returns its error
+                            # unmarked so the caller can retry cleanly.
+                            if waited.get("ok"):
+                                waited["existing"] = True
+                                waited["deduped"] = "in_flight"
+                            _log_activity(
+                                "spawn", "DEDUPED",
+                                f"in-flight key={task_key or prompt_hash!r} "
+                                f"name={name!r}",
+                            )
+                            self.send_json(waited)
+                        else:
+                            self.send_json({
+                                "ok": False,
+                                "error": "timed out waiting for an in-flight "
+                                         "duplicate spawn to finish",
+                                "code": "dedupe_wait_timeout",
+                            }, 504)
+                        return
+                    live_row, finished_row = _spawn_dedupe_lookup(
+                        task_key=task_key,
+                        prompt_hash=(
+                            prompt_hash if payload.get("dedupe") else ""
+                        ),
+                        scope=dedupe_scope,
+                    )
+                    if live_row is not None or finished_row is not None:
+                        matched = live_row if live_row is not None else finished_row
+                        result = _dedupe_existing_response(
+                            matched, finished=finished_row is not None,
+                        )
+                        _log_activity(
+                            "spawn", "DEDUPED",
+                            f"key={task_key or prompt_hash!r} "
+                            f"matched pid={matched.get('pid')} "
+                            f"finished={finished_row is not None} name={name!r}",
+                        )
+                        with _SPAWN_DEDUPE_LOCK:
+                            dedupe_slot["result"] = result
+                            _SPAWN_DEDUPE_INFLIGHT.pop(dedupe_key, None)
+                            dedupe_slot["event"].set()
+                        self.send_json(result)
+                        return
                 try:
                     # Return address: spawned session reports back to its
                     # dispatcher on completion. No-op when report_to is unset.
@@ -33061,6 +37050,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ) + prompt
                     spawn_cwd = str(cwd_resolved) if cwd_resolved else None
                     _set_control_plane_action_id(payload.get("idempotency_key"))
+                    _set_spawn_request_meta(
+                        task_key=task_key,
+                        prompt_hash=prompt_hash,
+                        task_summary=task_summary,
+                    )
                     if engine == "codex":
                         result = spawn_session_codex(
                             prompt,
@@ -33144,6 +37138,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                             env=byok_extra_env,
+                            runtime=spawn_runtime,
                         )
                         if result.get("ok") and byok_extra_env:
                             byok_record_usage(
@@ -33202,6 +37197,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                             env=byok_extra_env,
+                            runtime=spawn_runtime,
                         )
                         if result.get("ok") and byok_extra_env:
                             byok_record_usage(
@@ -33229,7 +37225,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 model=model,
                                 key_profile=key_profile,
                             )
-                    elif engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None)):
+                    elif not spawn_runtime and (engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None))):
                         remote_engine = "hermes" if engine == "hermes" else "claude"
                         result = spawn_session_remote(
                             prompt,
@@ -33255,6 +37251,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             prewarm_id=payload.get("prewarm_id"),
                             auto_compact_k=auto_compact_k,
                             reasoning_effort=reasoning_effort,
+                            runtime=spawn_runtime,
                         )
                     result.setdefault("engine", engine)
                     if shipped_info and isinstance(result, dict):
@@ -33282,6 +37279,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        if spawn_runtime:
+                            result["runtime"] = spawn_runtime
+                            # Worker-routed spawns stamp marker+registry inside
+                            # the worker; restamping here is idempotent and
+                            # covers every route the spawn could have taken.
+                            _spawned_sid = result.get("session_id")
+                            if _spawned_sid:
+                                try:
+                                    _merge_spawn_marker(
+                                        _spawned_sid, runtime=spawn_runtime,
+                                    )
+                                except Exception:
+                                    pass
+                            _tag_spawn_runtime_in_registry(
+                                pid=result.get("pid"),
+                                session_id=_spawned_sid,
+                                runtime=spawn_runtime,
+                            )
+                        # The in-process meta path stamps the registry row
+                        # inside _record_spawn_to_registry; this tag is the
+                        # fallback for rows written by the worker (or an
+                        # engine that recorded before meta was set).
+                        if any(spawn_request_meta.values()):
+                            result["task_key"] = task_key
+                            _tag_spawn_task_meta_in_registry(
+                                pid=result.get("pid"),
+                                session_id=result.get("session_id"),
+                                meta=spawn_request_meta,
+                            )
                     # Opt in to unattended auto-resume ("continue") pokes at
                     # spawn time -- the main legitimate use case is a
                     # WatchTower queue-drain worker that should be nudged
@@ -33333,6 +37359,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except Exception as e:
                     _log_activity("spawn", "FAILED", f"engine={engine} error={e}")
                     self.send_json({"ok": False, "error": str(e)}, 500)
+                finally:
+                    _clear_spawn_request_meta()
+                    if dedupe_slot is not None:
+                        with _SPAWN_DEDUPE_LOCK:
+                            dedupe_slot["result"] = (
+                                result
+                                if isinstance(result, dict)
+                                else {"ok": False, "error": "spawn dispatch failed"}
+                            )
+                            _SPAWN_DEDUPE_INFLIGHT.pop(dedupe_key, None)
+                            dedupe_slot["event"].set()
         elif path == "/api/sessions/spawn-codex":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -33753,6 +37790,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     spawned_via = self._extract_spawned_via()
+                    _oc_runtime = str(payload.get("runtime") or "").strip().lower()
+                    if _oc_runtime != "free":
+                        _oc_runtime = ""
                     result = spawn_session_opencode(
                         prompt,
                         name=name,
@@ -33760,6 +37800,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         repo_path=payload.get("repo_path"),
                         worktree=bool(payload.get("worktree")),
                         model=model,
+                        runtime=_oc_runtime,
                     )
                     if isinstance(result, dict) and result.get("ok"):
                         result["spawned_via"] = spawned_via
@@ -33768,6 +37809,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        if _oc_runtime:
+                            result["runtime"] = _oc_runtime
+                            _sid = result.get("session_id")
+                            if _sid:
+                                try:
+                                    _merge_spawn_marker(_sid, runtime=_oc_runtime)
+                                except Exception:
+                                    pass
+                            _tag_spawn_runtime_in_registry(
+                                pid=result.get("pid"), session_id=_sid,
+                                runtime=_oc_runtime,
+                            )
                     if result.get("code") in ("opencode_unavailable", "opencode_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -34156,9 +38209,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if length > 0:
                 self.rfile.read(length)
             try:
+                # Experimental idea tickets ride the same once-per-turn event;
+                # returns at once and does its wt work on a thread.
+                try:
+                    _idea_tickets.on_turn_end(sid)
+                except Exception:
+                    pass
                 self.send_json(request_auto_title(sid))
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[^/]+/quick-action$", path):
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 16000:
+                self.send_json({"ok": False, "error": "invalid request size"}, 400)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length))
+                # Compatibility for older dashboard tabs. Actions now arrive
+                # in the answer footer; this endpoint never invokes a model.
+                self.send_json({"ok": True, "action": None})
+            except (ValueError, UnicodeError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/summarize$", path):
             conv_id = path.split("/")[-2]
             length = int(self.headers.get("Content-Length", "0"))
@@ -34240,6 +38311,45 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[^/]+/idea-ticket$", path):
+            # Experimental idea tickets: move a session's ticket between the
+            # IDEAS and SMALL-BUGS queues, or detach it with OTHER (sidebar
+            # row menu and tab-bar drag). Body: {queue}.
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = (payload.get("session_id") or conv_id or "").strip()
+            if not _feature_flag("idea_tickets"):
+                self.send_json({"ok": False, "error": "idea_tickets flag is off"}, 400)
+                return
+            result = _idea_tickets.move_ticket(sid, payload.get("queue"))
+            if result.get("ok"):
+                if result.get("queue") != "OTHER":
+                    result["moved_at"] = _idea_tickets.note_manual_move(sid)
+                _restamp_archive_serve_cache_after_mutation(mutated_sids=[sid])
+            self.send_json(result, 200 if result.get("ok") else 400)
+        elif path == "/api/idea-tickets/backfill":
+            # Experimental idea tickets: one-off backfill for sessions that
+            # predate the flag. Body: {session_ids: [...]}, oldest first so
+            # continuations join their origin's ticket. Runs on a thread.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not _feature_flag("idea_tickets"):
+                self.send_json({"ok": False, "error": "idea_tickets flag is off"}, 400)
+                return
+            ids = payload.get("session_ids")
+            if not isinstance(ids, list):
+                self.send_json({"ok": False, "error": "session_ids must be a list"}, 400)
+                return
+            self.send_json(_idea_tickets.backfill(ids[:200]))
         elif path == "/api/conversations/all-lane" or re.match(r"^/api/conversations/[^/]+/all-lane$", path):
             conv_id = "" if path == "/api/conversations/all-lane" else urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))
@@ -34324,30 +38434,58 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # legacy one-click UI behavior. An in-UI agent should always pass the
             # explicit desired state so re-runs don't un-archive.
             desired = payload.get("archived")
+            # keep_running: the phone's "Background" swipe -- hide the row but
+            # leave the session working; it returns to Active when it next
+            # needs the user. Without it, archiving still means "done", but a
+            # session mid-turn is only stopped once that turn ends.
+            keep_running = payload.get("keep_running") is True
+            from ccc_server import archive_deferred as _archive_deferred
+            has_process = bool(sid) and not sid.startswith("backlog-") and not sid.startswith("pkood-")
+            busy_now = (
+                has_process and desired is not False and not keep_running
+                and _archive_deferred.is_busy(sid)
+            )
+            deferred = None
             try:
                 # Keep retirement ordered with the state transition. If Move
                 # to Active races this request, it must run after the kill so
                 # the final Active state never points at a just-killed session.
                 with _conversation_lifecycle_lock:
-                    now_archived, _changed = _set_conversation_archived(
-                        sid, desired, source="manual",
+                    now_archived = (
+                        desired if isinstance(desired, bool)
+                        else sid not in _load_archived_conversations()
                     )
+                    changed, unchanged, _, _ = _set_conversations_archived(
+                        [sid], now_archived, source="manual",
+                    )
+                    group = changed + unchanged
                     # Archiving retires the session — drop any stale Notification-hook
                     # marker so the dashboard doesn't keep classifying it as Waiting
                     # (which would pin the row to "In progress" and undo the move).
                     kill_result = None
                     if now_archived:
-                        try:
-                            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
-                        except (OSError, FileNotFoundError):
-                            pass
+                        # A backgrounded session keeps its marker: a pending
+                        # permission is exactly what should bring it back.
+                        if not keep_running:
+                            try:
+                                (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+                            except (OSError, FileNotFoundError):
+                                pass
                         # Free the headless agent. Resume via Jump rebuilds full
                         # context from the on-disk JSONL — keeping the process
                         # alive past the user's "done" gesture only accumulates
                         # MCP children. Backlog rows have no process; pkood is
                         # uninstalled.
-                        if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
+                        if has_process and keep_running:
+                            deferred = "background"
+                        elif has_process and busy_now:
+                            deferred = "stop"
+                        elif has_process:
                             kill_result = _kill_session_by_id(sid)
+                    if deferred:
+                        _archive_deferred.record(sid, deferred)
+                    else:
+                        _archive_deferred.clear(sid)
                 # If this card represents a GitHub issue (id `issue-N`),
                 # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
@@ -34371,11 +38509,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except RepoContextError:
                         _bust_issue_state_cache()
                 _restamp_archive_serve_cache_after_mutation()
-                _publish_dashboard_patch(
-                    "conversation.patch", "conversation", sid,
-                    {"archived": now_archived, "trashed": False},
-                )
-                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
+                for member in group:
+                    patch = {"archived": now_archived}
+                    if not now_archived:
+                        patch["trashed"] = False
+                    _publish_dashboard_patch(
+                        "conversation.patch", "conversation", member, patch,
+                    )
+                self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result, "deferred": deferred, "session_ids": group})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/trash$", path):
@@ -35042,7 +39183,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if path.endswith("/run"):
                 self.send_json(decision_inbox_start_background_run())
             elif path.endswith("/decide"):
-                self.send_json(decision_inbox_decide(payload.get("card_id"), payload.get("option")))
+                self.send_json(decision_inbox_decide(
+                    payload.get("card_id"), payload.get("option"),
+                    reason=str(payload.get("reason") or "")[:2000]))
             elif path.endswith("/dismiss"):
                 self.send_json(decision_inbox_dismiss(payload.get("card_id")))
             else:
@@ -35687,6 +39830,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "already_consumed": True,
                     "session_id": sid,
                 })
+        elif path in ("/api/stop-held/release", "/api/stop-held/cancel"):
+            # CCC-237: {session_id, ids?: [...]} -- omit ids for all. Release
+            # re-sends through the normal inject path (still after any running
+            # turn); cancel discards. Nothing else ever delivers held input.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            raw_ids = payload.get("ids")
+            ids = None if raw_ids is None else [str(i) for i in raw_ids if str(i or "").strip()]
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            elif raw_ids is not None and not isinstance(raw_ids, list):
+                self.send_json({"ok": False, "error": "ids must be a list"}, 400)
+            elif path.endswith("/release"):
+                _record_interaction(sid)
+                result = _release_stop_held_inputs(sid, ids)
+                self.send_json(result, 200 if result.get("ok") else 502)
+            else:
+                _record_interaction(sid)
+                self.send_json(_cancel_stop_held_inputs(sid, ids))
         elif path == "/api/usage-limit/cancel":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -35711,6 +39880,56 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "session_id": sid,
                         "cancelled_queued": result.get("cancelled_queued", 0),
                     })
+        elif path.startswith("/api/free-failover/"):
+            # ccc_server/free_failover.py — the limit-hit approval card's
+            # actions. Every one of these is a user-initiated write:
+            #   continue    {session_id, always?}  resume now on a free model
+            #   arm         {session_id, armed?}   approve/cancel auto-resume
+            #                                       at the limit's reset
+            #   dismiss     {session_id, offer?}   hide the card for this stop
+            #   switch-back {session_id}           return to the paid plan
+            #                                       once the reset passed
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            if path == "/api/free-failover/fleet":
+                # ccc_server/fleet_failover.py — one click fanned out to a
+                # selected set: {action: continue|arm|disarm|dismiss|
+                # switch_back, session_ids: [...], offer?, always?}
+                result = free_failover_fleet_action(
+                    str(payload.get("action") or ""),
+                    payload.get("session_ids"),
+                    offer=str(payload.get("offer") or "failover"),
+                    always=bool(payload.get("always")),
+                )
+                self.send_json(result, 200 if "action" in result else 400)
+            elif not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            elif path == "/api/free-failover/continue":
+                result = free_failover_continue(
+                    sid, always=bool(payload.get("always"))
+                )
+                self.send_json(result, 200 if result.get("ok") else 409)
+            elif path == "/api/free-failover/arm":
+                result = free_failover_arm(
+                    sid, armed=bool(payload.get("armed", True))
+                )
+                self.send_json(result, 200 if result.get("ok") else 409)
+            elif path == "/api/free-failover/dismiss":
+                self.send_json(free_failover_dismiss(
+                    sid, offer=str(payload.get("offer") or "failover"),
+                ))
+            elif path == "/api/free-failover/switch-back":
+                result = free_failover_switch_back(sid)
+                self.send_json(result, 200 if result.get("ok") else 409)
+            else:
+                self.send_json({"ok": False, "error": "unknown endpoint"}, 404)
         elif path == "/api/sessions/spawn-continue-from":
             # ccc_server/continuation.py — `ccc spawn --continue-from`: spawn
             # a fresh session pointed at <sid>'s latest continuation
@@ -35730,19 +39949,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing continue_from"}, 400)
             else:
                 from ccc_server import continuation as _continuation
+                try:
+                    supplied = dict(payload)
+                    supplied.setdefault('attr', _attribution.from_text(payload.get('prompt')))
+                    if supplied['attr'] is None:
+                        supplied.pop('attr')
+                    continuation_attr = _attribution.request_attr(supplied, continue_from)
+                except ValueError as exc:
+                    self.send_json({'ok':False,'error':str(exc)},400)
+                    return
+                if not payload.get('dry_run'):
+                    _attribution.journal(continuation_attr,app='ccc',event='continuation-send')
                 result = _continuation.spawn_continuation(
                     continue_from,
-                    prompt=str(payload.get("prompt") or ""),
+                    prompt=_attribution.carry(str(payload.get("prompt") or ""), continuation_attr, app="ccc"),
                     model=payload.get("model"),
                     effort=payload.get("effort") or payload.get("reasoning_effort"),
                     report_to=payload.get("report_to"),
                     dry_run=bool(payload.get("dry_run")),
                     rebind_chain=payload.get("rebind_chain", True),
+                    name=payload.get("name"),
+                    task_key=payload.get("task_key") or "",
+                    dedupe=bool(payload.get("dedupe")),
                 )
                 if not result.get("ok"):
                     self.send_json(result, 400)
                 else:
                     if not result.get("dry_run"):
+                        forwarded = _attribution.relay(continuation_attr,'continuation',delivered=result.get('new_session_id'))
+                        _attribution.journal(forwarded,app='ccc',event='continuation-delivered')
                         _log_activity(
                             "spawn", "CONTINUE_FROM",
                             f"from={continue_from} latest={result.get('latest_session_id')} "
@@ -35813,6 +40048,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # session UUID — that's the id users see in the TUI and commit
             # trailers now.
             sid = _resolve_bridge_session_alias(sid)
+            continuation_origin = sid
             # MEMO-FIX-lineage: once `sid` has a recorded continuation
             # successor (--continue-from, --new-if-large-and-stale, the F2
             # button, or usage-limit auto-resume — all embed the same "Origin
@@ -35841,15 +40077,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             announced_from, announced_from_error = _normalize_announced_from(payload)
             if not sid or (not text and not presentation_bootstrap and verb != "abort"):
                 self.send_json({"ok": False, "error": "missing session_id or text"})
+            elif is_cloud_thread_id(sid):
+                # Codex cloud (dot/aeon) threads are read-only in CCC: the
+                # transcript lives in OpenAI's cloud and the backend protocol
+                # is used for reads only. Nothing may be injected.
+                self.send_json({
+                    "ok": False,
+                    "error": "cloud thread, read-only in CCC",
+                    "cloud_readonly": True,
+                }, 400)
             elif verb_error:
                 self.send_json({"ok": False, "error": verb_error}, 400)
             elif verb == "abort":
                 # Control verb: interrupt the turn, deliver nothing.
                 _record_interaction(sid)
-                self.send_json(_annotate_inject_result(
+                held_queued = _hold_queued_inputs_for_stop(sid, "abort")
+                result = _annotate_inject_result(
                     _interrupt_session(sid), requested="abort",
                     fields={"aborted": True, "landed": "none", "effect": "aborted"},
-                ))
+                )
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
+                self.send_json(result)
             elif presentation_bootstrap and verb_mode != "send":
                 self.send_json({"ok": False, "error": "presentation bootstrap requires send mode"}, 400)
             elif announced_from_error:
@@ -35886,6 +40135,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         and not str(queued_text).lstrip().startswith("/")
                     ):
                         text = _mode3_prompt(text)
+                held_queued = 0
                 try:
                     inject_options = {
                         "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
@@ -35907,6 +40157,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         inject_options["idempotency_key"] = payload.get(
                             "idempotency_key"
                         )
+                    if continuation_origin != sid:
+                        # Keep retries in the original request's dedupe bucket,
+                        # including while its worker-owned spawn is in flight.
+                        inject_options["_dedupe_session_id"] = continuation_origin
                     peer_sender_sid = (
                         payload.get("peer_sender_sid")
                         or payload.get("sender_session_id")
@@ -35917,6 +40171,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         str(payload.get("source") or "").strip()
                         or _inject_source_for_request(announced_from, inject_options["wt_origin"])
                     )
+                    browser_composer = (
+                        source == "composer" and payload.get("composer_form") == "ccc-composer-v1"
+                        and bool(self.headers.get("Origin"))
+                    )
+                    if source == "composer" and not browser_composer:
+                        source = "api"
+                    try:
+                        inject_options["attr"] = _attribution.request_attr(payload, continuation_origin, browser_composer=browser_composer)
+                    except ValueError as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 400)
+                        return
+                    if continuation_origin != sid:
+                        inject_options["attr"] = _attribution.relay(inject_options["attr"], "continuation", delivered=sid)
+                    try:
+                        # Cloud-relay presence: composer sends are human input;
+                        # every other source is remembered as machine input.
+                        from ccc_server import presence as _presence
+                        _presence.note_inject(sid, queued_text, source)
+                    except Exception:
+                        pass
+                    # CCC-237: a steer that is itself a Stop ("STOP ... end
+                    # your turn", or stop:true) holds the after-turn queue
+                    # first, so the stopped turn cannot end and replay it.
+                    from ccc_server import stop_holds as _stop_holds
+                    if verb_mode == "steer" and not replace_queued and (
+                        bool(payload.get("stop"))
+                        or _stop_holds.is_stop_steer_text(_attribution.strip_header(str(queued_text)))
+                    ):
+                        held_queued = _hold_queued_inputs_for_stop(sid, "stop-steer")
                     result = _inject_text_into_session(
                         sid, text, mode=verb_mode,
                         requested_verb=verb,
@@ -35934,6 +40217,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # "Failed to fetch" with no way to tell what went wrong.
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
                 if replace_queued_texts:
                     result = _finalize_queued_steer_batch_result(
                         sid, replace_queued_texts, result,
@@ -35947,6 +40232,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # copy then survives a successful steer and the queue
                     # pump resends it later, delivering the message twice.
                     result = _finalize_queued_steer_result(sid, text, result)
+                if continuation_origin != sid and result.get("ok"):
+                    try:
+                        capture = _codex_capture_thread_row(continuation_origin) or {}
+                    except Exception:
+                        capture = {}
+                    if capture.get("_ccc_capture"):
+                        # A retry can be deduped after the first response was
+                        # lost. Still tell the stale pane where work continued.
+                        result = dict(result, via="codex-continuation",
+                                      continue_from=continuation_origin, new_session_id=sid)
                 # CCC-28: an "ok" result that is also "queued" reached CCC's
                 # durable queue, not the session. Open a receipt so a future
                 # triage session (or the additive inject-receipt API field)
@@ -36074,15 +40369,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             sid = payload.get("session_id", "")
             if not sid:
                 self.send_json({"ok": False, "error": "missing session_id"})
+            elif is_cloud_thread_id(sid):
+                self.send_json({"ok": False,
+                                "error": "cloud thread, read-only in CCC",
+                                "cloud_readonly": True}, 400)
             else:
                 _record_interaction(sid)
-                self.send_json(_interrupt_session(sid))
+                # CCC-237: Stop parks queued after-turn input before the
+                # interrupt, so it waits for an explicit release.
+                held_queued = _hold_queued_inputs_for_stop(sid, "stop")
+                result = _interrupt_session(sid)
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
+                self.send_json(result)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/force-restart$", path):
             # CCC-27: manual escape hatch for a live session that will not
             # take input (Stop only interrupts a running turn).
             sid = path.split("/")[3]
-            _record_interaction(sid)
-            self.send_json(_force_restart_session(sid))
+            if is_cloud_thread_id(sid):
+                self.send_json({"ok": False,
+                                "error": "cloud thread, read-only in CCC",
+                                "cloud_readonly": True}, 400)
+            else:
+                _record_interaction(sid)
+                self.send_json(_force_restart_session(sid))
         elif path == "/api/ask":
             # Synchronous "inject and wait for the next assistant turn".
             # Used by the ccc-orchestration skill so a sibling Claude
@@ -36112,8 +40422,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if guard:
                     self.send_json(guard, 409)
                 else:
+                    try:
+                        request_attr = _attribution.request_attr(payload, sid)
+                    except ValueError as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 400)
+                        return
                     result = ask_session_and_wait(
                         sid, text, timeout_ms=timeout_ms, cwd=cwd or None, peer_sender_sid=peer_sender_sid,
+                        attr=request_attr,
                     )
                     self.send_json(result)
         elif path == "/api/launch-terminal":
@@ -36134,11 +40450,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 for c in (payload.get("post_slash_commands") or [])
                 if str(c or "").strip().startswith("/")
             ]
-            self.send_json(launch_terminal_for_session(
-                sid, cwd, term_app,
-                post_slash_commands=post_cmds or None,
-                stop_headless=bool(payload.get("stop_headless")),
-            ))
+            if is_cloud_thread_id(sid):
+                # Cloud threads have no local rollout to `codex resume`.
+                self.send_json({"ok": False,
+                                "error": "cloud thread, read-only in CCC",
+                                "cloud_readonly": True}, 400)
+            else:
+                self.send_json(launch_terminal_for_session(
+                    sid, cwd, term_app,
+                    post_slash_commands=post_cmds or None,
+                    stop_headless=bool(payload.get("stop_headless")),
+                ))
         elif path == "/api/jump-terminal":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -36207,6 +40529,53 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             with _TERM_LOCK:
                 killed = _term_kill_running(_term_state(ctx["repo_path"]))
             self.send_json({"ok": killed})
+        elif path == "/api/savings/plan":
+            # Savings panel: set or reset the user's plan ($/mo). Writes the
+            # panel-owned row in subscription_plans; plans added via the
+            # `throughput plans` CLI are never touched.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            payload, status = handle_plan_post(data)
+            self.send_json(payload, status)
+        elif path == "/api/free-router/eval":
+            # L05 contract: kick off a benchmark run -> {job_id}.
+            from ccc_server import free_eval
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            body = self.rfile.read(length) if 0 < length <= 1024 * 1024 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            model_ids = payload.get("models")
+            if model_ids is not None and not isinstance(model_ids, list):
+                self.send_json({"ok": False, "error": "models must be a list of ids"}, 400)
+                return
+            if isinstance(model_ids, list):
+                model_ids = [str(m) for m in model_ids][:64]
+            result, status = free_eval.start_eval(model_ids)
+            self.send_json(result, status)
+        elif path == "/api/free-router/prefer":
+            # Pin a catalog model as the router's default (leaderboard action).
+            from ccc_server import free_eval
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            body = self.rfile.read(length) if 0 < length <= 1024 * 1024 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON body"}, 400)
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            result, status = free_eval.prefer_model(payload.get("model"))
+            self.send_json(result, status)
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -36286,6 +40655,51 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except (BrokenPipeError, ConnectionResetError, OSError):
                         break
                     last_keepalive = now
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _stream_voice_events(self, session_id, after=0):
+        """SSE for one realtime voice session: transcript deltas/done, state
+        changes, pending-action cards, errors, close. Replays the session's
+        bounded buffer from `after`, then waits on its Condition — the same
+        fan-out shape as _stream_acp_deltas, one stream per open voice panel.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        last_keepalive = time.time()
+        seq = after
+        try:
+            while True:
+                events, seq, alive = voice_events_wait(session_id, seq, timeout=15.0)
+                if events:
+                    try:
+                        self.wfile.write(
+                            f"data: {json.dumps({'events': events})}\n\n".encode()
+                        )
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    last_keepalive = time.time()
+                    continue
+                if not alive:
+                    # Session ended and the buffer is drained — close cleanly
+                    # so the browser can tear down without retry storms.
+                    try:
+                        self.wfile.write(b"event: end\ndata: {}\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        pass
+                    break
+                if time.time() - last_keepalive >= 5:
+                    try:
+                        self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    last_keepalive = time.time()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
@@ -36941,7 +41355,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             last_key = None
             try:
                 while True:
-                    cur_key = _devin_cli_cache_key()
+                    # Composite DB+ACP-transcript key — a turn result written
+                    # only to the transcript (quota error, cancel) must still
+                    # wake the loop and re-push.
+                    cur_key = _conv_parse_jsonl_mtime(conversation_id)
                     if cur_key != last_key:
                         last_key = cur_key
                         sse_start = time.perf_counter()
@@ -37148,8 +41565,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
         line_num = 0
+        file_offset = 0
         last_keepalive = time.time()
         last_mtime = -1.0
+        last_size = -1
         # No server-side timeout — SSE is designed for persistent connections,
         # and the 5s keepalive below is what keeps proxies/browsers happy.
         # Connection closes when the client disconnects (BrokenPipeError below)
@@ -37163,10 +41582,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # lines) then pegs CPU and disk continuously even while the
                 # session sits idle and nothing new is being written.
                 try:
-                    cur_mtime = os.stat(filepath).st_mtime
+                    st = os.stat(filepath)
+                    cur_mtime = st.st_mtime
+                    cur_size = st.st_size
                 except OSError:
                     cur_mtime = last_mtime
-                if cur_mtime == last_mtime:
+                    cur_size = last_size
+                if cur_mtime == last_mtime and cur_size == last_size:
                     now = time.time()
                     if now - last_keepalive >= 5:
                         self.wfile.write(b"event: keepalive\ndata: {}\n\n")
@@ -37175,14 +41597,37 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     time.sleep(0.3)
                     continue
                 last_mtime = cur_mtime
+                last_size = cur_size
+                if cur_size >= 0 and cur_size < file_offset:
+                    file_offset = 0
+                    line_num = 0
+                    codex_token_usage = None
                 try:
                     with open(filepath, "r") as f:
-                        for line in f:
+                        if file_offset > 0:
+                            try:
+                                f.seek(file_offset)
+                            except OSError:
+                                f.seek(0)
+                                line_num = 0
+                                codex_token_usage = None
+                        while True:
+                            pos_before = f.tell()
+                            line = f.readline()
+                            if not line:
+                                break
+                            stripped = line.strip()
+                            if not line.endswith("\n") and stripped:
+                                try:
+                                    json.loads(stripped)
+                                except json.JSONDecodeError:
+                                    f.seek(pos_before)
+                                    break
                             line_num_current = line_num + 1
                             if line_num_current <= after_line:
-                                if is_codex:
+                                if is_codex and '"token_count"' in stripped:
                                     try:
-                                        ev = json.loads(line.strip())
+                                        ev = json.loads(stripped)
                                     except json.JSONDecodeError:
                                         ev = None
                                     if ev:
@@ -37192,7 +41637,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 line_num = line_num_current
                                 continue
                             line_num = line_num_current
-                            stripped = line.strip()
                             if not stripped:
                                 continue
                             try:
@@ -37209,21 +41653,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 parsed = parser(ev, line_num)
                             if parsed:
                                 events.append(parsed)
+                        file_offset = f.tell()
                 except FileNotFoundError:
                     break
 
+                after_line = max(after_line, line_num)
                 if events and is_codex:
                     events = _merge_codex_compact_boundary_events(events)
                 if events:
                     payload = {"events": events, "last_line": line_num}
                     self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
                     self.wfile.flush()
-                    after_line = line_num
-
-                # Reset line_num for next read — we'll re-read from start and skip
-                # Actually, keep line_num as-is; on next iteration we re-scan from 0
-                # but skip up to after_line
-                line_num = 0
 
                 now = time.time()
                 if now - last_keepalive >= 5:
@@ -37246,8 +41686,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         last_keepalive = time.time()
         try:
             while True:
-                native = Path(filepath).stat()
-                if _codex_native_recovery_metadata(filepath) is None:
+                native_path = filepath or _resolve_codex_rollout_path(conversation_id)
+                native = Path(native_path).stat() if native_path else None
+                if native_path and _codex_native_recovery_metadata(native_path) is None:
                     # Native and recovered sources have different line
                     # offsets. Reload the pane rather than append duplicates.
                     self.wfile.write(b"event: source_reset\ndata: {}\n\n")
@@ -37255,8 +41696,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     return
                 # A resume writes a new per-turn log. Rediscover before
                 # fingerprinting so an unchanged old capture cannot hide it.
-                recovered = _codex_recover_log_conversation(conversation_id, filepath)
-                key = (native.st_mtime_ns, native.st_size,
+                recovered = _codex_recover_log_conversation(conversation_id, native_path)
+                key = (native.st_mtime_ns if native else 0, native.st_size if native else 0,
                        _codex_capture_fingerprint(conversation_id))
                 if key != last_key:
                     last_key = key
@@ -37465,35 +41906,57 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # the archive snapshot are unchanged. Preserve replay until it does.
         body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision())
         raw = gzip_body = etag_val = None
-        if snap_ver:
+
+        def _cached_body():
             with _ARCHIVE_LIST_BODY_LOCK:
                 entry = _ARCHIVE_LIST_BODY_CACHE.get(body_key)
                 if entry is not None and entry.get("ver") == snap_ver:
-                    raw = entry["raw"]
-                    gzip_body = entry.get("gzip")
-                    etag_val = entry.get("etag")
-        if raw is None:
-            raw = json.dumps(build_payload()).encode()
-            etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
-            gzip_body = (
-                gzip.compress(raw, compresslevel=5)
-                if len(raw) >= self._GZIP_MIN_BYTES else None
-            )
-            if snap_ver:
+                    return entry["raw"], entry.get("gzip"), entry.get("etag")
+            return None, None, None
+
+        build_lock = None
+        if snap_ver:
+            raw, gzip_body, etag_val = _cached_body()
+            if raw is None:
+                # CCC-142: single-flight per body key. Tabs polling the same
+                # window after a snapshot change each built the same ~11MB
+                # body at once, multiplying the GIL-bound work; the waiters
+                # now replay the first builder's bytes.
                 with _ARCHIVE_LIST_BODY_LOCK:
-                    if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
-                        _ARCHIVE_LIST_BODY_CACHE.clear()
-                    _ARCHIVE_LIST_BODY_CACHE[body_key] = {
-                        "ver": snap_ver,
-                        "raw": raw,
-                        "gzip": gzip_body,
-                        "etag": etag_val,
-                    }
+                    build_lock = _ARCHIVE_LIST_BODY_BUILD_LOCKS.setdefault(body_key, threading.Lock())
+                build_lock.acquire()
+                raw, gzip_body, etag_val = _cached_body()
+        try:
+            if raw is None:
+                raw = json.dumps(build_payload()).encode()
+                etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
+                # Level 1 halves compression time on the multi-MB 7d body
+                # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
+                gzip_body = (
+                    gzip.compress(raw, compresslevel=1)
+                    if len(raw) >= self._GZIP_MIN_BYTES else None
+                )
+                if snap_ver:
+                    with _ARCHIVE_LIST_BODY_LOCK:
+                        if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
+                            _ARCHIVE_LIST_BODY_CACHE.clear()
+                        _ARCHIVE_LIST_BODY_CACHE[body_key] = {
+                            "ver": snap_ver,
+                            "raw": raw,
+                            "gzip": gzip_body,
+                            "etag": etag_val,
+                        }
+        finally:
+            if build_lock is not None:
+                build_lock.release()
+                with _ARCHIVE_LIST_BODY_LOCK:
+                    if len(_ARCHIVE_LIST_BODY_BUILD_LOCKS) > 4 * _ARCHIVE_LIST_BODY_CACHE_MAX:
+                        _ARCHIVE_LIST_BODY_BUILD_LOCKS.clear()
         if self.headers.get("If-None-Match") == etag_val:
             self.send_response(304)
             self.send_header("ETag", etag_val)
             self.end_headers()
-            return
+            return 304
         if accept_gzip and gzip_body is not None:
             body, enc = gzip_body, "gzip"
         else:
@@ -37509,6 +41972,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
+            return "pipe"
+        return 200
+
+    def _send_server_timing(self, cache=None):
+        # Server-side time for this response so the client's conv_open perf
+        # event can split network/queue wait from handler time (CCC-143).
+        # cpu well below app means the handler waited (GIL, locks, disk).
+        try:
+            _st0 = getattr(self, "_ccc_req_t0", None)
+            _sc0 = getattr(self, "_ccc_req_cpu0", None)
+            if _st0 is None or _sc0 is None:
+                return
+            val = "app;dur=%.0f, cpu;dur=%.0f" % ((time.time() - _st0) * 1000.0,
+                                                  (time.thread_time() - _sc0) * 1000.0)
+            if cache:
+                val += ', cache;desc="%s"' % cache
+            self.send_header("Server-Timing", val)
+        except Exception:
             pass
 
     def send_json(self, data, status=200, etag=False):
@@ -37554,6 +42035,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(body)))
+        self._send_server_timing()
         if etag_val:
             self.send_header("ETag", etag_val)
         if enc:
@@ -37574,6 +42056,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # so any other endpoint (not just send_json) doesn't dump a
         # traceback when the client bails on us mid-response.
         _t0 = time.time()
+        _c0 = time.thread_time()
+        self._ccc_req_t0 = _t0
+        self._ccc_req_cpu0 = _c0
+        # A keep-alive connection's final call only waits for a request that
+        # never comes; clear the previous request's path so that idle wait is
+        # not logged as a slow repeat of it.
+        self.path = ""
         try:
             super().handle_one_request()
         except (BrokenPipeError, ConnectionResetError):
@@ -37592,14 +42081,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 _ms = (time.time() - _t0) * 1000.0
                 _p = getattr(self, "path", "?").split("?", 1)[0]
-                if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events") and _ms >= SLOW_REQ_MS:
+                if (_p and not _p.startswith("/api/secrets/")
+                        and _p not in ("/api/events", "/api/sessions/events", "/api/queue/events", "/api/sessions/ultra-fresh")
+                        and _ms >= SLOW_REQ_MS):
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)
             except Exception:
                 pass
+            # Per-route CPU accounting (CCC-143): which handlers keep the
+            # single-GIL process saturated. Idle keep-alive waits (no path)
+            # are skipped.
+            try:
+                if getattr(self, "path", None):
+                    _cpu_accounting.record(self.path, time.thread_time() - _c0, time.time() - _t0)
+            except Exception:
+                pass
 
     def log_message(self, format, *args):
+        # Never log credential endpoint URLs, including malformed callers
+        # that accidentally put sensitive data in a path or query string.
+        if getattr(self, "path", "").startswith("/api/secrets/"):
+            return
         # Quieter logging — only errors
         if args and "404" in str(args[0]):
             super().log_message(format, *args)
@@ -37673,6 +42176,8 @@ _NS_DECISION_WORDS = (
     "review", "approve", "confirm", "pick", "choose", "which", "want me",
     "should i", "should we", "redirect", "your call", "let me know", "sign off",
     "decide", "answer", "respond", "reply", "approve or", "go deep",
+    # "Say X if you want Y" hands the choice back just as much as a question.
+    "say ", "tell me", "if you want", "do you want", "give me", "send me",
 )
 _NS_SKIP_PREFIXES = (
     # done / shipped
@@ -37996,15 +42501,21 @@ def _classify_attention(c):
                 "has_structured": has_structured,
             }
 
-        if c.get("stale_tool_call"):
+        # Same liveness gate: a dead process has no tool call left to be
+        # stuck in. Without it every session that died mid-tool stayed
+        # "may be stuck" forever (110 corpses up to 96 days old). A dormant
+        # Codex session can still be woken, so it keeps the flag for a day.
+        _stale_codex = (c.get("source") == "codex" or c.get("engine") == "codex")
+        if c.get("stale_tool_call") and (
+                live or (_stale_codex
+                         and (c.get("stale_tool_age_s") or 0) < 86400)):
             tool_age = c.get("stale_tool_age_s") or 0
             age_minutes = max(1, round(tool_age / 60)) if tool_age else None
             # Use a placeholder for the ticking age so the dashboard can render
             # it in a volatile span and avoid rebuilding the whole conversation
             # list every time the age increments.
             age_text = "{{stale_age}}" if age_minutes else ""
-            _stale_is_codex = (c.get("source") == "codex" or c.get("engine") == "codex")
-            if _stale_is_codex:
+            if _stale_codex:
                 _stale_where = "Needs attention · Codex tool stopped reporting"
                 _stale_next = state.get("next_step_user") or (
                     f"Wake Codex - {pending_tool or 'a tool call'} has been open{age_text}" +
@@ -38030,7 +42541,7 @@ def _classify_attention(c):
                 "has_structured": has_structured,
             }
 
-        if live and pending_tool:
+        if live and pending_tool and _approval_evidence.pending_tool_is_approval(c):
             return {
                 "kind": "pending_tool", "priority": 1,
                 "session_id": sid, "name": name,
@@ -38255,7 +42766,7 @@ def _platform_capabilities():
         "launchTerminal": is_mac,     # open a session in a visible terminal
         "answerPermission": is_mac,   # approve/deny a Claude permission prompt via keystroke
         "folderPicker": is_mac or _linux_folder_picker_cmd() is not None,
-        "desktopDeepLinks": is_mac,   # open in Claude / Codex desktop apps
+        "desktopDeepLinks": is_mac or platform.system() == "Windows",   # open in Claude / Codex desktop apps
         "revealFile": is_mac,         # reveal a file in Finder
         "openBrowser": is_mac,        # open a URL via the OS `open` command
         "notifications": is_mac,      # desktop banner notifications (hooks)
@@ -38687,7 +43198,7 @@ def _get_onboarding_status():
     codex_bin = codex_info.get("bin")
     codex_logged_in = False
     
-    codex_auth_file = Path.home() / ".codex" / "auth.json"
+    codex_auth_file = codex_home() / "auth.json"
     if codex_auth_file.is_file():
         try:
             with open(codex_auth_file, "r", encoding="utf-8") as f:
@@ -39742,12 +44253,16 @@ def _sync_hook_scripts():
     """
     import shutil
     repo_hooks = CCC_ROOT / "hooks"
-    HOOK_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    target_dir = Path(HOOK_SCRIPTS_DIR)
+    current_home = Path.home()
+    if not str(target_dir).startswith(str(current_home)):
+        target_dir = current_home / ".claude" / "command-center" / "hooks"
+    target_dir.mkdir(parents=True, exist_ok=True)
     for name in CCC_HOOK_SCRIPT_NAMES:
         src = repo_hooks / name
         if not src.exists():
             continue
-        dst = HOOK_SCRIPTS_DIR / name
+        dst = target_dir / name
         try:
             if not dst.exists() or dst.read_bytes() != src.read_bytes():
                 shutil.copy2(src, dst)
@@ -39792,6 +44307,10 @@ if "ccc_server.phone_access" in sys.modules:
     phone_access = _pa_importlib.reload(sys.modules["ccc_server.phone_access"])
 else:
     from ccc_server import phone_access
+# CCC Cloud Relay (ccc_server/cloud_relay.py): opt-in, outbound-only device
+# client for the hosted relay. Namespace import; the manager singleton below
+# owns its state. See docs/cloud-relay/PROTOCOL.md and SECURITY.md.
+from ccc_server import cloud_relay as _cloud_relay
 # Consent gate for agent-config writes: namespace import (generic names).
 if "ccc_server.config_consent" in sys.modules:
     import importlib as _cc_importlib
@@ -39806,6 +44325,7 @@ def main():
     class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         allow_reuse_address = True
         daemon_threads = True
+        request_queue_size = 128
     # Parse CLI overrides for this server instance. Env var PORT and the
     # module-level default still apply when the flags are absent.
     port = PORT
@@ -39832,7 +44352,16 @@ def main():
     globals()["PORT"] = port
     _raise_open_file_limit()
     migrate_state_dir()
+    _seed_model_policy_once()
     _install_python_stack_dump_handler()
+    # Conversation opens get their own process (and GIL) so background work
+    # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
+    _conv_reader.start()
+    # The heaviest background warmers (gh-queue-watch, uxq-health-refresh,
+    # ship-graph-warm) run in a helper process too, so /list reads stop
+    # queueing behind them for this GIL (CCC-142). CCC_BG_HELPER=0 disables.
+    from ccc_server import bg_helper as _bg_helper
+    _bg_helper.start()
     # Keep spawn stats across a dashboard restart -- otherwise restarting
     # mid-investigation throws away the evidence you restarted to look at.
     _spawn_timeline_load()
@@ -39969,7 +44498,30 @@ def main():
     global RUNTIME_NETWORK_INFO, BIND_HOST
     RUNTIME_NETWORK_INFO = network_info
     BIND_HOST = bind_host
-    server = ThreadedHTTPServer((bind_host, port), CommandCenterHandler)
+
+    bind_attempts = 0
+    max_bind_attempts = 30
+    server = None
+    while server is None:
+        try:
+            server = ThreadedHTTPServer((bind_host, port), CommandCenterHandler)
+        except OSError as exc:
+            is_addr_not_avail = getattr(exc, "errno", None) in (errno.EADDRNOTAVAIL, errno.ENETUNREACH) or isinstance(exc, socket.gaierror)
+            if is_addr_not_avail and bind_attempts < max_bind_attempts:
+                bind_attempts += 1
+                if bind_attempts == 1:
+                    print(f"⏳ Address {bind_host} not available yet (waiting for network/tailscale to assign IP, retry {bind_attempts}/{max_bind_attempts})...")
+                time.sleep(1)
+            else:
+                raise
+
+    if bind_attempts > 0 and network_info["trust_tailnet"]:
+        tailnet_info = _detect_tailnet_origins(port)
+        if tailnet_info["running"]:
+            network_info["tailnet"] = tailnet_info
+            for o in tailnet_info["origins"]:
+                if o not in ALLOWED_ORIGINS:
+                    ALLOWED_ORIGINS.append(o)
     if bind_host not in ("127.0.0.1", "localhost", "::1"):
         print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
         print(f"   This server has no auth. Anyone who can reach this port can run")
@@ -39980,7 +44532,8 @@ def main():
         print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
     if _wt_messaging_enabled() and not _wt_cli_available():
         print("⚠️  CCC_MESSAGING_BACKEND=wt is set but `wt` is not on PATH — headless delivery falls back to native `claude --resume`. Install WatchTower or unset to silence.")
-    _check_duplicate_repo_instance()
+    _check_duplicate_repo_instance(
+        on_duplicate=lambda entry: _serve_duplicate_gate(server, entry, CommandCenterHandler))
     write_port_file(bind_host, port=port)
     _register_self(port, bind_host)
     # CCC as a Claude Code peer (slice 3): bind our own socket and publish a
@@ -39999,6 +44552,15 @@ def main():
             _unregister_self()
         except Exception:
             pass
+        try:  # restart recovery: this stop was on purpose, not a crash
+            from ccc_server import restart_recovery as _rr_stop
+            _rr_stop.record_clean_stop()
+        except Exception:
+            pass
+        try:
+            voice_shutdown()
+        except Exception:
+            pass
         try:
             _ccc_peer_server_stop()
         except Exception:
@@ -40015,6 +44577,21 @@ def main():
     # and hold the Python GIL long enough to make the whole app feel stuck.
     if _env_truthy("CCC_WARM_CACHE_ON_STARTUP"):
         threading.Thread(target=_warm_cache, daemon=True).start()
+    # CCC-142: the ACP registry load (counts every ACP transcript's lines,
+    # ~135MB here) runs once per process under _ACP_LOCK. Left to the first
+    # caller it landed on a request thread (live_build ~30s after a restart).
+    # It is not extra work, only moved: list/live polls take a lock-free
+    # copy while this holds the lock; conversation opens still wait for it.
+    if _ACP_HARNESSES and not os.environ.get("CCC_EPHEMERAL"):
+        def _warm_acp_state():
+            try:
+                with _ACP_LOCK:
+                    for harness in list(_ACP_HARNESSES):
+                        if _acp_harness_enabled(harness):
+                            _acp_load_state(harness)
+            except Exception:
+                pass
+        threading.Thread(target=_warm_acp_state, name="ccc-acp-state-load", daemon=True).start()
     # `ccc recall` / /api/memory/recall memory index: unconditional, unlike
     # the opt-in cache warmup above. On a cold process the first search over
     # ~/.claude/projects would otherwise re-parse the whole transcript corpus
@@ -40022,11 +44599,32 @@ def main():
     # warming here means that parse is already done, or well underway, by the
     # time any real request arrives. Cheap/no-op once already warm.
     if not os.environ.get("CCC_EPHEMERAL"):
+        # Installed local voice: load it now and keep it up, so the first
+        # Speak doesn't wait ~30 s for the model.
+        threading.Thread(target=_free_runtime.local_tts_keepalive, daemon=True,
+                         name="local-tts-keepalive").start()
+    if not os.environ.get("CCC_EPHEMERAL"):
         from ccc_server import session_fts as _session_fts_warm
         from ccc_server import ship_graph as _ship_graph_warm
         from ccc_server import sandbox_harvest as _sandbox_harvest_warm
-        threading.Thread(target=_session_fts_warm.warm_start, daemon=True, name="ccc-session-fts-warm").start()
-        threading.Thread(target=_ship_graph_warm.warm_start, daemon=True, name="ccc-ship-graph-warm").start()
+        # Deferred past the first list build and opens (CCC-143: opens within
+        # 5 min of a boot had p95 17s while these warmers, the list rebuild
+        # and the first opens all fought for the GIL). A search arriving
+        # before the delay still kicks its own background sync.
+        try:
+            _boot_warm_delay = float(os.environ.get("CCC_BOOT_WARM_DELAY_S", "90"))
+        except ValueError:
+            _boot_warm_delay = 90.0
+
+        def _after_boot_delay(target):
+            def _run():
+                if _boot_warm_delay > 0:
+                    time.sleep(_boot_warm_delay)
+                target()
+            return _run
+
+        threading.Thread(target=_after_boot_delay(_session_fts_warm.warm_start), daemon=True, name="ccc-session-fts-warm").start()
+        threading.Thread(target=_after_boot_delay(_ship_graph_warm.warm_start), daemon=True, name="ccc-ship-graph-warm").start()
         # Sandbox-transcript harvest (multi-machine S8b): copies queue-worker
         # sandbox transcripts (/tmp/ccc-local-*) into a persistent home
         # before they're wiped, so session_fts above can index them.
@@ -40035,6 +44633,14 @@ def main():
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
     # sessions and forgotten cron agents that the archive-time kill misses.
     threading.Thread(target=_idle_reaper_loop, daemon=True).start()
+    # Restart recovery: a minute heartbeat whose last touch before a reboot
+    # records when the machine went down, so sessions cut off mid-turn can
+    # be told apart from ones that died earlier on their own.
+    from ccc_server import restart_recovery as _restart_recovery_boot
+    _restart_recovery_boot.start_heartbeat()
+    # Resume waiting on any backgrounded / stop-after-turn archives.
+    from ccc_server import archive_deferred as _archive_deferred_boot
+    _archive_deferred_boot.ensure_running()
     # Next.js and Claude/Agy detached background scanner
     threading.Thread(target=_system_processes_scanner_loop, daemon=True, name="ccc-system-processes-scanner").start()
     # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new
@@ -40102,6 +44708,15 @@ def main():
         _throughput_week_rankings()
     if _should_prewarm_throughput_on_startup():
         threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
+    # Scheduled notifications: the 6pm daily digest and savings milestones.
+    # Emitted on the dashboard event hub and, on macOS, as an osascript banner
+    # so they land with no browser open. Ephemeral verification instances skip
+    # the loop so they can never consume the once-a-day digest marker.
+    if not os.environ.get("CCC_EPHEMERAL"):
+        def _notify_scheduled_loop():
+            from ccc_server import notify as _notify
+            _notify.scheduler_loop(base_url=f"http://127.0.0.1:{port}")
+        threading.Thread(target=_notify_scheduled_loop, daemon=True, name="ccc-notify").start()
     # Self-serve-loop health check: periodic self-probe + SIGUSR2 stack dump
     # on repeated misses. See `_self_health_check_loop` docstring for the
     # 2026-08-28 sleep/wake silent-hang incident this instruments for.
@@ -40115,6 +44730,17 @@ def main():
             daemon=True,
             name="ccc-self-health-check",
         ).start()
+    # CCC Cloud Relay: starts ONLY if the user already paired and enabled it,
+    # never with CCC_CLOUD_DISABLED=1. Outbound-only; one loop per machine
+    # (state-dir flock), so a preview or sibling server on the same HOME
+    # cannot run a second loop. Unpaired installs (no credentials file) skip
+    # it entirely: no state dir is created.
+    try:
+        if (_cloud_relay.load_credentials(_cloud_relay.CloudPaths())
+                and cloud_relay_manager(port).maybe_start()):
+            print("  [cloud-relay] outbound loop started (paired + enabled)")
+    except Exception as e:
+        print(f"  [cloud-relay] not started: {e}")
     print()
     try:
         server.serve_forever()
@@ -40122,6 +44748,10 @@ def main():
         print("\nStopped.")
         try:
             _unregister_self()
+        except Exception:
+            pass
+        try:
+            voice_shutdown()
         except Exception:
             pass
         try:

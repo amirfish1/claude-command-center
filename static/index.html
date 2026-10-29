@@ -8,7 +8,19 @@
      composer rides above it (Chrome Android honours this). iOS Safari /
      WKWebView ignore it — there we drive body height from
      `visualViewport` in app.js instead. -->
-<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content, viewport-fit=cover">
+<script>
+  // iOS zooms the page when a focused input's font is under 16px; capping
+  // maximum-scale stops that auto-zoom (iOS still allows pinch-zoom), so the
+  // composer can use a smaller font on phones.
+  (function () {
+    var ua = navigator.userAgent || '';
+    var ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (!ios) return;
+    var m = document.querySelector('meta[name="viewport"]');
+    if (m && !/maximum-scale/.test(m.content)) m.content += ', maximum-scale=1';
+  })();
+</script>
 <script>
 // Diagnostics: the Mac app is a WKWebView with no devtools, so page JS errors
 // are invisible there. Mirror them to /api/client-log (same endpoint app.js
@@ -64,6 +76,8 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/savings.css">
+<link rel="stylesheet" href="/static/headroom-bars.css">
 <!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
      file's diff against upstream stays small — see simple.css's own header
      comment. Loaded unconditionally; it's inert (never matches) outside
@@ -72,6 +86,19 @@
 <!-- Shared ticket body / transcript renderer, also used by q2.html — keeps
      the two ticket views from drifting on how a ticket reads. -->
 <link rel="stylesheet" href="/static/ticket-prose.css">
+<!-- Sound + motion kit (window.cccFx): confetti canvas + shimmer/glow/pop helpers. -->
+<link rel="stylesheet" href="/static/fx.css">
+<!-- Moment Zero onboarding shell: always-dark cinematic overlay. Scoped
+     under #cccMomentZero; inert unless the overlay opens. -->
+<link rel="stylesheet" href="/static/onboarding/onboarding.css">
+<link rel="stylesheet" href="/static/star-ask.css">
+<!-- Limit-hit failover card (see static/limit-failover.js). -->
+<link rel="stylesheet" href="/static/limit-failover.css">
+<!-- Fleet limit view: one banner per engine limit wall (see
+     static/fleet-failover.js). -->
+<link rel="stylesheet" href="/static/fleet-failover.css">
+<link rel="stylesheet" href="/static/router-detected.css">
+<link rel="stylesheet" href="/static/question-tags.css">
 <style>
   body.hide-gh-issues .is-github-issue {
     display: none !important;
@@ -127,11 +154,13 @@
     }).catch(() => {});
   })();
 </script>
+<link rel="stylesheet" href="/static/credential-broker.css">
 </head>
-<body>
+<body class="voice-call-btn-off">
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
        Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
-       Advanced (data-nav-chrome="advanced") is Coding / Workers / Queues / Ask.
+       Advanced (data-nav-chrome="advanced") is ☰ (Jobs / Queues / Ask) /
+       Coding / Workers.
        Hidden everywhere else via inline style. -->
   <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
     <button type="button" class="mobile-nav-btn" data-mobile-nav="home" data-nav-chrome="simple" aria-current="page" aria-label="Home">
@@ -146,25 +175,40 @@
       <span class="mobile-nav-icon" aria-hidden="true">&#9889;</span>
       <span class="mobile-nav-label mobile-sr-only">Helpers</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="more" data-nav-chrome="simple" aria-label="More">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="more" data-nav-chrome="simple" aria-label="Settings" title="Settings">
       <span class="mobile-nav-icon" aria-hidden="true">&#8943;</span>
-      <span class="mobile-nav-label mobile-sr-only">More</span>
+      <span class="mobile-nav-label mobile-sr-only">Settings</span>
     </button>
     <button type="button" class="mobile-nav-btn" data-mobile-nav="coding" data-nav-chrome="advanced" aria-label="Coding">
       <span class="mobile-nav-icon" aria-hidden="true">&lt;/&gt;</span>
       <span class="mobile-nav-label">Coding</span>
     </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="smallbugs" data-nav-chrome="advanced" data-ff-only="idea_tickets" aria-label="Small bugs" style="display:none">
+      <span class="mobile-nav-icon" aria-hidden="true">&#128027;</span>
+      <span class="mobile-nav-label">Bugs</span>
+    </button>
     <button type="button" class="mobile-nav-btn" data-mobile-nav="workers" data-nav-chrome="advanced" aria-label="Workers">
       <span class="mobile-nav-icon" aria-hidden="true">&#9881;</span>
       <span class="mobile-nav-label">Workers</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="queues" data-nav-chrome="advanced" aria-label="Queues">
+    <div class="mobile-nav-menu" role="menu" hidden>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="jobs" data-nav-chrome="advanced" role="menuitem" aria-label="Jobs">
+      <span class="mobile-nav-icon" aria-hidden="true">&#9201;</span>
+      <span class="mobile-nav-label">Jobs</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="queues" data-nav-chrome="advanced" role="menuitem" aria-label="Queues">
       <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
       <span class="mobile-nav-label">Queues</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="ask" data-nav-chrome="advanced" aria-label="Ask">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="ask" data-nav-chrome="advanced" role="menuitem" aria-label="Ask">
       <span class="mobile-nav-icon" aria-hidden="true">✦</span>
       <span class="mobile-nav-label">Ask</span>
+    </button>
+    </div>
+    <!-- Advanced: ☰ at bottom right opens the less-used destinations. -->
+    <button type="button" class="mobile-nav-btn mobile-nav-menu-btn" data-mobile-nav-menu data-nav-chrome="advanced" aria-label="More" aria-haspopup="menu" aria-expanded="false">
+      <span class="mobile-nav-icon" aria-hidden="true">&#9776;</span>
+      <span class="mobile-nav-label">More</span>
     </button>
   </nav>
   <!-- Core-app frame: Queues (q2) overlays the dashboard without unloading
@@ -247,6 +291,16 @@
     <div class="pwa-install-banner__actions">
       <button id="pwaInstallBtn" class="pwa-install-banner__cta" type="button" hidden>Install</button>
     </div>
+  </div>
+  <!-- Idea tickets intro banner: idea_tickets defaults on for everyone, so
+       the Active/Coding tabs swapping to Features/Small bugs needs an explainer
+       with an easy way back the first time someone sees it. Shown once;
+       dismissal/revert is persisted in localStorage. -->
+  <div id="ideaTicketsIntroBanner" class="idea-tickets-intro-banner" hidden role="status" aria-live="polite">
+    <span class="idea-tickets-intro-banner__icon" aria-hidden="true">&#128161;</span>
+    <span class="idea-tickets-intro-banner__text" id="ideaTicketsIntroBannerText">Coding is now Features / Small bugs: every session you start gets filed onto one of those tickets.</span>
+    <button type="button" class="idea-tickets-intro-banner__revert" id="ideaTicketsIntroRevertBtn">Revert</button>
+    <button type="button" class="idea-tickets-intro-banner__dismiss" id="ideaTicketsIntroDismissBtn">Dismiss</button>
   </div>
   <!-- FOIT guard: read the persisted layout choice synchronously and apply
        the body class BEFORE any layout paint. Without this, the sidebar
@@ -474,6 +528,13 @@
             document.body.classList.add('conv-list-collapsed');
           }
         } catch (_) {}
+        // Floating voice call button on mobile view. Persisted as
+        // `ccc-voice-mobile-btn` ('0' = hidden, '1'/unset = shown).
+        try {
+          if (localStorage.getItem('ccc-voice-mobile-btn') === '0') {
+            document.body.classList.add('hide-voice-mobile-btn');
+          }
+        } catch (_) {}
       } catch (_) {}
     })();
   </script>
@@ -483,6 +544,15 @@
        now the fixed 52px column on the left edge, shared with q2.html and
        /view/<app> pages. See static/app-rail.js. -->
   <script src="/static/app-rail.js" defer></script>
+  <!-- Limit-hit failover approval card: self-contained poller + stack,
+       inert on servers without /api/free-failover/status. -->
+  <script src="/static/popups.js"></script>
+  <script src="/static/limit-failover.js" defer></script>
+  <!-- Fleet limit view: one banner per engine limit wall. Owns the
+       failover lifecycle when /api/free-failover/fleet answers; the
+       per-session cards above stay as the fallback for older servers. -->
+  <script src="/static/fleet-failover.js" defer></script>
+  <script src="/static/headroom-bars.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
@@ -688,9 +758,22 @@
           </div>
         </div>
         <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Voice call button</div>
+          <div class="simple-settings-desc">The floating green "CALL" button on mobile.</div>
+          <div class="simple-chip-row" id="simpleVoiceMobileRow" role="group" aria-label="Voice call button visibility">
+            <button type="button" class="simple-chip" data-simple-voice-mobile="on"><span class="simple-chip-name">Show</span></button>
+            <button type="button" class="simple-chip" data-simple-voice-mobile="off"><span class="simple-chip-name">Hide</span></button>
+          </div>
+        </div>
+        <div class="simple-card simple-settings-row">
           <div class="simple-settings-label">What&rsquo;s new</div>
           <div class="simple-settings-desc">See what changed in the latest update.</div>
           <button type="button" class="simple-chip" id="simpleWhatsNewBtn"><span class="simple-chip-name">Show me</span></button>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">All settings</div>
+          <div class="simple-settings-desc">Every setting, without leaving Simple mode.</div>
+          <button type="button" class="simple-chip" id="simpleAllSettingsBtn"><span class="simple-chip-name">Open settings</span></button>
         </div>
         <div class="simple-card simple-settings-row">
           <div class="simple-settings-label">Advanced view</div>
@@ -715,6 +798,11 @@
               <path d="M21.5 2.5 15 21.5 11 13 2.5 9z"></path>
             </svg>
           </button>
+          <a id="discordCccBtn" class="sh-discord-btn" href="https://discord.gg/aK325db94M" target="_blank" rel="noopener" title="Join the CCC Community on Discord" aria-label="Join CCC Discord">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
+              <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+            </svg>
+          </a>
         </div>
         <!-- One rollup chip for every service CCC runs. It replaced two
              separate header badges (WatchTower + Worker) whose signals fought
@@ -781,14 +869,24 @@
              flip the palette via CSS so no chip needs to re-render. -->
         <button id="chipsColorToggle" class="sh-btn" title="Toggle folder chip color mode" aria-label="Toggle folder chip color mode"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
       </div>
+      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
     </div>
 
     <div class="new-session-panel">
       <div class="new-session-primary-row">
         <button class="new-session-btn" id="sidebarNewBtn" data-tour="new-session" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
+        <!-- Phones: + Ticket folds into this caret on the New session button
+             (CSS hides the standalone Ticket button and shows the caret).
+             The menu item forwards to #sidebarNewTicketBtn. -->
+        <span class="new-session-caret-wrap">
+          <button type="button" class="new-session-caret" id="sidebarNewCaret" title="More ways to start" aria-label="More ways to start" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
+          <div class="new-session-caret-menu" id="sidebarNewCaretMenu" role="menu" hidden>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarNewTicketBtn">New ticket</button>
+          </div>
+        </span>
         <button class="new-session-btn new-session-btn-secondary" id="sidebarNewTicketBtn" title="File a ticket into any queue" aria-label="New ticket"><span class="plus" aria-hidden="true">+</span> Ticket</button>
         <div class="search-wrap">
-          <input type="text" id="convSearch" class="conv-search-input" data-tour="search" placeholder="Search..." autocomplete="off" list="convSearchHistoryList">
+          <input type="text" id="convSearch" class="conv-search-input" data-tour="search" placeholder="Search..." autocomplete="off">
           <datalist id="convSearchHistoryList"></datalist>
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
@@ -798,13 +896,23 @@
              so every existing id and click handler stays untouched; each item
              here forwards to one of them via data-proxy. -->
         <div class="sh-more-wrap">
-          <button type="button" id="sidebarMoreBtn" class="sh-btn sh-more-btn" data-tour="watchtower" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
+          <button type="button" id="sidebarMoreBtn" data-qtag-badge class="sh-btn sh-more-btn" data-tour="watchtower" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
           <div class="sh-more-menu" id="sidebarMoreMenu" role="menu" aria-label="More actions" hidden>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="historyBtn">Search history…</button>
-            <div class="sh-more-divider" role="separator"></div>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarGroupChatLiveBtn">Group chat live view</button>
-            <div class="sh-more-divider" role="separator"></div>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="qtagPill" data-qtag-menu hidden>Open questions</button>
+            <!-- Phones: a live mirror of the session list's ⋮ (grouping, density,
+                 time window, engines, other machines), filled on open by
+                 app.js; clicks forward to the originals. -->
+            <div class="sh-more-filters" id="sidebarMoreFilters" hidden></div>
+            <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="historyBtn">Search history…</button>
+            <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
+            <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
+            <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarGroupChatLiveBtn">Group chat live view</button>
+            <!-- Desktop: render the session list with the phone layout
+                 (app.js mirrors the phone CSS onto #convList). -->
+            <label class="sh-more-item sh-more-desktop-only sh-more-check" role="menuitemcheckbox" title="Show the session list exactly as it looks on a phone">
+              <input type="checkbox" id="mobileListViewToggle"> <span>Mobile view</span>
+            </label>
+            <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
             <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarRefreshBtn">Reload page</button>
             <!-- Opens #sysModal, which is the restart UI (Dashboard / Worker /
                  WatchTower rows plus "Restart all") and also the detail behind
@@ -819,6 +927,9 @@
                  app.js binds them directly, so they are moved, not proxied. -->
             <a href="#" class="sh-more-item sh-whats-new-link" role="menuitem" id="cccWhatsNewLink" title="View what is new in this version">What's new</a>
             <a href="#" class="sh-more-item sh-check-updates" role="menuitem" id="cccCheckUpdatesLink" title="Check GitHub for a newer release">Check for updates</a>
+            <div class="sh-more-divider" role="separator"></div>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="bugReportLink">Report a bug…</button>
+            <a href="https://discord.gg/aK325db94M" class="sh-more-item" role="menuitem" target="_blank" rel="noopener" title="Join the CCC Community on Discord">Discord community</a>
             <div class="sh-more-info">Last updated <span id="cccLastUpdated">…</span></div>
           </div>
         </div>
@@ -863,6 +974,7 @@
       <div class="coord-toolbar" id="coordToolbar">
         <span class="coord-count" id="coordCount"></span>
         <button class="coord-btn" id="coordBtn">Coordinate&hellip;</button>
+        <button class="coord-btn coord-trash-btn" id="coordTrashBtn" title="Move selected sessions to Trash" style="display:none;">Trash</button>
         <button class="coord-clear-btn" id="coordClearBtn" title="Clear selection">&times;</button>
       </div>
       <div class="kanban-board" id="kanbanBoard" style="display:none;"></div>
@@ -890,6 +1002,12 @@
            glanceable from anywhere without crowding the topbar. JS toggles
            display + textContent in updateGcActiveBtn(). -->
       <button id="gcActiveBtn" class="sidebar-footer-pill" style="display:none;" title="Active group-chat coordinations - click to open the most recent one" aria-label="Active group chats"></button>
+      <!-- Background / harness runs (headless claude -p from temp dirs). JS
+           shows it only while such runs exist; click lists them by spawner. -->
+      <div style="position:relative;">
+        <button id="bgRunsBtn" class="sidebar-footer-pill" style="display:none;" title="Background / harness runs (headless claude -p)" aria-label="Background runs" aria-haspopup="true" aria-expanded="false"></button>
+        <div id="bgRunsPanel" class="bg-runs-panel" hidden></div>
+      </div>
       <div class="sidebar-footer-spacer"></div>
       <div style="position:relative;">
         <button type="button" class="sidebar-footer-btn" id="settingsBtn" data-tour="settings" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
@@ -929,6 +1047,10 @@
            app.js. In the Simple depth-2 view the rest of this toolbar is
            hidden by CSS, so this span + the back button ARE the header. -->
       <span class="simple-conv-title" id="simpleConvTitle"></span>
+      <!-- Phone-width only: the open session's name, matching its sidebar
+           row (set in updatePaneHeader). Owns the first toolbar row with
+           the back button; every other control wraps below it. -->
+      <span class="mobile-conv-title" id="mobileConvTitle" hidden></span>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
               aria-expanded="false" title="Show the full original ask" hidden>
         <span class="mobile-original-ask__label">Original ask</span>
@@ -950,6 +1072,7 @@
         <button class="launch-choice-btn" id="launchChoiceBtnConv" type="button" title="Choose launch target" aria-label="Choose launch target" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
         <span class="launch-choice-menu" id="launchChoiceMenuConv" role="menu" aria-hidden="true"></span>
       </span>
+      <button type="button" class="launch-btn" id="codexHandoverBtn" style="display:none;" title="Wait for replies to finish, then continue this conversation in Codex Desktop.">Hand over to Codex Desktop</button>
       <span class="live-badge" id="liveBadgeConv" style="display:none;" title="Streaming directly from the headless agent's stdout (block-level)">
         <span class="live-badge-dot"></span>
         <span class="live-badge-label">live</span>
@@ -987,7 +1110,7 @@
         <button type="button" id="todayToggleBtn" class="bug-link today-toggle-btn" title="Toggle the Today's projects tray - a lightweight list of the sessions you're working on today." aria-label="Toggle Today's projects" aria-pressed="false">
           <span aria-hidden="true">&#9788;</span><span class="sh-action-label">Today</span>
         </button>
-        <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center." aria-label="Report a bug">
+        <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature, by private email or a public GitHub issue." aria-label="Report a bug">
           <span aria-hidden="true">&#128027;</span><span class="sh-action-label">Report a bug</span>
         </button>
         <!-- Topbar TTS control: visible whenever TTS is playing or paused,
@@ -1016,6 +1139,18 @@
             </svg>
           </button>
         </span>
+        <!-- Realtime voice: mic button opens the voice panel; while a session
+             is live it turns into the always-visible "voice is live" chip.
+             Wired in app.js (VoiceMode). -->
+        <button type="button" id="voiceModeBtn" class="voice-mode-btn" title="Talk to CCC - voice mode powered by Codex realtime" aria-label="Voice mode" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+            <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+            <line x1="12" y1="18" x2="12" y2="22"></line>
+          </svg>
+          <span class="sh-action-label">Voice</span>
+          <span id="voiceLiveDot" class="voice-live-dot" hidden aria-hidden="true"></span>
+        </button>
         <button type="button" id="annotationStartBtn" class="annotation-link" title="Annotate the visible page and save a local note for agent context.">
           &#9998; Annotate
         </button>
@@ -1063,17 +1198,39 @@
            Simple-only actions (rendered conditionally by isSimpleMode() at
            render time, not by a parallel copy of this menu). -->
       <div class="mobile-actions-wrap">
-        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Task actions"><span aria-hidden="true">&#8942;</span></button>
+        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" data-qtag-badge aria-haspopup="menu" aria-expanded="false" aria-label="Task actions"><span aria-hidden="true">&#8942;</span></button>
         <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
+          <!-- Narrow-viewport copy of the rail's transcript view control (the
+               status rail is hidden on phones). Synced by _syncConvViewSegs;
+               clicks go through its document-level delegate. -->
+          <span class="conv-view-seg mobile-view-seg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true">Normal</button></span>
+          <button type="button" class="mobile-actions-item" data-simple-action="questions" role="menuitem" data-qtag-menu hidden>Open questions</button>
           <button type="button" class="mobile-actions-item" data-simple-action="stop" role="menuitem"><span aria-hidden="true">&#9724;&nbsp;</span>Stop this task</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="force-restart" role="menuitem" title="Use when a message won't send. Stop only interrupts a running turn; this restarts an idle or unresponsive session and re-sends anything queued."><span aria-hidden="true">&#8635;&nbsp;</span>Restart session</button>
+          <!-- Lifecycle/queue moves for the OPEN session; each shows only when
+               it applies (_syncSessionMenuItems in app.js). -->
+          <button type="button" class="mobile-actions-item" data-simple-action="archive" role="menuitem" hidden><span aria-hidden="true">&#128230;&nbsp;</span>Archive</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="unarchive" role="menuitem" hidden><span aria-hidden="true">&#8617;&nbsp;</span>Unarchive</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="untrash" role="menuitem" hidden><span aria-hidden="true">&#8617;&nbsp;</span>Untrash</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="idea-IDEAS" role="menuitem" hidden><span aria-hidden="true">&#128161;&nbsp;</span>Move to Features</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="idea-SMALL-BUGS" role="menuitem" hidden><span aria-hidden="true">&#128027;&nbsp;</span>Move to Small bugs</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="codex-handover" id="mobileCodexHandoverItem" role="menuitem" hidden><span aria-hidden="true">&#8599;&nbsp;</span>Hand over to Codex Desktop</button>
           <button type="button" class="mobile-actions-item" data-simple-action="annotate" role="menuitem"><span aria-hidden="true">&#9873;&nbsp;</span>Annotate</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="font-minus" role="menuitem"><span aria-hidden="true">A-&nbsp;</span>Smaller text</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem"><span aria-hidden="true">A+&nbsp;</span>Bigger text</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="reload-app" role="menuitem" title="Reload CCC to pick up a new version (a Home Screen app has no browser reload)"><span aria-hidden="true">&#8635;&nbsp;</span>Reload app</button>
+          <!-- Text size: one row, menu stays open so several steps take one open. -->
+          <div class="mobile-actions-row" role="group" aria-label="Text size">
+            <button type="button" class="mobile-actions-item" data-simple-action="font-minus" role="menuitem" aria-label="Smaller text" title="Smaller text">A&minus;</button>
+            <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem" aria-label="Bigger text" title="Bigger text">A+</button>
+          </div>
           <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem" data-simple-only><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
           <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem" data-simple-only><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
           <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem" data-simple-only><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
           <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem" data-simple-only><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
+          <!-- Open session's id and repo path; filled by _syncSessionMenuItems,
+               tap to copy. -->
+          <div class="mobile-actions-info" data-role="menu-session-info" hidden>
+            <button type="button" class="mobile-actions-info-item" data-simple-action="copy-session-id" role="menuitem" title="Copy session id"><span class="mobile-actions-info-label">Session</span><span class="mobile-actions-info-value" data-role="menu-session-id"></span></button>
+            <button type="button" class="mobile-actions-info-item" data-simple-action="copy-repo-path" role="menuitem" title="Copy repo path"><span class="mobile-actions-info-label">Repo</span><span class="mobile-actions-info-value" data-role="menu-repo-path"></span></button>
+          </div>
         </div>
       </div>
       <div class="conv-overflow-wrap">
@@ -1088,6 +1245,9 @@
       <div class="conv-pane" data-pane-id="p1">
         <div class="conv-pane-header" data-role="pane-header">
           <div class="conv-pane-titlebar" data-role="pane-titlebar">
+            <!-- CCC-149: the session's sidebar avatar; shown only in the
+                 single-pane desktop header (mobile-style session header). -->
+            <span class="conv-pane-avatar" data-role="pane-avatar" aria-hidden="true"></span>
             <span class="conv-pane-category" data-role="pane-category"></span>
             <!-- Headless/terminal process pill slot. In the dashboard the
                  transport pill lives in the status rail (Metadata tab) and the
@@ -1096,9 +1256,12 @@
                  by the popout's dedicated poll (_popoutProcPills), which has no
                  rail; empty spans are display:none. -->
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
-            <span class="conv-pane-title" data-role="pane-title"></span>
-            <button type="button" class="conv-pane-where-btn" data-role="where-btn" hidden
-                    title="Where are we? Plain-language status, action items, and a continue prompt">Where?</button>
+            <!-- CCC-213: the short session id rides after the name only
+                 while both fit; the wrapper wraps it onto a clipped 2nd line. -->
+            <span class="conv-pane-title-wrap">
+              <span class="conv-pane-title" data-role="pane-title"></span>
+              <button type="button" class="conv-pane-session-id" data-role="pane-session-id" hidden></button>
+            </span>
           </div>
           <span class="conv-pane-last-user-message" data-role="pane-last-user-message" hidden></span>
           <button type="button" class="conv-pane-popout" data-role="pane-popout ccc-breadcrumb-popout"
@@ -1121,6 +1284,25 @@
               <path d="M2.6 6h2.3m0 0-1-1m1 1-1 1" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
+          <!-- CCC-154: desktop single-pane ⋮ session menu (the phone toolbar's
+               ⋮ menu is hidden on desktop). Lifecycle items are filtered by
+               _syncSessionMenuItems; clicks go through _wirePaneSessionMenu. -->
+          <span class="conv-pane-session-wrap" data-role="pane-session-wrap">
+            <button type="button" class="conv-pane-session-btn" data-role="pane-session-btn"
+                    title="Session actions" aria-label="Session actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
+            <div class="conv-pane-session-menu" data-role="pane-session-menu" role="menu" hidden>
+              <button type="button" class="conv-pane-more-item" data-simple-action="rename" role="menuitem" title="Rename session (or double-click its name)">&#9998; Rename</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="archive" role="menuitem" hidden>&#128230; Archive</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="unarchive" role="menuitem" hidden>&#8617; Unarchive</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="untrash" role="menuitem" hidden>&#8617; Untrash</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="idea-IDEAS" role="menuitem" hidden>&#128161; Move to Features</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="idea-SMALL-BUGS" role="menuitem" hidden>&#128027; Move to Small bugs</button>
+              <div data-role="menu-session-info" hidden>
+                <button type="button" class="conv-pane-more-item" data-simple-action="copy-session-id" role="menuitem" title="Copy session id">Copy session id <span class="conv-pane-session-meta" data-role="menu-session-id"></span></button>
+                <button type="button" class="conv-pane-more-item" data-simple-action="copy-repo-path" role="menuitem" title="Copy repo path">Copy repo path <span class="conv-pane-session-meta" data-role="menu-repo-path"></span></button>
+              </div>
+            </div>
+          </span>
           <!-- Per-pane header actions are compact in split mode / popouts:
                Annotate remains one-click, while recording controls live in
                the adjacent overflow menu. -->
@@ -1129,7 +1311,7 @@
             <details class="conv-pane-more">
               <summary class="conv-pane-action conv-pane-more-trigger" data-role="pane-more" aria-label="More pane actions" title="More pane actions">&#8230;</summary>
               <div class="conv-pane-more-menu" data-role="pane-more-menu" role="menu" aria-label="Pane actions">
-                <button type="button" class="conv-pane-more-item" data-role="pane-verbose" role="menuitemcheckbox" aria-checked="false" aria-pressed="false" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views.">&#8801; Verbose</button>
+                <span class="conv-view-seg" data-role="pane-view-seg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false" title="Compact: dense, no per-message metadata">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true" title="Normal transcript">Normal</button><button type="button" data-conv-view="verbose" role="radio" aria-checked="false" title="Verbose: tool calls and command details expanded">Verbose</button></span>
                 <button type="button" class="conv-pane-more-item" data-role="pane-replay" role="menuitem" title="Replay this conversation message by message">&#9654; Replay</button>
                 <button type="button" class="conv-pane-more-item" data-role="pane-clear" role="menuitem" title="Clear the screen visually (transcript history is untouched)">Clear screen</button>
               </div>
@@ -1219,6 +1401,11 @@
                       aria-label="Choose folder">&#128193;</button>
               <div id="spawnCwdMenu" class="spawn-cwd-menu" role="listbox"></div>
             </span>
+            <button id="jevRepoSetupBtn" type="button" class="smart-repo-status" hidden
+                    aria-label="Smart repo off: add token" title="Smart repo off: add a Jev token to enable">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="m14 10 1.2 2.8L18 14l-2.8 1.2L14 18l-1.2-2.8L10 14l2.8-1.2Z"/></svg>
+            </button>
+            <span id="spawnCwdGuessChip" class="spawn-cwd-guess-chip" hidden aria-live="polite"></span>
           </span>
           <label class="spawn-worktree-row" title="Spawn the session in a fresh git worktree (`feat/<slug>` branch) so it can't accidentally commit to main.">
             <input type="checkbox" id="inlineWorktreeToggle"> 🌿 worktree
@@ -1233,10 +1420,10 @@
         <aside class="status-rail" id="statusRail" data-tour="status-rail" aria-label="Session status rail">
           <div class="status-rail-resizer" id="statusRailResizer" role="separator" aria-orientation="vertical" aria-label="Resize status rail" aria-controls="statusRail" tabindex="0" title="Drag to resize the status rail; drag to the right edge to hide it"></div>
           <div class="status-rail-topbar" id="statusRailTopbar">
-            <!-- CCC-454: Verbose transcript toggle — keeps tool calls, command
-                 details, and thinking expanded in conversation views. -->
-            <button type="button" id="verboseToggleBtn" class="status-rail-annotate verbose-toggle-btn" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views." aria-label="Toggle verbose transcript" aria-pressed="false">&#8801; Verbose</button>
-            <button type="button" id="statusRailAnnotateBtn" class="status-rail-annotate" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">&#9998; Annotate</button>
+            <!-- CCC-454: transcript view segmented control (Compact | Normal |
+                 Verbose). Verbose keeps tool calls and command details expanded. -->
+            <span class="conv-view-seg" id="convViewSeg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false" title="Compact: dense, no per-message metadata">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true" title="Normal transcript">Normal</button><button type="button" data-conv-view="verbose" role="radio" aria-checked="false" title="Verbose: tool calls and command details expanded">Verbose</button></span>
+            <button type="button" id="statusRailAnnotateBtn" class="status-rail-annotate" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">&#9998;</button>
             <!-- Quick-close X — collapses the rail without having to drag
                  the resizer or find the topbar toggle. Wired below in
                  the rail-toggle IIFE. -->
@@ -1252,8 +1439,9 @@
                    session, plus a live lane map of the sessions it spawns.
                    Files no longer has its own tab -- the files panel is docked
                    at the bottom of the Metadata pane. -->
-              <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailOrchestrationPane" data-rail-tab="orchestration" data-tour="orchestration">Orchestration</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
+              <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailOrchestrationPane" data-rail-tab="orchestration" data-tour="orchestration">Orchestration</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailFilesPane" data-rail-tab="files">Files<span class="status-rail-tab-count" id="filesTabCount"></span></button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue" data-tour="queue">Queue</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailAskPane" data-rail-tab="ask">Ask</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailLogPane" data-rail-tab="log">Log</button>
@@ -1337,9 +1525,10 @@
                 </div>
                 <div class="subagents-list" id="subagentsList"></div>
               </div>
-              <!-- Files panel docked at the bottom of Metadata (it used to be
-                   its own tab). Activity feed above it takes the slack;
-                   _applyStatusRailLayout keeps this element last. -->
+            </div>
+            <!-- Files: its own tab again (CCC-1228); it was hard to find at the
+                 bottom of Metadata. -->
+            <div class="status-rail-pane" id="statusRailFilesPane" role="tabpanel" data-rail-pane="files" hidden>
               <div class="files-panel" id="filesPanel" style="display: none;">
                 <div class="files-resize-handle" id="filesResizeHandle" title="Drag up to resize · double-click to reset"></div>
                 <div class="files-header">
@@ -1350,6 +1539,7 @@
                 </div>
                 <div class="files-list" id="sidebarFilesList"></div>
               </div>
+              <div class="files-tab-empty" id="filesTabEmpty">No files touched in this session yet.</div>
             </div>
             <div class="status-rail-pane" id="statusRailQueuePane" role="tabpanel" data-rail-pane="queue">
               <div class="shared-queue-host shared-queue-host-rail" id="statusRailQueueHost">
@@ -1476,8 +1666,13 @@
               </div>
             </div>
             <div class="rail-bottom-tools">
+              <div class="rail-voice-stepper" data-role="tts-voice-stepper" role="group" aria-label="Speak voice for this session"></div>
               <div class="conv-rowstyle-palette" data-role="conv-rowstyle-palette" role="radiogroup" aria-label="Conversation row style"></div>
               <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
+              <div class="rail-font-stepper" role="group" aria-label="Conversation font size">
+                <button type="button" class="font-size-btn" data-role="rail-font-minus" title="Decrease font size" aria-label="Decrease font size">A-</button>
+                <button type="button" class="font-size-btn" data-role="rail-font-plus" title="Increase font size" aria-label="Increase font size">A+</button>
+              </div>
             </div>
           </div>
           <div class="status-rail-file-viewer" id="statusRailFileViewer" style="display: none;">
@@ -1513,19 +1708,17 @@
         </button>
         <div class="conv-goal-strip" data-role="conv-goal-strip" hidden></div>
         <div class="conv-model-picker-strip" id="convModelPickerStrip" style="display:none;" aria-label="Quick model picker">
-          <div class="conv-model-picker-inner">
-            <span class="conv-model-picker-label">Model</span>
-            <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
-          </div>
+          <section class="ns-advisor" id="nsComposerAdvisor" aria-label="Session thinking" hidden></section>
+          <details class="ns-model-overrides" id="nsModelOverrides">
+            <summary><span id="nsSelectedModel" aria-live="polite"></span><span class="ns-model-change">Change</span></summary>
+            <div class="conv-model-picker-inner">
+              <span class="conv-model-picker-label">Model</span>
+              <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
+            </div>
+          </details>
         </div>
         <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
           <div class="engine-missing-notice" id="engineMissingNotice" role="status" hidden></div>
-          <!-- Composer expand toggle — pinned to the bar's top-right corner. -->
-          <button class="expand-btn" id="convExpandBtn" title="Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)" aria-label="Expand composer" aria-pressed="false">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
-            </svg>
-          </button>
           <!-- F2 cold-session composer. Both slots are hidden until
                f2RenderComposer() decides the gate is hot (250k+ tokens AND
                idle past the engine's cache-decay line). The rail needs only
@@ -1546,6 +1739,19 @@
                  existing (desktop-only) drag-drop attachment flow.
                  Lives on the left-hand side of the toolbar row (CCC-1039). -->
             <input type="file" id="convAttachInput" multiple hidden aria-hidden="true" tabindex="-1">
+            <!-- Touch only: the + opens this actions menu (Attach, Compact,
+                 Continue in new session) instead of attaching directly. The
+                 menu items are wired in app.js (_initConvActionsMenu). -->
+            <span class="conv-actions-group" id="convActionsGroup">
+              <button type="button" class="conv-actions-btn" id="convActionsBtn" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+              </button>
+              <div class="conv-actions-menu" id="convActionsMenu" role="menu" aria-label="More actions" style="display:none;">
+                <button type="button" class="conv-actions-item" data-act="esc" role="menuitem" hidden>Esc - stop the current reply</button>
+                <button type="button" class="conv-actions-item" data-act="attach" role="menuitem">Attach file or photo</button>
+                <button type="button" class="conv-actions-item" data-act="continue" role="menuitem">Continue in new session</button>
+              </div>
+            </span>
             <button type="button" class="attach-btn" id="convAttachBtn" title="Attach files or photos" aria-label="Attach files or photos">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M12 5v14M5 12h14"></path>
@@ -2010,7 +2216,7 @@
         </div>
         <div class="sys-svc-started" id="sysKapStarted"></div>
         <div class="sys-svc-busy" id="sysKapBusy"></div>
-        <div class="sys-desc" id="sysKapDetail">The Kimi daemon (kimi web) that CCC routes sessions through when kap routing is on — the transport that can steer a running turn in place. CCC adopts this daemon; it never starts or restarts it.</div>
+        <div class="sys-desc" id="sysKapDetail">The Kimi daemon (kimi web) that CCC routes sessions through when kap routing is on - the transport that can steer a running turn in place. CCC adopts this daemon; it never starts or restarts it.</div>
         <div class="sys-svc-meta" id="sysKapMeta"></div>
       </div>
 
@@ -2408,6 +2614,9 @@
         <span class="settings-esc-hint">esc to close</span>
         <button type="button" class="settings-modal-close" id="settingsModalClose" title="Close" aria-label="Close settings">&times;</button>
       </div>
+      <!-- Phones: Restart servers / What's new / Check for updates / Discord /
+           Last updated are moved here from the sidebar ⋮ menu by app.js. -->
+      <div class="settings-about-strip" id="settingsAboutStrip" hidden></div>
       <div class="settings-modal-body">
         <div class="settings-rail" id="settingsRail" role="tablist" aria-label="Settings sections">
           <button type="button" class="settings-rail-item is-active" id="settingsRailTab-appearance" data-section-target="appearance" role="tab" aria-selected="true" aria-controls="appearancePopover">
@@ -2418,9 +2627,17 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             <span>Layout &amp; View</span>
           </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-notifications" data-section-target="notifications" role="tab" aria-selected="false" aria-controls="settingsSection-notifications">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+            <span>Notifications</span>
+          </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-engines" data-section-target="engines" role="tab" aria-selected="false" aria-controls="settingsSection-engines">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
             <span>Engines</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-vault" data-section-target="vault" role="tab" aria-selected="false" aria-controls="settingsSection-vault">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><circle cx="12" cy="15.5" r="1.4"/></svg>
+            <span>Vault</span>
           </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-network" data-section-target="network" role="tab" aria-selected="false" aria-controls="settingsSection-network">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
@@ -2466,6 +2683,22 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="repository repo logo avatar image icon upload">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Repository avatars</div>
+                <div class="settings-row-desc">Uses a logo or favicon from each repo, then initials. Upload an image to override it on this machine.</div>
+                <label for="repoAvatarSelect">Repository</label>
+                <select id="repoAvatarSelect" class="settings-select" style="max-width:100%;width:100%"></select>
+                <div id="repoAvatarStatus" class="settings-row-desc" role="status"></div>
+              </div>
+              <div class="settings-row-control" id="repoAvatarControls">
+                <span id="repoAvatarPreview"></span>
+                <input type="file" id="repoAvatarFile" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/x-icon,image/vnd.microsoft.icon" hidden>
+                <button type="button" class="settings-action-btn" id="repoAvatarUpload">Upload image…</button>
+                <button type="button" class="settings-action-btn" id="repoAvatarReset">Use automatic</button>
+              </div>
+            </div>
+
             <div class="settings-row" data-keywords="folder chip chips color colors colour hue palette muted level hierarchy repo">
               <div class="settings-row-main">
                 <div class="settings-row-label">Folder chip colors</div>
@@ -2502,6 +2735,23 @@
                 <!-- Slice B moves the existing `.font-size-controls` (A-/A+
                      stepper, id-less, drives ccc-conv-font-scale) here. -->
                 <div id="settingsModalFontSlot" class="settings-modal-font-slot"></div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="tts speaker voice speech cache debug highlight ready">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Speaker cache debug</div>
+                <div class="settings-row-desc">Show colored lines beside conversation rows for this browser’s audio cache:
+                  <span class="tts-cache-debug-sent">amber = sent to TTS</span>,
+                  <span class="tts-cache-debug-ready">green = audio ready</span>, purple = cancelled before sending.
+                  Expand the TTS queue to see browser waiting positions.
+                  Requests already sent finish and stay cached. Markers disappear when clips are evicted or fail. Mixed states appear side by side on the same row.
+                  Prepared audio may still exist in the server’s disk cache after the browser releases it.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsTtsCacheDebugToggle" role="switch" aria-checked="false" aria-label="Speaker cache debug">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
               </div>
             </div>
 
@@ -2546,6 +2796,38 @@
                 <button type="button" class="settings-toggle" id="settingsUiModeToggle" data-ui-mode-toggle role="switch" aria-checked="false" aria-label="Simple mode">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="voice call button floating phone talk assistant">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Floating call button</div>
+                <div class="settings-row-desc">Off by default. Turn on to show the floating CALL button for starting a voice call; an active call still shows it.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsVoiceCallBtnToggle" role="switch" aria-checked="false" aria-label="Floating call button">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="voice speak tts read aloud deepgram kokoro">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Default Speak voice</div>
+                <div class="settings-row-desc">Voice for reading replies aloud. Each session can override it from the right rail. A $ marks a voice that costs money.</div>
+              </div>
+              <div class="settings-row-control">
+                <select id="settingsTtsVoiceDefault" class="bug-input" style="width:auto;" aria-label="Default Speak voice"></select>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="voice speak offline kokoro install repair">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Better offline voice</div>
+                <div class="settings-row-desc" id="localSpeechStatus" role="status" aria-live="polite">Optional download (~330 MB). Your Mac voice keeps working during installation.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" id="localSpeechInstall" class="bug-input">Install better offline voice (~330 MB)</button>
               </div>
             </div>
 
@@ -2597,6 +2879,18 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="voice call mobile phone icon button hide remove show">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Show voice call button on mobile</div>
+                <div class="settings-row-desc">Show the floating "CALL" button on mobile view to start or return to voice sessions.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle is-on" id="settingsVoiceMobileToggle" data-voice-mobile-toggle role="switch" aria-checked="true" aria-label="Show voice call button on mobile">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
             <div class="settings-row" data-debug-hide data-keywords="fleet pulse hero health strip repos nodes show">
               <div class="settings-row-main">
                 <div class="settings-row-label">Fleet Pulse</div>
@@ -2609,6 +2903,68 @@
 
             <div class="settings-reset-row">
               <button type="button" class="settings-reset-btn" id="settingsResetLayout">Reset Layout &amp; View to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-notifications" data-section-id="notifications" role="tabpanel" aria-labelledby="settingsRailTab-notifications">
+            <div class="settings-section-eyebrow">Notifications</div>
+
+            <div class="settings-row" data-keywords="notification notify ping alert all master on off">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Notifications</div>
+                <div class="settings-row-desc">Ping you when agents finish, need your input, or hit a milestone.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyEnabledToggle" data-notify-pref="enabled" role="switch" aria-checked="true" aria-label="Notifications">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="task done finished complete working waiting input ping">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Task finished and needs you</div>
+                <div class="settings-row-desc">Tell you when an agent finishes real work or stops to ask for input.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyTasksToggle" data-notify-pref="tasks" role="switch" aria-checked="true" aria-label="Task finished and needs you">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="digest daily summary 6pm report today work">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Daily digest</div>
+                <div class="settings-row-desc">One 6pm summary of what your agents got done today.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyDigestToggle" data-notify-pref="digest" role="switch" aria-checked="true" aria-label="Daily digest">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="milestone celebrate savings free models tokens work value">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Milestones</div>
+                <div class="settings-row-desc">Celebrate when your agents pass savings and work milestones.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsNotifyMilestonesToggle" data-notify-pref="milestones" role="switch" aria-checked="true" aria-label="Milestones">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="browser system permission alerts banner allow enable">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Browser notifications</div>
+                <div class="settings-row-desc">Show alerts even when this tab is in the background. <span id="notifyBrowserPermStatus" class="settings-row-desc">Checking…</span></div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="notifyBrowserPermBtn">Turn on</button>
+              </div>
             </div>
           </section>
 
@@ -2761,6 +3117,23 @@
                   </div>
               </div>
             </div>
+            <div class="eng-card model-routing-card" id="workerFallbackSettings" data-keywords="fallback quota exhausted models worker watchtower managed">
+              <div class="eng-card-head"><div class="eng-card-title">Worker and managed model fallback</div><div class="eng-card-sub">Try the next configured provider when a model runs out of quota.</div></div>
+              <div class="settings-row">
+                <div class="settings-row-main"><div class="settings-row-label">Enable fallback by default</div><div class="settings-row-desc">Applies to new worker launches and apps using WatchTower managed model runs. Queue On/Off overrides this default. Active runs finish with their current model.</div></div>
+                <div class="settings-row-control"><input type="checkbox" id="workerFallbackEnabled" aria-label="Enable worker and managed model fallback"></div>
+              </div>
+              <div id="workerFallbackModels" style="padding:0 16px;"></div>
+              <div style="padding:12px 16px;"><button type="button" class="settings-action-btn" id="workerFallbackAdd">Add fallback model</button></div>
+              <p class="settings-row-desc" style="padding:0 16px 16px;">Models are tried from top to bottom, once per provider. Queue model pins stay stored; explicit queue effort takes precedence over fallback effort. Exhausting every provider parks work until quota recovers. Uses existing signed-in engines.</p>
+            </div>
+            <div class="eng-card model-routing-card" id="modelProfilesSettings" data-keywords="capability profile fast standard deep model routing fallback">
+              <div class="eng-card-head"><div class="eng-card-title">Managed model profiles</div><div class="eng-card-sub">Apps request a capability; WatchTower selects its configured provider and model.</div></div>
+              <div class="settings-row"><div class="settings-row-main"><label class="settings-row-label" for="modelProfileSelect">Capability profile</label></div><div class="settings-row-control"><select id="modelProfileSelect" class="bug-input"><option value="fast">Fast</option><option value="standard" selected>Standard</option><option value="deep">Deep</option></select></div></div>
+              <div id="modelProfileModels" style="padding:0 16px;"></div>
+              <div style="padding:12px 16px;"><button type="button" class="settings-action-btn" id="modelProfileAdd">Add profile model</button></div>
+              <p class="settings-row-desc" style="padding:0 16px 16px;">The first model is the primary route. Later providers are used only when fallback is enabled above and quota is exhausted. An empty profile has no route. Profile names describe your intended capability; choose models accordingly. The managed runtime currently supports Claude with schema and no-tools guarantees. Unsupported providers fail visibly; Codex is supported for queue worker fallback above.</p>
+            </div>
             <div class="settings-row-note" id="spawnDefaultsError" hidden></div>
 
             <div class="eng-list-head">
@@ -2812,7 +3185,7 @@
             <div class="settings-subsection-label">API keys</div>
             <div class="settings-row" data-keywords="byok bring your own key api key openrouter tokenrouter anthropic openai xai moonshot google keychain">
               <div class="settings-row-main">
-                <div class="settings-row-label">BYOK — bring your own key</div>
+                <div class="settings-row-label">BYOK - bring your own key</div>
                 <div class="settings-row-desc" id="byokBackendDesc">Checking key storage…</div>
               </div>
             </div>
@@ -2820,7 +3193,7 @@
             <div class="settings-row byok-add-row" data-keywords="byok add key profile provider">
               <div class="settings-row-main">
                 <div class="settings-row-label">Add a key</div>
-                <div class="settings-row-desc">Stored on this machine only — never committed, never sent anywhere but the provider you pick.</div>
+                <div class="settings-row-desc">Stored on this machine only - never committed, never sent anywhere but the provider you pick.</div>
                 <div class="byok-add-form">
                   <input type="text" id="byokProfileInput" class="settings-text-input" placeholder="Profile name (e.g. personal)" autocomplete="off">
                   <select id="byokProviderSelect" class="settings-select"></select>
@@ -2842,6 +3215,79 @@
               <div class="settings-row-main">
                 <div class="settings-row-label">BYOK spend (last 30 days)</div>
                 <div class="settings-row-desc" id="byokUsageDesc">No BYOK usage recorded yet.</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Vault: any kind of secret (API keys, tokens, logins), stored in
+               the Keychain (service ccc-vault) or an encrypted file. Values
+               are write-only here; agents read them via `ccc vault exec`.
+               Logic: refreshVaultSettings() in static/app.js. -->
+          <section class="settings-section" id="settingsSection-vault" data-section-id="vault" role="tabpanel" aria-labelledby="settingsRailTab-vault">
+            <div class="settings-section-eyebrow">Vault</div>
+
+            <div class="settings-row" data-keywords="vault secrets secret keys api key token login password credentials keychain local storage">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Vault</div>
+                <div class="settings-row-desc" id="vaultBackendDesc">Checking secret storage…</div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="smart repo repository matching jev token key">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Smart repo</div>
+                <div class="settings-row-desc" id="smartRepoSettingsStatus">Matches your prompt to a repository using Jev, with local matching as a fallback.</div>
+                <div class="settings-row-desc">Jev receives your scrubbed prompt, repo descriptions and recent session titles. Your token stays in the local Vault.</div>
+              </div>
+              <button id="smartRepoTokenBtn" type="button" class="settings-action-btn">Manage token</button>
+            </div>
+
+            <div class="settings-row vault-form-row" id="vaultFormRow" data-keywords="vault add secret new api key token login password username env var website notes">
+              <div class="settings-row-main">
+                <div class="settings-row-label" id="vaultFormTitle">Add a secret</div>
+                <div class="settings-row-desc" id="vaultFormHint">Values are write-only: once saved, CCC shows only that a value is saved and when, never the value.</div>
+                <div class="vault-form">
+                  <input type="text" id="vaultNameInput" class="settings-text-input" placeholder="Name, e.g. stripe-live" autocomplete="off" spellcheck="false" aria-label="Name">
+                  <select id="vaultKindSelect" class="settings-select" aria-label="Kind">
+                    <option value="api_key">API key</option>
+                    <option value="token">Token</option>
+                    <option value="login">Login</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <input type="text" id="vaultServiceInput" class="settings-text-input" placeholder="Service, e.g. Stripe" autocomplete="off" aria-label="Service">
+                  <input type="text" id="vaultUsernameInput" class="settings-text-input" placeholder="Username (optional)" autocomplete="off" aria-label="Username">
+                  <input type="text" id="vaultEnvVarInput" class="settings-text-input" placeholder="Env var for ccc vault exec (optional)" autocomplete="off" spellcheck="false" aria-label="Env var">
+                  <input type="text" id="vaultWebsiteInput" class="settings-text-input" placeholder="Website (optional)" autocomplete="off" aria-label="Website">
+                  <input type="text" id="vaultNotesInput" class="settings-text-input vault-form-wide" placeholder="Notes (optional)" autocomplete="off" aria-label="Notes">
+                  <input type="password" id="vaultValueInput" class="settings-text-input vault-form-wide" placeholder="Secret value" autocomplete="new-password" aria-label="Secret value">
+                  <div class="vault-form-actions">
+                    <button type="button" class="settings-action-btn" id="vaultSaveBtn">Save</button>
+                    <button type="button" class="settings-action-btn" id="vaultCancelBtn" hidden>Cancel</button>
+                  </div>
+                </div>
+                <div class="settings-row-desc" id="vaultFormStatus" role="status"></div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="vault saved secrets entries list edit delete replace rotate">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Saved secrets</div>
+                <div class="settings-row-desc vault-list" id="vaultEntriesList">Nothing in the vault yet.</div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="vault byok bring your own key import existing llm provider keys">
+              <div class="settings-row-main">
+                <div class="settings-row-label">BYOK keys</div>
+                <div class="settings-row-desc">LLM provider keys from Settings &gt; Engines. They keep working for engine spawns; Import copies one into the Vault under a name and kind you pick, and leaves the BYOK key in place.</div>
+                <div class="settings-row-desc vault-list" id="vaultByokList">No BYOK keys.</div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="vault cli agents terminal ccc vault exec list get reveal environment">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Agent access</div>
+                <div class="settings-row-desc">Agents run <code>ccc vault exec --env VAR=&lt;name&gt; -- &lt;cmd&gt;</code>: the secret goes into the command's environment and is redacted from its output. <code>ccc vault list</code> shows names only; <code>ccc vault get &lt;name&gt; --reveal</code> prints a value in your own terminal.</div>
               </div>
             </div>
           </section>
@@ -2896,6 +3342,16 @@
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-action-btn" id="carModeMenuBtn">Open…</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="voice mode realtime talk microphone codex openai">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Voice mode</div>
+                <div class="settings-row-desc">Talk to CCC by voice; it answers questions and proposes actions you confirm by click.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="voiceSettingsBtn">Open…</button>
               </div>
             </div>
           </section>
@@ -3040,6 +3496,19 @@
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-action-btn" id="takeTourBtn">Start</button>
+              </div>
+            </div>
+
+            <!-- Moment Zero: the cinematic welcome + free-model setup shell.
+                 The click binding lives in static/onboarding/onboarding.js so
+                 this row is the whole Settings integration. -->
+            <div class="settings-row" data-keywords="welcome free setup moment zero onboarding install">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Welcome &amp; free setup</div>
+                <div class="settings-row-desc">Replay the cinematic welcome and the free-model setup flow.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="momentZeroBtn">Open</button>
               </div>
             </div>
 
@@ -3249,7 +3718,7 @@
           <input type="password" id="carModeAnthropicKey" class="bug-input" autocomplete="off" placeholder="sk-ant-…  (leave blank to keep the stored one)">
         </div>
         <div>
-          <label class="bug-label" for="carModeDeepgramKey">Deepgram API key <span style="color:var(--text-muted);font-weight:400;">(optional - enables speech in + out)</span></label>
+          <label class="bug-label" for="carModeDeepgramKey">Deepgram API key <span style="color:var(--text-muted);font-weight:400;">(optional - speech runs locally by default; set CCC_VOICE_ENGINE=deepgram to use it)</span></label>
           <input type="password" id="carModeDeepgramKey" class="bug-input" autocomplete="off" placeholder="leave blank to keep the stored one">
         </div>
         <div style="color:var(--text-muted);font-size:12px;">
@@ -3262,10 +3731,10 @@
         <div class="car-mode-cost">
           <strong>What it costs</strong>
           <div style="margin-top:4px;">
-            About <strong>$0.35/hr</strong> to run: routing agent on Claude Haiku 4.5
-            (~$0.10/hr), Deepgram speech-to-text (~$0.08-0.10/hr) and text-to-speech
-            (~$0.15/hr). Near-free if you skip Deepgram and use your Mac's built-in
-            speech. Your CCC sessions bill separately as usual.
+            About <strong>$0.10/hr</strong> to run: the routing agent on Claude Haiku 4.5.
+            Speech is local and free by default (whisper.cpp hears you, Kokoro speaks).
+            Opting into Deepgram (<code>CCC_VOICE_ENGINE=deepgram</code>) adds about
+            $0.25/hr. Your CCC sessions bill separately as usual.
           </div>
         </div>
 
@@ -3273,8 +3742,8 @@
         <div id="carModeDegradeNotice" class="car-mode-degrade">
           <strong>If a key is missing</strong> - Car Mode degrades instead of breaking:
           <ul style="margin:6px 0 0 18px;padding:0;">
-            <li>No Deepgram key → hands-free voice is off, but CCC's built-in browser
-              mic and read-aloud (free, no key) still let you work by voice in the UI.</li>
+            <li>Local voice not installed → run <code>scripts/install_local_speech.sh</code>
+              once; meanwhile CCC's built-in browser mic and read-aloud still work.</li>
             <li>No Anthropic key → Car Mode can't start; it tells you what's needed
               instead of erroring.</li>
           </ul>
@@ -3289,6 +3758,105 @@
         <button type="button" class="upd-btn" id="carModeStopBtn" style="display:none;">Stop</button>
       </div>
     </div>
+  </div>
+
+  <!-- Voice mode settings: pick the realtime voice + the BYOK profile that
+       holds the OpenAI key, set cost guardrails, and (optionally) persist
+       transcripts. Wired in app.js (VoiceMode); saves via /api/voice/config. -->
+  <div id="voiceModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="voiceModalTitle">
+    <div class="upd-backdrop" id="voiceModalBackdrop"></div>
+    <div class="upd-dialog" style="width:min(560px,94vw);">
+      <div class="upd-title" id="voiceModalTitle">Voice mode</div>
+      <div class="upd-versions">
+        Talk to Claude Command Center by voice. Powered by the Codex app's
+        realtime lane (experimental). Your mic audio goes to OpenAI; CCC sees
+        only the transcript. Runs on your ChatGPT subscription, subject to
+        plan limits. An OpenAI API key in a BYOK profile is optional: it
+        enables the billed-per-use websocket fallback for accounts whose
+        subscription voice call fails to connect. The backing Codex thread
+        is ephemeral, read-only, and can only propose actions for you to
+        confirm.
+      </div>
+
+      <div id="voiceSetupBanner" class="voice-setup-banner" style="display:none;"></div>
+
+      <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
+        <div>
+          <label class="bug-label" for="voiceSelect">Voice</label>
+          <select id="voiceSelect" class="bug-input"></select>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
+          <input type="checkbox" id="voiceAllowFallback">
+          Allow paid API-key fallback when subscription voice fails to connect
+        </label>
+        <div>
+          <label class="bug-label" for="voiceProfileSelect">Fallback: BYOK profile with an OpenAI key</label>
+          <select id="voiceProfileSelect" class="bug-input"></select>
+          <div id="voiceProfileHint" style="color:var(--text-muted);font-size:12px;margin-top:4px;"></div>
+        </div>
+        <div style="display:flex;gap:14px;">
+          <div style="flex:1;">
+            <label class="bug-label" for="voiceMaxMinutes">Max session (minutes)</label>
+            <input type="number" id="voiceMaxMinutes" class="bug-input" min="1" max="120" step="1">
+          </div>
+          <div style="flex:1;">
+            <label class="bug-label" for="voiceIdleSeconds">Stop after silence (seconds)</label>
+            <input type="number" id="voiceIdleSeconds" class="bug-input" min="15" max="1800" step="5">
+          </div>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
+          <input type="checkbox" id="voiceShowMobileBtn">
+          Show Call button on mobile view
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
+          <input type="checkbox" id="voiceSaveTranscripts">
+          Save transcripts to disk (off by default; they stay in memory otherwise)
+        </label>
+        <div style="color:var(--text-muted);font-size:12px;">
+          Raw audio is never stored. Voice sessions auto-stop on silence, at the
+          max length, and when you close this tab.
+        </div>
+      </div>
+
+      <div class="upd-error" id="voiceModalError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="voiceModalCancelBtn">Close</button>
+        <button type="button" class="upd-btn upd-primary" id="voiceModalSaveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Voice panel: the live voice session's floating card. Transcript is a
+       local render of the SSE stream (user + assistant); pending actions are
+       the same cards the Ask tab uses, confirmed by click only. -->
+  <button type="button" id="voiceMobileBtn" class="voice-mobile-btn" title="Call voice assistant; drag to move" aria-label="Call voice assistant" aria-controls="voicePanel" aria-expanded="false">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.57 2.79.69A2 2 0 0 1 22 16.92Z"></path></svg>
+    <span id="voiceMobileLabel">CALL</span>
+  </button>
+  <div id="voicePanel" class="voice-panel" role="dialog" aria-label="Voice session" hidden>
+    <div class="voice-panel-head">
+      <span id="voiceStatePill" class="voice-state-pill">idle</span>
+      <span id="voiceElapsed" class="voice-elapsed">0:00</span>
+      <span class="voice-panel-head-btns">
+        <button type="button" id="voiceMuteBtn" class="voice-panel-btn" title="Mute/unmute the voice's audio" aria-label="Mute" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path></svg>
+        </button>
+        <button type="button" id="voicePanelStopBtn" class="voice-panel-btn voice-panel-stop" title="End the voice session" aria-label="Stop voice">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>
+        </button>
+        <button type="button" id="voicePanelHideBtn" class="voice-panel-btn" title="Hide panel (session keeps running)" aria-label="Hide voice panel">&times;</button>
+      </span>
+    </div>
+    <div id="voiceError" class="voice-error" style="display:none;"></div>
+    <div id="voiceActions" class="voice-actions"></div>
+    <div id="voiceTranscript" class="voice-transcript" aria-live="polite"></div>
+    <div class="voice-panel-foot">
+      <button type="button" id="voiceTalkBtn" class="upd-btn voice-call-btn" aria-label="Call voice agent">
+        <svg class="voice-call-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.57 2.79.69A2 2 0 0 1 22 16.92Z"></path></svg>
+        <span id="voiceTalkLabel">CALL</span>
+      </button>
+    </div>
+    <audio id="voiceAudio" autoplay></audio>
   </div>
 
   <!-- Worktrees modal. Opened from the 🌿 pill in the input-context
@@ -3443,6 +4011,9 @@
 </div>
 <script id="ccc-hermes-bridge-plugin">
 (function () {
+  // Opt-in only: this runs whatever script answers on the port inside the
+  // dashboard, so it stays off unless localStorage 'ccc.hermesBridge' is '1'.
+  try { if (localStorage.getItem('ccc.hermesBridge') !== '1') return; } catch (e) { return; }
   var port = "8765";
   var host = window.location.hostname || '127.0.0.1';
   if (host === 'localhost' || host === '::1' || host === '[::1]') host = '127.0.0.1';
@@ -3462,15 +4033,34 @@
 </script>
 <script src="/static/claude-reauth.js"></script>
 <script src="/static/phone-access.js"></script>
+<script src="/static/cloud-relay.js" defer></script>
 <script src="/static/config-consent.js"></script>
+<script src="/static/domestic-providers.js" defer></script>
+<script src="/static/free-key-wizard.js" defer></script>
 <script src="/static/federated-sidebar.js"></script>
 <script src="/static/q2-worker-idle.js"></script>
 <script src="/static/wt-log-bursts.js"></script>
 <script src="/static/ticket-prose.js"></script>
+<script src="/static/fx.js"></script>
+<script src="/static/free-router.js"></script>
+<!-- Moment Zero must load before app.js so window.cccOnboarding.claimFirstRun
+     exists when the engines first-run check fires 300ms after eval. -->
+<script src="/static/onboarding/onboarding.js"></script>
+<script src="/static/savings.js"></script>
+<script src="/static/free-runtime.js"></script>
+<script src="/static/notify.js"></script>
+<script src="/static/router-detected.js" defer></script>
+<script src="/static/local-speech.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/free-settings.js" defer></script>
+<script src="/static/leftover.js" defer></script>
+<script src="/static/restart-recovery.js" defer></script>
 <script src="/static/codex-live-source.js"></script>
 <script src="/static/scheduled-jobs.js"></script>
 <script src="/static/jobs-tab.js"></script>
+<script src="/static/first-task.js" defer></script>
+<script src="/static/star-ask.js"></script>
+<script src="/static/question-tags.js" defer></script>
 
 <!-- ── In-UI terminal panel ──────────────────────────────────────────────
      A small one-shot terminal: type a command, hit Enter, output streams
@@ -4611,5 +5201,6 @@
     <span class="active-group-chat-label">Active Group chat</span>
   </button>
 </div>
+<script src="/static/credential-broker.js" defer></script>
 </body>
 </html>

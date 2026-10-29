@@ -80,3 +80,18 @@ def test_validate_registry_row_shape_with_no_reference_rows_is_unverified_ok():
     row = uds.build_ccc_registry_row(1, "/tmp/cc-socks/1.sock", "/x")
     result = uds.validate_registry_row_shape(row, [])
     assert result == {"ok": True, "reason": "no_reference_rows"}
+
+
+def test_proc_start_matches_claude_utc_lstart():
+    # Claude Code hides a peer row whose procStart != `TZ=UTC ps -o lstart=`.
+    import os
+    import subprocess
+    want = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())],
+                          capture_output=True, text=True,
+                          env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}).stdout.strip()
+    assert uds.proc_start_for(os.getpid()) == want
+
+
+def test_default_proc_start_is_utc():
+    row = uds.build_ccc_registry_row(1, "/tmp/cc-socks/1.sock", "/x", started_at_epoch_ms=0)
+    assert row["procStart"] == "Thu Jan  1 00:00:00 1970"

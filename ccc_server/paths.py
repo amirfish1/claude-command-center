@@ -34,11 +34,16 @@ CODEX_THREAD_REGISTRY_FILE = (
 )
 SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
 
-CODEX_GOALS_DB_CANDIDATES = (
-    Path.home() / ".codex" / "goals_1.sqlite",
-    Path.home() / ".codex" / "sqlite" / "goals_1.sqlite",
+_CODEX_HOME_DIR = (
+    Path(os.path.expanduser(os.environ["CODEX_HOME"]))
+    if os.environ.get("CODEX_HOME")
+    else Path.home() / ".codex"
 )
-CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+CODEX_GOALS_DB_CANDIDATES = (
+    _CODEX_HOME_DIR / "goals_1.sqlite",
+    _CODEX_HOME_DIR / "sqlite" / "goals_1.sqlite",
+)
+CODEX_SESSIONS_ROOT = _CODEX_HOME_DIR / "sessions"
 CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _SPAWN_TIMELINE_FILE = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"
@@ -57,6 +62,7 @@ def _iter_common_cli_candidates(cmd):
         Path("/opt/homebrew/bin") / cmd,
         Path("/usr/local/bin") / cmd,
         home / ".local" / "bin" / cmd,
+        home / ".ccc" / "runtime" / cmd / "bin" / cmd,
         home / ".npm-global" / "bin" / cmd,
         home / "Library" / "pnpm" / cmd,
         home / ".volta" / "bin" / cmd,
@@ -96,6 +102,61 @@ def _iter_common_cli_candidates(cmd):
         if s not in seen:
             seen.add(s)
             yield p
+
+
+def _is_pid_alive(pid, perm_alive=False):
+    """Check if a process is alive without sending a terminating signal.
+
+    On Unix, `os.kill(pid, 0)` performs an error check only (does not send a signal).
+    On Windows, `os.kill(pid, 0)` terminates the target process. We use Win32
+    OpenProcess + WaitForSingleObject on Windows.
+
+    `perm_alive`: on POSIX, treat PermissionError (pid owned by another user)
+    as alive. Default False keeps the historical OSError -> dead behaviour.
+    (Windows access-denied always means alive.)
+    """
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return False
+    if pid <= 0:
+        return False
+    import sys
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.windll.kernel32
+            # ctypes defaults to C int for both results and untyped arguments.
+            # HANDLE is pointer-sized, so declare the ABI before passing it
+            # between calls (including CloseHandle) on 64-bit Windows.
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.GetLastError.argtypes = []
+            kernel32.GetLastError.restype = wintypes.DWORD
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            SYNCHRONIZE = 0x00100000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+            if not handle:
+                return kernel32.GetLastError() == 5  # ERROR_ACCESS_DENIED means process exists
+            try:
+                # 258 = WAIT_TIMEOUT (still running), 0 = WAIT_OBJECT_0 (terminated)
+                return kernel32.WaitForSingleObject(handle, 0) == 258
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return bool(perm_alive)
+    except (OSError, ProcessLookupError):
+        return False
 
 
 def _path_is_within(child, parent):

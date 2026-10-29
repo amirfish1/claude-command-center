@@ -28,11 +28,13 @@ class TestQueueWipOrder(unittest.TestCase):
             app_js,
         )
         self.assertIn("if (_isLiveWip(it)) return 0;", app_js)
-        self.assertIn("if (status === 'blocked') return 1;", app_js)
+        self.assertIn("if (status === 'blocked' || status === 'in_review') return 1;", app_js)
         self.assertIn("if (_hasUnresolved(it)) return 2;", app_js)
         self.assertIn("if (_isWaitingToDrain(it)) return 3;", app_js)
-        self.assertIn("if (status === 'closed') return 4;", app_js)
-        self.assertIn("return 5;", app_js)
+        # Open-but-inert work (4) now sorts above clean closes (5): open work
+        # of any kind stays above closed.
+        self.assertIn("if (status === 'closed') return 5;", app_js)
+        self.assertIn("        return 4;\n      };\n      const historyOrder", app_js)
 
     def test_only_a_live_worker_backed_claim_is_animated_as_wip(self):
         """Historical claim metadata must not make an open row look live."""

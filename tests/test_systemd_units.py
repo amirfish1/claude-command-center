@@ -19,6 +19,7 @@ class TestSystemdUnits(unittest.TestCase):
         self.assertIn("MemoryMax=8G", content)
         self.assertIn("KillMode=process", content)
         self.assertIn("multi-user.target", content)
+        self.assertIn("StartLimitIntervalSec=0", content)
 
         # Ensure documentation comment exists explaining the 8090 collision
         self.assertIn("8090", content)
@@ -32,9 +33,15 @@ class TestSystemdUnits(unittest.TestCase):
 
         self.assertIn("User=hermes", content)
         self.assertIn("Group=hermes", content)
-        self.assertIn("MemoryMax=4G", content)
+        self.assertIn("MemoryMax=32G", content)
         self.assertIn("KillMode=process", content)
         self.assertIn("ccc_worker.py", content)
+        self.assertIn("StartLimitIntervalSec=0", content)
+
+    def test_run_sh_systemd_units_have_zero_start_limit(self):
+        run_script = REPO_ROOT / "run.sh"
+        content = run_script.read_text(encoding="utf-8")
+        self.assertIn("StartLimitIntervalSec=0", content)
 
     def test_install_script(self):
         install_script = REPO_ROOT / "systemd" / "install.sh"
@@ -44,6 +51,21 @@ class TestSystemdUnits(unittest.TestCase):
         self.assertIn("/etc/systemd/system/ccc.service", content)
         self.assertIn("/etc/systemd/system/ccc-worker.service", content)
         self.assertIn("systemctl daemon-reload", content)
+
+    def test_leaderboard_weekly_user_timer(self):
+        service = (REPO_ROOT / "systemd" / "ccc-leaderboard-weekly.service").read_text(encoding="utf-8")
+        timer = (REPO_ROOT / "systemd" / "ccc-leaderboard-weekly.timer").read_text(encoding="utf-8")
+        self.assertIn("Type=oneshot", service)
+        self.assertIn("scripts/leaderboard-weekly.py run", service)
+        self.assertNotIn("publish-leaderboard.sh --apply", service)
+        self.assertNotIn("User=", service)  # a user unit, no root needed
+        self.assertIn("OnCalendar=Mon", timer)
+        self.assertIn("Persistent=true", timer)
+        install = REPO_ROOT / "systemd" / "install-leaderboard-weekly.sh"
+        self.assertTrue(os.access(install, os.X_OK))
+        self.assertIn("systemctl --user enable --now ccc-leaderboard-weekly.timer",
+                      install.read_text(encoding="utf-8"))
+        self.assertTrue((REPO_ROOT / "scripts" / "leaderboard-weekly.py").exists())
 
 
 if __name__ == "__main__":

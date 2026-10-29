@@ -3,6 +3,8 @@ import os
 import sqlite3
 import time
 
+import pytest
+
 import server
 
 
@@ -87,6 +89,8 @@ def test_hermes_live_status_ignores_dead_runtime_owner(tmp_path, monkeypatch):
     assert status["pid"] is None
 
 
+@pytest.mark.skipif(not os.path.exists("/proc/self/stat"),
+                    reason="PID start-time identity check reads /proc, which only exists on Linux")
 def test_hermes_pid_liveness_rejects_recycled_pid_identity():
     assert server._hermes_pid_alive(os.getpid()) is True
     assert server._hermes_pid_alive(os.getpid(), time.time()) is False

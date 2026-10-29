@@ -207,3 +207,10 @@ html[data-theme="light"] .tp-conv-head { color: #43526a; }
 html[data-theme="light"] .tp-table td { border-color: rgba(0, 0, 0, 0.12); }
 html[data-theme="light"] .tp-table tr:first-child td { color: #43526a; }
 html[data-theme="light"] .tp-bq { color: #4a5a70; border-left-color: rgba(53, 92, 170, 0.35); }
+
+/* Inline "(a) … (b) …" options lifted out of a dense block question (CCC-64) */
+.tp-body { line-height: 1.6; }
+.tp-opts { list-style: none; margin: 0 0 0.85em; padding: 0; }
+.tp-opts li { margin: 0.35em 0; padding: 6px 10px 6px 34px; position: relative; border-radius: 5px; background: rgba(139,148,158,0.08); }
+.tp-opt-k { position: absolute; left: 10px; top: 6px; font: 700 12px var(--font-mono, ui-monospace, monospace); text-transform: uppercase; color: var(--accent, #58a6ff); }
+.tp-rec { padding: 6px 10px; border-left: 3px solid var(--accent, #58a6ff); background: rgba(88,166,255,0.08); border-radius: 0 5px 5px 0; }

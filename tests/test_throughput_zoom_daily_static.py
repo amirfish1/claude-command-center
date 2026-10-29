@@ -13,19 +13,21 @@ def _read(rel):
 
 
 def test_server_has_window_and_daily_endpoints():
-    server = _read("server.py")
-    assert '"/api/throughput/window"' in server
-    assert '"/api/throughput/daily"' in server
+    # Routes stay in server.py; the payload builders moved to ccc_server/usage_stats.py.
+    routes = _read("server.py")
+    assert '"/api/throughput/window"' in routes
+    assert '"/api/throughput/daily"' in routes
+    assert '"/throughput-daily.html"' in routes
+    server = _read("ccc_server/usage_stats.py")
     assert "def _throughput_window_payload(" in server
     assert "def _throughput_daily_payload(" in server
     # Bounded-query guards: span/age caps and the (mtime,size) turn cache.
     assert "_THROUGHPUT_WINDOW_MAX_SPAN_SEC" in server
     assert "_THROUGHPUT_WINDOW_MAX_AGE_SEC" in server
-    assert "_throughput_recent_conversations(engine, start_epoch)" in server
+    assert "_core._throughput_recent_conversations(engine, start_epoch)" in server
     # Finished days persist write-once snapshots; today coalesces via lock.
     assert "def _throughput_persist_daily_snapshot(" in server
     assert "_THROUGHPUT_DAILY_LOCK" in server
-    assert '"/throughput-daily.html"' in server
 
 
 def test_throughput_page_has_zoom_ladder():

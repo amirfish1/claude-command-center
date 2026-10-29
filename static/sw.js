@@ -17,7 +17,7 @@
 //
 // Version bump strategy: increment SW_VERSION whenever this file changes
 // behaviour, so the browser picks up the new worker.
-const SW_VERSION = '1';
+const SW_VERSION = '2';
 
 self.addEventListener('install', (event) => {
   // Activate immediately rather than waiting for old tabs to close.
@@ -26,6 +26,29 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
+});
+
+// Notifications shown via registration.showNotification (static/notify.js)
+// land here on click: focus an open dashboard tab if there is one, else open
+// a fresh one at the item's URL.
+self.addEventListener('notificationclick', (event) => {
+  try { event.notification.close(); } catch (_) {}
+  const data = (event.notification && event.notification.data) || {};
+  const target = typeof data.url === 'string' && data.url.startsWith('/')
+    ? data.url
+    : (data.session_id ? '/?session=' + encodeURIComponent(data.session_id) : '/');
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (client.url && 'focus' in client) {
+          return client.focus().then((c) => {
+            try { if (c && c.navigate) c.navigate(target); } catch (_) {}
+          }).catch(() => self.clients.openWindow(target));
+        }
+      }
+      return self.clients.openWindow(target);
+    }),
+  );
 });
 
 self.addEventListener('fetch', (event) => {

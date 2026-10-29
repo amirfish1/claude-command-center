@@ -1,0 +1,1 @@
+- Long Codex sessions now show their first prompt at the top of the conversation, above "Load earlier messages", instead of starting mid-conversation.

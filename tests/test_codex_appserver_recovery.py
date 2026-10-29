@@ -8,7 +8,6 @@ refused because CCC's own dashboard held a read handle on the shared state DB.
 
 import os
 import pathlib
-import threading
 import unittest
 from unittest import mock
 
@@ -83,96 +82,52 @@ class ManagedInitCooldownTest(unittest.TestCase):
         self.assertLessEqual(codex._codex_managed_cooldown_s(), 60.0)
 
 
-class TestSharedStateConflictCooldownTest(unittest.TestCase):
+class TestSharedStateConflictNoLongerGatesStdioTest(unittest.TestCase):
+    """A foreign Codex writer must not block CCC's private stdio app-server.
+
+    The shared-state conflict used to suppress the stdio candidate entirely,
+    which pushed every send onto the one-shot `codex exec` fallback whenever
+    Codex Desktop (or any other codex process) held state_5.sqlite. Codex
+    itself treats the DBs as multi-process (WAL + per-thread writer records),
+    so the gate was removed; failures now queue durably instead of exec'ing.
+    """
+
     def setUp(self):
         import server  # noqa: F401  (registers the _core namespace)
-        self.previous = codex._CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
-        codex._CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 0.0
-        self.addCleanup(setattr, codex, "_CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL", self.previous)
 
-    def test_conflict_suppresses_stdio_retry_until_cooldown_expires(self):
-        # A real conflict is retried for a short budget (busy_timeout-style,
-        # see _codex_wait_for_shared_state_clear) before it counts as durable
-        # -- shrink that budget so this still runs in well under a second.
+    def test_stdio_spawn_attempted_despite_conflict(self):
         conflict = {"summary": "pids=9 commands=codex"}
+        transports_made = []
+
+        def fake_transport(kind, proc=None, sock=None):
+            transport = mock.Mock()
+            transport.kind = kind
+            transport.proc = proc or mock.Mock(pid=4242)
+            transport.alive.return_value = True
+            transports_made.append(transport)
+            return transport
+
         with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", None), \
              mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
              mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZING", False), \
              mock.patch.object(codex._core, "_codex_managed_app_server_enabled", return_value=False), \
              mock.patch.object(codex._core, "_codex_shared_state_conflict", return_value=conflict) as check, \
-             mock.patch.object(codex._core, "_log_activity") as log_activity, \
-             mock.patch.object(codex, "_CODEX_SHARED_STATE_CONFLICT_RETRY_BUDGET_S", 0.03), \
-             mock.patch.object(codex, "_CODEX_SHARED_STATE_CONFLICT_POLL_S", 0.01), \
-            mock.patch.object(codex.time, "time", return_value=1000.0):
-            self.assertIsNone(codex._ensure_codex_app_server())
-            first_call_count = check.call_count
-            self.assertIsNone(codex._ensure_codex_app_server())
-            self.assertFalse(codex._core._CODEX_APP_SERVER_INITIALIZING)
+             mock.patch.object(codex._core, "_resolve_codex_bin", return_value={"available": True, "bin": "/usr/bin/codex-test"}), \
+             mock.patch.object(codex._core, "_codex_app_server_reap_stray_children"), \
+             mock.patch.object(codex._core, "_CodexAppServerTransport", side_effect=fake_transport), \
+             mock.patch.object(codex._core, "_codex_app_server_request_to_transport", return_value={"result": {}}), \
+             mock.patch.object(codex, "_codex_app_server_reader"), \
+             mock.patch.object(codex.subprocess, "Popen", return_value=mock.Mock(pid=4242)) as popen:
+            result = codex._ensure_codex_app_server()
+            codex._codex_app_server_shutdown()
 
-        # First call retries within its budget (busy_timeout-style) before
-        # giving up; the second call is short-circuited entirely by the
-        # cooldown gate and must not retry (or even re-check) at all.
-        self.assertGreaterEqual(first_call_count, 1)
-        self.assertEqual(check.call_count, first_call_count)
-        self.assertEqual(log_activity.call_count, 1)
-
-    def test_cooldown_return_wakes_initialization_waiter(self):
-        """A cooldown must release callers that arrived behind its flag."""
-        paused_at_cooldown = threading.Event()
-        release_cooldown = threading.Event()
-        waiter_blocked = threading.Event()
-        waiter_released = threading.Event()
-        results = []
-        lock = codex._core._CODEX_APP_SERVER_LOCK
-        original_wait = lock.wait
-        original_notify_all = lock.notify_all
-
-        def controlled_socket_path():
-            paused_at_cooldown.set()
-            release_cooldown.wait(2)
-            return mock.Mock()
-
-        def mark_wait(timeout=None):
-            waiter_blocked.set()
-            result = original_wait(10)
-            waiter_released.set()
-            return result
-
-        with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", None), \
-             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
-             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZING", False), \
-             mock.patch.object(codex._core, "_codex_managed_app_server_socket_path", side_effect=controlled_socket_path), \
-             mock.patch.object(codex._core, "_codex_managed_app_server_enabled", return_value=False), \
-             mock.patch.object(codex.time, "time", return_value=1000.0), \
-             mock.patch.object(lock, "wait", side_effect=mark_wait), \
-             mock.patch.object(lock, "notify_all", wraps=original_notify_all) as notify_all:
-            codex._CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 1030.0
-            initializer = threading.Thread(
-                target=lambda: results.append(codex._ensure_codex_app_server()),
-            )
-            initializer.start()
-            self.assertTrue(paused_at_cooldown.wait(1))
-
-            waiter = threading.Thread(
-                target=lambda: results.append(codex._ensure_codex_app_server()),
-            )
-            waiter.start()
-            self.assertTrue(waiter_blocked.wait(1))
-
-            try:
-                release_cooldown.set()
-                self.assertTrue(waiter_released.wait(1))
-                self.assertGreaterEqual(notify_all.call_count, 1)
-            finally:
-                with lock:
-                    original_notify_all()
-            initializer.join(2)
-            waiter.join(2)
-
-        self.assertFalse(initializer.is_alive())
-        self.assertFalse(waiter.is_alive())
-        self.assertEqual(results, [None, None])
-        self.assertFalse(codex._core._CODEX_APP_SERVER_INITIALIZING)
+        self.assertIsNotNone(result)
+        popen.assert_called_once()
+        cmd = popen.call_args.args[0]
+        self.assertIn("app-server", cmd)
+        self.assertEqual([t.kind for t in transports_made], ["stdio"])
+        # The holder check is no longer consulted on the spawn path at all.
+        check.assert_not_called()
 
 
 class StaleAppServerInitializationTest(unittest.TestCase):

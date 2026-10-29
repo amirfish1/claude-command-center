@@ -10,6 +10,7 @@ from control_plane import ControlPlaneClient, socket_path, worker_pid_path
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 import ccc_peer_inbound
+import sender_envelope as attribution
 import ccc_peer_uds
 import fcntl
 import hashlib
@@ -125,14 +126,50 @@ def _find_wt_cli():
     not installed" in the dashboard, `wt` start/restart fails, and every
     queue affordance silently disables itself."""
     found = _core.shutil.which("wt") or ""
+    if sys.platform == "win32" and found and "windowsapps" in found.lower():
+        found = ""
     if not found:
-        try:
-            scheme = "posix_user" if os.name == "posix" else "nt_user"
-            candidate = os.path.join(sysconfig.get_path("scripts", scheme=scheme), "wt")
-            if os.access(candidate, os.X_OK):
-                found = candidate
-        except Exception:
-            pass
+        if sys.platform == "win32":
+            exe_names = ("wt.exe", "wt.cmd", "wt.bat")
+            candidates = []
+            try:
+                scripts_dir = sysconfig.get_path("scripts", scheme="nt_user")
+                candidates.extend(os.path.join(scripts_dir, name) for name in exe_names)
+            except Exception:
+                pass
+            try:
+                scripts_dir = sysconfig.get_path("scripts")
+                candidates.extend(os.path.join(scripts_dir, name) for name in exe_names)
+            except Exception:
+                pass
+            try:
+                prefix_scripts = os.path.join(sys.prefix, "Scripts")
+                candidates.extend(os.path.join(prefix_scripts, name) for name in exe_names)
+            except Exception:
+                pass
+            appdata = os.environ.get("APPDATA")
+            if appdata:
+                py_ver = f"Python{sys.version_info.major}{sys.version_info.minor}"
+                candidates.extend(os.path.join(appdata, "Python", py_ver, "Scripts", name) for name in exe_names)
+            candidates.extend(os.path.join(str(Path.home()), ".local", "bin", name) for name in exe_names)
+
+            for candidate in candidates:
+                try:
+                    if os.path.isfile(candidate):
+                        if "windowsapps" in candidate.lower():
+                            continue
+                        found = candidate
+                        break
+                except Exception:
+                    continue
+        else:
+            try:
+                scheme = "posix_user" if os.name == "posix" else "nt_user"
+                candidate = os.path.join(sysconfig.get_path("scripts", scheme=scheme), "wt")
+                if os.access(candidate, os.X_OK):
+                    found = candidate
+            except Exception:
+                pass
     return found
 
 
@@ -169,8 +206,9 @@ def _wt_import_available():
         _core._WT_IMPORT_AVAILABLE_CACHE = False
         if _core._wt_cli_available():
             try:
+                wt_bin = _core._wt_cli_path() or "wt"
                 proc = _core.subprocess.run(
-                    ["wt", "import", "--help"],
+                    [wt_bin, "import", "--help"],
                     capture_output=True, text=True, timeout=10,
                 )
                 _core._WT_IMPORT_AVAILABLE_CACHE = proc.returncode == 0
@@ -298,7 +336,8 @@ def _run_wt_import(doc_path, queue, *, apply=False, item_type=None):
     argv list only (never a shell string), so path/queue can't inject shell.
     Mirrors `_try_wt_send_for_headless_delivery`'s subprocess posture: bounded
     timeout, catch the OS/timeout family, degrade to a clear error dict."""
-    cmd = ["wt", "import", str(doc_path), "-q", queue]
+    wt_bin = _core._wt_cli_path() or "wt"
+    cmd = [wt_bin, "import", str(doc_path), "-q", queue]
     if apply:
         cmd.append("--apply")
     if item_type in ("bug", "feature"):
@@ -391,7 +430,9 @@ def _ccc_peer_server_start():
             except OSError:
                 pass
             return {"ok": False, "reason": f"bind_failed: {e}"}
-        row = ccc_peer_uds.build_ccc_registry_row(pid, socket_path, str(_core.CCC_ROOT))
+        row = ccc_peer_uds.build_ccc_registry_row(
+            pid, socket_path, str(_core.CCC_ROOT), proc_start=ccc_peer_uds.proc_start_for(pid),
+        )
         # Cross-check against real rows already on disk (Claude sessions this
         # same user has running, if any) before publishing.
         real_rows = []
@@ -566,6 +607,25 @@ def _ccc_sid_for_socket_addr(from_addr):
     return ""
 
 
+def _ccc_peer_route_relay_reply(from_sid, body):
+    """Hand a session's message to CCC back to the Cloud Relay client, if
+    the relay messaged that session recently. Pushes a snapshot right away
+    so the reply doesn't wait for the next 20s push."""
+    if not from_sid:
+        return False
+    try:
+        manager = _core.cloud_relay_manager()
+        from ccc_server import cloud_relay as _cloud_relay
+        if not _cloud_relay.record_session_reply(manager.paths, from_sid, body):
+            return False
+        if manager.loop is not None:
+            manager.loop.request_push()
+        return True
+    except Exception as e:
+        _core._log_activity("peer", "CCC-PEER-ERR", f"relay reply: {e}")
+        return False
+
+
 def _ccc_peer_handle_connection(conn):
     """Classify and route one inbound connection on CCC's own peer socket.
 
@@ -602,12 +662,25 @@ def _ccc_peer_handle_connection(conn):
                     f"from={from_addr} orig_msg_id={orig_msg_id or '-'}",
                 )
                 continue
+            reply_attr = attribution.lookup(message_id=orig_msg_id) if orig_msg_id else None
+            route = (reply_attr or {}).get('reply_to') or {}
+            if route.get('route_token') and _core._report_routes.get(route['route_token']):
+                reply_to = _core._report_routes.resolve(route['route_token'])
+                _core._inject_text_into_session(reply_to, remainder, source='peer-reply',
+                    attr=attribution.request_attr({'peer_sender_sid': from_sid}, reply_to))
+                continue
             envelope = ccc_peer_inbound.parse_report_envelope(body)
             if envelope is not None:
                 _ccc_peer_route_report(envelope, from_addr)
                 _core._log_activity(
                     "peer", "CCC-PEER-REPORT",
                     f"from={from_addr} session_id={envelope.get('session_id')}",
+                )
+                continue
+            if _ccc_peer_route_relay_reply(from_sid, body):
+                _core._log_activity(
+                    "peer", "CCC-PEER-RELAY-REPLY",
+                    f"from={from_addr} session_id={from_sid}",
                 )
                 continue
             _core._log_activity(
@@ -634,7 +707,7 @@ def _ccc_peer_accept_loop(sock):
         ).start()
 
 
-def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender_sid=None):
+def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender_sid=None, attr=None):
     """Deliver agent-origin text over the target's Claude Code peer socket.
 
     Returns a CCC-shaped success dict ONLY when the post-send transcript
@@ -700,15 +773,29 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
         # what makes CCC a dialable address instead of leaving from blank.
         from_addr = "uds:" + _core._CCC_PEER_STATE["socket_path"]
         from_name = from_name or "ccc"
-    msg_id = str(uuid.uuid4())
+    if attribution.enabled("ccc"):
+        attr = attr or attribution.from_text(text) or attribution.request_attr({"peer_sender_sid": peer_sender_sid}, session_id)
+        attr = attribution.relay(attr, "ccc-uds", attested_mode=from_mode, delivered=session_id)
+        from_name = attr["author"].get("name_at_send") or "Unattributed sender"
+        # A peer address is a reply route, not proof of authorship. Probe alternate
+        # addresses separately; do not assert another process's socket here.
+        if source != "ask":
+            from_addr = ""
+        msg_id = attr["message_id"]
+        attribution.journal(attr, app="ccc", event="transport", transport_id=msg_id)
+    else:
+        attr = None
+        msg_id = str(uuid.uuid4())
     ask_text = text
     if source == "ask":
         _core._ccc_ask_correlation_register(msg_id, sender_sid=peer_sender_sid, target_sid=session_id)
         ask_text = (
-            f"orig_msg_id: {msg_id}\n{text}\n\n"
-            "(If you reply, please start your reply with the line above "
-            "exactly as shown, so the reply routes back correctly.)"
+            f"orig_msg_id: {msg_id}\n"
+            "(If you reply, start with the orig_msg_id line above exactly as shown.)\n"
+            f"{text}"
         )
+    if attr:
+        ask_text = attribution.carry(ask_text, attr, app="ccc")
     content = ccc_peer_uds.wrap(ask_text, from_addr=from_addr, from_name=from_name, from_mode=from_mode)
     token = ccc_peer_uds.load_peer_token(_core.SESSIONS_REGISTRY, target["pid"], target["socket_path"])
     priority = "now" if str(mode or "") == "steer" else "next"
@@ -732,7 +819,17 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
         f"session={session_id} source={source} msg_id={msg_id} receipt={receipt} "
         f"text=\"{_core._activity_log_preview(text)}\"",
     )
+    if receipt == "unknown":
+        try:
+            window = max(0, min(60, float(os.environ.get("WT_UDS_RECONCILE_S", "30"))))
+        except ValueError:
+            window = 30
+        deadline = time.monotonic() + window
+        while receipt == "unknown" and time.monotonic() < deadline:
+            receipt = _core._transcript_peer_receipt(session_id, msg_id, text, start_offset=start_offset, timeout_s=min(2, max(0, deadline-time.monotonic())))
     if receipt not in ("delivered", "queued"):
+        if attr:
+            attribution.journal(attr, app="ccc", event="possible_duplicate", reason=receipt, transport_id=msg_id)
         return None
     # "queued" means the frame is confirmed sitting in the receiver's inbox
     # (an enqueue row landed after we sent it) even though Claude has not
@@ -742,7 +839,7 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
     return {"ok": True, "via": "uds", "source": "uds", "receipt_id": msg_id, "receipt": receipt}
 
 
-def _try_wt_send_for_headless_delivery(session_id, text):
+def _try_wt_send_for_headless_delivery(session_id, text, *, attr=None):
     """Stage-2 hook for `_inject_text_into_session`'s dormant-claude branch.
 
     Called ONLY at the exact point the router has already decided delivery
@@ -766,9 +863,13 @@ def _try_wt_send_for_headless_delivery(session_id, text):
     # `wt send` again, recursing until timeout.
     env = dict(os.environ)
     env["WATCHTOWER_DELEGATE_URL"] = "off"
+    attr = attr or attribution.from_text(text)
+    if attr and attribution.enabled("ccc"):
+        env[attribution.ENV] = json.dumps(attr)
     try:
+        wt_bin = _core._wt_cli_path() or "wt"
         proc = _core.subprocess.run(
-            ["wt", "send", session_id, text, "--no-queue", "--json"],
+            [wt_bin, "send", session_id, text, "--no-queue", "--json"],
             capture_output=True, text=True, timeout=30, env=env,
         )
     except (OSError, _core.subprocess.TimeoutExpired, ValueError):
@@ -796,6 +897,9 @@ def _try_wt_send_for_headless_delivery(session_id, text):
     if not payload.get("ok"):
         return None
     result = {"ok": True, "source": "wt-send", "via": "wt-send", "resumed": True}
+    if attr and payload.get("attribution_v") != 1:
+        result["attribution_limitation"] = "legacy WatchTower did not acknowledge the envelope"
+        _core._log_activity("inject", "ATTRIBUTION-LEGACY", "WatchTower envelope not acknowledged")
     # CCC-452: surface wt's delivery pipeline to the UI. `wt send --json`
     # reports the transport it used (fifo/tty/resume/codex/delegate) and, when
     # the transport records one, a receipt_id the client can poll via
@@ -854,10 +958,16 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
     if not _core._wt_messaging_enabled() or not _core._wt_cli_available():
         return None
     timeout_s = max(1, math.ceil(timeout_ms / 1000.0))
+    from sender_envelope import child_env, from_text, enabled, ENV
+    handoff_env = child_env()
+    envelope = from_text(text) if enabled("ccc") else None
+    if envelope:
+        handoff_env[ENV] = json.dumps(envelope)
     try:
+        wt_bin = _core._wt_cli_path() or "wt"
         proc = _core.subprocess.run(
-            ["wt", "ask", session_id, text, "--timeout", str(timeout_s), "--json"],
-            capture_output=True, text=True, timeout=timeout_s + 15,
+            [wt_bin, "ask", session_id, text, "--timeout", str(timeout_s), "--json"],
+            capture_output=True, text=True, timeout=timeout_s + 15, env=handoff_env,
         )
     except (OSError, _core.subprocess.TimeoutExpired, ValueError):
         return None
@@ -865,7 +975,10 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
         payload = json.loads(proc.stdout or "")
     except (json.JSONDecodeError, TypeError):
         return None
-    return _core._map_wt_ask_json_to_ccc_result(payload)
+    result = _core._map_wt_ask_json_to_ccc_result(payload)
+    if result is not None and envelope and payload.get("attribution_v") != 1:
+        result["attribution_limitation"] = "WT does not acknowledge envelope support"
+    return result
 
 
 # ── Inject circuit breaker ──────────────────────────────────────────────────
@@ -1397,11 +1510,17 @@ def _annotate_inject_result(result, *, requested, force_queue=False, fields=None
         effect = "queued" if result.get("queued") else "delivered"
     elif result.get("blocked"):
         effect = "blocked"
+    elif result.get("uncertain"):
+        # The transport may have applied it (e.g. a timed-out Codex
+        # turn/steer); "failed" would invite a duplicate resend (CCC-238).
+        effect = "unknown"
     else:
         effect = "failed"
     aborted = bool(result.get("interrupted")) or via in _INJECT_ABORTING_VIA
     if effect == "queued":
         landed = "after_turn"
+    elif effect == "unknown":
+        landed = "unknown"
     elif effect != "delivered":
         landed = "none"
     elif aborted:
@@ -1455,7 +1574,7 @@ def _log_inject_result(
         )
         return
     _core._log_activity(
-        "inject", "INJECT_REJECT",
+        "inject", "INJECT_UNKNOWN" if result.get("uncertain") else "INJECT_REJECT",
         f"{detail}code={result.get('code') or '-'} "
         f"error=\"{_core._activity_log_preview(str(result.get('error') or 'delivery failed'))}\" "
         f"text=\"{_core._activity_log_preview(text)}\"",
@@ -1468,10 +1587,35 @@ def _inject_text_into_session(session_id, text, **kwargs):
     Every keyword of the router below is keyword-only, so forwarding **kwargs
     preserves the existing signature exactly.
     """
+    if attribution.enabled("ccc"):
+        incoming = kwargs.pop("attr", None) or getattr(text, "attr", None) or attribution.lookup(text=text)
+        if incoming is None and kwargs.get("peer_sender_sid"):
+            incoming = attribution.request_attr({"peer_sender_sid": kwargs["peer_sender_sid"]}, session_id)
+        if incoming is None:
+            source_name = str(kwargs.get("source") or "api")
+            incoming = (attribution.service("ccc:" + source_name, session_id)
+                        if source_name not in ("api", "wt", "announced_from", "composer")
+                        else attribution.make(session_id))
+        attr = attribution.relay(incoming, "ccc-inject", delivered=session_id)
+        if attr['author']['kind'] == 'session' and not (attr.get('reply_to') or {}).get('route_token'):
+            sender = attr['author'].get('id')
+            node = attr['author'].get('node')
+            if sender:
+                address = (node + ':' + sender) if node and node != attribution.local_node() else sender
+                route = _core._report_routes.create(address)
+                attr['reply_to'] = {'addr': route, 'route_token': route, 'node': attribution.local_node(),
+                                    'method': 'ccc send <addr> <reply>'}
+        kwargs["attr"] = attr
+        kwargs["idempotency_key"] = kwargs.get("idempotency_key") or attr["message_id"]
+        text = attribution.carry(text, attr, app="ccc")
+        attribution_recorded = attribution.journal(attr, app="ccc", event="inject")
+    else:
+        kwargs.pop("attr", None)
     requested = str(kwargs.pop("requested_verb", "") or "")
     mode = str(kwargs.get("mode", "send"))
     fields = dict(kwargs.pop("contract_fields", None) or {})
     allow_duplicate = bool(kwargs.pop("allow_duplicate", False))
+    dedupe_sid = kwargs.pop("_dedupe_session_id", None) or session_id
     if not requested:
         requested, legacy_fields = _LEGACY_TO_VERB.get(mode, (mode, {}))
         for key, value in legacy_fields.items():
@@ -1484,7 +1628,7 @@ def _inject_text_into_session(session_id, text, **kwargs):
     dedupe_owner = False
     while True:
         duplicate, pending, dedupe_owner = _core._inject_dedupe_acquire(
-            session_id, text,
+            dedupe_sid, text,
             source=str(kwargs.get("source", "api")),
             idempotency_key=kwargs.get("idempotency_key"),
             from_terminal_queue=bool(kwargs.get("_from_terminal_queue", False)),
@@ -1530,27 +1674,37 @@ def _inject_text_into_session(session_id, text, **kwargs):
         )
     try:
         result = _annotate_inject_result(
-            _core._inject_text_into_session_router(session_id, text, **kwargs),
+            attribution.during(kwargs.get("attr"), lambda: _core._inject_text_into_session_router(session_id, text, **kwargs)),
             requested=requested,
             force_queue=bool(kwargs.get("force_queue", False)),
             fields=fields,
         )
+        if attribution.enabled("ccc"):
+            result["message_id"] = attr["message_id"]
+            result["attribution_recorded"] = attribution_recorded
         log_owned_by_worker = bool(result.pop("_log_owned_by_worker", False))
     except BaseException:
         if dedupe_owner:
             _core._inject_dedupe_release(
-                session_id, text, kwargs.get("idempotency_key"),
+                dedupe_sid, text, kwargs.get("idempotency_key"),
             )
         raise
     # Queued counts as reaching the session: CCC owns the text from here and
     # the drain (exempt from the check above) delivers it exactly once.
     if isinstance(result, dict) and result.get("ok"):
         _core._inject_dedupe_record(
-            session_id, text, kwargs.get("idempotency_key"),
+            dedupe_sid, text, kwargs.get("idempotency_key"),
         )
+        if result.get("via") == "codex-continuation" and result.get("new_session_id"):
+            # The worker owns the spawn, but this process owns HTTP inject
+            # dedupe. Retries addressed to the old ID now forward to the new
+            # one; its initial prompt already included this message.
+            _core._inject_dedupe_record(
+                result["new_session_id"], text, kwargs.get("idempotency_key"),
+            )
     if dedupe_owner:
         _core._inject_dedupe_release(
-            session_id, text, kwargs.get("idempotency_key"),
+            dedupe_sid, text, kwargs.get("idempotency_key"),
         )
     if not log_owned_by_worker:
         _core._log_inject_result(
@@ -1580,6 +1734,7 @@ def _inject_text_into_session_router(
     force_queue=False,
     peer_sender_sid=None,
     queued_steer_batch=False,
+    attr=None,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -1609,6 +1764,8 @@ def _inject_text_into_session_router(
             "text": text,
             "mode": mode,
             "force_queue": bool(force_queue),
+            "attr": attr,
+            "idempotency_key": (attr or {}).get("message_id") or idempotency_key,
         })
     # Session search can surface a Claude child transcript's bare ``agent-*``
     # id. It is searchable, but Claude cannot resume it independently; route
@@ -1690,6 +1847,8 @@ def _inject_text_into_session_router(
                 "force_queue": bool(force_queue),
                 "source": source,
                 "peer_sender_sid": peer_sender_sid,
+                "attr": attr,
+                "idempotency_key": (attr or {}).get("message_id") or idempotency_key,
             },
             idempotency_key=idempotency_key,
         )
@@ -1730,6 +1889,7 @@ def _inject_text_into_session_router(
     if not is_codex:
         uds_result = _core._try_uds_peer_delivery(
             session_id, text, source=source, mode=mode, peer_sender_sid=peer_sender_sid,
+            **({"attr": attr} if attribution.enabled("ccc") else {}),
         )
         if uds_result is not None:
             return uds_result
@@ -2380,7 +2540,7 @@ def _inject_text_into_session_router(
         # receipt-lost fallback (CCC-452): wt already accepted this text once
         # and the receipt verified it never landed, so retry natively.
         if not wt_origin and not skip_wt:
-            wt_result = _core._try_wt_send_for_headless_delivery(session_id, text)
+            wt_result = _core._try_wt_send_for_headless_delivery(session_id, text, **({"attr": attr} if attribution.enabled("ccc") else {}))
             if wt_result is not None:
                 return wt_result
         return _maybe_queue_on_invalid_cwd(
@@ -2627,6 +2787,22 @@ def _interrupt_claude_headless_local(session_id):
     }
 
 
+def _codex_interrupt_route(status):
+    """Decide how Stop reaches a Codex session: "sigint-exec" for a live,
+    identity-verified headless `codex exec` process, else "app-server"."""
+    if status and status.get("live") and status.get("headless_exec") and status.get("pid"):
+        return "sigint-exec"
+    return "app-server"
+
+
+def _sigint_codex_pid(pid, via, note):
+    try:
+        os.kill(pid, signal.SIGINT)
+    except (ProcessLookupError, PermissionError, OSError) as e:
+        return {"ok": False, "via": via, "pid": pid, "error": str(e)}
+    return {"ok": True, "via": via, "pid": pid, "note": note}
+
+
 def _interrupt_session(session_id):
     """Send an interrupt to a session using the same fall-through as
     `_inject_text_into_session`:
@@ -2646,9 +2822,18 @@ def _interrupt_session(session_id):
     """
     if not session_id:
         return {"ok": False, "error": "missing session_id"}
+    from ccc_server import session_death
+    session_death.note_stop(session_id, "interrupt")
     cwd = _core.find_session_cwd(session_id)
     status = _core.session_live_status(session_id, cwd)
     if _core._is_codex_session(session_id):
+        decision = _codex_interrupt_route(status)
+        if decision == "sigint-exec":
+            # Headless `codex exec` we do not own: no app-server involvement
+            # (thread/resume would load it into the app-server as a second
+            # writer), so signal the identity-verified process directly.
+            return _sigint_codex_pid(status["pid"], "exec-sigint",
+                                     "headless codex exec interrupted")
         app_interrupt = _core._codex_interrupt_via_app_server(session_id, cwd=cwd)
         if app_interrupt.get("ok"):
             return app_interrupt
@@ -2668,6 +2853,9 @@ def _interrupt_session(session_id):
                 "pid": pid,
                 "note": "Codex process interrupted",
             }
+        if app_interrupt.get("code") == "codex_no_active_turn":
+            return {"ok": False, "code": "codex_no_active_turn",
+                    "error": "Codex is idle - no running turn to interrupt"}
         return {"ok": False, "error": "Codex session is not live — nothing to interrupt"}
     acp_harness = _core._session_acp_harness(session_id)
     if acp_harness:
@@ -2744,7 +2932,7 @@ def _bridge_pending_inputs(session_id):
             rows.append({
                 "id": f"{queue_name}:{index}",
                 "queue": queue_name,
-                "text": str(text or ""),
+                "text": attribution.strip_header(str(text or "")),
             })
     return rows
 
@@ -3064,7 +3252,10 @@ def _recover_engine_bridge(session_id, selected_text="", idempotency_key=None):
     engine = _core._detect_session_engine(sid)
     if engine not in ("codex", "kimi"):
         return _core._engine_bridge_status_local(engine, sid)
-    if text and not any(row["text"] == text for row in _bridge_pending_inputs(sid)):
+    # Rows are shown without the attribution header; the client may send
+    # either form back.
+    wanted = attribution.strip_header(text).strip()
+    if text and not any(row["text"].strip() == wanted for row in _bridge_pending_inputs(sid)):
         return {
             "ok": False,
             "code": "queued_message_missing",
@@ -3634,7 +3825,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
                 pass
 
 
-def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_sender_sid=None):
+def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_sender_sid=None, attr=None):
     """Synchronously inject `text` into a session and wait for its reply.
 
     Non-claude engines route first: codex/gemini/antigravity/hermes/opencode/devin
@@ -3658,6 +3849,10 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
       {"ok": False, "error": "timeout", "partial": <best-effort text>, "source": <str>}
       {"ok": False, "error": <message>, "source": <str>}
     """
+    attr = attr or attribution.from_text(text) or attribution.request_attr({"peer_sender_sid": peer_sender_sid}, session_id)
+    attr = attribution.relay(attr, "ccc-ask", delivered=session_id)
+    attribution.journal(attr, app="ccc", event="ask")
+    text = attribution.carry(text, attr, app="ccc")
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
 
@@ -3666,7 +3861,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
     session_id, owner_node = _core._federation_resolve_target(session_id)
     if owner_node:
         return _core._federation_proxy_session_action(owner_node, "ask", {
-            "session_id": session_id, "text": text, "timeout_ms": timeout_ms,
+            "session_id": session_id, "text": text, "timeout_ms": timeout_ms, "attr": attr, "idempotency_key": attr["message_id"],
         }, timeout=min(660.0, max(60.0, timeout_ms / 1000.0 + 45.0)))
 
     session_id = _core._resolve_local_spawn_session_prefix(session_id)
@@ -3686,6 +3881,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
                 "timeout_ms": timeout_ms,
                 "cwd": cwd,
                 "peer_sender_sid": peer_sender_sid,
+                "attr": attr,
             },
             timeout_ms=timeout_ms,
         )

@@ -7,11 +7,21 @@ time-ordered with a correct per-queue open-depth fold.
 """
 import importlib
 import sys
+from datetime import datetime, timedelta, timezone
 
 
 def _load_server():
     sys.modules.pop("server", None)
     return importlib.import_module("server")
+
+
+# Timestamps are anchored to "now" (the replay drops events older than its
+# lookback window, so fixed dates would silently rot into an empty result).
+_T0 = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(second=0, microsecond=0)
+
+
+def _at(minutes):
+    return (_T0 + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # Synthetic durable ticket items — same shape watchtower.queue persists
@@ -20,21 +30,21 @@ _FAKE_ITEMS = [
     {
         "ref": "DEMO-1", "queue": "DEMO", "project": "DEMO", "status": "closed",
         "note": "first ticket", "claimed_by": "demo-aaa",
-        "created_at": "2026-07-16T10:00:00Z",
-        "claimed_at": "2026-07-16T10:05:00Z",
-        "closed_at": "2026-07-16T10:20:00Z",
+        "created_at": _at(0),
+        "claimed_at": _at(5),
+        "closed_at": _at(20),
     },
     {
         "ref": "DEMO-2", "queue": "DEMO", "project": "DEMO", "status": "in_progress",
         "note": "second ticket", "claimed_by": "demo-bbb",
-        "created_at": "2026-07-16T10:10:00Z",
-        "claimed_at": "2026-07-16T10:12:00Z",
+        "created_at": _at(10),
+        "claimed_at": _at(12),
         "closed_at": None,
     },
     {
         "ref": "OTHER-9", "queue": "OTHER", "project": "OTHER", "status": "open",
         "note": "other queue ticket", "claimed_by": "",
-        "created_at": "2026-07-16T10:15:00Z",
+        "created_at": _at(15),
         "claimed_at": None,
         "closed_at": None,
     },
@@ -49,7 +59,10 @@ def test_queue_replay_events_are_time_ordered_with_depth_fold(monkeypatch):
         def list_items():
             return [dict(it) for it in _FAKE_ITEMS]
 
-    monkeypatch.setattr(server, "_q", _FakeQ)
+    # The derive logic now lives in ccc_server.queue_events and reads the
+    # queue store through ccc_server.core at call time, so patch it there.
+    from ccc_server import core as _core
+    monkeypatch.setattr(_core, "_q", _FakeQ)
 
     out = server._queue_replay_events_uncached()
     events = out["events"]
@@ -91,6 +104,7 @@ def test_queue_replay_events_tolerate_bad_input(monkeypatch):
         def list_items():
             raise RuntimeError("store unavailable")
 
-    monkeypatch.setattr(server, "_q", _BoomQ)
+    from ccc_server import core as _core
+    monkeypatch.setattr(_core, "_q", _BoomQ)
     out = server._queue_replay_events_uncached()
     assert out == {"events": [], "truncated": False}

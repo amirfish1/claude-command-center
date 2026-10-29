@@ -44,7 +44,7 @@ the release, and leave the `[Unreleased]` header empty.
   fallback no longer exists).
 - **docs/index.html** (ccc.amirfish.ai) — bump the nav badge, hero badge,
   release meta line, compare-table header, and the `#whats-new` strip; swap the
-  hero frame image; keep engine counts honest ("eight engines", not seven).
+  hero frame image; keep engine counts honest ("nine engines", not eight).
   The GET CCC button links `releases/latest` so it never pins an old tag.
 - **Screenshots** — never capture the live dashboard (real session titles =
   PII). Use the seeded fixtures via `scripts/story-capture`:
@@ -58,12 +58,33 @@ the release, and leave the `[Unreleased]` header empty.
 
 ## 0.9 Announce
 
-Draft and hand to the maintainer (or post): a WhatsApp blurb for friends
-(short, casual, top 3 features + link) and a Reddit post that names the actual
-new features — never "there's a new version". Threads that worked:
-r/ClaudeAI, r/codex, r/LocalLLaMA for the multi-engine angle.
+Post directly, don't just hand text to the maintainer:
 
-`cut-release.sh` orchestrates the whole sequence below, fails loud on the first error, auto-computes the Homebrew sha256, and verifies at the end. **Always `--dry-run` first.** Prereqs are the same as the manual steps (Developer ID cert, `ccc-notary` notarytool profile, Sparkle EdDSA key in login keychain, `gh` logged in, Homebrew tap at `~/Apps/homebrew-ccc` or `$CCC_BREW_TAP`).
+- **"CCC Updates" WhatsApp group** — the maintainer's FishClaw WhatsApp
+  bridge lives on the Hermes VM at loopback `:3000` (`ssh hermes-gcp`).
+  **Always post with a screenshot of the new functionality** — reuse the
+  release hero (`docs/images/ccc-vX-Y-Z-hero.png` from `scripts/story-capture`)
+  or capture a feature-specific shot if one screen tells the story better.
+  ```bash
+  # image posts go through /send-media; filePath resolves on the VM, so scp first
+  scp docs/images/ccc-vX-Y-Z-hero.png hermes-gcp:/tmp/ccc-vX-Y-Z-hero.png
+  ssh hermes-gcp 'curl -s -X POST http://127.0.0.1:3000/send-media \
+    -H "Content-Type: application/json" \
+    -d "{\"chatId\":\"<group-jid>@g.us\",\"filePath\":\"/tmp/ccc-vX-Y-Z-hero.png\",\"mediaType\":\"image\",\"caption\":\"<blurb>\"}"'
+  ```
+  Plain text uses the same shape against `/send` (`{chatId, message}`).
+  To resolve the group JID: after the bridge account is added to the group,
+  any inbound message lands in the bridge log as `"chatId":"<digits>@g.us"`
+  (`/home/hermes/.hermes/whatsapp/bridge.log` on the VM). When the release is
+  cut *on* hermes-gcp this all runs locally — no ssh hop.
+- **Blurb style** — short, casual, top 3 features + link. WhatsApp uses
+  single-asterisk `*bold*` (not markdown `**`). The GH release URL
+  (`releases/tag/vX.Y.Z`) is the link to share.
+- **Reddit** — name the actual new features, never "there's a new version".
+  Threads that worked: r/ClaudeAI, r/codex, r/LocalLLaMA for the
+  multi-engine angle.
+
+`cut-release.sh` orchestrates the whole sequence below, fails loud on the first error, auto-computes the Homebrew sha256, and verifies at the end. **Always `--dry-run` first.** Prereqs are the same as the manual steps (Developer ID cert, `ccc-notary` notarytool profile, Sparkle EdDSA key in login keychain, `gh` logged in, Homebrew tap at `~/Apps/homebrew-tap` (or the older `~/Apps/homebrew-ccc` checkout) or `$CCC_BREW_TAP`).
 
 The manual steps below are the fallback / reference for what the wrapper does.
 

@@ -17,6 +17,7 @@ import time
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import share_savings
 
 # ---------------------------------------------------------------------------
 # Global usage stats — aggregated across every transcript under PROJECTS_ROOT.
@@ -932,7 +933,7 @@ def _throughput_codex_turns_from_file(
                 effective_input_tps = effective_input / dur_sec if dur_sec > 0 else 0.0
                 effective_total_tps = effective_total / dur_sec if dur_sec > 0 else 0.0
                 turns.append({
-                    "codex_usage_schema": 3,
+                    "codex_usage_schema": 4,
                     "turn_index": len(turns) + 1,
                     "session_id": session_id,
                     "session_name": session_name,
@@ -1531,6 +1532,7 @@ def _throughput_build_bootstrap(
     engine = _core._throughput_engine_filter(engine_filter)
     return {
         "schema": _core._THROUGHPUT_BOOTSTRAP_SCHEMA,
+        "pricing_schema": 2,
         "session_id": session_id,
         "engine": engine,
         "generated_at": float(time.time() if generated_at is None else generated_at),
@@ -1556,6 +1558,8 @@ def _throughput_bootstrap_valid(model, session_id, engine_filter=None):
     if not isinstance(model, dict):
         return False
     if model.get("schema") != _core._THROUGHPUT_BOOTSTRAP_SCHEMA:
+        return False
+    if model.get("pricing_schema") != 2:
         return False
     if model.get("session_id") != session_id or model.get("engine") != engine:
         return False
@@ -1833,6 +1837,7 @@ def _throughput_persist_aggregate_snapshot(session_id, payload, status, engine_f
     try:
         _core._THROUGHPUT_DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         body = {
+            "pricing_schema": 2,
             "generated_at": time.time(),
             "payload": payload,
             "status": status,
@@ -1858,7 +1863,7 @@ def _throughput_initial_payload(session_id, repo_path=None, range_key=None, engi
         stored = json.loads(raw)
         payload = stored.get("payload") or {}
         status = int(stored.get("status") or 200)
-        if status == 200 and payload.get("ok"):
+        if status == 200 and payload.get("ok") and stored.get("pricing_schema") == 2:
             payload = dict(payload)
             payload["snapshot"] = {
                 "state": "cached",
@@ -1972,7 +1977,7 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     size = st.st_size
 
     def current_usage_schema(turns):
-        return all(turn.get("engine") != "codex" or turn.get("codex_usage_schema") == 3
+        return all(turn.get("engine") != "codex" or turn.get("codex_usage_schema") == 4
                    for turn in turns)
 
     # 1. In-memory hit
@@ -2940,7 +2945,7 @@ _THROUGHPUT_WINDOW_CACHE_TTL = 60
 _THROUGHPUT_WINDOW_CACHE_MAX = 64
 _THROUGHPUT_WINDOW_MAX_SPAN_SEC = 7 * 86400
 _THROUGHPUT_WINDOW_MAX_AGE_SEC = 56 * 86400
-_THROUGHPUT_DAILY_SCHEMA = 1
+_THROUGHPUT_DAILY_SCHEMA = 2
 _THROUGHPUT_DAILY_CACHE = {}       # (iso_date,engine) -> {"ts","payload","status"}
 _THROUGHPUT_DAILY_CACHE_TTL = 180
 _THROUGHPUT_DAILY_LOCK = threading.Lock()
@@ -3134,6 +3139,199 @@ def _throughput_window_payload(start, end, engine_filter=None, limit=50):
         _THROUGHPUT_WINDOW_CACHE.pop(oldest, None)
     _THROUGHPUT_WINDOW_CACHE[key] = {"ts": now, "payload": payload, "status": 200}
     return payload, 200
+
+
+# ---------------------------------------------------------------------------
+# Share card — 365 days of totals-only daily buckets for the throughput page's
+# "Share" screen. Reads through the same (mtime,size) per-transcript turn cache
+# as the window/daily digests (discovery is gated by the 365-day mtime cutoff),
+# then keeps only numbers: no session ids, names, titles, paths or repos ever
+# enter the payload. A cold cache can mean parsing many transcripts, so the
+# build runs single-flight on a background thread and callers poll.
+# ---------------------------------------------------------------------------
+
+_THROUGHPUT_SHARE_DAYS = 365
+_THROUGHPUT_SHARE_ENGINES = ("claude", "codex", "kimi")
+_THROUGHPUT_SHARE_TTL = 300
+_THROUGHPUT_SHARE_CACHE = {"ts": 0.0, "payload": None}
+_THROUGHPUT_SHARE_LOCK = threading.Lock()
+_THROUGHPUT_SHARE_JOB = {"thread": None}
+
+
+def _throughput_share_aggregate(turns_by_engine, now=None):
+    """Totals-only daily buckets from {engine: [turn, ...]}.
+
+    Pure function: the only per-turn fields read are numeric usage fields and
+    the end timestamp, so nothing identifying can reach the output.
+    """
+    now = time.time() if now is None else now
+    start_day = (datetime.fromtimestamp(now).astimezone()
+                 - timedelta(days=_THROUGHPUT_SHARE_DAYS - 1)).strftime("%Y-%m-%d")
+    days = {}
+    engines_seen = set()
+    for engine, turns in turns_by_engine.items():
+        for t in turns:
+            t_end = _stats_parse_ts(t.get("t_end"))
+            if not t_end:
+                continue
+            day = t_end.strftime("%Y-%m-%d")
+            if day < start_day:
+                continue
+            row = days.get(day)
+            if row is None:
+                row = days[day] = {
+                    "day": day, "tokens": 0, "raw_context_tokens": 0,
+                    "cache_read_tokens": 0, "turns": 0,
+                    "active_duration_sec": 0.0, "cost_usd": 0.0,
+                    "engine_tokens": {},
+                }
+            tokens = (t.get("tokens_in") or 0) + (t.get("tokens_out") or 0)
+            row["tokens"] += tokens
+            row["raw_context_tokens"] += t.get("raw_context_tokens") or t.get("tokens_in") or 0
+            row["cache_read_tokens"] += t.get("cache_read_tokens") or 0
+            row["turns"] += 1
+            row["active_duration_sec"] += t.get("dur_sec") or 0
+            row["cost_usd"] += t.get("cost_usd") or 0.0
+            row["engine_tokens"][engine] = row["engine_tokens"].get(engine, 0) + tokens
+            if tokens:
+                engines_seen.add(engine)
+    daily = []
+    for day in sorted(days):
+        row = days[day]
+        row["active_duration_sec"] = round(row["active_duration_sec"], 2)
+        row["cost_usd"] = round(row["cost_usd"], 4)
+        daily.append(row)
+    return {
+        "ok": True,
+        "pending": False,
+        "days": _THROUGHPUT_SHARE_DAYS,
+        "generated_at": now,
+        "engines": sorted(engines_seen),
+        "daily": daily,
+    }
+
+
+def _throughput_share_build(now=None):
+    now = time.time() if now is None else now
+    start_epoch = now - _THROUGHPUT_SHARE_DAYS * 86400
+    turns_by_engine = {}
+    for engine in _THROUGHPUT_SHARE_ENGINES:
+        try:
+            turns_by_engine[engine] = _throughput_window_turns(start_epoch, now + 60, engine)
+        except Exception:
+            turns_by_engine[engine] = []
+    payload = _throughput_share_aggregate(turns_by_engine, now=now)
+    payload = share_savings.annotate_share_payload(
+        payload, turns_by_engine, now=now
+    )
+    _THROUGHPUT_SHARE_CACHE["payload"] = payload
+    _THROUGHPUT_SHARE_CACHE["ts"] = time.time()
+    return payload
+
+
+def _throughput_share_payload(wait=2.0):
+    """Cached 365-day totals for the share card.
+
+    Fresh cache -> returned directly. Otherwise a single background build is
+    started (one at a time) and we wait up to ``wait`` seconds for it; if it
+    is still running the caller gets the stale payload (if any) or
+    ``{"pending": True}`` and polls again.
+    """
+    cached = _THROUGHPUT_SHARE_CACHE.get("payload")
+    if cached and time.time() - _THROUGHPUT_SHARE_CACHE["ts"] < _THROUGHPUT_SHARE_TTL:
+        return cached, 200
+    with _THROUGHPUT_SHARE_LOCK:
+        job = _THROUGHPUT_SHARE_JOB.get("thread")
+        if job is None or not job.is_alive():
+            job = threading.Thread(
+                target=_throughput_share_build, name="throughput-share", daemon=True
+            )
+            _THROUGHPUT_SHARE_JOB["thread"] = job
+            job.start()
+    job.join(timeout=max(0.0, wait))
+    cached = _THROUGHPUT_SHARE_CACHE.get("payload")
+    if cached:
+        fresh = time.time() - _THROUGHPUT_SHARE_CACHE["ts"] < _THROUGHPUT_SHARE_TTL
+        return (cached if fresh else dict(cached, stale=True)), 200
+    return {"ok": True, "pending": True, "daily": [], "engines": []}, 200
+
+
+_TITLER_TURNS_CACHE = {"ts": 0.0, "payload": None}
+_TITLER_TURNS_CACHE_TTL = 15
+_TITLER_TURNS_LIMIT = 40
+_TITLER_PROMPT_PREFIX = "Produce a concise 4-8 word title"
+
+
+def _titler_targets(max_bytes=400_000):
+    """{titler_sid: {target_sid, target_mtime}} from the tail of
+    titler-targets.jsonl (written by session_graph._record_titler_target)."""
+    out = {}
+    try:
+        path = _core.COMMAND_CENTER_STATE_DIR / "titler-targets.jsonl"
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - max_bytes))
+            lines = f.read().decode("utf-8", "ignore").splitlines()
+    except Exception:
+        return out
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("titler_sid"):
+            out[d["titler_sid"]] = d
+    return out
+
+
+def _titler_turns_payload():
+    """Last-24h auto-titler turns (headless title helper runs), newest first.
+
+    Feeds the sidebar "auto-title" section. The titler is a `claude -p` run in
+    the scratch dir whose prompt starts with ``_TITLER_PROMPT_PREFIX``. Reuses
+    the per-file (mtime, size) turn cache behind /api/throughput/window plus a
+    short TTL, so a 15s poll never re-walks sessions. Totals cover every titler
+    turn in the window; ``turns`` is capped to the newest ``_TITLER_TURNS_LIMIT``.
+    """
+    now = time.time()
+    cached = _TITLER_TURNS_CACHE
+    if cached["payload"] is not None and now - cached["ts"] < _TITLER_TURNS_CACHE_TTL:
+        return cached["payload"]
+    turns = [
+        t for t in _throughput_window_turns(now - 86400, now + 60, None)
+        if "command-center-scratch" in (t.get("folder_path") or "")
+        and (t.get("trigger_preview") or "").startswith(_TITLER_PROMPT_PREFIX)
+    ]
+    total_bucket = _throughput_empty_bucket()
+    for t in turns:
+        _throughput_add_bucket(total_bucket, t)
+    turns.sort(key=lambda t: t.get("t_end") or "", reverse=True)
+    targets = _titler_targets()
+    payload = {
+        "ok": True,
+        "window_hours": 24,
+        "turn_count": len(turns),
+        "total_tokens": total_bucket["total_tokens"],
+        "output_tokens": total_bucket["output_tokens"],
+        "cost_usd": round(total_bucket["cost_usd"], 4),
+        "turns": [
+            {
+                "session_id": t.get("session_id") or "",
+                "title": (t.get("assistant_preview") or "").strip(),
+                "model": t.get("model") or "",
+                "t_end": t.get("t_end") or "",
+                "dur_sec": t.get("dur_sec") or 0,
+                "tokens": (t.get("tokens_in") or 0) + (t.get("tokens_out") or 0),
+                "output_tokens": t.get("tokens_out") or 0,
+                "target_sid": (targets.get(t.get("session_id")) or {}).get("target_sid") or "",
+                "target_mtime": (targets.get(t.get("session_id")) or {}).get("target_mtime"),
+            }
+            for t in turns[:_TITLER_TURNS_LIMIT]
+        ],
+    }
+    cached["ts"] = now
+    cached["payload"] = payload
+    return payload
 
 
 def _throughput_local_day_bounds(date_str=None):

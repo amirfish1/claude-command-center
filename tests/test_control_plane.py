@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import signal
+import site
 import socket
 import subprocess
 import sys
@@ -277,7 +278,28 @@ class TestWorkerServiceDefinition(unittest.TestCase):
         )
         self.assertIn('"engine-execution-v1" in capabilities', source)
         self.assertIn('kill "$existing_worker_pid"', source)
+
+    def test_worker_units_never_kill_the_sessions_they_launched(self):
+        """A worker restart must not take every session with it: the user
+        unit run.sh writes and the system unit both need KillMode=process
+        (the user unit lacked it, 2026-10-05)."""
+        source = pathlib.Path("run.sh").read_text(encoding="utf-8")
+        worker_unit = source[source.index('cat > "$WORKER_SYSTEMD_UNIT_PATH" <<EOF'):]
+        worker_unit = worker_unit[:worker_unit.index("\nEOF\n")]
+        self.assertIn("KillMode=process", worker_unit)
+        system_unit = pathlib.Path("systemd/ccc-worker.service").read_text(encoding="utf-8")
+        self.assertIn("KillMode=process", system_unit)
         self.assertIn("Never roll an older worker with unresolved work.", source)
+
+    def test_dashboard_units_never_kill_the_engines_they_spawned(self):
+        """A dashboard restart (every CCC auto-pull) must not kill the
+        one-shot engine turns it spawned: both units use KillMode=process."""
+        source = pathlib.Path("run.sh").read_text(encoding="utf-8")
+        unit = source[source.index('cat > "$SYSTEMD_UNIT_PATH" <<EOF'):]
+        unit = unit[:unit.index("\nEOF\n")]
+        self.assertIn("KillMode=process", unit)
+        system_unit = pathlib.Path("systemd/ccc.service").read_text(encoding="utf-8")
+        self.assertIn("KillMode=process", system_unit)
 
     def test_restart_handler_has_no_function_local_uuid_shadow(self):
         source = pathlib.Path("server.py").read_text(encoding="utf-8")
@@ -740,7 +762,7 @@ class TestEngineHost(unittest.TestCase):
             return None
 
         @staticmethod
-        def _tool_child_blocks_inject(_entry):
+        def _tool_child_blocks_inject(_entry, **_kwargs):
             return False
 
         def _reattach_spawned_orphans(self, **_kwargs):
@@ -969,6 +991,11 @@ for line in sys.stdin:
             "CCC_CLAUDE_BIN": str(self.fake_claude),
             "CCC_SKIP_SKILL_INSTALL": "1",
         })
+        # The worker hard-requires `watchtower`. Overriding HOME for state
+        # isolation also hides a user-site (pip --user / editable) install,
+        # because Python derives that path from $HOME at startup. Pin the
+        # user base to the real one so the child still finds it.
+        self.env.setdefault("PYTHONUSERBASE", site.getuserbase())
         self.worker = None
         self.child_pid = None
         self._start_worker()

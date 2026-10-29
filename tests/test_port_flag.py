@@ -6,6 +6,7 @@ where the dashboard bound; ephemeral verification servers that passed
 """
 
 import os
+import site
 import socket
 import subprocess
 import sys
@@ -64,6 +65,9 @@ class TestPortFlagBinding(unittest.TestCase):
             "CCC_WARM_CACHE_ON_STARTUP": "0",
         }
         env.pop("CCC_SSH_HOST", None)
+        # HOME is faked, which hides the user site-packages (where an editable
+        # `watchtower` install lives on dev machines); keep the parent's.
+        env.setdefault("PYTHONUSERBASE", site.getuserbase())
         env.update(extra_env or {})
 
         log_path = Path(tmp) / "server.log"

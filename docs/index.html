@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CCC: Your coding agents outgrew your terminal</title>
-<meta name="description" content="CCC puts every coding-agent session, every engine, however you launched it, on one local board and tells you which one needs you. Local, source-available, and free for non-commercial use.">
+<meta name="description" content="CCC puts every coding-agent session, every engine, however you launched it, on one local board and tells you which one needs you. Local, source-available, and free to use and modify, including at work.">
 <link rel="canonical" href="https://ccc.amirfish.ai">
 <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
 
 <meta property="og:title" content="CCC: Your coding agents outgrew your terminal">
-<meta property="og:description" content="Every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on one local board. See what needs you, steer any session, let work run unattended.">
+<meta property="og:description" content="Every Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin session on one local board. See what needs you, steer any session, keep working on a free model when you hit the usage limit.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://ccc.amirfish.ai">
 <meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=5">
@@ -63,7 +63,7 @@
   .nav-links { display: flex; gap: 22px; font-size: 14px; align-items: center; }
   .nav-links a { text-decoration: none; color: var(--fg-dim); }
   .nav-links a:hover { color: var(--fg); }
-  @media (max-width: 640px) { .nav-links a:not(.gh):not(.captain-link) { display: none; } }
+  @media (max-width: 640px) { .nav-links a:not(.download-link) { display: none; } }
 
   /* Hero */
   .hero { padding: 70px 0 40px; position: relative; }
@@ -474,14 +474,14 @@
     <div class="brand">
       <span class="dot"></span>
       <span>claude command center</span>
-      <span class="version">v5.35</span>
+      <span class="version">v5.41</span>
     </div>
     <nav class="nav-links">
       <a class="captain-link" href="/captain/">Captain</a>
       <a href="/watchtower/">WatchTower</a>
       <a href="/receipts/">Receipts</a>
       <a href="/demo/" rel="noopener">Demo</a>
-      <a href="#install">Install</a>
+      <a class="download-link" href="#install" data-ccc-cta="install_options" data-ccc-placement="nav">Download</a>
       <a class="gh" href="https://github.com/amirfish1/claude-command-center" rel="noopener">GitHub</a>
     </nav>
   </div>
@@ -491,8 +491,8 @@
   <section class="hero" style="border-top: 0;">
     <div class="wrap hero-inner">
       <div class="eyebrow fade-target">
-        <span class="badge">v5.35</span>
-        <span>Local &middot; Open source &middot; MIT &middot; For developers running many coding agents</span>
+        <span class="badge">v5.41</span>
+        <span>Local &middot; Source-available &middot; FSL-1.1-MIT &middot; For developers running many coding agents</span>
       </div>
       <h1 class="hero-title fade-target">
         Your coding agents <span class="orange">outgrew</span> your terminal.
@@ -503,15 +503,16 @@
         <span class="engine-line">sessions in one place.</span>
       </div>
       <p class="lede fade-target">
-        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. <span class="tag">Start the next while the first builds.</span>
+        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. Hit your usage limit and sessions can keep going on a $0 model. <span class="tag">Start the next while the first builds.</span>
       </p>
 
       <div class="cta-row fade-target">
-        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/latest">GET CCC</a>
+        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/download/v5.41.0/ccc-v5.41.0.dmg" data-ccc-cta="download" data-ccc-placement="hero">Download for macOS</a>
+        <a class="btn btn-soft" href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Linux, Windows &amp; Homebrew</a>
       </div>
       <p class="download-meta fade-target">
-        v5.35.0 macOS app, source, and Homebrew release &middot;
-        <a href="#install">Homebrew, Linux, and Windows</a> &middot;
+        macOS app v5.41.0 &middot; source and Homebrew v5.41.0 &middot;
+        <a href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Homebrew, Linux, and Windows</a> &middot;
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md#landing-page-download-clicks">anonymous click count</a>
       </p>
 
@@ -526,7 +527,7 @@
           <span class="live"><span class="pulse"></span>3 sessions live &middot; 12 total</span>
         </div>
         <div class="demo-body">
-          <img class="frame-fallback" src="./images/ccc-v5-35-hero.png" alt="CCC v5.35 showing the session fleet in the compact list, an active agent conversation, and the composer" onerror="this.onerror=null; this.src='./images/demo.png';">
+          <img class="frame-fallback" src="./images/ccc-v5-39-hero.png" alt="CCC v5.39 showing the session fleet in the compact list, an active agent conversation, and the composer" onerror="this.onerror=null; this.src='./images/demo.png';">
           <video class="frame-video" poster="./product-story/assets/video/posters/V-01.png" muted loop playsinline preload="none" hidden aria-label="CCC fleet scan: the board, the kanban, and engine badges across live and waiting sessions">
             <source src="./product-story/assets/video/V-01-fleet-scan.mp4" type="video/mp4">
           </video>
@@ -575,9 +576,9 @@
   <section id="families" class="families-intro">
     <div class="wrap">
       <div class="section-eyebrow fade-target">What it solves</div>
-      <h2 class="fade-target">Six problems that arrive in <span class="orange">order</span>.</h2>
+      <h2 class="fade-target">Seven problems that arrive in <span class="orange">order</span>.</h2>
       <p class="section-lede fade-target">
-        The list grows the same way for everyone. First you cannot see every session. Then you cannot tell which one needs you. Then the flat list itself stops making sense. CCC answers them in that order, and each answer is a real capture from seeded demo data below.
+        The list grows the same way for everyone. First you cannot see every session. Then you cannot tell which one needs you. Then the flat list itself stops making sense. Eventually the usage limit stops the whole fleet. CCC answers them in that order, and each answer is a real capture from seeded demo data below.
       </p>
     </div>
   </section>
@@ -587,11 +588,11 @@
     <div class="wrap chapter-grid">
       <div class="chapter-copy fade-target">
         <div class="chapter-eyebrow">01 &middot; See everything</div>
-        <h2 class="chapter-title" id="f1-title">Nine terminals, eight engines, one board.</h2>
+        <h2 class="chapter-title" id="f1-title">Nine terminals, nine engines, one board.</h2>
         <p class="chapter-promise">Every coding-agent session on your machine, on one local board, however you launched it.</p>
         <ul class="chapter-highlights">
           <li><span class="hl-pain">Resume a session by hand</span> <span class="hl-out">and it still appears. CCC reads each engine's on-disk state as truth, so it sees sessions it never spawned — and since v5.33, headless sessions launched outside the dashboard attach to their parent session automatically.</span></li>
-          <li><span class="hl-pain">One board for eight engines.</span> <span class="hl-out">Claude Code is first-class; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin spawn and ingest with documented gaps.</span></li>
+          <li><span class="hl-pain">One board for nine engines.</span> <span class="hl-out">Claude Code is first-class; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Grok, and Devin spawn and ingest with documented gaps.</span></li>
           <li><span class="hl-pain">Close the dashboard</span> <span class="hl-out">and sessions keep running. Reopen tomorrow and everything reattaches.</span></li>
           <li><span class="hl-pain">Forgotten work resurfaces.</span> <span class="hl-out">Dormant and archived sessions stay in the inventory with time-gap markers, so nothing is silently lost.</span></li>
         </ul>
@@ -636,7 +637,7 @@
         <ul class="chapter-highlights">
           <li><span class="hl-pain">An agent asked and nobody saw.</span> <span class="hl-out">The needs-attention lane flags sessions ending on a real question, including plain-prose ones, with desktop notifications on macOS.</span></li>
           <li><span class="hl-pain">A context window fills silently.</span> <span class="hl-out">A per-session meter warns at danger levels before it costs you a session, with one click through to compact.</span></li>
-          <li><span class="hl-pain">Rate limits sneak up.</span> <span class="hl-out">Usage windows for Claude plans and Codex limits project your pace so you budget the day.</span></li>
+          <li><span class="hl-pain">Rate limits sneak up.</span> <span class="hl-out">Usage windows for Claude plans and Codex limits project your pace, and when a limit hits, sessions can fall back to a free model (see 07).</span></li>
         </ul>
         <details class="chapter-details">
           <summary>Every way CCC helps here</summary>
@@ -644,8 +645,8 @@
             <table class="mini">
               <tr><td>An agent asked "want me to proceed?" 40 minutes ago and you never saw it.</td><td>Attention detection flags sessions ending on a real question, including plain-prose ones, plus desktop notifications on macOS.</td></tr>
               <tr><td>A session dies mid-task because its context window silently filled.</td><td>Per-session context meter with warning and danger levels; click through to compact.</td></tr>
-              <tr><td>No idea how close you are to your plan's rate limits.</td><td>Usage windows for Claude plans and Codex limits, with pace projections.</td></tr>
-              <tr><td>You cannot say what your agent fleet actually produced this week.</td><td>Throughput view: token-weighted output over time, per engine, week by week.</td></tr>
+              <tr><td>No idea how close you are to your plan's rate limits.</td><td>Usage windows for Claude plans and Codex limits, with pace projections and an optional free-model fallback when a limit hits.</td></tr>
+              <tr><td>You cannot say what your agent fleet actually produced this week.</td><td>Throughput view: token-weighted output over time, per engine, and a shareable monthly card.</td></tr>
             </table>
           </div>
         </details>
@@ -670,24 +671,24 @@
     <div class="wrap chapter-grid">
       <div class="chapter-copy fade-target">
         <div class="chapter-eyebrow">03 &middot; Organize the fleet</div>
-        <h2 class="chapter-title" id="f3-title">Thirty sessions is not a list problem.</h2>
+        <h2 class="chapter-title" id="f3-title">A long session list needs a shape.</h2>
         <p class="chapter-promise">Pin strategy, nest execution, arrange the whole operation on a canvas.</p>
         <ul class="chapter-highlights">
-          <li><span class="hl-pain">Thirty rows in a flat list mean nothing.</span> <span class="hl-out">Kanban states, a project tree, and a Flow canvas give the operation a shape.</span></li>
+          <li><span class="hl-pain">A flat list stops meaning anything.</span> <span class="hl-out">Kanban states, a project tree, and a Flow canvas give the operation a shape.</span></li>
           <li><span class="hl-pain">Strategy sinks under execution.</span> <span class="hl-out">Pin strategy sessions to the top and spawned sub-sessions nest beneath them.</span></li>
           <li><span class="hl-pain">Comparing two transcripts is window Tetris.</span> <span class="hl-out">Split pane puts two conversations side by side, each with its own input bar.</span></li>
-          <li><span class="hl-pain">"What did I decide last week?"</span> <span class="hl-out">Search across your Claude Code and Codex session history from the sidebar returns it in seconds.</span></li>
+          <li><span class="hl-pain">"What did I decide last week?"</span> <span class="hl-out">Search and ask across your session history from multiple engines, with citations back to the session where it was decided.</span></li>
         </ul>
         <details class="chapter-details">
           <summary>Every way CCC helps here</summary>
           <div class="mini-wrap">
             <table class="mini">
               <tr><td>Strategy sessions sink under a pile of execution sessions.</td><td>Pin sessions to the top; spawned sub-sessions nest underneath them.</td></tr>
-              <tr><td>Thirty rows in a flat list mean nothing.</td><td>Kanban states (Working, Review, In Testing, Verified, Archived) with drag-and-drop and multi-select.</td></tr>
+              <tr><td>A flat list of dozens of sessions means nothing.</td><td>Kanban states (Working, Review, In Testing, Verified, Archived) with drag-and-drop and multi-select.</td></tr>
               <tr><td>Sessions belong to projects and features, not just columns.</td><td>Project tree: group sessions under nestable named objects.</td></tr>
               <tr><td>You want the whole operation laid out spatially, like a whiteboard.</td><td>Flow canvas: drag repos, sessions, group chats, and objects on an infinite zoomable board with edges.</td></tr>
               <tr><td>Comparing two transcripts means window Tetris.</td><td>Split pane: two conversations side by side, each with its own input bar.</td></tr>
-              <tr><td>"What did I decide about this last week?" takes minutes of grep.</td><td>Search across all Claude Code and Codex session history from the sidebar.</td></tr>
+              <tr><td>"What did I decide about this last week?" takes minutes of grep.</td><td>Search and ask across session history from multiple engines and paired machines, with citations to the source session.</td></tr>
               <tr><td>Auto-generated session titles are useless slugs.</td><td>One-click AI-regenerated titles.</td></tr>
             </table>
           </div>
@@ -802,15 +803,15 @@
         <h2 class="chapter-title" id="f6-title">The fleet stays home. You don't have to.</h2>
         <p class="chapter-promise">Phone in hand or a different machine entirely. The fleet does not care where you are.</p>
         <ul class="chapter-highlights">
-          <li><span class="hl-pain">Phone in hand.</span> <span class="hl-out">A responsive mobile UI shows the whole fleet and lets you steer any session from your network.</span></li>
+          <li><span class="hl-pain">Phone in hand.</span> <span class="hl-out">A responsive mobile UI shows the whole fleet and lets you steer any session. One button puts CCC on your Tailscale tailnet and shows a QR code for your phone.</span></li>
           <li><span class="hl-pain">A different machine entirely.</span> <span class="hl-out">Install CCC where the fleet lives (a home server, a VM) and, with a trusted-network opt-in, reach it from any browser on that network. Never the open internet.</span></li>
-          <li><span class="hl-pain">The fleet does not care where you are.</span> <span class="hl-out">Check it from the couch, pick it up at another desk.</span></li>
+          <li><span class="hl-pain">No VPN on this phone.</span> <span class="hl-out">An opt-in CCC Cloud relay shows sessions, waiting questions, and queues on your phone. The connection is outbound-only from your machine.</span></li>
         </ul>
         <details class="chapter-details">
           <summary>Every way CCC helps here</summary>
           <div class="mini-wrap">
             <table class="mini">
-              <tr><td>You stepped away; the fleet kept going; your phone shows nothing.</td><td>Responsive mobile UI: monitor and steer sessions from a phone on your network.</td></tr>
+              <tr><td>You stepped away; the fleet kept going; your phone shows nothing.</td><td>Responsive mobile UI: monitor and steer sessions from your phone. One-button Tailscale setup with a QR code, or the opt-in, outbound-only CCC Cloud relay.</td></tr>
               <tr><td>The fleet lives on a machine that isn't the one in front of you.</td><td>Loopback-only by default; opt in on a trusted network (<code>CCC_TRUST_TAILNET=1</code>) and reach that machine's CCC from any browser on it. Never the open internet or an untrusted LAN.</td></tr>
               <tr><td>A session needs to move machines, not just be viewed.</td><td>Cross-machine handoff can transfer a session to a paired peer (a niche path; the everyday answer is reaching the fleet where it already runs).</td></tr>
             </table>
@@ -839,6 +840,50 @@
     </div>
   </section>
 
+  <!-- F7 -->
+  <section class="chapter chapter--media-left" id="f7" aria-labelledby="f7-title">
+    <div class="wrap chapter-grid">
+      <div class="chapter-copy fade-target">
+        <div class="chapter-eyebrow">07 &middot; Keep working past the limit</div>
+        <h2 class="chapter-title" id="f7-title">Hit the usage limit. Keep working.</h2>
+        <p class="chapter-promise">A limit-hit session can keep going on a free model, then switch back to Claude when the limit resets.</p>
+        <ul class="chapter-highlights">
+          <li><span class="hl-pain">Your plan runs out at 3pm.</span> <span class="hl-out">Limit-hit Claude sessions can move to a $0 model through a free-model router on your machine, then go back to Claude at reset. You choose when that happens in Settings &rarr; Session limits.</span></li>
+          <li><span class="hl-pain">Boring tasks burn your best tokens.</span> <span class="hl-out">Pick "$0 Free" when you start a session, so the expensive model is saved for the hard parts.</span></li>
+          <li><span class="hl-pain">"Free" turns into a surprise bill.</span> <span class="hl-out">A spawn that can't reach the free router refuses to start instead of silently billing you.</span></li>
+          <li><span class="hl-pain">Picking a free model is guesswork.</span> <span class="hl-out">A free-models leaderboard and a key wizard with signup links get you to a working $0 model in minutes.</span></li>
+        </ul>
+        <details class="chapter-details">
+          <summary>Every way CCC helps here</summary>
+          <div class="mini-wrap">
+            <table class="mini">
+              <tr><td>You hit the usage limit mid-afternoon and every session stops.</td><td>Limit fallback: sessions can keep going on a free model and switch back to Claude when the limit resets. Configure it in Settings &rarr; Session limits.</td></tr>
+              <tr><td>Routine tasks cost the same as hard ones.</td><td>"$0 Free" choice for new sessions, backed by a local free-model router.</td></tr>
+              <tr><td>Setting up free providers means reading five signup pages.</td><td>Free-key wizard: provider cards, paste-and-verify keys, keyless options where they exist.</td></tr>
+              <tr><td>You cannot tell which free model is good enough.</td><td>Free-models leaderboard: races each router model through small coding tasks and pins the winner as your default.</td></tr>
+              <tr><td>You want to know what free runs actually saved.</td><td>Free runs show "$0 &middot; saved $X" on the session and in notifications, and the Savings page adds it up against your plan cost.</td></tr>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div class="chapter-media fade-target">
+        <div class="chapter-frame">
+          <div class="frame-bar">
+            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+            <span class="url">localhost:8090 &middot; running free</span>
+          </div>
+          <div class="frame-body">
+            <img class="frame-fallback" src="./product-story/assets/video/posters/V-20.png" alt="Claude usage at 0 percent left while twelve sessions keep running on a free model through the local router at no cost" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+            <video class="frame-video" poster="./product-story/assets/video/posters/V-20.png" muted loop playsinline preload="none" hidden aria-label="Claude hits its usage limit and twelve sessions keep going on a free model">
+              <source src="./product-story/assets/video/V-20-limit-hit-16x9.mp4" type="video/mp4">
+            </video>
+          </div>
+        </div>
+        <div class="media-cap"><span class="play">&#9654;</span> Watch twelve sessions keep going after the limit</div>
+      </div>
+    </div>
+  </section>
+
   <section id="compare">
     <div class="wrap">
       <div class="section-eyebrow fade-target">Honest comparison</div>
@@ -852,7 +897,7 @@
           <thead>
             <tr>
               <th></th>
-              <th class="us">CCC v5.35</th>
+              <th class="us">CCC v5.41</th>
               <th>claude-squad</th>
               <th>Conductor</th>
               <th>Sculptor</th>
@@ -868,7 +913,7 @@
             </tr>
             <tr>
               <td>Multi-engine dashboard</td>
-              <td class="yes">&#10003; eight engines, Claude Code first-class</td>
+              <td class="yes">&#10003; nine engines, Claude Code first-class</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
@@ -917,7 +962,7 @@
             </tr>
             <tr>
               <td>Windows / Linux</td>
-              <td class="partial">macOS first-class, Linux headless, native Windows install (v5.6)</td>
+              <td class="partial">macOS first-class, Linux headless, native Windows install</td>
               <td class="yes">&#10003;</td>
               <td class="no">macOS</td>
               <td class="partial">macOS + Linux</td>
@@ -931,9 +976,9 @@
   <section id="install">
     <div class="wrap">
       <div class="section-eyebrow fade-target">Get it</div>
-      <h2 class="fade-target">Install in 60 seconds.</h2>
+      <h2 class="fade-target">Start free in five minutes.</h2>
       <p class="section-lede fade-target">
-        macOS, Linux, or Windows, Python 3, and Claude Code. Add Codex, Cursor, Antigravity, Kilo Code, or GitHub CLI and the matching surfaces light up.
+        macOS, Linux, or Windows with Python 3. First run walks you through engines and free-model keys and runs your first task on a $0 model. Add Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Devin, or GitHub CLI and the matching surfaces light up.
       </p>
 
       <div class="install-grid stagger-grid">
@@ -951,17 +996,16 @@ open http://localhost:8090
 
 <span class="comment"># Windows PowerShell: launch later</span>
 .\run.ps1</pre>
-          <p class="req">Installs two hooks into <code>~/.claude/settings.json</code> so every Claude Code session writes the sidecar state CCC reads. Idempotent.</p>
+          <p class="req">Asks before adding two hooks to <code>~/.claude/settings.json</code> so every Claude Code session writes the sidecar state CCC reads. Idempotent.</p>
         </div>
 
         <div class="install-block">
           <h3># Homebrew or Mac app</h3>
 <pre><span class="comment"># drag-and-drop install (recommended if you avoid the terminal)</span>
-<a href="https://github.com/amirfish1/claude-command-center/releases/latest/download/ccc.dmg" style="color: var(--orange); text-decoration: underline; text-underline-offset: 3px;">Download CCC.dmg &darr;</a>
+<a href="https://github.com/amirfish1/claude-command-center/releases/download/v5.41.0/ccc-v5.41.0.dmg" data-ccc-cta="download" data-ccc-placement="install" style="color: var(--orange); text-decoration: underline; text-underline-offset: 3px;">Download CCC.dmg &darr;</a>
 
 <span class="comment"># or via Homebrew</span>
-brew tap amirfish1/ccc
-brew install ccc</pre>
+brew install amirfish1/tap/ccc</pre>
           <p class="req">DMG is notarized and signed by Apple. Drag, drop, double-click. Homebrew installs the <code>ccc</code> command and can run CCC as a background service.</p>
         </div>
       </div>
@@ -971,7 +1015,7 @@ brew install ccc</pre>
 <pre><span class="comment"># installed with CCC; talks to the running server</span>
 ccc sessions                        <span class="comment"># live census: state, age, engine, repo</span>
 ccc models                          <span class="comment"># every engine's models, efforts, cost</span>
-ccc spawn "fix the flaky test" --engine claude --model opus-5
+ccc spawn "fix the flaky test" --engine claude --model opus-5-5
 ccc send queue-drain "also update the changelog"
 ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for the reply</span></pre>
         <p class="req">Address sessions by id or by name fragment. <code>send</code> is fire-and-forget (with <code>--steer</code> to interrupt a turn), <code>ask</code> waits for the reply — no dashboard, no hand-rolled <code>curl</code>.</p>
@@ -992,7 +1036,7 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
             The moment you resume a session by hand, you're outside the tool's universe. The dashboard can't see it. The work you just did doesn't show up against the issue, in the review queue, or anywhere.
           </p>
           <p>
-            <strong>CCC goes the other way.</strong> Each engine's on-disk state is the source of truth. If Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, or OpenCode is running anywhere on your machine, it shows up here. Close the dashboard. Sessions keep running. Reopen tomorrow. Everything still there.
+            <strong>CCC goes the other way.</strong> Each engine's on-disk state is the source of truth. If Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, or Devin is running anywhere on your machine, it shows up here. Close the dashboard. Sessions keep running. Reopen tomorrow. Everything still there.
           </p>
         </div>
         <ul class="why-list fade-target">
@@ -1009,8 +1053,8 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
   <section class="whats-new-strip" id="whats-new" style="padding: 0;">
     <div class="wrap">
       <div class="wn-inner fade-target">
-        <span class="ver">v5.35.0</span>
-        <span>2026-09-28 &middot; The Mac app is now CCC.app and updates itself silently through Sparkle, first launch waits for the Command Line Tools instead of failing, and install.sh checks for them up front. First run opens on an engines review, adds a Tailscale step and a compact consent dialog, and the composer tells you when the engine you picked is not installed.</span>
+        <span class="ver">v5.41.0</span>
+        <span>2026-10-18 &middot; Tap-back reactions on agent messages, faster cached read-aloud, voice access to scheduled jobs, and fixes for Codex sub-agent replies, compact message controls, and duplicate-server startup.</span>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Full changelog &rarr;</a>
       </div>
     </div>
@@ -1032,8 +1076,8 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
   <div class="wrap">
     <div class="foot-row">
       <div>
-        Claude Command Center. MIT &copy; 2026 Amir Fish.<br>
-        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, Cursor, <a href="https://antigravity.google">Antigravity</a>, Kilo Code, Kimi Code, and OpenCode.
+        Claude Command Center. FSL-1.1-MIT &copy; 2026 Amir Fish.<br>
+        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, Cursor, <a href="https://antigravity.google">Antigravity</a>, Kilo Code, Kimi Code, OpenCode, and Devin.
       </div>
       <div class="links">
         <a href="/captain/">Captain</a>
@@ -1057,10 +1101,16 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
 
 <script>
   const DOWNLOAD_EVENT_URL = "https://telemetry.claude-command-center.workers.dev/v1/download";
+  document.querySelectorAll("[data-ccc-cta]").forEach((link) => {
+    link.addEventListener("click", () => {
+      if (window.cccTrackCta) {
+        window.cccTrackCta(link.dataset.cccCta, link.dataset.cccPlacement);
+      }
+    });
+  });
   const downloadCta = document.getElementById("downloadCta");
   if (downloadCta) {
     downloadCta.addEventListener("click", () => {
-      if (window.cccTrackCta) window.cccTrackCta("download");
       try {
         if (navigator.sendBeacon && navigator.sendBeacon(DOWNLOAD_EVENT_URL)) return;
       } catch (_) {

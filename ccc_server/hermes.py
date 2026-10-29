@@ -22,6 +22,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 from ccc_server import dbutil
 from ccc_server.history_search import extract_history_terms, _is_explicit_history_fts_query
 
@@ -186,13 +187,7 @@ def _hermes_pid_alive(pid, expected_start=None):
         return False
     if pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    except OSError:
+    if not _is_pid_alive(pid, perm_alive=True):
         return False
     # kill(pid, 0) succeeds for zombies on Linux; a zombie cannot own a live
     # conversation. While /proc is available, also compare the recorded

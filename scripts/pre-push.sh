@@ -5,7 +5,7 @@
 # the same gate. A thin .git/hooks/pre-push shim calls this; hooks are not
 # versioned, so install it per clone with scripts/install-git-hooks.sh.
 #
-# Bypass for a genuine emergency: git push --no-verify
+# Install pytest before pushing; an unavailable gate must stop the push.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,6 +51,23 @@ if [ -n "$tr_to_hits" ]; then
   exit 1
 fi
 
+# Test fixtures set user.name "Test User" in tmp repos; a leaked GIT_DIR once
+# wrote that into this clone's .git/config, and ~180 commits shipped under it.
+# Refuse to push any commit authored or committed as the fixture identity.
+zero=0000000000000000000000000000000000000000
+while read -r _lref lsha _rref rsha; do
+  [ "$lsha" = "$zero" ] && continue
+  if [ "$rsha" = "$zero" ]; then range="$lsha --not --remotes"; else range="$rsha..$lsha"; fi
+  # shellcheck disable=SC2086
+  bad="$(git log --format='%h %ae %ce %s' $range 2>/dev/null | grep -E ' test@example\.com ' || true)"
+  if [ -n "$bad" ]; then
+    echo "pre-push: commits use the test fixture identity (test@example.com):"
+    echo "$bad"
+    echo "Check 'git config --show-origin user.email', fix it, then amend these commits."
+    exit 1
+  fi
+done
+
 if [ ! -f tests/test_perf_budget.py ]; then
   exit 0  # nothing to gate on this checkout
 fi
@@ -63,13 +80,17 @@ for candidate in "$REPO_ROOT/.venv/bin/python3" $(type -aP python3 2>/dev/null);
     break
   fi
 done
-[ -z "$PY" ] && { echo "pre-push: no python3 with pytest found (checked .venv and PATH), skipping perf gate"; exit 0; }
+if [ -z "$PY" ]; then
+  echo "pre-push: no python3 with pytest found (checked .venv and PATH); push blocked." >&2
+  echo "Install pytest in .venv or a python3 on PATH, then retry the push." >&2
+  exit 1
+fi
 
 echo "pre-push: running perf-budget gate…"
 if ! "$PY" -m pytest tests/test_perf_budget.py -q --tb=short; then
   echo ""
   echo "❌ perf-budget gate FAILED — a hot path lost its gating/caching."
-  echo "   Restore the gate; don't relax the bound. (Emergency bypass: git push --no-verify)"
+  echo "   Restore the gate; don't relax the bound."
   exit 1
 fi
 echo "pre-push: perf gate passed ✓"

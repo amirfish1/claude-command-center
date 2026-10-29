@@ -31,6 +31,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 
 # ---------------------------------------------------------------------------
 # Productivity dashboard — outcome, project, activity, and time evidence.
@@ -730,9 +731,11 @@ def _kill_session_by_id(session_id):
     so a recycled PID can't end up taking out something unrelated.
     """
     import signal
+    from ccc_server import session_death
     sessions_dir = Path.home() / ".claude" / "sessions"
     if not sessions_dir.is_dir():
         return {"ok": False, "error": "no sessions dir"}
+    session_death.note_stop(session_id, "kill")
     killed = []
     errors = []
     matched = 0
@@ -749,9 +752,7 @@ def _kill_session_by_id(session_id):
         pid = data.get("pid")
         if not pid:
             continue
-        try:
-            os.kill(int(pid), 0)
-        except OSError:
+        if not _is_pid_alive(pid):
             continue
         matched += 1
         if not _core._pid_is_engine_process(pid, "claude"):

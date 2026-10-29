@@ -67,6 +67,10 @@ _antigravity_cli_settings_lock = threading.Lock()
 
 
 _ANTIGRAVITY_MODEL_LABELS = {
+    "gemini-4-argon-high": "Gemini 4 Argon (High)",
+    "gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
+    "gemini-4-argon-low": "Gemini 4 Argon (Low)",
+    "gemini-4-argon": "Gemini 4 Argon (High)",
     "gemini-3-8-flash-high": "Gemini 3.8 Flash (High)",
     "gemini-3-8-flash-medium": "Gemini 3.8 Flash (Medium)",
     "gemini-3-8-flash-low": "Gemini 3.8 Flash (Low)",

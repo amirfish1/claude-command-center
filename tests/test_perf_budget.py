@@ -13,6 +13,7 @@ If one fails, a hot path lost its gating or caching — don't relax the bound,
 restore the gate. See CLAUDE.md "Performance gates".
 """
 import importlib
+import importlib.util
 import concurrent.futures
 import gzip
 import json
@@ -31,6 +32,50 @@ import pytest
 from ccc_server import sandbox_harvest
 
 server = importlib.import_module("server")
+
+
+def test_shared_clone_guard_reads_only_live_candidates_and_caches(tmp_path, monkeypatch):
+    """The opt-in hook must not walk session archives or reparse warm rows."""
+    spec = importlib.util.spec_from_file_location(
+        "perf_shared_clone_guard",
+        Path(__file__).resolve().parents[1] / "hooks" / "shared-clone-guard.py",
+    )
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    config_dir = tmp_path / "config"
+    sessions = config_dir / "sessions"
+    sessions.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    for pid, sid in [(11, "current"), (22, "peer")]:
+        (sessions / (str(pid) + ".json")).write_text(json.dumps({
+            "pid": pid, "sessionId": sid, "cwd": str(repo)}))
+    # Archived/dead entries cannot become candidates, whatever their count.
+    for pid in range(100, 200):
+        (sessions / (str(pid) + ".json")).write_text("{}")
+    monkeypatch.setattr(guard, "_live_claude_pids", lambda: [11, 22])
+    def forbidden(*args, **kwargs):
+        raise AssertionError("hook walked a session directory or forked per row")
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(guard.subprocess, "run", forbidden)
+    reads = []
+    original = guard._read_json
+    def read_json(file, limit):
+        reads.append(file.name)
+        return original(file, limit)
+    monkeypatch.setattr(guard, "_read_json", read_json)
+    assert guard.peer_roots("current", config_dir, float("inf")) == {str(repo)}
+    assert reads == ["git-guard-cache.json", "11.json", "22.json"]
+    reads.clear()
+    assert guard.peer_roots("current", config_dir, float("inf")) == {str(repo)}
+    assert reads == ["git-guard-cache.json"], "warm hook re-parsed unchanged session rows"
+    reads.clear()
+    (sessions / "22.json").write_text("{}")
+    assert guard.peer_roots("current", config_dir, float("inf")) == set()
+    assert reads == ["git-guard-cache.json", "22.json"]
 
 
 def test_healthcheck_cold_cache_build_is_singleflight(monkeypatch):
@@ -150,9 +195,11 @@ def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
     payload = server._archive_list_payload([row], window="1d", now=now)
 
     projected = payload["conversations"]
-    assert projected == [
-        {key: row[key] for key in server._ARCHIVE_LIST_FIELDS if key in row}
-    ]
+    assert projected == [dict(
+        {key: row[key] for key in server._ARCHIVE_LIST_FIELDS if key in row},
+        # The full reply never ships; only a capped one-line preview does.
+        last_assistant_preview=server._archive_list_preview(transcript),
+    )]
     assert payload["window"] == "1d"
     assert payload["count"] == 1
     assert payload["total_count"] == 1
@@ -181,6 +228,23 @@ def test_archive_list_window_filters_old_rows_but_keeps_pinned_and_hermes():
     assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="all", now=now)] == ["recent", "week-old", "old", "pinned-old", "hermes-old"]
 
 
+def test_archive_list_window_filters_open_idea_ticket_rows(monkeypatch):
+    now = 2_000_000.0
+    ages = {"now": 60, "day": 12 * 3600, "week": 2 * 86400, "old": 8 * 86400}
+    for queue in ("IDEAS", "SMALL-BUGS"):
+        tickets = {sid: {"ref": f"EXAMPLE-{i}", "queue": queue, "sessions": 1, "closed": False}
+                   for i, sid in enumerate(ages, 1)}
+        monkeypatch.setattr(server._idea_tickets, "idea_ticket_rows_map", lambda: tickets)
+        monkeypatch.setattr(server._idea_tickets, "sweep_rows", lambda rows: None)
+        rows = [{"session_id": sid, "engine": "claude", "mtime": now - age}
+                for sid, age in ages.items()]
+        for window, expected in (("8h", ["now"]), ("1d", ["now", "day"]),
+                                 ("7d", ["now", "day", "week"]), ("all", list(ages))):
+            out = server._archive_list_project_rows(rows, window=window, now=now)
+            assert [row["session_id"] for row in out] == expected
+            assert all(row["idea_ticket"] == tickets[row["session_id"]] for row in out)
+
+
 def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
     calls = []
 
@@ -195,6 +259,55 @@ def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
     assert [row["session_id"] for row in rows] == ["warm"]
     assert from_cache is True
     assert calls == [{"include_prs": False}]
+
+
+def test_archive_list_sidebar_payload_budget_at_corpus_scale(monkeypatch):
+    """A 1,543-row archive must project only the 234 visible-window rows.
+
+    Guard allocation/call counts and uncompressed bytes, not host-dependent
+    wall time or just the gzip ratio of repetitive synthetic transcripts.
+    """
+    now = 2_000_000.0
+    rows = [{
+        "id": f"session-{i:04d}", "session_id": f"session-{i:04d}",
+        "engine": "claude", "source": "interactive",
+        "folder_path": "/tmp/example", "folder_label": "example",
+        "mtime": now - (60 if i < 234 else 30 * 86400),
+        "first_message": "Review the example feature. " * 4,
+        "ai_title": f"Example task {i}", "state": "ended",
+        "archived": False, "trashed": False, "pinned": False,
+        "last_assistant_text": "Transcript-only detail. " * 120,
+        "debug": {"parser_notes": "not sidebar metadata " * 12},
+    } for i in range(1543)]
+    calls = []
+    project = server._archive_list_project_row
+
+    def counted(row, **kw):
+        calls.append(row["id"])
+        return project(row, **kw)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("sidebar projection performed transcript or process work")
+
+    monkeypatch.setattr(server, "_archive_list_project_row", counted)
+    monkeypatch.setattr(server._session_graph, "parent_of", lambda sid: None)
+    monkeypatch.setattr(server, "usage_limit_resume_at_for_session", lambda sid, **kw: None)
+    monkeypatch.setattr(server, "find_all_conversations", forbidden)
+    monkeypatch.setattr(server, "_tail_read_lines", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    full = json.dumps({"conversations": rows}).encode()
+
+    payload = server._archive_list_payload(rows, window="7d", now=now)
+    slim = json.dumps(payload).encode()
+
+    assert payload["count"] == 234
+    assert payload["total_count"] == 1543
+    assert calls == [row["id"] for row in rows[:234]]
+    assert len(slim) < 160_000
+    assert len(slim) < len(full) * 0.04
+    # The opt-in projection must never strip the shared /all source rows.
+    assert json.dumps({"conversations": rows}).encode() == full
 
 
 def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
@@ -277,6 +390,7 @@ def test_archive_list_http_route_projects_cached_rows(monkeypatch):
     assert body["conversations"] == [{
         "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
         "archived": True, "trashed": True, "all_lane_override": "messages",
+        "last_assistant_preview": "not returned",
     }]
 
 
@@ -1284,7 +1398,7 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     # assert CCC's scheduling, not the CI box's load: on a busy VM (load 30 on
     # 8 cores) the gate suppressed every spawn and 4 tests failed there only.
     # Tests of the gate itself override this with their own setattr.
-    monkeypatch.setattr(server, "machine_saturated", lambda: False)
+    monkeypatch.setattr(server, "_machine_load", lambda: (0.0, 8))
     # Short-TTL memos (corpus signature + per-session liveness) are module
     # globals; reset them so a leaked sig/liveness entry from a prior test can't
     # make a signature-gated assertion order-dependent.
@@ -1328,33 +1442,38 @@ def test_archive_serve_default_throttles_large_corpus_refreshes():
 
 
 def test_archive_spawned_cold_cache_does_not_block_request(monkeypatch):
-    """A slow first spawned-session refresh must not hang ?all=1."""
+    """A cold request must return while spawned-session discovery is blocked."""
     release = threading.Event()
     refreshed = threading.Event()
+    returned = threading.Event()
+    result = {}
 
     def slow_list():
-        release.wait(timeout=2)
+        release.wait(timeout=10)
         refreshed.set()
         return [{"spawn_id": "late"}]
+
+    def request():
+        try:
+            result["rows"] = server._archive_spawned_coalesced()
+        finally:
+            returned.set()
 
     monkeypatch.setattr(server, "list_spawned_sessions", slow_list)
     monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 2.0)
     monkeypatch.setattr(server, "_archive_spawned_cache", {"ts": 0.0, "data": None})
     monkeypatch.setattr(server, "_archive_spawned_refreshing", False)
-    timer = threading.Timer(0.5, release.set)
-    timer.start()
-    start = time.perf_counter()
+    caller = threading.Thread(target=request, daemon=True)
+    caller.start()
     try:
-        rows = server._archive_spawned_coalesced()
-        elapsed = time.perf_counter() - start
-        assert rows == [], "cold request should serve an empty stale snapshot"
-        assert elapsed < 0.2, (
-            f"cold spawned-session cache blocked for {elapsed:.3f}s instead of "
-            "refreshing off-thread"
-        )
+        # Check ordering against an explicitly blocked discovery, rather than
+        # a 200ms wall-clock budget that includes unrelated host scheduling.
+        assert returned.wait(timeout=2), "cold request waited for discovery"
+        assert not refreshed.is_set(), "discovery must still be blocked"
+        assert result["rows"] == [], "cold request should serve an empty stale snapshot"
     finally:
         release.set()
-        timer.cancel()
+        caller.join(timeout=2)
         refreshed.wait(timeout=2)
         deadline = time.time() + 2
         while server._archive_spawned_refreshing and time.time() < deadline:
@@ -1513,7 +1632,7 @@ def test_archive_refresh_spawn_gated_when_machine_saturated(
 
     spawned = []
     monkeypatch.setattr(server.threading, "Thread", _FakeThreadFactory(spawned))
-    monkeypatch.setattr(server, "machine_saturated", lambda: True)
+    monkeypatch.setattr(server, "_machine_load", lambda: (13.0, 8))  # >= 1.5/core
 
     rows, from_cache, _ver = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
 
@@ -1523,7 +1642,7 @@ def test_archive_refresh_spawn_gated_when_machine_saturated(
     with server._archive_serve_lock:
         assert _ALL_KEY not in server._archive_serve_refreshing
 
-    monkeypatch.setattr(server, "machine_saturated", lambda: False)
+    monkeypatch.setattr(server, "_machine_load", lambda: (11.0, 8))
     server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
     assert len(spawned) == 1
     assert spawned[0].target is server._archive_serve_refresh
@@ -1534,7 +1653,7 @@ def test_archive_refresh_load_blocked_fails_open(monkeypatch):
     def boom():
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(server, "machine_saturated", boom)
+    monkeypatch.setattr(server, "_machine_load", boom)
     assert server._archive_refresh_load_blocked(time.time()) is False
 
 
@@ -1668,6 +1787,105 @@ def test_archive_response_cache_restores_signature_stat_map(
         with server._archive_sig_lock:
             server._ARCHIVE_STATMAP_BY_SIG.pop(old_sig, None)
             server._ARCHIVE_STATMAP_BY_SIG.pop(new_sig, None)
+
+
+def test_archive_cache_load_is_single_flight(isolated_archive_cache, monkeypatch):
+    """CCC-1244: a caller racing the boot-time load must wait for it, not see
+    an empty cache and fall through to a synchronous full archive rebuild."""
+    import threading
+    server._archive_response_cache_put(_ALL_KEY, [{"session_id": "persisted"}])
+    server._save_archive_response_cache(force=True)
+    server._ARCHIVE_RESPONSE_CACHE.clear()
+    server._ARCHIVE_RESPONSE_CACHE_LOADED = False
+
+    real_read = server._read_archive_response_cache_file
+    reading = threading.Event()
+    release = threading.Event()
+
+    def slow_read():
+        reading.set()
+        release.wait(5)
+        real_read()
+
+    monkeypatch.setattr(server, "_read_archive_response_cache_file", slow_read)
+    first = threading.Thread(target=server._load_archive_response_cache)
+    first.start()
+    assert reading.wait(5)
+    seen = {}
+    second = threading.Thread(target=lambda: seen.update(entry=server._archive_response_cache_get(_ALL_KEY)))
+    second.start()
+    second.join(0.2)
+    assert second.is_alive(), "second caller returned before the persisted cache was loaded"
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert [r.get("session_id") for r in seen["entry"]["conversations"]] == ["persisted"]
+
+
+def test_devin_overlay_cold_miss_does_not_block_list(monkeypatch):
+    """CCC-1244: with nothing cached (fresh process) the /list overlay must not
+    run the multi-second sessions.db scan inline; it builds in the background."""
+    import threading
+    from ccc_server import devin
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_build(**kwargs):
+        started.set()
+        release.wait(5)
+        return [{"session_id": "devincli-x"}]
+
+    monkeypatch.setattr(devin, "_devin_cli_cached_rows", lambda key, ttl_only=True: None)
+    monkeypatch.setattr(devin, "_find_devin_cli_conversations_locked", slow_build)
+    t0 = time.monotonic()
+    rows = devin.find_devin_cli_conversations(include_old=True, stale_ok=True)
+    assert rows == []
+    assert time.monotonic() - t0 < 1.0
+    assert started.wait(5), "cold miss should start a background rebuild"
+    # A second poll while it runs does not start another build.
+    assert devin.find_devin_cli_conversations(include_old=True, stale_ok=True) == []
+    release.set()
+    deadline = time.monotonic() + 5
+    while devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked()
+
+
+def test_devin_overlay_stale_rows_trigger_background_refresh(monkeypatch):
+    """CCC-137: an expired cache served to a stale-ok poll must also start a
+    background rebuild; otherwise Devin rows kept a stale ``modified`` forever
+    and sorted below a fake time gap."""
+    import threading
+    from ccc_server import devin
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_build(**kwargs):
+        calls.append(kwargs)
+        started.set()
+        release.wait(5)
+        return [{"session_id": "devincli-fresh"}]
+
+    def cached(key, ttl_only=True):
+        return None if ttl_only else [{"session_id": "devincli-stale"}]
+
+    monkeypatch.setattr(devin, "_devin_cli_cached_rows", cached)
+    monkeypatch.setattr(devin, "_find_devin_cli_conversations_locked", slow_build)
+    t0 = time.monotonic()
+    rows = devin.find_devin_cli_conversations(include_old=True, stale_ok=True)
+    assert [r["session_id"] for r in rows] == ["devincli-stale"]
+    assert time.monotonic() - t0 < 1.0
+    assert started.wait(5), "stale serve should start a background rebuild"
+    # A second poll while it runs serves stale rows without a second build.
+    rows = devin.find_devin_cli_conversations(include_old=True, stale_ok=True)
+    assert [r["session_id"] for r in rows] == ["devincli-stale"]
+    release.set()
+    deadline = time.monotonic() + 5
+    while devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not devin._DEVIN_CLI_LIST_REBUILD_LOCK.locked()
+    assert len(calls) == 1
 
 
 def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
@@ -2330,7 +2548,11 @@ def test_throughput_full_aggregate_persists_initial_snapshot(monkeypatch, tmp_pa
     """A completed aggregate refresh should seed the next cold initial paint."""
     server._THROUGHPUT_AGG_CACHE.clear()
     monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
-    monkeypatch.setattr(server, "find_all_conversations", lambda *a, **k: [])
+    # Seven-day refreshes use bounded discovery rather than the archive
+    # scanner. Keep this persistence test independent of the host transcripts.
+    monkeypatch.setattr(server, "_throughput_recent_conversations", lambda *a, **k: [])
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda: {})
+    monkeypatch.setattr(server, "usage_reset_events_payload", lambda **_: {"events": []})
 
     full_payload, full_status = server._throughput_payload("all_7_days")
     server._THROUGHPUT_AGG_CACHE.clear()
@@ -2514,8 +2736,9 @@ def test_throughput_refresh_reports_live_session_progress(monkeypatch):
         server._THROUGHPUT_REFRESH_JOBS.clear()
 
     started = server._throughput_refresh_start("all_7_days", "claude")
-    assert finished.wait(1)
-    for _ in range(100):
+    assert finished.wait(5)
+    # Up to 5s: the job's completion bookkeeping lags on a loaded host.
+    for _ in range(500):
         status = server._throughput_refresh_status("all_7_days", "claude")
         if status["state"] == "complete":
             break
@@ -2911,6 +3134,36 @@ def test_archive_build_under_budget(big_projects):
 # Before this gate, ANY corpus change re-ran the full O(all-rows) build
 # (~12s warm, 60-95s under live GIL contention), so list/search freshness
 # equaled the rebuild duration.
+
+def test_archive_snapshot_publication_reads_only_cached_metadata(tmp_path, monkeypatch):
+    """Persisting a large snapshot must not reopen any transcript or rediscover rows."""
+    cache_file = tmp_path / "archive.json"
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache_file)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT", 0.0)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {
+        "base": {"cached_at": time.time(), "signature": "sig", "conversations": [
+            {"session_id": str(i), "jsonl_path": str(tmp_path / f"{i}.jsonl")}
+            for i in range(300)
+        ]},
+    })
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {"sig": ({}, {})})
+    for name in ("find_all_conversations", "_archive_corpus_signature", "_build_archive_conversations"):
+        monkeypatch.setattr(server, name, lambda *a, **k: pytest.fail("persistence scanned sessions"))
+
+    reads = []
+    original_open = Path.open
+
+    def tracked_open(candidate, *args, **kwargs):
+        reads.append(candidate)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    server._save_archive_response_cache(force=True)
+    assert reads == [cache_file], "publication must read just the previous metadata snapshot"
+    server._save_archive_response_cache()
+    assert reads == [cache_file], "debounced publications must do no disk reads"
+    assert len(json.loads(cache_file.read_text())["entries"]["base"]["conversations"]) == 300
+
 
 def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     big_projects, monkeypatch, tmp_path
@@ -3348,8 +3601,22 @@ def test_hermes_conv_open_does_not_scan_whole_sessions_table(monkeypatch, tmp_pa
     assert lineage and lineage[0]["lineage_session_ids"] == [parent, child]
 
 
+def _isolate_hermes_search_channel(monkeypatch):
+    """Session search also ranks hits from Hermes' own messages_fts, read from
+    the host's real ~/.hermes/state.db. Tests that count results must not see
+    the host's sessions."""
+    from ccc_server import session_fts
+    monkeypatch.setattr(session_fts, "_hermes_channel_hits", lambda query, limit: [])
+    # Likewise the sandbox-harvest channel: /tmp/ccc-local-* worker sandboxes
+    # and the harvested dir leak host transcripts into the index.
+    monkeypatch.setenv("CCC_SANDBOX_SCAN_ROOT", "/nonexistent/ccc-test-sandbox")
+    monkeypatch.setenv("CCC_HARVESTED_ROOT", "/nonexistent/ccc-test-harvested")
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", "/nonexistent/ccc-test-devin")
+
+
 def test_session_fts_second_search_does_no_reparse(tmp_path, monkeypatch):
     """A second search must reuse cached (mtime, size) index without re-parsing transcripts."""
+    _isolate_hermes_search_channel(monkeypatch)
     from ccc_server import session_fts
 
     db_path = tmp_path / "session_fts.sqlite"
@@ -3362,6 +3629,7 @@ def test_session_fts_second_search_does_no_reparse(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
@@ -3423,6 +3691,7 @@ def test_session_fts_section_search_cost_is_independent_of_session_count(tmp_pat
     re-parse nothing and run a constant number of section queries (one, via
     the FTS index) however many long sessions exist; section_matches() for
     a page of results is one batched query, never one per sid."""
+    _isolate_hermes_search_channel(monkeypatch)
     from ccc_server import session_fts
 
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(tmp_path / "session_fts.sqlite"))
@@ -3430,6 +3699,7 @@ def test_session_fts_section_search_cost_is_independent_of_session_count(tmp_pat
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
@@ -3495,6 +3765,7 @@ def test_session_fts_search_never_triggers_embedding_backfill_scan(tmp_path, mon
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
@@ -3606,6 +3877,7 @@ def test_ship_graph_second_call_does_no_reparse_or_subprocesses(tmp_path, monkey
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
@@ -3711,6 +3983,7 @@ def test_ship_graph_is_shipped_spawns_no_fetch_or_ls_remote(tmp_path, monkeypatc
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
@@ -3799,12 +4072,14 @@ def test_memory_recall_warm_call_spawns_no_subprocesses(tmp_path, monkeypatch):
     ]
     session_file.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
 
+    _isolate_hermes_search_channel(monkeypatch)
     monkeypatch.setenv("CCC_SHIP_GRAPH_DB", str(ship_db))
     monkeypatch.setenv("WATCHTOWER_DB", str(wt_db_path))
     monkeypatch.setenv("CCC_PROJECTS_ROOT", str(projects_dir))
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "0")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
@@ -3875,6 +4150,7 @@ def test_session_fts_embeddings_warm_search_does_no_reembed(tmp_path, monkeypatc
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
@@ -3942,6 +4218,7 @@ def test_recall_path_search_does_not_block_on_document_embedding(tmp_path, monke
     embedding (a side effect of sync) must be handed to a background thread,
     never awaited inline, or every recall() call after a restart eats the
     full cold-load time."""
+    _isolate_hermes_search_channel(monkeypatch)
     from ccc_server import session_fts
 
     db_path = tmp_path / "session_fts.sqlite"
@@ -3954,6 +4231,7 @@ def test_recall_path_search_does_not_block_on_document_embedding(tmp_path, monke
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
@@ -4109,6 +4387,7 @@ def test_sidebar_recall_search_never_spawns_a_subprocess(tmp_path, monkeypatch):
     (ccc_server/recent_search.py -> ccc_server/session_fts.py), never a
     subprocess call. Guard against a regression that reintroduces a shell-out
     on this path — with or without that binary on PATH, zero forks either way."""
+    _isolate_hermes_search_channel(monkeypatch)
     from ccc_server import session_fts
 
     db_path = tmp_path / "session_fts.sqlite"
@@ -4128,6 +4407,7 @@ def test_sidebar_recall_search_never_spawns_a_subprocess(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex-empty"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
@@ -4179,10 +4459,20 @@ def _session_fts_perf_env(tmp_path, monkeypatch, n_docs=300):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(tmp_path / "codex-empty"))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(tmp_path / "kimi-empty"))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
     monkeypatch.setenv("CCC_SESSION_FTS_DAYS", "0")
     monkeypatch.setenv("CCC_SESSION_FTS_ALLOW_SCRATCH", "1")
     monkeypatch.setenv("CCC_SESSION_FTS_EMBED", "0")
+    # Session search also ranks hits from Hermes' messages_fts and enriches
+    # Hermes sids from the host's real ~/.hermes/state.db (+ profile DBs).
+    # On a box running the gateway that DB is hundreds of MB and constantly
+    # written, so a cold first keystroke paid for an FTS scan of it (0.69s
+    # vs a 0.5s bound) -- timing the host, not the code. Point both at
+    # files that don't exist so the Hermes channel short-circuits.
+    hermes_home = tmp_path / ".hermes"
+    monkeypatch.setattr(server, "HERMES_STATE_DB", hermes_home / "state.db")
+    monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
     for mod in (session_fts, ship_graph):
         if hasattr(mod._tls, "conn") and mod._tls.conn:
             mod._tls.conn.close()
@@ -4391,16 +4681,10 @@ def test_ship_graph_reader_not_blocked_by_open_writer(tmp_path, monkeypatch):
     )
 
 
-def test_session_fts_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch):
-    """MEMO-FIX-14 root cause: `_candidate_files()` walks and stat()s every
-    transcript on disk, unconditionally, on every non-forced sync -- cheap
-    against a small corpus (why unit tests never caught this) but on a real
-    restart, with a large already-indexed corpus and a cold OS metadata
-    cache, that single scan measured 20-45s wall clock for one `recall()`
-    call, racing warm_start()'s own background sync for who does it first.
-    A process's first sync (`_last_sync_ts == 0.0`) against an already-large
-    `file_cache` must defer to the background sync without ever calling
-    `_candidate_files()`."""
+@pytest.mark.parametrize("previous_sync", [0.0, 1.0], ids=["cold", "expired-warm"])
+def test_session_fts_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch, previous_sync):
+    """Cold and expired warm searches must use the index without walking
+    the transcript corpus on the request thread."""
     from ccc_server import session_fts
 
     db_path = tmp_path / "session_fts.sqlite"
@@ -4410,7 +4694,7 @@ def test_session_fts_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path,
     if getattr(session_fts._tls, "conn", None):
         session_fts._tls.conn.close()
     session_fts._tls.conn = None
-    session_fts._last_sync_ts = 0.0
+    monkeypatch.setattr(session_fts, "_last_sync_ts", previous_sync)
 
     conn = session_fts._get_connection()
     session_fts._init_db(conn)
@@ -4431,11 +4715,12 @@ def test_session_fts_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path,
 
     session_fts._sync_index(conn, force=False)
 
-    assert scan_calls == [], "cold-start sync with a large existing corpus scanned the filesystem inline"
-    assert bg_calls == [1], "cold-start sync with a large existing corpus did not defer to the background sync"
+    assert scan_calls == [], "large-corpus refresh scanned the filesystem inline"
+    assert bg_calls == [1], "large-corpus refresh did not defer to the background sync"
 
 
-def test_ship_graph_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch):
+@pytest.mark.parametrize("previous_sync", [0.0, 1.0], ids=["cold", "expired-warm"])
+def test_ship_graph_skips_filesystem_scan_for_large_corpus(tmp_path, monkeypatch, previous_sync):
     """MEMO-FIX-14: the ship_graph analog of the session_fts test above --
     `_count_pending_transcripts()` calls `_candidate_transcript_files()`,
     which is the same O(corpus) filesystem walk/stat, unconditionally."""
@@ -4447,10 +4732,14 @@ def test_ship_graph_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, 
     if getattr(ship_graph._tls, "conn", None):
         ship_graph._tls.conn.close()
     ship_graph._tls.conn = None
-    ship_graph._last_sync_ts = 0.0
+    monkeypatch.setattr(ship_graph, "_last_sync_ts", previous_sync)
 
     conn = ship_graph._get_connection()
     ship_graph._init_db(conn)
+    # Finish fresh-database migrations before seeding transcripts, so the
+    # test exercises the size guard rather than the migration deferral.
+    assert not ship_graph._session_files_migration_pending(conn)
+    assert not ship_graph._continuation_origin_migration_pending(conn)
     rows = [
         (f"/fake/path-{i}.jsonl", f"sid-{i}", float(i), 100, 1)
         for i in range(ship_graph._BG_SYNC_THRESHOLD + 5)
@@ -4470,8 +4759,8 @@ def test_ship_graph_cold_start_skips_filesystem_scan_for_large_corpus(tmp_path, 
 
     ship_graph._sync_all(conn, force=False)
 
-    assert scan_calls == [], "cold-start sync with a large existing corpus scanned the filesystem inline"
-    assert bg_calls == [1], "cold-start sync with a large existing corpus did not defer to the background sync"
+    assert scan_calls == [], "large-corpus refresh scanned the filesystem inline"
+    assert bg_calls == [1], "large-corpus refresh did not defer to the background sync"
 
 
 def test_sandbox_harvest_warm_tick_copies_nothing(monkeypatch, tmp_path):
@@ -4507,3 +4796,209 @@ def test_sandbox_harvest_warm_tick_copies_nothing(monkeypatch, tmp_path):
     assert copy_calls == [], f"warm harvest tick re-copied {len(copy_calls)} unchanged files"
 
 
+
+
+def test_conversation_path_skips_projects_walk_for_known_non_claude(monkeypatch, tmp_path):
+    """CCC-1247: a Codex open walked every ~/.claude/projects dir (2 stats each,
+    misses never cached) several times per request. A memoized non-Claude
+    verdict must skip the walk; an unknown or Claude sid still walks."""
+    root = tmp_path / "projects"
+    for i in range(50):
+        (root / f"-proj-{i}").mkdir(parents=True)
+    claude_sid = "11111111-2222-3333-4444-555555555555"
+    (root / "-proj-49" / f"{claude_sid}.jsonl").write_text("{}\n")
+    monkeypatch.setattr(server, "PROJECTS_ROOT", root)
+    codex_sid = "01a0f2a9-0000-7000-8000-000000000000"
+    monkeypatch.setitem(server._ENGINE_DETECT_CACHE, codex_sid, ("codex", None))
+
+    iterdirs = []
+    real_iterdir = type(root).iterdir
+
+    def counting_iterdir(self):
+        if self == root:
+            iterdirs.append(self)
+        return real_iterdir(self)
+
+    monkeypatch.setattr(type(root), "iterdir", counting_iterdir)
+    for _ in range(3):
+        path = server._resolve_conversation_path(codex_sid)
+        assert not path.is_file()
+    assert iterdirs == [], "known Codex sid walked ~/.claude/projects"
+
+    assert server._resolve_conversation_path(claude_sid).is_file()
+    assert len(iterdirs) == 1
+
+
+def test_voice_briefing_is_bounded_and_subprocess_free(monkeypatch):
+    """The realtime-voice seed builds from cached feeds only: one attention
+    feed call + one queue rollup, zero per-row work, zero subprocesses —
+    even on repeated builds (no hidden all-sessions scan)."""
+    import ccc_server.realtime_voice as rv
+
+    feed_calls, roll_calls, proc_calls = [], [], []
+
+    def feed(**kw):
+        feed_calls.append(kw)
+        # A heavy feed still only costs the one cached call.
+        return {"items": [{"kind": "question", "where": f"s{i}",
+                           "session_id": f"sess_{i}",
+                           "question_text": "q"} for i in range(50)]}
+
+    def roll():
+        roll_calls.append(1)
+        return {"open_total": 9, "queues_total": 3,
+                "workers_live": 2, "stuck_total": 1}
+
+    def no_popen(*a, **k):
+        proc_calls.append((a, k))
+        raise AssertionError("briefing spawned a subprocess")
+
+    monkeypatch.setattr(rv.subprocess, "Popen", no_popen)
+    for _ in range(3):
+        text = rv.build_briefing(feed_fn=feed, rollup_fn=roll)
+        assert "need attention" in text
+        assert len(text) <= 3500
+    assert feed_calls and len(feed_calls) == 3, "briefing did not use exactly one feed call each"
+    assert len(roll_calls) == 3
+    assert proc_calls == []
+
+
+def test_fleet_failover_get_reuses_watcher_state(monkeypatch):
+    now = time.time()
+    tracked = {f"limit-{engine}-{i}": {
+        "engine": engine, "detected_at": now - 60, "resume_at": now + 3600,
+    } for engine in ("claude", "codex", "devin") for i in range(7)}
+    monkeypatch.setattr(server, "_load_usage_limit_resumes", lambda: tracked)
+    monkeypatch.setattr(server, "_load_free_failovers", lambda: {})
+    monkeypatch.setattr(server, "_free_ready_info", lambda: {"ready": True})
+    monkeypatch.setattr(server, "_devin_free_model_candidates", lambda model=None: ["swe-2-medium"])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("fleet poll performed fresh session work")
+
+    for name in ("find_all_conversations", "_archive_all_rows_cached", "_tail_read_lines",
+                 "_usage_limit_claude_candidates", "_usage_limit_codex_candidates",
+                 "_usage_limit_kimi_candidates", "_free_failover_devin_candidates"):
+        monkeypatch.setattr(server, name, forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    for _ in range(10):
+        fleet = server.free_failover_fleet()
+        assert len(fleet["groups"]) == 3
+        assert sum(g["limited_count"] for g in fleet["groups"]) == 21
+
+
+def test_archive_list_projection_loads_per_row_stores_once(monkeypatch):
+    """The 7d sidebar list ran a stat()+lock (usage-limit store) and a lock
+    (session graph) per row; under GIL contention after a restart that was a
+    20s request. Bulk projection must read each store once per call."""
+    import server
+    loads, parents = [], []
+    monkeypatch.setattr(server, "_load_usage_limit_resumes", lambda: loads.append(1) or {})
+    monkeypatch.setattr(server._session_graph, "parent_of", lambda sid: parents.append(sid))
+    rows = [{"id": f"s{i}", "session_id": f"s{i}", "mtime": 1} for i in range(500)]
+    server._archive_list_project_rows(rows, window="all")
+    assert len(loads) == 1
+    assert parents == []
+
+
+def test_archive_list_acp_overlay_skips_sidecars_without_candidates(monkeypatch):
+    """CCC-142: every /api/conversations/list poll ran the ACP overlay, which
+    loaded (and re-stat'd) every spawn marker on disk before checking for a
+    single attached ACP session. Live stack dumps caught 3-4s list requests
+    sitting there. With no candidate, no sidecar may be read; with one
+    missing attached session, they are read exactly once."""
+    import server
+    loads = []
+    monkeypatch.setattr(server, "_load_spawn_markers", lambda: loads.append("m") or {})
+    monkeypatch.setattr(server, "_load_session_name_overrides", lambda: loads.append("n") or {})
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets",
+                        lambda: loads.append("l") or (set(), set()))
+    monkeypatch.setattr(server, "_load_pinned_conversations", lambda: loads.append("p") or [])
+    monkeypatch.setattr(server, "_ACP_HARNESSES", {"kimi": {"label": "Kimi"}})
+    monkeypatch.setattr(server, "_acp_harness_enabled", lambda h: True)
+    rows = [{"id": f"s{i}", "session_id": f"s{i}"} for i in range(2000)]
+    state = {"kimi": {"s5": {"attached": True, "cwd": "/tmp", "status": "active"}}}
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", state)
+    assert server._archive_overlay_acp_sessions(rows) == []
+    assert loads == []
+    state["kimi"]["new-acp"] = {"attached": True, "cwd": "/tmp", "status": "active"}
+    state["kimi"]["other-acp"] = {"attached": True, "cwd": "/tmp", "status": "idle"}
+    out = server._archive_overlay_acp_sessions(rows)
+    assert sorted(r["session_id"] for r in out) == ["new-acp", "other-acp"]
+    assert sorted(loads) == ["l", "m", "n", "p"]
+
+
+def test_restart_recovery_reads_only_window_tails_once_per_boot(monkeypatch, tmp_path):
+    """Restart recovery stats every transcript once per boot, opens only the
+    ones that went quiet in the window before a shutdown, and serves every
+    later request (same boot) from the persisted result."""
+    import json as _json
+    from ccc_server import restart_recovery as rr
+
+    boot = 1_800_000_000.0
+    down = boot - 3600
+    proj = tmp_path / "projects" / "-w"
+    proj.mkdir(parents=True)
+    rec = _json.dumps({"type": "user", "message": {"content": "go"}}) + "\n"
+    for i in range(200):
+        p = proj / ("old-%03d.jsonl" % i)
+        p.write_text(rec)
+        old = down - 30 * 86400
+        os.utime(p, (old, old))
+    near = proj / "near.jsonl"
+    near.write_text(rec)
+    os.utime(near, (down - 60, down - 60))
+
+    opened = []
+    real_tail = rr._read_tail
+    monkeypatch.setattr(rr, "_read_tail", lambda path, size: opened.append(path) or real_tail(path, size))
+    monkeypatch.setattr(rr, "_MEMO", None)
+    # Codex / ACP stores: a stat per file, tails only in the window.
+    acp = tmp_path / "acp" / "kimi"
+    acp.mkdir(parents=True)
+    for i in range(100):
+        p = acp / ("session_old-%03d.jsonl" % i)
+        p.write_text(_json.dumps({"type": "user_text", "text": "go"}) + "\n")
+        old = down - 30 * 86400
+        os.utime(p, (old, old))
+    kw = dict(projects_root=tmp_path / "projects", state_file=tmp_path / "rr.json",
+              boot=boot, now=boot + 60, shutdowns=[down],
+              codex_root=tmp_path / "codex", acp_root=tmp_path / "acp")
+    assert [s["session_id"] for s in rr.state(**kw)["sessions"]] == ["near"]
+    assert len(opened) == 1
+    monkeypatch.setattr(rr, "_MEMO", None)
+    rr.state(**kw)
+    rr.state(**kw)
+    assert len(opened) == 1
+
+
+def test_dead_session_check_reads_only_on_a_transition(monkeypatch, tmp_path):
+    """The dead-session toast looks at a transcript only when a session leaves
+    "working", never per session per tick, and writes state only on change."""
+    from ccc_server import notify, popups
+    from ccc_server import session_death as sd
+
+    monkeypatch.setattr(sd, "STATE_FILE", tmp_path / "death.json")
+    monkeypatch.setattr(sd, "STOPS_FILE", tmp_path / "stops.json")
+    monkeypatch.setattr(notify, "STATE_FILE", tmp_path / "notify-state.json")
+    monkeypatch.setattr(notify, "LOG_FILE", tmp_path / "notify-log.json")
+    monkeypatch.setattr(popups, "APPROVED", frozenset())
+    looked, saves = [], []
+    monkeypatch.setattr(sd, "_find_path", lambda sid: looked.append(sid))
+    real_save = sd._save
+    monkeypatch.setattr(sd, "_save", lambda: saves.append(1) or real_save())
+    notify.reset_for_tests()
+    sd.reset_for_tests()
+    try:
+        cur = {f"s{i}": {"state": "working" if i % 2 else "idle"} for i in range(1000)}
+        notify.observe_session_states(None, cur, publish=lambda item: None)
+        for _ in range(20):
+            notify.observe_session_states(cur, cur, publish=lambda item: None)
+        assert looked == []
+        assert len(saves) == 1
+        after = dict(cur, s1={"state": "idle"})
+        notify.observe_session_states(cur, after, publish=lambda item: None)
+        assert looked == ["s1"]
+    finally:
+        notify.reset_for_tests()

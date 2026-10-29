@@ -247,6 +247,14 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   background: var(--surface);
   overflow: hidden;
 }
+/* ALL view: the band hosts the history chart plus every live worker, far
+   taller than the 320px cap. Clipped, it left the live-workers list cut off
+   with a blank box below it. Let it fill the column and scroll instead. */
+.q2-diagram:has(.q2-live-workers-wrap) {
+  flex: 1 1 auto;
+  max-height: none;
+  overflow-y: auto;
+}
 /* Sized for the tickets column at its 440px default, which is the tightest
    this has to work at; the column is resizable, so it only gets roomier.
    Raised from 168px (CCC-757 reopen): the worker-stage scroll fix wasn't
@@ -1031,6 +1039,8 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-n { white-space: nowrap; }
 .q2-n b { color: var(--text); font-weight: 600; }
 .q2-n.is-blocked, .q2-n.is-blocked b { color: var(--wip-blue); }
+/* in_review (WT-5 gate): closed by its worker, waiting on accept/reject. */
+.q2-n.is-review, .q2-n.is-review b { color: var(--wip-blue); }
 .q2-n.is-open, .q2-n.is-open b { color: var(--orange); }
 .q2-n.is-wip, .q2-n.is-wip b { color: var(--green); }
 .q2-n.is-done, .q2-n.is-done b { color: var(--text-muted); }
@@ -1652,6 +1662,7 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
 .q2-status.is-open { color: var(--orange); }
 .q2-status.is-in_progress { color: var(--green); }
 .q2-status.is-blocked { color: var(--wip-blue); }
+.q2-status.is-in_review { color: var(--wip-blue); }
 .q2-status.is-closed { color: var(--text-muted); }
 /* Queued to run: idle but not "just open" — WatchTower's reconciler will
    pick it up on its own. Purple keeps it out of the orange/green/blue set
@@ -1782,6 +1793,11 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
 .q2-res-row { display: contents; }
 .q2-res-row.is-caveat .q2-res-v { color: var(--orange); }
 .q2-res-row.is-unresolved .q2-res-v { color: var(--red); }
+.q2-res-entry { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.q2-res-entry + .q2-res-entry { margin-top: 6px; }
+.q2-res-entry.is-acked .q2-res-text { color: var(--text-muted); text-decoration: line-through; }
+.q2-res-ack { flex-shrink: 0; white-space: nowrap; border: 1px solid var(--border); cursor: pointer; }
+.q2-res-ack:disabled { opacity: .6; cursor: wait; }
 
 .q2-input {
   width: 100%;
@@ -2162,3 +2178,66 @@ a.q2-toggle-opt:hover { color: var(--text); background: var(--surface-2); }
   background: var(--surface-2);
   cursor: default;
 }
+
+/* ── WatchTower stage pipeline (CCC-1236) ──────────────────────────────────
+   Row: a compact pip strip, one pip per stage the ticket actually has.
+   Detail: the same strip with labels. done = filled, current = pulsing,
+   failed = red, skipped = dim, pending = hollow. */
+.q2-stages { display: inline-flex; align-items: center; gap: 3px; }
+.q2-stage { display: inline-flex; align-items: center; gap: 4px; }
+.q2-stage-pip {
+  width: 7px; height: 7px; border-radius: 50%;
+  border: 1.5px solid var(--text-muted); box-sizing: border-box; opacity: 0.6;
+}
+.q2-stage.is-done .q2-stage-pip { background: var(--green); border-color: var(--green); opacity: 1; }
+.q2-stage.is-current .q2-stage-pip {
+  background: var(--wip-blue); border-color: var(--wip-blue); opacity: 1;
+  animation: q2-stage-pulse 1.6s ease-in-out infinite;
+}
+.q2-stage.is-failed .q2-stage-pip { background: var(--red); border-color: var(--red); opacity: 1; }
+.q2-stage.is-skipped .q2-stage-pip { border-style: dashed; opacity: 0.35; }
+@keyframes q2-stage-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .q2-stage.is-current .q2-stage-pip { animation: none; } }
+
+.q2-stages.is-full { flex-wrap: wrap; gap: 4px 10px; margin: 2px 0 8px; }
+.q2-stages.is-full .q2-stage-pip { width: 9px; height: 9px; }
+.q2-stage-label { font-size: 12px; color: var(--text-muted); }
+.q2-stages.is-full .q2-stage.is-current .q2-stage-label { color: var(--text); font-weight: 600; }
+.q2-stages.is-full .q2-stage.is-failed .q2-stage-label { color: var(--red); }
+.q2-stages.is-full .q2-stage.is-skipped .q2-stage-label { text-decoration: line-through; opacity: 0.6; }
+.q2-stages.is-full .q2-stage + .q2-stage::before {
+  content: "\203A"; color: var(--text-muted); opacity: 0.6; margin-right: 6px;
+}
+
+.q2-trow.has-stage .q2-tstatus { color: var(--wip-blue); }
+.q2-trow.has-stage.is-stage-stuck .q2-tstatus { color: var(--orange); }
+.q2-stage-now { font-size: 12.5px; margin: 2px 0 4px; }
+.q2-stage-now.is-stuck b { color: var(--orange); }
+.q2-stage-stuck {
+  font-size: 11px; color: var(--orange); border: 1px solid var(--orange);
+  border-radius: 8px; padding: 0 6px; margin-left: 4px;
+}
+.q2-stage-note { font-size: 12px; color: var(--text-muted); margin: 2px 0; }
+.q2-stage-note.is-loop { color: var(--orange); }
+.q2-stage-note.is-waiting { color: var(--wip-blue); }
+.q2-stage-links { font-size: 12px; margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.q2-stage-ev { margin: 6px 0; font-size: 12.5px; }
+.q2-stage-ev > summary { cursor: pointer; color: var(--text-muted); }
+.q2-stage-verdict { margin: 6px 0; font-size: 12.5px; padding-left: 8px; border-left: 2px solid var(--border); }
+.q2-stage-verdict.is-pass { border-left-color: var(--green); }
+.q2-stage-verdict.is-fail { border-left-color: var(--red); }
+.q2-stage-tail { max-height: 180px; overflow: auto; font-size: 11px; margin-top: 4px; }
+
+.q2-n.is-stage, .q2-n.is-stage b { color: var(--wip-blue); }
+.q2-n.is-stage-stuck, .q2-n.is-stage-stuck b { color: var(--orange); }
+.q2-stage-head {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px;
+  padding: 6px 12px; font-size: 11.5px; border-bottom: 1px solid var(--border);
+}
+.q2-stage-head-counts, .q2-stage-head-roles { display: inline-flex; flex-wrap: wrap; gap: 2px 10px; }
+.q2-stage-head-roles { color: var(--text-muted); }
+.q2-role { white-space: nowrap; }
+
+.q2-tl-row.is-stage .q2-tl-dot { background: var(--wip-blue); border-color: var(--wip-blue); }
+.q2-tl-row.is-stage-pass .q2-tl-dot { background: var(--green); border-color: var(--green); }
+.q2-tl-row.is-stage-fail .q2-tl-dot { background: var(--red); border-color: var(--red); }

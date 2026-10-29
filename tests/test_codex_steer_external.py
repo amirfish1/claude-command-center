@@ -82,3 +82,96 @@ def test_codex_steer_fallback_send_uses_a_key_the_ledger_has_not_burned():
     assert calls[0]["idempotency_key"] == "inject:deadbeef"
     assert calls[1]["idempotency_key"] != calls[0]["idempotency_key"]
     assert result["ok"]
+
+
+def test_writer_snapshot_holder_classified_as_own_exec_resume():
+    """A shared-state-DB holder whose argv carries this sid through
+    `codex exec resume` is CCC's own worker child — the snapshot must report
+    writer 'ccc' instead of falling to the rollout-mtime 'external' heuristic."""
+    import time as _time
+    from ccc_server import codex as codex_mod
+
+    sid = "019fca00-af1d-7771-bffa-bc81f46b4b53"
+    now = _time.time()
+    holders = [{"pid": 6440, "command": "codex"}]
+    classified = [{
+        "pid": 6440, "command": "codex",
+        "argv": "node /Users/x/.local/bin/codex exec resume --json " + sid + " hi",
+        "kind": "ccc-exec-resume", "this_thread": True,
+    }]
+    with mock.patch.object(
+        codex_mod, "_codex_ccc_exec_child_running", return_value=False
+    ), mock.patch.object(
+        codex_mod, "_codex_classify_state_holders", return_value=classified
+    ), mock.patch.object(
+        server, "_codex_app_server_thread_state", return_value={}
+    ):
+        snap = server._codex_thread_writer_snapshot(
+            sid, now,
+            app_state={},
+            rollout={"path": "/tmp/rollout.jsonl", "mtime_ns": int(now * 1e9)},
+            attached={},
+            holders=holders,
+        )
+    assert snap["writer"] == "ccc"
+    assert snap["external_active"] is False
+
+
+def test_writer_snapshot_foreign_holder_stays_external():
+    """A holder for a different sid must not be claimed as ours."""
+    import time as _time
+    from ccc_server import codex as codex_mod
+
+    sid = "019fca00-af1d-7771-bffa-bc81f46b4b53"
+    now = _time.time()
+    classified = [{
+        "pid": 999, "command": "codex",
+        "argv": "codex exec resume --json other-sid hi",
+        "kind": "ccc-exec-resume", "this_thread": False,
+    }]
+    with mock.patch.object(
+        codex_mod, "_codex_ccc_exec_child_running", return_value=False
+    ), mock.patch.object(
+        codex_mod, "_codex_classify_state_holders", return_value=classified
+    ), mock.patch.object(
+        server, "_codex_app_server_thread_state", return_value={}
+    ):
+        snap = server._codex_thread_writer_snapshot(
+            sid, now,
+            app_state={"status": "idle"},
+            rollout={"path": "/tmp/rollout.jsonl", "mtime_ns": int(now * 1e9)},
+            attached={},
+            holders=[{"pid": 999, "command": "codex"}],
+        )
+    assert snap["writer"] is None
+    assert snap["external_active"] is False
+
+
+def test_holder_argv_cache_batches_ps_calls():
+    """Per-row writer attribution must not fork /bin/ps once per session:
+    the argv map is cached by (pid tuple, TTL)."""
+    from ccc_server import codex as codex_mod
+
+    sid = "019fca00-af1d-7771-bffa-bc81f46b4b53"
+    codex_mod._CODEX_HOLDER_ARGV_CACHE.update(pids=None, at=0.0, argv={})
+    calls = []
+
+    def fake_ps(args, **kw):
+        calls.append(args)
+        r = mock.Mock()
+        pid_field = args[2] if len(args) > 2 else ""
+        first = str(pid_field).split(",")[0]
+        r.stdout = first + " codex exec resume --json " + sid + " hi\n"
+        return r
+
+    with mock.patch.object(codex_mod.subprocess, "run", side_effect=fake_ps):
+        for _ in range(5):
+            rows = codex_mod._codex_classify_state_holders(
+                [{"pid": 6440, "command": "codex"}], sid)
+        assert len(calls) == 1
+        assert rows[0]["kind"] == "ccc-exec-resume"
+        assert rows[0]["this_thread"] is True
+        rows = codex_mod._codex_classify_state_holders(
+            [{"pid": 7000, "command": "codex"}], sid)
+        assert len(calls) == 2
+        assert rows[0]["kind"] == "ccc-exec-resume"

@@ -1,0 +1,63 @@
+.ccc-fleet-host {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9400;
+  width: 460px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  pointer-events: none;
+}
+.ccc-fleet-host[hidden] { display: none; }
+.ccc-fleet-card {
+  pointer-events: auto;
+  background: var(--panel-bg, var(--bg-secondary, #1e1f24));
+  border: 1px solid rgba(240, 173, 78, 0.55);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text, #e6e6e9);
+}
+.ccc-fleet-host .ccc-fleet-card { box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25); }
+.ccc-fleet-card h3 { margin: 0; font-size: 15px; font-weight: 650; }
+.ccc-fleet-summary { margin: 2px 0 8px; color: var(--muted, #9a9ba2); }
+.ccc-fleet-rows { max-height: 260px; overflow-y: auto; margin-top: 8px; }
+#cccFleetLimitsPanel .ccc-fleet-rows { max-height: 340px; }
+.ccc-fleet-row { display: flex; align-items: center; gap: 9px; padding: 6px 0; }
+.ccc-fleet-check { margin: 0; accent-color: #58c88c; flex-shrink: 0; width: 16px; height: 16px; }
+.ccc-fleet-rowbody { flex: 1; min-width: 0; }
+.ccc-fleet-name {
+  display: block; width: 100%; text-align: left; background: none; border: none; padding: 0;
+  color: inherit; font: inherit; font-weight: 600; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ccc-fleet-name:hover { text-decoration: underline; }
+.ccc-fleet-meta { color: var(--muted, #9a9ba2); font-size: 12px; overflow-wrap: anywhere; }
+.ccc-fleet-rowactions { display: flex; gap: 4px; flex-wrap: wrap; flex-shrink: 0; }
+.ccc-fleet-rowactions .ccc-fleet-btn { font-size: 11px; padding: 4px 6px; }
+.ccc-fleet-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.ccc-fleet-btn {
+  border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border, #3a3c44); background: transparent;
+  color: inherit;
+}
+.ccc-fleet-btn:hover { background: rgba(120, 170, 255, 0.09); }
+.ccc-fleet-actions .ccc-fleet-btn[data-act="continue"],
+.ccc-fleet-actions .ccc-fleet-btn[data-act="switch_back"] { background: #58c88c; color: #0c1a12; border-color: transparent; }
+.ccc-fleet-btn:disabled { opacity: 0.45; cursor: default; }
+.ccc-fleet-always { display: flex; align-items: center; gap: 7px; margin-top: 12px; font-size: 12px; color: var(--muted, #9a9ba2); }
+.ccc-fleet-always input { margin: 0; accent-color: #58c88c; }
+.ccc-fleet-note, .ccc-fleet-status { font-size: 12px; color: var(--muted, #9a9ba2); }
+.ccc-fleet-note { margin: 10px 0 0; }
+.ccc-fleet-error { font-size: 12px; color: #d95353; overflow-wrap: anywhere; }
+.ccc-fleet-card button:focus-visible, .ccc-fleet-card input:focus-visible { outline: 2px solid #78aaff; outline-offset: 3px; }
+@media (max-width: 720px) {
+  .ccc-fleet-host { top: 8px; width: auto; left: 10px; right: 10px; transform: none; }
+  .ccc-fleet-rowactions { max-width: 90px; }
+  .ccc-fleet-card { padding: 11px; }
+  .ccc-fleet-always { align-items: flex-start; }
+}

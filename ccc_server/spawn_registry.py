@@ -14,6 +14,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive
 
 # ---------------------------------------------------------------------------
 # Persistent spawn-PID registry
@@ -60,18 +61,14 @@ class _ReattachedProc:
             pass
         except OSError:
             pass
-        try:
-            os.kill(self.pid, 0)
-            if _core._pid_is_zombie(self.pid):
-                self._cached_exit = -1
-                return self._cached_exit
-            return None
-        except ProcessLookupError:
+        # perm_alive: process owned by another user still counts as alive.
+        if not _is_pid_alive(self.pid, perm_alive=True):
             self._cached_exit = -1
             return -1
-        except PermissionError:
-            # Process exists but is owned by another user; treat as alive.
-            return None
+        if _core._pid_is_zombie(self.pid):
+            self._cached_exit = -1
+            return self._cached_exit
+        return None
 
 
 def _load_spawn_registry():
@@ -253,7 +250,7 @@ _SPAWN_FEED_WINDOW_S = 300.0
 _SPAWN_FEED_FIELDS = (
     "session_id", "resumed_sid", "name", "engine", "model", "reasoning_effort",
     "cwd", "repo_path", "parent_session_id", "command_summary", "spawned_via",
-    "log",
+    "runtime", "log",
 )
 
 

@@ -1,0 +1,221 @@
+/* Leftover Mode (static/leftover.js): Settings panel + floating offer card. */
+#settingsSection-leftover { min-width: 0; --lo-green: var(--green, #3fb950); }
+.lo-hero {
+  padding: 20px;
+  margin: 18px 0;
+  border: 1px solid color-mix(in srgb, var(--lo-green) 45%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--lo-green) 8%, transparent);
+}
+.lo-hero h2 {
+  font-size: 20px;
+  line-height: 1.4;
+  margin: 0;
+  color: var(--text, #c9d1d9);
+  overflow-wrap: anywhere;
+}
+.lo-hero p { font-size: 12px; color: var(--text-muted, #8b949e); margin-bottom: 0; }
+.lo-hero p:empty { display: none; }
+.lo-folder { display: block; font-size: 13px; font-weight: 600; color: var(--text, #c9d1d9); }
+.lo-folder input, #loAccount {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text, #c9d1d9);
+  background: var(--surface, #161b22);
+}
+#loAccount { margin-top: 14px; }
+#loAccount[hidden] { display: none; }
+.lo-plan, #loTaskStatus, .lo-sources { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.lo-plan, .lo-sources { color: var(--text-muted, #8b949e); }
+.lo-task {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border, #30363d);
+}
+.lo-task-copy { flex: 1; min-width: 0; }
+.lo-task-source {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-muted, #8b949e);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lo-task h3 { margin: 5px 0 8px; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; color: var(--text, #c9d1d9); }
+.lo-task details { font-size: 12px; }
+.lo-task summary { cursor: pointer; color: var(--text-muted, #8b949e); }
+.lo-task pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--surface, #161b22);
+  padding: 10px;
+  border-radius: 6px;
+}
+.lo-task-actions { width: 150px; flex-shrink: 0; text-align: right; }
+.lo-start {
+  border: 1px solid color-mix(in srgb, var(--green, #3fb950) 70%, transparent);
+  border-radius: 8px;
+  color: var(--text, #c9d1d9);
+  background: color-mix(in srgb, var(--green, #3fb950) 18%, transparent);
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.lo-start:hover:not(:disabled) { background: color-mix(in srgb, var(--green, #3fb950) 32%, transparent); }
+.lo-start:disabled { opacity: .55; cursor: default; }
+.lo-outcome { font-size: 12px; line-height: 1.5; margin-top: 6px; overflow-wrap: anywhere; color: var(--green, #3fb950); }
+.lo-outcome.is-error { color: var(--orange, #d29922); }
+.lo-outcome .lo-link { padding: 0; }
+.lo-link {
+  border: 0;
+  background: none;
+  color: var(--text-muted, #8b949e);
+  padding: 4px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font: inherit;
+  font-size: 12px;
+}
+.lo-link:hover { color: var(--text, #c9d1d9); }
+
+/* Floating offer card (pop-up id 'leftover-offer'). Bottom left so it never
+   covers the notification stack (bottom right). */
+.lo-offer {
+  --lo-green: var(--green, #3fb950);
+  position: fixed;
+  left: 20px;
+  bottom: 20px;
+  z-index: 3900;
+  width: min(400px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 16px 18px 12px;
+  border: 1px solid color-mix(in srgb, var(--lo-green) 40%, var(--border, #30363d));
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--lo-green) 12%, transparent) 0%, transparent 60%),
+    var(--surface, #161b22);
+  color: var(--text, #c9d1d9);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .35), 0 0 0 1px rgba(255, 255, 255, .03) inset;
+  font-family: var(--font-ui, Inter, -apple-system, sans-serif);
+}
+.lo-offer[hidden] { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .lo-offer { animation: lo-offer-in .4s cubic-bezier(.2, .9, .3, 1.1); }
+  @keyframes lo-offer-in { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+}
+.lo-offer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.lo-offer-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--lo-green);
+}
+.lo-offer-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lo-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lo-green) 22%, transparent); }
+.lo-offer-close {
+  border: 0;
+  background: none;
+  color: var(--text-muted, #8b949e);
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lo-offer-close:hover { color: var(--text, #c9d1d9); background: var(--surface-2, #21262d); }
+.lo-offer-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--text, #c9d1d9); }
+.lo-offer-meta { margin: 4px 0 0; font-size: 12px; color: var(--text-muted, #8b949e); overflow-wrap: anywhere; }
+.lo-offer-meta:empty { display: none; }
+.lo-offer-tasks { margin-top: 12px; }
+.lo-offer-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border, #30363d); }
+.lo-offer-task {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.lo-offer-copy { flex: 1; min-width: 0; }
+.lo-offer-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text, #c9d1d9);
+  overflow-wrap: anywhere;
+}
+.lo-offer-task .lo-start { flex-shrink: 0; padding: 6px 14px; }
+.lo-offer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-2, #21262d);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted, #8b949e);
+}
+.lo-offer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+}
+#settingsSection-leftover :focus-visible, .lo-offer :focus-visible { outline: 2px solid var(--green, #3fb950); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .lo-hero { padding: 14px; }
+  .lo-hero h2 { font-size: 18px; }
+  .lo-task { flex-direction: column; gap: 10px; }
+  .lo-task-actions { width: 100%; text-align: left; }
+  .lo-task-actions .lo-start { width: 100%; }
+  .lo-offer { left: 12px; right: 12px; bottom: 12px; width: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lo-start { transition: none; }
+}
+.lo-task-ref {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border, #30363d);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.lo-amount { color: var(--green, #3fb950); }
+#loTaskStatus { margin: 2px 0 10px; color: var(--text, #c9d1d9); }
+.lo-plan { margin: 10px 0 0; }

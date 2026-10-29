@@ -367,7 +367,8 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None,
         # The one explicitly-requested mutation-adjacent step a scan may do:
         # refresh remote refs. Never touches the working tree.
         _core._git(["fetch", "--quiet", "--prune", "origin"], repo_path, timeout=60)
-    wt_payload = _core.list_repo_worktrees(repo_path, include_prs=include_prs)
+    wt_payload = _core.list_repo_worktrees(
+        repo_path, include_prs=include_prs, fresh=True)
     worktrees = []
     for wt in wt_payload.get("worktrees", []):
         entry = dict(wt)
@@ -647,8 +648,31 @@ def _federation_execute_route(envelope, peer=None):
         return {"ok": False, "error": "routing_loop",
                 "detail": "hop limit exhausted"}, 400
     method, api_path, mutating = spec
-    req_id = str(envelope.get("req_id") or "")
-    if mutating and req_id:
+    req_id = str(args.get("idempotency_key") or (args["attr"].get("message_id") if isinstance(args.get("attr"), dict) else "") or envelope.get("req_id") or "")
+    if action in ("inject", "ask") and isinstance(args.get("attr"), dict):
+        import sender_envelope as attribution
+        args = dict(args)
+        try:
+            args["attr"] = attribution.relay(args["attr"], "federation")
+        except ValueError as exc:
+            return {"ok": False, "error": "bad_request", "detail": str(exc)}, 400
+        args["attr"]["relay"][-1]["peer_node"] = str((peer or {}).get("node_id") or "")
+        args["attr"]["basis"] = "claimed"
+        args["attr"]["evidence"] = {"source": "federation", "peer_node": str((peer or {}).get("node_id") or "")}
+        reply = args['attr'].get('reply_to') or {}
+        if reply.get('node') and reply['node'] != attribution.local_node() and str(reply.get('addr') or '').startswith('rr_'):
+            reply['addr'] = reply['node'] + ':' + reply['addr']
+        attribution.journal(args['attr'], app='ccc', event='federation-receive')
+    # Confirmed Fleet steps have permanent executor receipts. Do not cache a
+    # transient loopback timeout or an in-progress response over that receipt:
+    # a later retry must be able to recover the actual completed outcome.
+    from ccc_server import fleet_receipts
+    planned_step = (
+        action == "fleet_step" and isinstance(args.get("action"), dict)
+        and fleet_receipts.request_id(args["action"]) is not None
+    )
+    dedupe = (mutating or action == "ask") and req_id and not planned_step
+    if dedupe:
         prior = federation.check_and_record_request(req_id)
         if prior is not None:
             if "result" in prior:
@@ -742,12 +766,12 @@ def _federation_execute_route(envelope, peer=None):
         result = _federation_self_api(method, api_path, body=args, timeout=timeout)
     if action in _MEMORY_ROUTE_ACTIONS:
         result = _federation_cap_memory_response(result)
-    if mutating and req_id:
+    if dedupe:
         federation.record_request_result(req_id, result)
     return {"ok": True, "result": result}, 200
 
 
-def _federation_proxy_session_action(owner_node, action, args, timeout=60.0):
+def _federation_proxy_session_action(owner_node, action, args, timeout=60.0, req_id=None):
     """Proxy an inject/ask/spawn to the CCC that owns the session. Returns the
     remote action's own result dict (typed errors on transport failure)."""
     peer = federation.get_peer(owner_node)
@@ -756,6 +780,8 @@ def _federation_proxy_session_action(owner_node, action, args, timeout=60.0):
                 "detail": f"session owner {owner_node[:13]}… is not a paired peer "
                           "of this node"}
     envelope = federation.make_route_envelope(action, args)
+    if req_id:
+        envelope["req_id"] = req_id
     try:
         routed = federation.PeerClient(peer).request(
             "POST", "/api/federation/v1/route", envelope, timeout=timeout)

@@ -424,6 +424,50 @@
     .turn-list { max-height: 55vh; overflow-y: auto; }
   }
 
+  /* ── Share card ── */
+  .btn-share { border-color: var(--border-active); color: var(--accent); }
+  .sh-overlay { position: fixed; inset: 0; z-index: 9300; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(4, 6, 10, 0.78); }
+  .sh-overlay.open { display: flex; }
+  .sh-modal { width: min(1180px, 96vw); max-height: 94vh; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 340px; background: #11131b; border: 1px solid #262b40; border-radius: 20px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6); }
+  .sh-left { padding: 26px 28px; border-right: 1px solid #1f2335; min-width: 0; }
+  .sh-right { padding: 26px 24px; background: #0f1118; border-radius: 0 20px 20px 0; }
+  .sh-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .sh-hdr h2 { font-size: 20px; font-weight: 600; }
+  .sh-hdr h3 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b7290; font-weight: 600; }
+  .sh-x { background: none; border: 0; color: #6b7290; font-size: 22px; cursor: pointer; line-height: 1; }
+  .sh-x:hover { color: var(--text); }
+  .sh-seg { display: inline-flex; flex-wrap: wrap; background: #191c28; border-radius: 10px; padding: 3px; margin: 0 10px 12px 0; }
+  .sh-seg button { padding: 6px 12px; border: 0; border-radius: 8px; font: 500 12.5px var(--font-ui); color: #8a91a5; background: transparent; cursor: pointer; }
+  .sh-seg button.on { background: #2a2f45; color: #e8eaf0; }
+  .sh-seg button:disabled { opacity: 0.35; cursor: default; }
+  .sh-stage { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid #23302a; background: #0d1110; line-height: 0; }
+  .sh-stage canvas { width: 100%; height: auto; display: block; }
+  .sh-stage.square { max-width: 560px; margin: 0 auto; }
+  .btn-month { white-space: nowrap; }
+  .btn-month.fresh { border-color: #39d353; color: #9fe0b0; }
+  .sh-status { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 14px; line-height: 1.5; color: #cfe3d6; background: rgba(13, 17, 16, 0.86); }
+  .sh-status.on { display: flex; }
+  .sh-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 16px; font-size: 13px; color: #aab1c5; align-items: center; }
+  .sh-opts label { display: flex; gap: 7px; align-items: center; cursor: pointer; }
+  .sh-opts input[type=checkbox] { accent-color: #26a641; }
+  .sh-pseudo { display: flex; gap: 6px; align-items: center; }
+  .sh-pseudo input[type=text] { width: 150px; background: #0b0d14; border: 1px solid #23283a; border-radius: 8px; padding: 6px 9px; color: #e8eaf0; font-size: 12.5px; }
+  .sh-pseudo button { background: #1c2030; border: 1px solid #2a2f45; border-radius: 8px; padding: 5px 9px; color: #cfd4e6; cursor: pointer; font-size: 12px; }
+  .sh-privacy { margin-top: 14px; font-size: 12px; color: #6b7290; }
+  .sh-milestone { display: none; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: linear-gradient(90deg, #14281d, #101a2b); border: 1px solid #1f4d33; color: #9fe0b0; font-size: 13px; font-weight: 500; }
+  .sh-milestone.on { display: block; }
+  .btn-share.attn { border-color: #39d353; color: #9fe0b0; animation: shPulse 2.2s ease-out infinite; }
+  @keyframes shPulse { 0% { box-shadow: 0 0 0 0 rgba(57, 211, 83, 0.45); } 70% { box-shadow: 0 0 0 9px rgba(57, 211, 83, 0); } 100% { box-shadow: 0 0 0 0 rgba(57, 211, 83, 0); } }
+  @media (prefers-reduced-motion: reduce) { .btn-share.attn { animation: none; } }
+  .sh-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 18px; }
+  .sh-tile { background: #191c28; border: 1px solid #23283a; border-radius: 12px; padding: 12px 8px; text-align: center; font: 500 12.5px var(--font-ui); color: #cfd4e6; cursor: pointer; }
+  .sh-tile:hover:not(:disabled) { border-color: #39d353; }
+  .sh-tile:disabled { opacity: 0.45; cursor: default; }
+  .sh-ico { width: 30px; height: 30px; border-radius: 8px; margin: 0 auto 6px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; color: #fff; background: #2a2f45; }
+  .sh-note { font-size: 12px; color: #8a91a5; line-height: 1.5; min-height: 36px; }
+  .sh-text { width: 100%; background: #0b0d14; border: 1px solid #20253a; border-radius: 8px; padding: 9px 10px; font: 12px/1.5 var(--font-ui); color: #9fe0b0; resize: none; margin-bottom: 14px; }
+  @media (max-width: 900px) { .sh-modal { grid-template-columns: 1fr; } .sh-left { border-right: 0; } .sh-right { border-radius: 0 0 20px 20px; } }
+
   /* Empty state */
   .empty-state {
     display: flex;
@@ -991,7 +1035,19 @@
   .top-sess-row.total-row { background: rgba(255,255,255,0.04); border-top: 1px solid var(--border); }
   .top-sess-bar-cell { display: flex; align-items: center; gap: 8px; }
   .top-sess-bar { height: 4px; border-radius: 2px; background: var(--accent); min-width: 2px; }
-  .top-sess-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+  .top-sess-name { display: block; overflow-wrap: anywhere; }
+  .top-sess-details { display: block; margin-top: 4px; color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+  body.throughput-inspecting #normal-model-section,
+  body.throughput-inspecting #top-sessions-section { display: none !important; }
+  #inspected-throughput-section { margin: 18px 0; }
+  .inspected-window-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .inspected-window-table th, .inspected-window-table td { text-align: right; padding: 10px; border-bottom: 1px solid var(--border); }
+  .inspected-window-table th:first-child, .inspected-window-table td:first-child { text-align: left; }
+  .inspected-window-table a { color: var(--accent); text-decoration: none; }
+  .inspected-window-table a:hover { text-decoration: underline; }
+  .inspected-window-table td:first-child { max-width: 500px; overflow-wrap: anywhere; }
+  .throughput-attribution-note { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: 8px 0 14px; }
+  .throughput-attribution-note button { color: var(--accent); background: none; border: 1px solid var(--border); border-radius: 5px; padding: 3px 8px; cursor: pointer; }
 
   .model-row {
     display: grid;
@@ -1206,9 +1262,71 @@
       <button class="btn btn-primary" onclick="refreshThroughput()">
         <span>↻</span> Refresh Data
       </button>
+      <button class="btn btn-share" id="share-btn" title="Make a shareable card of your agent activity">
+        <span>&#8599;</span> Share
+      </button>
+      <button class="btn btn-share btn-month" id="month-card-btn" title="Make your monthly card">
+        <span>&#9638;</span> <span id="month-card-label">My month</span>
+      </button>
       <button class="btn" id="annotate-btn" onclick="openAnnotate()" title="File a bug or note to the THROUGHPUT queue">
         <span>📝</span> Annotate
       </button>
+    </div>
+  </div>
+
+  <!-- Share card -->
+  <div class="sh-overlay" id="share-overlay" role="dialog" aria-modal="true" aria-labelledby="share-title">
+    <div class="sh-modal">
+      <div class="sh-left">
+        <div class="sh-hdr"><h2 id="share-title">Share your agent fleet</h2></div>
+        <div class="sh-milestone" id="sh-milestone" role="status"></div>
+        <div class="sh-seg" id="sh-period" role="group" aria-label="Period">
+          <button type="button" data-v="week">This week</button>
+          <button type="button" data-v="month">Last 30 days</button>
+          <button type="button" data-v="year">Last 12 months</button>
+          <button type="button" data-v="cal" id="sh-period-cal" title="A calendar card for one month">My month</button>
+        </div>
+        <div class="sh-seg" id="sh-metric" role="group" aria-label="Headline number">
+          <button type="button" data-v="tokens">Tokens</button>
+          <button type="button" data-v="hours">Agent hours</button>
+          <button type="button" data-v="plan">Plan used</button>
+          <button type="button" data-v="cache">Cache hits</button>
+          <button type="button" data-v="saved">$ saved</button>
+          <button type="button" data-v="runs">$0 runs</button>
+        </div>
+        <div class="sh-seg" id="sh-size" role="group" aria-label="Card size">
+          <button type="button" data-v="wide">Card 1200x630</button>
+          <button type="button" data-v="square">Square 1080x1080</button>
+        </div>
+        <div class="sh-stage" id="sh-stage">
+          <canvas id="sh-canvas" width="1200" height="630"></canvas>
+          <div class="sh-status" id="sh-status"></div>
+        </div>
+        <div class="sh-opts">
+          <label><input type="checkbox" id="sh-opt-pseudo"> Show pseudonym</label>
+          <span class="sh-pseudo"><input type="text" id="sh-pseudo-input" maxlength="24" aria-label="Pseudonym"><button type="button" id="sh-pseudo-roll" title="New random name">Roll</button></span>
+          <label><input type="checkbox" id="sh-opt-streak"> Show streak</label>
+          <label><input type="checkbox" id="sh-opt-cost"> Show $ value at API prices</label>
+          <label><input type="checkbox" id="sh-opt-saved"> Show $0 savings</label>
+          <label><input type="checkbox" id="sh-opt-engines"> Show engines used</label>
+        </div>
+        <div class="sh-privacy">The card contains only the totals you see. No prompts, code, file paths, session names, or project names.</div>
+        <div class="sh-privacy" id="sh-upload-note">Sharing uploads only this image to make the link preview.</div>
+      </div>
+      <div class="sh-right">
+        <div class="sh-hdr"><h3>Share</h3><button type="button" class="sh-x" id="sh-close" aria-label="Close">&times;</button></div>
+        <textarea class="sh-text" id="sh-text" rows="4" aria-label="Post text"></textarea>
+        <div class="sh-grid">
+          <button type="button" class="sh-tile" data-net="x"><div class="sh-ico" style="background:#000;border:1px solid #333">X</div>X</button>
+          <button type="button" class="sh-tile" data-net="linkedin"><div class="sh-ico" style="background:#0a66c2">in</div>LinkedIn</button>
+          <button type="button" class="sh-tile" data-net="bluesky"><div class="sh-ico" style="background:#1185fe">B</div>Bluesky</button>
+          <button type="button" class="sh-tile" data-net="threads"><div class="sh-ico" style="background:#000;border:1px solid #333">@</div>Threads</button>
+          <button type="button" class="sh-tile" id="sh-copylink"><div class="sh-ico">&#128279;</div>Copy link</button>
+          <button type="button" class="sh-tile" id="sh-copy"><div class="sh-ico">&#10697;</div>Copy image</button>
+          <button type="button" class="sh-tile" id="sh-download"><div class="sh-ico">&#10515;</div>Download PNG</button>
+        </div>
+        <div class="sh-note" id="sh-note">Posting uploads the card to make a link preview, then opens a composer with the link. The image is also copied, in case you would rather paste it.</div>
+      </div>
     </div>
   </div>
 
@@ -1278,7 +1396,7 @@
       </div>
       <div class="search-container">
         <input type="text" class="search-input" id="search-input" placeholder="Search sessions..." oninput="filterSessions()">
-        <div class="throughput-range-tabs" role="group" aria-label="Session activity window">
+        <div id="throughput-range-tabs" class="throughput-range-tabs" role="group" aria-label="Session activity window">
           <button type="button" class="throughput-range-tab" data-throughput-range="1d" onclick="setThroughputRange('1d')">1D</button>
           <button type="button" class="throughput-range-tab" data-throughput-range="2d" onclick="setThroughputRange('2d')">2D</button>
           <button type="button" class="throughput-range-tab active" data-throughput-range="7d" onclick="setThroughputRange('7d')">7D</button>
@@ -1453,13 +1571,21 @@
           </div>
         </div>
         
+        <section id="inspected-throughput-section" hidden aria-live="polite"></section>
+        <div id="normal-model-section">
         <div class="section-title">
           <span>🧭</span> Model Breakdown
+        </div>
+        <div class="throughput-attribution-note" id="throughput-attribution-note">
+          Tables show activity in the selected window. Model and session token shares do not measure subscription quota attribution. Costs are API-equivalent estimates.
+          <button type="button" onclick="setThroughputRange('1d')">Inspect last 24 hours</button>
+          Click a chart bar, then an hour, to see the sessions behind a spike.
         </div>
         <div class="model-breakdown" id="model-breakdown">
           <!-- Model rows populated by JS -->
         </div>
 
+        </div>
         <!-- Session waste (per-session only): agent-throughput's `throughput analyze`, on demand -->
         <div id="waste-section" style="display:none">
           <div class="section-title"><span>🧯</span> Session Waste</div>
@@ -1500,6 +1626,7 @@
     let allSessions = [];
     let sessionListExpanded = false;
     let activeSessionId = null;
+    let throughputSelectionVersion = 0;
     const THROUGHPUT_ENGINE_STORE_KEY = 'ccc-throughput-engine';
     function initialThroughputEngine() {
       try {
@@ -1897,10 +2024,16 @@
       return Number(candidate && candidate.generated_at || 0) > Number(current.generated_at || 0);
     }
 
+    function bootstrapSelectionMatches(session, engine) {
+      return activeThroughputRange === '7d' && engine === activeThroughputEngine &&
+        activeSessionId === session.session_id;
+    }
+
     function applyThroughputBootstrap(model, source) {
       const applyStarted = performance.now();
       const session = currentAggregateSession();
-      if (!validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
+      if (!bootstrapSelectionMatches(session, activeThroughputEngine) ||
+          !validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
       visibleBootstrap = model;
       activeSessionId = session.session_id;
       weeklyData = stabilizeWeeklyQuota(overlayLiveCodexWeeklyQuota(
@@ -1920,7 +2053,8 @@
       window.__throughputBootstrapApplyMs = performance.now() - applyStarted;
       window.__throughputBootstrapSource = source;
       requestAnimationFrame(() => {
-        if (activeSessionId === session.session_id) {
+        if (activeThroughputRange === '7d' && visibleBootstrap === model &&
+            bootstrapSelectionMatches(session, model.engine)) {
           const summary = model.throughput.summary || {};
           const modelRows = summary.per_model || [];
           renderModelBreakdown(modelRows, modelBreakdownContext(modelRows));
@@ -2006,7 +2140,7 @@
           fetchInitialBootstrapForEngine('claude', session),
           fetchInitialBootstrapForEngine('codex', session),
         ]);
-        if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return null;
+        if (!bootstrapSelectionMatches(session, engineAtStart) || engineAtStart !== 'combined') return null;
         if (claudeModel) writeThroughputBootstrap(claudeModel);
         if (codexModel) writeThroughputBootstrap(codexModel);
         const combined = composeCombinedBootstrap(claudeModel, codexModel);
@@ -2017,7 +2151,7 @@
       } catch (_error) {
         return null;
       } finally {
-        if (engineAtStart === 'combined' && activeThroughputEngine === 'combined') {
+        if (engineAtStart === 'combined' && bootstrapSelectionMatches(session, engineAtStart)) {
           startCombinedRefreshStatusPolling(session);
         }
       }
@@ -2033,7 +2167,7 @@
         if (!response.ok) return null;
         const data = await response.json();
         const model = data && data.bootstrap;
-        if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return null;
+        if (!bootstrapSelectionMatches(session, engineAtStart)) return null;
         if (validateThroughputBootstrap(model, session.session_id, engineAtStart) &&
             isNewerThroughputBootstrap(model, visibleBootstrap)) {
           writeThroughputBootstrap(model);
@@ -2043,7 +2177,7 @@
       } catch (_error) {
         return null;
       } finally {
-        if (engineAtStart === activeThroughputEngine && activeSessionId === session.session_id) {
+        if (bootstrapSelectionMatches(session, engineAtStart)) {
           startRefreshStatusPolling(session);
         }
       }
@@ -2097,6 +2231,7 @@
 
     function setThroughputRange(range) {
       if (!Object.hasOwn(THROUGHPUT_RANGE_LABELS, range) || range === activeThroughputRange) return;
+      stopRefreshStatusPolling();
       activeThroughputRange = range;
       sessionListExpanded = false;
       weekRankings = {};
@@ -2111,6 +2246,8 @@
     async function setThroughputEngine(engine) {
       const next = ['combined', 'codex', 'kimi'].includes(engine) ? engine : 'claude';
       if (next === activeThroughputEngine) return;
+      stopRefreshStatusPolling();
+      throughputSelectionVersion++;
       activeThroughputEngine = next;
       try { localStorage.setItem(THROUGHPUT_ENGINE_STORE_KEY, next); } catch (_e) {}
       activeSessionId = null;
@@ -2300,14 +2437,13 @@
       if (!response.ok) return false;
       const data = await response.json();
       const model = data && data.bootstrap;
-      if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return false;
+      if (!bootstrapSelectionMatches(session, engineAtStart)) return false;
       if (!validateThroughputBootstrap(model, session.session_id, engineAtStart)) return false;
       writeThroughputBootstrap(model);
       applyThroughputBootstrap(model, 'refresh');
       renderRefreshPanel(status);
-      fetchWeekRankings();
       loadWeeklyHistory();
-      loadSessions({ selectDefault: false });
+      void loadSessions({ selectDefault: false }).then(fetchWeekRankings);
       return true;
     }
 
@@ -2316,7 +2452,7 @@
         fetchInitialBootstrapForEngine('claude', session, statuses.claude && statuses.claude.last_refreshed_at),
         fetchInitialBootstrapForEngine('codex', session, statuses.codex && statuses.codex.last_refreshed_at),
       ]);
-      if (activeThroughputEngine !== 'combined') return false;
+      if (!bootstrapSelectionMatches(session, 'combined')) return false;
       if (claudeModel) writeThroughputBootstrap(claudeModel);
       if (codexModel) writeThroughputBootstrap(codexModel);
       const combined = composeCombinedBootstrap(claudeModel, codexModel);
@@ -2327,6 +2463,7 @@
     }
 
     async function startCombinedRefreshStatusPolling(session) {
+      if (!bootstrapSelectionMatches(session, 'combined')) return;
       stopRefreshStatusPolling();
       const engines = ['claude', 'codex'];
       const engineAtStart = activeThroughputEngine;
@@ -2339,12 +2476,12 @@
         statuses[engine] = response.ok ? await response.json() : { state: 'failed' };
       }));
       void starts;
-      if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return;
+      if (!bootstrapSelectionMatches(session, engineAtStart) || engineAtStart !== 'combined') return;
       refreshStatus = combineRefreshStatuses(Object.values(statuses));
       renderRefreshPanel(refreshStatus);
 
       refreshElapsedTimer = setInterval(() => {
-        if (activeThroughputEngine !== 'combined') return;
+        if (!bootstrapSelectionMatches(session, 'combined')) return;
         Object.values(statuses).forEach(status => {
           if (status.state === 'refreshing') {
             status.elapsed_ms = Math.max(0, Date.now() - Number(status.started_at || 0) * 1000);
@@ -2354,7 +2491,7 @@
       }, 100);
 
       const poll = async () => {
-        if (activeThroughputEngine !== 'combined') return;
+        if (!bootstrapSelectionMatches(session, 'combined')) return;
         await Promise.all(engines.map(async engine => {
           if (statuses[engine] && ['complete', 'failed'].includes(statuses[engine].state)) return;
           const response = await fetch(
@@ -2363,6 +2500,7 @@
           );
           if (response.ok) statuses[engine] = await response.json();
         }));
+        if (!bootstrapSelectionMatches(session, 'combined')) return;
         refreshStatus = combineRefreshStatuses(Object.values(statuses));
         renderRefreshPanel(refreshStatus);
         if (refreshStatus.state === 'complete') {
@@ -2377,13 +2515,14 @@
     }
 
     async function startRefreshStatusPolling(session) {
-      if (!session) return;
+      if (!session || !bootstrapSelectionMatches(session, activeThroughputEngine)) return;
       stopRefreshStatusPolling();
       const engineAtStart = activeThroughputEngine;
       const startResponse = await fetch(
         throughputFetchUrl('/api/throughput/refresh/start', session.session_id),
         { cache: 'no-store' }
       );
+      if (!bootstrapSelectionMatches(session, engineAtStart)) return;
       if (!startResponse.ok) {
         renderRefreshPanel({
           state: 'failed',
@@ -2394,6 +2533,7 @@
         return;
       }
       refreshStatus = await startResponse.json();
+      if (!bootstrapSelectionMatches(session, engineAtStart)) return;
       renderRefreshPanel(refreshStatus);
 
       const renderElapsed = () => {
@@ -2409,8 +2549,9 @@
             throughputFetchUrl('/api/throughput/refresh/status', session.session_id),
             { cache: 'no-store' }
           );
-          if (!response.ok || engineAtStart !== activeThroughputEngine) return;
+          if (!response.ok || !bootstrapSelectionMatches(session, engineAtStart)) return;
           refreshStatus = await response.json();
+          if (!bootstrapSelectionMatches(session, engineAtStart)) return;
           renderRefreshPanel(refreshStatus);
           if (refreshStatus.state === 'complete') {
             stopRefreshStatusPolling();
@@ -2430,6 +2571,11 @@
     function refreshThroughput() {
       const session = currentAggregateSession();
       activeSessionId = session.session_id;
+      if (activeThroughputRange !== '7d') {
+        void selectSession(session);
+        void fetchWeekRankings();
+        return;
+      }
       if (activeThroughputEngine === 'combined') startCombinedRefreshStatusPolling(session);
       else startRefreshStatusPolling(session);
     }
@@ -2448,6 +2594,7 @@
         const end = Math.floor(Date.now() / 1000);
         const start = end - throughputRangeSeconds();
         const engine = activeThroughputEngine;
+        const range = activeThroughputRange;
         const res = await fetch(
           `/api/throughput/window?start=${start}&end=${end}&engine=${encodeURIComponent(engine)}&limit=200`,
           { cache: 'no-store' }
@@ -2455,22 +2602,33 @@
         if (!res.ok) return;
         const data = await res.json();
         if (!data.ok) return;
-        if (engine !== activeThroughputEngine) return;
+        if (engine !== activeThroughputEngine || range !== activeThroughputRange) return;
         const rankings = data.sessions || [];
         weekRankings = {};
         const tokenMap = {};
+        const costMap = {};
+        const detailMap = {};
         rankings.forEach((r, i) => {
           weekRankings[r.session_id] = i + 1;
           tokenMap[r.session_id] = Number(r.cache_adjusted_tokens || 0);
+          detailMap[r.session_id] = { models: r.models || [], turns: r.turns || 0, name: r.session_name || '' };
+          costMap[r.session_id] = {
+            usd: Number(r.cost_usd) || 0,
+            unpriced: Number(r.unpriced_turns) || 0,
+          };
         });
         // Keep this field for the existing aggregate table, but its value is
         // now cache-adjusted tokens in the selected sidebar window.
-        allSessions.forEach(s => { s._week_tokens = tokenMap[s.session_id] || 0; });
+        allSessions.forEach(s => {
+          s._week_tokens = tokenMap[s.session_id] || 0;
+          const c = costMap[s.session_id];
+          s._week_cost = c ? c.usd : 0;
+          s._week_unpriced = c ? c.unpriced : 0;
+          s._window_details = detailMap[s.session_id] || {};
+        });
         renderSessionList();
-        if (document.getElementById('top-sessions-section') &&
-            document.getElementById('top-sessions-section').style.display !== 'none') {
-          renderTopSessions();
-        }
+        const selected = findSessionById(activeSessionId);
+        if (selected && selected.aggregate) renderTopSessions();
       } catch (_e) {
         // Non-critical — silently ignore network or parse errors.
       }
@@ -2482,11 +2640,14 @@
         renderSessionList();
         return;
       }
+      const engineAtStart = activeThroughputEngine;
+      const rangeAtStart = activeThroughputRange;
       if (selectDefault) setStatus('Loading sessions...', true);
       try {
         const convRes = await fetch(`/api/conversations?all=1&compact=1&${throughputEngineParam()}`);
         if (!convRes.ok) throw new Error('API failed');
         const data = await convRes.json();
+        if (engineAtStart !== activeThroughputEngine || rangeAtStart !== activeThroughputRange) return;
         allSessions = data.conversations || data.sessions || [];
         renderSessionList();
         if (selectDefault) fetchWeekRankings();
@@ -2571,6 +2732,13 @@
         const effort = String(s.reasoning_effort || '').trim();
         const wt = s._week_tokens;
         const tokenLabel = wt ? formatCompactTokens(wt) : '';
+        // API-price cost for the same window; skipped when no turn was priced
+        // (e.g. models missing from the price table) so we never show a fake $0.
+        const cost = s._week_cost || 0;
+        const costLabel = cost > 0 ? fmtCost(cost) : '';
+        const costTitle = costLabel
+          ? ` · ${costLabel} at API prices${s._week_unpriced ? ` (${s._week_unpriced} turns unpriced)` : ''}`
+          : '';
 
         const item = document.createElement('div');
         item.className = `session-item ${sid === activeSessionId ? 'active' : ''}`;
@@ -2585,7 +2753,7 @@
           </div>
           <div class="session-meta">
             <span>${sid.substring(0, 8)}...${effort ? ` · ${effort}` : ''}</span>
-            <span title="${wt ? `${fmtNum(wt)} cache-adjusted tokens in the selected window` : ageText}">${tokenLabel || ageText}</span>
+            <span title="${wt ? `${fmtNum(wt)} cache-adjusted tokens in the selected window${costTitle}` : ageText}">${tokenLabel || ageText}${tokenLabel && costLabel ? ` · ${costLabel}` : ''}</span>
           </div>
         `;
         listEl.appendChild(item);
@@ -2594,7 +2762,10 @@
       // "Other" row: sum of sessions beyond top 20.
       if (rest.length > 0 && !sessionListExpanded) {
         const otherTokens = rest.reduce((sum, s) => sum + (s._week_tokens || 0), 0);
-        const otherLabel = otherTokens ? formatCompactTokens(otherTokens) : `${rest.length} sessions`;
+        const otherCost = rest.reduce((sum, s) => sum + (s._week_cost || 0), 0);
+        const otherLabel = otherTokens
+          ? formatCompactTokens(otherTokens) + (otherCost > 0 ? ` · ${fmtCost(otherCost)}` : '')
+          : `${rest.length} sessions`;
         const other = document.createElement('div');
         other.className = 'session-item';
         other.style.opacity = '0.6';
@@ -2663,6 +2834,10 @@
     }
 
     async function selectAggregateSession(session) {
+      const version = ++throughputSelectionVersion;
+      const engineAtStart = activeThroughputEngine;
+      const rangeAtStart = activeThroughputRange;
+      const stillSelected = () => version === throughputSelectionVersion && engineAtStart === activeThroughputEngine && rangeAtStart === activeThroughputRange && activeSessionId === session.session_id;
       activeSessionId = session.session_id;
       renderSessionList();
       updateActiveEngineBadge(session);
@@ -2677,6 +2852,7 @@
           if (!response.ok) throw new Error('API failed');
           return response.json();
         }));
+        if (!stillSelected()) return;
         if (!payloads.every(data => data && data.ok)) throw new Error('API returned an error');
         let data = payloads[0];
         if (activeThroughputEngine === 'combined') {
@@ -2692,15 +2868,20 @@
         renderDashboard(session, data);
         setStatus('Idle');
       } catch (err) {
+        if (!stillSelected()) return;
         console.error(err);
         setStatus('Error loading throughput');
       } finally {
-        hideLoader();
+        if (stillSelected()) hideLoader();
       }
     }
 
     async function selectSession(s) {
       if (s.aggregate) return selectAggregateSession(s);
+      stopRefreshStatusPolling();
+      const version = ++throughputSelectionVersion;
+      const engineAtStart = activeThroughputEngine;
+      const stillSelected = () => version === throughputSelectionVersion && engineAtStart === activeThroughputEngine && activeSessionId === s.session_id;
       activeSessionId = s.session_id;
 
       // Update UI active class in list
@@ -2718,6 +2899,7 @@
         if (!res.ok) throw new Error('API failed');
         const data = await res.json();
 
+        if (!stillSelected()) return;
         if (data.ok) {
           renderDashboard(s, data);
         } else {
@@ -2725,10 +2907,11 @@
         }
         setStatus('Idle');
       } catch (err) {
+        if (!stillSelected()) return;
         console.error(err);
         setStatus('Error loading throughput');
       } finally {
-        hideLoader();
+        if (stillSelected()) hideLoader();
       }
     }
 
@@ -2848,7 +3031,7 @@
 
         document.getElementById('lbl-card4').textContent = 'PLAN COST';
         document.getElementById('val-out-throughput').textContent =
-          sessionMetrics.plan_cost_usd == null ? '—' : fmtCost(sessionMetrics.plan_cost_usd);
+          sessionMetrics.plan_cost_usd == null ? '-' : fmtCost(sessionMetrics.plan_cost_usd);
         document.getElementById('val-out-tps').textContent =
           actualPct == null
             ? 'Quota calibration unavailable'
@@ -2937,7 +3120,7 @@
       if (acts.length) html += `<div class="waste-muted" style="padding-top:6px">went to: ${esc(acts.join(' · '))}</div>`;
       (w.findings || []).forEach((f, i) => {
         html += `<div class="waste-finding"><div><span class="waste-finding-title">${i + 1}. ${esc(f.title)}</span>`
-          + ` — ${esc(Math.round(f.share_pct))}% of spend (${esc(pair(f))})</div>`
+          + ` - ${esc(Math.round(f.share_pct))}% of spend (${esc(pair(f))})</div>`
           + `<div class="waste-fix">${esc(f.fix || '')}</div></div>`;
       });
       if (w.score != null && !(w.findings || []).length) {
@@ -3139,6 +3322,25 @@
       container.appendChild(svg);
     }
 
+    function escapeThroughputText(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      })[c]);
+    }
+
+    function windowSessionCost(session) {
+      const cost = Number(session._week_cost || 0);
+      return session._week_unpriced ? (cost ? `${fmtCost(cost)} + unpriced` : 'n/a') : fmtCost(cost);
+    }
+
+    function throughputSessionName(session) {
+      const name = String(session.display_name || session.name || session.title || '').trim();
+      if (!/^You continue the work of session\b/i.test(name)) return name || session.session_id;
+      const source = String((session._window_details || {}).name || name).replace(/\\n/g, '\n');
+      const task = source.match(/(?:^|\n)Task:\s*([^\n]+)/i);
+      return task && task[1].trim() ? `Continuation: ${task[1].trim()}` : 'Continuation';
+    }
+
     function renderTopSessions() {
       const el = document.getElementById('top-sessions-table');
       if (!el) return;
@@ -3162,7 +3364,7 @@
       // Header
       const hdr = document.createElement('div');
       hdr.className = 'top-sess-row header';
-      hdr.innerHTML = `<div>Session</div><div>Window share</div><div>Cache-adjusted</div><div>Cost</div>`;
+      hdr.innerHTML = `<div>Session</div><div>Window share</div><div>Cache-adjusted</div><div>API equiv.</div>`;
       el.appendChild(hdr);
 
       top.forEach(s => {
@@ -3173,15 +3375,17 @@
         row.className = 'top-sess-row';
         row.style.cursor = 'pointer';
         row.onclick = () => selectSession(s);
-        const name = s.display_name || s.name || s.title || s.session_id.substring(0, 8);
+        const name = escapeThroughputText(throughputSessionName(s));
+        const details = s._window_details || {};
+        const routing = escapeThroughputText((details.models || [s.model || s.engine || 'unknown']).join(', '));
         row.innerHTML = `
           <div class="top-sess-bar-cell">
             <div class="top-sess-bar" style="width:${barW}px"></div>
-            <span class="top-sess-name" title="${name}">${name}</span>
+            <span><span class="top-sess-name">${name}</span><span class="top-sess-details">${routing} · ${fmtNum(details.turns || 0)} calls · ${escapeThroughputText(s.session_id.substring(0, 13))}</span></span>
           </div>
           <div style="font-weight:600;color:var(--accent)">${pctStr}</div>
           <div style="color:var(--text-muted)">${fmtNum(tok)}</div>
-          <div style="color:var(--text-muted)">${s._cost_usd ? fmtCost(s._cost_usd) : '-'}</div>`;
+          <div style="color:var(--text-muted)">${windowSessionCost(s)}</div>`;
         el.appendChild(row);
       });
 
@@ -3199,7 +3403,8 @@
       }
 
       // Total row
-      const totalCost = withTokens.reduce((s, r) => s + (r._cost_usd || 0), 0);
+      const totalCost = withTokens.reduce((s, r) => s + (r._week_cost || 0), 0);
+      const unpriced = withTokens.some(s => s._week_unpriced);
       const totalPct = totalTok ? '100%' : '-';
       const totalRow = document.createElement('div');
       totalRow.className = 'top-sess-row total-row';
@@ -3207,70 +3412,24 @@
         <div style="font-weight:700">Total (${withTokens.length} sessions)</div>
         <div style="font-weight:700;color:var(--accent)">${totalPct}</div>
         <div style="font-weight:700">${fmtNum(totalTok)}</div>
-        <div style="font-weight:700">${totalCost ? fmtCost(totalCost) : '-'}</div>`;
+        <div style="font-weight:700">${windowSessionCost({ _week_cost: totalCost, _week_unpriced: unpriced })}</div>`;
       el.appendChild(totalRow);
     }
 
-    function modelWeeklyBasisTokens(model) {
-      if (!model) return 0;
-      return (model.raw_context_tokens || 0) + (model.output_tokens || 0);
-    }
-
     function modelBreakdownContext(models) {
-      const rows = models || [];
-      const claudeWeeklyPct = weeklyData && weeklyData.display_pct;
-      const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
-        ? weeklyData.codex.weekly_pct
-        : null;
-      const kimiWeeklyPct = weeklyData && weeklyData.kimi && weeklyData.kimi.ok
-        ? weeklyData.kimi.weekly_pct
-        : null;
       return {
-        claudeWeeklyPct,
-        claudeWeeklyTotalTokens: rows.reduce((sum, model) =>
-          sum + ((isCodexModelRow(model) || isKimiModelRow(model)) ? 0 : modelWeeklyBasisTokens(model)), 0),
-        codexWeeklyPct,
-        codexWeeklyTotalTokens: rows.reduce((sum, model) =>
-          sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
-        kimiWeeklyPct,
-        kimiWeeklyTotalTokens: rows.reduce((sum, model) =>
-          sum + (isKimiModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
-        engine: activeThroughputEngine,
+        windowAdjustedTokens: (models || []).reduce((sum, m) =>
+          sum + (m.effective_input_tokens || 0) + (m.output_tokens || 0), 0),
       };
     }
 
-    function isCodexModelRow(model, fallbackEngine) {
-      const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
-      const label = String((model && (model.model || model.engine)) || '').toLowerCase();
-      return engine === 'codex' || label.startsWith('gpt-') || label.includes('codex');
-    }
-
-    function isKimiModelRow(model, fallbackEngine) {
-      const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
-      const label = String((model && (model.model || model.engine)) || '').toLowerCase();
-      return engine === 'kimi' || label.startsWith('kimi');
-    }
-
     function formatModelWeeklyPct(model, context) {
+      // Subscription meters expose account totals, not per-model attribution.
+      // Keep every row on the same selected-window cache-adjusted basis.
       const ctx = context || {};
-      const tokens = modelWeeklyBasisTokens(model);
-      if (!(tokens > 0)) return '-';
-      if (isCodexModelRow(model, ctx.engine)) {
-        const total = Number(ctx.codexWeeklyTotalTokens || 0);
-        const pct = Number(ctx.codexWeeklyPct);
-        if (!(total > 0) || !Number.isFinite(pct)) return '-';
-        return `${((tokens / total) * pct).toFixed(2)}%`;
-      }
-      if (isKimiModelRow(model, ctx.engine)) {
-        const total = Number(ctx.kimiWeeklyTotalTokens || 0);
-        const pct = Number(ctx.kimiWeeklyPct);
-        if (!(total > 0) || !Number.isFinite(pct)) return '-';
-        return `${((tokens / total) * pct).toFixed(2)}%`;
-      }
-      const total = Number(ctx.claudeWeeklyTotalTokens || 0);
-      const pct = Number(ctx.claudeWeeklyPct);
-      if (!(total > 0) || !Number.isFinite(pct)) return '-';
-      return `${((tokens / total) * pct).toFixed(2)}%`;
+      const tokens = (model.effective_input_tokens || 0) + (model.output_tokens || 0);
+      const total = ctx.windowAdjustedTokens || 0;
+      return total > 0 ? `${(100 * tokens / total).toFixed(2)}%` : '-';
     }
 
     function renderModelBreakdown(models, context) {
@@ -3304,9 +3463,9 @@
           <div class="model-cell">Active</div>
           <div class="model-cell">Adj tokens</div>
           <div class="model-cell">Raw tokens</div>
-          <div class="model-cell">% Weekly</div>
+          <div class="model-cell" title="Cache-adjusted tokens in the selected activity window">Window share</div>
           <div class="model-cell">Cache</div>
-          <div class="model-cell">Cost</div>
+          <div class="model-cell">API equiv.</div>
         </div>
         ${rows}
       `;
@@ -3636,14 +3795,17 @@
       };
     }
 
-    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken, slotMs = 3 * 3600000) {
+    // The previous cycle is [periodStart - 7d, periodStart). Accumulate from that
+    // fixed start (not the first visible row) and stop at the reset, so the
+    // 7-day view and the zoomed 48h view end on the same % (THROUGHPUT-1).
+    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken, slotMs = 3 * 3600000, periodStartMs = null) {
       const firstPreResetRow = sourceRows.find(row => row && row._prePeriod && !row._projected);
-      const start = firstPreResetRow ? chartRowTimeMs(firstPreResetRow) : null;
-      if (start == null) return null;
+      if (!firstPreResetRow || !Number.isFinite(periodStartMs)) return null;
+      const start = periodStartMs - 7 * 86400000;
       const events = ((componentSummary && componentSummary.hourly) || []).map(row => ({
         at: throughputSummaryRowTimeMs(row),
         tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
-      })).filter(event => event.at != null && event.at >= start);
+      })).filter(event => event.at != null && event.at >= start && event.at < periodStartMs);
       let lastPreResetIndex = -1;
       const values = sourceRows.map((row, index) => {
         const at = chartRowTimeMs(row);
@@ -3653,13 +3815,15 @@
           .reduce((sum, event) => sum + event.tokens, 0) * pctPerToken;
       });
       if (lastPreResetIndex < 0) return null;
+      // The last pre-reset column stands for the cycle's end, whatever its slot size.
+      const endPct = events.reduce((sum, event) => sum + event.tokens, 0) * pctPerToken;
+      values[lastPreResetIndex] = endPct;
       return {
         actual: values,
         values,
-        currentPct: values[lastPreResetIndex] || 0,
+        currentPct: endPct,
         lastActualIndex: lastPreResetIndex,
-        projectedEnd: values[lastPreResetIndex] || 0,
-        startAtZero: true,
+        projectedEnd: endPct,
       };
     }
 
@@ -3671,7 +3835,6 @@
         if (value == null) return;
         const point = `${xScale(index + 1)} ${yPct(value)}`;
         if (index <= series.lastActualIndex) {
-          if (!actualPath && series.startAtZero) actualPath = `M ${xScale(index + 1)} ${yPct(0)} `;
           actualPath += actualPath ? `L ${point} ` : `M ${point} `;
         }
         if (index >= series.lastActualIndex) projectedPath += projectedPath ? `L ${point} ` : `M ${point} `;
@@ -3812,7 +3975,9 @@
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
       // Extra right padding when either secondary axis needs room.
-      const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
+      // Without quota context the 3-hour view falls back to a cumulative-tokens line.
+      const showTokenCumFallback = sixhourly && isAggregate && !showWeeklyOverlay;
+      const rightPad = (showWeeklyOverlay || showCumulative || showTokenCumFallback) ? 52 : 30;
       const padding = { top: showAccountUsage ? 44 : 20, right: rightPad, bottom: 54, left: 60 };
 
       // Build sourceRows — aggregate hourly data into 3h buckets scoped to billing period.
@@ -4276,6 +4441,43 @@
         );
       }
 
+      // ── Cumulative tokens fallback (3-hour view, no quota context) ────────────
+      if (showTokenCumFallback) {
+        let run = 0;
+        const cumTok = sourceRows.map(row => {
+          if (!row || row._projected) return null;
+          run += (row.effective_input_tokens || 0) + (row.output_tokens || 0);
+          return run;
+        });
+        const maxTok = Math.max(...cumTok.filter(v => v != null), 0);
+        if (maxTok > 0) {
+          const cumH = height - padding.top - padding.bottom;
+          const yTok = v => padding.top + cumH * (1 - v / maxTok);
+          const mk = (tag, attrs) => {
+            const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+            Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+            svg.appendChild(el);
+            return el;
+          };
+          [0.5, 1].forEach(f => {
+            mk('text', {
+              x: width - padding.right + 4, y: yTok(maxTok * f) + 3, fill: '#47a6ff',
+              'font-size': '11px', 'font-family': 'var(--font-mono)',
+            }).textContent = fmtNum(Math.round(maxTok * f));
+          });
+          const d = cumTok.map((v, idx) => v == null ? null : `${xScale(idx + 1)},${yTok(v)}`)
+            .filter(Boolean).map((p, i) => `${i === 0 ? 'M' : 'L'}${p}`).join(' ');
+          mk('path', {
+            d, fill: 'none', stroke: '#47a6ff', 'stroke-width': '1.8',
+            'stroke-dasharray': '5,3', opacity: '0.8',
+          });
+          mk('text', {
+            x: width - padding.right + 4, y: padding.top - 4, fill: '#47a6ff', 'font-size': '11px',
+            'font-weight': 'bold', 'font-family': 'var(--font-mono)',
+          }).textContent = 'cumulative';
+        }
+      }
+
       // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
       if (showWeeklyOverlay && sixhourly) {
         const componentSummaries = summary.components || {};
@@ -4313,9 +4515,11 @@
         const primaryComponent = activeThroughputEngine === 'codex' ? codexComponent
           : (activeThroughputEngine === 'kimi' ? kimiComponent : claudeComponent);
         // The current view includes a small lead-in from before the latest reset.
-        // Preserve its own zero-based progression without joining it to the new
+        // Draw the previous cycle's running total separately from the new
         // billing-period line, whose ending value must match the live meter.
-        const previousSeries = buildPreviousQuotaSeries(primaryComponent, sourceRows, ppt, chartSlotMs);
+        const previousSeries = buildPreviousQuotaSeries(
+          primaryComponent, sourceRows, ppt, chartSlotMs, selPeriodStart ? selPeriodStart.getTime() : null
+        );
         // Kimi's weekly line is purple so it never reads as the Claude meter.
         const weeklyLineColor = activeThroughputEngine === 'kimi' ? '#c084fc' : '#f59e0b';
 
@@ -4892,7 +5096,7 @@
       if (!meterEl) return;
       meterEl.classList.toggle('is-stale', !!stale);
       meterEl.title = stale
-        ? `${label} usage snapshot is stale — the provider has not reported fresh usage recently`
+        ? `${label} usage snapshot is stale - the provider has not reported fresh usage recently`
         : '';
       if (!pctEl) return;
       const existing = pctEl.querySelector('.weekly-stale-tag');
@@ -5328,7 +5532,9 @@
   <script>
   // ── W87 zoom ladder: 3h → 1h → per-session drill ─────────────────────────
   // Level 1 re-renders the already-loaded `lastRender.summary.hourly` rows at
-  // 1h granularity for a 12h window around the clicked 3h bar (zero fetches).
+  // 1h granularity for a 12h window around the clicked 3h bar. The visible
+  // session table fetches only that inspected interval, then narrows to one
+  // hour when clicked; broad aggregate tables stay hidden until backing out.
   // Level 2 calls /api/throughput/window (bounded, server-cached) for the
   // per-session breakdown of one clicked hour; each session row clicks
   // through to its conversation. Escape (or ‹ back) pops one level.
@@ -5336,6 +5542,7 @@
   // drawChart pipeline is untouched.
   (function () {
     'use strict';
+    let inspectionVersion = 0;
     let zoom = null; // null | {level:1,startMs,endMs} | {level:2,hourMs,l1:{startMs,endMs}}
 
     // Bucket keys are local wall-clock strings ("YYYY-MM-DD HH:00" or
@@ -5408,8 +5615,57 @@
 
     function closeZoom() {
       zoom = null;
+      inspectionVersion++;
+      document.body.classList.remove('throughput-inspecting');
+      const panel = document.getElementById('inspected-throughput-section');
+      if (panel) panel.hidden = true;
       const el = document.getElementById('tput-zoom-overlay');
       if (el) el.remove();
+    }
+
+    async function inspectWindow(startMs, endMs) {
+      const panel = document.getElementById('inspected-throughput-section');
+      if (!panel) return;
+      const request = ++inspectionVersion;
+      const engine = typeof activeThroughputEngine === 'string' ? activeThroughputEngine : 'claude';
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const label = dayLabel(startMs) + ' ' + hm(startMs) + '–' + hm(endMs) + ' (' + zone + ')';
+      document.body.classList.add('throughput-inspecting');
+      panel.hidden = false;
+      panel.innerHTML = '<div class="section-title">Sessions in inspected window · ' + esc(label) + '</div><p class="throughput-attribution-note">Loading turns in this time window…</p>';
+      try {
+        const engines = engine === 'combined' ? ['claude', 'codex'] : [engine];
+        const results = await Promise.all(engines.map(async selectedEngine => {
+          const response = await fetch('/api/throughput/window?start=' + startMs / 1000 + '&end=' + endMs / 1000 + '&engine=' + encodeURIComponent(selectedEngine) + '&limit=200', {cache: 'no-store'});
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) throw new Error(payload.error || 'Could not load inspected window');
+          return payload;
+        }));
+        const data = results.length === 1 ? results[0] : {
+          ok: true,
+          totals: results.reduce((total, result) => ({turns: total.turns + (result.totals.turns || 0), cache_adjusted_tokens: total.cache_adjusted_tokens + (result.totals.cache_adjusted_tokens || 0)}), {turns: 0, cache_adjusted_tokens: 0}),
+          sessions: results.flatMap(result => result.sessions || []).sort((a, b) => b.cache_adjusted_tokens - a.cache_adjusted_tokens),
+          session_count: results.reduce((sum, result) => sum + (result.session_count || 0), 0),
+        };
+        if (!zoom || request !== inspectionVersion) return;
+        if (!data.ok) throw new Error(data.error || 'Could not load inspected window');
+        const total = data.totals || {};
+        const totalTokens = Number(total.cache_adjusted_tokens) || 0;
+        const rows = (data.sessions || []).map(session => {
+          const fullName = typeof throughputSessionName === 'function' ? throughputSessionName({session_id: session.session_id, display_name: session.session_name, _window_details: {name: session.session_name}}) : session.session_name;
+          const firstLine = String(fullName || '').replace(/\\n/g, '\n').split('\n')[0];
+          const name = firstLine.length > 240 ? firstLine.slice(0, 237) + '…' : firstLine;
+          const share = totalTokens ? (100 * session.cache_adjusted_tokens / totalTokens).toFixed(1) + '%' : '-';
+          const cost = session.unpriced_turns ? (session.cost_usd ? fmtUsd(session.cost_usd) + ' + unpriced' : 'n/a') : fmtUsd(session.cost_usd);
+          return '<tr><td><a href="/?ccc_popout=conversation&amp;conv=' + encodeURIComponent(session.session_id) + '" target="_blank" rel="noopener">' + esc(name || 'Untitled session') + '</a><span class="top-sess-details">' + esc((session.models || []).join(', ')) + ' · ' + esc(session.session_id.slice(0, 13)) + '</span></td><td>' + (session.turns || 0) + '</td><td>' + fmtTok(session.raw_context_tokens) + '</td><td>' + fmtTok(session.cache_adjusted_tokens) + '</td><td>' + share + '</td><td>' + cost + '</td></tr>';
+        }).join('');
+        panel.innerHTML = '<div class="section-title">Sessions in inspected window · ' + esc(label) + '</div>' +
+          '<p class="throughput-attribution-note">' + (total.turns || 0) + ' turns (model calls) · ' + fmtTok(totalTokens) + ' cache-adjusted tokens · ' + (data.session_count || 0) + ' sessions. Every number below counts only turns completed in this window. Token share does not measure subscription quota attribution.</p>' +
+          '<table class="inspected-window-table"><thead><tr><th>Session / model</th><th>Turns</th><th>Raw input</th><th>Cache-adjusted</th><th>Window share</th><th>API equiv.</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6">No turns in this window</td></tr>') + '</tbody></table>';
+      } catch (error) {
+        if (request !== inspectionVersion || !zoom) return;
+        panel.innerHTML = '<p class="throughput-attribution-note">Could not load inspected sessions: ' + esc(error.message) + '</p>';
+      }
     }
 
     function head(backLabel, title, hint) {
@@ -5440,20 +5696,23 @@
     }
 
     function renderL1() {
+      // A queued resize can fire after the user has entered an hour.
+      if (!zoom || zoom.level !== 1) return;
       const el = overlayEl();
-      if (!el || !zoom) return;
+      if (!el) return;
       const { startMs, endMs } = zoom;
       const rows = hourRowsInWindow(startMs, endMs);
       const byHour = {};
       rows.forEach((r) => { byHour[r.ms] = r; });
       const nHours = Math.round((endMs - startMs) / 3600e3);
       const total = rows.reduce((a, r) => a + r.tokens, 0);
+      const totalTurns = rows.reduce((sum, row) => sum + row.turns, 0);
       const title = dayLabel(startMs) + ' ' + hm(startMs) + '–' + hm(endMs - 1) +
-        ' · 1h buckets · ' + fmtTok(total) + ' cache-adj';
+        ' · 1h buckets · ' + fmtTok(total) + ' cache-adj · ' + totalTurns + ' turns';
       let html = head('3h view', esc(title), 'click an hour for its sessions');
       const bodyW = Math.max(320, (el.clientWidth || 800) - 16);
       const H = Math.max(160, (el.clientHeight || 300) - 70);
-      const padB = 22, padT = 12, padL = 8, padR = 8;
+      const padB = 40, padT = 12, padL = 8, padR = 8;
       const slotW = (bodyW - padL - padR) / nHours;
       const barW = Math.max(6, slotW * 0.66);
       const max = Math.max(1, ...rows.map((r) => r.tokens));
@@ -5479,10 +5738,12 @@
         }
         bars += '<text x="' + (padL + i * slotW + slotW / 2).toFixed(1) + '" y="' + (H - 6) +
           '" text-anchor="middle" font-size="9">' + label.slice(0, 2) + '</text>';
+        bars += '<text x="' + (padL + i * slotW + slotW / 2).toFixed(1) + '" y="' + (H - 21) + '" text-anchor="middle" font-size="9">' + (r ? r.turns : 0) + ' turns</text>';
       }
       html += '<div class="tz-body"><svg width="' + bodyW + '" height="' + H + '" viewBox="0 0 ' + bodyW + ' ' + H + '">' +
         bars + '</svg></div>';
       el.innerHTML = html;
+      void inspectWindow(startMs, endMs);
       el.querySelector('.tz-back').addEventListener('click', closeZoom);
       el.querySelectorAll('.tz-bar').forEach((b) => {
         b.addEventListener('click', () => enterDrill(Number(b.getAttribute('data-ms'))));
@@ -5500,6 +5761,7 @@
       const el = overlayEl();
       if (!el || !zoom || zoom.level !== 2) return;
       const { hourMs } = zoom;
+      void inspectWindow(hourMs, hourMs + 3600e3);
       const title = dayLabel(hourMs) + ' ' + hm(hourMs) + '–' + hm(hourMs + 3600e3 - 1) + ' · sessions';
       el.innerHTML = head('1h view', esc(title), 'click a session to open its conversation') +
         '<div class="tz-body"><div class="tz-note">Loading sessions…</div></div>';
@@ -5528,7 +5790,7 @@
           const tot = d.totals || {};
           let rowsHtml = '';
           sessions.forEach((s, i) => {
-            const name = s.session_name || (s.session_id || '').slice(0, 8) || '(unknown)';
+            const name = typeof throughputSessionName === 'function' ? throughputSessionName({session_id: s.session_id, display_name: s.session_name, _window_details: {name: s.session_name}}) : s.session_name || (s.session_id || '').slice(0, 13) || '(unknown)';
             const models = (s.models || []).map((m) => String(m).replace(/^claude-/, '')).join(', ');
             rowsHtml += '<tr class="tz-row" data-sid="' + esc(s.session_id || '') + '" title="Open this conversation">' +
               '<td><span class="tz-name">' + (i + 1) + '. ' + esc(name) + '</span>' +
@@ -5543,7 +5805,7 @@
               (sessions.length === 1 ? '' : 's') +
               (d.sessions_truncated ? ' (+' + d.sessions_truncated + ' more)' : '') +
               ' · window total ' + fmtTok(tot.cache_adjusted_tokens) + ' cache-adj · ' + fmtUsd(tot.cost_usd) + '</div>' +
-            '<table class="tz-table"><thead><tr><th>session</th><th>calls</th><th>cache-adj</th><th>out</th><th>cost</th></tr></thead>' +
+            '<table class="tz-table"><thead><tr><th>session</th><th>turns</th><th>cache-adj</th><th>out</th><th>cost</th></tr></thead>' +
             '<tbody>' + rowsHtml + '</tbody></table>';
           body.querySelectorAll('.tz-row').forEach((tr) => {
             tr.addEventListener('click', () => {
@@ -5587,7 +5849,7 @@
 
     // Session/engine switches repaint the chart beneath the overlay with new
     // data — close the (now stale) zoom rather than showing the wrong window.
-    ['throughput-engine-tabs', 'session-list'].forEach((id) => {
+    ['throughput-engine-tabs', 'session-list', 'throughput-range-tabs'].forEach((id) => {
       const host = document.getElementById(id);
       if (host) host.addEventListener('click', closeZoom, true);
     });
@@ -5599,6 +5861,860 @@
       resizeT = setTimeout(renderL1, 220);
     });
   })();
+  </script>
+  <script>
+  // SHARE-CARD:BEGIN
+  // Share card: reads only the totals-only /api/throughput/share payload
+  // (daily numeric buckets). It never touches session lists, so no session
+  // names, titles, paths or repo names can reach the canvas.
+  (function () {
+    const REPO_URL = 'https://github.com/amirfish1/claude-command-center';
+    const SITE = 'getccc.dev';
+    const LS_KEY = 'ccc.share.v1';
+    // Hosted card page (infra/card-worker). Intents cannot attach images, so the
+    // card PNG is uploaded here and the page URL is what gets shared.
+    const CARD_BASE_DEFAULT = 'https://ccc-card.claude-command-center.workers.dev';
+    const LS_CARD_BASE = 'ccc.share.cardBase';
+    const ADJ = ['amber', 'brisk', 'calm', 'dusty', 'eager', 'fuzzy', 'gentle', 'hasty', 'icy', 'jolly', 'keen', 'lucky', 'mellow', 'nimble', 'odd', 'plucky', 'quiet', 'rapid', 'sunny', 'tidy', 'upbeat', 'vivid', 'witty', 'zesty'];
+    const ANI = ['falcon', 'otter', 'lynx', 'heron', 'badger', 'gecko', 'ibis', 'koala', 'lemur', 'marten', 'newt', 'osprey', 'panda', 'quail', 'raven', 'stoat', 'tapir', 'urchin', 'viper', 'wombat', 'yak', 'zebra'];
+    const LEVELS = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
+    const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Inter, sans-serif';
+    const PERIODS = {
+      week: { days: 7, kicker: 'last 7 days', phrase: 'this week' },
+      month: { days: 30, kicker: 'last 30 days', phrase: 'this month' },
+      year: { days: 365, kicker: 'last 12 months', phrase: 'in the last 12 months' },
+      // One calendar month ("My October"); range comes from calMonth().
+      cal: { days: 0, kicker: '', phrase: '' },
+    };
+    const ENGINE_NAMES = { claude: 'Claude', codex: 'Codex', kimi: 'Kimi' };
+    const PRODUCT_NAMES = { claude: 'Claude Code', codex: 'Codex', kimi: 'Kimi' };
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const MON = MONTHS.map((m) => m.slice(0, 3));
+    const NET_URLS = {
+      x: (t) => 'https://x.com/intent/post?text=' + encodeURIComponent(t),
+      linkedin: (t) => 'https://www.linkedin.com/feed/?shareActive=true&text=' + encodeURIComponent(t),
+      bluesky: (t) => 'https://bsky.app/intent/compose?text=' + encodeURIComponent(t),
+      threads: (t) => 'https://www.threads.net/intent/post?text=' + encodeURIComponent(t),
+    };
+
+    const $ = (id) => document.getElementById(id);
+    let data = null;          // last /api/throughput/share payload
+    let dataAt = 0;
+    let pollTimer = null;
+    let state = loadState();
+
+    function randomName() {
+      return ADJ[Math.floor(Math.random() * ADJ.length)] + '-' + ANI[Math.floor(Math.random() * ANI.length)];
+    }
+    function loadState() {
+      const base = { period: 'week', metric: 'tokens', size: 'wide', pseudo: true, streak: true, cost: false, saved: true, engines: false, name: '' };
+      try { Object.assign(base, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* ignore */ }
+      base.month = '';   // a ?m=YYYY-MM month pick lasts one page load
+      if (!PERIODS[base.period]) base.period = 'week';
+      if (!base.name) base.name = randomName();
+      return base;
+    }
+    function saveState() {
+      try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+    }
+
+    // ── Aggregation (pure; exposed for tests/snapshots) ──
+    function dayKey(d) {
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + m + '-' + dd;
+    }
+    function addDays(d, n) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); return x; }
+
+    // The month the "My month" card shows. In the first week of a month that
+    // is the month that just ended (the monthly card goes out then);
+    // otherwise it is the current month so far. `pick` is an optional
+    // 'YYYY-MM' override from the ?m= deep link.
+    function calMonth(today, pick) {
+      let y = today.getFullYear();
+      let m = today.getMonth();
+      const mm = /^(\d{4})-(\d{2})$/.exec(pick || '');
+      if (mm && +mm[2] >= 1 && +mm[2] <= 12) { y = +mm[1]; m = +mm[2] - 1; }
+      else if (today.getDate() <= 7) { m -= 1; if (m < 0) { m = 11; y -= 1; } }
+      const first = new Date(y, m, 1);
+      const last = new Date(y, m + 1, 0);
+      const todayKey = dayKey(today);
+      const complete = dayKey(last) < todayKey;
+      const endDay = complete ? last.getDate() : (dayKey(first) <= todayKey ? today.getDate() : 0);
+      return {
+        key: y + '-' + String(m + 1).padStart(2, '0'),
+        year: y, month: m, name: MONTHS[m], first: first,
+        daysInMonth: last.getDate(), endDay: endDay, complete: complete,
+      };
+    }
+    // First day and length of the window a period covers, ending today
+    // (or at the end of the picked month).
+    function periodRange(periodKey, today, pick) {
+      if (periodKey === 'cal') {
+        const cm = calMonth(today, pick);
+        return { start: cm.first, days: cm.endDay };
+      }
+      const days = PERIODS[periodKey].days;
+      return { start: addDays(today, -(days - 1)), days: days };
+    }
+
+    function summarize(payload, periodKey, today, pick) {
+      const daily = (payload && payload.daily) || [];
+      const byDay = {};
+      daily.forEach((r) => { byDay[r.day] = r; });
+      const range = periodRange(periodKey, today, pick);
+      const freeByDay = {};
+      ((((payload || {}).savings) || {}).daily || []).forEach((r) => { freeByDay[r.day] = r; });
+      const sum = { tokens: 0, hours: 0, calls: 0, cost: 0, raw: 0, cacheRead: 0, engineTokens: {}, freeSaved: 0, freeRuns: 0, freeTokens: 0, activeDays: 0, longestStreak: 0, bestDay: null, bestTokens: 0 };
+      let run = 0;
+      for (let i = 0; i < range.days; i++) {
+        const dk = dayKey(addDays(range.start, i));
+        const active = !!(byDay[dk] && byDay[dk].tokens > 0);
+        run = active ? run + 1 : 0;
+        if (active) {
+          sum.activeDays++;
+          if (run > sum.longestStreak) sum.longestStreak = run;
+          if (byDay[dk].tokens > sum.bestTokens) { sum.bestTokens = byDay[dk].tokens; sum.bestDay = dk; }
+        }
+        const fr = freeByDay[dk];
+        if (fr) {
+          sum.freeSaved += fr.free_saved_usd || 0;
+          sum.freeRuns += fr.free_runs || 0;
+          sum.freeTokens += fr.free_tokens || 0;
+        }
+        const r = byDay[dk];
+        if (!r) continue;
+        sum.tokens += r.tokens || 0;
+        sum.hours += (r.active_duration_sec || 0) / 3600;
+        sum.calls += r.turns || 0;
+        sum.cost += r.cost_usd || 0;
+        sum.raw += r.raw_context_tokens || 0;
+        sum.cacheRead += r.cache_read_tokens || 0;
+        Object.keys(r.engine_tokens || {}).forEach((e) => {
+          sum.engineTokens[e] = (sum.engineTokens[e] || 0) + (r.engine_tokens[e] || 0);
+        });
+      }
+      sum.cachePct = sum.raw > 0 ? Math.round((sum.cacheRead / sum.raw) * 100) : 0;
+      // Streak: consecutive active days ending today (or yesterday if today is still empty).
+      let streak = 0;
+      let cur = today;
+      if (!(byDay[dayKey(cur)] && byDay[dayKey(cur)].tokens > 0)) cur = addDays(cur, -1);
+      while (byDay[dayKey(cur)] && byDay[dayKey(cur)].tokens > 0) { streak++; cur = addDays(cur, -1); }
+      sum.streak = streak;
+      sum.engines = Object.keys(sum.engineTokens).filter((e) => sum.engineTokens[e] > 0).sort();
+      return sum;
+    }
+
+    // 53 week-columns (Sunday first) ending with the current week; null = future day.
+    function heatmapCells(payload, today) {
+      const byDay = {};
+      ((payload && payload.daily) || []).forEach((r) => { byDay[r.day] = r.tokens || 0; });
+      const lastColStart = addDays(today, -today.getDay());
+      const firstColStart = addDays(lastColStart, -52 * 7);
+      const cols = [];
+      const vals = [];
+      for (let w = 0; w < 53; w++) {
+        const col = [];
+        for (let d = 0; d < 7; d++) {
+          const day = addDays(firstColStart, w * 7 + d);
+          if (day > today) { col.push(null); continue; }
+          const v = byDay[dayKey(day)] || 0;
+          col.push(v);
+          if (v > 0) vals.push(v);
+        }
+        cols.push(col);
+      }
+      vals.sort((a, b) => a - b);
+      const q = (p) => (vals.length ? vals[Math.min(vals.length - 1, Math.floor(vals.length * p))] : 0);
+      const cuts = [q(0.25), q(0.5), q(0.75)];
+      const level = (v) => (v <= 0 ? 0 : v <= cuts[0] ? 1 : v <= cuts[1] ? 2 : v <= cuts[2] ? 3 : 4);
+      return cols.map((col) => col.map((v) => (v === null ? -1 : level(v))));
+    }
+
+    // One heat level per day of the picked month (-1 = still to come).
+    // Levels are quartiles of that month's own active days.
+    function monthCells(payload, cm) {
+      const byDay = {};
+      ((payload && payload.daily) || []).forEach((r) => { byDay[r.day] = r.tokens || 0; });
+      const raw = [];
+      for (let d = 1; d <= cm.daysInMonth; d++) {
+        raw.push(d > cm.endDay ? null : (byDay[dayKey(new Date(cm.year, cm.month, d))] || 0));
+      }
+      const vals = raw.filter((v) => v > 0).sort((a, b) => a - b);
+      const q = (p) => (vals.length ? vals[Math.min(vals.length - 1, Math.floor(vals.length * p))] : 0);
+      const cuts = [q(0.25), q(0.5), q(0.75)];
+      return raw.map((v) => (v === null ? -1 : v <= 0 ? 0 : v <= cuts[0] ? 1 : v <= cuts[1] ? 2 : v <= cuts[2] ? 3 : 4));
+    }
+    // "Claude Code", "Claude Code + Codex", or a generic name for 3+ engines.
+    function engineLabel(s) {
+      const names = s.engines.slice().sort((a, b) => (s.engineTokens[b] || 0) - (s.engineTokens[a] || 0)).map((e) => PRODUCT_NAMES[e] || e);
+      if (!names.length) return 'AI coding agents';
+      if (names.length > 2) return 'AI coding agents';
+      return names.join(' + ');
+    }
+
+    function fmtBig(n) {
+      const abs = Math.abs(n);
+      const f = (v, s) => {
+        const t = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+        return t.replace(/\.?0+$/, '') + s;
+      };
+      if (abs >= 1e12) return { num: f(n / 1e12, 'T') };
+      if (abs >= 1e9) return { num: f(n / 1e9, 'B') };
+      if (abs >= 1e6) return { num: f(n / 1e6, 'M') };
+      if (abs >= 1e3) return { num: f(n / 1e3, 'K') };
+      return { num: String(Math.round(n)) };
+    }
+    const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
+    function fmtUsd(n) {
+      if (n >= 1e6) return '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (n >= 1e4) return '$' + (n / 1e3).toFixed(0) + 'K';
+      return '$' + fmtInt(n);
+    }
+
+    // The card model: everything drawn comes from here.
+    function cardModel(payload, st, today, planPct) {
+      const p = PERIODS[st.period];
+      const s = summarize(payload, st.period, today, st.month);
+      const stat = {
+        tokens: { num: fmtBig(s.tokens).num, unit: 'tokens processed' },
+        hours: { num: fmtInt(s.hours), unit: 'agent hours' },
+        cache: { num: s.cachePct + '%', unit: 'cache hit rate' },
+        plan: { num: planPct == null ? '0%' : Math.round(planPct) + '%', unit: 'of my weekly plan used' },
+        saved: { num: fmtUsd(s.freeSaved), unit: 'of work for $0' },
+        runs: { num: fmtInt(s.freeRuns), unit: 'runs for $0' },
+      };
+      let metric = st.metric;
+      if (metric === 'plan' && planPct == null) metric = 'tokens';
+      if ((metric === 'saved' || metric === 'runs') && !(s.freeRuns > 0 || s.freeSaved > 0)) metric = 'tokens';
+      const small = {
+        tokens: fmtBig(s.tokens).num + ' tokens',
+        hours: fmtInt(s.hours) + ' agent hours',
+        cache: s.cachePct + '% cache hits',
+        calls: fmtInt(s.calls) + ' calls',
+        saved: fmtUsd(s.freeSaved) + ' saved',
+        runs: fmtInt(s.freeRuns) + ' runs for $0',
+      };
+      const order = { tokens: ['hours', 'cache', 'calls'], hours: ['tokens', 'cache', 'calls'], cache: ['tokens', 'hours', 'calls'], plan: ['tokens', 'hours', 'cache'], saved: ['runs', 'tokens', 'hours'], runs: ['saved', 'tokens', 'hours'] }[metric];
+      const extras = [];
+      if (st.streak && s.streak > 0 && st.period !== 'cal') extras.push(s.streak + ' day streak');
+      if (st.cost && s.cost > 0) extras.push('about ' + fmtUsd(s.cost) + ' at API prices');
+      if (st.saved && metric !== 'saved' && s.freeSaved > 0) extras.push('saved ' + fmtUsd(s.freeSaved) + (s.freeRuns > 0 ? ' on ' + fmtInt(s.freeRuns) + ' $0 runs' : ''));
+      const engineText = st.engines && s.engines.length ? s.engines.map((e) => ENGINE_NAMES[e] || e).join(' + ') : '';
+      const who = st.pseudo && st.name.trim() ? st.name.trim() + "'s AI agent fleet" : 'My AI agent fleet';
+      const model = {
+        kicker: who + ' · ' + p.kicker + (engineText ? ' · ' + engineText : ''),
+        big: stat[metric].num,
+        unit: stat[metric].unit,
+        line: order.map((k) => small[k]),
+        extras: extras,
+        cells: heatmapCells(payload, today),
+        metric: metric,
+        raw: s,
+      };
+      if (st.period === 'cal') {
+        // Monthly card: a titled calendar of one month plus four stat tiles.
+        // The title names the engines (it is the point of the card), so the
+        // "engines used" switch does not apply here.
+        const cm = calMonth(today, st.month);
+        const span = MON[cm.month] + ' 1' + (cm.endDay > 1 ? '-' + cm.endDay : '') + ', ' + cm.year + (cm.complete ? '' : ' (so far)');
+        const best = s.bestDay ? MON[cm.month] + ' ' + Number(s.bestDay.slice(8)) : 'none yet';
+        const first = metric === 'tokens'
+          ? { num: fmtInt(s.hours), unit: 'agent hours' }
+          : { num: fmtBig(s.tokens).num, unit: 'tokens processed' };
+        model.kind = 'month';
+        model.monthName = cm.name;
+        model.complete = cm.complete;
+        model.engineLabel = engineLabel(s);
+        model.title = 'My ' + cm.name + ' in ' + model.engineLabel;
+        model.kicker = (st.pseudo && st.name.trim() ? st.name.trim() + ' · ' : '') + span;
+        model.tiles = [
+          first,
+          { num: s.activeDays + '/' + cm.daysInMonth, unit: 'active days' },
+          { num: s.longestStreak + (s.longestStreak === 1 ? ' day' : ' days'), unit: 'longest streak' },
+          { num: best, unit: 'busiest day' },
+        ];
+        model.cal = {
+          firstDow: cm.first.getDay(),
+          levels: monthCells(payload, cm),
+          best: s.bestDay ? Number(s.bestDay.slice(8)) : 0,
+        };
+        model.monthKey = cm.key;
+      }
+      return model;
+    }
+
+    const SHORT_UNIT = { tokens: 'tokens', hours: 'agent hours', cache: 'cache hit rate', plan: 'of my weekly plan', saved: 'of work for $0', runs: 'runs for $0' };
+    function shareLead(model, st) {
+      if (model.kind === 'month') {
+        const parts = [model.big + ' ' + SHORT_UNIT[model.metric], model.tiles[0].num + ' ' + model.tiles[0].unit, model.raw.activeDays + ' active days'];
+        return 'My ' + model.monthName + (model.complete ? '' : ' so far') + ' in ' + model.engineLabel + ': ' + parts.join(', ') + '.';
+      }
+      const phrase = PERIODS[st.period].phrase;
+      let lead;
+      if (model.metric === 'hours') lead = 'My AI agents worked ' + model.big + ' hours ' + phrase + '.';
+      else if (model.metric === 'cache') lead = 'My AI agents hit a ' + model.big + ' cache rate ' + phrase + '.';
+      else if (model.metric === 'plan') lead = 'I used ' + model.big + ' of my weekly AI plan with my agent fleet.';
+      else if (model.metric === 'saved') lead = 'My AI agents did ' + model.big + ' of work for $0 ' + phrase + '.';
+      else if (model.metric === 'runs') lead = 'My AI agents finished ' + model.big + ' runs for $0 ' + phrase + '.';
+      else lead = 'My AI agents processed ' + model.big + ' tokens ' + phrase + '.';
+      return lead;
+    }
+    // With a card page URL it is the only link (the card page unfurls); the
+    // site name stays as plain text. Without one, fall back to the repo link.
+    function shareText(model, st, cardUrl) {
+      const lead = shareLead(model, st);
+      if (cardUrl) return lead + ' Run your own fleet: ' + SITE + ' ' + cardUrl;
+      return lead + ' Run your own fleet: ' + SITE + ' ' + REPO_URL;
+    }
+    // Headline for the card page's og:title (no links, no personal data).
+    function cardTitle(model, st) {
+      return shareLead(model, st);
+    }
+    function cardBase() {
+      let v = '';
+      try { v = localStorage.getItem(LS_CARD_BASE) || ''; } catch (e) { /* ignore */ }
+      v = (v || CARD_BASE_DEFAULT).replace(/\/+$/, '');
+      return /^https:\/\//.test(v) ? v : CARD_BASE_DEFAULT;
+    }
+
+    // ── Canvas drawing ──
+    function rrect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+    // Draw text, shrinking the font until it fits maxW.
+    function fitText(ctx, text, x, y, weight, size, maxW, color, align) {
+      let sz = size;
+      ctx.font = weight + ' ' + sz + 'px ' + FONT;
+      while (sz > 10 && ctx.measureText(text).width > maxW) { sz -= 1; ctx.font = weight + ' ' + sz + 'px ' + FONT; }
+      ctx.fillStyle = color;
+      ctx.textAlign = align || 'left';
+      ctx.fillText(text, x, y);
+      return ctx.measureText(text).width;
+    }
+    function drawHeat(ctx, cols, x, y, pitch, from, to) {
+      const cell = pitch * 0.84;
+      const r = Math.max(2, cell * 0.16);
+      for (let w = from; w < to; w++) {
+        for (let d = 0; d < 7; d++) {
+          const lv = cols[w][d];
+          if (lv < 0) continue;
+          ctx.fillStyle = LEVELS[lv];
+          rrect(ctx, x + (w - from) * pitch, y + d * pitch, cell, cell, r);
+          ctx.fill();
+        }
+      }
+    }
+    function drawLegend(ctx, xRight, y, pitch) {
+      const cell = pitch * 0.84;
+      const gap = pitch * 0.16 + 2;
+      const total = LEVELS.length * (cell + gap);
+      let x = xRight - total;
+      ctx.font = '500 ' + Math.round(cell * 0.85) + 'px ' + FONT;
+      ctx.fillStyle = '#7d9886';
+      ctx.textAlign = 'right';
+      ctx.fillText('Less', x - 8, y + cell * 0.82);
+      LEVELS.forEach((c) => { ctx.fillStyle = c; rrect(ctx, x, y, cell, cell, 3); ctx.fill(); x += cell + gap; });
+      ctx.fillStyle = '#7d9886';
+      ctx.textAlign = 'left';
+      ctx.fillText('More', xRight + 8, y + cell * 0.82);
+    }
+    function drawFooter(ctx, w, y, pad, scale) {
+      const logo = 26 * scale;
+      const g = ctx.createLinearGradient(pad, y - logo, pad + logo, y);
+      g.addColorStop(0, '#7c8cff');
+      g.addColorStop(1, '#4fd1c5');
+      ctx.fillStyle = g;
+      rrect(ctx, pad, y - logo + 4 * scale, logo, logo, 7 * scale);
+      ctx.fill();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#e8eaf0';
+      ctx.font = '700 ' + 24 * scale + 'px ' + FONT;
+      ctx.fillText('CCC', pad + logo + 10 * scale, y);
+      const right = w - pad;
+      ctx.textAlign = 'right';
+      const repoText = 'github.com/amirfish1/claude-command-center';
+      const sz = 19 * scale;
+      ctx.font = '500 ' + sz + 'px ' + FONT;
+      const repoW = ctx.measureText('★ ' + repoText).width;
+      ctx.fillStyle = '#7d9886';
+      ctx.fillText('★ ' + repoText, right, y);
+      ctx.font = '700 ' + sz + 'px ' + FONT;
+      const siteW = ctx.measureText(SITE).width;
+      ctx.fillStyle = '#e8eaf0';
+      ctx.fillText(SITE, right - repoW - 22 * scale, y);
+      ctx.font = '500 ' + sz + 'px ' + FONT;
+      ctx.fillStyle = '#7d9886';
+      ctx.fillText('Run your own fleet:', right - repoW - 22 * scale - siteW - 8 * scale, y);
+    }
+    function drawBackground(ctx, w, h) {
+      ctx.fillStyle = '#0d1110';
+      ctx.fillRect(0, 0, w, h);
+      const g = ctx.createRadialGradient(w * 0.85, -h * 0.1, 0, w * 0.85, -h * 0.1, w * 0.8);
+      g.addColorStop(0, '#1d3a2a');
+      g.addColorStop(0.55, '#121a17');
+      g.addColorStop(1, '#0d1110');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    // Month calendar: Sunday-first columns, day numbers in each cell, the
+    // busiest day ringed, days still to come drawn as empty outlines.
+    function drawMonth(ctx, cal, x, y, pitch) {
+      const cell = pitch * 0.88;
+      const r = Math.max(3, cell * 0.14);
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = '600 ' + Math.round(pitch * 0.26) + 'px ' + FONT;
+      ctx.fillStyle = '#7d9886';
+      ctx.textAlign = 'center';
+      ['S', 'M', 'T', 'W', 'T', 'F', 'S'].forEach((d, i) => ctx.fillText(d, x + i * pitch + cell / 2, y - pitch * 0.18));
+      cal.levels.forEach((lv, i) => {
+        const idx = cal.firstDow + i;
+        const cx = x + (idx % 7) * pitch;
+        const cy = y + Math.floor(idx / 7) * pitch;
+        rrect(ctx, cx, cy, cell, cell, r);
+        if (lv < 0) {
+          ctx.strokeStyle = '#1f2a24';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = LEVELS[lv];
+          ctx.fill();
+        }
+        if (i + 1 === cal.best) {
+          rrect(ctx, cx - 3, cy - 3, cell + 6, cell + 6, r + 3);
+          ctx.strokeStyle = '#f2f5f3';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        }
+        ctx.font = '600 ' + Math.round(pitch * 0.22) + 'px ' + FONT;
+        ctx.textAlign = 'left';
+        ctx.fillStyle = lv >= 3 ? 'rgba(13,17,16,0.72)' : lv < 0 ? '#3a4a40' : '#7d9886';
+        ctx.fillText(String(i + 1), cx + cell * 0.13, cy + cell * 0.32);
+      });
+    }
+    function drawTiles(ctx, tiles, x, y, colW, rowH, cols, numSize, unitSize) {
+      tiles.forEach((t, i) => {
+        const tx = x + (i % cols) * colW;
+        const ty = y + Math.floor(i / cols) * rowH;
+        fitText(ctx, t.num, tx, ty, 800, numSize, colW - 16, '#f2f5f3');
+        fitText(ctx, t.unit, tx, ty + unitSize + 10, 500, unitSize, colW - 16, '#8fb59d');
+      });
+    }
+    function drawMonthCard(ctx, model, w, h, wide) {
+      if (wide) {
+        const pad = 60;
+        const left = 600;
+        fitText(ctx, model.kicker, pad, 84, 500, 22, left, '#8fb59d');
+        fitText(ctx, model.title, pad, 138, 800, 44, left, '#f2f5f3');
+        fitText(ctx, model.big, pad, 262, 800, 112, left, '#f2f5f3');
+        fitText(ctx, model.unit, pad, 304, 700, 30, left, '#8fb59d');
+        drawTiles(ctx, model.tiles, pad, 380, 300, 92, 2, 40, 18);
+        if (model.extras.length) fitText(ctx, model.extras.join('   ·   '), pad, 548, 500, 20, left, '#8fb59d');
+        const pitch = 60;
+        const rows = Math.ceil((model.cal.firstDow + model.cal.levels.length) / 7);
+        const x0 = w - pad - 7 * pitch + pitch * 0.12;
+        const y0 = 120 + (6 - rows) * pitch / 2;
+        drawMonth(ctx, model.cal, x0, y0, pitch);
+        drawLegend(ctx, w - pad - 44, y0 + rows * pitch + 8, 15);
+        drawFooter(ctx, w, h - 36, pad, 1);
+      } else {
+        const pad = 64;
+        const inner = w - pad * 2;
+        fitText(ctx, model.kicker, pad, 100, 500, 26, inner, '#8fb59d');
+        fitText(ctx, model.title, pad, 172, 800, 58, inner, '#f2f5f3');
+        fitText(ctx, model.big, pad, 330, 800, 160, inner, '#f2f5f3');
+        fitText(ctx, model.unit, pad, 384, 700, 40, inner, '#8fb59d');
+        drawTiles(ctx, model.tiles, pad, 470, inner / 4, 0, 4, 40, 18);
+        if (model.extras.length) fitText(ctx, model.extras.join('  \u00b7  '), pad, 552, 500, 22, inner, '#8fb59d');
+        const pitch = 62;
+        const rows = Math.ceil((model.cal.firstDow + model.cal.levels.length) / 7);
+        const x0 = pad + (inner - 7 * pitch) / 2;
+        const y0 = 620 + (6 - rows) * pitch / 2;
+        drawMonth(ctx, model.cal, x0, y0, pitch);
+        drawLegend(ctx, x0 + 7 * pitch - pitch * 0.12 - 44, y0 + rows * pitch + 8, 15);
+        drawFooter(ctx, w, h - 40, pad, 1);
+      }
+    }
+
+    function drawCard(canvas, model, size) {
+      const wide = size !== 'square';
+      const w = wide ? 1200 : 1080;
+      const h = wide ? 630 : 1080;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      drawBackground(ctx, w, h);
+      if (model.kind === 'month') { ctx.textBaseline = 'alphabetic'; drawMonthCard(ctx, model, w, h, wide); return; }
+      const pad = wide ? 60 : 64;
+      const inner = w - pad * 2;
+      ctx.textBaseline = 'alphabetic';
+      if (wide) {
+        fitText(ctx, model.kicker, pad, 90, 500, 24, inner, '#8fb59d');
+        const bigW = fitText(ctx, model.big, pad, 214, 800, 128, inner * 0.55, '#f2f5f3');
+        fitText(ctx, model.unit, pad + bigW + 18, 214, 700, 40, inner - bigW - 18, '#8fb59d');
+        fitText(ctx, model.line.join('   ·   '), pad, 270, 500, 30, inner, '#cfe3d6');
+        if (model.extras.length) fitText(ctx, model.extras.join('   ·   '), pad, 308, 500, 22, inner, '#8fb59d');
+        const pitch = inner / 53;
+        drawHeat(ctx, model.cells, pad, 338, pitch, 0, 53);
+        drawLegend(ctx, w - pad - 140, 338 + 7 * pitch + 14, pitch);
+        drawFooter(ctx, w, h - 36, pad, 1);
+      } else {
+        fitText(ctx, model.kicker, pad, 100, 500, 30, inner, '#8fb59d');
+        fitText(ctx, model.big, pad, 290, 800, 190, inner, '#f2f5f3');
+        fitText(ctx, model.unit, pad, 352, 700, 50, inner, '#8fb59d');
+        fitText(ctx, model.line.join('  \u00b7  '), pad, 418, 500, 34, inner, '#cfe3d6');
+        if (model.extras.length) fitText(ctx, model.extras.join('  \u00b7  '), pad, 458, 500, 26, inner, '#8fb59d');
+        // 53 weeks as two stacked bands so the cells stay large.
+        const pitch = Math.floor((990 - 496 - 18) / 14);
+        const x0 = pad + (inner - 27 * pitch) / 2;
+        drawHeat(ctx, model.cells, x0, 496, pitch, 0, 27);
+        drawHeat(ctx, model.cells, x0, 496 + 7 * pitch + 18, pitch, 27, 53);
+        drawFooter(ctx, w, h - 40, pad, 1);
+      }
+    }
+
+    // ── UI ──
+    function planPct() {
+      try {
+        if (typeof weeklyData !== 'undefined' && weeklyData && weeklyData.weekly_pct != null && !isNaN(Number(weeklyData.weekly_pct))) {
+          return Number(weeklyData.weekly_pct);
+        }
+      } catch (e) { /* weeklyData not declared yet */ }
+      return null;
+    }
+    function setStatus(msg) {
+      const el = $('sh-status');
+      el.textContent = msg || '';
+      el.classList.toggle('on', !!msg);
+    }
+    function syncControls() {
+      ['period', 'metric', 'size'].forEach((k) => {
+        document.querySelectorAll('#sh-' + k + ' button').forEach((b) => b.classList.toggle('on', b.dataset.v === state[k]));
+      });
+      const hasPlan = planPct() != null;
+      const planBtn = document.querySelector('#sh-metric button[data-v="plan"]');
+      planBtn.disabled = !hasPlan;
+      planBtn.title = hasPlan ? '' : 'Plan usage is not available yet';
+      const sv = ((data || {}).savings) || {};
+      const hasSavings = (sv.free_runs || 0) > 0 || (sv.free_saved_usd || 0) > 0;
+      ['saved', 'runs'].forEach((v) => {
+        const b = document.querySelector('#sh-metric button[data-v="' + v + '"]');
+        if (!b) return;
+        b.disabled = !hasSavings;
+        b.title = hasSavings ? '' : 'No $0 runs yet. Run a session on the free runtime to see this.';
+      });
+      $('sh-opt-pseudo').checked = state.pseudo;
+      $('sh-opt-streak').checked = state.streak;
+      $('sh-opt-cost').checked = state.cost;
+      $('sh-opt-saved').checked = state.saved;
+      $('sh-opt-engines').checked = state.engines;
+      const isCal = state.period === 'cal';
+      [['sh-opt-engines', 'The month card names your engines in its title'], ['sh-opt-streak', 'The month card always shows its longest streak']].forEach(([id, why]) => {
+        $(id).disabled = isCal;
+        if ($(id).parentNode) $(id).parentNode.title = isCal ? why : '';
+      });
+      syncMonthLabels();
+      $('sh-pseudo-input').value = state.name;
+      $('sh-pseudo-input').disabled = !state.pseudo;
+      $('sh-stage').classList.toggle('square', state.size === 'square');
+    }
+    let lastModel = null;
+    let textEdited = false;   // user typed in the post text, so keep their words
+    let lastUpload = null;    // {sig, url}: avoids re-uploading an identical card
+    function render() {
+      syncControls();
+      const model = cardModel(data || { daily: [] }, state, new Date(), planPct());
+      lastModel = model;
+      drawCard($('sh-canvas'), model, state.size);
+      if (!textEdited) $('sh-text').value = shareText(model, state);
+      const empty = data && !data.pending && !(data.daily || []).length;
+      if (!data || data.pending) setStatus('Counting 12 months of agent activity. The first run can take a minute.');
+      else if (empty) setStatus('No agent activity found yet. Run a session and come back.');
+      else setStatus('');
+      refreshMilestoneAttn();
+      maybePromptMilestone();
+    }
+
+    async function loadData(force) {
+      clearTimeout(pollTimer);
+      if (!force && data && !data.pending && Date.now() - dataAt < 60000) { render(); return; }
+      try {
+        const res = await fetch('/api/throughput/share', { cache: 'no-store' });
+        const d = await res.json();
+        data = d;
+        if (!d.pending) dataAt = Date.now();
+      } catch (e) {
+        data = null;
+        setStatus('Could not load activity totals. Reload the page and try again.');
+        return;
+      }
+      render();
+      if (data && data.pending && $('share-overlay').classList.contains('open')) {
+        pollTimer = setTimeout(() => loadData(true), 2500);
+      }
+    }
+
+    function canvasBlob() {
+      return new Promise((resolve) => $('sh-canvas').toBlob(resolve, 'image/png'));
+    }
+    function note(msg) { $('sh-note').textContent = msg; }
+    async function copyImage() {
+      try {
+        const blob = await canvasBlob();
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        note('Image copied. Paste it into your post.');
+        return true;
+      } catch (e) {
+        note('Could not copy the image here. Use Download PNG instead.');
+        return false;
+      }
+    }
+    async function download() {
+      const blob = await canvasBlob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const tag = state.period === 'cal' && lastModel && lastModel.monthKey ? 'month-' + lastModel.monthKey : 'fleet-' + state.period;
+      a.download = 'ccc-' + tag + '-' + (state.size === 'square' ? '1080x1080' : '1200x630') + '.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      note('Saved ' + a.download + '.');
+    }
+    async function sha256Hex(blob) {
+      if (!(window.crypto && crypto.subtle)) return '';
+      const d = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+      return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    // Uploads only the PNG and the headline. Resolves to the card page URL, or
+    // null when the upload fails for any reason (callers fall back).
+    async function uploadCard() {
+      const base = cardBase();
+      const blob = await canvasBlob();
+      if (!blob) return null;
+      const title = lastModel ? cardTitle(lastModel, state) : '';
+      const sig = await sha256Hex(blob);
+      if (sig && lastUpload && lastUpload.sig === sig + '|' + title && lastUpload.base === base) return lastUpload.url;
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 20000);
+      try {
+        const fd = new FormData();
+        fd.append('image', blob, 'card.png');
+        fd.append('title', title);
+        const res = await fetch(base + '/c', { method: 'POST', body: fd, signal: ctl.signal });
+        if (!res.ok) return null;
+        const j = await res.json();
+        if (!j || typeof j.url !== 'string' || j.url.indexOf(base + '/c/') !== 0) return null;
+        if (sig) lastUpload = { sig: sig + '|' + title, base: base, url: j.url };
+        return j.url;
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // Post text carrying the card page URL as its only link.
+    function textWithCard(cardUrl) {
+      const typed = $('sh-text').value;
+      if (!textEdited || !lastModel) return lastModel ? shareText(lastModel, state, cardUrl) : typed;
+      if (typed.indexOf(REPO_URL) !== -1) return typed.split(REPO_URL).join(cardUrl);
+      return typed.replace(/\s+$/, '') + ' ' + cardUrl;
+    }
+    async function post(net) {
+      // Open the tab now (inside the click) so the upload wait cannot get it
+      // blocked as a popup; point it at the composer once the link exists.
+      const tab = window.open('', '_blank');
+      if (tab) { try { tab.opener = null; } catch (e) { /* ignore */ } }
+      note('Uploading the card to make a link preview...');
+      const copied = await copyImage();
+      const cardUrl = await uploadCard();
+      const text = cardUrl ? textWithCard(cardUrl) : $('sh-text').value;
+      const url = NET_URLS[net](text);
+      if (tab) tab.location.href = url; else window.open(url, '_blank', 'noopener');
+      if (cardUrl) note('Composer opened with your card link.' + (copied ? ' The image is also copied.' : ''));
+      else if (copied) note('Could not upload the card, so the link will not show it. Composer opened. Image copied: paste it into the post.');
+      else note('Could not upload the card. Composer opened. Use Download PNG and attach the image.');
+    }
+    async function copyLink() {
+      note('Uploading the card to make a link...');
+      const cardUrl = await uploadCard();
+      if (!cardUrl) { note('Could not upload the card. Use Copy image or Download PNG instead.'); return; }
+      try {
+        await navigator.clipboard.writeText(cardUrl);
+        note('Link copied. It previews as your card when pasted into a post.');
+      } catch (e) {
+        $('sh-text').value = cardUrl;
+        textEdited = true;
+        note('Could not copy automatically. The link is in the text box above.');
+      }
+    }
+
+    function open() {
+      $('share-overlay').classList.add('open');
+      render();
+      loadData(false);
+      if (!weeklyData && typeof loadWeeklyUsage === 'function') {
+        loadWeeklyUsage().then(syncControls);
+      }
+    }
+    function close() {
+      $('share-overlay').classList.remove('open');
+      clearTimeout(pollTimer);
+      $('sh-milestone').classList.remove('on');
+      milestoneShown = 0;
+    }
+
+    // Savings milestones: once per new threshold the Share button pulses, and
+    // the next time the card opens it lands on the $ saved view with a
+    // celebratory banner. Purely local state, seen markers in localStorage.
+    const MILESTONES = [10, 100, 1000, 10000];
+    const LS_MILESTONE = 'ccc.share.savingsMilestone';
+    function milestoneSeen() {
+      try { return Number(localStorage.getItem(LS_MILESTONE) || 0) || 0; } catch (e) { return 0; }
+    }
+    function pendingMilestone() {
+      const total = (((data || {}).savings) || {}).free_saved_usd || 0;
+      let hit = 0;
+      MILESTONES.forEach((m) => { if (total >= m) hit = m; });
+      return hit > milestoneSeen() ? hit : 0;
+    }
+    function refreshMilestoneAttn() {
+      const pending = pendingMilestone();
+      const btn = $('share-btn');
+      if (!btn) return;
+      btn.classList.toggle('attn', pending > 0);
+      btn.title = pending
+        ? 'You passed ' + fmtUsd(pending) + ' saved on $0 runs. Share it.'
+        : 'Make a shareable card of your agent activity';
+    }
+    let milestoneBusy = false;
+    let milestoneShown = 0;   // banner stays up for the rest of this open
+    function maybePromptMilestone() {
+      if (milestoneBusy) return;
+      const el = $('sh-milestone');
+      if (!el) return;
+      const open = $('share-overlay').classList.contains('open');
+      const pending = pendingMilestone();
+      if (pending && open) {
+        milestoneBusy = true;
+        try {
+          try { localStorage.setItem(LS_MILESTONE, String(pending)); } catch (e) { /* ignore */ }
+          milestoneShown = pending;
+          refreshMilestoneAttn();
+          // The month card was asked for by name, so keep its headline.
+          if (state.metric === 'tokens' && state.period !== 'cal') { state.metric = 'saved'; saveState(); }
+          el.textContent = 'You just passed ' + fmtUsd(pending) + ' saved on $0 runs. This card says it best.';
+          el.classList.add('on');
+          try {
+            if (window.cccFx && typeof window.cccFx.confetti === 'function' && !(window.cccFx.reducedMotion && window.cccFx.reducedMotion())) {
+              window.cccFx.confetti();
+            }
+          } catch (e) { /* fx kit is optional */ }
+          render();
+        } finally {
+          milestoneBusy = false;
+        }
+        return;
+      }
+      if (!open || !milestoneShown) el.classList.remove('on');
+    }
+
+    // Entry point for milestone toasts and share CTAs elsewhere in CCC:
+    // open the card straight on the savings numbers.
+    function openSavings() {
+      const sv = ((data || {}).savings) || {};
+      if ((sv.free_saved_usd || 0) > 0) state.metric = 'saved';
+      else if ((sv.free_runs || 0) > 0) state.metric = 'runs';
+      else state.metric = 'saved';
+      saveState();
+      open();
+      return state.metric;
+    }
+
+    // "My October" in the period picker and the header button. The header
+    // button lights up in the first week of a month, when last month's card
+    // is ready to share.
+    function syncMonthLabels() {
+      const today = new Date();
+      const cm = calMonth(today, state.month);
+      $('sh-period-cal').textContent = 'My ' + cm.name;
+      const btn = $('month-card-btn');
+      if (!btn) return;
+      const auto = calMonth(today, '');
+      $('month-card-label').textContent = 'My ' + auto.name;
+      btn.classList.toggle('fresh', auto.complete);
+      btn.title = auto.complete ? 'Your ' + auto.name + ' card is ready to share' : 'Make your ' + auto.name + ' card (so far)';
+    }
+    // One click: open the card on the calendar month. `pick` = 'YYYY-MM'.
+    function openMonth(pick) {
+      state.period = 'cal';
+      if (state.metric === 'plan') state.metric = 'tokens';
+      state.month = /^\d{4}-\d{2}$/.test(pick || '') ? pick : '';
+      saveState();
+      open();
+      return lastModel ? lastModel.monthKey : '';
+    }
+
+    function wire() {
+      $('share-btn').addEventListener('click', open);
+      $('month-card-btn').addEventListener('click', () => openMonth(''));
+      $('sh-close').addEventListener('click', close);
+      $('share-overlay').addEventListener('click', (e) => { if (e.target === $('share-overlay')) close(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('share-overlay').classList.contains('open')) close(); });
+      ['period', 'metric', 'size'].forEach((k) => {
+        $('sh-' + k).addEventListener('click', (e) => {
+          const b = e.target.closest('button');
+          if (!b || b.disabled) return;
+          state[k] = b.dataset.v;
+          // Plan used is a weekly figure, so keep period and metric consistent.
+          if (k === 'metric' && state.metric === 'plan') state.period = 'week';
+          if (k === 'period' && state.period !== 'week' && state.metric === 'plan') state.metric = 'tokens';
+          saveState();
+          render();
+        });
+      });
+      [['pseudo', 'sh-opt-pseudo'], ['streak', 'sh-opt-streak'], ['cost', 'sh-opt-cost'], ['saved', 'sh-opt-saved'], ['engines', 'sh-opt-engines']].forEach(([k, id]) => {
+        $(id).addEventListener('change', (e) => { state[k] = e.target.checked; saveState(); render(); });
+      });
+      $('sh-pseudo-input').addEventListener('input', (e) => { state.name = e.target.value; saveState(); render(); });
+      $('sh-pseudo-roll').addEventListener('click', () => { state.name = randomName(); saveState(); render(); });
+      $('sh-text').addEventListener('input', () => { textEdited = true; });
+      $('sh-copylink').addEventListener('click', copyLink);
+      $('sh-copy').addEventListener('click', copyImage);
+      $('sh-download').addEventListener('click', download);
+      document.querySelectorAll('.sh-tile[data-net]').forEach((t) => t.addEventListener('click', () => post(t.dataset.net)));
+    }
+    wire();
+    syncMonthLabels();
+    // /throughput?share=1 opens the card; ?share=saved|runs lands on a metric;
+    // ?share=month[&m=YYYY-MM] opens the monthly card.
+    // This is the deep link milestone prompts and other CCC views point at.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const shareParam = params.get('share');
+      if (shareParam === 'month') {
+        openMonth(params.get('m') || '');
+      } else if (shareParam) {
+        if (['tokens', 'hours', 'plan', 'cache', 'saved', 'runs'].indexOf(shareParam) !== -1) {
+          state.metric = shareParam;
+          saveState();
+        }
+        open();
+      }
+    } catch (e) { /* ignore */ }
+    // Prefetch the totals so a pending milestone can light up the Share
+    // button before the user ever opens the card.
+    if (!$('share-overlay').classList.contains('open')) loadData(false);
+    window.CCCShare = { summarize, heatmapCells, monthCells, calMonth, cardModel, shareText, cardTitle, cardBase, textWithCard, uploadCard, post, NET_URLS, drawCard, open, close, openSavings, openMonth, pendingMilestone, loadData };
+  })();
+  // SHARE-CARD:END
   </script>
 </body>
 </html>

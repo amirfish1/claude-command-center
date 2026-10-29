@@ -503,13 +503,16 @@ class TestAcpLiveActivityFields(unittest.TestCase):
 
     def test_pending_permissions_flag_needs_approval(self):
         server._kimi_session_index = lambda: {}
+        updated_at = time.time() - 9
         server._ACP_SESSION_STATE = {"kimi": {"session_k1": {
             "attached": True, "pending_permissions": [{"request_id": "r1"}],
-            "updated_at": time.time() - 9}}}
+            "updated_at": updated_at}}}
         out = server._acp_live_activity_fields("kimi", "session_k1")
         self.assertTrue(out["needs_approval"])
-        # No wire signal → falls back to the registry's updated_at.
-        self.assertAlmostEqual(out["sidecar_ts"], time.time() - 9, delta=2)
+        # No wire signal → falls back to the registry's updated_at, passed
+        # through verbatim (compare to the captured value, not a fresh
+        # time.time(), which flakes under suite load).
+        self.assertEqual(out["sidecar_ts"], updated_at)
 
     def test_grok_tail_mid_turn_then_finished(self):
         path = pathlib.Path(self._tmp.name) / "grok.jsonl"
@@ -643,6 +646,73 @@ class TestCensusCodexPoolIdentity(unittest.TestCase):
         server._codex_fetch_threads = lambda limit=None: [{
             "id": "pool-1", "title": "sqlite-name", "cwd": "/x/BYM"}]
         self.assertEqual(server._census_identity_map()["pool-1"]["name"], "spawned-name")
+
+    def test_dashboard_title_priority_and_continuation_inheritance(self):
+        server._load_spawn_registry = lambda: []
+        server._codex_fetch_threads = lambda limit=None: []
+        now = time.time()
+        server._ARCHIVE_RESPONSE_CACHE["k"] = {
+            "cached_at": now,
+            "conversations": [
+                {
+                    "session_id": "origin-1",
+                    "display_name": "Verify Sonia $100 FSH flex registration",
+                    "ai_title": "Verify Sonia $100 FSH flex registration",
+                    "first_message": "Verify Sonia $100 FSH flex registration",
+                    "engine": "codex",
+                    "mtime": now - 200,
+                },
+                {
+                    "session_id": "cont-2",
+                    "display_name": "You are continuing a task from an earlier Claude Code session in this same repository.",
+                    "first_message": (
+                        "You are continuing a task from an earlier Claude Code session in this same repository.\n"
+                        "Previous session ID: origin-1"
+                    ),
+                    "parent_session_id": "origin-1",
+                    "continued_from_session_id": "origin-1",
+                    "engine": "claude",
+                    "mtime": now - 100,
+                },
+                {
+                    "session_id": "wt-poll",
+                    "display_name": "Drain the CCC WatchTower queue and keep it empty.",
+                    "ai_title": "Empty CCC Queue Drain Check",
+                    "first_message": "Drain the CCC WatchTower queue and keep it empty.",
+                    "is_watchtower_worker": True,
+                    "engine": "claude",
+                    "mtime": now - 50,
+                },
+            ],
+            "signature": None,
+        }
+        with mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+             mock.patch.object(server, "_load_conversation_lifecycle_sets", return_value=({"origin-1"}, set())):
+            out = server._census_identity_map()
+        # Continuation leg inherits origin's resolved title and drops bogus self-parent link.
+        self.assertEqual(out["cont-2"]["name"], "Verify Sonia $100 FSH flex registration")
+        self.assertEqual(out["cont-2"]["continued_from_session_id"], "origin-1")
+        self.assertIsNone(out["cont-2"]["parent_session_id"])
+        # Archive lifecycle flags and empty WatchTower poll classification propagate.
+        self.assertTrue(out["origin-1"]["archived"])
+        self.assertFalse(out["cont-2"]["archived"])
+        self.assertEqual(out["wt-poll"]["name"], "Empty CCC Queue Drain Check")
+        self.assertTrue(out["wt-poll"]["empty_worker_poll"])
+
+    def test_wt_worker_display_name_preserves_ticket_title_when_snapshot_cold(self):
+        rows = [{
+            "session_id": "wt-1",
+            "is_watchtower_worker": True,
+            "watchtower_queue": "CCC",
+            "display_name": "CCC#138: Landing page refreshed",
+            "ai_title": "Landing page refreshed",
+        }]
+        with mock.patch.object(server, "_wt_list_items_display_cached", return_value=[]), \
+             mock.patch.object(server, "_wt_read_workers", return_value=[{"session_id": "wt-1", "queue": "CCC"}]), \
+             mock.patch.object(server, "_wt_read_worker_session_ids", return_value={"wt-1"}), \
+             mock.patch.object(server, "_wt_read_session_origins", return_value={}):
+            server._apply_watchtower_worker_display_names(rows)
+        self.assertEqual(rows[0]["display_name"], "🧵 CCC#138: Landing page refreshed")
 
 
 if __name__ == "__main__":

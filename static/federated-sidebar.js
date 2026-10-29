@@ -88,11 +88,18 @@
     return ((el && el.value) || '').trim().toLowerCase();
   }
 
+  // Gate on the COMMITTED tab (.conv-tab.is-active), not raw localStorage:
+  // the key is shared across same-origin windows and transiently written by
+  // the mobile bottom-nav correction, so reading it here flashed the section
+  // in for one render pass while the list body stayed on another tab.
   function sidebarTabIsCoding() {
-    try {
-      var t = localStorage.getItem('ccc-sidebar-tab');
-      return !t || t === 'coding';
-    } catch (_) { return true; }
+    var list = $('convList');
+    var active = list && list.querySelector('.conv-tab.is-active');
+    var t = active ? active.getAttribute('data-conv-tab') : null;
+    if (t == null) {
+      try { t = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+    }
+    return !t || t === 'coding';
   }
 
   function rowTitle(r) {

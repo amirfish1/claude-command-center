@@ -1,0 +1,151 @@
+/* Star ask (Q17): the small "star us on GitHub" card that appears once at a
+   success moment. Lives bottom-right, never modal, always dismissible.
+   static/star-ask.js owns the behavior; this file owns the look. */
+
+.ccc-star-ask {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9998;
+  width: 320px;
+  max-width: calc(100vw - 40px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 16px 16px 12px;
+  font-family: var(--font-ui);
+  color: var(--text);
+  animation: ccc-star-ask-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes ccc-star-ask-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.ccc-star-ask.is-leaving {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+}
+
+.ccc-star-ask__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ccc-star-ask__close:hover { background: var(--surface-2); color: var(--text); }
+
+.ccc-star-ask__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 20px 6px 0;
+}
+
+.ccc-star-ask__star {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--orange) 16%, transparent);
+  color: var(--orange);
+  font-size: 17px;
+  animation: ccc-star-ask-twinkle 2.4s ease-in-out infinite;
+}
+
+@keyframes ccc-star-ask-twinkle {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50%      { transform: scale(1.12) rotate(8deg); }
+}
+
+.ccc-star-ask__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ccc-star-ask__body {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.ccc-star-ask__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ccc-star-ask__btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 13px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  background: var(--surface-2);
+  color: var(--text);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ccc-star-ask__btn:hover { border-color: var(--accent); }
+
+.ccc-star-ask__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+.ccc-star-ask__btn--primary:hover { filter: brightness(1.08); }
+.ccc-star-ask__btn--primary[disabled] { opacity: 0.6; cursor: default; filter: none; }
+
+.ccc-star-ask__btn--text {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  padding: 7px 4px;
+}
+.ccc-star-ask__btn--text:hover { color: var(--text); border-color: transparent; }
+
+.ccc-star-ask__note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Success state: the card swaps to a small celebration, then leaves. */
+.ccc-star-ask.is-thanked .ccc-star-ask__star {
+  animation: ccc-star-ask-pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.4);
+}
+@keyframes ccc-star-ask-pop {
+  0%   { transform: scale(0.4); }
+  60%  { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+/* Reduced motion: same card, no bounce or twinkle. */
+@media (prefers-reduced-motion: reduce) {
+  .ccc-star-ask { animation: none; }
+  .ccc-star-ask.is-leaving { transition: none; }
+  .ccc-star-ask__star { animation: none; }
+  .ccc-star-ask.is-thanked .ccc-star-ask__star { animation: none; }
+}
+.ccc-star-ask--still { animation: none !important; }
+.ccc-star-ask--still .ccc-star-ask__star { animation: none !important; }

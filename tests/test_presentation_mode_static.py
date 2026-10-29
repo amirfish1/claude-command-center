@@ -116,7 +116,8 @@ process.stdout.write(JSON.stringify({ path, resolved: resolved && resolved.name 
 
 class TestPresentationModeStatic(unittest.TestCase):
     def test_presentation_is_an_opt_in_preview_feature(self):
-        server_source = (PROJECT_ROOT / "server.py").read_text(encoding="utf-8")
+        # The feature-flag registry moved out of server.py into ccc_server.
+        server_source = (PROJECT_ROOT / "ccc_server" / "log_parse.py").read_text(encoding="utf-8")
         app_js = APP_JS.read_text(encoding="utf-8")
 
         self.assertIn('"presentation": {', server_source)
@@ -135,7 +136,12 @@ class TestPresentationModeStatic(unittest.TestCase):
         html = INDEX.read_text(encoding="utf-8")
 
         self.assertIn('data-role="presentation-toolbar"', html)
-        self.assertEqual(html.count("data-presentation-mode="), 3)
+        # Three desktop segment buttons plus the three mobile-redesign buttons
+        # that reuse the same values.
+        self.assertEqual(html.count("data-presentation-mode="), 6)
+        self.assertEqual(html.count('data-presentation-mode="off"'), 2)
+        self.assertEqual(html.count('data-presentation-mode="2"'), 2)
+        self.assertEqual(html.count('data-presentation-mode="3"'), 2)
         self.assertIn('data-presentation-mode="off"', html)
         self.assertIn('data-presentation-mode="2"', html)
         self.assertIn('data-presentation-mode="3"', html)

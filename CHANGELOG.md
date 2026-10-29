@@ -7,6 +7,772 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.41.0] - 2026-10-28
+
+### Added
+- `ccc restart [all|dashboard|worker]` restarts CCC through the drain-aware restart endpoints and merges restarts requested within 5 minutes of the last one into one deferred restart. Agent instructions now use it instead of `systemctl`/`launchctl`.
+- **Tailscale headless install**: scripts/install.sh auto-detects Tailscale and prompts (or accepts `--tailnet` / `CCC_TAILNET=1`) to bind the node's Tailscale IP, configure `network.json`, and apply boot retries with `StartLimitIntervalSec=0` so remote headless setups connect reliably.
+- Session-list header now auto-collapses while scrolling down on touch layouts and returns on scroll-up or at the top (headroom-style, no library).
+- Optional hourly browser audit checks finished Features and Small bugs rows on desktop and mobile for missing action, question, or Close controls, and files deduplicated WatchTower bugs. Install with `systemd/install-row-audit.sh QUEUE`; reports remain local under the command-center data directory.
+- iOS shell: drag the composer chrome down to dismiss the keyboard, plus interactive scroll-dismiss; mic button now uses on-device iOS speech recognition via the SpeechRecognition Capacitor plugin (Web Speech API doesn't exist in WKWebView).
+- Option to remove the floating "CALL" voice button on mobile view via Settings > Layout & View, Simple mode settings, and Voice mode settings.
+- Add Routine and Deep new-session recommendations using configurable model rankings, thinking levels, fresh usage, reset times, and locally stored subscription or credit preferences. Manual choices remain selected until recommendations are resumed.
+- The conversation header now shows the short session ID in parentheses after the session name when there is room; click it to copy the full ID.
+- Messages sent through CCC and WatchTower retain a sender snapshot and logical message ID across delivery retries and relays. Conversation sender badges distinguish runtime evidence, caller claims, remote relays, and legacy gaps; none implies authenticated identity. Monthly attribution journals support local cross-application history without automatic expiry.
+- The new-session model picker now shows each model's cost next to its name (Devin's free SWE-2 models read "Free"; Claude and Codex show their $ in/out rate per 1M tokens).
+- Switch the read-aloud voice mid-read: a new ⇄ button beside the floating speaker (Shift-click for previous) and the rail voice stepper now restart the current read from the same word in the new voice.
+
+### Changed
+- Sidebar: a session's child lanes now show as real indented rows under it, with one "↳ N" fold toggle (like the Workers tab), instead of a "↳ N lanes" list of links. The duplicate second lane-count chip is gone.
+- Make Routine / Deep the primary new-session choice beside the composer, with the automatically selected model as a secondary override and on-demand reasoning behind Why?.
+- Dragging a session row no longer starts a range selection; hold Shift (or Cmd/Ctrl) while dragging to select a range, so a plain drag can move a session into a pane.
+- Self-filed perf tickets now compute p95 over steady-state samples only (outside warmup, load1 at or below the core count, at least 30 minutes after a dashboard boot) and report the excluded samples' count and p95 separately, so host overload and restart churn no longer read as a CCC regression.
+- Replace the new-session repo matching card with a compact Smart repo status icon; keep token management in Settings → Vault and offer setup from the icon when off.
+- Speaker: the latest reply in the focused pane keeps preparing its audio while another message is being read, so clicking "next" right after a read starts instantly; the second clip of a read is shorter (~160 characters) so it no longer pauses after the first sentence; a soft tick plays when a read must wait for its first clip; and an interrupted iPhone stream retries instead of starting over.
+
+### Removed
+- Removed the expand/resize toggle from the conversation composer; the textarea still auto-grows with its content.
+- Sidebar rows no longer show the meaningless "user" origin chip or an "Object · Inbox" chip for sessions auto-filed into the default Inbox.
+
+### Fixed
+- Releasing an unfinished drag of a sidebar conversation inside the window no longer pops it out into a separate window.
+- Support Node.js 26 for the free model engine and setup checks.
+- Archiving a grouped topic no longer floods its ticket with one comment per session; parallel unarchive handlers now reopen it only once and ignore superseded actions.
+- Message attribution uses the platform-safe process liveness check, avoiding terminating processes when checking their identity on Windows.
+- Late delivery receipts preserve the complete recorded relay history and permission-mode assertion in sender badges.
+- `ccc send`/`ccc ask` to a full session UUID no longer waits on the seven-day session census, so it returns promptly on a busy dashboard.
+- Codex conversations no longer repeat an earlier turn at the bottom of the transcript when its start falls just outside the initially loaded window.
+- A Codex steer whose reply times out is now checked against the session transcript before it is reported: if the message landed it counts as delivered, otherwise `ccc send` reports "delivery unknown" (exit 3) instead of "send failed", so senders no longer resend duplicates.
+- Codex sessions: the in-flight tool card ("▶ Bash …") now expands on click to the full command, `wt` / `ccc` / CCC API calls get the same purple compact chips as Claude sessions, and skill loads (reads of a `SKILL.md`) show as "Skill loaded" cards.
+- Codex sends no longer flicker while waiting: the wake progress card and the Working pill stopped swapping places every poll, and the card stays hidden until it has progress beyond the "Delivered" note (it used to say "Waiting for delivery" right under it).
+- Sessions no longer report "Ready to close" after doing only a narrow slice of an open-ended request; the end-of-turn guidance now keeps the user's whole aim as the goal and treats further recommended work as remaining.
+- Composer messages and inputs without a recorded sender keep normal user-bubble styling without peer badges. Identified agent and service messages retain their sender badges; attribution metadata is preserved.
+- Typing in the composer with a multi-line draft no longer makes the conversation jump up and flicker the status pill and Last/Previous button.
+- Feature and Small bugs lists now preserve continuation metadata, so a newer continuation leads its topic instead of being hidden as a spawned child.
+- Opening a conversation no longer waits behind dashboard background work: opens are served from a separate reader process with its own interpreter, falling back to the old in-process path if it is unavailable (`CCC_CONV_READER=0` turns it off).
+- Show depth-specific ranked model choices above the new-session composer, including thinking level, instead of unrelated history and engine defaults. Keep the full catalog and free runtime labelled as manual overrides.
+- Fixed Devin session rows showing stale summaries after an ACP turn while the local CLI database had not yet caught up. Newer requests clear the earlier completion state.
+- Devin sessions no longer leave an answered message stuck on "Delivered - waiting to pick it up" at the bottom of the conversation, and the note now names Devin instead of Claude.
+- Devin CLI sessions now receive dashboard reporting instructions, retain authored action/question/completion state beyond long previews, and expose it in session rows. Hourly audits also detect explicitly ended replies that ask a permission or destination question without exposing a question control; missing footers alone do not trigger tickets.
+- Moving an older session to Features or Small bugs now keeps it visible in the destination's recent time window and brings it to the top of its topic.
+- **Collapse project groups in Features sidebar**: Ensure session rows and child elements properly fold and hide when project groups are collapsed via chevron or "Collapse all", across both desktop and responsive layouts.
+- Idea rows keep the parent session as the lead row; a newer subagent it spawned no longer takes over the row.
+- Reviewer and critic sessions that another session starts with `wt spawn` now show under that session's idea, even when the parent joined the idea after the reviewer started.
+- **Install background service**: `run.sh` extends the service bind wait from 2.5s to 20s (aborting early if the service fails) to accommodate slower startup on headless hosts, and `scripts/install.sh` avoids falling back to a conflicting foreground instance if the background service is active.
+- Lowered the mobile bottom-nav icon row so it sits closer to the home indicator instead of floating above the safe-area dead space.
+- Fixed the iOS conversation view sliding under the status bar (fixed panes now add safe-area-inset-top) and made the composer snap above the keyboard instantly instead of settling over 1-2s (Keyboard plugin keyboardWillShow drives --app-vh).
+- Fixed the composer refocusing after Send on touch devices, which popped the keyboard back up even when it had been dismissed.
+- Shrunk the floating speaker button and rate dial on phones (56→40px, dial 84→56px).
+- Fixed the iOS shell so the header respects the status-bar safe area and the composer rides above the keyboard (Capacitor Keyboard resize 'native'; WKWebView never shrinks visualViewport).
+- Keep routine task-dispatch acknowledgments out of the Jobs day timeline while retaining them in job details.
+- The sidebar no longer re-downloads the whole session list when an idea ticket, parent link, or usage-limit resume changes; open pages get a small delta with just the affected rows.
+- Fixed mobile session rows clipping question chips, action buttons, and speaker controls beneath the session ID. Controls now reserve their full height and wrap on narrow phones.
+- Mobile now opens Simple Home by default when no interface mode has been saved, while preserving explicit Simple or Advanced choices.
+- Desktop Mobile view now condenses worker ticket history like the phone does: the "N recorded tickets" label is gone and the ticket chips sit on one line.
+- Turn-end notifications show the session's actual outcome and any required next step instead of the generic “Ready for your input” message. Older agents fall back to the latest response, with no extra AI call.
+- **Onboarding setup wording on Linux**: adapt copy and developer tools step dynamically between Mac, server, and PC so remote and Linux hosts show the machine's hostname instead of hardcoding "Mac".
+- In narrow conversation panes the composer strip now drops the "peak" token label before the current `Xk / XXk` context count, instead of hiding the count first.
+- Phone session rows show worker ticket chips on one compact line instead of three tall wrapped lines.
+- Steering or cancelling a queued message no longer fails with "queued message no longer exists", and a queued message no longer shows up twice; queue rows that carry sender attribution now match the text you see.
+- Daily releases fast-forward sibling repositories before choosing their version, retain detailed notarization errors, and refresh homepage release labels and stable download links automatically.
+- Folded repeat-session groups on phones no longer blow the idea's repo logo up across the whole session list.
+- The "Report a bug" form can be reached again from the sidebar **⋮** menu. Its only button had been hidden since the sidebar icon row was collapsed behind ⋮.
+- Searching for an idea now opens that idea's newest session (as the Features tab does), instead of an older session that only pointed onward with "Go to newer session".
+- Sidebar search results now show one row per idea ticket instead of one row per session in that ticket.
+- Show saved search suggestions only while typing a nonempty query, so clearing, dismissing, or refocusing search does not reopen the browser dropdown.
+- **Setup GitHub CLI on Linux**: `_install_gh` now supports installing from official release tarballs when Homebrew and passwordless package managers are unavailable, the setup runner preserves step failure details when an install returns False, the onboarding wizard displays the failure reason and prompts to skip instead of looping silently, and skipped optional steps persist in `localStorage` across page reloads.
+- The "No response for Xm" stall bar no longer appears next to a contradictory "Thinking…" card, and Codex app-server activity now counts as a response.
+- Make the website’s macOS download buttons link directly to the published installer, expose Download in desktop and mobile navigation, and measure download and installation-option clicks by placement.
+- Use consistent punctuation in the Smart repo status tooltip and accessible label.
+- New-session spawn no longer shows "Spawn failed: Can't find variable pickedModel" after a successful launch.
+- Speaker speed dial now sits centered around the read-aloud button on phones and narrow windows instead of drifting up and to the left.
+- Grouped the floating speaker's speed readout, voice switch, and next-sentence buttons into one pill under the rate dial instead of three scattered overlapping controls
+- In split view, the right rail's Original ask, session activity, session ID and Codex diagnostics now follow the focused pane instead of showing the other pane's details.
+- Steering a queued message from the dashboard now records it as your own input, so it no longer shows as an unattributed peer message and its queued card clears once delivered.
+- The New queue ticket dialog asks before discarding a typed draft when you click outside it or press Esc, and you can move it by dragging its header.
+- The speaker debug queue box (cache-debug mode) now hides while no speech requests are pending, so it no longer covers the header controls.
+- Speaker cache-debug overlay no longer paints a stray column of marks across the conversation from a long pinned ask's hidden (scrolled-away) lines.
+- Read-aloud no longer slows to half speed while another message is being prepared in the background: background voice work now waits until the read being heard is idle.
+
+## [5.40.0] - 2026-10-25
+
+### Added
+- Set `CCC_ALERT_COMMAND` to a command that reads stdin and CCC also alerts you there (chat, SMS) when a session dies or an automatic wake is refused: once per incident, at most 10 an hour.
+- Automatic session wakes (limit-reset "continue", stuck-inject recovery) now share one ledger: at most 2 per session per 24h, never a second without progress from the first, and CCC asks you instead of waking again. `CCC_AUTO_WAKE=0` turns them off.
+- Settings → Layout has a new "Floating call button" toggle (default on) to hide the floating CALL button.
+- Dead sessions can opt in to one automatic rerun (`/api/auto-rerun`, or a host rule for scheduled jobs that reruns the job's command). Every rerun goes through the wake guard; without an opt-in, dead sessions stay notify-only.
+- A red toast now appears when a session stops mid-turn or hits an API error, instead of a misleading "finished" toast. CCC waits 90 seconds and checks that nothing restarted the session before alerting. It ignores Esc and Stop, usage limits, WatchTower-owned sessions and machine restarts. Each incident alerts once, and the toast stays until dismissed.
+- Desktop conversation header now has a ⋮ session menu with Archive / Unarchive / Untrash, Move to Ideas / Small bugs, and copy session id / repo path.
+- Add evidence-backed end-of-turn completion assessments with independent resolution, verification, delivery, and decision-dependency gates. Blocking caveats and unfinished actions prevent Close, and archiving stays manual. Show assessment details without expanding session rows, and limit desktop and mobile row labels to Working, Next, and Close. Session instructions favor completing authorized low-risk work over unnecessary permission requests.
+- Perf pane logs time from page load to the first conversation list response as a first-list row in the list column.
+- A large floating speaker button now reads whichever assistant message is on screen; tap again to pause/resume. The tiny per-turn speaker icons still work.
+- Drag a session onto the Ideas, Small bugs or Other tab to move it there (Other detaches and closes its idea ticket).
+- Experimental **Idea tickets** (Settings > Experimental, off by default): every session you start from the UI gets a WatchTower ticket after its first reply, labeled an idea or a small bug (by Jev when a `JEV_API_KEY` is in the Vault, otherwise Ideas). CCC files, logs, and closes the ticket itself, so agents spend no turns on it; continuations and child sessions join their origin's ticket, and archiving the latest session closes it. With the flag on, **Ideas** and **Small bugs** tabs replace Active and Coding, one row per ticket with its `IDEAS-N` / `SMALL-BUGS-N` chip and a one-click move between them.
+- Idea tickets: a session without a ticket (started before the flag, or outside the UI) shows 💡 and 🐛 buttons that file its ticket in Ideas or Small bugs, and `POST /api/idea-tickets/backfill` files tickets for a list of older sessions, oldest first, so continuations join their origin's ticket.
+- Idea tickets backfills the last 2 days of sessions once per machine when the flag turns on, so upgrading doesn't leave recent work untracked; older sessions are left alone.
+- Ideas and Small bugs now have collapsible Archived and Trash sections with restore actions. Explicit completion reviews show “Ready to close” until newer transcript activity arrives; closing remains a manual Archive action.
+- A live session that has written nothing for 30s now shows an **Investigate** button that starts a new session asking what is wrong with it and opens it in a split pane to the right.
+- The bottom-left background-runs pill now explains itself and shows CPU load (per-core load and Linux PSI), turning on when the host is busy.
+- Make Jev repo matching discoverable beside the new-session folder picker, with direct Vault setup, a configured indicator, and support for tokens saved through the credential broker.
+- Show a blue speaker with a LIVE badge while the current audio clip is still streaming. Keep cache coverage colors on the outer ring, and clear the indicator when the clip finishes downloading or playback stops.
+- Sidebar ⋮ menu gains a **Mobile view** checkbox (desktop) that shows the session list exactly as it looks on a phone, reusing the phone stylesheet.
+- Phones: the conversation view's ⋮ menu now has an **Archive** item for the open session.
+- Phones: each session row gets its own avatar: a character from its project's theme (robots and space for CCC, fitness for BYM, plants for growth, funny animals for the rest) on a per-session gradient, with a corner badge for the kind of work (🐞 bug, 💡 idea, ✨ feature, 🔍 investigation, 🚀 release). The engine shows as a small mark by the time.
+- Rename a session straight from its conversation header: double-click the session name, or choose ⋮ → Rename.
+- Perf telemetry rows now carry the server build stamp, and `scripts/perf_gate.py` turns them into a WatchTower `cmd:` acceptance gate: a perf ticket passes only when enough samples measured on code containing the fix meet the latency budget.
+- Added a collapsible `perf` strip above the sidebar footer: the left column logs every `/api/conversations/list` read (time, duration, size), the right column logs each conversation open's click→render time — useful for spotting index-refresh jank.
+- Perf pane now has a third "speaker cache" column: one row per read-aloud clip, showing whether it was replayed from the clip cache (HIT), made fresh (miss), or reused from audio prepared before the click, with timing.
+- Perf watchdog: session-list read times and server-side list builds now feed the same breach evaluation as archive loads and conversation opens; self-filed WatchTower tickets are opt-in via CCC_PERF_TICKETS=1 (off by default on regular installs), still capped at one ticket per day per regression.
+- Session view turns `[Q<n>:slug]` owner-question tags into tappable chips that open the first full explanation, plus an open-questions pill and panel (mobile-friendly).
+- Perf pane now shows queue health on each session-list read: sessions with a turn still in flight, durable queued inputs, and how long queued messages have been waiting for sessions whose turn already finished.
+- Completed sessions with only a reload or no-action next step now show “Ready to close” with an always-visible Archive button in desktop and phone rows. Active work, approvals, questions, and unfinished delivery keep their existing attention state.
+- Repository avatars detect local logos and favicons automatically, fall back to initials, and can be customized per repo in Settings > Appearance.
+- After a machine restart (an update, a crash, a preempted cloud VM), a card lists the Claude sessions the restart cut off mid-turn, with Open, Resume and Dismiss. Resume tells the session what it was doing when the machine went down.
+- The restart card now says how the machine went down: shut down cleanly, preempted by the cloud provider (GCP), or crashed / lost power.
+- Open question details from compact question chips on desktop and phone session rows, and send or draft answers in the current continuation without navigating to the session. Add a row speaker button to read the latest full answer without opening the session. Ignore answers quoted in unrelated sessions when tracking open questions.
+- Drag across session-list rows to multi-select them, then trash all selected sessions at once from the toolbar.
+- Phone ⋮ menu on an open session now has Unarchive, Untrash, Move to Ideas and Move to Small bugs (files the idea ticket if the session has none); each shows only when it applies.
+- Session rows can offer a one-word, AI-written action chip for a clearly scoped go-ahead, such as Restart. Hover to see the exact reply; click to send it to that session without opening the conversation.
+- A brief toast now confirms when auto-classification files a new session into Small bugs, so it's not easy to miss.
+- Add a Speaker cache debug switch in Settings → Appearance: amber highlights show text sent for audio preparation, green shows fully downloaded clips, and highlights follow browser cache removal and conversation rerenders.
+- Speaker cache debug now shows numbered browser waiting positions, requests sent to the engine, and purple text/ring coverage for queued work cancelled by newer priority. Sent requests still finish and retain their cached audio; late head completions no longer queue continuations for superseded turns.
+- The New queue ticket dialog now has the same + button as the session composer for attaching files or photos.
+- Tracked sessions table (prototype): a "Table" toggle in the sidebar toolbar opens a gridded table over the main pane listing pinned sessions (or In-progress ones when nothing is pinned) with ticket ref, name, status pill and each session's next step from its end-of-turn summary. Clicking a row opens that session; the table refreshes with the sidebar.
+- Add transcript-backed row checks for stale summaries, missing action or question controls, contradictory user steps, open topics without a plan, and invalid Close suggestions. Inspect evidence without opening a session; optionally watch visible rows without additional model calls.
+- Ultra-fresh session rows: the top four visible sessions receive agent message explanations through a bounded live stream, without waiting for the archive poll. Tool activity no longer replaces row explanations; selection, scrolling, manual Archive, and completion safeguards stay in place.
+
+### Changed
+- Antigravity conversations now run on one persistent `agy` process per conversation using its documented stream-json mode. The end-of-turn `result` event, not whether the process is alive, decides busy versus idle, so queued messages go out as soon as a turn ends and later messages reuse the same process. A message that arrives mid-turn waits in the durable queue, and a process that dies mid-turn puts its message back. Idle processes close after 10 minutes. Set `CCC_ANTIGRAVITY_STREAM=0` to use one-shot `agy -p` runs instead; any stream failure falls back to them automatically.
+- Make completion assessments easier to scan with contrasting labels and scores, a compact score/caveat heading, and an explicit Needs you line.
+- Idea avatars sit higher with an engine-colored badge at the lower right showing only the model name and cost tier.
+- Phone session avatars now carry context: one fixed background color per repo, a topic emoji shared by every session on that topic (tests, deploy, payments, voice…), and a corner badge that follows the idea ticket's queue.
+- Session-list rows now bound `last_assistant_text` at the serve boundary even when the emitting path skipped the cap, keeping multi-KB previews out of `/api/conversations/list` responses.
+- Sidebar briefs flip to WORKING the moment you send, drop the old next step, and pick up the reply's opening line about 8 seconds later instead of at the next sweep.
+- The brief's separate status column is gone: one label (WORKING, NEXT STEP in green, NEEDS YOU, LATEST) now carries the state, leaving more room for the text.
+- Sidebar session briefs now lead with the session's own **Next step** (amber) instead of the DONE line when it names an action; the DONE line still shows when there is nothing to do, and both are in the tooltip.
+- Credential broker's **Remember for this service** now saves to the CCC Vault (Keychain or encrypted file) instead of plaintext files.
+- **`ccc sessions` matches Command Center titles, lineage (`↳` / `↱`), and 24h window by default**: `ccc sessions` now defaults to a 24-hour window (`--since 24h`, with `--live` for attached processes only), resolves session names using the same priority chain as the Command Center sidebar (`name_overrides` > WatchTower `<QUEUE>#<N>` ticket overlay > `ai_title` > `display_name` > `first_message`, plus continuation title inheritance), nests `↳` subagent children under their parent by default (`--flat` to disable), folds `continued_from_session_id` chains into the active head with a `↱ N earlier` badge, and hides empty WatchTower queue-drain polls and archived/trashed sessions unless `--all` is passed.
+- Codex stuck-session footer skips rollout-file lookups for threads too old to be recent, and no longer rescans the sessions directory when a recorded rollout path is gone.
+- `/api/conversations/list` is ~2× faster per poll: row projection deep-copies only container fields instead of all ~130, assistant previews are memoized, and devin session liveness probes are cached for 5s instead of stat'ing lock files per row.
+- The composer no longer shows a Speak button on desktop (the floating speaker reads the on-screen turn), and the floating speaker's ring now shows cached audio and read progress like the old Speak bar.
+- When a session's next step sits beside its title, its IDEAS ticket chip now stacks right under the title in the same row.
+- Idea tickets: in Ideas / Small bugs rows the title gets the full first line; the ticket chip moves to the line below, and the goal and queue-progress chips plus a "1 recorded ticket" line that only repeated the idea ticket are gone.
+- Show idea numbers in repo-colored avatars with model badges. Restore clickable child-session links and let Earlier expand the list of previous sessions.
+- Idea tickets now defaults on: new sessions get filed onto an Ideas or Small bugs ticket, and the sidebar's Active/Coding tabs become Ideas/Small bugs (desktop and mobile). A one-time banner explains the change with a Revert button; existing sessions are untouched unless backfilled.
+- The idea-tickets "Ideas" tab, mobile nav button, intro banner, and file/move toasts are now labeled "Features" (the underlying ticket queue is unchanged).
+- With detailed rows, a session's next step now sits to the right of its title, with the badges on a second line.
+- `[Qn:slug]` tags in a sidebar next step are now chips that open the same explanation sheet as in the conversation pane.
+- Landing page refreshed for v5.39: a new "Hit the usage limit. Keep working." chapter (free-model fallback, $0 sessions, the free-models leaderboard and key wizard), Devin in every engine list, cross-engine recall with citations, one-button Tailscale and the opt-in Cloud relay for phone access, a "Start free in five minutes" install section, and no more "thirty sessions" framing.
+- The floating mobile CALL button is now off by default and can be enabled in Settings → Layout.
+- Phones: the session list uses WhatsApp-style rows: engine avatar, one-line name and time, a two-line preview of the last reply, a pulsing dot while working and a ? when it needs you; child sessions show as indented rows that collapse from the parent's ↳ N.
+- Phones: the composer is a soft rounded card with sans-serif text, a round + menu button and a round Send/mic button; the waiting-questions pill moves under the header in a conversation so it no longer covers the composer.
+- Phones: Esc moved into the composer's ⋯ menu, the Steer button and the attachment preview strip are hidden, and the composer keeps the caret in view after a long paste.
+- Phones: the composer puts + outside the text card, tucks expand and Send/mic into the card's corner, and grows with your text up to about a third of the screen.
+- The floating read-aloud button can be dragged anywhere in the conversation; its spot is remembered.
+- Phones: Compact/Normal moved into the ⋮ menu (⋮ now sits beside the session name), the composer text is smaller, and an empty composer shows the mic in Send's place until you type, like iMessage.
+- Phone conversation header now shows just Back and the session's name (the same title as its sidebar row); Compact/Normal and the ⋮ menu move to a second row, and header, composer and floating buttons are all thumb-sized.
+- Phones: the time window (Now/1d/7d/All), the engine filter and a new Show other machines toggle moved into the session list's ⋮ menu.
+- Phones: the session list's top row (share, Discord, savings ticker) is gone; the CCC icon now sits on the Usage left line.
+- Phones: the session list's small controls (header icons, New/Ticket/Search, the Now/1d/7d/All window, section menus, lane and ticket chips, Trash, Show more) are now thumb-sized.
+- The phone ⋮ menu now shows the open session's id and repo path (tap to copy), and the text-size A−/A+ buttons sit on one row and keep the menu open between taps.
+- Phones: the New session screen is just a row of folder chips, a row of model chips and the composer; the intro copy, price table, fresh-folder form, folder path box, worktree toggle and floating scroll buttons are hidden.
+- Phones: the sidebar ⋮ menu now holds just Open questions, the session-list view filters (grouping, density, time window, engines, other machines) and Reload page; the list's second ⋮ row is gone. Restart servers, What's new, Check for updates, Discord and Last updated moved into Settings, which the CCC icon now opens.
+- The floating read-aloud button now sits in the right-hand column with Last/End instead of covering the transcript, and the composer's duplicate Speak button is gone on phones.
+- Start mobile session explanations with a quiet, inline status word such as Working, Next, Ready, or Latest, using the same status and explanation as the desktop row.
+- Phones: + Ticket folds into a ▾ on the New session button, and the ? questions pill moves into the ⋮ menus (with a count badge on ⋮).
+- The cache-adjusted turn total is now just a number at the end of the in/cached/out token row.
+- Notification toasts now appear top-right, are skipped for the session already in front, and every notification attempt is logged to activity.log (NOTIFY lines) with its outcome.
+- The conversation header now shows just the session's name: the repo label beside the engine icon and the latest-ask line are gone, so the name gets the room.
+- The sidebar perf pane now lists only anomalies (slow or failed list reads, opens over ~1s, speaker clips not prepared at read time); normal samples show as a per-column "✓ N ok" count. Every sample is still logged to `service.out.log`.
+- Phone bottom bar: Jobs, Queues and Ask moved into a ☰ More menu at the bottom right.
+- Phone session avatars use five topic categories (Money, Data & evals, Customers & growth, Product & UI, Build & ops), each one emoji on one color.
+- On phones, "ready for your input" and task-finished cards no longer pile up over the screen; the "? N" pill shows how many sessions are waiting and jumps to the first one.
+- Phone session list: titles wrap to two lines instead of cutting off, the time is shorter (11:42, Mon, 10/19), and the engine mark only shows for non-Claude sessions.
+- Question-tag sheet shows the original explanation as readable rendered text and has an answer box that adds `[Q<n>] ...` to that session's composer without sending, so several answers can be stacked.
+- 'Jump to original' on a question tag loads earlier history as needed and scrolls to the first message that carried the tag, even when it is above the loaded window.
+- Question tags `[Q<n>:slug]` are now indexed from Codex, Kimi, Hermes and Devin transcripts as well as Claude's.
+- Daily release gate blocks only on uncommitted work or unpushed commits on main; stale worktrees and branches go to a REPO-FIXER ticket, and a second blocked day reports FAILED.
+- Repository avatar logos display at full opacity, with repo colors retained as a narrow rim.
+- The "a machine restart cut off N sessions" banner now also finds Codex, Kimi and Devin sessions that a reboot stopped mid-turn, not just Claude ones, and labels each with its engine.
+- A finished session row now ends its explanation with a Close button (it archives the session); the separate "CLOSE" label and Archive chip are gone.
+- `ccc secret request` now saves to the Vault and returns only the entry name by default; `--return-key` (alias `--stdout`) pipes the value as before.
+- Session IDs appear in the row's actions menu, opened with the three-dot button on hover.
+- Mute ready-to-close explanations and Archive actions, shorten the action label to Next, remove the done chip, show session IDs with lower-row metadata, and move Archive below explanations. Numbered avatars use a bottom-right engine icon whose brightness reflects cost tier.
+- Desktop session rows use the tighter mobile layout: larger avatars, bold titles, plain details, thin dividers, and context and time together at the top right. Hover replaces time with the actions menu.
+- Sidebar polls now fetch only the conversations that changed since the last poll instead of the whole list, and a background refresh that changed nothing no longer forces the list to be rebuilt.
+- The sidebar list refresh no longer waits behind slow background requests right after a dashboard restart.
+- The session sidebar with the All window re-renders less often and does less work per render, so it uses noticeably less CPU while open.
+- Sidebar rows are cleaner: the "Where?" button (row, pane header, overflow menu and mobile header) and the "⤴ from:" chip are gone, there is no separate "pushed"/"committed" chip, and on rows with an inline next step the context % sits beside the time. "N legs" now reads "↱ N earlier" and opens the previous session in the chain; "N lanes" now reads "↳ N spawned".
+- Working rows flip to WORKING (and drop the yellow needs-you dot) from the live 5s poll, instead of waiting for the next list refresh.
+- A single desktop conversation now has the phone's clean session header: the session's sidebar avatar beside its name, without the engine/repo chip and latest-message text.
+- Small bugs tab now opens in Mobile view by default (its own setting, still toggleable) and shows the numbered ticket avatars Ideas uses.
+- Keep speech controls with the floating speaker: drag the outer rim clockwise or counterclockwise to change speed, read the speed underneath, and use the small button at 3 o’clock to skip to the next sentence. Dragging the center still moves the whole control; arrow keys also adjust speed.
+- Skip sentences using existing prepared or streaming audio instead of restarting synthesis. Preserve paused playback and wait for buffered audio when a streaming seek is not ready yet.
+- With text selected in a conversation, every speaker button (floating, per-message, and composer) now reads just the selection; tapping again with the same selection pauses and resumes.
+- Split view: the focused pane's header is highlighted, and the sidebar marks the other pane's session row in blue. Desktop pane headers now lead with the session name in large bold text, as on phones. The New ticket composer opens on the left with a light dim, so the conversation stays visible.
+- Phone swipes on Active rows now mean two different things. Swipe right is **Done**: the session is archived and stops, but if it's mid-turn it finishes that turn first. Swipe left is **Background**: the row leaves Active while the session keeps working, and it comes back on its own when the turn ends or the session asks you something.
+- Speaker cache debug now marks each rendered text row with slim colored lines in the left gutter instead of coloring the text background. Rows containing multiple cache states show their colors side by side; markers follow scrolling and text wrapping.
+- Read-aloud now continues from the selected assistant paragraph across tool calls until the next user message or the loaded conversation end. Preparation and cache gutters use the same prose grouping. The speaker speed rim now shows a blue circular slider arc and position marker that update while adjusting speed.
+- Sidebar rows: the green working dot now sits at the right edge, centred in the row, instead of on the avatar's corner.
+- Sidebar WORKING rows now show the tool the session is running right now (for example "Bash command: …"), refreshed every few seconds, instead of a bare "Working…" or the previous turn's text.
+
+### Removed
+- Removed row Check buttons, Check rows, and Watch rows so the session list stays focused on actions and question details.
+- Removed the sidebar's Triggered Workers section; the Workers tab covers it.
+
+### Fixed
+- Keep accepted messages out of the composer when updating their delivery status fails, preserving the pending message and any new draft instead of restoring already-submitted text.
+- A Devin session whose ACP state lost its working directory (for example after a worker restart) can be attached again: the directory supplied by the caller is now used instead of failing with "session cwd unknown". That failure sent queued messages down the slower one-shot path, which delivered them twice.
+- Session action chips now use the label and reply supplied by the model writing the original answer. Removed the separate Haiku inference call; older answers without action metadata keep their summary text.
+- Show Antigravity CLI errors and live tool activity when its transcript still contains only the starting prompt. Refresh the reader when CLI logs or conversation storage change, including quota errors that leave the transcript untouched.
+- The Archive button for a finished session now sits above the composer on the right, styled like the sidebar's Archive chip, instead of an unstyled button inside the composer.
+- Opening the dashboard with the archive window set to All no longer gets silently switched back to 7 days and loaded twice when the first load is slow.
+- Archived sessions no longer silently reappear as active. The dashboard and the worker each rewrote the whole archive list from their own copy, so one could erase archives the other had just made. Archive and Trash saves now take a cross-process file lock, re-read the file, apply only their own change and replace it atomically. Every save is logged to `archive-events.log`, and tests no longer write to the live archive files.
+- Archiving or restoring a session moves its entire ticket group and child sessions together, keeping grouped Ideas visible in the correct section.
+- Sidebar renders with the archive window set to "all" are much cheaper: archive rows are shaped as one plain object (V8 kept them in slow dictionary mode before), and row time labels reuse their date formatters instead of building new ones per row.
+- The bottom-left background pill now always shows host CPU load per core and memory used (it used to hide CPU unless the host was busy and never showed memory), turns amber/red under pressure, and its details panel no longer opens empty.
+- A blocked ticket's detail view keeps its "open in CCC" link to the session that parked it, instead of showing "unassigned" with no link.
+- Homebrew install is now `brew install amirfish1/tap/ccc`: the tap was renamed, and the fully qualified name keeps newer Homebrew from refusing an "untrusted tap".
+- `ccc` CLI no longer falls through to `run.sh` (and attempts to start a second server) when given a mistyped subcommand; added `ccc session` as an alias for `ccc sessions`.
+- Cmd+F find in a conversation now highlights and scrolls to matches after the transcript re-renders, instead of only advancing the counter.
+- Keep session avatars circular with ticket numbers and the corner model badge; repo logos now replace only the avatar background. Remove dollar markers from session portraits.
+- Show Close on completed session rows when the next-step field explicitly says “None” followed by an explanation of delivered behavior.
+- Remove stale queued-message cards when Codex records several submitted messages together in one transcript entry. Match complete paragraph boundaries and consume each delivery receipt once, preserving newer and repeated submissions.
+- A finished /compact card on a Codex session no longer stays pinned to the bottom of the transcript under every new turn.
+- Compact transcripts now fold Codex and Kimi tool activity and reasoning into inline summaries, use consistent reply styling, and hide output previews while keeping approval prompts accessible.
+- Show latest replies and user prompts from current Codex rollout messages in the session sidebar. Codex sessions started or resumed through CCC now receive the same structured end-of-turn summary reminder as Claude sessions, enabling next-step summaries.
+- Keep running Codex sessions labeled Working between tool calls, preventing the sidebar from briefly showing a previous turn's next step and shifting neighboring rows.
+- Keep Codex turn timestamps visible without hovering, including in compact view, with space above the text to prevent overlap.
+- Codex sessions no longer flicker their Thinking row and Working badge when a single live-status read comes back empty or fails mid-turn.
+- Keep the Codex Working indicator below the latest message and prevent status polls from rebuilding unchanged content, splitting assistant updates, or duplicating the indicator.
+- Sidebar loads in seconds, not tens of seconds, right after a server restart: the list no longer re-reads thousands of spawn-marker files or re-stats the usage-limit store once per row.
+- Shorten structured session summary cards to the current update, the next planned step with an explicit owner, and status. Keep grading evidence under one Details disclosure, and make missing plans visible without inventing a user approval.
+- Use small engine-icon and cost badges, remove leading title chevrons, and require an explicit review before marking an unchanged session ready to close.
+- Prevent compact transcripts from jumping during live refreshes by preserving unchanged tool groups and fold chips, and folding new content before scrolling.
+- Preserve session summaries across compaction when rows enter the live feed, and keep pending user reviews visible instead of recommending Close from completion scores alone.
+- Keep conversations at the end when an assistant reply finishes instead of automatically jumping back to the start of the reply.
+- Show the completion decision and unmet gates in transcript assessments, and add the manual Close action when a live row first becomes complete.
+- Clear a submitted draft restored while Send is pending once the message is accepted, while preserving new typing and drafts in other conversations.
+- Link a continuation to its existing Ideas or Small bugs entry before its first reply, so switching engines keeps the new session in the same sidebar group.
+- Archiving an open conversation returns to the conversation list. Conversations ready to close also show an Archive button above the composer.
+- Cap Kokoro local TTS ONNX threads (`CCC_KOKORO_THREADS=2`), disable per-thread CPU memory arena bloat, serialize synthesis requests, and wait for stream completion before chaining TTS prefetches; use file-offset seeking in `/api/conversations/stream`, memoize usage snapshot ISO timestamp parsing, and bound ACP diff payloads to 64 KiB.
+- CCC-launched sessions whose native ID arrives after the spawn response now receive their Ideas or Small bugs ticket. Manual filing also reads Antigravity's opening request instead of creating an untitled ticket.
+- Stop incremental polls on tail-windowed Devin CLI conversations from re-emitting every historical ACP `result` row (`DONE` / `STOPPED - ERROR`) at the bottom of the transcript, and keep same-second microsecond ACP result events ordered after the assistant reply they close.
+- Unstick queued Devin messages by safely recycling an idle CCC-owned connection when its loaded-session marker is lost; preserve external owners and active turns.
+- A queued Devin message is no longer sent several times to a long-lived session. Loading such a session over ACP takes about 27s and used to time out at 30s, so the queue fell back to one-shot CLI runs; those wrote no delivery proof, so the same message was re-sent after every turn. ACP loads now wait up to 120s (`CCC_DEVIN_ACP_LOAD_TIMEOUT_S`), the user message in the session transcript counts as delivery proof, the proof window is 120s, and a fall back from ACP is logged as `DEVIN_ACP_FALLBACK`.
+- Opening a Devin (or Gemini, Antigravity, Kilo, OpenCode, Aider, Copilot) session now loads only the latest window of the conversation instead of the whole transcript, so long sessions open much faster; scrolling up still loads earlier history.
+- Recall now indexes saved Devin ACP conversations, including their visible prompts and replies.
+- Sidebar no longer goes empty for minutes after a restart on hosts with a large Devin CLI `sessions.db`; the Devin freshness query uses the covering index again.
+- Devin sessions no longer sort below a false time gap ("13h") while their row says "8m ago". An expired Devin list cache now refreshes in the background instead of being served stale forever.
+- Devin sessions now show the model and context pills promptly; usage is read incrementally instead of re-decoding the whole session on every poll.
+- Session guidance now distinguishes diagnosing a malfunction from resolving it, surfaces repairs that need authorization, and preserves explicitly explanation-only requests. Refresh cached session rows so existing short action labels appear after upgrading.
+- Features / Small bugs opt-in messages and a few debug tooltips no longer use em dashes.
+- Opening a session right after a page load no longer waits behind the dashboard's deferred startup reads or a burst of sidebar live-preview reconnects.
+- Informational follow-up answers now receive guidance to preserve the ongoing task summary and outstanding actions instead of replacing them with the side question's result.
+- Docs: Grok is listed as a spawnable, steerable engine (ACP); it is no longer described as read-only.
+- Experimental Ideas and Small bugs cards keep the same session during live-status
+refreshes instead of flickering between sessions on the same ticket. Equal-time
+sessions also resolve consistently across refreshes.
+- Idea tickets no longer rename their session to "🧵 IDEAS#N: <first line>"; the session keeps its own title, and the ticket takes that title once the session has one.
+- Idea tickets: the phone row shows its IDEAS-N / SMALL-BUGS-N chip, a session with an open idea ticket stays listed however old it is, a newly started session sits in Ideas until its ticket is filed, and tapping the row already loaded behind the phone list now opens it.
+- Ideas and Small bugs now respect the selected Now, 1d, or 7d time window instead of keeping old open-ticket sessions visible. All still shows the full history.
+- The one-line installer no longer fails with "Failed to connect to bus" on Linux machines without a systemd user session (containers, plain SSH logins, some WSL setups): it skips the background-service question there and starts CCC in the window, and falls back to that if the service does not start.
+- The session menu's Archive / Unarchive / Untrash now moves the session straight away and undoes the move if the server request fails. Before, a click could look like it did nothing while the request waited behind background refreshes.
+- Read-aloud on iPhone (and other browsers without MediaSource) now plays a whole message as one continuous stream, so it no longer pauses for 20-45 seconds between chunks or when the phone is locked.
+- A local-voice clip that fails partway through is no longer cached as finished, so replaying that text no longer stops short. The voice server now logs the failure to `~/.ccc/local-tts/server.log`.
+- The sidebar list and live-session chips no longer stall for 20-30 seconds right after the dashboard restarts, and session-list refreshes do less repeated work when several tabs are open.
+- Sidebar list polls no longer read every spawn marker on disk when no Kimi/GLM session needs an overlay row, and the list-read perf number no longer counts time the tab spent hidden.
+- Live session status rebuilds no longer fork a host-wide `lsof` or re-tokenize process command lines on every build, cutting warm rebuilds from ~2s to ~0.3s on a busy host.
+- Start speaker audio preparation automatically for live replies and on pane focus. Repeated unchanged live snapshots no longer postpone preparation, and cache debug highlights now cover standalone Codex answer blocks.
+- Fixed the dashboard getting stuck on "Loading conversations…" after reload by stopping boot-time single-row restore shaping from triggering an unrequested `window=all` archive fetch, deferring pre-`app.js` and federated background reads until archive rows paint, dismissing the loading overlay when archive rows settle, and raising the HTTP server TCP listen backlog (`request_queue_size = 128`).
+- Suppress Mermaid v10 default error rendering and clean up stray body elements so invalid Mermaid diagram syntax does not leak floating error icons onto document.body.
+- Annotate opens its note editor in about a second on phones instead of 10+ seconds: the element screenshot no longer clones the whole conversation pane.
+- Keep the mobile response input on its own row, including in minimized mode, so voice playback controls cannot squeeze away the space to type. Controls wrap below the input on narrow screens.
+- Fixed opening `.png` and other media/document links on mobile and standalone PWA mode so they open in an in-app media lightbox with a **← Back** toolbar and browser history support instead of replacing the main CCC view with a raw `/api/media` page that had no way back.
+- Tapping Send on a phone with the keyboard open sends on the first tap instead of only dismissing the keyboard.
+- Phones: swiping right on an archived session now moves it back to Active instead of trashing it.
+- New session model chips always name a real model: "Claude default", "Devin default" and "Auto (default)" chips are replaced by the model they stand for, or dropped when no named model is known.
+- Restore word-by-word text highlighting during neural TTS playback, including prepared clips, pause/resume, and clip handoffs. Highlights follow the audio clock independently of cache-debug gutter marks; neural timing is estimated because audio responses do not include word timestamps.
+- Show newly launched sessions in Ideas immediately, before ticket assignment or the first response. Keep continuations in their topic queue and background workers in their existing lanes.
+- The "No response" banner no longer appears on finished sessions or while a tool is running, and waits 3 minutes of real silence instead of 30 seconds.
+- Offline voice install no longer reports 'failed (AttributeError)' after a successful install.
+- Keep ongoing topic goals separate from shipped milestones in completion assessments. Explicitly unmet topic criteria block Close regardless of scores; the transcript shows the topic and an Open assessment without inventing a user action.
+- Perf pane's session-opens column now logs reliably: opens are captured both at `selectConversation` and via a delegated click listener on sidebar/kanban/table rows, and fresh-load renders close the timer even when the strict `conv_open` metric doesn't match.
+- Phone composer no longer collapses into a tall, zero-width text box when a session shows the "Large and stale" notice.
+- Phone: reloading the page from the conversation list now keeps you on the list instead of opening the last conversation.
+- A new session opened in a split pane that wasn't focused now switches to its real conversation when the answer arrives, instead of showing "Thinking…" forever while the reply appears in a separate sidebar row.
+- Continued sessions show the topic directly, without arrows or stacked “Cont’d” prefixes; session history remains available under Earlier.
+- Search for several ticket IDs separated by spaces to find sessions containing every ID, without adding quotes or AND operators.
+- A still-running Antigravity or Devin child is no longer marked exited (and dropped to spawn history as "(external)") when a session-id lookup polls its raw spawn-registry row.
+- Settings model profiles can now add a second model on an engine already in the route (for example Opus then Sonnet); worker fallback stays one model per engine.
+- Model profiles in Settings now keep two models on the same engine (for example Opus then Sonnet) instead of silently dropping the profile; worker fallback is still one model per engine.
+- Queue board ALL view no longer clips the live-workers list behind an empty box; the band now fills the column and scrolls.
+- Sidebar rows whose next step carries a question tag no longer flicker between the raw [Q<n>:slug] text and the Q<n> chip.
+- Question chips no longer treat compaction summaries or injected metadata as owner answers, including previously cached summary text.
+- Question-tag chips no longer misresolve a panel row tap to Q0, and the open-questions index refreshes in the background instead of blocking requests or showing a false 'still indexing' message.
+- The queue panel's + (and the Triggered Workers + on a queue header) now show a Queue picker preselected to the scoped queue, so a ticket no longer files silently into whatever queue the panel happened to be showing.
+- The queue picker keeps the selected queue's name readable. The repo label and the sub-queue chip now give up space first, so a short name like BECKY is no longer cut to "BE…".
+- Queue rows now show a "replied" chip instead of "needs input" when the owner commented after the worker's question but the ticket has not been formally answered.
+- Fixed queued message cards multiplying after their pane was rebuilt by reusing the original pending send record during restoration. Genuine repeated messages remain separate.
+- Queued messages no longer wait forever behind an engine process that has already finished its turn. A Devin session whose `devin acp` connection lost its loaded-session marker now re-attaches through that same connection instead of waiting on a lock it owns, and an Antigravity `agy` process that outlives its final answer is stopped so the queue can resume. The Devin queue also logs why it is waiting (`Q_WAIT`).
+- Fixed the queued-message tray piling up hundreds of identical cards for one parked Codex input: queue-overlay events carry no transcript dedupe key, so each re-render appended another row for the same durable entry. Queued sends now dedupe by text (matching the server queue's own rule) both at render time and inside the queued-steer tray.
+- Bring back the A-/A+ font-size buttons beside the session background color picker in the status rail.
+- Read aloud starts sooner and stalls less on busy machines: the local voice now runs at normal priority with 4 threads (and its own high CPU weight on Linux), the read you are listening to is made before background prepare-ahead work, the voice is loaded at dashboard start and restarted if it crashes, and finished clips are kept on disk so a restart no longer throws them away.
+- Show text-search matches across sidebar tabs, so the selected Ideas or Workers tab no longer hides matching sessions. Keep large Recall index refreshes in the background after cache expiry.
+- Release cuts now run the full source test suite before changing versions or tags. Refresh the public release badges, seeded hero image, and license wording, and keep release checks independent of local agent credentials and consumed changelog snippets.
+- Repository avatars retain their stable repo colors beneath subdued logos, keeping sessions from different repos visually distinct.
+- Distinguish hovered repo chips from the selected folder in New session, and add a final “Browse folders…” chip so the machine's folder picker is available in compact layouts and with no recent repos.
+- Send failures with `repo_not_allowed` now offer an **Add repo…** button in the error toast that registers the folder so you can resend.
+- Restore the previous session-row layout with the title and message side by side, reverting the compact-row grid and forced title truncation. Keep engine icon badges and queued-message delivery fixes.
+- Claude sessions that CCC restarts from cold now keep your autocompact threshold instead of falling back to Claude Code's default, and pick up a changed Settings value on that restart.
+- Preserve every Claude resume log and input pipe when multiple cold resumes start within the same second, including rapid router failover and switch-back.
+- Row action chips now show Sending, Sent, or Queued feedback through list refreshes, restore failed actions for retry, and explain changed actions instead of silently disappearing.
+- Deliver session-row reply chip clicks as human composer input so approval replies are not mislabeled or rejected as messages from another agent.
+- Fixed sidebar session rows so the trash and menu buttons appear on hover of any row again, not just the selected one. Title chrome (id overlay, pencil, drag grip) still waits for selection, so rows keep their clean click target.
+- A sidebar row with no next step (for example while a session is mid-turn) now shows the start of its latest message, labelled LATEST, instead of going blank.
+- Sidebar rows no longer grow taller when a live message wraps to a second line beside the read-aloud button.
+- Repeated `SIGUSR2` stack dumps no longer crash the dashboard. New local-only `GET /api/debug/stacks?samples=N&interval=S` takes repeated all-thread stack samples safely.
+- Queue speech preparation when scrolling to an older answer, without starting playback. The floating speaker follows the visible answer and measures its actual cached text coverage. Codex speech now uses the same rendered text for preparation and playback, including tables and links, and prepared clips remain reusable after playback.
+- Sessions now inherit their repository's avatar in the desktop list and conversation header, including sessions working in repo subdirectories.
+- Session rows label informational summaries as “Update” when there is no user action, reserving “Next” for an actual requested next step, including live row updates.
+- Session rows show a pulsing green working indicator between tools and refresh their status and latest message while hovered, preserving question chips.
+- Esc now closes Settings even after clicking plain text inside it (focus had fallen out of the dialog).
+- Session action chips accept short model-authored labels such as “Build triage” instead of silently falling back to Reply when a label contains spaces. Labels remain limited to three words and 24 characters, and rendering makes no extra model call.
+- Avoid a redundant archive fetch and sidebar render on initial page navigation while preserving immediate refreshes when returning to the dashboard or restoring it from browser history.
+- Reloading a tab no longer waits on the full session list when another tab uses a different time window; each window now keeps its own cached sidebar snapshot.
+- Sidebar rows no longer slide down and back when a row above changes height (Close button, overlay text) without any actual reorder.
+- The mobile Coding tab no longer shows only a couple of sessions while thousands sit behind "Show more"; the row budget now goes to rows the open tab and window actually display.
+- Sidebar renders with the archive window set to "all" are faster again: HTML escaping no longer creates a DOM element per call, and the row-ranking pass stops allocating per row.
+- Conversation pane: the rules of a skill an agent invokes (the text Claude Code injects after "Launching skill: X") now render as a collapsed Skill card instead of being dropped, so "the rules shown above" actually are.
+- Fix the Speaker cache debug switch so its knob visibly reflects the enabled setting, including after a reload.
+- Reuse one audio player across speech chunks and replays so per-element browser playback permissions carry over to prepared continuations. Log clip starts, endings, and playback errors; keep a blocked ready clip available to resume instead of silently changing voices.
+- The floating speaker now stays where you drop it: quick flicks grab it, and releasing off the button or mid-scroll no longer snaps it back.
+- The floating speaker shows a pause icon while its selected turn is playing and a resume icon when paused. Selecting another turn by scrolling restores the speaker icon and read action.
+- Show speech chunks still processing as amber coverage in the floating speaker ring, alongside green coverage for ready audio. The processing arc remains visible during playback and follows the selected answer.
+- Make the floating speaker read the answer nearest its position, so a large earlier status footer cannot steal a click from the answer underneath the circle. Cache coverage and clicks share the selected answer, and moving the circle updates its target.
+- A second split pane's new-session composer now shows the model name instead of a blank dropdown.
+- Split view: the sidebar now shows the details of the active conversation instead of always the left pane's.
+- Stop stale Codex compaction recovery prompts once execution resumes or a later turn takes over, and enforce the retry limit even when resume requests succeed without progress.
+- Fixed delivered send echoes lingering under the real transcript bubble when the persisted message text differs from the sent text (e.g. devin-cli inlines pasted-image paths mid-message); a durable user event now also sweeps the oldest unmatched echo row.
+- Stream speech from clips that are still being prepared when the speaker is clicked, without waiting for the complete MP3 or generating it again. Keep completed clips available for replay and preserve pause, word highlighting, and automatic continuation.
+- Read-aloud keeps up with playback: the local voice makes audio in short pieces with more threads (about 1.9x real time instead of 0.5x on a 16-core host), prepares the whole latest message ahead, retries after 20s instead of 5 minutes on an error, and restarts itself if it was left at low CPU priority.
+- The TTS debug log follows new entries at the bottom, including when reopened. Browser waiting positions stay visible above the scrolling log, with an explicit empty-queue message when no requests are waiting.
+- A sidebar row now shows a session's final NEXT STEP within a few seconds of its turn ending, instead of keeping the mid-turn LATEST text until the next slow list refresh.
+- The sidebar list no longer stalls for seconds while several live-row (ultra-fresh) streams are open: transcript checks are rate-limited and Codex transcript paths are cached briefly instead of re-querying the Codex state DB on every tick.
+- Clicks and sends no longer wait behind background polls when the dashboard runs over HTTP/1.1. Background reads now share the connections the live streams leave free, and one connection always stays reserved for user actions.
+- The time-window toggle copy in the session list's ⋮ menu now works (only the toolbar copy had a click handler).
+- Workers table: session titles now wrap to up to three lines instead of being cut off after a few words.
+
+## [5.39.0] - 2026-10-18
+
+### Added
+- `scripts/release-daily.sh`: once-a-day release gate; waives unless repos are clean+pushed and changelog.d has enough entries, else cuts the next release.
+- `cut-release.sh` runs an optional machine-local preflight (`~/.claude/command-center/release-preflight.sh`, or `$CCC_RELEASE_PREFLIGHT`) and aborts the release if it fails.
+- Tap-backs: hover an agent message and tap a thumb; the reaction is sent as "[158] Thumbs up" with your next message, so it costs no extra turn.
+- `scripts/uninstall.sh` removes the services, the `ccc` CLI link and the checkout; `--purge-data` also deletes `~/.claude/command-center`.
+- Voice agent: new read-only `ccc_jobs` tool answers whether a scheduled job ran, succeeded, when it runs next, and why not. The Jobs feed (`/api/jobs`) now also covers user-level systemd timers and crontab entries (previously only system timers: 13 of 75 jobs), marks interval timers healthy by last-run recency instead of `stale`, and `ccc_session` reports pid-verified liveness.
+
+### Changed
+- Saving an annotation without a screenshot now shows a plain "Annotation saved" toast instead of a red macOS permissions error.
+- Read-aloud now pre-makes only the first ~40 seconds of a message, so the speaker turns green quickly instead of staying amber while whole messages generate.
+- Read-aloud speed control now goes up to 1.8×.
+
+### Fixed
+- The annotate popup now stays fully inside the viewport (including its Queue/Cancel buttons) when it grows or opens near the bottom edge.
+- Codex now applies the configured context budget (250K by default), starts automatic compaction with 10% headroom, and reapplies that budget when resuming older threads. Larger windows require an explicit `CCC_CODEX_CONTEXT_TOKENS` override instead of the legacy full-window flag.
+- Messages and steers sent to a Codex multi-agent sub-agent no longer bounce back to the queue forever. Codex only accepts input to a v2 sub-agent through its parent, so CCC now loads the parent before resuming the sub-agent and relays the message through the parent (which forwards it with `followup_task`). A toast says when a message went through the parent.
+- Codex and Kimi turns now show their turn number and timestamp, including in Compact view.
+- Compact transcript view no longer draws the message timestamp and speak/copy icons on top of the first line of assistant text; they appear on hover (or in a reserved strip on touch devices).
+- Compact transcript view now keeps the timestamp and speak/copy buttons on every assistant text message, not just the newest reply and each turn's final card, so long single-turn Codex sessions no longer look like they have no per-message metadata.
+- Continuation spawns honor task keys and prompt deduplication, preserve requested names, and return the standard session ID so retries can find the existing session.
+- Spawned coordinators are instructed to yield while awaiting completion reports and use bounded CLI watchers for external checks, avoiding repeated model sleep and status-polling turns.
+- A second same-repo CCC server no longer crash-loops the primary: startup shows a loopback-only "kill it?" page that re-verifies the process is this checkout's server.py before signalling, and servers started with CCC_ALLOW_DUPLICATE_REPO=1 never block the primary.
+- Opening the in-conversation find bar (Cmd+F) on a very large session no longer freezes CCC; find searches the loaded part instead of pulling in the whole transcript.
+- Narrow main windows now have a "Show side panel" button to reopen the right-hand session rail, and the bottom context bar keeps the repo path on non-touch devices.
+- `ccc recall` and session search now index Antigravity (agy) sessions from both the desktop app and the CLI.
+- Show selected-window token shares instead of inferred quota attribution, expose session models/call counts and API-equivalent costs, and price GPT-6.1 Sol with refreshed usage caches.
+- Show session token usage and model turn counts for the inspected chart interval, narrowing to the selected hour, and hide broader session tables until inspection ends.
+- Read-aloud replays a clip you already heard (or prefetched) instantly instead of regenerating it, which took ~20s per 400 characters on a busy machine.
+- Read-aloud now makes a message's clips three at a time instead of one by one, and a speaker stuck amber after switching sessions resumes and turns green.
+- Voice agent: `ccc_sessions` no longer drops idle-but-open Claude sessions (liveness now trusts the pid-verified session registry, not only a 30-minute hook marker); `ccc_sessions`, `ccc_attention`, `ccc_queues` and `ccc_ticket` now report as-of times, liveness proof, and label ticket needs-input questions as recorded reports with their age. `ccc_attention` now includes WatchTower tickets parked on the user instead of contradicting `ccc_queues`.
+- Windows: the server no longer fails to import because the `pty` module needs `termios`.
+
+## [5.38.0] - 2026-10-17
+
+### Added
+- Messages to a running Antigravity CLI (agy) session now go straight into that live session through agy's local language server, including from WatchTower. Steer now lands mid-turn and no longer waits for the turn to end. A session becomes reachable after its agent runs any `ccc` command; until then CCC falls back to the old `agy --conversation -p` resume.
+- Ask answers now end with their cost in cache-adjusted tokens. Hover to see the fresh, cache-write, cache-read, and output breakdown.
+- `GET /api/background-runs` groups headless `claude -p` runs launched from OS temp dirs by spawner (spawn marker), with run counts, tokens and an hourly-rate alert list; markerless runs land in an `unknown` bucket.
+- `/api/background-runs` now includes an estimated USD cost (list prices, cache priced at the read rate) and logs one activity-log line when a spawner crosses the hourly threshold.
+- Sidebar footer shows a "background" pill for headless temp-dir `claude -p` runs; click lists them by spawner with runs/hour and tokens.
+- Throughput share screen: posting to X, LinkedIn, Bluesky or Threads, or the new Copy link button, uploads only the card PNG and its headline to a hosted card page, then shares that link so the post shows your card image. If the upload fails, CCC falls back to the repo link and the copied image. See SECURITY.md.
+- `scripts/e2e-failover-clean.sh`: runs the full limit, approval, free work and switch-back path on a clean HOME installed from the README, and checks the free child never gets paid credentials.
+- The free models boundary page now spells out what CCC does and never does with your Claude subscription login.
+- CCC Cloud relay (opt-in): pair this machine with a CCC Cloud relay from **Settings > Network access** to see sessions, attention items, queues and waiting questions on your phone, and answer or send input from there. The connection is outbound-only, pairing and settings work only from this machine, the relay can run only a short closed list of commands, and local and Tailscale access are unchanged. CCC ships no service URL; you enter the relay URL yourself. Protocol: `docs/cloud-relay/PROTOCOL.md`.
+- Cloud relay: the device can now answer a Claude Code permission prompt on request from the cloud (`approval.answer`). It acts only when the pending prompt still matches the action the cloud approved (sha256 check), reuses the dashboard's Approve/Deny path, and reports `unsupported` where that path is not available (non-macOS, sub-agent prompts, other engines).
+- CCC Cloud approvals now carry the complete tool input (up to 16 KB, with an explicit truncation flag) and are applied through a new `PermissionRequest` hook that only acts on the exact tool call the cloud judged (single use, 120 s expiry); the terminal keystroke remains as a fallback when the hook is not installed.
+- **Cloud relay presence.** The state snapshot now carries `presence`
+(`present`, `last_input_at`) and a per-session `last_human_input_at`, computed
+only from prompts you type in a terminal session or send from the dashboard
+composer. Relay, peer and WatchTower injections never count. The cloud uses it
+to wake an outside agent only when you are away, and to block that agent from
+typing into a session you are using. See `docs/cloud-relay/PROTOCOL.md`.
+- Cloud Relay: input sent by an agent (for example Instinct) now starts with a line naming the sender, `[From <name> via CCC Cloud, request <id>]`, so the session and anyone watching the transcript can see who sent it.
+- Keep a limit-hit session on your router for every later turn (not just the first resume), switch it back to Claude automatically when the limit resets, refuse routers that would carry a Claude model, and add a hermetic fake-router E2E for the whole hop.
+- Agents can request credentials through `ccc secret request` and a mobile-friendly masked dashboard prompt. Values are delivered once to the local requester, outside chat and activity logs, with expiry, denial, cancellation, optional owner-only local storage, and `ccc secret forget`.
+- Ask and `ccc decisions` now retrieve stored user decision quotes with source citations and provenance, with repository filtering and a labelled session-snippet fallback. Background rescans replace prior quotes instead of duplicating them.
+- Discord community relay: join the CCC community directly from the dashboard header or terminal banner, and route community bug reports into a dedicated, review-first WatchTower queue with live reactions and reply updates.
+- Add guided paid-key presets for GLM, Kimi, DeepSeek, Qwen and MiniMax, with international and China endpoints, local key storage, and direct Claude sessions that keep their provider on resume.
+- Added an opt-in end-to-end novice harness (`scripts/e2e-novice.sh`, run via `CCC_E2E_FREE=1 python3 -m pytest tests/test_e2e_novice_free.py`): in a throwaway HOME it builds the free model router from source, enables the keyless provider, spawns a real Claude Code session that creates a file, and proves the traffic cost $0 via the router's own analytics. Also `scripts/verify-onboarding.js`, a headless-Chrome walk of `/?onboarding=1`.
+- Detects free model routers you already run (freellmapi on :3001, 9Router/OmniRoute on :20128, free-claude-code, Ollama, LM Studio, or an OpenRouter key saved in BYOK) via `GET /api/free-router/detected`, offers "use yours instead" in onboarding and as a dashboard card, and can point Aider, OpenCode, and Codex at the free router (`POST /api/free-router/engine-setup`; `runtime:"free"` spawns inject the env per child).
+- Add an opt-in real Claude failover test with isolated router analytics and switch-back proof, document free-provider data boundaries, strip inherited subscription credentials from failover resumes, and reliably retire and reap free children after completed turns.
+- First magic task during onboarding: creates ~/CCC-Playground (a tiny site with a failing test), then runs one of three starter tasks on a live agent with streamed progress and a "cost $0, worth $X at API prices" celebration. Adds `POST/GET /api/onboarding/first-task*` and `window.cccFirstTask` (`/?first-task=1` opens it standalone).
+- Settings → Session limits groups stopped Claude, Codex and Devin sessions with checkboxes, free continuation where supported, and approved resumes spread across reset times. Weekly limits and registered headless/queue-worker logs are detected by the existing watcher. A single fleet banner is available for preview but stays off pending popup approval (`GET`/`POST /api/free-failover/fleet`).
+- Opening a folder or file link when the server host has no desktop (headless Linux viewed from another machine) now opens an in-page folder viewer with image/PDF/video/HTML previews, instead of a bare error.
+- A free-router session's bottom-bar chip now names the provider that last answered it (for example "$0 free · kilo"), with the model in the tooltip.
+- A session running on the free router now shows a $0 free chip in the bottom usage bar.
+- New free-key wizard (`GET /api/free-router/providers`, `POST /api/free-router/keys`, `static/free-key-wizard.js`): provider cards with signup links, paste-and-verify key setup, and one-click keyless enable so new users can reach a $0 model fast.
+- Free model leaderboard at /free-models: races every router model through five tiny coding tasks, scores pass rate + speed, and pins the winner as the default free model (GET /api/free-router/models, POST /api/free-router/eval).
+- Docs for the $0 onboarding: `docs/onboarding.md` (the five-minute welcome flow — per-step consent, what installs where, troubleshooting) and `docs/free-models.md` (how free runs route through the local freellmapi on `127.0.0.1:3017`, the provider list, Kilo's prompt-logging disclosure, and why a Claude OAuth token never goes through the router). SECURITY.md gains a free-router section covering loopback binding and key storage, and the README opens with "Start free in 5 minutes".
+- Settings gains a "Free models" panel: start or stop the local free-model router, add and remove provider keys, see per-provider usage and the dollar value of work done for $0, and pick which free model your agents run on.
+- Added a managed free-model router: CCC can now install, start, stop and supervise a private freellmapi on loopback (`/api/free-router/*`, `ccc_server/free_router.py`, `spawn_env()` for $0 agent runs) with a friendly status page at `/free-router`.
+- New "free $0" option when starting a session: with the free router running, a spawned Claude, OpenCode or Aider session runs on free models instead of your paid plan. Free sessions show a "$0 free" badge on their card and in the session rail, and a spawn that can't reach the router refuses rather than silently billing you.
+- **Sound + motion kit** (`window.cccFx` in `static/fx.js` / `static/fx.css`):
+six short cues synthesized live in Web Audio (`welcome`, `step`, `success`,
+`coin`, `error`, `whoosh` — no audio files), a canvas confetti burst, a
+count-up number animation, and `.fx-shimmer` / `.fx-glow` / `.fx-pop` helpers
+any view can opt into. Sounds obey the existing completion-sounds toggle and
+all motion honors `prefers-reduced-motion`. Try it all on `/fx-demo.html`.
+- Sidebar usage bars show how much of each plan is left and when it resets, colored by risk, with a hover or focus tooltip carrying the numbers. Engines without usage data yet are hidden, and so is the whole strip when the headroom engine is not installed.
+- Added a plain-language comparison guide and a light/dark SVG explaining CCC, model routers, and parallel coding tools, with pinned public README sources and the Crystal-to-Nimbalyst migration note.
+- Installer now speaks in plain numbered steps and opens `/?onboarding=1` (the guided setup tour) instead of the bare dashboard for anyone who has not finished onboarding yet; the site gains a "free AI dev team in 5 minutes" hero with a CSS-only install animation and a dedicated /install/ page with copy-to-clipboard one-liners.
+- An optional iOS app shell (`ios-app/`) hides the prev/next/done bar above the keyboard.
+- Jobs tab day view now shows each `CCC_EVENT:` line a scheduled job printed as its own timeline row, so meaningful work by high-frequency jobs (like a 5-minute ship tick re-pinning a release or merging a PR) appears at the time it happened instead of hiding behind the last run's outcome.
+- Add an opt-in offline Speak voice installer in voice settings with background progress, repair of missing MP3 streaming dependencies, and streaming health verification. The one-time Speak install offer stays off pending popup approval.
+- Add a 15-task free-model leaderboard runner (scripts/run-leaderboard-eval.py) that scores $0 models on pass rate, latency and tokens, and never calls a paid model.
+- Added a weekly free-model leaderboard refresh: `scripts/leaderboard-weekly.py` reruns the benchmark without changing your router's default model, stages a privacy-checked page in `~/.ccc/leaderboard/`, and records each run for a `health` check. `systemd/install-leaderboard-weekly.sh` installs it as a user timer. Publishing stays a manual, reviewed step.
+- The Claude Code plugin now ships CCC's skills: `/plugin marketplace add amirfish1/claude-command-center`, then `/plugin install ccc-dashboard@claude-command-center`. The bundle lives in `plugin/` and is generated from `skills/*.md` by `scripts/build-plugin.py`.
+- Added account headroom estimates for Claude, Codex, and Kimi, showing how much usage may expire at reset without scanning session transcripts. Missing limits or history stay clearly unknown.
+- Leftover Mode: when at least 20% of your Claude, Codex or Kimi plan may go unused within a day, CCC suggests 3 to 5 real tasks (WatchTower tasks, open GitHub issues, or TODO and FIXME notes) and starts one only when you click it. Turn it on or off in Settings > Leftover Mode. The floating offer and the once-a-day reminder stay hidden until approved.
+- Added a limit-hit approval card: when a session stops on a usage limit (now including Devin's free-model wall, with its reset time parsed from the error), you can continue it on a free model, schedule it to resume automatically when the limit resets (staggered at most 5 per minute), or do nothing. Once the reset passes, a running-free session offers to switch back to your plan.
+- Speak falls back to a local Kokoro voice (installed under ~/.ccc/local-tts, started on demand) when the free cloud voices are unavailable.
+- **Mac app first run.** A brand-new CCC.app opens straight into the
+guided onboarding flow (`/?onboarding=1`) on first launch, shows a real
+splash screen (icon, tagline, live setup status, gentle tips) while the
+server starts, and can turn dashboard notifications into native macOS
+banners via the new `window.webkit.messageHandlers.cccNotify` bridge.
+Returning users get the plain dashboard as before.
+- Phone ⋮ menu has a Reload app item, so a Home Screen app can pick up a new version without closing it.
+- Added Moment Zero: a cinematic first-run onboarding shell (animated logo,
+  typed "Your own AI dev team. Free." welcome, guided dependency setup,
+  free-key wizard, first $0 task, savings finale). Auto-opens on fresh
+  installs and at `/?onboarding=1`; replayable anytime from Settings, Help &
+  Onboarding, "Welcome & free setup".
+- Monthly share card: a "My October" button on the throughput page (and a new period in the share screen) makes a calendar card of one month with tokens, agent hours, active days, longest streak and busiest day. In the first week of a month it shows the month that just ended. Deep link: `/throughput.html?share=month` (optional `&m=YYYY-MM`).
+- Notifications: agents now ping you when they finish real work or stop for input — with a "Cost $0, saved $X" line for free-model runs — plus a 6pm daily digest of the day's agent work and savings-milestone celebrations. Delivers through the macOS app bridge, browser notifications (asked once at a success moment), or an in-app toast; toggles live in Settings > Notifications.
+- Added a no-build public free-model leaderboard with checked, privacy-safe local result exports, a dry-run-by-default Pages staging script, and Claude plugin directory metadata.
+- Queue picker now has an "ALL QUEUES" row at the top to view tickets across every queue.
+- Queue tickets can say where they run (Mac only, cloud only, or any machine). The ticket detail panel has a "Runs on" setting and a badge, so Mac-bound work waits for the Mac while an always-on server drains the rest.
+- Add a Japanese README (README.ja.md) covering install, first run, and engine support.
+- README states CCC is not affiliated with Anthropic (English, Japanese and Chinese first screens).
+- Add a Simplified Chinese README (README.zh-CN.md) covering install, first run, and the GLM, Kimi, DeepSeek, Qwen and MiniMax presets.
+- Added a Savings page (`/savings`, also in the app rail) with `GET /api/savings`: API-priced value of agent work vs your plan cost, ROI, and free-router $0 savings with an editable monthly plan (`POST /api/savings/plan`). Backed by an incremental sqlite ledger so unchanged transcripts are never re-parsed.
+- Added a savings surface: a header ticker that counts up the API-priced value of today's agent work (with a coin sound on live increases), a per-session chip showing "$0 · saved $X" on free-model runs, a savings panel with range tabs, ROI, and a milestone ladder, and one-time celebrations at $10 / $100 / $1,000 of work and 1B free tokens with a share button. Reads `GET /api/savings`; the surface stays hidden while that endpoint is absent.
+- Added a first-run setup service: `GET /api/setup/plan` detects everything a
+  fresh machine needs (Apple tools, Git, Python, Node.js, Claude Code, GitHub
+  CLI, plus the free-model steps), `POST /api/setup/run` installs them in a
+  streamed background job, and `GET /api/setup/jobs/<id>` polls progress. A
+  new `/setup` page renders the one-click wizard (`window.cccSetup`) with
+  per-step consent, a live log, and a cancel button. Node.js installs are
+  downloaded from nodejs.org into `~/.ccc/runtime/node` and verified against
+  the official SHASUMS256 checksums, no admin password required.
+- Throughput page: new Share button opens a share screen that renders a 1200x630 or 1080x1080 card (activity heatmap, one headline number, three small stats) with Copy image, Download PNG, and compose links for X, LinkedIn, Bluesky and Threads. The card holds totals only, never session names or paths.
+- Share card gains "$ saved" and "$0 runs" headline metrics plus a savings extras line, a milestone share prompt (Share button pulses when you pass $10/$100/$1k/$10k saved on $0 runs), and a `?share=saved` deep link so other views can open the card straight on the savings numbers.
+- Optional Claude Code PreToolUse hook blocks destructive Git commands and broad staging in shared checkouts, with automatic live-session detection, a force-protection flag, and setup documentation.
+- Speak can use Deepgram Aura-2 voices (random voice per read) when a `DEEPGRAM_API_KEY` env var or `~/.ccc/deepgram.key` exists; set `CCC_DEEPGRAM=0` or delete the file to turn it off. Metered, so it is opt-in by key.
+- The Speak button reads replies of any length in a free Gemini voice (random per read, shown in the button tooltip), switches to Cloudflare MeloTTS when Google rate-limits, and uses the browser voice only if the free router is unavailable.
+- Added a per-session Speak voice picker in the right rail. The default voice is set in Settings.
+- Added a gentle "star us on GitHub" prompt at success moments (task done, PR merged, milestones): one click stars via the local `gh` CLI through `/api/star`, with a GitHub-link fallback. Asked at most once per 14 days and 3 times ever; "Don't ask again" persists.
+- Throughput dashboard: each session in the sidebar now shows its API-price cost next to its token count.
+- While reading aloud, the Speak button's bar shows both the read position and how much audio is already made ahead of it.
+- Read-aloud button now shows a green dot when the whole last message is ready (amber when only the first clip is), names the voice model (fp32 or int8), and grows to fit the voice name.
+- Speak now explains itself: the button names the voice that is speaking (including "Mac voice" with the reason in its tooltip), and every decision is logged to the console, `window.__cccTtsLog`, and activity.log.
+- Hovering the speaker on an older message now makes its audio ahead of the click, so it starts without a wait.
+- The Speak button shows a slim bar along its top edge that fills as the last message's voice audio is generated (amber while filling, green when done).
+- A `vault` skill teaches coding agents to use `ccc vault list` and `ccc vault exec` so they can use your saved secrets without seeing them.
+- WatchTower error rows in the Queue panel have an Investigate button that files a ticket in the WATCHTOWER queue for a worker to fix the root cause (once per alert).
+- Run CCC from a locally built wheel with uvx or pipx, including the dashboard, hooks, bundled skills, and first-launch WatchTower setup. State stays in the usual user folders; no PyPI publication is required.
+
+### Changed
+- Blocked-ticket questions with inline (a)/(b)/(c) options now render as a lead-in, a list of options, and a highlighted recommendation instead of one dense paragraph.
+- Session "ready for your input" and approval banners now go through the CCC server: in the app they open the session when clicked, repeat banners for one session collapse into one, and the old unclickable macOS banner is only a fallback when no dashboard is open. Digest and milestone banners open the throughput page.
+- Cloud Relay replies from a session now go up as a top-level `replies` field (for the relay's ask API) with a `reply` attention item, instead of a fake question that fired a "question waiting" notification.
+- Cloud Relay attention items now name the parent session, the sub-agent's description and the pending tool action (for example `Bash: git push origin main`) for background sub-agents, and `session.detail` returns the title, parent, state and pending approval with the recent turns. With titles off, none of that text is sent.
+- Cloud Relay: when nothing changed, CCC sends a small heartbeat instead of repeating the full state snapshot every 20 seconds.
+- Cloud Relay: when the state changed, CCC sends only the changed sessions and sections instead of the full snapshot.
+- Codex cloud threads now appear under the Other tab instead of Coding.
+- Codex tool-output peeks no longer repeat the "Script completed / Wall time / Output:" boilerplate.
+- Continue-in-new-session dialog now shows the composer prompt in an editable box, so you can see and change exactly what the new session receives.
+- The Continue new picker is a clean sheet: labeled engine, model and effort fields, pill chips for recent picks, and one big Continue button.
+- The in-page folder viewer is now a movable, resizable window (drag the title bar, resize from the corner; position is remembered) and previews Markdown files rendered.
+- New sessions get a clear "$0 Free" choice first in the model row (it replaces the small "free $0" checkbox). If free models are not set up, it says "Set up free models" and opens the setup page.
+- Compact view keeps the per-turn token summary and model line on the newest reply. Free-router sessions show the provider, model, latency and failed attempts in that model line instead of "auto".
+- The usage-left strip now keeps Claude and Devin as a muted "No reading" chip (with a reason in the tooltip) when CCC has no quota for them, instead of leaving them out.
+- Claude model pickers now list only the newest version of each family (for example Opus 5.5 without Opus 5 or 4.8); a model you already selected stays listed.
+- Codex model pickers also list only the newest Sol, Terra, Luna and Astra.
+- Leftover Mode now suggests open tickets from all your WatchTower queues (this folder's queues first), and one click queues the ticket back in WatchTower (`wt run`) so a WatchTower worker claims it instead of a loose session.
+- Speak now uses the local Kokoro voice first and streams it a sentence at a time, so long replies start playing after the first sentence instead of after the whole clip. Deepgram is used only when explicitly turned on (`CCC_DEEPGRAM=1` or `~/.ccc/deepgram.on`); a stored key alone no longer enables it.
+- Car Mode no longer needs a Deepgram key: speech runs locally (whisper.cpp + Kokoro) by default, and the status banner names the engine. `CCC_VOICE_ENGINE=deepgram` opts back into Deepgram.
+- New `scripts/install_local_speech.sh` installs the Kokoro voice into `~/.ccc/local-tts`.
+- Ask (Mazkir): a git request like "push bym" now proposes a session in that repo to do it (one Confirm click) instead of answering that it can't push.
+- On phones the + is now a ⋯ actions menu (Attach, Compact, Continue in new session), and long-pressing Send opens the send options.
+- New-session model chips now offer one chip per enabled engine, not just the most-used one.
+- Promo pop-ups (savings milestones, notification ask, daily report, star ask, router card, limit cards, Moment Zero auto-open) now stay off until each one is approved in `ccc_server/popups.py` and `static/popups.js`.
+- The session cost rail no longer shows an "Unavailable" headline when quota cost can't be computed; the API list-price line stands alone.
+- Shortened the README to a quick start and visual tour, with linked guides for installation, engine support, CLI/API use, secrets, and internals. Added checks for the line limit and local documentation links.
+- README first screen now leads with the pitch, a real share card, the one-line install, and three bullets; badges moved below. Licence copy says source-available (FSL-1.1-MIT) everywhere, including the site footer, and the README and site say CCC is not affiliated with Anthropic.
+- New Session repo guess now switches the folder by itself when Jev is at least 80% sure (was 95%). Local path or name matches still only suggest.
+- New Session repo guess now knows what each repo is for: it reads CLAUDE.md and AGENTS.md as well as the README, skips language-switcher and tool-managed lines, and sends Jev your past session titles in each repo, so a prompt like "send the digest to owners" finds the right repo without naming it.
+- The header savings counter no longer plays a coin sound each time the value goes up.
+- Free voice reads start after about 3 seconds (short first chunk, then medium chunks), and the Speak button shows the name of the voice that is speaking.
+- Speak starts with no wait: the first sentence of each new reply is prepared in the background, and Speak uses the browser voice at once when it is not ready.
+- Speak starts with a shorter first chunk (80 characters) so the voice begins sooner.
+- Speak streams Deepgram audio as it is made, so the voice starts in under a second.
+- Local read-aloud voice now uses the fp32 model on every Mac and PC; it made speech about 2.5x faster than int8 in a benchmark.
+- Speak skips Google's free voice for 15 minutes after it reports the quota is used up, so each read no longer wastes two failed requests first.
+- Speak now picks a random local Kokoro voice (28 English voices, named on the button) ahead of the single MeloTTS voice when Google's free quota is used up.
+- Landing on the final reply start when a live turn ends (was: scrolled to the very bottom).
+- Per-turn speaker (🔊) button now shows the voiceover cache bar, like the composer Speak button.
+- The Claude plan-usage meter now identifies itself as CCC instead of a web browser, refuses redirects, and shows a refused or rate-limited reading as unavailable (backing off instead of retrying); earlier readings stay in usage history.
+
+### Removed
+- Removed the sidebar auto-title activity strip and its 15s `/api/titler-turns` poll (the endpoint remains).
+
+### Fixed
+- Antigravity (agy) runs that CCC starts while agy is signed out now ask for the sign-in code in the dashboard's credential request panel and pass it to agy, so the turn continues. Before, the run stopped and you had to sign in from a terminal.
+- Antigravity: resuming a session while the `agy` CLI is signed out now fails fast with a "not logged in" message instead of hanging on "Thinking…".
+- The model pill on Antigravity sessions is now clickable, and the picker lists Gemini 4 Argon, so you can switch from Gemini 3.8 to 4.
+- Antigravity input is refused with a clear message when a terminal agy already holds the conversation.
+- CCC.app now replaces an out-of-date local server on launch: when port 8090 is already served by a server whose code is older than the install on disk, the app asks it to restart itself (via `/api/restart`) and waits for the new code before loading the dashboard, instead of showing new UI against an old API.
+- Preserve newer archive cache variants and incremental-refresh signatures when detached refresh workers save concurrently, avoiding lost snapshots and unnecessary full rebuilds.
+- Ask no longer surfaces WatchTower worker sessions (queue drains, ticket fixers, verifiers) when searching past work, unless the question is about workers or queues. The trace shows how many were hidden.
+- Needs Your Attention now catches sessions whose next step hands a choice back to you ("Say X if you want Y", "Tell me which"), not only ones that end on a question mark.
+- Ready-for-input banners for not-yet-titled sessions now show the opening of the first prompt instead of a bare hex id.
+- Bare image/PDF/video filenames in a message (e.g. `01-gate.png`) now resolve against the directory named earlier in the same message, so the links open from a remote machine.
+- CCC Cloud attention items now use the same session id as the sessions list and include the session title, so remote clients can tell which session needs you.
+- Cloud relay: approvals now carry the complete pending tool input (full Bash command, Edit/Write file and change summary) and prose questions carry the full final assistant message, both redacted and size-capped; `session.detail` no longer returns empty turns for tool-heavy or Codex transcripts, reports `turn_count`, and repo names like `claude-command-center` are no longer redacted. A long-running tool is now reported as working instead of "paused on Bash" unless a real permission prompt is pending.
+- Queued messages on a Codex session now show the Steer button even when the row's source is "interactive" with engine "codex".
+- First load on a fresh install now shows live scan progress (step, transcripts N of M, elapsed time) on the Simple home list and the archive stage list, instead of a silent spinner that could fall back to an empty list mid-scan.
+- Compact view no longer stacks a smear of timestamps after the last reply.
+- Compact view now shows the speak and copy icons on every turn's final reply card, not only the newest reply.
+- Compact transcript view now shows the timestamp on each turn's final reply, not just the newest one.
+- Opening a /compact-ed Claude session no longer drops recent replies that the compaction stored at early file lines.
+- Agent config notice can be dismissed from a remote/tunnel session, and the "local-only" error now explains itself.
+- The Continue new picker now has a Done button, and its quick picks no longer repeat models or offer the one already selected.
+- The Continue new sheet fits the phone screen, and Done closes it together with the offer.
+- Restarting the dashboard on Linux no longer kills engine turns it spawned (Devin, Gemini, and other one-shot CLI turns): the systemd user unit that `./run.sh --install-service` writes for the dashboard now sets `KillMode=process`, like the system unit. Existing installs pick it up on the next `--install-service`.
+- Sessions that died in the middle of a tool call no longer show as "tool call may be stuck" in Needs Your Attention forever, and CCC Cloud now reports a stuck tool call as stuck instead of as an approval request.
+- Devin turns sent over its live ACP connection now survive a dashboard restart. The shared `devin acp` connection lives in the persistent worker, like Kimi's and Grok's; it used to live in the dashboard, so every dashboard restart (each automatic update) cut off running Devin turns.
+- Fleet limit actions (continue / switch back for many sessions) now run one at a time on Windows, where file locks are unavailable, so they cannot overwrite each other's failover state.
+- Fleet plan retries now replay durable step results across node restarts without repeating pushes or session nudges. Interrupted steps with an unknown outcome stop safely for review.
+- Folder picker list rows (.fp-item) clipped when many entries: flex column + overflow:hidden shrinks them; needs flex:0 0 auto.
+- Free model setup on Linux and WSL: the router no longer inherits the dashboard's `PORT` and collides with CCC itself, which made setup fail at "Starting it up".
+- With "$0 Free" picked, the new-session composer shows "Free model" in place of the Claude model and effort menus, and the free router picks the model (the paid default model is no longer sent).
+- A fresh install no longer shows a red "model-policy.json is missing" health error: first launch writes an empty policy once, and deleting it later is still flagged. The dashboard no longer loads a script from local port 8765 unless you opt in with `localStorage['ccc.hermesBridge'] = '1'`.
+- Hide stale usage-left bars (e.g. a lapsed Kimi plan) once their reset window ended over a day ago.
+- Clear outstanding delivery receipts when an unattended continuation is discarded after auto-resume is disabled or its permission check is unavailable; record it as dropped rather than delivered.
+- The installer now picks the next free port when another program already uses 8090, and `run.sh` stops with one clear line instead of a traceback (it used to leave a stray worker behind).
+- On iPhone, the composer now sits above the keyboard's ✓ accessory bar so Send is no longer covered.
+- The Jobs tab now opens on this machine's own view: the VM shows its systemd timers (no empty Laptop view), and a Mac defaults to All so it lists both its launchd jobs and the hermes-gcp jobs.
+- Activity-log scope changes discard outdated responses in the rail and modal. Search now matches timestamps and displayed session names, and filtered or empty logs keep a clear message and disabled expansion controls.
+- A minimized phone composer on the new-session screen is a single tidy row again instead of a squeezed sliver.
+- Phone: the folder field shows the end of a long path, an attached image no longer pushes Send off screen, and tapping the context pill offers Compact with a confirm.
+- Phones show the context usage numbers again, and the MiniMax chip no longer opens a new session on Fable.
+- Phone new-session screen shows recent-folder chips again, and the folder button opens the in-page folder picker.
+- Phone: tapping the new-session folder field hides the composer while you edit, so the field and its suggestions stay visible above the keyboard.
+- Mobile new-session folder suggestions are no longer cut off by the strip; they open as a full-width sheet.
+- Mobile Queues tab: the header (queue label, filters, status strip, chips) is more compact, so more tickets fit on a phone screen.
+- Phone: while typing with an image attached, the composer shrinks (selectors hidden, small thumbnails) so Send stays above the keyboard.
+- Phone new-session composer shows engine, model and effort on their own full-width row so they are readable.
+- Phone composer toolbar is tidy (offer on its own row, icons in one row), and the Continue new offer has a × to dismiss it.
+- The Sonnet 5 chip in the new-session model row now selects Sonnet 5 instead of falling back to Fable, and the $0 Free pill only looks pressed when it is on.
+- New-session model chips no longer offer picks for engines that cannot be launched there, so clicking MiniMax no longer switches to Fable.
+- New-session model pills no longer show "Sonnet 5" once "Sonnet 5.5" is available for the same engine.
+- Fixed delayed chat launch responses reopening a session over another chat, draft, or split pane. New chats still open immediately; late failures keep their Retry/Edit request without replacing a newer draft.
+- Finished-turn and approval banners no longer fire for headless runs started in an OS temp directory (eval harnesses could trigger ~100 banners a minute).
+- Fixed free onboarding so router setup and the first task use the right APIs, failed or paid runs never appear as a free success, notifications work for both supported call styles, concurrent setup stays reliable, Free models Settings links open reliably, leaderboard readiness and tool support stay accurate, and isolated installs cannot replace the normal macOS router service.
+- Opening a folder from a remote browser against a headless server host now copies the path and explains why, instead of only showing "Open failed".
+- Opening a file or folder link on a Linux server host no longer fails with `No such file or directory: 'open'`; it uses `xdg-open` when present and otherwise shows a clear message.
+- Perf self-filer no longer files archive/conv-open tickets for single slow samples taken while the host load is over 4x its core count.
+- Block pushes with a setup message when pytest is unavailable, so the performance gate cannot silently pass without running.
+- The conversation "Previous"/"Next" buttons now step only through messages you typed, skipping messages from other sessions.
+- Messages sent to a headless session no longer sit on "sending..." for up to 10 minutes after a turn or /compact ends while a background subagent still runs a long tool.
+- Acknowledge or undo individual resolution notes in the queue board. Acknowledged follow-ups no longer keep closed tickets flagged or pinned as unresolved; the original notes and close history remain readable.
+- The conversation reader no longer creeps up toward older messages on its own on iPhone when lazy images or blocks above the viewport finish loading.
+- Claude sessions can now see CCC as the `ccc` peer and reply to it. A reply to a message that came through Cloud Relay goes back to the remote client as a question, which wakes it with a notification.
+- Local repo-name matching now accepts a unique leading segment (e.g. ERGO for ERGO-NEXT), so such prompts show a suggestion chip.
+- Scrolling up a few pixels from the end of a conversation no longer snaps back to the bottom.
+- Paint the conversation sidebar from a bounded, day-old-or-newer local cache while refreshing the lightweight list endpoint. Cache only display and lifecycle metadata; fresh server results replace the preview, including when history is empty.
+- Simple mode's All past tasks screen now shows the current loading step, its progress, and the time spent during a slow first load, and keeps waiting instead of saying there are no tasks yet.
+- Simple mode: the Settings screen now has an "All settings" row that opens the full Settings window without leaving Simple mode, and the ⋯ bottom-nav button is labeled "Settings" for screen readers.
+- A just-spawned Antigravity (and other fire-and-watch) session now shows as started and live instead of "not-live, no process" while its placeholder row awaits the real session.
+- Speak speed and skip buttons now continue from the current spot and keep the same voice, instead of restarting the text with a new voice.
+- Split-pane [+] attach: buildPaneElement clones drop listeners; fixed by binding attachFilePickerButton per clone.
+- A resumed session no longer sticks on "No active agent process" once its process starts; the card goes back to Thinking.
+- WatchTower input alerts clear when a later notice or ticket snapshot shows the
+request has been resolved. Failed status notices appear as warnings, and delivery
+failures no longer claim the recipient session is gone. Reopened requests remain
+visible, and unknown ticket state keeps the original alert available.
+- Queued and steered messages now match delivery by timestamp and occurrence, so older identical history cannot hide a new message and repeated cleanup passes cannot acknowledge several sends with one transcript entry.
+- A tail-loaded transcript no longer hides your first visible message as the "original ask"; only the real original ask is pinned to the header.
+- Throughput 3-hour chart now shows a cumulative-tokens line when weekly quota data is unavailable or stale, instead of dropping the line.
+- Fixed ticket modal learnings button and comment textarea styling (CCC-49).
+- Hebrew text is now read with the Mac Hebrew voice, because the free offline voice only spells out the letters.
+- Speak no longer drops to the Mac voice when the first sentence wasn't prepared in advance; it fetches the free voice on demand (about 1-2 s) and uses the Mac voice only if that fails or the free voice is cooling down.
+- Read-aloud shows the voice model (fp32 or int8) on the non-streaming path too.
+- Read-aloud audio is now prepared for every visible conversation pane, not just the active one.
+- Read-aloud audio is now made ahead: when a turn ends or you open a conversation, its last message is generated in the background so the Speak click plays with no wait or pauses.
+- The speaker cache now retries after a cooldown or a hidden tab instead of staying empty on an idle session.
+- Read-aloud retries the free voice after 15 seconds (not 5 minutes) when the connection drops, and the playing button label is dark so it is readable.
+- The skip-sentence button no longer pauses while the voice is re-made: it jumps inside the audio that is already generated.
+- Windows: process liveness checks no longer use `os.kill(pid, 0)` (which terminates the target on Windows), and "Open in desktop app" deep links are enabled on Windows (#142).
+- Harden native Windows process checks and force-stop handling, preserve live sessions when hidden-terminal compaction is unavailable, refuse unsupported nonblocking FIFO writes, and reject Windows Terminal's `wt.exe` alias with either path separator.
+- Windows: prevent test isolation leaks from touching real or root user directories by honoring CODEX_HOME across rollout day directory discovery and signature tracking, re-anchoring hook script sync under redirected home, and isolating USERPROFILE alongside HOME across test harnesses (#142).
+- On Windows, CCC no longer launches Windows Terminal (`error 0x80070002 when launching 'skills status'` / `'status --json'`) when it means to run WatchTower's `wt` CLI; every `wt` call now uses WatchTower's `wt.exe` from Python's Scripts folder.
+- On Linux, CCC no longer starts a second execution worker beside the systemd one. Both `run.sh` and the in-app restart used to fall back to a detached `ccc_worker.py` when `launchctl` was missing; that copy held the worker socket while the systemd worker crash-looped "already running" thousands of times. They now start and restart the worker only through `systemctl --user`. An idle worker running stale code is again restarted automatically, because sessions survive the restart; set `CCC_WORKER_AUTO_RESTART=0` to restart it yourself from Settings → Maintenance.
+- Restarting the execution worker on Linux no longer kills every session it launched: the systemd user unit that `./run.sh --install-service` writes now sets `KillMode=process`, matching the system unit, so a new worker reattaches the running sessions. Existing installs pick it up on the next `--install-service`.
+- The Workers tab now highlights the row of the session open in the conversation view.
+- A WatchTower worker row with no transcript now says "no session yet" after 5 minutes instead of "starting…", and clicking it opens its session when known instead of the old queue view.
+
+### Security
+- Harden local image responses: `/api/local-image` now sends `Content-Security-Policy: default-src 'none'; sandbox` so a crafted on-disk `.svg` opened as a top-level document can't run script in CCC's origin (rendering via `<img>` is unaffected), and `X-Content-Type-Options: nosniff` is added to `/api/local-image`, `/image-cache/`, `/api/pasted-image`, and `/api/conv-image`.
+
+## [5.37.0] - 2026-10-04
+
+### Added
+- Sidebar shows an "auto-title" section above the footer: 24h token total and a live list of recent auto-title runs.
+- Auto-title section shows the mtime of the conversation each run titled.
+- Codex cloud ("dot" / aeon) threads now appear in the session list and archive: threads whose records live in OpenAI's cloud never write local rollout files, so they were invisible before. They carry a `cloud` badge, nest under their dot's root thread, and open in the normal transcript view — read-only, with the composer disabled and a note to reply in the Codex app. Discovery rides a TTL- and disk-cached catalog fetch on a background refresh; opening a thread fetches and caches its turns with large attachments replaced by placeholders. Degrades softly to the desktop's local sidebar cache when the login is missing/expired or the (undocumented) backend is unreachable.
+- Conversation view is a one-tap Compact | Normal | Verbose segmented control (rail topbar and pane menu). Compact collapses the transcript in every engine (Claude, Codex, Devin, ACP): the tool calls and thinking between two text messages fold into a small "▸ N tool calls · M thoughts" chip at the end of the preceding sentence (tap to unfold), narration reads as plain spaced paragraphs, each turn's final summary keeps its card, and per-message timestamps, line numbers and token chips are hidden.
+- **Ask (Mazkir) now finds sessions on your other paired CCC machines.** History questions also ask each paired peer's own recall in parallel (2.5 s cap). Answers name the machine a session ran on, and sources show a `[machine]` tag. An unreachable peer shows up in the trace and never blocks the answer.
+- `ccc recall`, `ccc shipped`, `ccc brief` and `ccc history` now also search your paired CCC machines and merge the results, tagging each row with the machine it came from. A session that moved between machines shows once, with `also on` the other copies. An unreachable machine is named in the output instead of silently missing, and `ccc shipped` says "NOT FOUND on reachable nodes" rather than "NOT SHIPPED" while one is down. `--scope local` keeps the old single-machine behaviour; the `/api/memory/*` endpoints gain an opt-in `scope=all`.
+- Added a floating green CALL button on mobile to open the voice assistant, with an IN CALL shortcut when its panel is hidden.
+- Voice mode: talk to the board hands-on through the Codex app-server realtime lane (experimental). A mic button in the top bar opens a floating panel with live transcript, state, timer, plan-usage readout, and pending-action cards. The browser peers with the local voice host over WebRTC on your ChatGPT subscription so audio never passes through the server; an optional BYOK OpenAI key enables a billed-per-use websocket fallback when subscription voice can't connect (the key goes to the child env only, never argv, disk, logs, or API responses). The voice answers from a read-only tool surface (attention feed, session summary, queue rollup) and every mutation becomes a card the user confirms by click; the backing Codex thread is ephemeral and sandboxed read-only. One session at a time, auto-stop on silence/max length/tab close, per-session usage records. Settings > Voice mode picks the voice, fallback profile, and limits; docs/realtime-voice.md.
+- Spawn dedupe contract: `POST /api/sessions/spawn` accepts `task_key` (repo-scoped exact match) or `dedupe: true` (raw-prompt hash). A matching live or finished lane returns `200 {existing: true, finished?, session_id, ...}` instead of spawning a twin; concurrent duplicates collapse onto the in-flight spawn (`deduped: "in_flight"`). `/api/sessions/spawned` rows now carry `task_key`, `task_summary` (raw prompt, not the boilerplate-wrapped `command_summary`), `prompt_hash`, and `display_name` (the enriched AI title once the session has an archive row), plus server-side filters `?task_key=`, `?parent=`, `?q=`, and `?include_finished=1` — finished lanes persist to `spawned-history.json` (24h/200-row bounded) instead of vanishing, so "was this already done" is answerable. `ccc spawn` gains `--task-key` / `--dedupe`.
+- Vault: a new Settings > Vault tab for any kind of secret (API keys, tokens, logins, other), not just the LLM providers BYOK covers. Each entry has a name, kind, service, optional username, env var, website and notes; values live in the macOS Keychain (service `ccc-vault`) or, off macOS, the same encrypted-file fallback BYOK uses, with a 0600 metadata index that never holds a value. Values are write-only in the UI and API (rows show "saved" and when, plus a last-4 hint for long API keys/tokens). Existing BYOK keys are listed with an "Import to Vault" action that copies the value and leaves BYOK untouched. Agents use `ccc vault list`, `ccc vault get <name> [--reveal]`, and `ccc vault exec --env VAR=<name> -- <cmd>`, which injects the secret into the command's environment and redacts it from the command's output. BYOK Keychain writes now pass the key on stdin instead of argv.
+
+### Changed
+- Auto-title activity-log lines now include the titled session's transcript mtime and age.
+- Every auto-title spawn (including manual and "Summarize all") now writes an activity-log line with the session mtime.
+- The "Ready for your input" banner now shows the session name instead of the short session id.
+- Approved agent hooks and skills now update silently with CCC instead of re-opening the "Agent config access" dialog after every update.
+- Mobile conversation view: Compact/Normal toggle in the top bar; Codex Desktop handover moved into the ⋮ menu.
+- Voice mode starts with a green phone button labeled CALL and welcomes you when audio connects. Use END CALL to hang up.
+- The mobile voice button starts calls with one tap, sits higher, and can be dragged to a remembered position. Calls open with “Hi, what's up?” Voice can inspect ticket input requests and propose queue triage sessions using a configured Deep profile or an explicitly selected model.
+
+### Removed
+- Removed the new-session Claude "pre-warm": no more background claude processes spawned while the composer is open; new sessions cold-start.
+
+### Fixed
+- Auto-titler: skips WatchTower queue-worker sessions (identical "Drain the <Q> queue" prompt) and runs with minimal context (<1k tokens per title instead of ~32k).
+- The "Ready for your input" banner shows the current session name (rename or auto-title) instead of a stale launch slug like "prewarm-<repo>".
+- Auto-titler leaves Codex sessions untouched for more than 3 days alone (CCC_AUTO_TITLE_CODEX_MAX_AGE_DAYS), ending bulk Haiku titling of old history.
+- Opening an active Codex cloud thread no longer stalls for 8-13s while its transcript refetches; the cached copy shows immediately and new turns appear when the background refresh lands.
+- Compact transcript view keeps the speak/copy buttons and timestamp on the newest assistant reply.
+- Keep the transcript scroll position when switching Default/Verbose/Compact views.
+- Opening a long Devin CLI conversation is fast again after a restart: parsed events persist to disk, and the ACP turn-result merge no longer re-reads the whole transcript on every open and poll.
+- Fixed: transcript no longer jumps when an empty streaming bubble appears and disappears.
+- Mac app: microphone dictation and voice no longer fail with "Microphone access blocked" (the signed build now declares the audio-input entitlement).
+- Auto-title helper sessions no longer pop a "Ready for your input" macOS banner.
+- Searching for an exact path or filename (e.g. a pasted-image path) now matches only sessions containing that exact string, instead of every session that shares any of its words.
+- Fixed Windows compatibility across process liveness checking, WatchTower CLI discovery, detached daemon startup, hook script sync, FIFO fallbacks, project root boundary detection, test isolation, and Desktop app deep links.
+
+## [5.36.0] - 2026-10-02
+
+### Added
+- Added a “Hand over to Codex Desktop” conversation button that waits for replies and queued work to finish, releases CCC’s writer ownership, and opens the same conversation in Desktop. Waiting can be cancelled.
+- Metadata tab now shows a Codex diagnostics panel: what state the session is in, whether CCC is driving it via the app-server or a one-shot `codex exec` fallback (and why it fell back), whether the run is ephemeral/invisible to Codex desktop, and whether Codex desktop is competing for the thread.
+- `POST /api/jobs/add` and `ccc jobs add` create a scheduled job through an agent session (host, repo, what, when); `ccc jobs ls` lists jobs with status, last/next run and outcome. The Jobs tab's + Add dialog now uses the same endpoint.
+- Jobs tab: a "+ Add" button opens a short form (host, folder, what, when) and starts an agent session that creates the scheduled job and checks it appears in the list.
+- Jobs tab: a project / recent / day toggle (choice is remembered). Day lists today's launches in clock order with a "now" marker; recent is flat, running first.
+- Jobs tab: a running job shows a "live" pill. It opens the WatchTower ticket the run printed, or tails the run's log live (auto-scrolls unless you scroll up, stops when the job finishes).
+- Jobs tab: larger text and spacing throughout.
+- **Jobs tab**: a new sidebar tab next to Workers lists scheduled jobs grouped by project, newest run first. Each row shows what the job does, a 24h strip of when it launches, the ticket/PR/issue chips its last run produced (or the job's own last output), and when it last ran. Covers the Hermes VM's systemd timers and the scheduled laptop launchd agents; a job can print a `CCC_OUTCOME:` line to set its own one-line summary. New `GET /api/jobs` serves it from a background-refreshed cache.
+- Jobs tab is now on phones: a Jobs button in the bottom nav opens it, with 36px+ tap targets, a scrollable live log and an Add dialog that fits the screen.
+- Configure quota fallback in Settings → Engines: enable it by default, choose ordered provider models and effort, map fast/standard/deep capability profiles, and override individual queues with On, Off, or Use machine default. Active runs and stored queue pins are preserved.
+- "Needs you" cards now carry buttons: Run a suggested command in a terminal (after a confirm), Copy it, Restart CCC, Reload, open linked URLs and files, or jump to the composer to reply.
+- Needs-you cards now show a one-tap chip for a quoted reply the agent asked for (e.g. Say "ship now"); tapping it sends that text.
+- Queue settings now have a Roles section: pick the engine and model for the planner, plan reviewer and verifier (builder shown alongside), with the effective value and where it comes from. Choices come from WatchTower's approved catalog, and refused picks show their error inline.
+- Queue rows now say "waiting on REF" instead of READY when a ticket is blocked by another open ticket. Click the chip to open the blocker. The queue header counts blocked tickets separately, and closed tickets no longer show a readiness chip.
+- New sessions can pick their folder from the prompt. Without any setup, a path or repo name in your message is matched locally (no network) and offered as a "<folder>?" chip. Add an optional TypeSafe Jev key under Settings > BYOK to guess the project even when the message never names it; very confident guesses switch the folder for you with an "Auto-picked <folder> · undo" chip. Prompts are scrubbed of likely secrets and are only sent when a Jev key is set.
+- Sessions started by a script (`claude -p`) now record who launched them at startup: the launching script or app is shown as "via: <caller>" instead of "via: Terminal", and when the launcher was a Claude session it is linked as the parent.
+- Sessions now show a live WIP timer while a turn is running: a "12s / 3m 4s" chip next to the Working signal in the sidebar row, and "Working · Ns" on the Codex state pill. Timed from the real turn start (Codex turn/started, ACP turn tracking, or a Claude in-flight tool's start); waiting-on-you states never get a timer.
+- The ticket detail now has an Acceptance section: the acceptance line, each check (command, independent verifier, review) in order with passed/failed/waiting, the command output or verifier findings, which engine and model ran the verifier with a link to its session, and why a failed check sent the ticket back.
+- The q2 queue board now shows each WatchTower ticket's stages (plan, plan review, build, checks, verify, closed). Rows get a stage strip and say which stage the ticket is in, which model runs it and for how long. The ticket detail adds a Stages panel with loop counts, floor routing, what the ticket waits on, links to the stage transcripts, the plan, reviewer verdicts and check output. The ticket list header shows per-stage counts and the queue's role models.
+- WatchTower tickets waiting on a review gate (`in_review`) now appear in the queue panel and the q2 board with who they wait on. Reviews for you show up as Decision Inbox cards with Accept and Reject, and the ticket detail has the same buttons. Queue counts treat these tickets as not closed.
+
+### Changed
+- Codex sends return as soon as `turn/start` is accepted instead of blocking ~1.5-5s on the durable-delivery confirmation. The check still runs — on a background thread with a wider 30s window (`CCC_CODEX_WAKE_CONFIRM_TIMEOUT`), reporting the result via `codex_wake_confirm` telemetry and the wake ledger. Inject responses now carry `confirmed: null` + `confirmation_source: "pending"` until that lands, matching the spawn path's contract.
+- Changed: Codex sends to a thread the app-server already holds now go straight to `turn/start` — `thread/resume` only runs when the thread might be missing or stale (foreign rollout writes, busy state, or a "thread not found" reply). The per-send latency drops by the whole resume round-trip (~0.1-0.7s). The "Wake up" button is now labeled "Nudge" — it always sent a status-check message rather than waking any server.
+- Codex sessions no longer fall back to one-shot `codex exec` runs: spawns go through the app-server exclusively (and fail visibly if it can't start), and failed resumes park the message in the durable queue for retry instead of launching an unsteerable `codex exec resume`. The shared-state holder check no longer blocks CCC's private app-server, so sessions stay on the native transport even while Codex Desktop or a terminal Codex is running.
+- Files is its own tab in the session side panel again (with a count on the tab), instead of being docked at the bottom of Metadata. Metadata is now the first tab, before Orchestration.
+- License: CCC is now under the Functional Source License 1.1 with MIT future license (FSL-1.1-MIT). You can use and modify it for free, including at work and on your own servers for your team. Selling CCC or offering it as a competing product or hosted service is not allowed. Each release becomes MIT two years after it ships.
+- Model catalog now discovers new Claude and Codex models on its own: prices, context limits, default reasoning effort (e.g. Opus 5.5 defaults to medium) and retirement/launch dates come from the vendors' published docs and the Codex CLI's model list on the hourly refresh, with no code change per model. Superseded Codex models (e.g. GPT-5.6 Sol once GPT-6 Sol exists) drop out of the picker like older Claude tiers already did, and discovered prices flow into the usage database.
+- The queue activity log reads faster: each row's plain-language statement is bold, machine key=value fields sit on a dimmer line below, and rows without a worker no longer leave an empty gap before the text.
+- Clicking a queue's engine · model · effort chip now opens a quick popover of 1-tap chips (your favorite engine/model picks plus the effort ladder) that saves instantly; "More settings…" still opens the full queue manager.
+- Queue status dots now color the ticket's WatchTower stage: cyan while planning, pink during checks/verify, orange when stuck, and a check mark on tickets closed after a passed verify.
+- Optimized Claude Desktop session lookup by pre-warming project paths and caching jsonl locations, reducing metadata pruning and backfill CPU cost by up to 36x. (CCC-1248)
+- "Create queue for this session" now suggests a short, editable queue name, links the queue to the session on the server (so agents and other browsers can find it), tells the session how to split its work into tickets (`--accept`, `--after`, checks), and asks "Start N workers?" once the first tickets land.
+- The queue's "waiting on REF" chip and blocked count now come from WatchTower's own `waiting_on`, so they always match what workers will claim. Needs a WatchTower with `waiting_on`; older installs just show no chip.
+
+### Fixed
+- The sidebar no longer sits empty for 20-30 seconds after the CCC server restarts: the saved conversation list loads once for every early request, and the Devin CLI overlay no longer scans its multi-GB database inline on the first list request.
+- Restarting CCC no longer re-runs the full Claude Desktop sidebar sweep every time: it runs at most once every 12 hours (new sessions still appear right away), removing a several-second CPU burst after each restart.
+- Sends to Codex sessions now settle the message echo immediately: the `codex-app-turn` response branch finally calls `markPendingSendDelivered`, so the bubble flips to "✓ Delivered - waiting for Codex" and the Thinking indicator shows during Codex's time-to-first-token instead of the message sitting in "Sending…" for seconds.
+- Codex sessions stored only in capture logs retain their completion diagnostics after spawn records expire, and follow-ups point to the capture log instead of a nonexistent native transcript.
+- Compacting a Codex session that another process is still driving (for example a headless WatchTower `codex exec` worker) now says which process owns the thread and its pid, instead of a generic "already has an active writer" error with a misleading retry hint.
+- Codex compactions no longer leave the card stuck on "reading the new size…". The app-server's completion signal lands before the rollout writes the rebuilt-context `token_count`, so the wait now honors an in-progress grace window past the deadline (12s) instead of returning `post_tokens: 0`; a `token_count` with `input_tokens` set is rejected so a normal turn can't pose as the post-compact size, and if no size is ever confirmed the card settles on an honest "new size not reported" instead of reading forever.
+- Codex sends no longer wait out a 5-second confirm window: the delivery-ack matcher now recognizes current Codex's `UserMessage` items (`content[].text`) on notifications and in rollout files, so accepted turns confirm in well under a second instead of always timing out.
+- Opening a Codex (or other non-Claude) conversation no longer stalls on "Loading..." for seconds: CCC stopped scanning every Claude project folder on each request for a session it already knows is not a Claude one.
+- Fixed follow-up sends to native Codex sessions while Desktop is open by waiting for Desktop's definitive ownership response before selecting the session transport.
+- Codex sessions spawned by CCC now use the desktop sidebar's user-thread marker; the bounded startup repair also fixes older CCC-marked sessions while preserving their IDs and conversation history.
+- Sending to a Codex session that ran via the ephemeral exec fallback no longer fails with "repo_required"; CCC now continues it in a new Codex session in the same folder.
+- Fixed the dashboard showing a blank transcript for a Codex session whose native history got stuck at "task started" (the `codex exec` fallback bug fixed in the previous release); it now falls back to CCC's own spawn log so the real conversation still renders.
+- Fixed a Codex spawn falling back to the plain CLI (because another Codex process held the shared state database) leaving a broken, permanently-stuck thread in the Codex desktop app even though the run itself completed successfully; the fallback now runs `--ephemeral` so it no longer writes that native state at all.
+- Show Codex fallback runs and their captured replies even when no native session is saved, instead of leaving their cards stuck on “spawning”.
+- Automatically repair a missing native package in a user-owned npm Codex CLI at its installed version, with bounded retries and a clear manual repair command if recovery fails.
+- Codex diagnostics and send-queueing no longer mistake CCC's own fallback `codex exec resume` run for "another app driving this thread"; the spawn registry also no longer drops Codex children launched through the npm `node` wrapper.
+- Codex background status checks no longer load conversations or acquire their writer locks. CCC unsubscribes idle conversations after work finishes, while preserving subscriptions for active goals and queued input; Codex releases them after its inactivity grace period.
+- Make Codex CLI transcript recovery work in the normal viewer, retain tool results and errors, and refresh correctly as captured output or native history changes.
+- Codex replies now update in place when live snapshots revise rendered text, and saved replies reconcile by native item identity. This prevents repeated reply text and speak/copy controls during streaming and transcript handoff.
+- Report unavailable Codex capabilities with an installation diagnostic instead of the misleading “Unknown Codex operation” send error.
+- Stop now interrupts Codex threads running inside the CCC worker's app-server (it used to report "not live"), and SIGINTs headless `codex exec` workers CCC did not spawn. Steering or compacting a headless exec worker now fails immediately with a clear reason instead of queueing forever.
+- The conversation top bar now shows the original ask for Codex and worker sessions whose recent history has no user message, instead of disappearing.
+- Keep the preceding user prompt visible when opening a Codex conversation window in the middle of a long turn, preserving contiguous history and pagination.
+- Fixed Codex sessions falsely reporting "Another app is driving this thread" (and hiding the Steer button / mislabeling the status pill) while CCC's own turn was writing. Three compounding causes: the dashboard read only its local thread-state map, which stays empty when the control-plane worker owns the app-server; routed `thread/list`/`thread/read` responses recorded stale snapshot entries into that local map, which then shadowed live worker state; and a `turn/started` notification carrying no turn id downgraded the `ccc` writer stamp to `unknown`. Writer attribution, the diagnostics verdict, conversation overlays, and the nudge-outcome breakdown now resolve thread state from the owning process via one TTL-cached query with remote-wins merging, and the notification handler keeps `ccc` ownership when no id is present to contradict it.
+- Offer all enabled New session engines in the Continue in a new session picker, with models and effort levels for the selected engine. Keep the picker above the composer so its controls remain visible.
+- Devin sessions spawned from the picker no longer silently run on the account default model: family ids like `swe-2` are now resolved to a concrete variant the ACP session actually offers (e.g. `swe-2-high`), and a rejected model aborts to the `devin -p` fallback instead of being swallowed. Devin panes also surface ACP turn results — quota errors and cancels now render and clear the "Thinking" indicator instead of leaving it spinning — and the status pill shows the session's real model uid.
+- The "Other machines" sidebar section no longer flashes in for a split second when the shared sidebar-tab key changes under another window or mid-correction - it now follows the tab actually rendered in the list.
+- The Other machines sidebar list shows a peer's most recently active sessions again, instead of only ones from a day or more ago.
+- Jobs on Linux now read local systemd timers and journal logs directly, avoiding a failed SSH connection back to the same machine. macOS continues to collect remote systemd jobs over SSH.
+- **Jobs tab**: a job whose log stamps each line with a timestamp (like `bym-ship`) now shows its `CCC_OUTCOME:` sentence (e.g. "Shipped PR #1884 (3 commits).") instead of only a PR chip.
+- The session list no longer paints a bare frame after each periodic rebuild: orchestration borders/lane chips and the "Other machines" section are re-applied synchronously instead of one frame late.
+- Keep the conversation’s live generating indicator steady while assistant replies and tool results arrive during an active turn.
+- Tapping Search (or any other text field) on a phone no longer zooms the page in with no way back out.
+- On phones, the selected session row's trash and actions buttons no longer cover its lanes chip, so a parent session's lanes can be collapsed again.
+- On phones, the new-session send button no longer hides under the keyboard; the folder and model rows scroll instead.
+- On phones, the ticket details view no longer slides under the status bar, so its close button and header are fully visible.
+- The sidebar session list no longer jumps for a moment when it refreshes in narrow windows.
+- Keep session titles and line wrapping stable when working or waiting status markers appear and disappear in the sidebar.
+- Clicking an image, PDF or video link in a conversation no longer stalls for seconds while the server rescans every project folder to find known repos.
+- Archive loads during server startup now participate in performance alerts using the cold-load budget, so slow startup loads are no longer silently excluded from ticketing.
+
+Model discovery now survives opening New session during startup, preventing newly available models from disappearing behind the fallback catalog.
+- The lane map no longer shows a Task subagent as "landed" while it is still thinking or narrating between tool calls.
+- WORKING NOW keeps one row per worker, led by its live ticket and aged from that claim; tickets parked on needs-input (or extra claims) show as clickable chips, and the worker's own uptime is labeled separately.
+- Long ticket titles in the Workers tab's WORKING NOW rows now wrap (up to three lines) instead of spilling past the card.
+- WatchTower planner, plan-reviewer, verifier and assessor sessions now sort into the Workers tab instead of Coding.
+
 ## [5.35.0] - 2026-09-28
 
 ### Added
@@ -3562,7 +4328,13 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.35.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.41.0...HEAD
+[5.41.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.0
+[5.40.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.40.0
+[5.39.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.39.0
+[5.38.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.38.0
+[5.37.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.37.0
+[5.36.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.36.0
 [5.35.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.35.0
 [5.34.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.34.0
 [5.33.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.33.0

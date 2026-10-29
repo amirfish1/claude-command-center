@@ -242,6 +242,7 @@
   var STATUS_LABEL = {
     blocked: 'needs input',
     in_progress: 'in progress',
+    in_review: 'awaits review',
     open: 'open',
     closed: 'closed'
   };
@@ -249,9 +250,28 @@
     return STATUS_LABEL[st] || String(st || '').replace(/_/g, ' ');
   }
 
+  // WT-5 acceptance gates: a worker's close lands a gated ticket in
+  // `in_review` until its pending stage passes. Not closed (dependents still
+  // wait), not claimable. Mirrors watchtower.queue.gate_stage_label.
+  function reviewer(it) {
+    var stage = String((it && it.gate_pending) || 'review');
+    if (stage === 'verify') return 'independent verifier';
+    return stage.indexOf('review:') === 0 ? (stage.slice(7).trim() || 'submitter') : 'submitter';
+  }
+
+  function resolutionAcked(res, field, index) {
+    var acks = res && res[field + '_ack'];
+    return !!(acks && typeof acks === 'object' && !Array.isArray(acks)
+      && Object.prototype.hasOwnProperty.call(acks, String(index)));
+  }
+
   function unresolvedNotes(it) {
-    return (it && it.resolution && Array.isArray(it.resolution.unresolved))
-      ? it.resolution.unresolved.filter(Boolean) : [];
+    var res = it && it.resolution;
+    if (!res || !Array.isArray(res.unresolved)) return [];
+    // Filter against the original indexes: blank entries must not shift acks.
+    return res.unresolved.filter(function (value, index) {
+      return value && !resolutionAcked(res, 'unresolved', index);
+    });
   }
 
   // Closed-list admission for the default "Recent closed" view: rows in the
@@ -287,7 +307,7 @@
   function operationalBucket(it) {
     var st = statusOf(it);
     if (isLiveWip(it)) return 0;
-    if (st === 'blocked') return 1;
+    if (st === 'blocked' || st === 'in_review') return 1;
     if (String(it.status) === 'closed' && unresolvedNotes(it).length) return 2;
     if (isWaitingToDrain(it)) return 3;
     if (st === 'closed') return 4;
@@ -380,7 +400,7 @@
     var by = {};
     var typesCache = {};
     function bucket(k) {
-      if (!by[k]) by[k] = { github: 0, local: 0, needsInput: 0, wip: 0, waiting: 0, parked: 0 };
+      if (!by[k]) by[k] = { github: 0, local: 0, needsInput: 0, review: 0, wip: 0, waiting: 0, parked: 0 };
       return by[k];
     }
     (state.items || []).forEach(function (it) {
@@ -390,10 +410,17 @@
       if (String(it.source || '') === 'github' || it.github_repo) b.github++; else b.local++;
       var st = statusOf(it);
       if (st === 'closed') return;
+      var sp = stagesOf(it);
+      if (sp && sp.current && sp.current !== 'closed' && !sp.queued) {
+        b.stages = b.stages || {};
+        b.stages[sp.current] = (b.stages[sp.current] || 0) + 1;
+        if (stageStuck(it, sp)) b.stageStuck = (b.stageStuck || 0) + 1;
+      }
       if (it.needs_input) {
         if (it.block_kind === 'rationale') b.gated = (b.gated || 0) + 1;
         b.needsInput++;
       }
+      else if (st === 'in_review') b.review++;
       else if (st === 'in_progress') b.wip++;
       // Waiting = open, unclaimed, and something a worker is actually allowed
       // to pick up. `claimable === false` marks GitHub issues without the
@@ -424,6 +451,7 @@
     var openWord = openBase
       ? openBase + ((f.waiting || 0) === 1 ? '' : 's')
       : 'open';
+    var stageN = f.stages || {};
     var openTip = types.length
       ? 'Open and claimable here (this queue drains ' + types.join(' + ') + ')'
       : 'Open and unclaimed';
@@ -432,10 +460,23 @@
         ? '<span class="q2-n is-gated" title="Product-gate pitch awaiting human Ack/Nack">'
           + '<b>' + f.gated + '</b> gated</span>'
         : '',
-      needsInput: f.needsInput
+      needsInput: (f.needsInput
         ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
           + '<b>' + f.needsInput + '</b> needs input</span>'
-        : '',
+        : '')
+        + (f.review
+          ? '<span class="q2-n is-review" title="Closed by a worker, waiting on its review gate (accept / reject)">'
+            + '<b>' + f.review + '</b> review</span>'
+          : ''),
+      // CCC-1236: where gated tickets are, stage by stage, in pipeline order.
+      stages: STAGE_ORDER.filter(function (k) { return stageN[k]; }).map(function (k) {
+        return '<span class="q2-n is-stage is-stage-' + k + '" title="Tickets in the ' + esc(STAGE_WORD[k]) + ' stage">'
+          + '<b>' + stageN[k] + '</b> ' + esc(STAGE_WORD[k]) + '</span>';
+      }).join('')
+        + (f.stageStuck
+          ? '<span class="q2-n is-stage-stuck" title="In one stage longer than the queue\u2019s stuck threshold"><b>'
+            + f.stageStuck + '</b> stuck</span>'
+          : ''),
       wip: f.wip
         ? '<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
           + '<b>' + f.wip + '</b> wip</span>'
@@ -1025,13 +1066,14 @@
     });
 
     var allItems = (state.items || []).filter(function (it) { return statusOf(it) !== 'closed'; });
-    var allFacts = { waiting: 0, wip: 0, needsInput: 0, gated: 0 };
+    var allFacts = { waiting: 0, wip: 0, needsInput: 0, gated: 0, review: 0 };
     allItems.forEach(function (it) {
       var st = statusOf(it);
       if (st === 'blocked') {
         if (it.block_kind === 'rationale') allFacts.gated++;
         allFacts.needsInput++;
       }
+      else if (st === 'in_review') allFacts.review++;
       else if (st === 'in_progress') allFacts.wip++;
       else allFacts.waiting++;
     });
@@ -1216,7 +1258,7 @@
         if (isFinite(t) && now - t < DONE_WINDOW_MS) doneRecent.push(it);
         return;
       }
-      if (st === 'blocked') blocked.push(it);
+      if (st === 'blocked' || st === 'in_review') blocked.push(it);
       else if (st === 'in_progress') working.push(it);
       else if (it.claimable === false || !isClaimableType(it, types)) parked.push(it);
       else waiting.push(it);
@@ -2087,6 +2129,149 @@
     return '<span class="q2-gh-label" title="GitHub label: ' + esc(l) + '">' + esc(l) + '</span>';
   }
 
+  // ── WatchTower stage pipeline (CCC-1236) ─────────────────────────────────
+  // The server attaches `stages` (ccc_server/ticket_stages.py) to any ticket
+  // with gates or a plan: only the stages that ticket really has, which one
+  // it is in, who runs it and since when, and loop counts read from
+  // WatchTower's own events. Nothing is re-derived here; this only draws it.
+  var STAGE_ORDER = ['plan', 'plan_review', 'build', 'checks', 'verify', 'review'];
+  var STAGE_WORD = {
+    plan: 'planning', plan_review: 'plan review', build: 'building',
+    checks: 'checks', verify: 'verifying', review: 'review',
+  };
+  var STATE_WORD = { done: 'done', current: 'now', failed: 'failed', skipped: 'skipped', pending: 'not yet' };
+
+  function stagesOf(it) {
+    var sp = it && it.stages;
+    return (sp && Array.isArray(sp.stages) && sp.stages.length) ? sp : null;
+  }
+
+  function stageStuckSeconds(it) {
+    var k = projectKey(it && it.project);
+    var row = (state.queues || []).filter(function (q) { return projectKey(q.queue) === k; })[0];
+    return (row && row.stage_stuck_s) || 600;
+  }
+
+  // Minutes resolution: rows repaint every poll, and a seconds counter would
+  // change the row html on every one of them.
+  function fmtStageAge(ms) {
+    var m = Math.floor(Math.max(0, ms) / 60000);
+    if (m < 1) return '<1m';
+    if (m < 60) return m + 'm';
+    if (m < 1440) return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+    return Math.floor(m / 1440) + 'd';
+  }
+
+  function stageAgeMs(sp) {
+    var t = Date.parse((sp && sp.since) || '');
+    return t ? Math.max(0, Date.now() - t) : 0;
+  }
+
+  // Stuck at stage: in the same not-closed stage longer than the queue's
+  // stuck threshold (the same no-progress window WatchTower health uses).
+  function stageStuck(it, sp) {
+    if (!sp || sp.queued || sp.current === 'closed' || statusOf(it) === 'closed') return false;
+    return stageAgeMs(sp) > stageStuckSeconds(it) * 1000;
+  }
+
+  function stageRunner(s) {
+    if (!s || !(s.engine || s.model)) return '';
+    return [s.engine, shortModel(s.model)].filter(Boolean).join(' ');
+  }
+
+  function currentStage(sp) {
+    return (sp.stages || []).filter(function (s) { return s.key === sp.current; })[0] || null;
+  }
+
+  // "Verify: codex gpt-6.1-sol · 12m". The age is dropped once closed.
+  function stageNowText(it, sp, withRunner) {
+    var cur = currentStage(sp);
+    if (!cur) return '';
+    if (sp.current === 'closed') return 'Closed';
+    var runner = withRunner ? stageRunner(cur) : '';
+    var age = sp.since ? fmtStageAge(stageAgeMs(sp)) : '';
+    return cur.label + (runner ? ': ' + runner : '') + (age ? ' · ' + age : '');
+  }
+
+  function stageStripHtml(sp, full) {
+    return '<span class="q2-stages' + (full ? ' is-full' : '') + '">'
+      + (sp.stages || []).map(function (s) {
+        var tip = s.label + ': ' + (STATE_WORD[s.state] || s.state)
+          + (stageRunner(s) ? ' (' + (s.role ? s.role.replace('_', ' ') + ', ' : '') + stageRunner(s) + ')' : '')
+          + (s.detail ? ' — ' + s.detail : '');
+        return '<span class="q2-stage is-' + esc(s.state) + '" data-stage="' + esc(s.key) + '"'
+          + ' title="' + esc(tip) + '">'
+          + '<span class="q2-stage-pip" aria-hidden="true"></span>'
+          + (full ? '<span class="q2-stage-label">' + esc(s.label) + '</span>' : '')
+          + '</span>';
+      }).join('')
+      + '</span>';
+  }
+
+  // Detail pane: the full strip, what is running now, loops, floor routing,
+  // why it is not moving, and the plan/verdict/check evidence.
+  function stagePanelHtml(item) {
+    var sp = stagesOf(item);
+    if (!sp) return '';
+    var sessions = sp.sessions || {};
+    var cur = currentStage(sp);
+    var stuck = stageStuck(item, sp);
+    var lines = [];
+    if (sp.queued) {
+      lines.push('<div class="q2-stage-now"><b>Queued</b> <span class="q2-dim">waiting for a worker; next: '
+        + esc(cur ? cur.label : '') + (stageRunner(cur) ? ' on ' + esc(stageRunner(cur)) : '') + '</span></div>');
+    } else if (cur && sp.current !== 'closed') {
+      lines.push('<div class="q2-stage-now' + (stuck ? ' is-stuck' : '') + '">'
+        + '<b>' + esc(cur.label) + '</b>'
+        + (stageRunner(cur) ? ' <span class="q2-dim">' + esc((cur.role || '').replace('_', ' ')) + '</span> '
+          + '<span class="q2-mono">' + esc(stageRunner(cur)) + '</span>' : '')
+        + (sp.since ? ' <span class="q2-dim" title="' + esc(sp.since) + '">for ' + esc(fmtStageAge(stageAgeMs(sp))) + '</span>' : '')
+        + (stuck ? ' <span class="q2-stage-stuck">stuck at this stage</span>' : '')
+        + (sessions[sp.current] ? ' ' + sessionBtn(sessions[sp.current], 'open ' + (cur.role || 'session').replace('_', ' ')) : '')
+        + '</div>');
+    }
+    if (sp.floor_routed) {
+      lines.push('<div class="q2-stage-note">Routed to <span class="q2-mono">' + esc(sp.floor_routed) + '</span> (floor)</div>');
+    }
+    (sp.loops || []).forEach(function (l) {
+      lines.push('<div class="q2-stage-note is-loop">↻ ' + esc(l.text) + '</div>');
+    });
+    (sp.waiting || []).forEach(function (w) {
+      lines.push('<div class="q2-stage-note is-waiting">' + esc(w.text) + '</div>');
+    });
+    // Per-stage sessions (planner / plan reviewer / builder / verifier).
+    var links = (sp.stages || []).filter(function (s) {
+      return sessions[s.key] && s.key !== sp.current;
+    }).map(function (s) { return sessionBtn(sessions[s.key], s.label); });
+    if (links.length) lines.push('<div class="q2-stage-links"><span class="q2-dim">transcripts</span> ' + links.join(' ') + '</div>');
+
+    var plan = (item.plan && typeof item.plan === 'object') ? item.plan : null;
+    var evidence = '';
+    if (plan && plan.text) {
+      evidence += '<details class="q2-stage-ev"' + (sp.current === 'plan_review' ? ' open' : '') + '>'
+        + '<summary>Plan' + (plan.round > 1 ? ' (round ' + esc(plan.round) + ')' : '') + '</summary>'
+        + (window.CCCTicketProse ? window.CCCTicketProse.render(plan.text) : '<pre class="q2-pre">' + esc(plan.text) + '</pre>')
+        + '</details>';
+    }
+    (plan && Array.isArray(plan.reviews) ? plan.reviews : []).forEach(function (r) {
+      evidence += '<div class="q2-stage-verdict ' + (r.accepted ? 'is-pass' : 'is-fail') + '">'
+        + '<b>Plan review round ' + esc(r.round || 1) + ': ' + (r.accepted ? 'accepted' : 'rejected') + '</b>'
+        + (r.reasons ? '<div class="q2-tl-note">' + esc(r.reasons) + '</div>' : '') + '</div>';
+    });
+    (Array.isArray(item.gate_results) ? item.gate_results : []).forEach(function (g) {
+      if (!g || !g.gate) return;
+      var isVerify = g.gate === 'verify';
+      evidence += '<div class="q2-stage-verdict ' + (g.passed ? 'is-pass' : 'is-fail') + '">'
+        + '<b>' + esc(isVerify ? 'Verify' : g.gate) + ': ' + (g.passed ? 'passed' : 'failed') + '</b>'
+        + (g.model ? ' <span class="q2-mono">' + esc([g.engine, shortModel(g.model)].filter(Boolean).join(' ')) + '</span>' : '')
+        + (g.exit_code != null && !isVerify ? ' <span class="q2-dim">exit ' + esc(g.exit_code) + (g.seconds != null ? ', ' + esc(g.seconds) + 's' : '') + '</span>' : '')
+        + (g.output_tail ? '<pre class="q2-pre q2-stage-tail">' + esc(String(g.output_tail).slice(-1200)) + '</pre>' : '')
+        + '</div>';
+    });
+    return '<section class="q2-sec q2-stage-panel"><div class="q2-sec-label">Stages</div>'
+      + stageStripHtml(sp, true) + lines.join('') + evidence + '</section>';
+  }
+
   function ticketRow(it) {
     var st = statusOf(it);
     var ref = it.ref || '';
@@ -2128,7 +2313,17 @@
     // shrinks below its content and clips instead of pushing the title or
     // the age/status signals off the row.
     var gh = ghLabels(it);
+    var sp = stagesOf(it);
+    // The stage text replaces the status word. Only the build stage belongs
+    // to the claiming worker, so a stale/unverified claim still wins there;
+    // in plan, verify or review the builder being gone is expected.
+    var claimIssue = (stale && st !== 'blocked') || unverified;
+    var stageText = (sp && !sp.queued && st !== 'closed' && !queued && !(claimIssue && sp.current === 'build'))
+      ? stageNowText(it, sp, true) : '';
+    var stuckAtStage = sp ? stageStuck(it, sp) : false;
     return '<button type="button" class="q2-trow is-' + esc(st)
+      + (stageText ? ' has-stage' : '')
+      + (stuckAtStage ? ' is-stage-stuck' : '')
       + (ref === state.ref ? ' is-selected' : '')
       + (isNewTicket(ref) ? ' q2-new-ticket' : '')
       + (stale ? ' is-stale-claim' : '')
@@ -2147,6 +2342,7 @@
       // Age then dot: the status marker sits to the RIGHT of the age, matching
       // the main dashboard's .fq-row-signals order.
       + '<span class="q2-tsignals">'
+      + (sp ? stageStripHtml(sp, false) : '')
       + '<span class="q2-tage" title="' + esc(ageSrc || '') + '">' + esc(age) + '</span>'
       + (canRun
           ? '<span class="q2-tdot-wrap' + (queued ? ' is-queued' : '') + '"'
@@ -2157,9 +2353,57 @@
             + (queued ? ICON_TINY_STOP : ICON_TINY_PLAY)
             + '</span>'
           : '<span class="q2-tdot" title="' + esc(dotHoverTitle) + '" aria-label="' + esc(dotHoverTitle) + '"></span>')
-      + '<span class="q2-tstatus">' + esc(dotTitle) + '</span>'
+      + '<span class="q2-tstatus"' + (stageText ? ' title="' + esc(stageText + (stuckAtStage ? ' (stuck at this stage)' : '')) + '"' : '') + '>'
+      + esc(stageText || dotTitle) + '</span>'
       + '</span>'
       + '</button>';
+  }
+
+  // Queue header (CCC-1236): per-stage counts plus the non-builder role
+  // models (the builder is the engine/model spec right before it). Role
+  // models come from /api/queue/roles (WatchTower's role_table, CCC-1235),
+  // fetched once a minute per queue, and only show once the queue actually
+  // runs staged tickets or has a role pinned.
+  var ROLE_TTL_MS = 60000;
+  var rolesByQueue = {};
+  var ROLE_SHORT = { planner: 'plan', plan_reviewer: 'plan review', verifier: 'verify' };
+
+  function queueRoles(queue) {
+    var k = projectKey(queue);
+    var ent = rolesByQueue[k];
+    if (!ent || (Date.now() - ent.ts > ROLE_TTL_MS && !ent.loading)) {
+      rolesByQueue[k] = ent = { ts: Date.now(), roles: ent ? ent.roles : null, loading: true };
+      getJson('/api/queue/roles?queue=' + encodeURIComponent(queue)).then(function (d) {
+        ent.roles = (d && d.available && Array.isArray(d.roles)) ? d.roles : [];
+      }).catch(function () {
+        ent.roles = ent.roles || [];
+      }).then(function () {
+        ent.loading = false;
+        ent.ts = Date.now();
+        if (projectKey(state.queue) === k) renderTickets({ force: true });
+      });
+    }
+    return ent.roles || [];
+  }
+
+  function queueStageHeaderHtml(queue) {
+    if (!queue) return '';
+    var f = queueFacts()[projectKey(queue)] || {};
+    var c = countParts(f, 0, []);
+    var roles = queueRoles(queue).filter(function (r) { return ROLE_SHORT[r.role]; });
+    var staged = !!(f.stages && Object.keys(f.stages).length);
+    var pinned = roles.some(function (r) { return r.source === 'queue'; });
+    var roleHtml = (staged || pinned) ? roles.map(function (r) {
+      var runner = [r.engine, shortModel(r.model)].filter(Boolean).join(' ');
+      return '<span class="q2-role" title="' + esc((r.label || r.role) + ': ' + (runner || 'unresolved')
+          + ' (' + (r.source || 'default') + ') - change in Queue settings') + '">'
+        + '<span class="q2-dim">' + esc(ROLE_SHORT[r.role]) + '</span> ' + esc(runner || '?') + '</span>';
+    }).join('') : '';
+    if (!c.stages && !roleHtml) return '';
+    return '<div class="q2-stage-head">'
+      + (c.stages ? '<span class="q2-stage-head-counts">' + c.stages + '</span>' : '')
+      + (roleHtml ? '<span class="q2-stage-head-roles">' + roleHtml + '</span>' : '')
+      + '</div>';
   }
 
   function renderTickets(opts) {
@@ -2290,7 +2534,8 @@
       : pickShownClosed(closed, function (it) {
           return isRecentClosed(it) || unresolvedNotes(it).length > 0;
         }, state.closedCap));
-    var html = openish.map(ticketRow).join('');
+    var html = (state.viewAll ? '' : queueStageHeaderHtml(state.queue))
+      + openish.map(ticketRow).join('');
     if (shownClosed.length) {
       // Once the recent view has been expanded past its 12h window the label
       // stops being accurate — switch to the plain "Closed" count form.
@@ -2332,19 +2577,35 @@
   // A close event carries the worker's own account of what it did. Flattening
   // that to one blob loses the distinction that matters most: what was fixed
   // versus what was explicitly NOT.
-  function resolutionHtml(resolution) {
+  function resolutionHtml(resolution, ref) {
     var res = (resolution && typeof resolution === 'object') ? resolution : {};
     var rows = [
       ['Summary', res.summary, ''],
-      ['Caveat', res.caveats || res.caveat, 'is-caveat'],
-      ['Follow-up', res.follow_ups || res.follow_up, ''],
-      ['Unresolved', res.unresolved, 'is-unresolved'],
+      ['Caveat', res.caveats || res.caveat, 'is-caveat', 'caveats'],
+      ['Follow-up', res.follow_ups || res.follow_up, '', 'follow_ups'],
+      ['Unresolved', res.unresolved, 'is-unresolved', 'unresolved'],
     ].filter(function (r) { return resList(r[1]); });
     if (!rows.length) return '';
     return '<div class="q2-res">' + rows.map(function (r) {
+      var content = resList(r[1]);
+      if (r[3] && Array.isArray(res[r[3]])) {
+        content = res[r[3]].map(function (value, index) {
+          if (!value) return '';
+          var acked = resolutionAcked(res, r[3], index);
+          var label = acked ? 'Undo acknowledgment' : 'Acknowledge';
+          return '<div class="q2-res-entry' + (acked ? ' is-acked' : '') + '">'
+            + '<span class="q2-res-text">' + esc(String(value)) + '</span>'
+            + (ref ? '<button type="button" class="q2-linkbtn q2-res-ack"'
+              + ' data-q2-ack="' + esc(ref) + '" data-q2-ack-field="' + r[3] + '"'
+              + ' data-q2-ack-index="' + index + '" data-q2-ack-undo="' + (acked ? '1' : '0') + '"'
+              + ' aria-label="' + label + ' ' + r[0].toLowerCase() + ' ' + (index + 1) + '"'
+              + ' title="' + label + ' (keeps the original note)">'
+              + (acked ? '↺ Acked' : '✓ Acknowledge') + '</button>' : '') + '</div>';
+        }).join('');
+      }
       return '<div class="q2-res-row ' + r[2] + '">'
         + '<span class="q2-res-k">' + esc(r[0]) + '</span>'
-        + '<div class="q2-res-v">' + resList(r[1]) + '</div></div>';
+        + '<div class="q2-res-v">' + content + '</div></div>';
     }).join('') + '</div>';
   }
 
@@ -2382,6 +2643,8 @@
   function timelineHtml(item) {
     var tl = Array.isArray(item.timeline) ? item.timeline : [];
     if (!tl.length) return '<div class="q2-empty">No activity yet.</div>';
+    var lastClose = -1;
+    tl.forEach(function (ev, index) { if (ev.event === 'close') lastClose = index; });
 
     function head(label, ev) {
       var by = (ev && ev.by && typeof ev.by === 'object') ? ev.by : {};
@@ -2403,7 +2666,7 @@
       return '<div class="' + (cls || 'q2-tl-note') + '">' + body + '</div>';
     }
 
-    var rows = tl.map(function (ev) {
+    var rows = tl.map(function (ev, index) {
       var type = String((ev && ev.event) || '');
       if (type === 'filed') {
         return evt('filed', head('Filed', ev)
@@ -2417,12 +2680,30 @@
       if (type === 'answer')   return evt('answer', head('Answered', ev), text(ev.text, 'q2-tl-note is-answer'));
       if (type === 'comment')  return evt('comment', head('Comment', ev), text(ev.text));
       if (type === 'reopen')   return evt('reopen', head('Reopened', ev), text(ev.reason));
-      if (type === 'close')    return evt('close', head('Closed', ev), resolutionHtml(ev.resolution));
+      if (type === 'close') {
+        // Only the latest close uses live ack state. Previous close events
+        // remain historical snapshots, including after a reopen/reclose.
+        var live = item.status === 'closed' && index === lastClose && item.resolution;
+        return evt('close', head('Closed', ev), resolutionHtml(
+          live || ev.resolution, live ? item.ref : ''));
+      }
       if (type === 'move') {
         var mv = [ev.from_ref, ev.to_ref].filter(Boolean).join(' → ');
         return evt('move', head('Moved', ev), text(mv));
       }
       if (type === 'edit')     return evt('edit', head('Edited', ev), editFieldsHtml(ev.fields));
+      // WatchTower stage events (WT-5/6/11): plan, plan review, gates.
+      if (type === 'plan_start')  return evt('stage', head('Planning started', ev), '');
+      if (type === 'plan')        return evt('stage', head('Plan filed' + (ev.round > 1 ? ' (round ' + ev.round + ')' : ''), ev), text(ev.text));
+      if (type === 'plan_review') return evt(ev.passed ? 'stage-pass' : 'stage-fail',
+        head('Plan ' + (ev.passed ? 'accepted' : 'rejected') + (ev.round ? ' (round ' + ev.round + ')' : ''), ev), text(ev.text));
+      if (type === 'plan_failed') return evt('stage-fail', head('Plan stage skipped', ev), text(ev.text));
+      if (type === 'in_review')   return evt('stage', head(ev.reviewer === 'verify'
+        ? 'Checks passed · verifying' : 'Awaiting review' + (ev.reviewer && ev.reviewer !== 'review' ? ' by ' + String(ev.reviewer).replace(/^review:/, '') : ''), ev), '');
+      if (type === 'verify')      return evt(ev.passed ? 'stage-pass' : 'stage-fail', head('Verify ' + (ev.passed ? 'passed' : 'failed'), ev), text(ev.findings));
+      if (type === 'accept')      return evt('stage-pass', head('Accepted', ev), '');
+      if (type === 'gate_ack')    return evt('stage-pass', head('Acked', ev), text(ev.text));
+      if (type === 'gate_nack')   return evt('stage-fail', head('Nacked', ev), text(ev.text));
       return evt('comment', head(type || 'Event', ev), text(ev.text));
     }).join('');
 
@@ -2434,7 +2715,9 @@
       // it. Say so plainly for the unclaimed case, since "Open" alone reads
       // like an action someone just took.
       var verb = st === 'in_progress' ? 'In progress'
-        : st === 'blocked' ? 'Needs your input' : 'Open · unclaimed';
+        : st === 'blocked' ? 'Needs your input'
+        : st === 'in_review' ? 'Closed by worker · awaits review by ' + reviewer(item)
+        : 'Open · unclaimed';
       rows += evt('now', '<span class="q2-tl-verb" title="Current status, not a new event">' + esc(verb) + '</span>'
         + (item.claimed_by ? '<span class="q2-tl-who">' + esc(withMachine(item.claimed_by, item.claimed_machine).slice(0, 30)) + '</span>' : ''), '');
     }
@@ -2611,6 +2894,7 @@
       close_completed:    ['Resolution summary (optional)', 'Mark as completed', 'close_completed'],
       close_not_relevant: ['Reason (optional)', 'Mark as not relevant', 'close_not_relevant'],
       reopen:              ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
+      review_reject:       ['What must change before this can be accepted?', 'Reject', 'review_reject'],
     };
     function armedForm(key) {
       var spec = FORMS[key];
@@ -2631,7 +2915,22 @@
     // single generic "Close" button couldn't tell the difference later when
     // triaging a queue's history. Run now stays a one-click action — it
     // doesn't need a comment, it needs to happen now.
-    var resolveActionsHtml = closed ? '' :
+    var inReview = st === 'in_review';
+    var reviewActionsHtml = !inReview ? '' :
+      '<section class="q2-sec q2-resolve-actions q2-review-actions">'
+      + '<div class="q2-resolve-row">'
+      + '<span class="q2-dim">Closed by its worker; waiting on review by ' + esc(reviewer(item))
+      + (item.accept ? '. Accept when: ' + esc(item.accept) : '') + '</span>'
+      + '</div>'
+      + '<div class="q2-resolve-row">'
+      + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="review_accept"'
+      + ' title="Close it and unblock its dependents">Accept</button>'
+      + '<button type="button" class="q2-btn' + (state.arm === 'review_reject' ? ' is-armed' : '') + '"'
+      + ' data-q2-arm="review_reject" title="Back to open with your reason; its worker resumes">Reject</button>'
+      + '</div>'
+      + armedForm('review_reject')
+      + '</section>';
+    var resolveActionsHtml = inReview ? reviewActionsHtml : closed ? '' :
       '<section class="q2-sec q2-resolve-actions">'
       + '<div class="q2-resolve-row">'
       + '<button type="button" class="q2-btn' + (state.arm === 'close_completed' ? ' is-armed' : '') + '"'
@@ -2693,6 +2992,7 @@
             + '</h1>')
       + toolbar
       + reopenFormHtml
+      + stagePanelHtml(item)
       + (showPrompt
           ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
             + (window.CCCTicketProse
@@ -2924,6 +3224,35 @@
     }
   }
 
+  async function acknowledgeResolution(btn) {
+    if (btn.disabled) return;
+    var ref = btn.getAttribute('data-q2-ack');
+    var undo = btn.getAttribute('data-q2-ack-undo') === '1';
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = undo ? 'Undoing…' : 'Acknowledging…';
+    try {
+      var data = await postJson('/api/ux-fixes/ack', {
+        ref: ref,
+        field: btn.getAttribute('data-q2-ack-field'),
+        index: Number(btn.getAttribute('data-q2-ack-index')),
+        undo: undo,
+      });
+      if (data.item) {
+        state.items = state.items.map(function (it) { return it.ref === ref ? data.item : it; });
+        if (state.ref === ref) state.detail = data.item;
+        renderAll();
+      }
+      note(undo ? 'Acknowledgment undone' : 'Acknowledged — original note kept');
+      await refresh();
+    } catch (err) {
+      note('Could not acknowledge note: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
   async function detailAction(act, btn) {
     var ref = state.ref;
     if (!ref) return;
@@ -3016,6 +3345,8 @@
         note: 'Not relevant' + (detailInput('close_not_relevant') ? ': ' + detailInput('close_not_relevant') : '') },
         false, 'Closed as not relevant', 'Closing…'],
       reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened', 'Reopening…'],
+      review_accept: ['/api/ux-fixes/accept', { ref: ref }, false, 'Accepted', 'Accepting…'],
+      review_reject: ['/api/ux-fixes/reject', { ref: ref, reason: detailInput('review_reject') }, true, 'Rejected', 'Rejecting…'],
     }[act];
     if (!plan) return;
     // Answer and comment carry the user's words; sending an empty one would
@@ -3375,12 +3706,13 @@
       + field('Effort', '<select class="q2-input" data-q2-cfg="effort">'
           + effortOptions(engine, c.effort || '')
           + '</select>', 'Reasoning budget for workers this queue spawns')
-      + field('Revert to CCC default worker if current model is exhausted',
+      + field('Use configured fallback providers when quota is exhausted',
           '<select class="q2-input" data-q2-cfg="fallback_to_default_worker">'
-          + opt('false', 'off', String(!!c.fallback_to_default_worker))
-          + opt('true', 'on', String(!!c.fallback_to_default_worker))
+          + opt('', 'Use machine default', c.fallback_to_default_worker == null ? '' : String(c.fallback_to_default_worker))
+          + opt('false', 'Off', c.fallback_to_default_worker == null ? '' : String(c.fallback_to_default_worker))
+          + opt('true', 'On', c.fallback_to_default_worker == null ? '' : String(c.fallback_to_default_worker))
           + '</select>',
-          'On: a launch that fails on the configured engine/model retries on the CCC default worker for that launch only (stored engine/model unchanged). Off: the queue parks with a visible reason instead of switching engines')
+          'On/Off overrides Settings → Engines fallback. Use machine default inherits it. Stored model pins stay unchanged; explicit queue effort wins.')
       + field('Desired workers', '<input class="q2-input" type="number" min="0" max="16"'
           + ' data-q2-cfg="desired_workers" value="' + esc(String(c.desired_workers != null ? c.desired_workers : 1)) + '">')
       + field('Auto-drain', '<select class="q2-input" data-q2-cfg="auto_drain">'
@@ -3438,7 +3770,7 @@
     });
     payload.auto_drain = payload.auto_drain === 'true';
     payload.product_gate = payload.product_gate === 'true';
-    payload.fallback_to_default_worker = payload.fallback_to_default_worker === 'true';
+    payload.fallback_to_default_worker = payload.fallback_to_default_worker === '' ? null : payload.fallback_to_default_worker === 'true';
     payload.desired_workers = parseInt(payload.desired_workers, 10) || 0;
     payload.claim_types = [].slice.call(modal.querySelectorAll('[data-q2-claim]'))
       .filter(function (el) { return el.checked; })
@@ -3638,6 +3970,8 @@
   }
 
   document.addEventListener('click', function (e) {
+    var ack = e.target.closest('[data-q2-ack]');
+    if (ack) { e.stopPropagation(); acknowledgeResolution(ack); return; }
     var back = e.target.closest('[data-q2-mobile-back]');
     if (back) {
       showMobileColumn(back.getAttribute('data-q2-mobile-back'));

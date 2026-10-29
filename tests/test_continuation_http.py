@@ -98,10 +98,10 @@ def test_spawn_continue_from_success(httpd, monkeypatch):
     seen = {}
 
     def fake_spawn(continue_from, prompt="", model=None, effort=None, report_to=None,
-                   dry_run=False, rebind_chain=True):
+                   dry_run=False, rebind_chain=True, name=None, task_key="", dedupe=False):
         seen.update(continue_from=continue_from, prompt=prompt, model=model,
                     effort=effort, report_to=report_to, dry_run=dry_run,
-                    rebind_chain=rebind_chain)
+                    rebind_chain=rebind_chain, name=name, task_key=task_key, dedupe=dedupe)
         return {"ok": True, "dry_run": False, "continue_from": continue_from,
                 "latest_session_id": continue_from, "new_session_id": "new-sid",
                 "engine": "claude", "rebound": []}
@@ -109,6 +109,7 @@ def test_spawn_continue_from_success(httpd, monkeypatch):
     monkeypatch.setattr(continuation, "spawn_continuation", fake_spawn)
     status, body = _request(httpd, "/api/sessions/spawn-continue-from", {
         "continue_from": "old-sid", "prompt": "keep going", "model": "opus-5",
+        "name": "worker", "task_key": "example-task", "dedupe": True,
     })
     assert status == 200
     assert body["ok"] is True
@@ -116,6 +117,9 @@ def test_spawn_continue_from_success(httpd, monkeypatch):
     assert seen["continue_from"] == "old-sid"
     assert seen["prompt"] == "keep going"
     assert seen["model"] == "opus-5"
+    assert seen["name"] == "worker"
+    assert seen["task_key"] == "example-task"
+    assert seen["dedupe"] is True
     assert seen["dry_run"] is False
 
 
@@ -182,3 +186,41 @@ def test_inject_input_lineage_forward_actually_redirects_delivery(monkeypatch):
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+def test_ephemeral_forward_retry_returns_pane_successor(httpd, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(server, '_resolve_bridge_session_alias', lambda sid: sid)
+    monkeypatch.setattr(continuation, 'forward_target', lambda sid: 'new-codex')
+    monkeypatch.setattr(server, '_codex_capture_thread_row', lambda sid: {'_ccc_capture': 'capture.log'})
+    monkeypatch.setattr(server, '_handoff_lease_guard', lambda sid: None)
+    monkeypatch.setattr(server, '_record_interaction', lambda sid: None)
+    def inject(sid, text, **kwargs):
+        seen.update(sid=sid, **kwargs)
+        return {'ok': True, 'via': 'duplicate-suppressed', 'deduped': True}
+    monkeypatch.setattr(server, '_inject_text_into_session', inject)
+    code, result = _request(httpd, '/api/inject-input', {
+        'session_id': 'old-codex', 'text': 'first task', 'idempotency_key': 'send-1',
+    })
+    assert code == 200
+    assert result['via'] == 'codex-continuation'
+    assert result['new_session_id'] == 'new-codex'
+    assert result['continue_from'] == 'old-codex'
+    assert result['deduped']
+    assert seen['_dedupe_session_id'] == 'old-codex'
+
+
+def test_continuation_envelope_keeps_author_and_actual_recipient(httpd,monkeypatch):
+    import sender_envelope as attribution
+    monkeypatch.setenv('CCC_ATTRIBUTION_EMIT','1')
+    a=attribution.service('wt:notify','original')
+    attribution.journal(a,app='wt')
+    seen=[]
+    monkeypatch.setattr(continuation,'spawn_continuation',lambda sid,**kw: seen.append(kw) or {'ok':True,'new_session_id':'successor'})
+    status,result=_request(httpd,'/api/sessions/spawn-continue-from',{'continue_from':'original','prompt':'notice','attr':a})
+    assert status==200 and result['ok']
+    assert attribution.from_text(seen[0]['prompt'])['message_id']==a['message_id']
+    stored=attribution.lookup(message_id=a['message_id'],recipient='successor')
+    assert stored['author']==a['author']
+    assert stored['intended_recipient']['id']=='original'
+    assert stored['delivered_recipient']['id']=='successor'
