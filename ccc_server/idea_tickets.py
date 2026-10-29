@@ -217,7 +217,8 @@ def idea_ticket_rows_map():
         h = ticket.get("handoff")
         if isinstance(h, dict) and h.get("state"):
             out[sid]["handoff"] = {k: h.get(k) for k in
-                                   ("state", "auto", "at", "question", "nudges", "session")}
+                                   ("state", "auto", "at", "question", "nudges", "session",
+                                    "waiting_on")}
     # UI spawns still waiting for their first reply: no ticket yet, but the
     # row belongs in Ideas now rather than in Other.
     for sid in (data.get("pending") or {}):
@@ -943,7 +944,7 @@ HANDOFF_WATCH_EVERY_S = 60
 HANDOFF_STALL_S = 20 * 60
 HANDOFF_MAX_NUDGES = 3
 HANDOFF_QUEUE = "SMALL-BUGS"
-_ACTIVE_HANDOFF = ("running", "blocked")
+_ACTIVE_HANDOFF = ("running", "blocked", "waiting")
 
 _NONE_STEP_RE = re.compile(
     r"^(?:none|nothing|no action(?: is)?(?: needed| required)?|n/?a|not applicable)?"
@@ -1341,11 +1342,20 @@ def _watch_one(ref, h, info, *, now=None):
         return
     if item.get("needs_input") or item.get("status") == "awaiting_answer":
         question = str(item.get("block_question") or "").strip()
-        if h.get("state") != "blocked" or h.get("question") != question:
-            _set_handoff(ref, state="blocked", question=question)
+        # A block that waits on another ticket, a worker or an outside party
+        # is not the owner's to answer: show it as waiting, no Answer chip,
+        # and don't nudge (the session parked on purpose).
+        wait = item.get("wait") if isinstance(item.get("wait"), dict) else {}
+        on = str(wait.get("on") or "owner")
+        state = "blocked" if on == "owner" else "waiting"
+        waiting_on = "" if on == "owner" else str(
+            wait.get("ref") or wait.get("actor") or on)
+        if (h.get("state"), h.get("question"), h.get("waiting_on") or "") != (
+                state, question, waiting_on):
+            _set_handoff(ref, state=state, question=question, waiting_on=waiting_on)
             _restamp_rows()
         return
-    if h.get("state") == "blocked":
+    if h.get("state") in ("blocked", "waiting"):
         # Answered outside CCC (wt answer, the WT dashboard): back to running.
         _set_handoff(ref, state="running", question="", at=int(now), nudges=0)
         return

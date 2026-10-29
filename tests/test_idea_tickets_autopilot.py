@@ -194,6 +194,19 @@ class AutopilotTest(unittest.TestCase):
         self.assertEqual((h["state"], h["question"]), ("blocked", "Ship to prod now?"))
         self.assertEqual(it.idea_ticket_rows_map()["a1"]["handoff"]["question"], "Ship to prod now?")
 
+    def test_watchdog_dependency_wait_is_not_a_question(self):
+        h = self._handed_off()
+        self.find["IDEAS-1"] = {"status": "awaiting_answer", "needs_input": True,
+                                "block_question": "Waiting on the build worker.",
+                                "wait": {"on": "dependency", "ref": "EXAMPLE-11"}}
+        it._watch_one("IDEAS-1", h, {"seen": True, "busy": False, "mtime": NOW - 3600}, now=NOW)
+        h = self._ticket()["handoff"]
+        self.assertEqual((h["state"], h["waiting_on"]), ("waiting", "EXAMPLE-11"))
+        self.assertEqual(self.injects, [])  # parked on purpose: no nudge
+        self.find["IDEAS-1"] = {"status": "in_progress"}
+        it._watch_one("IDEAS-1", h, {"seen": True, "busy": True}, now=NOW)
+        self.assertEqual(self._ticket()["handoff"]["state"], "running")
+
     def test_watchdog_nudges_then_blocks_a_stalled_session(self):
         info = {"seen": True, "busy": False, "mtime": NOW - 3600, "session_state": {}}
         h = self._handed_off()

@@ -157,6 +157,8 @@ test('a running handoff leaves the main list for the Handed off section', () => 
   rows[0].idea_ticket.handoff.state = 'blocked';  // a question puts it back on top
   assert.deepEqual(representatives(rows, 'ideas', 'active'), ['h', 'n']);
   assert.deepEqual(representatives(rows, 'ideas', 'handoff'), []);
+  rows[0].idea_ticket.handoff.state = 'waiting';  // parked on a dependency: stays handed off
+  assert.deepEqual(representatives(rows, 'ideas', 'handoff'), ['h']);
 });
 
 test('sessionAttentionStep labels handoffs and owner-held tails', () => {
@@ -171,6 +173,8 @@ test('sessionAttentionStep labels handoffs and owner-held tails', () => {
   assert.equal(blocked.label, 'Needs you');
   assert.equal(blocked.text, 'Ship?');
   assert.equal(ctx.step({ idea_ticket: { handoff: { state: 'running' } }, session_state: { did: 'X' } }).kind, 'handoff');
+  const waiting = ctx.step({ idea_ticket: { handoff: { state: 'waiting', waiting_on: 'EXAMPLE-11', question: 'build receipts' } } });
+  assert.deepEqual([waiting.label, waiting.handoff, waiting.text], ['Waiting', 'running', 'Waiting on EXAMPLE-11: build receipts']);
   const mine = ctx.step({ session_state: { next_step_user: 'None.', completion: comp({
     remaining_actions: [{ text: 'User: approve the client email' }] }) } });
   assert.equal(mine.text, 'approve the client email');

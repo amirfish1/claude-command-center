@@ -3773,7 +3773,7 @@
   }
   function rowHandoff(c) {
     const h = c && c.idea_ticket && !c.idea_ticket.closed && c.idea_ticket.handoff;
-    return h && (h.state === 'running' || h.state === 'blocked') ? h : null;
+    return h && (h.state === 'running' || h.state === 'blocked' || h.state === 'waiting') ? h : null;
   }
   function sessionAttentionStep(c) {
     const h = rowHandoff(c);
@@ -3782,6 +3782,12 @@
         text: String(h.question || 'The handed-off session is waiting on you.') };
     }
     const ss = (c && c.session_state) || {};
+    if (h && h.state === 'waiting') {
+      // Parked on another ticket, a worker or a client: not the owner's turn.
+      return { label: 'Waiting', kind: 'handoff', handoff: 'running',
+        text: 'Waiting on ' + String(h.waiting_on || 'a dependency')
+          + (h.question ? ': ' + String(h.question) : '') };
+    }
     if (h) {
       return { label: 'Handed off', kind: 'handoff', handoff: 'running',
         text: String(ss.did || 'CCC is driving this to a close.') };
@@ -43253,7 +43259,7 @@
         if (!ref) return;
         if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
         const _handedOff = !c.archived && !c.trashed && !c.idea_ticket.closed
-          && (c.idea_ticket.handoff || {}).state === 'running';
+          && ['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state);
         if (bucket === 'handoff' && !_handedOff) return;
         if (bucket === 'archived' && (c.trashed || activeRefs.has(ref)
           || (!c.archived && !c.idea_ticket.closed))) return;
@@ -43279,7 +43285,7 @@
       // A handed-off ticket leaves the main list for its own collapsed
       // section until it closes (then Archived) or blocks (back on top).
       return bucket === 'active'
-        ? rowsOut.filter(c => (c.idea_ticket.handoff || {}).state !== 'running') : rowsOut;
+        ? rowsOut.filter(c => !['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state)) : rowsOut;
     };
     const _allTabIdeaConvs = _ideaTicketsOn ? _ideaTicketRows('ideas') : [];
     const _allTabSmallBugConvs = _ideaTicketsOn ? _ideaTicketRows('smallbugs') : [];
@@ -84797,10 +84803,15 @@
     });
   })();
 
-  // ── In-app bug reporting ────────────────────────────────────────
-  // Topbar link → modal → POST /api/bug-report → server shells out
-  // to `gh issue create`. On gh failure the handler returns the
-  // rendered markdown so we can offer a copy-to-clipboard fallback.
+  // ── In-app problem reporting ────────────────────────────────────
+  // Topbar link or the rail's floating flag → modal. The default
+  // destination is private support (POST /api/bug-report/private, which
+  // answers with a report ID). The secondary one, a public GitHub issue,
+  // posts to /api/bug-report, which shells out to `gh issue create`; on
+  // gh failure the handler returns the rendered markdown so we can offer
+  // a copy-to-clipboard fallback. Diagnostics from
+  // /api/telemetry/health-report ride inside the visible report text, so
+  // the preview stays exactly what is sent.
   const $bugLink = document.getElementById('bugReportLink');
   const $bugModal = document.getElementById('bugReportModal');
   const $bugBackdrop = document.getElementById('bugReportBackdrop');
@@ -84825,6 +84836,15 @@
   const $bugAutoOptOut = document.getElementById('bugAutoOptOut');
   const $bugShotSection = document.getElementById('bugReportScreenshotSection');
   const $bugShotEmailNote = document.getElementById('bugShotEmailNote');
+  const $bugDiagInclude = document.getElementById('bugDiagInclude');
+  const $bugDiagStatus = document.getElementById('bugDiagStatus');
+  const BUG_DIAG_HOURS = 168;
+  const BUG_DIAG_NOTE = 'Timings, counts, and versions only. No prompts, paths, session names, or ticket text.';
+  const BUG_PRIVATE_MAX_CHARS = 48000;
+  // Per open of the modal: one fetch per destination. Private reports get
+  // exact counts; a public issue gets the bucketed ("21-50") ones.
+  let bugDiag = { private: null, github: null };
+  let bugReportFrom = '';
   let bugCachedVersion = null;
   let bugFallbackMarkdown = '';
   let bugShotB64 = '';  // raw base64 PNG (no data: prefix), '' when no screenshot
@@ -84832,6 +84852,7 @@
   let bugDiagnosticRequestId = '';
   const bugDiagnosticSections = [
     'bugReportDestinationSection', 'bugReportIdentitySection',
+    'bugReportDiagSection',
     'bugReportScreenshotSection', 'bugReportContextSection',
     'bugReportPreviewSection', 'bugShotEmailNote',
   ].map((id) => document.getElementById(id));
@@ -84852,10 +84873,10 @@
     const title = document.getElementById('bugReportTitle');
     const intro = document.getElementById('bugReportIntro');
     const privacy = document.getElementById('bugReportPrivacyCopy');
-    if (title) title.textContent = diagnostic ? 'Report diagnostics' : 'Report a bug';
+    if (title) title.textContent = diagnostic ? 'Report diagnostics' : 'Report a problem';
     if (intro) intro.innerHTML = diagnostic
       ? 'Review the complete report below, edit it if needed, then send it directly to private support.'
-      : 'Tell us what broke privately by email (recommended) or as a public GitHub issue against <strong>amirfish1/claude-command-center</strong>.';
+      : 'Tell the maintainer what went wrong. Private reports get a report ID you can quote later.';
     if (privacy) privacy.textContent = diagnostic
       ? 'Only the text visible in Details will be sent. Prompts, ticket text, files, paths, and raw logs are never included.'
       : 'Only the data shown in the preview below is sent. No code, no file contents, no personal data is included.';
@@ -84889,7 +84910,66 @@
 
   function bugDestination() {
     const r = document.querySelector('input[name="bugDest"]:checked');
-    return (r && r.value) === 'github' ? 'github' : 'email';
+    return (r && r.value) === 'github' ? 'github' : 'private';
+  }
+
+  function bugDiagSetStatus(text, isError) {
+    if (!$bugDiagStatus) return;
+    $bugDiagStatus.textContent = text;
+    $bugDiagStatus.style.color = isError ? 'var(--danger, #f85149)' : '';
+  }
+
+  // Fetches the health report for the current destination once per modal
+  // open. Returns the cache entry {state: 'loading'|'ok'|'error', ...}.
+  function bugLoadDiagnostics() {
+    const dest = bugDestination();
+    const entry = bugDiag[dest];
+    if (entry) return entry.promise;
+    const fresh = { state: 'loading', text: '', error: '' };
+    bugDiag[dest] = fresh;
+    if ($bugDiagInclude && $bugDiagInclude.checked) bugDiagSetStatus('Collecting diagnostics…');
+    const url = '/api/telemetry/health-report?hours=' + BUG_DIAG_HOURS +
+      (dest === 'private' ? '&exact=1' : '');
+    fresh.promise = fetch(url, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then((data) => {
+        fresh.state = 'ok';
+        fresh.text = JSON.stringify(data, null, 1);
+      })
+      .catch((e) => {
+        fresh.state = 'error';
+        fresh.error = (e && e.message) || 'unknown error';
+      })
+      .then(() => {
+        if (bugDiag[dest] !== fresh) return;  // modal reopened meanwhile
+        if (bugDestination() === dest) {
+          if (fresh.state === 'ok') bugDiagSetStatus(BUG_DIAG_NOTE);
+          else bugDiagSetStatus('Could not collect diagnostics: ' + fresh.error, true);
+        }
+        bugRenderPreview();
+      });
+    return fresh.promise;
+  }
+
+  // The diagnostics appendix, or '' when unchecked or unavailable. Always
+  // part of the visible preview, never added behind the user's back.
+  function bugDiagnosticsMarkdown() {
+    if (!$bugDiagInclude || !$bugDiagInclude.checked) return '';
+    const entry = bugDiag[bugDestination()];
+    const lines = ['## Diagnostics (last 7 days)', ''];
+    if (bugReportFrom) lines.push('Reported from: `' + bugReportFrom + '`', '');
+    if (!entry || entry.state === 'loading') lines.push('(collecting…)');
+    else if (entry.state === 'error') lines.push('(unavailable: ' + entry.error + ')');
+    else lines.push('```json', entry.text, '```');
+    return lines.join('\n');
+  }
+
+  // The Details text plus the diagnostics appendix: the description body a
+  // GitHub issue gets, and the Description section of a private report.
+  function bugFullDescription() {
+    const desc = $bugDescInput ? $bugDescInput.value.trim() : '';
+    const diag = bugDiagnosticsMarkdown();
+    return diag ? desc + '\n\n' + diag : desc;
   }
 
   // Renders the exact outbound report body. Mirrors server.py's
@@ -84899,7 +84979,7 @@
   // screenshot attached for the GitHub destination is uploaded only at
   // submit time, so the preview shows a placeholder image line.
   function bugBuildReportMarkdown() {
-    const desc = $bugDescInput ? $bugDescInput.value.trim() : '';
+    const desc = bugFullDescription();
     const name = $bugName ? $bugName.value.trim() : '';
     const contact = $bugContact ? $bugContact.value.trim() : '';
     const version = bugCachedVersion || '';
@@ -84928,11 +85008,16 @@
 
   // Destination toggle: screenshots can only ride along with a GitHub
   // issue (they're pushed to a public branch at submit time), so the
-  // screenshot section swaps out for an explanatory note on email.
+  // screenshot section swaps out for an explanatory note on private.
   function bugApplyDestinationUI() {
+    if (bugDiagnosticMode) return;
     const isGithub = bugDestination() === 'github';
     if ($bugShotSection) $bugShotSection.style.display = isGithub ? '' : 'none';
     if ($bugShotEmailNote) $bugShotEmailNote.style.display = isGithub ? 'none' : '';
+    const entry = bugDiag[bugDestination()];
+    if (entry && entry.state === 'ok') bugDiagSetStatus(BUG_DIAG_NOTE);
+    else if (entry && entry.state === 'error') bugDiagSetStatus('Could not collect diagnostics: ' + entry.error, true);
+    if ($bugDiagInclude && $bugDiagInclude.checked) bugLoadDiagnostics();
     bugRenderPreview();
   }
 
@@ -85030,6 +85115,10 @@
     bugResetState();
     bugDiagnosticRequestId = '';
     bugApplyMode(false);
+    bugDiag = { private: null, github: null };
+    bugReportFrom = typeof opts.from === 'string' ? opts.from.slice(0, 64) : '';
+    if ($bugDiagInclude) $bugDiagInclude.checked = true;
+    bugDiagSetStatus(BUG_DIAG_NOTE);
     if ($bugAutoBanner) $bugAutoBanner.style.display = auto ? '' : 'none';
     if ($bugAutoOptOut) $bugAutoOptOut.checked = false;
     if ($bugDescInput) {
@@ -85093,7 +85182,23 @@
     bugOpenDiagnosticReport(queue);
   }
 
-  if ($bugLink) $bugLink.addEventListener('click', bugOpenModal);
+  // ?report_problem=<view> arrives from the rail's flag on pages that do
+  // not carry this modal; the param names the page it was clicked on.
+  function bugOpenProblemFromLocation() {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('report_problem')) return;
+    const from = url.searchParams.get('report_problem') || '';
+    url.searchParams.delete('report_problem');
+    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    bugOpenModal({ from: from });
+  }
+  window.cccOpenReport = function (from) {
+    if ($bugModal && $bugModal.classList.contains('open')) return true;
+    bugOpenModal({ from: String(from || '') });
+    return true;
+  };
+
+  if ($bugLink) $bugLink.addEventListener('click', () => bugOpenModal());
   if ($bugBackdrop) $bugBackdrop.addEventListener('click', bugCloseModal);
   if ($bugCancelBtn) $bugCancelBtn.addEventListener('click', bugCloseModal);
   document.addEventListener('keydown', (e) => {
@@ -85110,43 +85215,16 @@
   document.querySelectorAll('input[name="bugDest"]').forEach((r) => {
     r.addEventListener('change', bugApplyDestinationUI);
   });
+  if ($bugDiagInclude) $bugDiagInclude.addEventListener('change', () => {
+    if ($bugDiagInclude.checked) bugLoadDiagnostics();
+    bugRenderPreview();
+  });
   if ($bugAutoOptOut) $bugAutoOptOut.addEventListener('change', () => {
     try {
       if ($bugAutoOptOut.checked) localStorage.setItem(BUG_AUTO_OPTOUT_KEY, '1');
       else localStorage.removeItem(BUG_AUTO_OPTOUT_KEY);
     } catch (_) {}
   });
-
-  // Email destination: open a pre-filled mailto draft addressed to the
-  // maintainer (address is already public in LICENSE / SECURITY.md).
-  // Nothing is sent automatically — the user reviews the draft and presses
-  // send. The full report body is also copied to the clipboard in case the
-  // mail client drops or truncates the mailto body.
-  function bugSubmitEmail(desc) {
-    const md = bugBuildReportMarkdown();
-    let subject = 'CCC bug report';
-    for (const line of desc.split('\n')) {
-      const t = line.trim();
-        if (t) { subject = 'CCC bug report: ' + (t.length > 80 ? t.slice(0, 80).trimEnd() + '…' : t); break; }
-    }
-    // Some mail clients choke on very long mailto URLs — keep the encoded
-    // body under ~1800 chars and say so in the body when we had to cut.
-    let body = md;
-    if (encodeURIComponent(body).length > 1800) {
-      const note = '\n\n[…truncated; the full report text was copied to your clipboard]';
-      while (body.length > 0 && encodeURIComponent(body + note).length > 1800) {
-        body = body.slice(0, Math.floor(body.length * 0.8));
-      }
-      body = body.trimEnd() + note;
-    }
-    try { navigator.clipboard.writeText(md); } catch (_) {}
-    window.location.href = 'mailto:amir.fish@gmail.com?subject=' +
-      encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-    try {
-      showOpToast('Draft opened in your mail app. Review and press send. (The report text was also copied to your clipboard.)', 'success');
-    } catch (_) {}
-    bugCloseModal();
-  }
 
   async function bugSubmitPrivateDiagnostic(desc) {
     if ($bugSubmitBtn) {
@@ -85177,7 +85255,8 @@
     }
     if (data && data.ok && data.report_id) {
       if ($bugSuccess) {
-        $bugSuccess.textContent = 'Sent privately as ' + String(data.report_id);
+        $bugSuccess.textContent = 'Sent privately as ' + String(data.report_id) +
+          (bugDiagnosticMode ? '' : '. Quote this ID if you follow up.');
         $bugSuccess.classList.add('visible');
       }
       if ($bugSubmitBtn) $bugSubmitBtn.textContent = 'Sent';
@@ -85185,11 +85264,16 @@
       return;
     }
     if ($bugError) {
-      $bugError.textContent = 'Could not send diagnostics: ' +
-        ((data && data.error) || 'private support is unavailable');
+      $bugError.textContent = 'Could not send privately: ' +
+        ((data && data.error) || 'private support is unavailable') +
+        (bugDiagnosticMode ? '' : '. You can copy the report and send it another way.');
       $bugError.classList.add('visible');
     }
-    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = false; $bugSubmitBtn.textContent = 'Send privately'; }
+    if (!bugDiagnosticMode) {
+      bugFallbackMarkdown = desc;
+      if ($bugCopyBtn) $bugCopyBtn.style.display = 'inline-block';
+    }
+    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = false; $bugSubmitBtn.textContent = bugDiagnosticMode ? 'Send privately' : 'Try again'; }
     if ($bugCancelBtn) $bugCancelBtn.disabled = false;
   }
 
@@ -85200,7 +85284,7 @@
     // explicitly added it and expects it to ride along with this submit.
     bugResetMessages();
     if (!desc) {
-      if ($bugError) { $bugError.textContent = 'Please describe the bug.'; $bugError.classList.add('visible'); }
+      if ($bugError) { $bugError.textContent = 'Please describe the problem.'; $bugError.classList.add('visible'); }
       $bugDescInput.focus();
       return;
     }
@@ -85208,7 +85292,28 @@
       await bugSubmitPrivateDiagnostic(desc);
       return;
     }
-    if (bugDestination() === 'email') { bugSubmitEmail(desc); return; }
+    // Wait for diagnostics still being collected, so what is sent matches
+    // the finished preview rather than a "(collecting…)" placeholder.
+    if ($bugDiagInclude && $bugDiagInclude.checked) {
+      if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Collecting diagnostics…'; }
+      await bugLoadDiagnostics();
+      bugRenderPreview();
+      if ($bugSubmitBtn) $bugSubmitBtn.disabled = false;
+    }
+    if (bugDestination() === 'private') {
+      const text = bugBuildReportMarkdown();
+      if (text.length > BUG_PRIVATE_MAX_CHARS) {
+        if ($bugError) {
+          $bugError.textContent = 'The report is ' + text.length + ' characters; private reports are limited to ' +
+            BUG_PRIVATE_MAX_CHARS + '. Shorten the description or untick the diagnostics.';
+          $bugError.classList.add('visible');
+        }
+        if ($bugSubmitBtn) $bugSubmitBtn.textContent = 'Send report';
+        return;
+      }
+      await bugSubmitPrivateDiagnostic(text);
+      return;
+    }
     if ($bugSubmitBtn) {
       $bugSubmitBtn.disabled = true;
       // Sending an image takes a couple of seconds (push to a public branch
@@ -85222,7 +85327,7 @@
     // Server derives the GitHub issue title from the first non-empty line
     // of `description`, so we only send the unified Details field now.
     const payload = {
-      description: desc,
+      description: bugFullDescription(),
       ccc_version: version || '',
       user_agent: (navigator && navigator.userAgent) || '',
       session_id: sid,
@@ -85319,6 +85424,7 @@
   });
 
   bugOpenDiagnosticFromLocation();
+  bugOpenProblemFromLocation();
 
   // Spawn defaults — inlined directly into Settings > Sessions & Spawning
   // (CCC-902). These controls are the ONLY writer of /api/spawn-defaults;
