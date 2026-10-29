@@ -89429,7 +89429,40 @@
     });
   }
 
+  // CCC-255: an open model override ("Change") shows the engine / model /
+  // effort selects right above the ranked chips instead of down in the
+  // composer row, and its toggle reads "Collapse". Closing (or legacy mode,
+  // where the details is forced open with no summary) puts them back.
+  function syncNsModelOverrideSelects() {
+    const overrides = document.getElementById('nsModelOverrides');
+    const slot = document.getElementById('nsModelOverrideSelects');
+    if (!overrides || !slot) return;
+    const lifted = overrides.open && !overrides.classList.contains('is-legacy');
+    const toggle = overrides.querySelector(':scope > summary .ns-model-change');
+    if (toggle) toggle.textContent = lifted ? 'Collapse' : 'Change';
+    for (const select of [$convInputEngineSelect, $convInputModelSelect, $convInputEffortSelect]) {
+      if (!select) continue;
+      if (lifted) {
+        if (select.parentNode === slot) continue;
+        if (!select._cccHome) {
+          select._cccHome = document.createComment('ns-override-home');
+          select.parentNode.insertBefore(select._cccHome, select);
+        }
+        slot.appendChild(select);
+      } else if (select._cccHome && select._cccHome.parentNode && select.parentNode === slot) {
+        select._cccHome.parentNode.insertBefore(select, select._cccHome);
+      }
+    }
+  }
+
   function enterNewSessionMode() {
+    if (!nsAdvisor.overridesListener) {
+      const overrides = document.getElementById('nsModelOverrides');
+      if (overrides) {
+        nsAdvisor.overridesListener = true;
+        overrides.addEventListener('toggle', syncNsModelOverrideSelects);
+      }
+    }
     if (!nsAdvisor.runtimeListener) {
       nsAdvisor.runtimeListener = true;
       window.addEventListener('ccc-runtime-change', event => {

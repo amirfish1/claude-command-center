@@ -31079,6 +31079,11 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .ns-selection-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ns-model-change { text-decoration: underline; text-underline-offset: 3px; }
 .ns-model-overrides .conv-model-picker-inner { margin-top: 8px; }
+/* CCC-255: the composer's engine/model/effort selects, lifted above the
+   ranked chips while the override is open. */
+.ns-model-override-selects { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.ns-model-override-selects:empty { display: none; }
+.ns-model-override-selects > select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .ns-model-overrides.is-legacy > summary { display: none; }
 .conv-pane:has(.conv-model-picker-strip.has-auto-selection) .ns-model-comparison:not(.is-manual-expanded) { display: none; }
 .conv-pane.has-new-session-context:has(.has-auto-selection):not(:has(#nsModelOverrides[open])) :is(#convInputEngineSelect, #convInputModelSelect, #convInputEffortSelect) { display: none !important; }
