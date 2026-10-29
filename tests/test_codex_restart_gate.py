@@ -798,14 +798,15 @@ def _run_sh_functions(*names):
     return "\n".join(out)
 
 
-def _run_helper(tmp_path, scenario, call):
+def _run_helper(tmp_path, scenario, call, env=None):
     (tmp_path / "ccc_worker.py").write_text(_FAKE_WORKER)
     (tmp_path / "scenario.json").write_text(json.dumps(scenario))
-    script = _run_sh_functions("codex_restart_freeze_ok", "worker_stop_safe",
-                               "codex_restart_report_kill")
+    script = _run_sh_functions("codex_restart_freeze_ok", "worker_process_absent",
+                               "worker_stop_safe", "codex_restart_report_kill")
     proc = subprocess.run(
         ["bash", "-c", f"{script}\n{call}"],
-        env={**os.environ, "HERE": str(tmp_path), "PYTHON": sys.executable},
+        env={**os.environ, "HERE": str(tmp_path), "PYTHON": sys.executable,
+             **(env or {})},
         capture_output=True, text=True, timeout=30,
     )
     calls = (tmp_path / "calls.log").read_text().splitlines() if (tmp_path / "calls.log").exists() else []
@@ -945,6 +946,162 @@ def test_run_sh_stop_safe_refuses_running_unreachable_worker(tmp_path):
         assert _run_helper(tmp_path, {}, "worker_stop_safe")[0] != 0
     finally:
         _reap(sleeper)
+
+
+
+def _sleeper(*argv, cwd=None):
+    """A disposable owned child whose argv carries `argv` after a sleep."""
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", *map(str, argv)],
+        cwd=cwd,
+    )
+
+
+def _stop_safe_with(here, *children):
+    procs = [_sleeper(*argv, cwd=cwd) for argv, cwd in children]
+    try:
+        # Health stays unavailable: the scenario answers no RPC.
+        return _run_helper(here, {}, "worker_stop_safe")[0]
+    finally:
+        for proc in procs:
+            _reap(proc)
+
+
+@pytest.mark.parametrize("tail", [
+    [], ["--socket", "SOCK"], ["--socket", "SOCK", "--verbose"], ["--health"],
+])
+def test_stop_safe_refuses_worker_with_any_trailing_args(tmp_path, tail):
+    # The pre-fix `pgrep -f "$HERE/ccc_worker\.py$"` missed a worker launched
+    # with trailing arguments and called the stop safe (CCC-250).
+    sock = tmp_path / "w.sock"
+    argv = [tmp_path / "ccc_worker.py", *[str(sock) if a == "SOCK" else a for a in tail]]
+    assert _stop_safe_with(tmp_path, (argv, None)) != 0
+
+
+@pytest.mark.parametrize("spelling", ["ccc_worker.py", "./ccc_worker.py", "sub/../ccc_worker.py"])
+def test_stop_safe_refuses_worker_started_by_relative_path(tmp_path, spelling):
+    (tmp_path / "sub").mkdir()
+    argv = [spelling, "--socket", tmp_path / "w.sock"]
+    assert _stop_safe_with(tmp_path, (argv, tmp_path)) != 0
+
+
+def test_stop_safe_refuses_worker_reached_through_symlinked_install(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    (real / "ccc_worker.py").write_text(_FAKE_WORKER)
+    # The process names the real path; run.sh's $HERE is the symlink.
+    argv = [real / "ccc_worker.py", "--socket", tmp_path / "w.sock"]
+    assert _stop_safe_with(link, (argv, None)) != 0
+
+
+def test_stop_safe_paths_with_regex_characters(tmp_path):
+    here = tmp_path / "a.b[c]+(d)$^|*?"
+    here.mkdir()
+    decoy = tmp_path / "aXb[c]+(d)$^|*?"   # what an unescaped `.` matches
+    decoy.mkdir()
+    (decoy / "ccc_worker.py").write_text(_FAKE_WORKER)
+    # Positive control: nothing of this install runs.
+    assert _stop_safe_with(here) == 0
+    # The real install's worker, with trailing args, is found.
+    assert _stop_safe_with(here, ([here / "ccc_worker.py", "--socket", here / "s"], None)) != 0
+    # A worker of another install is not this one.
+    assert _stop_safe_with(here, ([decoy / "ccc_worker.py", "--socket", decoy / "s"], None)) == 0
+
+
+def test_stop_safe_identity_is_the_exact_script(tmp_path):
+    (tmp_path / "sub").mkdir()
+    for other in ("ccc_worker.py.bak", "not_ccc_worker.py", "sub/ccc_worker.py",
+                  "ccc_worker.pyc"):
+        assert _stop_safe_with(tmp_path, ([tmp_path / other, "--socket", tmp_path / "s"], None)) == 0, other
+    # Relative names resolve against that process's cwd, not ours.
+    assert _stop_safe_with(tmp_path, (["ccc_worker.py"], tmp_path / "sub")) == 0
+
+
+def test_stop_safe_inspection_failure_is_not_absence(tmp_path):
+    # Interpreter unusable: health and the scan both fail; never safe.
+    broken = tmp_path / "broken-python"
+    broken.write_text("#!/bin/sh\nexit 3\n")
+    broken.chmod(0o755)
+    assert _run_helper(tmp_path, {}, "worker_stop_safe", env={"PYTHON": str(broken)})[0] != 0
+    # Process listing unavailable.
+    assert _run_helper(tmp_path, {}, "worker_stop_safe",
+                       env={"CCC_WORKER_PROC_ROOT": str(tmp_path / "no-proc")})[0] != 0
+
+
+def _fake_proc(tmp_path, entries):
+    root = tmp_path / "proc"
+    root.mkdir()
+    for pid, (argv, cwd) in entries.items():
+        d = root / str(pid)
+        d.mkdir()
+        if argv is not None:
+            (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+        if isinstance(cwd, Path):
+            (d / "cwd").symlink_to(cwd)
+        elif cwd == "unreadable":
+            (d / "cwd").write_text("")       # readlink fails with EINVAL
+    return root
+
+
+def _absent(tmp_path, root):
+    return _run_helper(tmp_path, {}, "worker_process_absent",
+                       env={"CCC_WORKER_PROC_ROOT": str(root)})[0]
+
+
+def test_process_absent_fake_proc_states(tmp_path):
+    worker = str(tmp_path / "ccc_worker.py")
+    cases = {
+        "stale": ({101: (None, None)}, 0),                       # pid gone mid-scan
+        "empty": ({102: ([], None)}, 0),                         # kernel thread
+        "other": ({103: (["python3", "/x/server.py"], None)}, 0),
+        "worker": ({104: (["python3", worker, "--socket", "/s"], None)}, 1),
+        "relative": ({105: (["python3", "ccc_worker.py"], tmp_path)}, 1),
+        "relative-elsewhere": ({106: (["python3", "ccc_worker.py"], Path("/"))}, 0),
+        "relative-cwd-unreadable": ({107: (["python3", "ccc_worker.py"], "unreadable")}, 2),
+    }
+    for label, (entries, want) in cases.items():
+        sub = tmp_path / label
+        sub.mkdir()
+        assert _absent(tmp_path, _fake_proc(sub, entries)) == want, label
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads mode-000 files")
+def test_process_absent_unreadable_cmdline_is_unknown(tmp_path):
+    root = _fake_proc(tmp_path, {201: (["python3", "x"], None)})
+    (root / "201" / "cmdline").chmod(0)
+    try:
+        assert _absent(tmp_path, root) == 2
+        assert _run_helper(tmp_path, {}, "worker_stop_safe",
+                           env={"CCC_WORKER_PROC_ROOT": str(root)})[0] != 0
+    finally:
+        (root / "201" / "cmdline").chmod(0o600)
+
+
+def test_process_absent_ps_fallback(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    worker = tmp_path / "ccc_worker.py"
+    elsewhere = tmp_path / "other"
+    elsewhere.mkdir()
+    cases = [
+        ("  1 /sbin/launchd\n 99 /usr/bin/python3 /x/server.py\n", 0, 0),
+        (f" 77 /usr/bin/python3 {worker} --socket /tmp/s\n", 0, 1),
+        (f" 77 /usr/bin/python3 {elsewhere}/ccc_worker.py --socket /tmp/s\n", 0, 0),
+        (" 77 /usr/bin/python3 ccc_worker.py\n", 0, 2),            # cwd unknown
+        ("", 0, 2),                                                # empty listing
+        (" 1 /sbin/launchd\n", 1, 2),                              # ps failed
+    ]
+    for out, rc, want in cases:
+        (tmp_path / "ps.out").write_text(out)
+        ps = bin_dir / "ps"
+        ps.write_text(f"#!/bin/sh\ncat '{tmp_path / 'ps.out'}'\nexit {rc}\n")
+        ps.chmod(0o755)
+        got = _run_helper(tmp_path, {}, "worker_process_absent",
+                          env={"CCC_WORKER_PROC_ROOT": "-",
+                               "PATH": f"{bin_dir}:{os.environ['PATH']}"})[0]
+        assert got == want, out
 
 
 def _run_sh_idle_parser():

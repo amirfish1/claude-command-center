@@ -545,15 +545,98 @@ ccc_bounded() {
   fi
 }
 
+# 0 only when no process of this install runs ccc_worker.py: some argv
+# element names $HERE/ccc_worker.py (absolute, or relative to that process's
+# cwd), whatever arguments follow it (--socket PATH, client flags). Exact
+# path comparison, no pattern, so regex characters in $HERE cannot hide a
+# worker. 1 = one runs; 2 = unknown (unreadable process, listing or ps
+# failure, unresolvable relative path), which callers must treat as running.
+# CCC_WORKER_PROC_ROOT is a test seam: another proc root, or "-" for ps.
+worker_process_absent() {
+  CCC_WORKER_SCRIPT="$HERE/ccc_worker.py" "${PYTHON:-python3}" -c '
+import os, subprocess, sys
+target = os.environ["CCC_WORKER_SCRIPT"]
+real = os.path.realpath(target)
+name = os.path.basename(target)
+root = os.environ.get("CCC_WORKER_PROC_ROOT") or "/proc"
+me = str(os.getpid())
+
+def is_worker(arg, cwd):
+    if os.path.basename(arg) != name:
+        return False
+    if not os.path.isabs(arg):
+        if cwd is None:
+            sys.exit(2)
+        arg = os.path.join(cwd, arg)
+    return arg == target or os.path.realpath(arg) == real
+
+def scan_proc():
+    try:
+        pids = [d for d in os.listdir(root) if d.isdigit()]
+    except OSError:
+        sys.exit(2)
+    for pid in pids:
+        if pid == me:
+            continue
+        try:
+            with open(os.path.join(root, pid, "cmdline"), "rb") as f:
+                raw = f.read()
+        except (FileNotFoundError, ProcessLookupError):
+            continue  # exited during the scan
+        except OSError:
+            sys.exit(2)
+        args = [a.decode("utf-8", "surrogateescape") for a in raw.split(b"\0") if a]
+        if not any(os.path.basename(a) == name for a in args):
+            continue
+        cwd = None
+        if any(os.path.basename(a) == name and not os.path.isabs(a) for a in args):
+            try:
+                cwd = os.readlink(os.path.join(root, pid, "cwd"))
+            except OSError:
+                pass  # unknown cwd: a relative worker path stays unknown
+        if any(is_worker(a, cwd) for a in args):
+            sys.exit(1)
+    sys.exit(0)
+
+def scan_ps():
+    # ps joins argv with spaces, so only an absolute path that resolves
+    # elsewhere is provably not this worker; anything else is unknown.
+    try:
+        out = subprocess.run(["ps", "-A", "-ww", "-o", "pid=", "-o", "args="],
+                             capture_output=True, text=True, timeout=10)
+    except Exception:
+        sys.exit(2)
+    if out.returncode != 0 or not out.stdout.strip():
+        sys.exit(2)
+    for line in out.stdout.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if pid == me or name not in cmd:
+            continue
+        if target in cmd or real in cmd:
+            sys.exit(1)
+        for tok in cmd.split():
+            if name in tok and not (os.path.isabs(tok)
+                                    and os.path.basename(tok) == name
+                                    and os.path.realpath(tok) != real):
+                sys.exit(2)
+    sys.exit(0)
+
+if root == "-" or (root == "/proc" and not os.path.isdir("/proc/self")):
+    scan_ps()
+scan_proc()
+'
+}
+
 # 0 when stopping the worker cannot abort a Codex turn: it froze admissions
-# with nothing loaded, or no worker answers and none runs. A worker that runs
-# but does not answer is unknown, never safe (CCC-250).
+# with nothing loaded, or no worker answers and none provably runs. A worker
+# that runs but does not answer, or a scan that cannot tell, is never safe
+# (CCC-250).
 worker_stop_safe() {
   if "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
     codex_restart_freeze_ok commit
     return
   fi
-  ! pgrep -f -- "$HERE/ccc_worker\\.py\$" >/dev/null 2>&1
+  worker_process_absent >/dev/null 2>&1
 }
 
 # Restart the systemd-managed worker. A stray worker outside the unit (pid
