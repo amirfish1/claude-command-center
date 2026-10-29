@@ -30719,6 +30719,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             conv_id = path.split("/")[-2]
             payload = _extract_files_from_conversation(conv_id)
             self.send_json(payload)
+        elif re.match(r"^/api/conversations/[^/]+/tokeneconomizer$", path):
+            from ccc_server.tokeneconomizer import session_annotation
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            self.send_json(session_annotation(conv_id))
         elif re.match(r"^/api/conversations/[^/]+/transcript-path$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             qs = urllib.parse.parse_qs(parsed.query)
@@ -32048,6 +32052,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # real work from waiting on the GIL / locks behind a rebuild.
             _lt0 = time.perf_counter()
             _lc0 = time.thread_time()
+            self._ccc_list_t0 = (_lt0, _lc0)
             # Body-cache version: snapshot version when rows ARE the stored
             # snapshot, or (snapshot version, overlay content hash) when
             # in-memory ACP/Devin overlay rows were appended — either way a
@@ -42204,6 +42209,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if self.headers.get("If-None-Match") == etag_val:
             self.send_response(304)
             self.send_header("ETag", etag_val)
+            self._send_list_server_timing()
             self.end_headers()
             return 304
         if accept_gzip and gzip_body is not None:
@@ -42217,12 +42223,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if enc:
             self.send_header("Content-Encoding", enc)
             self.send_header("Vary", "Accept-Encoding")
+        self._send_list_server_timing()
         self.end_headers()
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             return "pipe"
         return 200
+
+    def _send_list_server_timing(self):
+        # /api/conversations/list handler time, timed from the list branch
+        # rather than handle_one_request (whose start includes keep-alive
+        # idle), so list_read can split client/network wait from server work
+        # (CCC-229).
+        try:
+            t = getattr(self, "_ccc_list_t0", None)
+            if t is None:
+                return
+            self.send_header("Server-Timing", "list;dur=%.0f, listcpu;dur=%.0f" % (
+                (time.perf_counter() - t[0]) * 1000.0, (time.thread_time() - t[1]) * 1000.0))
+        except Exception:
+            pass
 
     def _send_server_timing(self, cache=None):
         # Server-side time for this response so the client's conv_open perf
@@ -42285,6 +42306,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(body)))
         self._send_server_timing()
+        self._send_list_server_timing()
         if etag_val:
             self.send_header("ETag", etag_val)
         if enc:
@@ -42308,6 +42330,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         _c0 = time.thread_time()
         self._ccc_req_t0 = _t0
         self._ccc_req_cpu0 = _c0
+        self._ccc_list_t0 = None
         # A keep-alive connection's final call only waits for a request that
         # never comes; clear the previous request's path so that idle wait is
         # not logged as a slow repeat of it.

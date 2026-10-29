@@ -50718,7 +50718,10 @@
       watchdog = setTimeout(reconnect, WATCHDOG_MS);
     };
     streamPane._eventSourceWatchdog = () => clearTimeout(watchdog);
-    source.addEventListener('keepalive', bumpWatchdog);
+    source.addEventListener('keepalive', () => {
+      bumpWatchdog();
+      _refreshTokenEconomizerAnnotation(streamPaneId);
+    });
     source.addEventListener('source_reset', () => {
       const pane = paneByPaneId(streamPaneId);
       if (!pane || pane.conversationId !== streamConvId || pane.eventSource !== source) return;
@@ -67639,6 +67642,58 @@
     return !!view.querySelector('.event.result[data-jsonl-line][data-turn-id="' + esc + '"]');
   }
 
+  function _tokenEconomizerAnnotationHtml(report) {
+    if (!report || !report.observed) return '';
+    const actions = Array.isArray(report.actions) ? report.actions : [];
+    const label = 'TokenEconomizer · ' + (actions.length ? actions.join(' · ') : 'observed');
+    const detail = actions.length
+      ? 'Recorded automatic actions for this conversation. This is not a measurement of token savings.'
+      : 'Hooks recorded this conversation; no optimization action is recorded yet. This does not imply token savings.';
+    return '<span class="te-conversation-chip" title="' + escapeAttr(detail) + '">'
+      + escapeHtml(label) + '</span>';
+  }
+
+  function _paintTokenEconomizerAnnotation(paneId, report) {
+    const view = getConvViewForPane(paneId);
+    if (!view) return;
+    let annotation = view.querySelector(':scope > .te-conversation-annotation');
+    const html = _tokenEconomizerAnnotationHtml(report);
+    if (!html) { if (annotation) annotation.remove(); }
+    else {
+      if (!annotation) {
+        annotation = document.createElement('div');
+        annotation.className = 'te-conversation-annotation';
+        view.prepend(annotation);
+      }
+      if (annotation.innerHTML !== html) annotation.innerHTML = html;
+    }
+  }
+
+  async function _refreshTokenEconomizerAnnotation(paneId) {
+    const pane = paneByPaneId(paneId);
+    if (!pane || !pane.conversationId) return;
+    const sid = pane.conversationId;
+    const now = Date.now();
+    if (pane._teFetchedSid === sid) _paintTokenEconomizerAnnotation(paneId, pane._teReport);
+    if (pane._teRequestSid === sid || (pane._teFetchedSid === sid && now - pane._teFetchedAt < 15000)) return;
+    pane._teRequestSid = sid;
+    try {
+      // The first annotation belongs to the conversation open. Background
+      // status reads can wait behind long-lived streams in the slot gate.
+      // Later refreshes share the background pool rather than taking a user slot.
+      const priority = pane._teFetchedSid !== sid ? { cccPriority: 'user' } : undefined;
+      const response = await fetch('/api/conversations/' + encodeURIComponent(sid) + '/tokeneconomizer', priority);
+      if (!response.ok) return;
+      const report = await response.json();
+      if (paneByPaneId(paneId) !== pane || pane.conversationId !== sid) return;
+      _paintTokenEconomizerAnnotation(paneId, report);
+      pane._teReport = report;
+      pane._teFetchedSid = sid;
+      pane._teFetchedAt = now;
+    } catch (_) { /* Optional plugin state must never block the transcript. */ }
+    finally { if (pane._teRequestSid === sid) pane._teRequestSid = null; }
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -67661,6 +67716,7 @@
     if (!opts.cachedPreview && $view.querySelector(':scope > .conv-cache-preview')) {
       $view.innerHTML = '';
     }
+    if (!opts.cachedPreview) _refreshTokenEconomizerAnnotation(paneId);
     // Webui panes (kimi + codex) render kimi-web style: merged turns,
     // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
     // path below stays byte-for-byte the shared legacy renderer.
@@ -76787,6 +76843,10 @@
     // which stretches when a fresh page's main thread is busy booting.
     let _perfHdrAt = 0;
     let _perfBodyMs = 0;
+    // Server list handler time (Server-Timing list;dur) and the fetched URL
+    // (its ?since= varies) for the Resource Timing split (CCC-229).
+    let _perfServer = null;
+    let _perfFetchUrl = url;
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
@@ -76818,6 +76878,10 @@
               ttfb_ms: _perfHdrAt ? Math.round(_perfHdrAt - _perfT0) : null,
               body_ms: _perfBodyMs ? Math.round(_perfBodyMs) : null,
               start_nav_ms: Math.round(_perfT0),
+              server_ms: _perfServer ? _perfServer.ms : null,
+              server_cpu_ms: _perfServer ? _perfServer.cpu : null,
+              longtask_ms: _perfLongTaskMs(_perfT0, _perfEnd),
+              rt: _perfHdrAt ? _convResourceTiming(_perfFetchUrl, _perfT0) : null,
             },
           });
         }
@@ -76844,13 +76908,18 @@
             r = await _archiveBootstrapFetchPromise;
           }
           if (!r) {
-            r = await backgroundApiFetch(
-              deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url, init);
+            _perfFetchUrl = deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url;
+            r = await backgroundApiFetch(_perfFetchUrl, init);
           }
         } finally {
           clearTimeout(timeoutId);
         }
         _perfHdrAt = performance.now();
+        try {
+          const st = r.headers.get('Server-Timing') || '';
+          const m = st.match(/(?:^|,)\s*list;dur=([0-9.]+)/), c = st.match(/listcpu;dur=([0-9.]+)/);
+          if (m) _perfServer = { ms: Math.round(+m[1]), cpu: c ? Math.round(+c[1]) : null };
+        } catch (_) {}
         _lastArchiveListHttpStatus = r.status;
         // 304 → the server confirms our cached payload is still current, so we
         // skip re-parsing ~500KB and reuse the last conversations as-is. The
@@ -84289,6 +84358,8 @@
   // the CCC CLI, or the CCC HTTP API gets a purple chip per distinct command,
   // so delegation stays visible while the tool calls are folded away.
   const _CC_ORCH_RES = [
+    [/(?:^|[\s;&|(`"'])((?:[^\s"'`]*tokeneconomizer[^\s"'`]*\/)?te)["']?\s+(?:(?:--host|--cwd)\s+(?:"[^"]*"|'[^']*'|[^\s;|)]+)\s+)*(status|microskills|facts|toolprune|untool|config|fold|judge|doctor|repos|repomap|probe)\b/gi,
+      (m) => 'TokenEconomizer ' + m[2].toLowerCase()],
     [/(?:^|[\s;&|(`])wt\s+([a-z][\w-]*)/g, (m) => 'wt ' + m[1]],
     [/(?:^|[\s;&|(`])ccc\s+([a-z][\w-]*)/g, (m) => 'ccc ' + m[1]],
     [/(?:localhost|127\.0\.0\.1|\$\{?CCC[A-Z_]*\}?)(?::809[01])?(\/api\/[\w\-./]*)/g,
