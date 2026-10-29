@@ -30843,9 +30843,9 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   justify-content: center;
   box-sizing: border-box;
   padding: 1px 3px;
-  border: 1px solid color-mix(in srgb, currentColor 45%, var(--border));
+  border: 0;
   border-radius: 5px;
-  background: color-mix(in srgb, currentColor 12%, var(--bg));
+  background: transparent;
   color: var(--text);
   font: 8px/1.2 system-ui, sans-serif;
   white-space: nowrap;
