@@ -108,10 +108,16 @@ def native(monkeypatch):
     monkeypatch.setattr(server, "_log_activity", lambda *a, **k: None)
     monkeypatch.setattr(gate, "_frozen_until", 0.0)
     monkeypatch.setattr(gate, "_frozen_reason", "")
+    monkeypatch.setattr(gate, "_owner", "")
     codex_mod._CODEX_APP_SERVER_MUTATING_PENDING.clear()
     yield transport
     codex_mod._CODEX_APP_SERVER_MUTATING_PENDING.clear()
-    gate.release()
+    gate.release(gate._owner)
+
+
+def _release_owned():
+    """Lift whichever lease is live, as its owner would."""
+    return gate.release(gate._owner)
 
 
 def _fake_child(*extra):
@@ -257,7 +263,7 @@ def test_admission_race_never_both_sends_and_freezes(native):
     """A turn/start that won the lock first is counted; one that lost is
     refused. No interleaving lets both the freeze and the send succeed."""
     for _ in range(50):
-        gate.release()
+        _release_owned()
         server._CODEX_APP_SERVER_THREAD_STATE.clear()
         native.sent.clear()
         results = {}
@@ -289,16 +295,64 @@ def test_freeze_lapsing_during_proof_is_not_proof(native):
     assert out["frozen"] is False and out["reason"] == "freeze_lapsed"
 
 
-def test_concurrent_release_during_proof_is_not_proof(native):
-    native.on_send["thread/loaded/list"] = lambda _p: gate.release()
+def test_owner_release_during_proof_is_not_proof(native):
+    native.on_send["thread/loaded/list"] = lambda _p: _release_owned()
     assert gate.acquire("test")["frozen"] is False
+
+
+@pytest.mark.parametrize("token", [None, "", "f" * 32])
+def test_foreign_or_tokenless_release_never_lifts(native, token):
+    out = gate.acquire("A")
+    assert out["frozen"] is True
+    assert gate.release(token) == {"ok": True, "released": False, "reason": "not_owner"}
+    assert gate.frozen() and gate.blocks("thread/resume")
+    # The owner's own release still works, and only once.
+    assert gate.release(out["token"])["released"] is True
+    assert gate.release(out["token"])["released"] is False
+
+
+def test_second_acquire_is_refused_and_leaves_lease_intact(native):
+    a = gate.acquire("A")
+    before = (gate._frozen_until, gate._owner)
+    b = gate.acquire("B")
+    assert b["frozen"] is False and b["reason"] == "restart_in_progress"
+    assert "token" not in b
+    assert (gate._frozen_until, gate._owner) == before
+    # A forged renewal is refused the same way.
+    forged = gate.acquire("B", token="0" * 32)
+    assert forged["frozen"] is False and forged["reason"] == "lease_lost"
+    assert (gate._frozen_until, gate._owner) == before
+    assert gate.acquire("A final", token=a["token"])["frozen"] is True
+
+
+def test_refused_renewal_releases_only_its_own_lease(native):
+    a = gate.acquire("A")
+    native.loaded = ["t-goal"]
+    # A's own renewal fails its proof: A's lease goes, nobody else's.
+    out = gate.acquire("A final", token=a["token"])
+    assert out["frozen"] is False and not gate.frozen()
+    native.loaded = []
+    b = gate.acquire("B")
+    assert b["frozen"] is True
+    # A's stale token can neither renew nor lift B's lease.
+    assert gate.acquire("A again", token=a["token"])["reason"] == "lease_lost"
+    assert gate.release(a["token"])["released"] is False
+    assert gate._owner == b["token"] and gate.frozen()
+
+
+def test_lapsed_lease_token_renews_nothing(native):
+    a = gate.acquire("A", ttl_s=5)
+    setattr(gate, "_frozen_until", time.time() - 1)
+    out = gate.acquire("A final", token=a["token"])
+    assert out["frozen"] is False and out["reason"] == "lease_lost"
+    assert not gate.frozen()
 
 
 def test_lapsed_freeze_is_reproved_not_trusted(native):
     assert gate.acquire("test", ttl_s=5)["frozen"] is True
     assert not gate.frozen(now=time.time() + 6)
     # While lapsed a client loaded a thread; the re-run proof catches it.
-    gate.release()
+    _release_owned()
     server._codex_app_server_request_to_transport(
         native, "thread/resume", {"threadId": "t-x"}, timeout=0.5,
     )
@@ -316,9 +370,11 @@ def test_barrier_exception_releases(native, monkeypatch):
 def test_no_server_module_freezes_with_zero_turns(monkeypatch):
     monkeypatch.setattr(gate, "_app_server_lock", lambda: None)
     monkeypatch.setattr(gate, "_frozen_until", 0.0)
+    monkeypatch.setattr(gate, "_owner", "")
     out = gate.acquire("cold worker")
     assert out["frozen"] is True and out["live_turns"] == 0
-    gate.release()
+    assert gate.acquire("second")["reason"] == "restart_in_progress"
+    assert gate.release(out["token"])["released"] is True
 
 
 # --- Process ownership / dead transport ------------------------------------
@@ -330,7 +386,7 @@ def test_real_child_transport_and_dead_transport_proof(native, monkeypatch):
         monkeypatch.setattr(server, "_CODEX_APP_SERVER_TRANSPORT", transport)
         # Our own tracked child is not a stray.
         assert gate.acquire("test")["frozen"] is True
-        gate.release()
+        _release_owned()
         transport.silent.add("turn/start")
         server._codex_app_server_request_to_transport(
             transport, "turn/start", {"threadId": "t1"}, timeout=0.05,
@@ -403,8 +459,15 @@ def test_worker_rpc_round_trip(native, runtime):
     native.loaded = ["t1"]
     assert runtime.dispatch("codex.restart_freeze", {"enabled": True})["frozen"] is False
     native.loaded = []
-    assert runtime.dispatch("codex.restart_freeze", {"enabled": True})["frozen"] is True
-    assert runtime.dispatch("codex.restart_freeze", {"enabled": False})["released"] is True
+    lease = runtime.dispatch("codex.restart_freeze", {"enabled": True})
+    assert lease["frozen"] is True and lease["token"]
+    assert runtime.dispatch("codex.restart_freeze", {"enabled": True})["reason"] == "restart_in_progress"
+    assert runtime.dispatch("codex.restart_freeze", {"enabled": False})["released"] is False
+    renewed = runtime.dispatch("codex.restart_freeze",
+                               {"enabled": True, "token": lease["token"]})
+    assert renewed["frozen"] is True and renewed["token"] == lease["token"]
+    assert runtime.dispatch("codex.restart_freeze",
+                            {"enabled": False, "token": lease["token"]})["released"] is True
     assert "codex-turn-gate-v1" in runtime.dispatch("health", {})["worker"]["capabilities"]
 
 
@@ -464,6 +527,142 @@ def test_nothing_can_start_after_final_check_before_kill(native, runtime, monkey
                     "loaded": [], "autonomous": []}
 
 
+def _route_to_worker(monkeypatch, runtime, adopt=None):
+    """Dashboard control-plane calls go to the real worker RPC; engine.adopt
+    and drain.set answer from `adopt` (default: worker accepts)."""
+    def request(method, params=None, **k):
+        if method == "engine.adopt" and adopt is not None:
+            return adopt
+        if method in ("engine.adopt", "drain.set"):
+            return {"ok": True, "available": True}
+        return runtime.dispatch(method, params or {})
+    monkeypatch.setattr(server, "_control_plane_request", request)
+    monkeypatch.setattr(server, "_dashboard_owned_active_executions", lambda: [])
+    monkeypatch.setattr(server, "_worker_systemd_scope", lambda pid: ("unit", True))
+
+
+def _in_thread(fn):
+    """Run fn on its own thread, as a second HTTP handler would."""
+    box = {}
+    t = threading.Thread(target=lambda: box.setdefault("out", fn()))
+    t.start()
+    t.join(timeout=30)
+    return box["out"]
+
+
+def test_overlapping_restart_cannot_release_after_final_proof(native, runtime, monkeypatch):
+    """Verifier witness (verify:2): restart A passes its final proof; at the
+    kill boundary restart B runs the real precheck, the worker refuses to
+    adopt, and B runs the real release. A's freeze must hold: no thread can
+    load and no autonomous turn exists when A's kill lands."""
+    _route_to_worker(monkeypatch, runtime,
+                     adopt={"ok": False, "available": True, "error": "adopt failed"})
+    seen = {}
+
+    def kill(*a, **k):
+        def restart_b():
+            precheck = server._safe_worker_restart_precheck()
+            server._codex_restart_release("B did not restart")
+            return precheck
+        seen["b"] = _in_thread(restart_b)
+        seen["frozen_after_b"] = gate.frozen()
+        seen["resume"] = server._codex_app_server_request_to_transport(
+            native, "thread/resume", {"threadId": "t-race"}, timeout=0.2,
+        ).get("code")
+        native.tick()
+        seen["loaded"] = list(native.loaded)
+        seen["autonomous"] = list(native.autonomous_turns)
+        return {"restarted": True}
+
+    monkeypatch.setattr(server, "_restart_systemd_worker", kill)
+    assert server._codex_restart_freeze("A")[0] is True
+    outcome = server._restart_worker_process(codex_final_check=True)
+    assert outcome == {"restarted": True}
+    ok, err, _, _ = seen["b"]
+    assert ok is False and err["code"] == "codex_restart_in_progress"
+    assert seen["frozen_after_b"] is True
+    assert seen["resume"] == "codex_restart_pending"
+    assert seen["loaded"] == [] and seen["autonomous"] == []
+
+
+def test_overlapping_restart_b_adoption_failure_after_owning_lease(native, runtime, monkeypatch):
+    """B that owns its own lease and fails adoption releases exactly that
+    lease; A, which never got one, has no kill authority."""
+    _route_to_worker(monkeypatch, runtime,
+                     adopt={"ok": False, "available": True, "error": "adopt failed"})
+    kills = []
+    monkeypatch.setattr(server, "_restart_systemd_worker",
+                        lambda *a, **k: kills.append(a) or {"restarted": True})
+    b_lease = gate.acquire("B (another dashboard)")
+    assert b_lease["frozen"] is True
+    a_ok, a_err = server._codex_restart_freeze("A")
+    assert a_ok is False and a_err["code"] == "codex_restart_in_progress"
+    assert server._restart_worker_process(codex_final_check=True)["restarted"] is False
+    server._codex_restart_release("A refused")      # A holds no token: no-op
+    assert gate._owner == b_lease["token"] and gate.frozen()
+    assert kills == []
+
+
+def test_restart_that_lost_its_lease_has_no_kill_authority(native, runtime, monkeypatch):
+    _route_to_worker(monkeypatch, runtime)
+    kills = []
+    monkeypatch.setattr(server, "_restart_systemd_worker",
+                        lambda *a, **k: kills.append(a) or {"restarted": True})
+    assert server._codex_restart_freeze("A")[0] is True
+    a_token = server._codex_restart_lease_token()
+    # A's lease lapses (a slow pull), and restart B takes a lease of its own.
+    gate._frozen_until = time.time() - 1
+    b = _in_thread(lambda: (server._codex_restart_freeze("B"),
+                            server._codex_restart_lease_token()))
+    assert b[0][0] is True and b[1] != a_token
+    outcome = server._restart_worker_process(codex_final_check=True)
+    assert outcome["restarted"] is False and outcome["codex_live_turns"] != 0
+    server._codex_restart_release("A did not restart")
+    assert kills == []
+    assert gate._owner == b[1] and gate.frozen()
+
+
+def test_final_check_refuses_a_lease_too_short_for_the_kill(native, runtime, monkeypatch):
+    _route_to_worker(monkeypatch, runtime)
+    kills = []
+    monkeypatch.setattr(server, "_restart_systemd_worker",
+                        lambda *a, **k: kills.append(a) or {"restarted": True})
+    monkeypatch.setattr(server, "_CODEX_KILL_WINDOW_S", gate.MAX_TTL_S + 1)
+    assert server._codex_restart_freeze("A")[0] is True
+    assert server._restart_worker_process(codex_final_check=True)["restarted"] is False
+    assert kills == []
+
+
+def test_final_check_without_a_lease_is_unknown(native, runtime, monkeypatch):
+    _route_to_worker(monkeypatch, runtime)
+    server._CODEX_RESTART_LEASE.token = ""
+    assert server._codex_restart_final_check() == -1
+    assert not gate.frozen()
+
+
+def test_kill_exception_keeps_freeze_until_owner_releases(native, runtime, monkeypatch):
+    """A kill that raises leaves the lease in place (fail closed: Codex
+    waits, nothing is admitted); a foreign release cannot lift it and the
+    owner's later release does."""
+    _route_to_worker(monkeypatch, runtime)
+
+    def kill(*a, **k):
+        raise OSError("systemctl vanished")
+
+    monkeypatch.setattr(server, "_restart_systemd_worker", kill)
+    assert server._codex_restart_freeze("A")[0] is True
+    with pytest.raises(OSError):
+        server._restart_worker_process(codex_final_check=True)
+    assert gate.frozen() and gate.blocks("thread/resume")
+    _in_thread(lambda: server._codex_restart_release("foreign"))
+    assert gate.frozen()
+    assert runtime.dispatch("codex.restart_freeze", {"enabled": False})["released"] is False
+    server._codex_restart_release("A cleanup")
+    assert not gate.frozen()
+    # Released twice is a no-op, never an error.
+    server._codex_restart_release("A cleanup again")
+
+
 def test_old_worker_without_rpc_never_restarts(monkeypatch):
     def old_worker(method, params=None, **k):
         if method == "codex.restart_freeze":
@@ -490,7 +689,7 @@ _FAKE_WORKER = textwrap.dedent('''
     scenario = json.load(open(os.path.join(here, "scenario.json")))
     flag = sys.argv[1] if len(sys.argv) > 1 else ""
     with open(os.path.join(here, "calls.log"), "a") as fh:
-        fh.write(flag + "\\n")
+        fh.write(" ".join(sys.argv[1:]) + "\\n")
     reply = scenario.get(flag)
     if reply is None:
         sys.exit(1)
@@ -518,7 +717,7 @@ def _run_helper(tmp_path, scenario, call):
         env={**os.environ, "HERE": str(tmp_path), "PYTHON": sys.executable},
         capture_output=True, text=True, timeout=30,
     )
-    calls = (tmp_path / "calls.log").read_text().split() if (tmp_path / "calls.log").exists() else []
+    calls = (tmp_path / "calls.log").read_text().splitlines() if (tmp_path / "calls.log").exists() else []
     return proc.returncode, calls
 
 
@@ -526,7 +725,7 @@ _IDLE = {"ok": True, "active": 0, "queued": 0, "uncertain": 0, "codex_live_turns
 
 
 def test_run_sh_freeze_ok_needs_freeze_and_zero_turns(tmp_path):
-    frozen = {"ok": True, "frozen": True}
+    frozen = {"ok": True, "frozen": True, "token": "tok-A"}
     assert _run_helper(tmp_path, {"--codex-restart-freeze": frozen, "--health": _IDLE},
                        "codex_restart_freeze_ok")[0] == 0
     for scenario in (
@@ -535,11 +734,29 @@ def test_run_sh_freeze_ok_needs_freeze_and_zero_turns(tmp_path):
         {"--codex-restart-freeze": frozen,
          "--health": {k: v for k, v in _IDLE.items() if k != "codex_live_turns"}},
         {"--codex-restart-freeze": frozen},                       # health unreachable
+        {"--codex-restart-freeze": {"ok": True, "frozen": True},   # no lease token
+         "--health": _IDLE},
     ):
         (tmp_path / "calls.log").unlink(missing_ok=True)
         rc, calls = _run_helper(tmp_path, dict(scenario, **{"--codex-restart-release": {"ok": True}}),
                                 "codex_restart_freeze_ok")
         assert rc != 0, scenario
+        # A refusal releases only the lease this shell took, never a
+        # token-less (anyone's) release.
+        for call in calls:
+            if call.startswith("--codex-restart-release"):
+                assert call == "--codex-restart-release --codex-restart-token tok-A"
+
+
+def test_run_sh_final_check_renews_its_own_lease(tmp_path):
+    frozen = {"ok": True, "frozen": True, "token": "tok-A"}
+    rc, calls = _run_helper(
+        tmp_path, {"--codex-restart-freeze": frozen, "--health": _IDLE},
+        "codex_restart_freeze_ok && codex_restart_freeze_ok",
+    )
+    assert rc == 0
+    assert calls == ["--codex-restart-freeze", "--health",
+                     "--codex-restart-freeze --codex-restart-token tok-A", "--health"]
 
 
 def test_run_sh_stop_safe_refuses_running_unreachable_worker(tmp_path):

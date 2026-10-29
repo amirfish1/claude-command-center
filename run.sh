@@ -462,9 +462,28 @@ worker_systemd_managed() {
 # Succeeds only when the worker froze and proved no Codex thread is loaded
 # and none of its turns is live; an older worker without the gate, or one
 # that does not answer, fails, which defers the kill. Callers run it again
-# as the last step before the kill.
+# as the last step before the kill. The freeze is a lease: the first call
+# keeps its token in CODEX_RESTART_TOKEN and later calls renew that lease,
+# so a refused call can only release its own lease, never another
+# restart's (and a lapsed lease is refused, never re-taken mid-roll).
+CODEX_RESTART_TOKEN=""
 codex_restart_freeze_ok() {
-  "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze >/dev/null 2>&1 || return 1
+  local reply token
+  if [ -n "$CODEX_RESTART_TOKEN" ]; then
+    reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze \
+      --codex-restart-token "$CODEX_RESTART_TOKEN" 2>/dev/null)" || return 1
+  else
+    reply="$("${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze 2>/dev/null)" || return 1
+  fi
+  token="$(printf '%s' "$reply" | "${PYTHON:-python3}" -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("token") or "")
+except Exception:
+    pass
+')"
+  [ -n "$token" ] || return 1
+  CODEX_RESTART_TOKEN="$token"
   if ! "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health 2>/dev/null | "${PYTHON:-python3}" -c '
 import json, sys
 try:
@@ -473,7 +492,9 @@ except Exception:
     raise SystemExit(1)
 raise SystemExit(0 if data.get("ok") and data.get("codex_live_turns") == 0 else 1)
 '; then
-    "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-release >/dev/null 2>&1 || true
+    "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-release \
+      --codex-restart-token "$CODEX_RESTART_TOKEN" >/dev/null 2>&1 || true
+    CODEX_RESTART_TOKEN=""
     return 1
   fi
   return 0

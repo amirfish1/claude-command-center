@@ -18712,9 +18712,28 @@ def _restart_body_allows_codex_interrupt(handler):
     return isinstance(payload, dict) and payload.get("allow_codex_interrupt") is True
 
 
+# The worker's freeze is a lease with one owner token (codex_restart_gate).
+# Each restart attempt runs freeze -> final check -> kill -> release on one
+# thread, so the token it took lives in this thread-local: an overlapping
+# restart on another handler thread holds no token, cannot renew or lift
+# this one's lease, and the worker refuses it a lease of its own.
+_CODEX_RESTART_LEASE = threading.local()
+# The final check renews the lease for the full TTL and refuses a kill if
+# less than this is left: every kill below (systemctl 60s, launchctl 10s +
+# a 10s death wait, a direct SIGTERM) finishes well inside it, so the lease
+# cannot lapse and admit a turn before the kill lands.
+_CODEX_KILL_WINDOW_S = 120.0
+
+
+def _codex_restart_lease_token():
+    return getattr(_CODEX_RESTART_LEASE, "token", "") or ""
+
+
 def _codex_restart_freeze(reason, *, allow_codex_interrupt=False):
     """(ok, error_or_None). ok=True means Codex admissions are frozen (or
-    the caller explicitly accepted interrupting turns)."""
+    the caller explicitly accepted interrupting turns) under a lease this
+    thread now owns."""
+    _CODEX_RESTART_LEASE.token = ""
     if allow_codex_interrupt:
         _log_activity(
             "worker", "RESTART_CODEX_OVERRIDE",
@@ -18729,10 +18748,20 @@ def _codex_restart_freeze(reason, *, allow_codex_interrupt=False):
         resp = {"ok": False, "available": False, "error": str(e)}
     if not isinstance(resp, dict):
         resp = {"ok": False, "error": "invalid worker response"}
-    if resp.get("ok") and resp.get("frozen"):
+    if resp.get("ok") and resp.get("frozen") and resp.get("token"):
+        _CODEX_RESTART_LEASE.token = str(resp["token"])
         return True, None
     hint = (" Pass allow_codex_interrupt=true to restart anyway and "
             "interrupt any running Codex turns.")
+    if resp.get("ok") and resp.get("reason") == "restart_in_progress":
+        return False, {
+            "ok": False,
+            "code": "codex_restart_in_progress",
+            "error": ("Another worker restart holds the Codex freeze. "
+                      "Retry once it finishes."),
+        }
+    if resp.get("ok") and resp.get("frozen"):
+        resp = {"ok": False, "error": "worker froze without a lease token"}
     if resp.get("ok"):
         turns = int(resp.get("live_turns") or 0)
         return False, {
@@ -18758,9 +18787,17 @@ def _codex_restart_freeze(reason, *, allow_codex_interrupt=False):
 
 
 def _codex_restart_release(reason=""):
+    """Lift this thread's own lease. A thread without one (its freeze was
+    refused, or it never froze) sends nothing, and the worker ignores any
+    token but the owner's, so this can never lift another restart's."""
+    token = _codex_restart_lease_token()
+    _CODEX_RESTART_LEASE.token = ""
+    if not token:
+        return
     try:
         _control_plane_request("codex.restart_freeze", {
             "enabled": False, "reason": str(reason or "")[:200],
+            "token": token,
         })
     except Exception:
         pass
@@ -18771,16 +18808,31 @@ def _codex_restart_final_check(health=None):
     the worker answers frozen with no loaded Codex thread. Anything else
     (live turns, a lapsed freeze, an error, no reply) is nonzero; -1 means
     unknown. `health` is ignored; the count in health is local bookkeeping,
-    not the native proof."""
+    not the native proof. It renews this thread's own lease: with no lease,
+    or one that lapsed or was lost, the worker refuses, so a restart that
+    lost its lease has no kill authority. A renewal with less than
+    _CODEX_KILL_WINDOW_S left is refused too."""
+    token = _codex_restart_lease_token()
+    if not token:
+        return -1
     try:
         resp = _control_plane_request("codex.restart_freeze", {
             "enabled": True, "reason": "final pre-kill check",
+            "token": token,
         })
     except Exception:
         return -1
     if not isinstance(resp, dict) or not resp.get("ok"):
         return -1
     if resp.get("frozen") is True:
+        if resp.get("token") != token:
+            return -1
+        try:
+            remaining = float(resp.get("remaining_s"))
+        except (TypeError, ValueError):
+            return -1
+        if remaining < _CODEX_KILL_WINDOW_S:
+            return -1
         return 0
     try:
         return max(int(resp.get("live_turns") or 0), 1)

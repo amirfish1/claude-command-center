@@ -149,7 +149,8 @@ class RestartWorkerProcessTests(unittest.TestCase):
 
         def fake(method, params=None, *, engine_timeout=False):
             if method == "codex.restart_freeze":
-                return {"ok": True, "frozen": True, "live_turns": 0}
+                return {"ok": True, "frozen": True, "live_turns": 0,
+                        "token": "tok-A", "remaining_s": 300.0}
             return health
         return fake
 
@@ -572,7 +573,8 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
         def fake_cpr(method, params=None, *, engine_timeout=False):
             calls.append(method)
             if method == "codex.restart_freeze":
-                return {"ok": True, "frozen": True, "live_turns": 0}
+                return {"ok": True, "frozen": True, "live_turns": 0,
+                        "token": "tok-A", "remaining_s": 300.0}
             if method == "engine.adopt":
                 return {"ok": True, "available": True, "adopted": 2}
             if method == "drain.set":
@@ -688,7 +690,8 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
         def fake_cpr(method, params=None, *, engine_timeout=False):
             calls.append((method, (params or {}).get("enabled")))
             if method == "codex.restart_freeze":
-                return {"ok": True, "frozen": True, "live_turns": 0}
+                return {"ok": True, "frozen": True, "live_turns": 0,
+                        "token": "tok-A", "remaining_s": 300.0}
             if method == "engine.adopt":
                 return {"ok": False, "available": True, "error": "nope"}
             return {"ok": True}
@@ -699,6 +702,46 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
             ok, _, _, _ = server._safe_worker_restart_precheck()
         self.assertFalse(ok)
         self.assertEqual(calls[-1], ("codex.restart_freeze", False))
+
+    def test_refused_freeze_never_sends_a_release(self):
+        """A restart whose freeze was refused owns no lease, so its cleanup
+        sends nothing that could lift another restart's freeze."""
+        server = self.server
+        calls = []
+
+        def fake_cpr(method, params=None, *, engine_timeout=False):
+            calls.append((method, dict(params or {})))
+            if method == "codex.restart_freeze":
+                return {"ok": True, "frozen": False, "live_turns": 1,
+                        "reason": "restart_in_progress"}
+            return {"ok": True}
+
+        with mock.patch.object(
+            server, "_dashboard_owned_active_executions", return_value=[],
+        ), mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr):
+            ok, err, _, _ = server._safe_worker_restart_precheck()
+            server._codex_restart_release("did not restart")
+        self.assertFalse(ok)
+        self.assertEqual(err["code"], "codex_restart_in_progress")
+        self.assertEqual([c[0] for c in calls], ["codex.restart_freeze"])
+
+    def test_release_sends_only_this_threads_token(self):
+        server = self.server
+        sent = []
+
+        def fake_cpr(method, params=None, *, engine_timeout=False):
+            sent.append(dict(params or {}))
+            if (params or {}).get("enabled"):
+                return {"ok": True, "frozen": True, "live_turns": 0,
+                        "token": "tok-A", "remaining_s": 300.0}
+            return {"ok": True, "released": True}
+
+        with mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr):
+            self.assertTrue(server._codex_restart_freeze("A")[0])
+            server._codex_restart_release("done")
+            server._codex_restart_release("done again")
+        self.assertEqual(sent[1], {"enabled": False, "reason": "done", "token": "tok-A"})
+        self.assertEqual(len(sent), 2)
 
     def test_final_check_aborts_kill_when_a_turn_appeared(self):
         server = self.server
@@ -723,8 +766,21 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
     def test_final_check_unknown_state_is_busy(self):
         server = self.server
         check = server._codex_restart_final_check
+        server._CODEX_RESTART_LEASE.token = ""
+        with mock.patch.object(server, "_control_plane_request") as cpr:
+            self.assertEqual(check(), -1)    # no lease of its own: no proof
+        cpr.assert_not_called()
+        server._CODEX_RESTART_LEASE.token = "tok-A"
+        self.addCleanup(setattr, server._CODEX_RESTART_LEASE, "token", "")
         for reply, want_zero in (
-            ({"ok": True, "frozen": True, "live_turns": 0}, True),
+            ({"ok": True, "frozen": True, "live_turns": 0}, False),   # no token
+            ({"ok": True, "frozen": True, "live_turns": 0,
+              "token": "tok-B", "remaining_s": 300.0}, False),         # foreign
+            ({"ok": True, "frozen": True, "live_turns": 0,
+              "token": "tok-A", "remaining_s": 5.0}, False),           # too short
+            ({"ok": True, "frozen": False, "live_turns": 1, "reason": "lease_lost"}, False),
+            ({"ok": True, "frozen": True, "live_turns": 0,
+                        "token": "tok-A", "remaining_s": 300.0}, True),
             ({"ok": True, "frozen": False, "live_turns": 0, "reason": "freeze_lapsed"}, False),
             ({"ok": False, "code": "method_not_found"}, False),  # older worker
             ({"ok": False, "available": False}, False),
@@ -758,7 +814,8 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
 
         def fake_cpr(method, params=None, *, engine_timeout=False):
             if method == "codex.restart_freeze":
-                return {"ok": True, "frozen": True, "live_turns": 0}
+                return {"ok": True, "frozen": True, "live_turns": 0,
+                        "token": "tok-A", "remaining_s": 300.0}
             return health
 
         with mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr), \

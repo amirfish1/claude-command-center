@@ -123,11 +123,13 @@ class WorkerRuntime:
             # with counting in-flight turns; frozen=False means do not restart.
             from ccc_server import codex_restart_gate
             try:
+                # The token is the lease: only its owner renews or lifts it.
                 if params.get("enabled") is False:
-                    return codex_restart_gate.release()
+                    return codex_restart_gate.release(params.get("token"))
                 return codex_restart_gate.acquire(
                     reason=params.get("reason") or "",
                     ttl_s=params.get("ttl_s") or codex_restart_gate.DEFAULT_TTL_S,
+                    token=params.get("token"),
                 )
             except Exception as exc:
                 return {"ok": False, "code": "codex_state_unavailable",
@@ -490,7 +492,12 @@ def main(argv=None):
     )
     parser.add_argument(
         "--codex-restart-release", action="store_true",
-        help="lift a Codex restart freeze",
+        help="lift a Codex restart freeze (needs its --codex-restart-token)",
+    )
+    parser.add_argument(
+        "--codex-restart-token", default="",
+        help="lease token printed by --codex-restart-freeze: renews that "
+             "lease instead of taking a new one, or names the one to release",
     )
     args = parser.parse_args(argv)
     if args.codex_restart_freeze or args.codex_restart_release:
@@ -498,6 +505,8 @@ def main(argv=None):
             {"enabled": False} if args.codex_restart_release
             else {"enabled": True, "reason": "run.sh worker roll"}
         )
+        if args.codex_restart_token:
+            params["token"] = args.codex_restart_token
         response = ControlPlaneClient(path=args.socket).request(
             "codex.restart_freeze", params,
         )
