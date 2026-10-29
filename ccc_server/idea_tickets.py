@@ -506,14 +506,18 @@ def _row_title(row):
 
 def _sweep_titles(rows, data):
     """Give a ticket its session's title once one exists: the opener's first
-    line ("Can we fix this ...") is a poor handle. A dict lookup per row; at
-    most SWEEP_MAX_PER_CALL ``wt edit`` threads per call."""
+    line ("Can we fix this ...") is a poor handle. Only the session that
+    started the ticket names it: a continuation or child is one step of a
+    longer topic, and its title would rename the whole topic (CCC-263). A dict
+    lookup per row; at most SWEEP_MAX_PER_CALL ``wt edit`` threads per call."""
     sessions, tickets = data["sessions"], data["tickets"]
     started = 0
     for row in rows or []:
         sid = str(row.get("session_id") or row.get("id") or "")
         entry = sessions.get(sid) if sid else None
-        ref = entry.get("ref") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or entry.get("kind") != "started":
+            continue
+        ref = entry.get("ref")
         ticket = tickets.get(ref) if ref else None
         if not ticket or ticket.get("closed") or ticket.get("title_src") == "session":
             continue
