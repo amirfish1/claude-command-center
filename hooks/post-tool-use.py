@@ -27,6 +27,10 @@ try:
 except ImportError:
     def request_auto_title(*_a, **_k):
         pass
+try:
+    import _asks
+except ImportError:
+    _asks = None
 
 
 def prompt_fragment(text, max_len=240):
@@ -196,12 +200,22 @@ def main():
 
         # Clear the needs-approval marker notification.py wrote — the user
         # answered the permission prompt (approve/deny) and the tool ran,
-        # so the badge should drop off the kanban card.
-        needs_approval = os.path.join(LIVE_STATE_DIR, f"{session_id}_needs_approval.json")
-        try:
-            os.unlink(needs_approval)
-        except OSError:
-            pass
+        # so the badge should drop off the kanban card. Unless another tool
+        # of this session is still parked on its own prompt (CCC-245).
+        open_asks = 0
+        if _asks is not None:
+            try:
+                open_asks = _asks.resolve(
+                    LIVE_STATE_DIR, session_id, tool_name, tool_input,
+                    data.get("tool_use_id") or "", data.get("transcript_path") or "")
+            except Exception:
+                open_asks = 0
+        if not open_asks:
+            needs_approval = os.path.join(LIVE_STATE_DIR, f"{session_id}_needs_approval.json")
+            try:
+                os.unlink(needs_approval)
+            except OSError:
+                pass
 
         has_writes = os.path.exists(writes_flag)
 

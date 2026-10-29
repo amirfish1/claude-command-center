@@ -217,14 +217,29 @@ def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.tim
         _unlink(wpath)
 
 
+def record_ask(sid, tool, tin, transcript_path):
+    """Note this pending prompt so PostToolUse of a DIFFERENT tool can't clear
+    the session's needs-approval badge while this one still waits (CCC-245)."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import _asks
+        _asks.record(os.path.join(os.path.expanduser("~"), ".claude",
+                                  "command-center", "live-state"),
+                     sid, tool, tin, transcript_path)
+    except Exception:
+        pass
+
+
 def main():
     try:
         data = json.loads(sys.stdin.read())
         sid = str(data.get("session_id") or "")
         tool = str(data.get("tool_name") or "")
         tin = data.get("tool_input")
-        if not _SID_RE.fullmatch(sid) or not tool or tool in SKIP_TOOLS \
-                or not isinstance(tin, dict):
+        if not _SID_RE.fullmatch(sid) or not tool or not isinstance(tin, dict):
+            return
+        record_ask(sid, tool, tin, str(data.get("transcript_path") or ""))
+        if tool in SKIP_TOOLS:
             return
         base = base_dir()
         now = time.time()

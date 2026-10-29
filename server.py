@@ -22469,7 +22469,7 @@ HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
 HOOK_MARKER = "command-center/hooks/"
 CCC_HOOK_SCRIPT_NAMES = (
     "pre-tool-use.py", "permission-request.py", "post-tool-use.py", "notification.py", "stop.py",
-    "pre-compact.py", "post-compact.py", "session-start.py", "_notify.py",
+    "pre-compact.py", "post-compact.py", "session-start.py", "_notify.py", "_asks.py",
     # Codex hooks (installed into ~/.codex/hooks.json, not settings.json —
     # see ensure_codex_hooks_installed) share this same copy step and the
     # same HOOK_SCRIPTS_DIR location so both engines' scripts stay in sync
@@ -23939,6 +23939,15 @@ def _cleanup_stale_sidecars(live_session_ids):
                 f.unlink()
             except OSError:
                 pass
+    # Per-tool pending asks (hooks/_asks.py, CCC-245): live-state/asks/<sid>/.
+    asks_root = SIDECAR_STATE_DIR / "asks"
+    try:
+        ask_dirs = [d for d in asks_root.iterdir() if d.is_dir()]
+    except OSError:
+        ask_dirs = []
+    for d in ask_dirs:
+        if d.name not in live_session_ids:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def _ask_payload_from_state(state):

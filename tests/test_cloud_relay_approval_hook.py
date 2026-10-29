@@ -42,6 +42,9 @@ def _transcript(tmp_path, tool, tin):
 def appdir(tmp_path, monkeypatch):
     d = tmp_path / "cloud-approvals"
     monkeypatch.setenv("CCC_APPROVAL_HOOK_DIR", str(d))
+    # The hook also records each ask under ~/.claude (CCC-245): keep it out
+    # of the real HOME.
+    monkeypatch.setenv("HOME", str(tmp_path))
     return d
 
 

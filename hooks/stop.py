@@ -22,6 +22,10 @@ except ImportError:
 
     def is_throwaway_cwd(_cwd):
         return False
+try:
+    import _asks
+except ImportError:
+    _asks = None
 
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 STATE_DIR = os.path.expanduser("~/.claude/command-center")
@@ -243,6 +247,8 @@ def main():
             os.unlink(needs_approval_path)
         except FileNotFoundError:
             pass
+        if _asks is not None:
+            _asks.clear(LIVE_STATE_DIR, session_id)
 
         # Subtitle = session name (falls back to the short id) so the user can
         # match the banner to a card in the kanban.

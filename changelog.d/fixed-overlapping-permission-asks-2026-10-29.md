@@ -1,0 +1,1 @@
+- The needs-you badge no longer drops while a second tool in the same Claude session is still waiting for permission; it clears once the last pending ask is answered.
