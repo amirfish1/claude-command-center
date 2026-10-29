@@ -131,6 +131,7 @@ class WorkerRuntime:
                     ttl_s=params.get("ttl_s") or codex_restart_gate.DEFAULT_TTL_S,
                     token=params.get("token"),
                     commit=params.get("commit") is True,
+                    owner_pid=params.get("owner_pid"),
                 )
             except Exception as exc:
                 return {"ok": False, "code": "codex_state_unavailable",
@@ -371,6 +372,37 @@ def _worker_pid_alive(pidfile):
     return b"ccc_worker" in cmdline
 
 
+def codex_restart_fence_path():
+    """Shared with server._codex_restart_fence_path() and run.sh."""
+    override = os.environ.get("CCC_CODEX_RESTART_FENCE")
+    if override:
+        return Path(override)
+    from ccc_server.paths import COMMAND_CENTER_STATE_DIR
+    return COMMAND_CENTER_STATE_DIR / "codex-restart-fence.json"
+
+
+def _adopt_codex_restart_fence(path=None, interval_s=2.0):
+    """Before serving anything, adopt a restart fence the previous worker
+    committed (its kill authority may still be live), then keep checking
+    whether every authority it lists has ended (CCC-250)."""
+    from ccc_server import codex_restart_gate
+    state = codex_restart_gate.configure_fence(path or codex_restart_fence_path())
+    if state.get("committed"):
+        print("CCC worker: inherited a Codex restart fence; Codex admissions "
+              "stay frozen until its restart authority ends", flush=True)
+
+    def loop():
+        while True:
+            time.sleep(interval_s)
+            try:
+                if codex_restart_gate.status().get("committed"):
+                    codex_restart_gate.recover()
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, name="codex-restart-fence", daemon=True).start()
+
+
 def serve(path=None):
     path = Path(path or socket_path())
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -393,6 +425,7 @@ def serve(path=None):
         except OSError:
             pass
     open_files = _raise_open_file_limit()
+    _adopt_codex_restart_fence()
     runtime = WorkerRuntime(token=token)
     server = WorkerServer(path, runtime)
     os.chmod(path, 0o600)
@@ -505,6 +538,11 @@ def main(argv=None):
         help="with --codex-restart-freeze and a token: the final pre-kill "
              "proof; commits the lease so it lasts until the worker exits",
     )
+    parser.add_argument(
+        "--codex-restart-owner-pid", type=int, default=0,
+        help="with --codex-restart-commit: the pid that will issue the kill "
+             "(run.sh passes $$); the fence waits for it",
+    )
     args = parser.parse_args(argv)
     if args.codex_restart_freeze or args.codex_restart_release:
         params = (
@@ -517,6 +555,9 @@ def main(argv=None):
                       and args.codex_restart_token)
         if commit:
             params["commit"] = True
+            # The kill comes from the calling shell (run.sh), so that is
+            # the authority the fence waits on.
+            params["owner_pid"] = args.codex_restart_owner_pid or os.getppid()
         response = ControlPlaneClient(path=args.socket).request(
             "codex.restart_freeze", params,
         )

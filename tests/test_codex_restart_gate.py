@@ -16,6 +16,7 @@ import functools
 import json
 import os
 import pathlib
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -110,6 +111,9 @@ def native(monkeypatch):
     monkeypatch.setattr(gate, "_frozen_reason", "")
     monkeypatch.setattr(gate, "_owner", "")
     monkeypatch.setattr(gate, "_committed", False)
+    monkeypatch.setattr(gate, "_authorities", [])
+    monkeypatch.setattr(gate, "_fence_path", None)
+    monkeypatch.setattr(gate, "pending_job", lambda: False)
     codex_mod._CODEX_APP_SERVER_MUTATING_PENDING.clear()
     yield transport
     codex_mod._CODEX_APP_SERVER_MUTATING_PENDING.clear()
@@ -797,7 +801,8 @@ def _run_sh_functions(*names):
 def _run_helper(tmp_path, scenario, call):
     (tmp_path / "ccc_worker.py").write_text(_FAKE_WORKER)
     (tmp_path / "scenario.json").write_text(json.dumps(scenario))
-    script = _run_sh_functions("codex_restart_freeze_ok", "worker_stop_safe")
+    script = _run_sh_functions("codex_restart_freeze_ok", "worker_stop_safe",
+                               "codex_restart_report_kill")
     proc = subprocess.run(
         ["bash", "-c", f"{script}\n{call}"],
         env={**os.environ, "HERE": str(tmp_path), "PYTHON": sys.executable},
@@ -858,7 +863,8 @@ def test_run_sh_final_check_commits_its_lease_last(tmp_path):
     assert rc == 0
     # The commit is the last call before the kill: nothing after it can
     # release the lease, and the commit re-runs the proof.
-    assert calls == ["--codex-restart-freeze", "--health", "--health", _COMMIT_CALL]
+    assert calls[:3] == ["--codex-restart-freeze", "--health", "--health"]
+    assert calls[3].startswith(_COMMIT_CALL)
 
 
 def test_run_sh_commit_alone_takes_a_lease_first(tmp_path):
@@ -869,7 +875,8 @@ def test_run_sh_commit_alone_takes_a_lease_first(tmp_path):
         "codex_restart_freeze_ok commit",
     )
     assert rc == 0
-    assert calls == ["--codex-restart-freeze", "--health", _COMMIT_CALL]
+    assert calls[:2] == ["--codex-restart-freeze", "--health"]
+    assert calls[2].startswith(_COMMIT_CALL)
 
 
 def test_run_sh_uncommitted_final_check_defers_the_kill(tmp_path):
@@ -884,7 +891,7 @@ def test_run_sh_uncommitted_final_check_defers_the_kill(tmp_path):
             "codex_restart_freeze_ok commit",
         )
         assert rc != 0, commit_reply
-        assert calls[-1] == _COMMIT_CALL
+        assert calls[-1].startswith(_COMMIT_CALL)
 
 
 def test_worker_cli_commit_exit_needs_committed(monkeypatch, capsys):
@@ -979,3 +986,261 @@ def test_run_sh_every_worker_kill_is_gated():
     assert stop_safe.index("codex_restart_freeze_ok commit") < stop_safe.index("\n}\n")
     install = src[src.index("install_service_linux() {"):]
     assert install.index("! worker_stop_safe") < install.index('systemctl --user stop "$SYSTEMD_UNIT_NAME" "$WORKER_SYSTEMD_UNIT_NAME"')
+
+
+# --- Persisted fence: kill authority outlives the worker -------------------
+
+def _new_worker_generation(monkeypatch, fence):
+    """Forget in-memory state, as a freshly booted worker would, then adopt
+    the fence file the way ccc_worker.serve() does."""
+    for name, value in (("_frozen_until", 0.0), ("_owner", ""),
+                        ("_committed", False), ("_authorities", [])):
+        monkeypatch.setattr(gate, name, value)
+    return gate.configure_fence(fence)
+
+
+def _rewrite_worker_pid(fence, pid):
+    data = json.loads(fence.read_text())
+    for a in data["authorities"]:
+        a["worker_pid"] = pid
+    fence.write_text(json.dumps(data))
+
+
+def _dead_pid():
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _commit(owner_pid=None):
+    lease = gate.acquire("A")
+    out = gate.acquire("A final", token=lease["token"], commit=True,
+                       owner_pid=owner_pid or os.getpid())
+    assert out["committed"] is True, out
+    return lease["token"]
+
+
+def test_commit_is_persisted_and_inherited_by_the_next_worker(native, tmp_path, monkeypatch):
+    fence = tmp_path / "fence.json"
+    gate.configure_fence(fence)
+    token = _commit()
+    assert json.loads(fence.read_text())["authorities"][0]["token"] == token
+    state = _new_worker_generation(monkeypatch, fence)
+    assert state["committed"] is True and gate.blocks("thread/resume")
+    resumed = server._codex_app_server_request_once(
+        "thread/resume", {"threadId": "t-next"}, timeout=0.1, _route=False)
+    assert resumed.get("code") == "codex_restart_pending"
+    assert gate.recover() is False      # owner alive, no word from it
+
+
+def test_killed_marker_lifts_only_in_the_next_worker(native, tmp_path, monkeypatch):
+    fence = tmp_path / "fence.json"
+    gate.configure_fence(fence)
+    token = _commit()
+    Path(gate.done_path(token)).write_text("killed\n")
+    assert gate.recover() is False      # this is the worker it killed
+    _rewrite_worker_pid(fence, _dead_pid())
+    _new_worker_generation(monkeypatch, fence)
+    assert gate.recover() is True
+    assert not gate.frozen() and not fence.exists()
+    assert not Path(gate.done_path(token, str(fence))).exists()
+
+
+def test_uncertain_marker_waits_for_queued_service_jobs(native, tmp_path, monkeypatch):
+    fence = tmp_path / "fence.json"
+    gate.configure_fence(fence)
+    token = _commit()
+    Path(gate.done_path(token)).write_text("uncertain\n")
+    monkeypatch.setattr(gate, "pending_job", lambda: True)
+    assert gate.recover() is False and gate.frozen()
+    monkeypatch.setattr(gate, "pending_job", lambda: 1 / 0)   # unknown
+    assert gate.recover() is False and gate.frozen()
+    monkeypatch.setattr(gate, "pending_job", lambda: False)
+    assert gate.recover() is True and not gate.frozen()
+
+
+def test_crashed_owner_recovers_only_when_its_group_is_gone(native, tmp_path, monkeypatch):
+    fence = tmp_path / "fence.json"
+    gate.configure_fence(fence)
+    dead = _dead_pid()
+    _commit(owner_pid=dead)
+    data = json.loads(fence.read_text())
+    # An orphaned systemctl from the dead owner is still in its group.
+    data["authorities"][0]["owner_pgid"] = os.getpgid(0)
+    fence.write_text(json.dumps(data))
+    _new_worker_generation(monkeypatch, fence)
+    assert gate.recover() is False
+    data["authorities"][0]["owner_pgid"] = dead
+    fence.write_text(json.dumps(data))
+    _new_worker_generation(monkeypatch, fence)
+    monkeypatch.setattr(gate, "pending_job", lambda: True)
+    assert gate.recover() is False      # a queued restart job can still fire
+    monkeypatch.setattr(gate, "pending_job", lambda: False)
+    assert gate.recover() is True and not gate.frozen()
+
+
+def test_unreadable_fence_fails_closed(native, tmp_path, monkeypatch):
+    fence = tmp_path / "fence.json"
+    fence.write_text("{not json")
+    state = _new_worker_generation(monkeypatch, fence)
+    assert state["committed"] is True and gate.blocks("turn/start")
+    assert gate.recover() is False
+
+
+def test_unpersistable_commit_is_refused(native, tmp_path, monkeypatch):
+    gate.configure_fence(tmp_path / "missing-dir" / "fence.json")
+    lease = gate.acquire("A")
+    out = gate.acquire("A final", token=lease["token"], commit=True)
+    assert out["frozen"] is False and out["reason"] == "fence_unpersisted"
+    assert gate.status()["committed"] is False
+
+
+def test_overlapping_authorities_all_must_end(native, tmp_path, monkeypatch):
+    """A's kill stalls; the worker dies anyway and B takes over in the next
+    one, commits and kills. Neither B's report nor a worker change lifts
+    the fence while A's authority is still open."""
+    fence = tmp_path / "fence.json"
+    gate.configure_fence(fence)
+    a = _commit()
+    _rewrite_worker_pid(fence, _dead_pid())
+    _new_worker_generation(monkeypatch, fence)
+    b = gate.acquire("B")
+    assert b["frozen"] is True
+    assert gate.acquire("B final", token=b["token"], commit=True,
+                        owner_pid=os.getpid())["committed"] is True
+    assert {x["token"] for x in json.loads(fence.read_text())["authorities"]} == {a, b["token"]}
+    Path(gate.done_path(b["token"])).write_text("killed\n")
+    _rewrite_worker_pid(fence, _dead_pid())
+    _new_worker_generation(monkeypatch, fence)
+    assert gate.recover() is False and gate.blocks("thread/start")
+    Path(gate.done_path(a)).write_text("killed\n")
+    assert gate.recover() is True and not gate.frozen()
+
+
+def test_recover_never_lifts_over_a_newer_commit(native, tmp_path, monkeypatch):
+    fence = tmp_path / "fence.json"
+    gate.configure_fence(fence)
+    token = _commit()
+    Path(gate.done_path(token)).write_text("uncertain\n")
+    late = {}
+
+    def pending():
+        # A new restart commits while recovery is checking.
+        b = gate.acquire("B")
+        late["b"] = gate.acquire("B final", token=b["token"], commit=True,
+                                 owner_pid=os.getpid())
+        return False
+    monkeypatch.setattr(gate, "pending_job", pending)
+    assert gate.recover() is False
+    assert late["b"]["committed"] is True and gate.frozen()
+
+
+def test_backward_wall_clock_step_does_not_matter(native, monkeypatch):
+    assert gate.acquire("A", ttl_s=5)["frozen"] is True
+    monkeypatch.setattr(time, "time", lambda: 0.0)
+    assert gate.frozen() and gate.blocks("thread/start")
+    token = gate._owner
+    assert gate.acquire("A final", token=token, commit=True)["committed"] is True
+    monkeypatch.setattr(time, "time", lambda: 4_000_000_000.0)
+    monkeypatch.setattr(gate, "_now", lambda: 10 ** 12)
+    assert gate.frozen()
+
+
+def test_dashboard_reports_kill_outcome_to_the_fence(native, runtime, monkeypatch, tmp_path):
+    fence = tmp_path / "fence.json"
+    gate.configure_fence(fence)
+    monkeypatch.setattr(server, "_codex_restart_fence_path", lambda: fence)
+    _route_to_worker(monkeypatch, runtime)
+    seen = {}
+
+    def kill(*a, **k):
+        token = gate._authorities[-1]["token"]
+        seen["owner"] = gate._authorities[-1]["owner_pid"]
+        seen["marker_before"] = Path(gate.done_path(token)).exists()
+        seen["token"] = token
+        return {"restarted": True}
+    monkeypatch.setattr(server, "_restart_systemd_worker", kill)
+    assert server._codex_restart_freeze("A")[0] is True
+    assert server._restart_worker_process(codex_final_check=True) == {"restarted": True}
+    assert seen["owner"] == os.getpid() and seen["marker_before"] is False
+    assert Path(gate.done_path(seen["token"])).read_text().strip() == "killed"
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired("systemctl", 60)
+    monkeypatch.setattr(server, "_restart_systemd_worker", boom)
+    monkeypatch.setattr(gate, "_frozen_until", 0.0)
+    _new_worker_generation(monkeypatch, None)
+    gate.configure_fence(fence)
+    monkeypatch.setattr(gate, "_committed", False)
+    monkeypatch.setattr(gate, "_authorities", [])
+    assert server._codex_restart_freeze("B")[0] is True
+    with pytest.raises(subprocess.TimeoutExpired):
+        server._restart_worker_process(codex_final_check=True)
+    b = gate._authorities[-1]["token"]
+    assert Path(gate.done_path(b)).read_text().strip() == "uncertain"
+    assert gate.frozen()
+
+
+def test_worker_boot_adopts_the_fence_before_serving(native, tmp_path, monkeypatch):
+    import ccc_worker
+    fence = tmp_path / "fence.json"
+    fence.write_text(json.dumps({"authorities": [
+        {"token": "tok-old", "owner_pid": os.getpid(), "owner_pgid": None,
+         "worker_pid": _dead_pid()}]}))
+    ccc_worker._adopt_codex_restart_fence(fence, interval_s=0.05)
+    assert gate.blocks("thread/resume")
+    Path(gate.done_path("tok-old")).write_text("killed\n")
+    deadline = time.monotonic() + 5
+    while gate.frozen() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not gate.frozen() and not fence.exists()
+
+
+def test_default_pending_job_reads_systemd_queue(monkeypatch):
+    def run(out, rc=0):
+        monkeypatch.setattr(gate.subprocess, "run", lambda *a, **k:
+                            subprocess.CompletedProcess(a, rc, stdout=out, stderr=""))
+        return gate._default_pending_job()
+    assert run("") is False
+    assert run("42 ccc-worker.service restart running\n") is True
+    assert run("", rc=1) is True
+
+    def missing(*a, **k):
+        raise FileNotFoundError("systemctl")
+    monkeypatch.setattr(gate.subprocess, "run", missing)
+    assert gate._default_pending_job() is False
+
+
+def test_run_sh_reports_its_kill_to_the_fence(tmp_path):
+    frozen = {"ok": True, "frozen": True, "token": "tok-A"}
+    fence = tmp_path / "fence.json"
+    rc, calls = _run_helper(
+        tmp_path, {"--codex-restart-freeze": frozen, "--health": _IDLE,
+                   "--codex-restart-commit": dict(frozen, committed=True)},
+        f'CODEX_RESTART_FENCE="{fence}"; codex_restart_freeze_ok commit '
+        '&& codex_restart_report_kill killed && codex_restart_report_kill uncertain',
+    )
+    assert rc == 0
+    assert calls[-1].startswith(_COMMIT_CALL + " --codex-restart-owner-pid ")
+    # Reported once; the second call has no committed lease left.
+    assert (tmp_path / "fence.json.done.tok-A").read_text() == "killed\n"
+
+
+def test_run_sh_bounded_command_cannot_stall(tmp_path):
+    script = _run_sh_functions("ccc_bounded")
+    start = time.monotonic()
+    proc = subprocess.run(["bash", "-c", f"{script}\nccc_bounded 1 sleep 30"],
+                          capture_output=True, timeout=20)
+    assert proc.returncode != 0 and time.monotonic() - start < 10
+
+
+def test_run_sh_service_kills_are_bounded_and_reported():
+    src = (REPO / "run.sh").read_text()
+    for line in src.splitlines():
+        stripped = line.strip()
+        if ("systemctl --user restart" in stripped or "systemctl --user stop" in stripped
+                or "launchctl kickstart -k \"$(worker_service_target)\"" in stripped):
+            if stripped.startswith("#") or stripped.startswith("echo"):
+                continue
+            assert "ccc_bounded" in stripped, stripped
+    assert src.count("codex_restart_report_kill killed") >= 4

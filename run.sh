@@ -468,7 +468,13 @@ worker_systemd_managed() {
 # as `codex_restart_freeze_ok commit` as the last step before the kill: that
 # re-proves and commits the lease, which then never lapses or lifts, so a
 # slow service-manager call before the kill cannot reopen Codex.
+# A commit is persisted by the worker and outlives it: the next worker keeps
+# Codex frozen until this shell reports, with codex_restart_report_kill
+# after its kill commands return, that its kill authority ended (or this
+# shell is gone with nothing queued). Kill commands go through ccc_bounded.
 CODEX_RESTART_TOKEN=""
+CODEX_RESTART_COMMITTED=0
+CODEX_RESTART_FENCE="${CCC_CODEX_RESTART_FENCE:-$HOME/.claude/command-center/codex-restart-fence.json}"
 codex_restart_freeze_ok() {
   local mode="${1:-}" reply token
   if [ -z "$CODEX_RESTART_TOKEN" ] || [ "$mode" != "commit" ]; then
@@ -506,12 +512,37 @@ raise SystemExit(0 if data.get("ok") and data.get("codex_live_turns") == 0 else 
     # this lease in the worker, and a lost one has nothing to release.
     if ! "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze \
         --codex-restart-commit --codex-restart-token "$CODEX_RESTART_TOKEN" \
-        >/dev/null 2>&1; then
+        --codex-restart-owner-pid "$$" >/dev/null 2>&1; then
       CODEX_RESTART_TOKEN=""
       return 1
     fi
+    CODEX_RESTART_COMMITTED=1
   fi
   return 0
+}
+
+# After the kill commands of a committed restart returned: "killed" when the
+# kill went through, "uncertain" otherwise (the worker then waits until no
+# service-manager job is queued). No-op without a committed lease.
+codex_restart_report_kill() {
+  local word="$1" marker
+  [ "$CODEX_RESTART_COMMITTED" = "1" ] && [ -n "$CODEX_RESTART_TOKEN" ] || return 0
+  marker="$CODEX_RESTART_FENCE.done.$CODEX_RESTART_TOKEN"
+  printf '%s\n' "$word" > "$marker.tmp" 2>/dev/null && mv -f "$marker.tmp" "$marker" 2>/dev/null || true
+  CODEX_RESTART_COMMITTED=0
+  CODEX_RESTART_TOKEN=""
+}
+
+# Run a service-manager command for at most $1 seconds, so a stalled one
+# cannot keep a restart's kill authority open indefinitely.
+ccc_bounded() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  else
+    perl -e 'alarm shift; exec @ARGV' "$secs" "$@"
+  fi
 }
 
 # 0 when stopping the worker cannot abort a Codex turn: it froze admissions
@@ -530,12 +561,12 @@ worker_stop_safe() {
 # the socket. KillMode=process keeps the sessions the worker launched alive.
 restart_worker_via_systemd() {
   local stray_pid="${1:-0}" main_pid
-  main_pid="$(systemctl --user show -p MainPID --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null || echo 0)"
+  main_pid="$(ccc_bounded 10 systemctl --user show -p MainPID --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null || echo 0)"
   if [ "${stray_pid:-0}" -gt 1 ] 2>/dev/null && [ "$stray_pid" != "${main_pid:-0}" ]; then
     kill "$stray_pid" >/dev/null 2>&1 || true
     sleep 0.5
   fi
-  systemctl --user restart "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1
+  ccc_bounded 60 systemctl --user restart "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1
 }
 
 write_systemd_unit() {
@@ -657,7 +688,11 @@ EOF
     echo "Error: the CCC worker has running Codex turns (or cannot report them). Re-run --install-service once they finish." >&2
     exit 1
   fi
-  systemctl --user stop "$SYSTEMD_UNIT_NAME" "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+  if ccc_bounded 60 systemctl --user stop "$SYSTEMD_UNIT_NAME" "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1; then
+    codex_restart_report_kill killed
+  else
+    codex_restart_report_kill uncertain
+  fi
   sleep 0.3
 
   if is_port_bound "$target_port"; then
@@ -1120,7 +1155,11 @@ EOF
       # A pre-engine-control worker owns no live work. Retire that exact PID;
       # launchd/systemd may replace it, otherwise the detached start below
       # does. Never roll an older worker with unresolved work.
-      kill "$existing_worker_pid" >/dev/null 2>&1 || true
+      if kill "$existing_worker_pid" >/dev/null 2>&1; then
+        codex_restart_report_kill killed
+      else
+        codex_restart_report_kill uncertain
+      fi
       for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         sleep 0.1
         worker_health="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null || true)"
@@ -1148,7 +1187,11 @@ raise SystemExit(0 if "engine-execution-v1" in caps else 1)
         # restart would abort them (CCC-250). Leave it; compatibility mode.
         echo "⚠ Older worker is unreachable or busy; restart deferred, using compatibility execution." >&2
       elif [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
-        restart_worker_via_systemd "$existing_worker_pid" || true
+        if restart_worker_via_systemd "$existing_worker_pid"; then
+          codex_restart_report_kill killed
+        else
+          codex_restart_report_kill uncertain
+        fi
       else
         systemctl --user start "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
       fi
@@ -1236,6 +1279,7 @@ EOF
         fi
         echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
         worker_kicked=0
+        codex_kill_word=uncertain
         if ! codex_restart_freeze_ok commit; then
           # Re-prove and commit the freeze as the last step before the kill
           # (CCC-250).
@@ -1244,10 +1288,16 @@ EOF
         elif worker_systemd_managed; then
           # Even if the restart call fails, never fall through to a
           # detached spawn: the unit's Restart=always owns recovery.
-          restart_worker_via_systemd "${existing_worker_pid:-0}" || true
+          if restart_worker_via_systemd "${existing_worker_pid:-0}"; then
+            codex_kill_word=killed
+          fi
           worker_kicked=1
-        elif launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+        elif ccc_bounded 20 launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+          codex_kill_word=killed
           worker_kicked=1
+        fi
+        if [ "$worker_kicked" = "1" ]; then
+          codex_restart_report_kill "$codex_kill_word"
         fi
         if [ "$worker_kicked" = "deferred" ]; then
           :
@@ -1256,7 +1306,11 @@ EOF
           # DMG app spawn): kill the stale worker AND immediately replace it,
           # or the dashboard runs workerless (legacy execution) until the
           # next launch.
-          kill "$existing_worker_pid" >/dev/null 2>&1 || true
+          if kill "$existing_worker_pid" >/dev/null 2>&1; then
+            codex_restart_report_kill killed
+          else
+            codex_restart_report_kill uncertain
+          fi
           sleep 0.5
           if ! "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
             nohup "$PYTHON" "$HERE/ccc_worker.py" \

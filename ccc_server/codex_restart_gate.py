@@ -28,20 +28,52 @@ lost its lease has no proof left to kill on and must start over.
 
 The final pre-kill check commits the lease (acquire(commit=True)): the
 proof and the commit happen under one lock, and a committed lease never
-expires and cannot be released. Only the worker's exit ends it. Expiry
+expires and cannot be released; only recover() (below) lifts it. Expiry
 used to reopen admissions while the kill the proof had authorized was
 still on its way (a wall-clock step, a stalled systemctl), so a turn could
 start and be killed. Nothing a caller does after the proof can outlive a
-lease that does not lapse. A restart whose kill then failed leaves Codex
-frozen until the next restart. Any later acquire() takes over a committed
-lease without ever lifting it, and its proof passes because nothing could
-load under the freeze. Times are monotonic, so a clock step changes nothing.
+lease that does not lapse. Any later acquire() takes over a committed
+lease without ever lifting it (so a failed kill never strands the normal
+idle restart), and its proof passes because nothing could load under the
+freeze. Times are monotonic, so a clock step changes nothing.
+
+The fence outlives the worker, because kill authority can too: a queued
+`systemctl restart` or a stalled run.sh can still land on the NEXT worker.
+So a commit is written to disk (configure_fence(); the worker does it at
+boot) before it is granted, listing every committed authority (token,
+owner pid). A worker that boots with that file starts committed and only
+lifts the fence once every listed authority provably cannot execute:
+
+  - the owner wrote a done marker for its token (done_path()) after its
+    kill commands returned. outcome "killed": lifted only by a worker that
+    is not the one it killed. "uncertain" (a timeout): its commands
+    returned, so only a queued service-manager job can still fire; lifted
+    once there is none.
+  - or the owner pid is gone, nothing of its process group is left (an
+    orphaned systemctl stays in it), and the service manager has no job
+    queued for the worker unit (pending_job, default `systemctl --user
+    list-jobs`; unknown counts as pending).
+
+Anything unproven fails closed: Codex stays frozen (sends get the queue
+fallback) while restarts keep working. Recovery, by case:
+  - normal restart: the owner's "killed" marker lifts it in the new worker
+    within one recover() tick.
+  - kill timed out or failed: "uncertain", lifted once no job is queued.
+  - owner crashed before reporting: lifted once its pid and process group
+    are gone and no job is queued (a dashboard restart gets there).
+  - fence file unreadable (it is written atomically, so only disk damage
+    or a hand edit): owner unknown, so it never lifts on its own; an
+    operator who has confirmed no restart is running removes the file.
+recover() runs these checks; the worker calls it on a timer while committed.
 
 Stdlib-only and free of server imports so the worker can freeze before it
 ever loaded the Codex stack (no transport then means no turns to protect).
 """
 
+import json
+import os
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -60,6 +92,30 @@ _frozen_until = 0.0
 _frozen_reason = ""
 _owner = ""
 _committed = False
+_fence_path = None          # persisted fence; None = in-memory only (tests)
+_authorities = []           # [{"token", "owner_pid", "owner_pgid", "worker_pid"}]
+WORKER_UNIT = "ccc-worker.service"
+
+
+def _default_pending_job():
+    """True when a worker-unit job is queued, or unknown. No systemctl
+    (macOS launchd, a plain spawn) has no queue: a returned launchctl or
+    kill() cannot fire later."""
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", "list-jobs", "--no-legend"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except FileNotFoundError:
+        return False
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    if proc.returncode != 0:
+        return True
+    return WORKER_UNIT in (proc.stdout or "")
+
+
+pending_job = _default_pending_job
 
 
 def _now():
@@ -133,7 +189,8 @@ def _take_lease_unlocked(token, ttl_s, reason, now):
     return token, None
 
 
-def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False):
+def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False,
+            owner_pid=None):
     """Freeze native admissions, then prove no Codex turn can run.
 
     Returns {"ok": True, "frozen": bool, "live_turns": n, "threads": [...],
@@ -144,8 +201,8 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False):
     final pre-kill check); a lapsed or foreign token is refused
     (lease_lost). A refusal never touches another owner's lease.
     commit=True (with a token) commits the lease when the proof holds:
-    the reply then has committed=True and the freeze lasts until the
-    worker exits.
+    the reply then has committed=True, and the fence holds until recover()
+    proves this authority (owner_pid: the process issuing the kill) ended.
     """
     try:
         ttl_s = min(max(float(ttl_s), 1.0), MAX_TTL_S)
@@ -161,7 +218,7 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False):
                 if refusal:
                     return refusal
                 return _proved(owned, "no_codex_stack", ttl_s,
-                               commit and bool(token))
+                               commit and bool(token), owner_pid)
         lock = _app_server_lock()
     with lock, _state_lock:
         now = _now() if now is None else now
@@ -185,14 +242,154 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False):
             # been admitted in that gap, so this proof proves nothing.
             return _refused("freeze_lapsed")
         return _proved(owned, str(proof.get("reason") or "proved"),
-                       remaining, commit and bool(token))
+                       remaining, commit and bool(token), owner_pid)
 
 
-def _proved(owned, reason, remaining, commit):
-    """Caller holds _state_lock and still owns a live lease."""
-    global _committed
-    if commit:
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError, ValueError, TypeError):
+        return True
+    return True
+
+
+def _group_alive(pgid):
+    try:
+        os.killpg(int(pgid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError, ValueError, TypeError):
+        return True
+    return True
+
+
+def configure_fence(path):
+    """Persist commits at `path` and adopt any fence a previous worker left
+    there. Call before serving any request."""
+    global _fence_path, _committed, _owner, _authorities, _frozen_reason
+    with _state_lock:
+        _fence_path = str(path) if path else None
+        if not _fence_path or not os.path.exists(_fence_path):
+            return status()
+        try:
+            with open(_fence_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            auths = [a for a in data.get("authorities") or [] if isinstance(a, dict)]
+            if not auths:
+                raise ValueError("no authorities")
+        except (OSError, ValueError, AttributeError):
+            # Unreadable: who holds kill authority is unknown. Fail closed;
+            # a placeholder no done marker can match keeps the fence until
+            # the next restart takes it over.
+            auths = [{"token": "unreadable", "owner_pid": None,
+                      "owner_pgid": None, "worker_pid": None}]
+        _authorities = auths
         _committed = True
+        _owner = ""
+        _frozen_reason = "inherited restart fence"
+    return status()
+
+
+def done_path(token, fence_path=None):
+    base = fence_path or _fence_path
+    return f"{base}.done.{token}" if base and token else None
+
+
+def _write_fence_unlocked():
+    """Caller holds _state_lock. Raises when the fence cannot be persisted."""
+    if not _fence_path:
+        return
+    tmp = f"{_fence_path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"authorities": _authorities}, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, _fence_path)
+
+
+def _authority_ended(auth):
+    path = done_path(auth.get("token"))
+    outcome = None
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                outcome = (fh.read().strip().split() or [""])[0]
+        except OSError:
+            outcome = None
+    if outcome == "killed":
+        # The worker it killed is on its way out; never lift there.
+        return auth.get("worker_pid") != os.getpid()
+    if outcome != "uncertain":
+        # No word from the owner: it must be gone, with nothing of its
+        # process group left to run a kill it started.
+        pid, pgid = auth.get("owner_pid"), auth.get("owner_pgid")
+        if pid is None or _pid_alive(pid):
+            return False
+        if pgid is not None and _group_alive(pgid):
+            return False
+    try:
+        return not pending_job()
+    except Exception:
+        return False
+
+
+def recover():
+    """Lift a committed fence once every authority it lists has ended.
+    Returns True when it lifted."""
+    global _frozen_until, _frozen_reason, _owner, _committed, _authorities
+    with _state_lock:
+        if not _committed:
+            return False
+        auths = list(_authorities)
+    if not auths or not all(_authority_ended(a) for a in auths):
+        return False
+    with _state_lock:
+        if not _committed or _authorities != auths:
+            return False        # a new authority committed meanwhile
+        if _fence_path:
+            try:
+                os.unlink(_fence_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return False
+        for a in auths:
+            path = done_path(a.get("token"))
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+        _frozen_until = 0.0
+        _frozen_reason = ""
+        _owner = ""
+        _committed = False
+        _authorities = []
+    return True
+
+
+def _proved(owned, reason, remaining, commit, owner_pid=None):
+    """Caller holds _state_lock and still owns a live lease. A commit is
+    granted only once it is persisted."""
+    global _committed, _authorities
+    if commit:
+        auth = {"token": owned, "owner_pid": owner_pid,
+                "owner_pgid": None, "worker_pid": os.getpid()}
+        if owner_pid is not None:
+            try:
+                auth["owner_pgid"] = os.getpgid(int(owner_pid))
+            except (OSError, ValueError, TypeError):
+                pass
+        before, was = list(_authorities), _committed
+        _authorities = [a for a in _authorities if a.get("token") != owned] + [auth]
+        _committed = True
+        try:
+            _write_fence_unlocked()
+        except OSError:
+            _authorities, _committed = before, was
+            return dict(_refused("fence_unpersisted"), token=owned)
     return {"ok": True, "frozen": True, "live_turns": 0, "threads": [],
             "reason": reason, "token": owned,
             "remaining_s": max(0.0, remaining), "committed": _committed}
@@ -221,4 +418,4 @@ def status(now=None):
     now = _now() if now is None else now
     return {"frozen": frozen(now), "remaining_s": max(0.0, _frozen_until - now),
             "reason": _frozen_reason, "owned": bool(_owner) and frozen(now),
-            "committed": _committed}
+            "committed": _committed, "authorities": len(_authorities)}

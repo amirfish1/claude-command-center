@@ -18634,6 +18634,21 @@ def _restart_worker_process(worker=None, *, was=None, now=None, codex_final_chec
             )
             return {"restarted": False, "reason": "codex_turns_running",
                     "codex_live_turns": turns}
+        # The worker committed the fence: it holds until this thread
+        # reports that its kill commands returned (CCC-250).
+        outcome = None
+        try:
+            outcome = _restart_worker_process_kill(
+                target, pid, systemd_scope, pid_in_unit, was=was, now=now)
+            return outcome
+        finally:
+            _codex_restart_report_kill(outcome)
+    return _restart_worker_process_kill(
+        target, pid, systemd_scope, pid_in_unit, was=was, now=now)
+
+
+def _restart_worker_process_kill(target, pid, systemd_scope, pid_in_unit, *,
+                                 was=None, now=None):
     if systemd_scope:
         return _restart_systemd_worker(
             systemd_scope, pid, pid_in_unit, was=was, now=now,
@@ -18809,6 +18824,34 @@ def _codex_restart_release(reason=""):
         pass
 
 
+def _codex_restart_fence_path():
+    override = os.environ.get("CCC_CODEX_RESTART_FENCE")
+    return Path(override) if override else COMMAND_CENTER_STATE_DIR / "codex-restart-fence.json"
+
+
+def _codex_restart_report_kill(outcome):
+    """Tell the worker's fence that this thread's kill authority ended: its
+    kill commands all returned. A restart that did not happen may have
+    half-run (a systemctl timeout leaves a queued job), so it is reported
+    uncertain and the worker waits until no job is queued."""
+    token = _codex_restart_lease_token()
+    if not token or not getattr(_CODEX_RESTART_LEASE, "committed", False):
+        return
+    from ccc_server import codex_restart_gate
+    path = codex_restart_gate.done_path(token, str(_codex_restart_fence_path()))
+    word = ("killed" if isinstance(outcome, dict) and outcome.get("restarted")
+            else "uncertain")
+    try:
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(word + "\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        # Fail closed: the fence holds until the next restart takes it over.
+        _log_activity("worker", "RESTART_CODEX_FENCE",
+                      f"could not report kill outcome ({e}); Codex stays frozen")
+
+
 def _codex_restart_final_check(health=None):
     """Re-run the worker's freeze proof right before the kill: 0 only when
     the worker answers frozen with no loaded Codex thread. Anything else
@@ -18825,7 +18868,7 @@ def _codex_restart_final_check(health=None):
     try:
         resp = _control_plane_request("codex.restart_freeze", {
             "enabled": True, "reason": "final pre-kill check",
-            "token": token, "commit": True,
+            "token": token, "commit": True, "owner_pid": os.getpid(),
         })
     except Exception:
         return -1
