@@ -33281,6 +33281,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     height: 46px;
   }
   #convList#convList .conv-item .conv-main-row.has-inline-step .conv-avatar-number { font-size: 18px; }
+  #convList#convList .conv-item .conv-main-row.has-inline-step .conv-avatar-initials { font-size: 11px; }
   /* CCC-155: right edge, vertically centred in the row (was the avatar's
      top corner); the preview line leaves room so the dot never covers it. */
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-working-dot {
@@ -33350,7 +33351,9 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-idea-avatar > .repo-avatar.conv-avatar-background { position:absolute; inset:2px; width:calc(100% - 4px); height:calc(100% - 4px); margin:0; border-radius:50%; overflow:hidden; pointer-events:none; background:transparent; }
 .conv-idea-avatar > .conv-avatar-background img { object-fit:cover; background:transparent; opacity:1; }
 .conv-avatar-background .repo-avatar-initials { display:none; }
-.conv-idea-avatar > .conv-avatar-number { position:relative; z-index:1; text-shadow:0 1px 3px #000, 0 0 5px #000; }
+.conv-idea-avatar > .conv-avatar-stack { position:relative; z-index:1; display:flex; flex-direction:column; align-items:center; gap:1px; text-shadow:0 1px 3px #000, 0 0 5px #000; }
+.conv-avatar-initials { font:700 9px/1 system-ui, sans-serif; letter-spacing:.5px; }
+.conv-avatar-stack > .conv-avatar-number { font-size:13px; }
 .conv-idea-avatar > .conv-avatar-model { z-index:2; }
 .conv-repo-portrait { cursor:default; }
 .conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }
