@@ -3167,6 +3167,26 @@ def _wt_item_ts(item):
     return 0
 
 
+def _wt_item_worked_by_session(item, sid):
+    """True unless the history shows ``sid`` never claimed the ticket.
+
+    A bare `wt close` stamps claimed_session_id on the closer, so a session
+    that only filed/closed a ticket would otherwise be retitled after it
+    (CCC-268). Items without a history list keep the old behavior.
+    """
+    history = item.get("history")
+    if not isinstance(history, list) or not history:
+        return True
+    for ev in history:
+        if not isinstance(ev, dict) or ev.get("event") != "claim":
+            continue
+        by = ev.get("by") if isinstance(ev.get("by"), dict) else {}
+        claim_sid = str(by.get("session_id") or "").strip()
+        if not claim_sid or claim_sid == sid:
+            return True
+    return False
+
+
 # The archive walk stamps WT ticket titles onto worker rows. Its only ticket
 # source, `_q.list_items()`, can be GitHub-backed: on a cold process that is
 # four `gh` subprocess round-trips (~5s), and WatchTower's own in-memory cache
@@ -3304,6 +3324,8 @@ def _apply_watchtower_worker_display_names(rows):
         if not sid:
             sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
         if not sid:
+            continue
+        if not _wt_item_worked_by_session(it, sid):
             continue
         rank = 1 if status == "in_progress" else 0
         score = (rank, _wt_item_ts(it))
@@ -12811,6 +12833,8 @@ def _overlay_wt_worker_display_names_on_census(out):
         if not sid:
             sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
         if not sid or sid not in out:
+            continue
+        if not _wt_item_worked_by_session(it, sid):
             continue
         rank = 1 if status == "in_progress" else 0
         score = (rank, _wt_item_ts(it))
