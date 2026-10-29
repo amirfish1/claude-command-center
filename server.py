@@ -28127,7 +28127,7 @@ def _static_asset_url(name):
 
 def _load_index_html():
     try:
-        html_text = _INDEX_HTML_PATH.read_text()
+        html_text = _INDEX_HTML_PATH.read_text(encoding="utf-8")
         html_text = html_text.replace(
             'href="/static/app.css"',
             f'href="{_static_asset_url("app.css")}"',
@@ -30178,7 +30178,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             })
         elif path == "/morning/kanban":
             try:
-                html = (MORNING_STATIC_DIR / "kanban.html").read_text()
+                html = (MORNING_STATIC_DIR / "kanban.html").read_text(encoding="utf-8")
                 # Inject CCC_USER_NAME so the greeting can personalize. Empty string
                 # by default; the JS handles the empty case ("Good morning.").
                 user_name = os.environ.get("CCC_USER_NAME", "").replace('"', '\\"')
@@ -31387,7 +31387,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/morning":
             try:
-                self.send_html((MORNING_STATIC_DIR / "index.html").read_text())
+                self.send_html((MORNING_STATIC_DIR / "index.html").read_text(encoding="utf-8"))
             except OSError as e:
                 self.send_json({"error": "morning/index.html missing", "detail": str(e)}, 500)
         elif re.match(r"^/app/[a-z0-9_-]+$", path):
@@ -31418,13 +31418,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             for base in (USER_APPS_DIR, STATIC_DIR):
                 target = base / name / "index.html"
                 if target.is_file():
-                    self.send_html(target.read_text())
+                    self.send_html(target.read_text(encoding="utf-8"))
                     break
             else:
                 self.send_json({"error": f"not found: {path}"}, 404)
         elif re.match(r"^/morning/goals/[A-Za-z0-9_-]+$", path):
             try:
-                self.send_html((MORNING_STATIC_DIR / "goal-detail.html").read_text())
+                self.send_html((MORNING_STATIC_DIR / "goal-detail.html").read_text(encoding="utf-8"))
             except OSError as e:
                 self.send_json({"error": "morning/goal-detail.html missing", "detail": str(e)}, 500)
         elif path == "/api/morning/state":
