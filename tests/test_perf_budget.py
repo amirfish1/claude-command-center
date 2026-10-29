@@ -5082,13 +5082,22 @@ def test_federation_pipe_warm_fanout_and_prewarm_tick_spawn_nothing(monkeypatch)
         memory_fanout.reset_state()
 
 
-def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_path):
+@pytest.mark.parametrize("surface", ["brief", "family"])
+def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_path, surface):
     """multi-machine S6: a brief whose lineage is all on this node builds no
     peer client and sends nothing; a dangling origin costs at most one
     routed request per paired peer (one hop, no recursion). A request per
     successor, or a second hop, is the O(chain x peers) path S6 must avoid."""
     import federation
-    from ccc_server import memory_fanout
+    from ccc_server import memory_fanout, lineage, ship_graph
+
+    def render(sid, local):
+        if surface == "brief":
+            return memory_fanout.brief_all(sid, local)
+        monkeypatch.setattr(ship_graph, "_get_connection", lambda: None)
+        monkeypatch.setattr(ship_graph, "_sync_all", lambda *a, **k: pytest.fail("family synced transcripts"))
+        monkeypatch.setattr(lineage, "continuation_links", lambda conn, query: local(query))
+        return memory_fanout.family_continuations(sid)
 
     here = "11111111-0000-0000-0000-00000000000a"
     peers = [{"node_id": f"2222222{i}-0000-0000-0000-00000000000b", "name": f"n{i}",
@@ -5123,14 +5132,14 @@ def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_pa
                 "predecessor": {"session_id": x, "ref": x},
                 "successors": [{"session_id": f"{i:08x}" + y[8:], "ref": f"{i:08x}" + y[8:]} for i in range(20)]},
         }
-        out = memory_fanout.brief_all(y, lambda q: local_chain[q])
+        out = render(y, lambda q: local_chain[q])
         assert out["predecessor"]["local"] is True
         assert built == [] and sent == [], "same-node lineage touched the network"
 
         dangling = {y: {"query": y, "session_id": y, "found": True,
                         "predecessor": {"session_id": x, "ref": x, "dangling": True},
                         "successors": []}}
-        out = memory_fanout.brief_all(y, lambda q: dangling.get(q, {"query": q, "found": False}))
+        out = render(y, lambda q: dangling.get(q, {"query": q, "found": False}))
         assert len(sent) <= len(peers), f"dangling origin cost {len(sent)} requests for {len(peers)} peers"
         assert {q for _, q in sent} == {x}, "resolution followed a second hop"
     finally:
@@ -5202,3 +5211,45 @@ def test_session_fts_recall_sync_kicks_and_sdoc_lookups_are_bounded(monkeypatch,
         if getattr(session_fts._tls, "conn", None):
             session_fts._tls.conn.close()
         session_fts._tls.conn = None
+
+
+def test_runaway_scan_opens_only_changed_active_transcripts(tmp_path, monkeypatch):
+    """ccc_server/runaway.py: candidacy is stat-only and warm rescans read
+    nothing. Stale transcripts are never opened; an unchanged active one is
+    not re-read; an appended one is read once from its saved offset."""
+    import builtins
+    from ccc_server import runaway
+
+    now = time.time()
+    projects = tmp_path / "projects" / "p"
+    projects.mkdir(parents=True)
+    rec = json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z", "turnOrigin": "scheduled",
+                      "message": {"role": "user", "content": "tick"}}) + "\n"
+    for i in range(300):  # stale: outside the active window
+        stale = projects / ("stale-%04d-aaaa.jsonl" % i)
+        stale.write_text(rec)
+        os.utime(stale, (now - 30 * 86400, now - 30 * 86400))
+    active = projects / "active-0001-aaaa.jsonl"
+    active.write_text(rec * 50)
+    kw = dict(projects_root=tmp_path / "projects", codex_root=tmp_path / "no-codex",
+              state_file=tmp_path / "scan.json")
+
+    opened = []
+    real_open = builtins.open
+
+    def counting_open(path, *args, **kwargs):
+        if str(path).endswith(".jsonl"):
+            opened.append(str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("runaway scan forked"))
+    runaway.scan(now=now, **kw)
+    assert opened == [str(active)]
+    opened.clear()
+    runaway.scan(now=now, **kw)
+    assert opened == []
+    with real_open(active, "a") as fh:
+        fh.write(rec)
+    runaway.scan(now=now, **kw)
+    assert opened == [str(active)]

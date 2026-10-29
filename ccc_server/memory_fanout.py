@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -654,6 +655,39 @@ def _node_names(here: dict, peers: list[dict]) -> dict:
              for p in peers if p.get("node_id")}
     names[here["node_id"]] = here["name"]
     return names
+
+
+def family_continuations(sid: str) -> dict:
+    """Direct neighbours of the requested family-map session, lazily resolved.
+
+    Read the existing local index, without brief's recall fallback, transcript
+    sync, or commit probes. Reuse brief's one-hop resolver; never resolve every
+    node in a spawn tree (which would multiply peer requests by family size).
+    """
+    from ccc_server import lineage, ship_graph
+
+    conn = ship_graph._get_connection()
+    node = _self_node()
+    peers = federation.load_peers()
+
+    def local_links(query):
+        return {"session_id": query,
+                "found": bool(conn.execute("SELECT 1 FROM session_meta WHERE sid = ?", (query,)).fetchone()),
+                **lineage.continuation_links(conn, query)}
+
+    out = {"session_id": sid, "node_id": node["node_id"], "node_name": node["name"],
+           "local": True, "node_names": _node_names(node, peers)}
+    try:
+        out.update(lineage.continuation_links(conn, sid))
+    except sqlite3.OperationalError as exc:
+        if str(exc) not in {"no such table: session_meta", "no such column: continuation_origin"}:
+            raise
+        # Startup indexing owns schema initialization/migration. Keep the
+        # existing spawn map usable without starting a sync on its read path.
+        out.update(predecessor=None, successors=[], indexing=True)
+        return out
+    _resolve_continuations(out, local_links, peers, node)
+    return out
 
 
 # -- file history ------------------------------------------------------------

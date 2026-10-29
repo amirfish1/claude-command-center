@@ -28698,6 +28698,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Sessions a machine restart cut off mid-turn (scanned once per boot).
             from ccc_server import restart_recovery
             restart_recovery.handle_api_get(self)
+        elif path == "/api/runaway":
+            # Sessions working on autonomously with nothing changing (timers,
+            # goals, WatchTower pings). Report-only; see ccc_server/runaway.py.
+            from ccc_server import runaway
+            runaway.handle_api_get(self, parsed)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
@@ -29448,6 +29453,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if tree is None:
                     self.send_json({"ok": False, "error": "no family found"}, 404)
                 else:
+                    from ccc_server.memory_fanout import family_continuations
+                    continuation = family_continuations(sid)
                     # Join spawn-registry metadata (name, model, engine,
                     # spawned_at, cwd, command_summary) onto each node so the
                     # frontend has something to display without a second
@@ -29463,6 +29470,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         if not isinstance(node, dict):
                             return node
                         nsid = node.get("session_id", "")
+                        owner, _native = federation.parse_session_ref(nsid)
+                        owner = owner or continuation["node_id"]
+                        node.update(ref=nsid, node_id=owner,
+                                    node_name=continuation["node_names"].get(owner, owner[:8]),
+                                    local=owner == continuation["node_id"])
                         reg = reg_by_sid.get(nsid)
                         if reg:
                             for field in ("name", "model", "engine", "spawned_at", "cwd", "command_summary"):
@@ -29484,6 +29496,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "root": tree.get("session_id"),
                         "total_nodes": total,
                         "tree": tree,
+                        "continuation": continuation,
                     })
         elif re.match(r"^/api/sessions/spawned/\d+/log$", path):
             try:
@@ -29701,6 +29714,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 hours = 24
             self.send_json(summarize(hours=hours))
+        elif path == "/api/telemetry/health-report":
+            # Local-only health snapshot (latency histograms, view-switch
+            # and rail timings, bucketed fleet counts) for a user to paste
+            # into a bug report. Sends nothing; built on request only. See
+            # ccc_server/health_report.py and docs/telemetry.md.
+            from ccc_server import health_report as _health_report
+            qs = urllib.parse.parse_qs(parsed.query)
+            exact = qs.get("exact", ["0"])[0] in ("1", "true")
+            self.send_json(_health_report.build_report(exact=exact))
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("federated", ["0"])[0] in ("1", "true"):
@@ -33018,6 +33040,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import auto_rerun
             auto_rerun.handle_api_post(self)
             return
+        if path.startswith("/api/runaway/"):
+            # Lease ("let it run") / dismiss for a flagged runaway session.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import runaway
+            if runaway.handle_api_post(self, path):
+                return
         if path.startswith("/api/restart-recovery/"):
             # Dismiss / resume-prompt for sessions a restart cut off mid-turn.
             # Same-origin was already enforced at the top of do_POST.

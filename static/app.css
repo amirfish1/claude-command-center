@@ -29580,6 +29580,8 @@ html:not(.ccc-debug-mode) #statsModal {
 }
 .orch-map.is-narrow .orch-map-ancestor { text-align: left; padding-left: 4px; }
 .orch-map-root { position: relative; display: flex; justify-content: center; z-index: 1; }
+.orch-map-continuation { position: relative; z-index: 1; font-size: 11px; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
+.orch-continuation-status { color: #d29922; }
 .orch-map-lanes {
   position: relative;
   display: flex;
@@ -30841,9 +30843,9 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   justify-content: center;
   box-sizing: border-box;
   padding: 1px 3px;
-  border: 1px solid color-mix(in srgb, currentColor 45%, var(--border));
+  border: 0;
   border-radius: 5px;
-  background: color-mix(in srgb, currentColor 12%, var(--bg));
+  background: transparent;
   color: var(--text);
   font: 8px/1.2 system-ui, sans-serif;
   white-space: nowrap;
@@ -31079,6 +31081,11 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .ns-selection-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ns-model-change { text-decoration: underline; text-underline-offset: 3px; }
 .ns-model-overrides .conv-model-picker-inner { margin-top: 8px; }
+/* CCC-255: the composer's engine/model/effort selects, lifted above the
+   ranked chips while the override is open. */
+.ns-model-override-selects { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.ns-model-override-selects:empty { display: none; }
+.ns-model-override-selects > select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .ns-model-overrides.is-legacy > summary { display: none; }
 .conv-pane:has(.conv-model-picker-strip.has-auto-selection) .ns-model-comparison:not(.is-manual-expanded) { display: none; }
 .conv-pane.has-new-session-context:has(.has-auto-selection):not(:has(#nsModelOverrides[open])) :is(#convInputEngineSelect, #convInputModelSelect, #convInputEffortSelect) { display: none !important; }
@@ -33095,6 +33102,15 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-row-read:hover, .conv-row-read:focus-visible, .conv-row-read.speaking { color: var(--accent); border-color: var(--accent); }
 .conv-row-read:disabled { opacity: .6; cursor: wait; }
 .conv-row-read.paused { opacity: .65; }
+/* With a mouse, a row's speaker appears only on hover/focus (or while it is
+   reading) so a list of rows is not a column of speaker icons (CCC-256).
+   Visibility, not display, so the row does not reflow on hover. Touch keeps
+   it visible: there is no hover to reveal it. */
+@media not all and (pointer: coarse) {
+  #convList .conv-item:not(:hover):not(:focus-within) .conv-row-read:not(.speaking):not(.paused):not([aria-busy]) {
+    visibility: hidden;
+  }
+}
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) {
   display: flex !important; align-items: flex-end; gap: 4px;
 }

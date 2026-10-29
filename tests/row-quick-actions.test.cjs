@@ -171,3 +171,41 @@ test('human row replies use composer provenance without promoting automated send
   assert.equal(humanSteers.length, 3);
   for (const call of humanSteers) assert.match(call, /userInitiated: true/);
 });
+
+test('row speaker shows only for rows with an answer, and only on hover with a mouse (CCC-256)', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 800 });
+    const rowHtml = id => `<div class="conv-item" data-session-id="${id}"><div class="conv-title-row"><div class="conv-main-row has-inline-step">
+      <span class="conv-title">${id}</span><div class="conv-outcome is-inline"><span class="conv-outcome-step">x</span></div></div></div></div>`;
+    await page.setContent(`<style>${css}</style><div id="convList" style="width:380px">${rowHtml('answered')}${rowHtml('empty')}</div>`);
+    await page.addScriptTag({ content: `
+      window.rows = {answered:{session_id:'answered', hasAnswer:true, session_state:{}}, empty:{session_id:'empty', hasAnswer:false, session_state:{}}};
+      let _ttsDirectBtn = null;
+      const _ultraFreshRow = sid => window.rows[sid];
+      const _ultraFreshCurrent = c => c;
+      const _applyLiveOverlayToRow = c => c;
+      const _ultraFreshExplanation = c => ({kind:'update', text:'x', hasAnswer:c.hasAnswer});
+      const showOpToast = () => {};
+      ${helpers}
+      window.syncAudio = syncRowAnswerAudio;
+      syncRowAnswerAudio();
+    ` });
+    const speakers = () => page.$$eval('.conv-row-read', els => els.map(b => b.closest('.conv-item').dataset.sessionId));
+    assert.deepEqual(await speakers(), ['answered'], 'no speaker on a row with nothing to read');
+    const vis = () => page.evaluate(() => getComputedStyle(document.querySelector('.conv-row-read')).visibility);
+    await page.mouse.move(1400, 790);
+    assert.equal(await vis(), 'hidden', 'hidden until the row is hovered');
+    const box = await page.evaluate(() => { const r = document.querySelector('[data-session-id="answered"]').getBoundingClientRect(); return {x:r.x + 20, y:r.y + 5}; });
+    await page.mouse.move(box.x, box.y);
+    assert.equal(await vis(), 'visible', 'hovering the row reveals its speaker');
+    await page.mouse.move(1400, 790);
+    await page.evaluate(() => document.querySelector('.conv-row-read').classList.add('speaking'));
+    assert.equal(await vis(), 'visible', 'stays visible while reading');
+    await page.evaluate(() => { document.querySelector('.conv-row-read').classList.remove('speaking'); rows.answered.hasAnswer = false; syncAudio(); });
+    assert.deepEqual(await speakers(), [], 'speaker removed once the answer goes stale');
+  } finally {
+    await browser.close();
+  }
+});

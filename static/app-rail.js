@@ -155,6 +155,72 @@
     return best;
   }
 
+  // Last good /api/apps answer, so a page paints the user's real rail
+  // (Decisions, Savings, their own apps) instantly instead of the two-app
+  // fallback until the fetch lands. Without it, every full navigation shows
+  // Sessions + Queues first and the rest only "sometimes" — whenever the
+  // fetch is slow behind the page's other requests, or fails outright.
+  var APPS_CACHE_KEY = "ccc-rail-apps-v1";
+  var SWITCH_KEY = "ccc-rail-switch";
+
+  function cachedApps() {
+    try {
+      var v = JSON.parse(localStorage.getItem(APPS_CACHE_KEY) || "null");
+      return (Array.isArray(v) && v.length) ? v : null;
+    } catch (e) { return null; }
+  }
+
+  // Fire-and-forget latency sample into the local perf sink (the same
+  // /api/perf-event the dashboard uses). Every page carries the rail, so it
+  // cannot rely on app.js's window._perfEvent being present.
+  function perfEvent(kind, ms, detail) {
+    try {
+      fetch("/api/perf-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: kind, ms: Math.max(0, Math.round(ms)), detail: detail || {} }),
+        keepalive: true
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  function afterPaint(fn) {
+    requestAnimationFrame(function () { requestAnimationFrame(fn); });
+  }
+
+  // Report the switch a rail click on the previous page started. Ends at
+  // this page's load event + a painted frame; navigation timing splits it
+  // into server response vs. parse/script time so "slow switch" can be
+  // attributed. Stale or foreign entries (> 60s) are dropped.
+  function reportArrival() {
+    var rec = null;
+    try {
+      rec = JSON.parse(sessionStorage.getItem(SWITCH_KEY) || "null");
+      sessionStorage.removeItem(SWITCH_KEY);
+    } catch (e) { rec = null; }
+    if (!rec || typeof rec.t !== "number") return;
+    function done() {
+      afterPaint(function () {
+        var ms = Date.now() - rec.t;
+        if (ms < 0 || ms > 60000) return;
+        var detail = { from: String(rec.from || ""), to: String(rec.to || ""), mode: "navigate" };
+        try {
+          var n = performance.getEntriesByType("navigation")[0];
+          if (n) {
+            detail.response_ms = Math.round(n.responseEnd);
+            detail.dom_ready_ms = Math.round(n.domContentLoadedEventEnd);
+            detail.load_ms = Math.round(n.loadEventStart);
+          }
+        } catch (e) {}
+        perfEvent("view_switch", ms, detail);
+      });
+    }
+    if (document.readyState === "complete") done();
+    else window.addEventListener("load", done, { once: true });
+  }
+
+  var lastApps = FALLBACK;
+
   var nav = document.createElement("nav");
   nav.className = "ccc-side-nav";
   nav.setAttribute("aria-label", "Applications");
@@ -169,10 +235,22 @@
     var a = e.target.closest("a[data-app-id]");
     if (!a || !nav.contains(a)) return;
     var id = a.getAttribute("data-app-id");
-    if (id !== "sessions" && id !== "queues") return;
-    if (typeof window.cccSwitchCoreApp === "function" && window.cccSwitchCoreApp(id)) {
+    var from = activeIdFor(lastApps) || "";
+    if (a.target === "_blank") return;
+    var t0 = Date.now();
+    if (id !== "sessions" && id !== "queues") {
+      // not a core app: falls through to a full navigation below
+    } else if (typeof window.cccSwitchCoreApp === "function" && window.cccSwitchCoreApp(id)) {
       e.preventDefault();
+      afterPaint(function () {
+        perfEvent("view_switch", Date.now() - t0, { from: from, to: id, mode: "in_page" });
+      });
+      return;
     }
+    // A full navigation: the next page's rail reports click -> its load.
+    try {
+      sessionStorage.setItem(SWITCH_KEY, JSON.stringify({ from: from, to: id, t: Date.now() }));
+    } catch (err) {}
   });
 
   function markRailActive(id) {
@@ -187,6 +265,7 @@
   window.cccMarkRailActive = markRailActive;
 
   function render(apps) {
+    lastApps = apps;
     var activeId = activeIdFor(apps);
     nav.textContent = "";
     for (var i = 0; i < apps.length; i++) {
@@ -228,13 +307,27 @@
     nav.appendChild(add);
   }
 
-  function refresh() {
+  // A failed or non-OK fetch retries with backoff instead of leaving the
+  // fallback rail up for the life of the page.
+  var RETRY_MS = [1500, 5000, 15000];
+
+  function refresh(attempt) {
+    attempt = attempt || 0;
+    var t0 = Date.now();
+    var hadCache = !!cachedApps();
     return fetch("/api/apps")
       .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
       .then(function (d) {
-        if (d && Array.isArray(d.apps) && d.apps.length) render(d.apps);
-      })
-      .catch(function () { /* keep whatever is already rendered */ });
+        var ok = !!(d && Array.isArray(d.apps) && d.apps.length);
+        perfEvent("rail_apps", Date.now() - t0, { ok: ok, attempt: attempt, cached: hadCache });
+        if (ok) {
+          render(d.apps);
+          try { localStorage.setItem(APPS_CACHE_KEY, JSON.stringify(d.apps)); } catch (e) {}
+        } else if (attempt < RETRY_MS.length) {
+          setTimeout(function () { refresh(attempt + 1); }, RETRY_MS[attempt]);
+        }
+      });
   }
 
   function mountResizer() {
@@ -266,15 +359,16 @@
   function mount() {
     if (!document.body) return;
     applyWidth(railW);
-    render(FALLBACK);
+    render(cachedApps() || FALLBACK);
     document.body.appendChild(nav);
     mountResizer();
     refresh();
+    reportArrival();
   }
 
   // The Applications settings page calls this after a toggle, reorder, or
   // removal so the rail beside it stops disagreeing with the list.
-  window.cccRefreshRail = refresh;
+  window.cccRefreshRail = function () { return refresh(0); };
 
   function openApps() {
     var scrim = document.createElement("div");

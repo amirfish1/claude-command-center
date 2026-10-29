@@ -3529,9 +3529,10 @@
     const ready = !working && !sending && sessionReadyToClose(c, live);
     const next = String(summary.next_step_user || '').trim();
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(next);
-    return working ? { label: 'Working', kind: 'working', text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
-      : ready ? { label: 'Close', kind: 'ready', text: summary.did || 'Reviewed as complete; archive when ready.' }
-      : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
+    const hasAnswer = !!text;
+    return working ? { label: 'Working', kind: 'working', hasAnswer, text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
+      : ready ? { label: 'Close', kind: 'ready', hasAnswer, text: summary.did || 'Reviewed as complete; archive when ready.' }
+      : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update', hasAnswer,
         text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
   }
   function _ultraFreshPaint(sid) {
@@ -17167,7 +17168,16 @@
     document.querySelectorAll(selector).forEach(row => {
       const id = row.dataset.sessionId;
       const base = _ultraFreshRow(id);
-      if (!base || base.pending_spawn || base.source === 'backlog' || base.source === 'github_pr') return;
+      // A speaker is only worth showing when there is an answer to read
+      // (CCC-256): empty, still-starting and placeholder rows get none.
+      const readable = !!base && !base.pending_spawn && base.source !== 'backlog' && base.source !== 'github_pr'
+        && _ultraFreshExplanation(_ultraFreshCurrent(base)).hasAnswer;
+      if (!readable) {
+        row.querySelectorAll('[data-role="read-row-answer"]').forEach(btn => {
+          if (_ttsDirectBtn !== btn && !btn.disabled) btn.remove();
+        });
+        return;
+      }
       const desktop = row.querySelector('.conv-outcome') || row.querySelector('.conv-row-end');
       [desktop, row.querySelector('.wa-line2')].filter(Boolean).forEach(host => {
         if (host.querySelector('[data-role="read-row-answer"]')) return;
@@ -40180,9 +40190,11 @@
       // into the newest leg (see lineage.collapse_chain_hits) and reports
       // how many earlier legs got folded in chain_collapsed.
       const historyChainBadgeHtml = (c._historyMatch && c._historyChainCollapsed > 0)
-        ? '<span class="conv-chain-badge" title="' + escapeAttr(
-            (c._historyChainCollapsedSids || []).join(', ') + ' folded into this row as the newest leg')
-          + '">+' + c._historyChainCollapsed + ' earlier</span>'
+        ? _sessionFamilyDetailsHtml(
+          '+' + c._historyChainCollapsed + ' earlier',
+          (c._historyChainCollapsedSids || []).map(sid =>
+            _sessionProvenanceById.get(sid) || { id: sid }),
+          c.id + ':history-earlier')
         : '';
       const repoBadgeHtml = c._repoSearchMatch
         ? '<span class="conv-history-badge" title="Matched repo search; showing latest sessions from ' + escapeHtml(c._repoSearchLabel || 'repo') + '">repo</span>'
@@ -59299,21 +59311,23 @@
           paneAfter.loadAncestorHop = true;
           await fetchConversationEvents(paneId);
         }
-        // Restore the reader's spot, then force a paint: the freshly rendered
-        // content can stay blank until a real scroll event fires (a browser
-        // quirk the user hit — "black screen until I move the scroll").
+        // Restore after the prepend without leaving cleanup dependent on a
+        // paint callback (background tabs can suspend animation frames).
+        _restoreAnchor($view, anchor);
         requestAnimationFrame(() => {
-          _restoreAnchor($view, anchor);
-          requestAnimationFrame(() => {
-            $view.scrollTop += 1; $view.scrollTop -= 1;
-            try { $view.dispatchEvent(new Event('scroll')); } catch (_) {}
-            overlay.remove();
-            loading = false;
-          });
+          $view.scrollTop += 1; $view.scrollTop -= 1;
+          try { $view.dispatchEvent(new Event('scroll')); } catch (_) {}
         });
-      } catch (_) {
+      } catch (err) {
+        banner.textContent = '↑ Retry loading earlier messages';
+        banner.title = err.message || 'History could not be loaded';
+      } finally {
         overlay.remove();
         loading = false;
+        banner.disabled = false;
+        if (banner.textContent === 'Loading earlier messages…') {
+          banner.textContent = '↑ Load earlier messages';
+        }
       }
       return;
     }
@@ -59672,6 +59686,7 @@
     // Set once a saved copy (IndexedDB) is on screen for this open; the
     // catch below keeps it, marked, instead of blanking the pane.
     let _cachedPreview = null;
+    let historyRequest = false;
     try {
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
@@ -59687,6 +59702,7 @@
       const _segs = _pane0 ? _contEnsureSegments(_pane0, id) : [];
       const _hopSid = _hop ? _contNextParentForPane(_pane0, id) : '';
       const _loadingEarlier = !!_loadBefore || !!_hopSid;
+      historyRequest = _loadingEarlier;
       // Earlier-window fetches walk the continuation chain: within the top
       // segment's own file first, then (hop) the previous session's tail.
       const _fetchSid = _hopSid || (_loadBefore && _segs.length ? String(_segs[0].sid) : id);
@@ -59720,8 +59736,14 @@
         if (_freshOpen && !_loadingEarlier) {
           return _fetchConvJsonTimed(_url, undefined, true);
         }
-        const res = await fetch(_url);
-        return res.json();
+        const res = await fetch(_url, _loadingEarlier ? {
+          cccPriority: 'user',
+          signal: AbortSignal.timeout(20000),
+        } : undefined);
+        if (!res.ok) throw new Error('Conversation request failed (' + res.status + ')');
+        const payload = await res.json();
+        if (payload.error) throw new Error(payload.error);
+        return payload;
       };
       _netP = _netP ? _netP.then(d => d || _loadNet()) : _loadNet();
       if (_cacheP) {
@@ -60000,6 +60022,7 @@
         fetchSessionUsage(sid);
       }
     } catch (err) {
+      if (historyRequest) throw err;
       if (_cachedPreview && convLastLine === 0 && $view.querySelector(':scope > .conv-cache-preview')) {
         _markConvCachePreview($view, 'failed', _cachedPreview.saved_at);
       } else if (convLastLine === 0) {
@@ -71412,12 +71435,14 @@
           depth,
           isTaskSubagent: true,
           source: node.source || '',
+          nodeName: node.node_name || '',
         });
       } else {
         const lane = orchLane(row, spawn || { session_id: sid, name: node.name, model: node.model, engine: node.engine, spawned_at: null });
         lane.depth = depth;
         lane.isTaskSubagent = false;
         lane.source = node.source || '';
+        lane.nodeName = node.node_name || '';
         out.push(lane);
       }
       (node.children || []).forEach(c => walk(c, depth + 1, sid));
@@ -71522,16 +71547,21 @@
   let _orchChildren = [];
   let _orchFamilyTreeSid = '';
   let _orchFamilyTree = null;
-  async function orchRefreshRegistry(force, rootSid) {
+  let _orchFamilyContinuation = null;
+  let _orchFamilyRequestKey = '';
+  async function orchRefreshRegistry(force, rootSid, selectedSid) {
     if (_orchRegistryInFlight) return;
-    const sidChanged = rootSid && rootSid !== _orchChildrenSid;
+    const familySid = selectedSid || rootSid;
+    const familyKey = (rootSid || '') + '|' + (familySid || '');
+    const sidChanged = rootSid && familyKey !== _orchFamilyRequestKey;
     if (!force && !sidChanged && Date.now() - _orchRegistryFetchedAt < 5000) return;
     _orchRegistryInFlight = true;
+    _orchFamilyRequestKey = familyKey;
     try {
       const [r1, r2, r3] = await Promise.all([
         fetch('/api/sessions/spawned', { signal: convScopeSignal() }),
         rootSid ? fetch('/api/sessions/children?parent=' + encodeURIComponent(rootSid), { signal: convScopeSignal() }) : Promise.resolve(null),
-        rootSid ? fetch('/api/sessions/family?sid=' + encodeURIComponent(rootSid), { signal: convScopeSignal() }) : Promise.resolve(null),
+        rootSid ? fetch('/api/sessions/family?sid=' + encodeURIComponent(familySid), { signal: convScopeSignal() }) : Promise.resolve(null),
       ]);
       const live = r1 && r1.ok ? await r1.json() : [];
       let kids = [];
@@ -71550,21 +71580,23 @@
         if (d && d.ok && d.tree) {
           _orchFamilyTreeSid = rootSid;
           _orchFamilyTree = d.tree;
+          _orchFamilyContinuation = d.continuation || null;
           if (rememberSidebarFamilyParents(d.tree)) renderSidebar(conversationsData);
         }
       } else if (rootSid === _orchFamilyTreeSid) {
         // keep cached tree
       } else {
         _orchFamilyTree = null;
+        _orchFamilyContinuation = null;
       }
       const seen = new Set();
       const merged = [];
       (Array.isArray(live) ? live : []).forEach(sp => { if (sp && sp.session_id) { seen.add(sp.session_id); merged.push(sp); } });
       kids.forEach(sp => { if (sp && sp.session_id && !seen.has(sp.session_id)) { seen.add(sp.session_id); merged.push(sp); } });
       _orchSpawnedRegistry = merged;
-      _orchRegistryFetchedAt = Date.now();
       orchLaneMetaRemember(merged);
     } catch (_) {}
+    _orchRegistryFetchedAt = Date.now();
     _orchRegistryInFlight = false;
     if (orchPaneVisible()) {
       updateOrchestrationPane(currentConversation);
@@ -71694,11 +71726,32 @@
     return indent
       + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(lane.engine) + '">' + glyph + '</span>'
       + '<span class="orch-node-body">'
-      + '<span class="orch-node-name">' + escapeHtml(lane.name) + '</span>'
+      + '<span class="orch-node-name">' + escapeHtml((lane.nodeName ? '[' + lane.nodeName + '] ' : '') + lane.name) + '</span>'
       + (compact ? '' : '<span class="orch-node-model">' + escapeHtml(lane.model || lane.engine) + '</span>')
       + '</span>'
       + taskBadge
       + '<span class="orch-node-status"><span class="orch-node-dot"></span>' + escapeHtml(statusWord) + '</span>';
+  }
+  function orchContinuationHtml(data) {
+    if (!data) return '';
+    const names = data.node_names || {};
+    const labelRef = ref => {
+      const parts = String(ref || '').split(':');
+      return parts.length === 2 ? '[' + (names[parts[0]] || parts[0].slice(0, 8)) + '] ' + parts[1].slice(0, 8) : String(ref || '').slice(0, 8);
+    };
+    const link = (edge, role) => {
+      if (!edge) return '';
+      let label = edge.node_name ? '[' + edge.node_name + '] ' + (edge.title || edge.session_id.slice(0, 8)) : labelRef(edge.ref || edge.session_id);
+      if (edge.dangling) label += ' · unresolved';
+      if (edge.ambiguous) label += ' · multiple copies: ' + (edge.candidates || []).map(labelRef).join(', ');
+      return '<div class="orch-continuation-link" title="' + escapeAttr(edge.ref || edge.session_id || '') + '">'
+        + escapeHtml(role + ' ' + label) + '</div>';
+    };
+    const links = link(data.predecessor, 'Continued from') + (data.successors || []).map(s => link(s, 'Continued as')).join('');
+    if (!links) return data.indexing ? '<div class="orch-continuation-status">Continuation index is warming</div>' : '';
+    const statuses = (data.continuation_status || []).filter(n => n.status !== 'ok' || n.stale)
+      .map(n => '[' + n.name + '] ' + (n.stale ? 'cached answer' : String(n.status).replace(/_/g, ' ')));
+    return links + (statuses.length ? '<div class="orch-continuation-status">' + escapeHtml(statuses.join(' · ')) + '</div>' : '');
   }
   function updateOrchestrationPane(convId) {
     const pane = document.getElementById('statusRailOrchestrationPane');
@@ -71718,10 +71771,17 @@
     playbooksEl.classList.toggle('is-disabled', !hasSession);
     orchPaintFamilyRows(ctx);
     if (pane.hidden) return;   // nothing visible to measure — skip the work
-    if (hasSession) orchRefreshRegistry(false, ctx.rootSid || ctx.sid);
+    if (hasSession) orchRefreshRegistry(false, ctx.rootSid || ctx.sid, ctx.sid);
 
     const sid = ctx.rootSid || ctx.sid;
     const hereSid = ctx.sid;
+    const continuation = !_orchSim && _orchFamilyContinuation && _orchFamilyContinuation.session_id === hereSid
+      ? _orchFamilyContinuation : null;
+    const continuationEl = document.getElementById('orchMapContinuation');
+    if (continuationEl) {
+      continuationEl.innerHTML = orchContinuationHtml(continuation);
+      continuationEl.hidden = !continuationEl.innerHTML;
+    }
     const atRoot = !ctx.rootSid || ctx.rootSid === ctx.sid;
     if (sid !== _orchLastSid) { _orchLastKeys = new Set(); _orchLastSid = sid; }
     const clock = _orchSim ? null : orchReplayClock();
@@ -71738,13 +71798,26 @@
     const rootEngine = _orchSim ? _orchSim.root.engine : ((rootRow && rootRow.engine) || 'claude');
     const rootModel = _orchSim ? _orchSim.root.model : ((rootRow && rootRow.model) || '');
     const rootConv = (rootRow && rootRow.id) || '';
+    const rootNodeName = (() => {
+      if (_orchSim || _orchFamilyTreeSid !== sid) return '';
+      const find = (node, depth) => {
+        if (!node || depth > 12) return '';
+        if (node.session_id === sid) return node.node_name || '';
+        for (const child of (node.children || [])) {
+          const name = find(child, depth + 1);
+          if (name) return name;
+        }
+        return '';
+      };
+      return find(_orchFamilyTree, 0);
+    })();
     rootEl.innerHTML = hasSession || _orchSim
       ? '<button type="button" class="orch-node orch-node-root' + (working ? ' is-fanning' : '') + (atRoot ? ' is-here' : '') + '"'
         + (rootConv && !atRoot ? ' data-conv-id="' + escapeAttr(rootConv) + '" title="Back to the orchestrator"' : '') + '>'
         + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(rootEngine) + '">' + (ORCH_ENGINE_GLYPH[rootEngine] || '?') + '</span>'
         + '<span class="orch-node-body">'
         + '<span class="orch-node-role">Orchestrator</span>'
-        + '<span class="orch-node-name">' + escapeHtml(rootName) + '</span>'
+        + '<span class="orch-node-name">' + escapeHtml((rootNodeName ? '[' + rootNodeName + '] ' : '') + rootName) + '</span>'
         + '<span class="orch-node-model">' + escapeHtml(rootModel || rootEngine) + '</span>'
         + '</span></button>'
       : '';
@@ -71951,7 +72024,7 @@
       if (!orchPaneVisible()) return;
       if (document.hidden) return;
       const c = orchContext();
-      orchRefreshRegistry(false, c.rootSid || c.sid).then(() => updateOrchestrationPane(currentConversation));
+      orchRefreshRegistry(false, c.rootSid || c.sid, c.sid).then(() => updateOrchestrationPane(currentConversation));
     }, 6000);
   }
 
@@ -89429,7 +89502,40 @@
     });
   }
 
+  // CCC-255: an open model override ("Change") shows the engine / model /
+  // effort selects right above the ranked chips instead of down in the
+  // composer row, and its toggle reads "Collapse". Closing (or legacy mode,
+  // where the details is forced open with no summary) puts them back.
+  function syncNsModelOverrideSelects() {
+    const overrides = document.getElementById('nsModelOverrides');
+    const slot = document.getElementById('nsModelOverrideSelects');
+    if (!overrides || !slot) return;
+    const lifted = overrides.open && !overrides.classList.contains('is-legacy');
+    const toggle = overrides.querySelector(':scope > summary .ns-model-change');
+    if (toggle) toggle.textContent = lifted ? 'Collapse' : 'Change';
+    for (const select of [$convInputEngineSelect, $convInputModelSelect, $convInputEffortSelect]) {
+      if (!select) continue;
+      if (lifted) {
+        if (select.parentNode === slot) continue;
+        if (!select._cccHome) {
+          select._cccHome = document.createComment('ns-override-home');
+          select.parentNode.insertBefore(select._cccHome, select);
+        }
+        slot.appendChild(select);
+      } else if (select._cccHome && select._cccHome.parentNode && select.parentNode === slot) {
+        select._cccHome.parentNode.insertBefore(select, select._cccHome);
+      }
+    }
+  }
+
   function enterNewSessionMode() {
+    if (!nsAdvisor.overridesListener) {
+      const overrides = document.getElementById('nsModelOverrides');
+      if (overrides) {
+        nsAdvisor.overridesListener = true;
+        overrides.addEventListener('toggle', syncNsModelOverrideSelects);
+      }
+    }
     if (!nsAdvisor.runtimeListener) {
       nsAdvisor.runtimeListener = true;
       window.addEventListener('ccc-runtime-change', event => {
