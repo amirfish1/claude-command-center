@@ -10390,6 +10390,46 @@
     showOpToast('Copied message', 'ok');
   });
 
+  // CCC-237: release or cancel input held by an explicit Stop. The next poll
+  // brings the new store revision; drop the acted-on rows right away.
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-stop-held-action]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const block = btn.closest('.stop-held-block');
+    const sid = btn.dataset.sessionId || '';
+    const action = btn.dataset.stopHeldAction === 'release' ? 'release' : 'cancel';
+    const id = btn.dataset.stopHeldId || '';
+    if (!sid || !id) return;
+    const buttons = block ? Array.from(block.querySelectorAll('[data-stop-held-action]')) : [btn];
+    buttons.forEach(b => { b.disabled = true; });
+    try {
+      const response = await fetch('/api/stop-held/' + action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(id === 'all' ? { session_id: sid } : { session_id: sid, ids: [id] }),
+      });
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+      const remaining = new Set(((data.held && data.held.items) || []).map(item => String(item.id)));
+      if (block) {
+        block.querySelectorAll('[data-stop-held-item]').forEach(row => {
+          if (!remaining.has(row.dataset.stopHeldItem)) row.remove();
+        });
+        if (!remaining.size) block.hidden = true;
+      }
+      if (!response.ok || !data.ok) throw new Error(data.error || ((data.failed || 0) + ' not sent; still held'));
+      showOpToast(action === 'release'
+        ? ('Released ' + (data.released || 0) + ' held message' + (data.released === 1 ? '' : 's') + '.')
+        : ('Cancelled ' + (data.cancelled || 0) + ' held message' + (data.cancelled === 1 ? '' : 's') + '.'));
+    } catch (err) {
+      showOpToast((action === 'release' ? 'Release' : 'Cancel') + ' failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      buttons.forEach(b => { if (b.isConnected) b.disabled = false; });
+    }
+  });
+
   // Cancel one durable queued message. Remove the row only after the server
   // confirms the persisted FIFO entry was withdrawn.
   document.addEventListener('click', async (ev) => {
@@ -67752,7 +67792,41 @@
       }
 
       if (ev.type === 'system') {
-        if (ev.subtype === 'peer_held') {
+        if (ev.subtype === 'stop_held_inputs') {
+          // CCC-237: queued after-turn input an explicit Stop parked. It never
+          // sends on its own; Release re-sends (still after any running turn),
+          // Cancel discards. Each store revision is a new block that replaces
+          // the previous one; an emptied record renders hidden to clear it.
+          const _shSid = String(ev.session_id || '');
+          $view.querySelectorAll('.event.stop-held-block').forEach(el => {
+            if (el.dataset.sessionId === _shSid) el.remove();
+          });
+          const _shItems = Array.isArray(ev.items) ? ev.items : [];
+          div.classList.add('stop-held-block');
+          div.dataset.sessionId = _shSid;
+          if (!_shItems.length) {
+            div.hidden = true;
+          } else {
+            const _shAttr = 'data-session-id="' + escapeAttr(_shSid) + '"';
+            div.innerHTML = '<div class="stop-held-head"><span class="label">Held after Stop</span>'
+              + '<span class="stop-held-sub">' + _shItems.length + ' queued message'
+              + (_shItems.length === 1 ? '' : 's') + ' will not send until you release '
+              + (_shItems.length === 1 ? 'it' : 'them') + '</span>'
+              + (_shItems.length > 1
+                ? '<button type="button" class="stop-held-btn" data-stop-held-action="release" data-stop-held-id="all" ' + _shAttr + '>Release all</button>'
+                  + '<button type="button" class="stop-held-btn" data-stop-held-action="cancel" data-stop-held-id="all" ' + _shAttr + '>Cancel all</button>'
+                : '')
+              + '</div>'
+              + _shItems.map(item => '<div class="stop-held-item" data-stop-held-item="' + escapeAttr(String(item.id || '')) + '">'
+                + '<span class="stop-held-text" data-raw-text="' + escapeAttr(String(item.text || '')) + '">'
+                + escapeHtml(truncate(String(item.text || ''), 400)) + '</span>'
+                + '<button type="button" class="stop-held-btn" data-stop-held-action="release" data-stop-held-id="' + escapeAttr(String(item.id || '')) + '" ' + _shAttr
+                + ' title="Send this message (after the current turn, if one is running)">Release</button>'
+                + '<button type="button" class="stop-held-btn" data-stop-held-action="cancel" data-stop-held-id="' + escapeAttr(String(item.id || '')) + '" ' + _shAttr
+                + ' title="Discard this message">Cancel</button>'
+                + '</div>').join('');
+          }
+        } else if (ev.subtype === 'peer_held') {
           // A teammate's peer message was held by Claude's mode-parity rule
           // and never reached the model. Muted, one line, expandable.
           const who = String(ev.name || '').trim() || String(ev.from || '').replace(/^uds:/, '') || 'peer';

@@ -30062,7 +30062,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "ok": True,
                 "session_id": sid,
                 "outstanding": _inject_receipts.outstanding(sid),
+                # CCC-237: queued input an explicit Stop parked. It waits for
+                # a release on purpose; it is not a stuck delivery.
+                "stop_held": len(_stop_held_inputs_view(sid)["items"]),
             })
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/stop-held$", path):
+            # CCC-237: inspect queued input held by an explicit Stop.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(dict(_stop_held_inputs_view(sid), ok=True))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/forward-target$", path):
             # MEMORY-5: read-only lookup so an external process (WatchTower,
             # over its own HTTP delegate) can ask "does this sid currently
@@ -39823,6 +39830,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "already_consumed": True,
                     "session_id": sid,
                 })
+        elif path in ("/api/stop-held/release", "/api/stop-held/cancel"):
+            # CCC-237: {session_id, ids?: [...]} -- omit ids for all. Release
+            # re-sends through the normal inject path (still after any running
+            # turn); cancel discards. Nothing else ever delivers held input.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            raw_ids = payload.get("ids")
+            ids = None if raw_ids is None else [str(i) for i in raw_ids if str(i or "").strip()]
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            elif raw_ids is not None and not isinstance(raw_ids, list):
+                self.send_json({"ok": False, "error": "ids must be a list"}, 400)
+            elif path.endswith("/release"):
+                _record_interaction(sid)
+                result = _release_stop_held_inputs(sid, ids)
+                self.send_json(result, 200 if result.get("ok") else 502)
+            else:
+                _record_interaction(sid)
+                self.send_json(_cancel_stop_held_inputs(sid, ids))
         elif path == "/api/usage-limit/cancel":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -40058,10 +40091,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             elif verb == "abort":
                 # Control verb: interrupt the turn, deliver nothing.
                 _record_interaction(sid)
-                self.send_json(_annotate_inject_result(
+                held_queued = _hold_queued_inputs_for_stop(sid, "abort")
+                result = _annotate_inject_result(
                     _interrupt_session(sid), requested="abort",
                     fields={"aborted": True, "landed": "none", "effect": "aborted"},
-                ))
+                )
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
+                self.send_json(result)
             elif presentation_bootstrap and verb_mode != "send":
                 self.send_json({"ok": False, "error": "presentation bootstrap requires send mode"}, 400)
             elif announced_from_error:
@@ -40098,6 +40135,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         and not str(queued_text).lstrip().startswith("/")
                     ):
                         text = _mode3_prompt(text)
+                held_queued = 0
                 try:
                     inject_options = {
                         "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
@@ -40153,6 +40191,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _presence.note_inject(sid, queued_text, source)
                     except Exception:
                         pass
+                    # CCC-237: a steer that is itself a Stop ("STOP ... end
+                    # your turn", or stop:true) holds the after-turn queue
+                    # first, so the stopped turn cannot end and replay it.
+                    from ccc_server import stop_holds as _stop_holds
+                    if verb_mode == "steer" and not replace_queued and (
+                        bool(payload.get("stop"))
+                        or _stop_holds.is_stop_steer_text(_attribution.strip_header(str(queued_text)))
+                    ):
+                        held_queued = _hold_queued_inputs_for_stop(sid, "stop-steer")
                     result = _inject_text_into_session(
                         sid, text, mode=verb_mode,
                         requested_verb=verb,
@@ -40170,6 +40217,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # "Failed to fetch" with no way to tell what went wrong.
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
                 if replace_queued_texts:
                     result = _finalize_queued_steer_batch_result(
                         sid, replace_queued_texts, result,
@@ -40326,7 +40375,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 "cloud_readonly": True}, 400)
             else:
                 _record_interaction(sid)
-                self.send_json(_interrupt_session(sid))
+                # CCC-237: Stop parks queued after-turn input before the
+                # interrupt, so it waits for an explicit release.
+                held_queued = _hold_queued_inputs_for_stop(sid, "stop")
+                result = _interrupt_session(sid)
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
+                self.send_json(result)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/force-restart$", path):
             # CCC-27: manual escape hatch for a live session that will not
             # take input (Stop only interrupts a running turn).

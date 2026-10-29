@@ -26745,6 +26745,26 @@ body.has-gc-reader .pwa-install-banner {
   font-variant-numeric: tabular-nums;
   opacity: 0.85;
 }
+/* CCC-237: queued input an explicit Stop held. Amber like other "waiting on
+   you" states; each message gets its own Release / Cancel. */
+.event.system.stop-held-block {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 12px; font-size: 12.5px;
+  background: rgba(210, 153, 34, 0.08); border-left-color: rgba(210, 153, 34, 0.55);
+}
+.event.system.stop-held-block[hidden] { display: none; }
+.stop-held-head, .stop-held-item { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.stop-held-sub { flex: 1 1 auto; color: var(--text-muted); }
+.stop-held-text {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--text);
+}
+.stop-held-btn {
+  flex: 0 0 auto; font: inherit; font-size: 12px; padding: 1px 8px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text);
+}
+.stop-held-btn:hover { border-color: rgba(210, 153, 34, 0.7); }
+.stop-held-btn:disabled { opacity: 0.5; cursor: default; }
 /* Durable coordination note — a meta row, not transcript content. Keep it
    compact, muted and border-free so it never competes with real messages. */
 .event.system.codex-coordination {
