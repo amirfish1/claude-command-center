@@ -490,7 +490,9 @@ def shipped_all(topic: str, local_shipped) -> dict:
 # -- brief -------------------------------------------------------------------
 
 
-_RESOLVE_DEADLINE_S = 1.5  # continuation resolution: one more hop, within the CLI's 2 s
+# Continuation resolution is one more routed hop with the same ssh tail as
+# recall: 1.5 s missed 2 of 5 live hermes-gcp briefs (MEMORY-16 verify).
+_RESOLVE_DEADLINE_S = PEER_DEADLINE_S
 
 
 def _exact_hit(res, sid: str) -> bool:
