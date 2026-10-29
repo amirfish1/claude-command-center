@@ -13,13 +13,16 @@
 #   ./scripts/cut-release.sh X.Y.Z --allow-dirty  # cut anyway with a dirty tree
 #   ./scripts/cut-release.sh X.Y.Z --release-site URL  # verify public release page
 #
+# Set CCC_RELEASE_ANNOUNCE=0 to omit the optional community announcement.
+#
 # A dirty working tree is refused by default: this script stages a fixed file
 # list, so uncommitted work in static/ (or anywhere outside that list) would be
 # left out and the release would ship a half-finished feature. See the preflight.
 #
 # Prereqs (see docs/RELEASING.md): Developer ID cert, notarytool profile
 # 'ccc-notary', Sparkle EdDSA key in login keychain, gh logged in, and the
-# Homebrew tap checked out at $BREW_TAP (default ~/Apps/homebrew-ccc).
+# Homebrew tap checked out at $BREW_TAP (default ~/Apps/homebrew-tap, or the
+# older ~/Apps/homebrew-ccc checkout if that is what exists).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,7 +35,10 @@ SKIP_DMG=0
 SKIP_BREW=0
 ALLOW_DIRTY=0
 RELEASE_SITE="${CCC_RELEASE_SITE:-https://ccc.amirfish.ai}"
-BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-ccc}"
+BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-tap}"
+if [ -z "${CCC_BREW_TAP:-}" ] && [ ! -d "$BREW_TAP" ] && [ -d "$HOME/Apps/homebrew-ccc" ]; then
+  BREW_TAP="$HOME/Apps/homebrew-ccc"
+fi
 BREW_FORMULA_UPDATED=0
 BREW_FORMULA_SHA=""
 
@@ -101,6 +107,14 @@ if [ -n "$DIRTY" ]; then
     exit 1
   fi
 fi
+# Optional machine-local preflight (e.g. confirm work on other hosts is committed
+# and pushed). Any non-zero exit aborts the release. Not shipped; lives in the
+# user's own config dir.
+RELEASE_PREFLIGHT="${CCC_RELEASE_PREFLIGHT:-$HOME/.claude/command-center/release-preflight.sh}"
+if [ -x "$RELEASE_PREFLIGHT" ]; then
+  step "     running $RELEASE_PREFLIGHT"
+  "$RELEASE_PREFLIGHT" || { echo "${RED}release preflight failed; refusing to cut a release${NC}" >&2; exit 1; }
+fi
 git rev-parse "v${VERSION}" >/dev/null 2>&1 && { echo "${RED}tag v${VERSION} already exists${NC}" >&2; exit 1; } || true
 # Sync with origin BEFORE bumping anything. Step 4 pushes main, and a rejected
 # push there leaves the release commit + tag local-only with no resume path
@@ -136,11 +150,16 @@ if [ "$SKIP_DMG" = 0 ] && [ "$DRY_RUN" = 0 ]; then
     exit 1
   }
   xcrun notarytool history --keychain-profile ccc-notary \
-    --output-format json >/dev/null 2>&1 || {
+    --output-format json >/dev/null || {
       echo "${RED}notarization profile 'ccc-notary' is unavailable; restore it before cutting the release${NC}" >&2
       exit 1
     }
 fi
+
+# Run against the source version before bumping or consuming snippets. The
+# pre-push performance gate alone does not cover the full release surface.
+step "Verify source test suite before changing release state"
+run "python3 -m pytest -q --tb=short tests/"
 
 # ── 1. Changelog rollup ─────────────────────────────────────────────────────
 step "1/9  Roll up changelog.d → CHANGELOG.md [${VERSION}]"
@@ -169,6 +188,7 @@ fi
 step "3/9  Bump version in pyproject.toml + server.py"
 run "sed_i 's/^version = \".*\"/version = \"${VERSION}\"/' pyproject.toml"
 run "sed_i 's/^__version__ = \".*\"/__version__ = \"${VERSION}\"/' server.py"
+[ ! -f scripts/update-release-page.py ] || run "python3 scripts/update-release-page.py ${VERSION}"
 # plugin/ is generated from skills/*.md + the pyproject version.
 PLUGIN_MANIFEST=""
 [ -f scripts/build-plugin.py ] && PLUGIN_MANIFEST=plugin
@@ -179,14 +199,13 @@ if [ "$DRY_RUN" = 0 ]; then
     || { echo "${RED}version bump verification failed${NC}" >&2; exit 1; }
 fi
 
-# Landing page (ccc.amirfish.ai) needs no per-release edit: it links to the
-# version-stable GitHub redirect releases/latest/download/ccc.dmg. We just
-# publish a stable-named ccc.dmg copy in step 7 so that link always resolves.
+# Release labels and stable download links are refreshed above. Release
+# highlights and the captured hero screenshot remain editorial updates.
 
 # ── 4. Commit + tag + push ──────────────────────────────────────────────────
 step "4/9  Commit, tag, push main + tag"
-run "git add CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d"
-run "git commit -m 'chore(release): v${VERSION}' -m 'Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>'"
+run "git add CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d docs/index.html"
+run "git commit --only CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d docs/index.html -m 'chore(release): v${VERSION}'"
 run "git tag -a v${VERSION} -m 'v${VERSION}'"
 run "git push origin main"
 run "git push origin v${VERSION}"
@@ -213,7 +232,8 @@ if [ "$SKIP_DMG" = 0 ]; then
   # (releases/latest/download/ccc.dmg) always resolves — Sparkle/appcast keep
   # the versioned name. This is what lets the landing page never need a bump.
   run "cp ccc-v${VERSION}.dmg ccc.dmg && gh release upload v${VERSION} ccc.dmg --clobber && rm -f ccc.dmg"
-  run "git commit --only docs/appcast.xml -m 'chore(release): publish v${VERSION} appcast'"
+  [ ! -f scripts/update-release-page.py ] || run "python3 scripts/update-release-page.py ${VERSION}"
+  run "git commit --only docs/appcast.xml docs/index.html -m 'chore(release): publish v${VERSION} appcast'"
   run "git push origin main"
   if [ "$DRY_RUN" = 0 ]; then
     step "     Verify release site: ${RELEASE_SITE}"
@@ -275,7 +295,7 @@ if [ "$DRY_RUN" = 0 ]; then
       || { echo "${RED}published Homebrew formula does not match v${VERSION}${NC}" >&2; exit 1; }
     echo "   brew formula: v${VERSION} published"
   fi
-  if [ -f "${HOME}/.claude/command-center/discord.json" ]; then
+  if [ "${CCC_RELEASE_ANNOUNCE:-1}" != 0 ] && [ -f "${HOME}/.claude/command-center/discord.json" ]; then
     REL_URL="$(gh release view v${VERSION} --json url --jq .url 2>/dev/null || echo "https://github.com/amirfish1/claude-command-center/releases/tag/v${VERSION}")"
     python3 ./scripts/discord_community.py ship "🚀 **CCC v${VERSION} shipped!** Release notes & download: ${REL_URL}" >/dev/null 2>&1 || true
     echo "   discord:  announced v${VERSION} in #ship-log"

@@ -206,13 +206,10 @@ class ContinueFreeTests(_FailoverBase):
         sid = "aaaaaaaa-1111-2222-3333-444444444444"
         self.server._save_usage_limit_resume_entry(
             sid, self._tracked_entry(sid))
-        env = mock.patch.dict(os.environ, {}, clear=False)
-        env.start()
-        self.addCleanup(env.stop)
-        for key in ("CCC_FREE_ROUTER_BASE_URL", "CCC_FREE_ROUTER_TOKEN",
-                    "CCC_FREE_ROUTER_MODEL"):
-            os.environ.pop(key, None)
-        res = self.server.free_failover_continue(sid)
+        # A developer may also configure the router on disk. Model its
+        # absence directly instead of depending on this machine's settings.
+        with mock.patch.object(self.server, "_free_spawn_env", return_value=None):
+            res = self.server.free_failover_continue(sid)
         self.assertFalse(res["ok"])
         self.assertEqual(res["code"], "free_not_ready")
 
@@ -273,6 +270,7 @@ class ContinueFreeTests(_FailoverBase):
 
         sid = "cccccccc-1111-2222-3333-555555555555"
         captured = {}
+        log_paths = []
         inherited = {
             "ANTHROPIC_API_KEY": "sk-ant-test-XXXX",
             "CLAUDE_CODE_OAUTH_TOKEN": "oauth-test-XXXX",
@@ -290,6 +288,10 @@ class ContinueFreeTests(_FailoverBase):
 
         def capture_spawn(*args, **kwargs):
             captured.update(kwargs["env"])
+            log = kwargs["stdout"]
+            log_paths.append(Path(log.name))
+            log.write(f"attempt {len(log_paths)}\n")
+            log.flush()
             raise OSError("stop at the process boundary")
 
         with mock.patch.object(self.server, "_claude_subagent_parent_session_id", return_value=None), \
@@ -305,10 +307,15 @@ class ContinueFreeTests(_FailoverBase):
              mock.patch.object(self.server, "_resume_ledger_append"), \
              mock.patch.object(self.server, "_question_relay_env", return_value=dict(inherited)), \
              mock.patch.object(self.server, "_make_stdin_fifo", return_value=(None, None)), \
+             mock.patch.object(engines.time, "strftime", return_value="20260101T000000"), \
              mock.patch.object(engines.subprocess, "Popen", side_effect=capture_spawn):
             result = self.server.resume_session_headless(sid, "continue", cwd=self.tmp_dir, extra_env=overlay)
+            retry = self.server.resume_session_headless(sid, "retry", cwd=self.tmp_dir, extra_env=overlay)
 
         self.assertFalse(result["ok"])
+        self.assertFalse(retry["ok"])
+        self.assertEqual(len(set(log_paths)), 2)
+        self.assertEqual([p.read_text() for p in log_paths], ["attempt 1\n", "attempt 2\n"])
         self.assertNotIn("ANTHROPIC_API_KEY", captured)
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", captured)
         self.assertNotIn("CLAUDE_CODE_SESSION_KEY", captured)
@@ -384,6 +391,40 @@ class AutoResumeArmTests(_FailoverBase):
         self.assertEqual(args[1], "continue")
         rec = self._failover_store()[sid]
         self.assertTrue(rec["auto_resume_done"])
+
+    def test_wake_ledger_refuses_a_second_wake_without_progress(self):
+        """RESIL-5: the previous automatic wake made no progress (unknown
+        transcript), so the armed resume must not send "continue" again and
+        the owner is told instead."""
+        from ccc_server import notify, wake_guard
+        sid = "dddddddd-1111-2222-3333-444444444444"
+        ledger = str(self.server.COMMAND_CENTER_STATE_DIR / "session-wakes.json")
+        self.assertEqual(wake_guard.request(sid, source="inject-recovery", path=ledger,
+                                            notify=lambda d: None), (True, "ok"))
+        self.server._save_usage_limit_resume_entry(
+            sid, self._tracked_entry(sid, resume_in=-1))
+        self.assertTrue(self.server.free_failover_arm(sid)["ok"])
+        inject = mock.Mock(return_value={"ok": True, "via": "test"})
+        posted = mock.Mock(return_value=({"ok": True}, 200))
+        patches = self._no_candidates() + [
+            mock.patch.object(
+                self.server, "_usage_limit_session_path", return_value=None),
+            mock.patch.object(
+                self.server, "_inject_text_into_session", inject),
+            mock.patch.object(notify, "post", posted),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            self.server._usage_limit_scan_once(now=time.time())
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        inject.assert_not_called()
+        posted.assert_called_once()
+        rec = self._failover_store()[sid]
+        self.assertTrue(rec["auto_resume_done"])
+        self.assertEqual(rec["auto_resume_error"], "wake_guard:no_progress")
 
     def test_unarmed_due_stop_stays_inert(self):
         """Approval required: detection alone must never send."""

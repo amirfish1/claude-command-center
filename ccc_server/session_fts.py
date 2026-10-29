@@ -193,6 +193,16 @@ def _get_gemini_dir() -> Path:
     return Path.home() / ".gemini" / "tmp"
 
 
+def _get_agy_roots() -> list[Path]:
+    """Antigravity (agy) brain dirs: the desktop app and the CLI each keep one
+    `<sid>/.system_generated/logs/transcript*.jsonl` per conversation."""
+    env = os.environ.get("CCC_AGY_BRAIN_ROOTS")
+    if env is not None:
+        return [Path(x) for x in env.split(os.pathsep) if x]
+    base = Path.home() / ".gemini"
+    return [base / "antigravity" / "brain", base / "antigravity-cli" / "brain"]
+
+
 def _get_cursor_dir() -> Path:
     env = os.environ.get("CCC_CURSOR_PROJECTS_ROOT")
     if env:
@@ -718,7 +728,100 @@ def parse_cursor(path: str) -> dict | None:
     return _finish(sid, "cursor", path, cwd, "", users, assists, tools, files, ts0, ts1)
 
 
+_AGY_USER_RE = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.S)
+
+
+def parse_agy(path: str) -> dict | None:
+    """Antigravity brain transcript (transcript_full.jsonl / transcript.jsonl).
+    One JSON step per line: USER_INPUT (prompt wrapped in <USER_REQUEST>),
+    PLANNER_RESPONSE / TEXT_RESPONSE (assistant text; PLANNER_RESPONSE also
+    carries tool_calls), RUN_COMMAND (output in content)."""
+    p = Path(path)
+    sid = p.parent.parent.parent.name
+    if not sid:
+        return None
+    users, assists, tools = [], [], []
+    files = set()
+    cwd = ""
+    ts0 = ts1 = None
+    with open(p, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            ts = _ts(ev.get("created_at"))
+            if ts:
+                ts0 = ts if ts0 is None else min(ts0, ts)
+                ts1 = ts if ts1 is None else max(ts1, ts)
+            typ = ev.get("type")
+            content = ev.get("content") if isinstance(ev.get("content"), str) else ""
+            if typ == "USER_INPUT":
+                m = _AGY_USER_RE.search(content)
+                txt = (m.group(1) if m else content).strip()
+                if txt and _is_real_prompt(txt):
+                    users.append(txt)
+            elif typ in ("PLANNER_RESPONSE", "TEXT_RESPONSE"):
+                if content.strip():
+                    assists.append(content.strip())
+                for call in ev.get("tool_calls") or []:
+                    args = call.get("args") if isinstance(call, dict) else None
+                    if not isinstance(args, dict):
+                        continue
+                    if not cwd and isinstance(args.get("Cwd"), str):
+                        cwd = args["Cwd"]
+                    cmd = args.get("CommandLine")
+                    if isinstance(cmd, str) and "git commit" in cmd:
+                        tools.append(cmd[:1500])
+                    fp = args.get("TargetFile") or args.get("AbsolutePath")
+                    if isinstance(fp, str) and call.get("name") in (
+                            "write_to_file", "replace_file_content", "multi_replace_file_content"):
+                        files.add(fp)
+            elif typ == "RUN_COMMAND" and content:
+                tools.append(content[:4000])
+    if not users and not assists:
+        return None
+    return _finish(sid, "agy", str(p), cwd, "", users, assists, tools, files, ts0, ts1)
+
+
+def parse_devin(path: str) -> dict | None:
+    """Index visible messages from CCC's persisted Devin ACP transcript."""
+    users, assists, stream = [], [], []
+    turn = 0
+    with open(path, encoding="utf-8", errors="replace") as transcript:
+        for line in transcript:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "user_text":
+                text = event.get("text")
+                if isinstance(text, str) and text.strip():
+                    turn += 1
+                    users.append(text)
+                    stream.append(("u", turn, text))
+            elif event.get("type") == "assistant":
+                text = "\n".join(
+                    block["text"] for block in (event.get("blocks") or [])
+                    if isinstance(block, dict) and block.get("kind") == "text"
+                    and isinstance(block.get("text"), str)
+                )
+                if text.strip():
+                    assists.append(text)
+                    stream.append(("a", turn, text))
+    if not users and not assists:
+        return None
+    return _finish("devincli-" + Path(path).stem, "devin", path, "", "",
+                   users, assists, [], set(), None, None, stream=stream)
+
+
 _PARSERS = {
+    "devin": parse_devin,
+    "agy": parse_agy,
     "claude": parse_claude,
     "codex": parse_codex,
     "kimi": parse_kimi,
@@ -800,6 +903,22 @@ def _candidate_files(days: float | None = None) -> list[tuple[str, str, float, i
                 if st.st_size > 0 and st.st_mtime >= cutoff:
                     out.append(("gemini", str(p), st.st_mtime, st.st_size))
 
+    # One listdir per brain root + 2 stats per conversation (never a
+    # recursive walk: chunks/ holds thousands of shards per long session).
+    for brain in _get_agy_roots():
+        if not brain.is_dir():
+            continue
+        for logs in brain.glob("*/.system_generated/logs"):
+            for name in ("transcript_full.jsonl", "transcript.jsonl"):
+                p = logs / name
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                if st.st_size > 0 and st.st_mtime >= cutoff:
+                    out.append(("agy", str(p), st.st_mtime, st.st_size))
+                    break
+
     cursor_dir = _get_cursor_dir()
     if cursor_dir.exists():
         for p in cursor_dir.glob("*/agent-transcripts/*/*.jsonl"):
@@ -809,6 +928,16 @@ def _candidate_files(days: float | None = None) -> list[tuple[str, str, float, i
                 continue
             if st.st_size > 0 and st.st_mtime >= cutoff:
                 out.append(("cursor", str(p), st.st_mtime, st.st_size))
+
+    devin_dir = Path(os.environ.get("CCC_DEVIN_TRANSCRIPTS_ROOT") or
+                     Path.home() / ".claude" / "command-center" / "acp" / "devin")
+    for p in devin_dir.glob("*.jsonl"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_size > 0 and st.st_mtime >= cutoff:
+            out.append(("devin", str(p), st.st_mtime, st.st_size))
 
     # Harvested worker-sandbox transcripts (multi-machine S8b): copies land
     # here preserving the source's .claude/projects or .codex/sessions
@@ -1287,26 +1416,18 @@ def _sync_index(conn: sqlite3.Connection, force: bool = False) -> None:
 
         _init_db(conn)
 
+        # A large corpus needs a directory walk even when only one file
+        # changed. Keep that scan off request threads on every expired
+        # refresh, not just the first search after a restart. Count before
+        # loading the cache rows: that too scales with the whole corpus.
+        if not force:
+            existing = conn.execute("SELECT COUNT(*) FROM file_cache").fetchone()[0]
+            if existing > _BG_SYNC_THRESHOLD:
+                _start_background_sync()
+                return
+
         cur = conn.execute("SELECT path, sid, mtime, size, indexed FROM file_cache")
         have = {r[0]: (r[1], r[2], r[3], r[4]) for r in cur.fetchall()}
-
-        # MEMO-FIX-14: `_candidate_files()` below walks and stat()s every
-        # transcript on disk, whether or not anything actually changed --
-        # cheap when `have` (the already-indexed corpus) is small, but on a
-        # real restart with thousands of prior sessions it's an O(corpus)
-        # filesystem scan against a cold OS metadata cache, measured at
-        # 20-45s wall clock for a single `recall()` even though the eventual
-        # diff (`todo`) turns out small. `len(todo) > _BG_SYNC_THRESHOLD`
-        # below can't catch this case -- it only sees the diff *after*
-        # paying for the scan. Use the existing corpus size as a cheap
-        # (indexed COUNT, no filesystem I/O) proxy instead: a process's
-        # first sync (`_last_sync_ts == 0.0`) against an already-large corpus
-        # is exactly the cold-restart shape, so hand it to the background
-        # sync before ever touching the filesystem. A small/fresh corpus
-        # (tests, a new install) still gets the fast inline path below.
-        if not force and _last_sync_ts == 0.0 and len(have) > _BG_SYNC_THRESHOLD:
-            _start_background_sync()
-            return
 
         # MEMO-FIX-21: one-time section rebuild of already-indexed long
         # transcripts. Only ever done by a force=True (background) sync; a
@@ -1637,7 +1758,12 @@ def _literal_phrase_query(q: str) -> str:
     filename, dotted/hyphenated identifier) becomes one quoted FTS5 phrase,
     so it matches that exact token sequence instead of OR-matching its
     pieces -- otherwise ".../paste-123.png" hits every session that ever
-    mentioned any pasted image (CCC-1256). Anything else is returned as-is."""
+    mentioned any pasted image (CCC-1256). A plain whitespace-separated
+    list of ticket IDs requires every ID in the same session. Explicit
+    operators and ordinary prose are returned unchanged."""
+    parts = q.split()
+    if len(parts) > 1 and all(TICKET_RE.fullmatch(part.upper()) for part in parts):
+        return " AND ".join('"' + part + '"' for part in parts)
     if not q or any(ch.isspace() for ch in q) or '"' in q:
         return q
     tokens = _HISTORY_LITERAL_TOKEN_RE.findall(q)

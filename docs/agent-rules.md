@@ -196,7 +196,7 @@ How to decide — the three services and what each one loads:
 
 | Service | launchd label | Runs | Restart when you touched |
 |---|---|---|---|
-| **Dashboard** | `com.github.claude-command-center` | `server.py` + the HTTP API | `server.py` or any module it imports |
+| **Dashboard** | `com.github.claude-command-center.server` (legacy: `com.github.claude-command-center`) | `server.py` + the HTTP API | `server.py` or any module it imports |
 | **Worker** | `com.github.claude-command-center.worker` | `ccc_worker.py`, owns engine execution + the shared Codex app-server | `ccc_worker.py`, `worker_engines.py`, `control_plane.py` — **and `server.py`**, see the gotcha below |
 | **WatchTower** | `ai.watchtower.watcher` | the `wt` queue daemon on `:8787` | WatchTower's own code (separate repo). CCC changes never need this — default **N** |
 
@@ -212,11 +212,29 @@ request — a browser reload is enough), `docs/`, `changelog.d/`, `tests/`,
 markdown. Frontend-only fixes are `N/N/N`.
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center.worker
-launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center
+ccc restart            # worker, then dashboard (POST /api/restart/all)
+ccc restart worker     # worker only (POST /api/restart/worker)
+ccc restart dashboard  # dashboard only (POST /api/restart)
 ```
 
-Order does not matter: on launch `run.sh` compares the worker's loaded code
+**Agents never restart CCC with `systemctl --user restart ccc*` or
+`launchctl kickstart` directly.** On one busy Linux host, 13 of ~23 dashboard
+and worker restarts in a day were agents restarting after their own commits,
+each skipping the drain/adopt handoff and each costing a ~30s cold warmup
+(OPS-150). `ccc restart` goes through the drain-aware endpoints and debounces:
+a request within 5 minutes of the last restart (`CCC_RESTART_DEBOUNCE_S`)
+becomes one pending restart that a detached runner fires when the window ends,
+merging targets (worker + dashboard = all), so the newest commit still goes
+live. A 409 (the server says a restart is unsafe right now) is retried every
+minute, up to 10 times. State lives in
+`~/.claude/command-center/restart-debounce.json`, runner output in
+`restart-debounce.log` next to it. `--now` skips the window; use it only when a
+human asked for an immediate restart. The raw `launchctl kickstart -k
+gui/$(id -u)/com.github.claude-command-center.server` (or `.worker`; `systemctl --user
+restart ccc[-worker]` on Linux) is for a human recovering a wedged server that
+no longer answers HTTP.
+
+Order does not matter for the raw commands: on launch `run.sh` compares the worker's loaded code
 fingerprint (`server.py` + `ccc_server/*.py`) to the repo, kickstarts a stale
 worker, and waits for the new worker pid before starting the dashboard. So
 `kickstart`-ing only the dashboard also refreshes a stale worker; the second
@@ -236,7 +254,7 @@ Depends entirely on what you touched. Most changes ship the moment you `git push
 | `scripts/macapp/main.swift`, `scripts/build-dmg.sh`, `scripts/release-dmg.sh`, `scripts/macapp/vendor/Sparkle.framework` (the .app shell or DMG build flow) | **DMG users get it ONLY via Sparkle auto-update**, which only fires when you ship a new versioned DMG with an EdDSA signature in the appcast. | Bump version → `./scripts/release-dmg.sh X.Y.Z` → `gh release create vX.Y.Z` with the DMG attached → commit + push `docs/appcast.xml`. See `docs/RELEASING.md` for the full sequence. |
 | `infra/telemetry-worker/` (Cloudflare Worker) | The Worker is independent of `main`. Pushing the repo does NOT deploy it. | `cd infra/telemetry-worker && npx wrangler deploy`. |
 | `infra/card-worker/` (Cloudflare Worker) | Independent of `main`; pushing does NOT deploy it. Hosts the share card page (Workers KV `CARDS`). | `cd infra/card-worker && npx wrangler deploy`. |
-| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-ccc`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
+| Homebrew formula | Formula lives at `github.com/amirfish1/homebrew-tap`, NOT this repo. | Push there (separate repo). brew users get it on `brew upgrade ccc`. |
 | `changelog.d/*`, `tests/`, `README.md`, `CLAUDE.md`, `AGENTS.md`, `pyproject.toml`/`server.py` version bumps | On push to main | Just `git push origin main`. Bumping versions touches a release cycle — see `docs/RELEASING.md`. |
 
 **Quick rule of thumb:**
@@ -252,20 +270,42 @@ If you're unsure, default to pushing then checking the table — `git push` is r
 - Bounding a headless `claude -p` to read-only tools: `--allowedTools` alone does NOT restrict the toolset; also pass `--disallowedTools` (Bash/Write/Edit/etc).
 - Never add a manual refresh button to fix UI staleness; fix the staleness at its source with auto-refresh.
 
-## Restart matrix: launchd bundle-ID collision
+## Server ownership (CCC.app and launchd)
 
-**If `launchctl kickstart` says "Could not find service" for the dashboard
-label**, don't assume the fix is `./run.sh --install-service` — check
-`pgrep -f "MacOS/CCC"` first. The .app shares its launchd Label with the app's
-bundle identifier (`com.github.claude-command-center`), so while the .app is
-open, `launchctl bootstrap` for that same Label always fails with a bare
-`Bootstrap failed: 5: Input/output error` (bundle-ID collision in the gui/<uid>
-session — confirmed via `launchctl dumpstate | grep application.com.github...`
-showing an active per-PID "application" domain for the running app). The
-.app self-manages its own `server.py` child whenever nothing else is already
-serving the port — quit and relaunch the .app to restore it instead of
-fighting the launchd install path. `run.sh` now detects this and prints the
-same guidance (OPS-1246).
+Exactly one process owns the dashboard `server.py` on a port:
+
+| Owner | How it got there | Quit / relaunch / Sparkle update of CCC.app |
+|---|---|---|
+| launchd job `com.github.claude-command-center.server` | `./run.sh --install-service`, or CCC.app after the user picked "Run in Background" | Server and streams keep running. KeepAlive restarts it after a crash. |
+| CCC.app child (`run.sh` under the app) | the user picked "Only While Open" (`CCCServerMode=app` in the app's defaults) | Quit stops it (`stopOwnedProcess`). |
+| anything else on the port (foreground `./run.sh`, a dev clone) | started by hand | The app attaches and never stops it. |
+
+On launch with the port free, CCC.app runs `run.sh --start-service` when either
+plist exists, otherwise it asks once (the approved first-launch consent).
+A port that is already bound is attached to; a stale `code_rev` gets
+`POST /api/restart`. "Stop Server and Quit…" runs `run.sh --stop-service`,
+which boots out the dashboard job only: the worker
+(`com.github.claude-command-center.worker`) and its sessions keep running, and
+the plist stays, so the next login or app launch starts it again. If a
+service command fails and launchd does not have the job loaded, the app runs
+the server as its child and says so in the window subtitle.
+
+**Legacy label.** The old dashboard Label was the .app bundle ID
+(`com.github.claude-command-center`), and macOS will not bootstrap a job whose
+Label equals a running app's bundle ID (bare `Bootstrap failed: 5:
+Input/output error`, OPS-1246). `run.sh --install-service`, `--start-service`
+(only when the port is free) and `--uninstall-service` migrate it
+idempotently: boot out the legacy job, copy its plist under the new Label
+(keeping its baked-in env) when no new plist exists, and move the old plist to
+`~/.claude/command-center/service-backup/`. `--service-status` reports a
+leftover legacy plist. Rollback: `./run.sh --uninstall-service`, move the
+backup back into `~/Library/LaunchAgents/`, then `launchctl bootstrap
+gui/$(id -u) ~/Library/LaunchAgents/com.github.claude-command-center.plist`
+(that only works while CCC.app is closed, which is why the label changed).
+`server.py` resolves the installed label with `_ccc_dashboard_launchd_label()`.
+For tests, `CCC_SERVICE_LABEL` / `CCC_WORKER_SERVICE_LABEL` give run.sh and
+CCC.app an isolated label; `tests/test_run_sh_service_lifecycle.py` runs
+run.sh against a temp HOME with a fake `launchctl`.
 
 ## Scratch-HOME test servers
 

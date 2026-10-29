@@ -31,17 +31,22 @@ ALL = {
     "fleet-limit": "One grouped notice for sessions stopped by an engine usage limit",
     "leftover-offer": "Card offering tasks before unused plan allowance resets",
     "leftover-notification": "Daily reminder to use plan allowance before reset",
+    "restart-interrupted": "Card listing sessions a machine restart cut off mid-turn",
+    "notify-session-died": "Toast when a session stops mid-turn or hits an API error",
 }
 
 # Approved pop-ups. Nothing else shows until Amir approves it.
 APPROVED = frozenset({
     "moment-zero",  # approved 2026-10-06
     "notify-task",  # approved 2026-10-16: clickable session-finished/needs-you banners
+    "restart-interrupted",  # approved 2026-10-22: sessions a machine restart cut off mid-turn
+    "notify-session-died",  # approved 2026-10-22: a session died mid-turn, nobody was told
 })
 
 _NOTIFY_KIND_IDS = {
     "task": "notify-task",
     "needs_input": "notify-task",
+    "session_died": "notify-session-died",
     "digest": "notify-digest",
     "milestone": "notify-milestone",
     "leftover": "leftover-notification",

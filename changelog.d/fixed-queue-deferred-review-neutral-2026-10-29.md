@@ -1,0 +1,1 @@
+- Queue board: deferred tickets read "deferred · in 1h" with a neutral dot instead of amber "open"; in-review tickets no longer inflate the Backlog "needs input" count; plain open and working rows are no longer tinted amber like an answer in flight.

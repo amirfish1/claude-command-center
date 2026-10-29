@@ -12,26 +12,29 @@ const end = app.indexOf('  // Pause periodic sidebar/poller work');
 assert.ok(start > 0 && end > start, 'could not slice the startup gate out of app.js');
 const src = app.slice(start, end);
 
-function harness() {
+function harness(holdSlow = false) {
   const calls = [];
+  const held = [];
   const baseFetch = (input, init) => {
     calls.push({ url: String(input), method: ((init && init.method) || 'GET').toUpperCase(), signal: init && init.signal });
     return new Promise((resolve, reject) => {
       const sig = init && init.signal;
       const done = () => resolve(new Response('{}', { status: 200 }));
       if (sig) sig.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
-      setTimeout(done, 5);
+      if (holdSlow && String(input).startsWith('/api/sessions/live-activity')) held.push(done);
+      else setTimeout(done, 5);
     });
   };
   const ctx = {
     calls,
+    releaseSlow() { holdSlow = false; held.splice(0).forEach(done => done()); },
     window: {
       fetch: baseFetch,
       location: { origin: 'http://127.0.0.1:8090' },
       addEventListener() {},
     },
     localStorage: { getItem() { return null; } },
-    Response, AbortController, DOMException, URL, setTimeout, clearTimeout,
+    Response, AbortController, DOMException, URL, setTimeout, clearTimeout, performance,
     encodeURIComponent, Object, Promise, console,
   };
   vm.createContext(ctx);
@@ -85,4 +88,68 @@ test('reader-only popouts release the startup gate at boot', () => {
   const after = app.slice(at, app.indexOf('\n\n', at));
   assert.match(after, /if \(READER_ONLY_POPOUT\) _releaseStartupApiReads\(\);/);
   assert.ok(app.indexOf('function _releaseStartupApiReads') < at, 'gate is defined before the popout release');
+});
+
+test('release waits for an in-flight conversation tail (CCC-143)', async () => {
+  const ctx = harness();
+  let finishOpen;
+  const open = new Promise(r => { finishOpen = r; });
+  ctx.window.__cccStartupHoldForOpen(open);
+  ctx.fetchViaGate('/api/vercel-deploy');
+  ctx.release();
+  await new Promise(r => setTimeout(r, 20));
+  assert.ok(!urls(ctx).includes('GET /api/vercel-deploy'), 'deferred read stays parked while the open is in flight');
+  finishOpen({});
+  await new Promise(r => setTimeout(r, 20));
+  assert.ok(urls(ctx).includes('GET /api/vercel-deploy'), 'settled open releases the queue');
+});
+
+test('release without a pending open is immediate', async () => {
+  const ctx = harness();
+  ctx.fetchViaGate('/api/vercel-deploy');
+  ctx.release();
+  await new Promise(r => setTimeout(r, 1));
+  assert.ok(urls(ctx).includes('GET /api/vercel-deploy'));
+});
+
+test('sidebar list polls skip a background pool full of slow reads', async () => {
+  const ctx = harness(true);
+  ctx.release();
+  const slow = [];
+  for (let i = 0; i < 6; i++) slow.push(ctx.window.__cccBackgroundApiFetch('/api/sessions/live-activity?i=' + i));
+  ctx.window.__cccBackgroundApiFetch('/api/conversations/list?window=7d&stale_ok=1');
+  await new Promise(r => setTimeout(r, 1));
+  const started = urls(ctx);
+  // The pool is full (the boot list fetch holds a slot), slow reads queue,
+  // and the poll still starts at once.
+  assert.ok(started.filter(u => u === 'GET /api/sessions/live-activity').length < 6);
+  assert.equal(started.filter(u => u === 'GET /api/conversations/list').length, 2);
+  ctx.releaseSlow();
+  await Promise.all(slow);
+});
+
+
+test('new-session recommendations bypass the startup queue and survive a pool abort', async () => {
+  const ctx = harness();
+  const advisor = ctx.fetchViaGate('/api/spawn-advisor', {cccPriority:'user'});
+  const installed = ctx.fetchViaGate('/api/engines/installed', {cccPriority:'user'});
+  ctx.abortPool();
+  const responses = await Promise.all([advisor, installed]);
+  assert.deepEqual(responses.map(r => r.status), [200, 200]);
+  assert.ok(urls(ctx).includes('GET /api/spawn-advisor'));
+  assert.ok(urls(ctx).includes('GET /api/engines/installed'));
+  ctx.release();
+});
+
+test('visible queue snapshots are not starved by unrelated background reads', async () => {
+  const ctx = harness(true);
+  ctx.release();
+  const slow = Array.from({length:6}, (_, i) => ctx.window.__cccBackgroundApiFetch('/api/sessions/live-activity?i=' + i));
+  const snapshots = ['/api/queue/status','/api/queue/list?slim=1'].map(u => ctx.window.__cccBackgroundApiFetch(u));
+  await new Promise(r => setTimeout(r,1));
+  assert.ok(urls(ctx).includes('GET /api/queue/status'));
+  assert.ok(urls(ctx).includes('GET /api/queue/list'));
+  assert.ok(urls(ctx).filter(u => u === 'GET /api/sessions/live-activity').length < 6);
+  ctx.releaseSlow();
+  await Promise.all([...slow, ...snapshots]);
 });

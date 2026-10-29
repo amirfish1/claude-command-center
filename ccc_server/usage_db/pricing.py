@@ -9,17 +9,22 @@ from typing import Optional
 PACKAGED_RATES = os.path.join(os.path.dirname(__file__), "rates.json")
 
 
-def load_rates(conn, path: Optional[str] = None) -> int:
+def load_rates(conn, path: Optional[str] = None, *, only_missing: bool = False) -> int:
     """Upsert rate rows from a JSON file (default: the packaged ``rates.json``).
 
     Rows are keyed by ``(pricing_key, effective_from)``, so re-loading is
     idempotent and a new effective date adds history instead of overwriting.
+    ``only_missing`` adds newly packaged models without replacing custom rates.
     """
     path = path or PACKAGED_RATES
     with open(path, encoding="utf-8") as fh:
         doc = json.load(fh)
     n = 0
     for r in doc.get("rates", []):
+        if only_missing and conn.execute(
+            "SELECT 1 FROM price_rates WHERE pricing_key=? LIMIT 1", (r["pricing_key"],)
+        ).fetchone():
+            continue
         conn.execute(
             "INSERT INTO price_rates (provider, pricing_key, effective_from, effective_to, currency, "
             "unit, input_rate, cache_read_rate, cache_write_5m_rate, cache_write_1h_rate, output_rate, "
@@ -109,8 +114,8 @@ def load_discovered_rates(conn, path: Optional[str] = None, today: Optional[str]
 
 
 def ensure_rates(conn) -> None:
-    """Seed the packaged rates the first time (empty table only), then merge
-    any vendor-published rates the dashboard has discovered since."""
-    if conn.execute("SELECT COUNT(*) FROM price_rates").fetchone()[0] == 0 and os.path.exists(PACKAGED_RATES):
-        load_rates(conn)
+    """Add missing packaged models, preserving existing custom/history rows,
+    then merge vendor-published rates the dashboard has discovered since."""
+    if os.path.exists(PACKAGED_RATES):
+        load_rates(conn, only_missing=True)
     load_discovered_rates(conn)

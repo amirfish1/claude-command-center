@@ -7,6 +7,19 @@ to "ccc" reliably fails with "No agent named ... is reachable" regardless of
 gate/socket state -- reproduced repeatedly, not a flaky edge case)."""
 
 import server
+import pytest
+
+
+@pytest.mark.parametrize("engine", ["claude", "codex", "cursor", "antigravity"])
+def test_coordinators_yield_to_reports_instead_of_sleep_polling(engine):
+    out = server._wrap_prompt_with_return_address("coordinate release", "parent", engine=engine)
+    assert "`report_to`" in out
+    assert "end your current turn while waiting" in out
+    assert "Do not repeatedly call sleep or poll child status" in out
+    # Ending a waiting turn must not generate an early success callback.
+    assert "send your own completion report only after the required child results" in out
+    assert "gh run watch <run-id> --exit-status" in out
+    assert "Give the watcher a timeout and retain its process handle" in out
 
 
 def test_footer_curl_is_always_present_for_claude_when_gate_on(monkeypatch):

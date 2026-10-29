@@ -30,9 +30,18 @@ if [ -f "$CONFIG_LOCAL_ENV" ]; then
   set +a
 fi
 
-PLIST_LABEL="com.github.claude-command-center"
+# The dashboard label must differ from the .app bundle identifier
+# (com.github.claude-command-center): macOS refuses to bootstrap a LaunchAgent
+# whose Label matches a running app's bundle ID, so the old label could not be
+# (re)started while CCC.app was open (OPS-1246). install_service migrates an
+# old plist (migrate_legacy_service). CCC_SERVICE_LABEL /
+# CCC_WORKER_SERVICE_LABEL exist so tests can install an isolated job.
+LEGACY_PLIST_LABEL="com.github.claude-command-center"
+LEGACY_PLIST_PATH="$HOME/Library/LaunchAgents/${LEGACY_PLIST_LABEL}.plist"
+LEGACY_PLIST_BACKUP_DIR="$HOME/.claude/command-center/service-backup"
+PLIST_LABEL="${CCC_SERVICE_LABEL:-com.github.claude-command-center.server}"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-WORKER_PLIST_LABEL="com.github.claude-command-center.worker"
+WORKER_PLIST_LABEL="${CCC_WORKER_SERVICE_LABEL:-com.github.claude-command-center.worker}"
 WORKER_PLIST_PATH="$HOME/Library/LaunchAgents/${WORKER_PLIST_LABEL}.plist"
 # Optional: only installed when a `kimi` CLI is found on PATH at install time.
 # This is Kimi's own daemon (`kimi web`), not CCC code — CCC's kap transport
@@ -51,7 +60,24 @@ KIMI_WEB_SYSTEMD_UNIT_NAME="ccc-kimi-web.service"
 KIMI_WEB_SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${KIMI_WEB_SYSTEMD_UNIT_NAME}"
 
 is_port_bound() {
-  (echo > "/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
+  local p="$1"
+  local explicit_host="${2:-}"
+  if [ -n "$explicit_host" ]; then
+    (echo > "/dev/tcp/$explicit_host/$p") >/dev/null 2>&1 && return 0
+  fi
+  if (echo > "/dev/tcp/127.0.0.1/$p") >/dev/null 2>&1; then
+    return 0
+  fi
+  local host="${CCC_BIND_HOST:-}"
+  if [ -z "$host" ] && [ -f "$HOME/.claude/command-center/network.json" ]; then
+    host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+  fi
+  if [ -n "$host" ] && [ "$host" != "127.0.0.1" ] && [ "$host" != "0.0.0.0" ]; then
+    if (echo > "/dev/tcp/$host/$p") >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 service_domain() {
@@ -117,6 +143,9 @@ unload_service() {
 
 load_service() {
   if launchctl_supports_bootstrap; then
+    # --uninstall-service disables the label; a disabled label refuses
+    # bootstrap with the same bare "5: Input/output error", so enable first.
+    launchctl enable "$(service_target)" >/dev/null 2>&1 || true
     if ! launchctl bootstrap "$(service_domain)" "$PLIST_PATH"; then
       # The LaunchAgent Label is the same string as the .app's bundle
       # identifier (both "com.github.claude-command-center"). While the .app
@@ -125,7 +154,8 @@ load_service() {
       # into the same gui/<uid> session collides with it — launchctl fails
       # with a bare "Bootstrap failed: 5: Input/output error" that gives no
       # hint why. Detect that case and say so instead of leaving the raw error.
-      if pgrep -f "(CCC|Command Center for Claude, Codex, Antigravity)\.app/Contents/MacOS/CCC" >/dev/null 2>&1; then
+      if [ "$PLIST_LABEL" = "$LEGACY_PLIST_LABEL" ] \
+        && pgrep -f "(CCC|Command Center for Claude, Codex, Antigravity)\.app/Contents/MacOS/CCC" >/dev/null 2>&1; then
         cat >&2 <<'EOF'
 
 That failure is expected: the CCC.app is currently open, and it shares its
@@ -146,6 +176,92 @@ EOF
   else
     launchctl load "$PLIST_PATH"
   fi
+}
+
+# Move a pre-rename dashboard agent (Label == the .app bundle ID) out of the
+# way. Idempotent: no legacy plist, nothing to do. If no new plist exists yet,
+# the legacy one is copied under the new Label so its baked-in env survives.
+# The old plist is kept in LEGACY_PLIST_BACKUP_DIR so a rollback is:
+# ./run.sh --uninstall-service, move the backup back into
+# ~/Library/LaunchAgents, launchctl bootstrap it. The worker label never
+# changed, so the worker (and its sessions) is untouched.
+migrate_legacy_service() {
+  [ "$PLIST_LABEL" = "$LEGACY_PLIST_LABEL" ] && return 0
+  [ -f "$LEGACY_PLIST_PATH" ] || return 0
+  echo "→ Migrating the CCC dashboard agent: $LEGACY_PLIST_LABEL -> $PLIST_LABEL"
+  if [ ! -f "$PLIST_PATH" ]; then
+    sed "s#<string>${LEGACY_PLIST_LABEL}</string>#<string>${PLIST_LABEL}</string>#" \
+      "$LEGACY_PLIST_PATH" > "$PLIST_PATH.tmp" && mv -f "$PLIST_PATH.tmp" "$PLIST_PATH"
+  fi
+  if launchctl_supports_bootstrap; then
+    launchctl bootout "$(service_domain)/$LEGACY_PLIST_LABEL" >/dev/null 2>&1 \
+      || launchctl bootout "$(service_domain)" "$LEGACY_PLIST_PATH" >/dev/null 2>&1 \
+      || true
+  fi
+  launchctl unload "$LEGACY_PLIST_PATH" >/dev/null 2>&1 || true
+  mkdir -p "$LEGACY_PLIST_BACKUP_DIR"
+  mv -f "$LEGACY_PLIST_PATH" "$LEGACY_PLIST_BACKUP_DIR/${LEGACY_PLIST_LABEL}.plist"
+  echo "  old plist kept at $LEGACY_PLIST_BACKUP_DIR/${LEGACY_PLIST_LABEL}.plist"
+}
+
+wait_for_service_bind() {
+  local target_port="$1"
+  for _ in $(seq 1 40); do
+    sleep 0.5
+    if is_port_bound "$target_port"; then
+      return 0
+    fi
+    if ! launchctl print "$(service_target)" >/dev/null 2>&1; then
+      return 1
+    fi
+  done
+  return 1
+}
+
+# Start an installed dashboard agent (CCC.app calls this on launch when the
+# port is free), migrating a legacy-label plist first. Exit 3 = not
+# installed, so the caller can ask for consent.
+start_service() {
+  if [ "$(uname -s)" != "Darwin" ]; then
+    echo "--start-service is macOS-only (use systemctl --user start ccc.service)." >&2
+    exit 2
+  fi
+  local target_port="${PORT:-8090}"
+  if is_port_bound "$target_port"; then
+    # Never migrate (bootout) a legacy job that is serving right now.
+    echo "✓ Port $target_port is already serving."
+    return 0
+  fi
+  migrate_legacy_service
+  if [ ! -f "$PLIST_PATH" ]; then
+    echo "Service is not installed." >&2
+    exit 3
+  fi
+  if [ -f "$WORKER_PLIST_PATH" ]; then
+    load_worker_service
+  fi
+  if launchctl print "$(service_target)" >/dev/null 2>&1; then
+    launchctl kickstart "$(service_target)" >/dev/null 2>&1 || true
+  else
+    load_service || exit 1
+  fi
+  if wait_for_service_bind "$target_port"; then
+    echo "✓ Service started on port $target_port"
+    return 0
+  fi
+  echo "⚠ Service did not bind port $target_port within 20s. Check: $SERVICE_LOG_DIR/service.err.log" >&2
+  exit 1
+}
+
+# Stop the dashboard agent only. The worker keeps running so agent sessions
+# survive. The plist stays: the next login or CCC.app launch starts it again.
+stop_service() {
+  if [ "$(uname -s)" != "Darwin" ]; then
+    echo "--stop-service is macOS-only (use systemctl --user stop ccc.service)." >&2
+    exit 2
+  fi
+  unload_service
+  echo "✓ Dashboard service stopped (worker left running)."
 }
 
 load_worker_service() {
@@ -379,6 +495,7 @@ write_systemd_unit() {
 Description=Claude Command Center
 After=network-online.target $WORKER_SYSTEMD_UNIT_NAME
 Wants=network-online.target $WORKER_SYSTEMD_UNIT_NAME
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -402,6 +519,7 @@ EOF
 Description=Claude Command Center persistent execution worker
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -496,10 +614,20 @@ EOF
     systemctl --user enable --now "$KIMI_WEB_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
   fi
 
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 40); do
     sleep 0.5
     if is_port_bound "$target_port"; then
-      echo "✓ Service started. Open: http://localhost:$target_port"
+      local display_host="localhost"
+      if [ -n "${CCC_BIND_HOST:-}" ] && [ "$CCC_BIND_HOST" != "127.0.0.1" ] && [ "$CCC_BIND_HOST" != "0.0.0.0" ]; then
+        display_host="$CCC_BIND_HOST"
+      elif [ -f "$HOME/.claude/command-center/network.json" ]; then
+        local net_host
+        net_host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+        if [ -n "$net_host" ] && [ "$net_host" != "127.0.0.1" ] && [ "$net_host" != "0.0.0.0" ]; then
+          display_host="$net_host"
+        fi
+      fi
+      echo "✓ Service started. Open: http://$display_host:$target_port"
       echo "  Status   : systemctl --user status $SYSTEMD_UNIT_NAME"
       echo "  Logs     : journalctl --user -u $SYSTEMD_UNIT_NAME -f"
       echo "  Uninstall: ./run.sh --uninstall-service"
@@ -509,9 +637,10 @@ EOF
       echo "  sudo loginctl enable-linger $USER"
       return 0
     fi
+    systemctl --user is-failed --quiet "$SYSTEMD_UNIT_NAME" 2>/dev/null && break
   done
 
-  echo "⚠ Unit started but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Unit didn't bind port $target_port within 20s." >&2
   echo "  Check: journalctl --user -u $SYSTEMD_UNIT_NAME" >&2
   exit 1
 }
@@ -575,6 +704,7 @@ install_service() {
 
   # Unload any previous version first so re-install is idempotent and the port
   # check below sees the real "is something else holding it" answer.
+  migrate_legacy_service
   unload_service
   sleep 0.3
 
@@ -605,16 +735,23 @@ EOF
     load_kimi_web_service
   fi
 
-  for _ in 1 2 3 4 5; do
-    sleep 0.5
-    if is_port_bound "$target_port"; then
-      echo "✓ Service started. Open: http://localhost:$target_port"
-      echo "  Uninstall: ./run.sh --uninstall-service"
-      return 0
+  if wait_for_service_bind "$target_port"; then
+    local display_host="localhost"
+    if [ -n "${CCC_BIND_HOST:-}" ] && [ "$CCC_BIND_HOST" != "127.0.0.1" ] && [ "$CCC_BIND_HOST" != "0.0.0.0" ]; then
+      display_host="$CCC_BIND_HOST"
+    elif [ -f "$HOME/.claude/command-center/network.json" ]; then
+      local net_host
+      net_host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+      if [ -n "$net_host" ] && [ "$net_host" != "127.0.0.1" ] && [ "$net_host" != "0.0.0.0" ]; then
+        display_host="$net_host"
+      fi
     fi
-  done
+    echo "✓ Service started. Open: http://$display_host:$target_port"
+    echo "  Uninstall: ./run.sh --uninstall-service"
+    return 0
+  fi
 
-  echo "⚠ Plist loaded but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Plist loaded but port $target_port didn't bind within 20s." >&2
   echo "  Check: $SERVICE_LOG_DIR/service.err.log" >&2
   exit 1
 }
@@ -624,6 +761,7 @@ uninstall_service() {
     uninstall_service_linux
     return
   fi
+  migrate_legacy_service
   if [ ! -f "$PLIST_PATH" ] && [ ! -f "$WORKER_PLIST_PATH" ]; then
     echo "Service is not installed."
     exit 0
@@ -654,6 +792,9 @@ service_status() {
   else
     echo "  state : not installed"
   fi
+  if [ "$PLIST_LABEL" != "$LEGACY_PLIST_LABEL" ] && [ -f "$LEGACY_PLIST_PATH" ]; then
+    echo "  legacy: $LEGACY_PLIST_PATH (migrated by --install-service)"
+  fi
 
   if launchctl print "$(service_target)" >/dev/null 2>&1; then
     echo "  loaded: yes"
@@ -682,6 +823,8 @@ case "${1:-}" in
   --install-service) install_service; exit 0 ;;
   --uninstall-service) uninstall_service; exit 0 ;;
   --service-status) service_status; exit 0 ;;
+  --start-service) start_service; exit 0 ;;
+  --stop-service) stop_service; exit 0 ;;
   --app)
     # Shortcut: open the dashboard as a chromeless app-style window.
     # Delegates to scripts/open-app.sh; remaining args are forwarded.
@@ -701,6 +844,8 @@ Usage: ./run.sh [OPTION]
                        of silently falling back to the ACP path.
   --uninstall-service  Remove the background service
   --service-status     Show service install/load status
+  --start-service      Start the installed dashboard service (macOS)
+  --stop-service       Stop the dashboard service; the worker keeps running (macOS)
   --app [...]          Open the dashboard in a chromeless app window.
                        Forwards extra args to scripts/open-app.sh.
                        Example: ./run.sh --app --size 1600x1000

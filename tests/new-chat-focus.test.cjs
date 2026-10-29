@@ -33,7 +33,7 @@ function harness(engine = 'codex') {
     composerInputForPane: () => input,
     spawnHandoffDraftRequest: 1, spawnEffortPickedByUser: false, spawnEffortChoiceDirty: false,
     spawnFastMode: null, f2DraftContinuation: null, spawnInTerminalChecked: () => false,
-    getSpawnEngine: () => engine, engineSupportsEffort: () => true,
+    getSpawnEngine: () => engine, engineSupportsEffort: () => true, ideaTicketsOn: () => false,
     spawnFirstSentence: text => text, createMissionFolderIndex: () => ({ folders: new Map() }),
     findActiveFlowObject: () => null, createSpawnGroupParent: () => 'object:task',
     flowNodeParents: {}, flowNodeKey: (kind, id) => kind + ':' + id, persistFlowNodeParents() {},

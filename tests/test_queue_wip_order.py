@@ -28,7 +28,10 @@ class TestQueueWipOrder(unittest.TestCase):
             app_js,
         )
         self.assertIn("if (_isLiveWip(it)) return 0;", app_js)
-        self.assertIn("if (status === 'blocked' || status === 'in_review') return 1;", app_js)
+        # Owner decisions and review share bucket 1; a block waiting on
+        # someone else (CCC-244) sinks to 2.
+        self.assertIn("return (!att || att.owner || att.key === 'gate') ? 1 : 2;", app_js)
+        self.assertIn("if (status === 'in_review') return 1;", app_js)
         self.assertIn("if (_hasUnresolved(it)) return 2;", app_js)
         self.assertIn("if (_isWaitingToDrain(it)) return 3;", app_js)
         # Open-but-inert work (4) now sorts above clean closes (5): open work

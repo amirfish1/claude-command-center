@@ -76,7 +76,21 @@ We'll respond within a week. If the report is valid we'll cut a fix release befo
 
 ## Optional outbound call: new-session repo guess
 
-When you start a new session, CCC guesses the right folder from your first prompt. Path and folder-name matching is local and never touches the network. Only if you add a TypeSafe Jev key (Settings > BYOK, or the `JEV_API_KEY` environment variable) does CCC also send the prompt (up to 3000 characters, with likely secrets such as tokens, API keys and passwords replaced by `[REDACTED]`) plus opaque repo labels, short repo descriptions (from each repo's README / CLAUDE.md / AGENTS.md) and up to a dozen of your past session titles per repo (scrubbed the same way) to `https://api.typesafe.ai/v1/systemone`. No key means no call. The key is used only for this call and is not passed to spawned agent sessions unless you explicitly choose that BYOK profile at spawn; failures and timeouts (3 seconds) silently fall back to the local result.
+When you start a new session, CCC guesses the right folder from your first prompt. Path and folder-name matching is local and never touches the network. Only if you add a TypeSafe Jev key (the new-session **Add Jev token** button, Settings > Engines provider profiles, or the `JEV_API_KEY` environment variable) does CCC also send the prompt (up to 3000 characters, with likely secrets such as tokens, API keys and passwords replaced by `[REDACTED]`) plus opaque repo labels, short repo descriptions (from each repo's README / CLAUDE.md / AGENTS.md) and up to a dozen of your past session titles per repo (scrubbed the same way) to `https://api.typesafe.ai/v1/systemone`. Vault entries named `jev-api-key`, `jev-api-key.password`, or `jev-api-key.token`, or marked with env var `JEV_API_KEY`, enable matching too. Environment keys take precedence over provider profiles, then Vault entries. No key means no call. The configured indicator checks key availability, not provider validity. The key is used only for this call and is not passed to spawned agent sessions unless you explicitly choose that BYOK profile at spawn; failures and timeouts (3 seconds) silently fall back to the local result.
+
+## Session row reply suggestions
+
+The model answering a session can include a `NEXT_ACTION` label and scoped
+reply in its `<session-state>` footer. CCC validates those fields and renders
+them directly for idle sessions with a pending request. Rendering makes no
+additional model call and sends no session text to another provider. Answers
+without valid action metadata keep their normal summary text. Hovering the
+chip shows the exact reply; clicking sends it through the normal session input
+API with the same `source:"composer"` provenance as a typed human reply,
+so Claude receives the click as user input rather than an agent peer message.
+Rendering the chip alone never sends that reply. Automated API and peer sends
+keep their existing provenance. The older `/api/conversations/<id>/quick-action` suggestion endpoint
+returns a no-action response for compatibility and never invokes a model.
 
 ## Optional outbound call: share card upload
 

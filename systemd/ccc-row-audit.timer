@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly session-row control audit
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=30
+Unit=ccc-row-audit.service
+
+[Install]
+WantedBy=timers.target

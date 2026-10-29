@@ -18,7 +18,10 @@ import fcntl
 import json
 import math
 import os
-import pty
+try:
+    import pty
+except ImportError:  # Windows: pty pulls in termios, which does not exist
+    pty = None
 import queue
 import re
 import select
@@ -34,7 +37,9 @@ import urllib.request
 import uuid
 
 from ccc_server import antigravity_ls
+from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
+from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
 
@@ -1145,7 +1150,7 @@ _ANTIGRAVITY_DB_TOOL_NAME_RE = re.compile(
 )
 # Only the tail matters for the pre-transcript live view; a long-running
 # session accumulates hundreds of steps, and this fallback stops being used
-# the moment the brain transcript exists.
+# once the brain transcript contains output.
 _ANTIGRAVITY_DB_LIVE_STEP_CAP = 60
 
 
@@ -2272,6 +2277,7 @@ def _parse_antigravity_conversation(session_id, after_line=0):
     path = _core._antigravity_transcript_path(session_id)
     events = []
     line_num = 0
+    has_output = False
     if not path:
         return _parse_antigravity_cli_log_conversation(session_id, after_line=after_line)
     # One RPC call per parse — the trajectory carries per-step token usage
@@ -2285,8 +2291,6 @@ def _parse_antigravity_conversation(session_id, after_line=0):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 line_num += 1
-                if line_num <= after_line:
-                    continue
                 line = line.strip()
                 if not line:
                     continue
@@ -2294,12 +2298,52 @@ def _parse_antigravity_conversation(session_id, after_line=0):
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if ev.get("type") not in (
+                    "USER_INPUT", "CONVERSATION_HISTORY", "SYSTEM_MESSAGE",
+                    "EPHEMERAL_MESSAGE", "CHECKPOINT",
+                ):
+                    has_output = True
+                if line_num <= after_line:
+                    continue
                 parsed = _core._parse_antigravity_event(ev, line_num, usage_map=usage_map)
                 if parsed:
                     events.append(parsed)
     except OSError:
         pass
+    # A seeded brain transcript can contain only the starting prompt even
+    # after the CLI has failed. Keep its real prompt, then show live steps
+    # and diagnostics from the same fallback used before a transcript exists.
+    if not has_output:
+        fallback = _parse_antigravity_cli_log_conversation(session_id)
+        for event in fallback["events"]:
+            if event.get("type") == "user_text":
+                continue
+            event = dict(event, line=event["line"] + line_num)
+            if event["line"] > after_line:
+                events.append(event)
+        line_num += fallback["last_line"]
     return {"events": events, "last_line": line_num}
+
+
+def _antigravity_reader_cache_key(session_id):
+    """Include CLI progress/errors even when the seeded transcript is static."""
+    transcript = _core._antigravity_transcript_path(session_id)
+    meta = _antigravity_cli_log_meta_for_session(session_id)
+    log_path = meta.get("log_path")
+    db_path = _antigravity_db_path(session_id)
+    sources = [transcript, log_path, db_path]
+    if log_path and str(log_path).endswith(".agy.log"):
+        sources.append(str(log_path)[:-8])
+    if db_path:
+        sources.append(str(db_path) + "-wal")
+    stamps = []
+    for source in sources:
+        try:
+            st = Path(source).stat() if source else None
+            stamps.append((st.st_mtime_ns, st.st_size) if st else (0, 0))
+        except OSError:
+            stamps.append((0, 0))
+    return (max((s[0] for s in stamps), default=0), tuple(stamps))
 
 
 def _antigravity_usage_to_int(val):
@@ -3143,7 +3187,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     ]
     if model_to_use:
         cmd.extend(["--model", model_to_use])
-    cmd.extend(["-p", prompt])
+    cmd.extend(["-p", _core._devin_session_state_prompt(prompt)])
     log_fh = open(log_path, "w")
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
@@ -3290,7 +3334,7 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path, *, delivery_s
 # Proof-of-delivery window. A `devin --resume -p` must write the prompt into
 # its own sessions DB (`prompt_history` table) within this many seconds of
 # the dashboard launching it; otherwise the follow-up is requeued for retry.
-_DEVIN_DELIVERY_PROOF_WINDOW_S = 30.0
+_DEVIN_DELIVERY_PROOF_WINDOW_S = 120.0  # resuming a huge session can take 45s+ before it records the prompt
 # How long to sleep between DB polls while waiting for proof.
 _DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S = 0.5
 
@@ -3308,8 +3352,25 @@ def _devin_cli_prompt_history_count(raw_id, text, since_ts):
     try:
         row = con.execute(
             "SELECT COUNT(*) AS n FROM prompt_history "
-            "WHERE session_id = ? AND content = ? AND timestamp >= ?",
-            (raw_id, text, int(since_ts)),
+            "WHERE session_id = ? AND content IN (?, ?) AND timestamp >= ?",
+            (raw_id, text, _core._devin_session_state_prompt(text), int(since_ts)),
+        ).fetchone()
+        count = int(row["n"]) if row else 0
+        if count:
+            return count
+        # A headless `devin --resume -p` turn can run without writing
+        # prompt_history at all (observed on a long-lived session), which
+        # made delivered messages look undelivered and get sent again every
+        # time the previous run exited. The user message in the session's own
+        # transcript is proof too. Newest rows only: the session index makes
+        # this a handful of rows, not a scan of the multi-GB table.
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM ("
+            " SELECT chat_message, created_at FROM message_nodes"
+            " WHERE session_id = ? ORDER BY row_id DESC LIMIT 60"
+            ") WHERE created_at >= ? AND json_extract(chat_message, '$.role') = 'user'"
+            " AND json_extract(chat_message, '$.content') IN (?, ?)",
+            (raw_id, int(since_ts), text, _core._devin_session_state_prompt(text)),
         ).fetchone()
         return int(row["n"]) if row else 0
     except sqlite3.Error:
@@ -3505,7 +3566,7 @@ def resume_session_devin(session_id, text, _delivery_slot="resume", model=None):
         model = os.environ.get("CCC_DEVIN_MODEL")
     if model:
         cmd.extend(["--model", model])
-    cmd.extend(["-p", text])
+    cmd.extend(["-p", _core._devin_session_state_prompt(text)])
     log_fh = open(log_path, "w")
     try:
         proc = subprocess.Popen(
@@ -4184,6 +4245,108 @@ def _antigravity_resume_stale_seconds():
     return _core._antigravity_print_timeout_seconds() + 60
 
 
+def _antigravity_turn_idle_seconds():
+    try:
+        return max(15.0, float(os.environ.get("CCC_ANTIGRAVITY_TURN_IDLE_S", "90")))
+    except ValueError:
+        return 90.0
+
+
+def _pid_age_seconds(pid):
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "etimes=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=5,
+        )
+        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _antigravity_turn_finished(session_id, pid=None, idle_s=None):
+    """True when the conversation's own record says its turn is over.
+
+    A headless ``agy -p`` is documented to exit when the turn ends, but a
+    process can outlive its turn (observed: alive for an hour after the final
+    answer, which made every queued message wait behind it). Process liveness
+    therefore cannot decide busy vs idle. The transcript can: the last row is
+    the model's final PLANNER_RESPONSE (DONE, no tool calls) and nothing has
+    been written for ``idle_s`` seconds. The process must also be older than
+    ``idle_s``, so a resume that has only just started (transcript still
+    showing the previous turn's answer) is never mistaken for a finished one.
+    """
+    idle_s = _antigravity_turn_idle_seconds() if idle_s is None else idle_s
+    newest = None
+    for brain_root in (_core.ANTIGRAVITY_BRAIN, _core.ANTIGRAVITY_CLI_BRAIN):
+        for name in ("transcript_full.jsonl", "transcript.jsonl"):
+            path = brain_root / str(session_id) / ".system_generated" / "logs" / name
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if newest is None or mtime > newest[0]:
+                newest = (mtime, path)
+    if newest is None or time.time() - newest[0] < idle_s:
+        return False
+    if pid is not None:
+        age = _pid_age_seconds(pid)
+        if age is None or age < idle_s:
+            return False
+    try:
+        with open(newest[1], "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 1024 * 1024))
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+        row = json.loads(lines[-1])
+    except (OSError, ValueError, IndexError):
+        return False
+    return (
+        isinstance(row, dict)
+        and row.get("source") == "MODEL"
+        and row.get("type") == "PLANNER_RESPONSE"
+        and row.get("status") == "DONE"
+        and not row.get("tool_calls")
+    )
+
+
+def _antigravity_reap_finished_process(session_id, pid):
+    """Stop an ``agy --conversation <sid>`` process that outlived its turn.
+
+    Only a process whose argv really is that conversation's agy is touched.
+    Returns True when it is gone.
+    """
+    try:
+        pid = int(pid)
+        argv = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except (OSError, TypeError, ValueError):
+        return True  # already gone
+    if f"--conversation {session_id}" not in argv or Path(argv.split(" ", 1)[0]).name != "agy":
+        return False
+    for sig, wait_s in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 2.0)):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
+        except OSError:
+            return False
+        deadline = time.time() + wait_s
+        while time.time() < deadline and Path(f"/proc/{pid}").exists():
+            try:  # a child of this server stays a zombie until reaped
+                if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                    break
+            except ChildProcessError:
+                pass
+            time.sleep(0.2)
+        if not Path(f"/proc/{pid}").exists():
+            break
+    _core._log_activity(
+        "inject", "AGY_REAP",
+        f"session={session_id} pid={pid} reason=turn_finished_process_lingered",
+    )
+    return not Path(f"/proc/{pid}").exists()
+
+
 def _antigravity_live_resume_pid(session_id):
     """Ground-truth check: is any `agy ... --conversation <sid>` process
     actually alive right now, independent of `_spawned_sessions`/the on-disk
@@ -4309,6 +4472,8 @@ def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id=""):
     the user for the code through the credential broker and types it in. The
     pty closes once no sign-in is needed, so normal runs see no input.
     """
+    if pty is None:
+        raise OSError("pseudo-terminals are not available on this platform")
     master, slave = pty.openpty()
     try:
         proc = subprocess.Popen(
@@ -4421,6 +4586,45 @@ def resume_session_antigravity(session_id, text, mode="send"):
     resolved = _core._resolve_antigravity_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    # A persistent stream-json process owns this conversation: its `result`
+    # event, not process liveness, says whether a turn is running.
+    stream_state = _antigravity_stream.state(session_id)
+    if stream_state is not None:
+        want_dirs = set(_core._pasted_image_parent_dirs(text))
+        have_model, have_dirs = stream_state["key"]
+        override = _core._get_session_override(session_id)
+        want_model = _core._antigravity_model_settings_label(
+            ((override or {}).get("model") if override else None)
+            or os.environ.get("CCC_ANTIGRAVITY_MODEL") or ""
+        )
+        if stream_state["busy"]:
+            if mode == "steer":
+                return {
+                    "ok": True,
+                    "queued_preserved": True,
+                    "pid": stream_state["pid"],
+                    "via": "antigravity-resume-queued",
+                    "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
+                }
+            queued = _core._apply_pending_input_operations(session_id, [{
+                "field": "resume", "action": "append_tail", "value": text,
+            }])
+            if not queued.get("ok"):
+                return {"ok": False, "error": "failed to persist queued Antigravity input"}
+            return {
+                "ok": True,
+                "queued": True,
+                "pid": stream_state["pid"],
+                "via": "antigravity-resume-queued",
+                "queued_reason": "waiting for the current Antigravity turn to finish (it can't take input mid-turn)",
+            }
+        if want_dirs <= set(have_dirs) and (not want_model or want_model == have_model):
+            sent = _antigravity_stream.send(session_id, text)
+            if sent.get("ok"):
+                return sent
+        # Settings changed (model, extra directories) or the write failed:
+        # start a fresh process below.
+        _antigravity_stream.retire(session_id)
     for s in _core._spawned_sessions:
         if s.get("engine") == "antigravity" and s.get("resumed_sid") == session_id:
             try:
@@ -4433,6 +4637,14 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     # it as done and fall through to a fresh resume instead.
                     started = _spawn_entry_started_epoch(s)
                     if started and (time.time() - started) > _antigravity_resume_stale_seconds():
+                        continue
+                    # The turn already ended (final answer in the transcript)
+                    # but the process lingers: free the conversation and fall
+                    # through to a fresh resume instead of queueing behind it.
+                    if (
+                        _antigravity_turn_finished(session_id, pid=s.get("pid"))
+                        and _antigravity_reap_finished_process(session_id, s.get("pid"))
+                    ):
                         continue
                     # Our own headless run is mid-turn. If its agent
                     # registered the language server, hand the message to
@@ -4475,6 +4687,12 @@ def resume_session_antigravity(session_id, text, mode="send"):
     # An untracked headless `-p` run only takes it while still mid-turn.
     term_pid = _antigravity_terminal_holder_pid(session_id)
     live_pid = _antigravity_live_resume_pid(session_id) if term_pid is None else None
+    if (
+        live_pid is not None
+        and _antigravity_turn_finished(session_id, pid=live_pid)
+        and _antigravity_reap_finished_process(session_id, live_pid)
+    ):
+        live_pid = None
     delivered = antigravity_ls.send(
         session_id, text, mode=mode, require_running=live_pid is not None)
     if delivered:
@@ -4556,6 +4774,26 @@ def resume_session_antigravity(session_id, text, mode="send"):
         cmd.extend(["--log-file", str(cli_log_path)])
     if not _core._antigravity_has_arg(user_args, "--print-timeout"):
         cmd.extend(["--print-timeout", _core._antigravity_print_timeout()])
+    if _antigravity_stream.enabled():
+        # Documented multi-turn mode: one persistent process per conversation,
+        # NDJSON on stdin, one `result` event per turn. Any failure falls
+        # through to the one-shot `-p` run below (which also owns the
+        # sign-in relay).
+        stream_cmd = cmd + [
+            "--conversation", session_id, "--print=",
+            "--input-format", "stream-json", "--output-format", "stream-json",
+        ]
+        try:
+            _antigravity_stream.spawn(
+                session_id, stream_cmd, cwd, log_path,
+                (model_to_use or "", tuple(sorted(set(add_dirs)))),
+            )
+            sent = _antigravity_stream.send(session_id, text)
+        except (OSError, ValueError):
+            sent = None
+        if sent and sent.get("ok"):
+            return {**sent, "log": str(log_path), "resumed": True, "model": model_to_use}
+        _antigravity_stream.retire(session_id)
     cmd.extend(["--conversation", session_id, "-p", text])
 
     log_fh = open(log_path, "w")
@@ -5521,6 +5759,17 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
         "- REASON: if FAILED, the reason and what blocked you (omit if succeeded)\n\n"
         "Send the report once, at the very end — not progress updates mid-task. "
         "Remember to JSON-escape the text (quotes, newlines) so the payload is valid.\n"
+        "\nWaiting for delegated work: give each child your session id as "
+        "`report_to`; its completion report will resume you through CCC. Finish "
+        "any independent work, then end your current turn while waiting. Do not "
+        "repeatedly call sleep or poll child status to keep the turn alive. "
+        "Waiting is not task completion: send your own completion report only "
+        "after the required child results arrive and you have checked them.\n"
+        "For external deployments or checks without callbacks, use one bounded "
+        "CLI watcher (for example `gh run watch <run-id> --exit-status`) rather "
+        "than alternating model turns, sleep calls, and status checks. Give the "
+        "watcher a timeout and retain its process handle; resume on completion "
+        "or a meaningful change, not on a fixed stream of short polling turns.\n"
     )
     return prompt + footer
 
@@ -5746,6 +5995,8 @@ def _start_claude_prewarm(
         claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
         effort=reasoning_effort,
     )
+    from sender_envelope import child_env as scrub_sender_env
+    child_env = scrub_sender_env(child_env)
     popen_kwargs = dict(
         stdout=log_fh,
         stderr=subprocess.STDOUT,
@@ -7219,6 +7470,10 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
     if not isinstance(entry, dict):
         return
     pid = entry.get("pid")
+    if terminate:
+        # A deliberate stop, so its open turn must not be toasted as a death.
+        from ccc_server import session_death
+        session_death.note_stop(entry.get("resumed_sid") or entry.get("session_id"), reason)
     # Diagnostic: record whether the child was still alive at retire time so we
     # can distinguish "we killed a live process" from "cleaned up a dead one".
     alive = None
@@ -7276,6 +7531,26 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
         pass
 
 
+def _proc_less_entry_poll(entry):
+    """None while a proc-less entry's pid is alive, else -1.
+
+    No waitpid here: the same pid may belong to a real Popen in another entry,
+    and reaping it would steal that handle's exit status.
+    """
+    pid = entry.get("pid") if isinstance(entry, dict) else None
+    if pid is None:
+        return -1
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return -1
+    if pid <= 0 or not _paths_is_pid_alive(pid, perm_alive=True):
+        return -1
+    if _core._pid_is_zombie(pid):
+        return -1
+    return None
+
+
 def _poll_spawn_entry(entry):
     """Poll a tracked spawned child and clean transient handles once it exits."""
     if isinstance(entry, dict) and entry.get("app_server_spawn"):
@@ -7293,7 +7568,14 @@ def _poll_spawn_entry(entry):
     else:
         proc = entry.get("proc") if isinstance(entry, dict) else None
         try:
-            poll = proc.poll() if proc is not None else -1
+            if proc is not None:
+                poll = proc.poll()
+            else:
+                # Proc-less entries with a pid (raw spawn-registry rows merged in
+                # by the Antigravity/Devin sid lookups) must not read as exited
+                # while the child runs, or the registry row is dropped early
+                # and the live row turns "(external)" (CCC-166).
+                poll = _proc_less_entry_poll(entry)
         except Exception:
             poll = -1
     # Devin's CLI wrapper can exit while the real agent child (recorded in
@@ -8377,7 +8659,9 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             "code": rebucket.get("error") or "session_jsonl_unavailable",
         }
     timestamp = time.strftime("%Y%m%dT%H%M%S")
-    log_filename = f"resume-{session_id[:8]}-{timestamp}.log"
+    # Rapid cold resumes can share a second (for example a router switch).
+    # Keep their output and stdin FIFO separate instead of truncating a turn.
+    log_filename = f"resume-{session_id[:8]}-{timestamp}-{uuid.uuid4().hex}.log"
     log_dir = _core.repo_log_dir(ctx["repo_path"])
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
@@ -8449,7 +8733,15 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             log_fh.flush()
         except OSError:
             pass
-    child_env = _core._question_relay_env()
+    # A cold resume is a new process, so it must carry the autocompact window
+    # too -- otherwise it silently falls back to Claude Code's own default.
+    # Use the current Settings value (the user-facing key, passed explicitly:
+    # this runs in the worker, whose role default is the WatchTower one), so
+    # changing Settings and restarting a session applies the new threshold.
+    resume_auto_compact_k = _core._validate_auto_compact_k(
+        (_core._load_spawn_defaults() or {}).get("auto_compact_k", 250)
+    )
+    child_env = _core._spawn_env(auto_compact_k=resume_auto_compact_k)
     if paid_preset:
         _domestic_providers.apply_env(child_env, paid_preset["env"])
     if runtime:
@@ -8511,6 +8803,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         "repo_path": ctx["repo_path"],
         "runtime": runtime,
         "model": preset_model if paid_preset else "",
+        "auto_compact_k": resume_auto_compact_k,
     }
     ok = _core._write_stream_json_user_message(entry, text, timeout=30)
     if not ok:

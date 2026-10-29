@@ -37,7 +37,8 @@ def fts_env(tmp_path, monkeypatch):
     kimi_dir = tmp_path / "kimi"
     gemini_dir = tmp_path / "gemini"
     cursor_dir = tmp_path / "cursor"
-    for d in (projects_dir, codex_dir, kimi_dir, gemini_dir, cursor_dir):
+    agy_dir = tmp_path / "agy-brain"
+    for d in (projects_dir, codex_dir, kimi_dir, gemini_dir, cursor_dir, agy_dir):
         d.mkdir(parents=True)
 
     monkeypatch.setenv("CCC_SESSION_FTS_DB", str(tmp_path / "session_fts.sqlite"))
@@ -49,7 +50,10 @@ def fts_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_CODEX_SESSIONS_ROOT", str(codex_dir))
     monkeypatch.setenv("CCC_KIMI_SESSIONS_ROOT", str(kimi_dir))
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(gemini_dir))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(cursor_dir))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin"))
+    monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", str(agy_dir))
     # Isolate the Hermes messages_fts channel (S9) -- see test_session_fts.py.
     monkeypatch.setattr(server, "HERMES_STATE_DB", tmp_path / "hermes" / "state.db")
     monkeypatch.setattr(server, "HERMES_PROFILES_DIR", tmp_path / "hermes" / "profiles")
@@ -76,6 +80,7 @@ def fts_env(tmp_path, monkeypatch):
         "kimi": kimi_dir,
         "gemini": gemini_dir,
         "cursor": cursor_dir,
+        "agy": agy_dir,
     }
 
 
@@ -400,3 +405,47 @@ def test_search_sessions_enriched_since_ts_excludes_old_sessions(fts_env):
         "zzzfoo stale marker", limit=10, since_ts=time.time() - 86400,
     )
     assert not any(h["session_id"] == sid for h in hits_recent)
+
+
+def _write_agy_session(agy_dir: Path, sid: str, steps: list[dict], name="transcript_full.jsonl"):
+    logs = agy_dir / sid / ".system_generated" / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    path = logs / name
+    with open(path, "w", encoding="utf-8") as f:
+        for st in steps:
+            f.write(json.dumps(st) + "\n")
+    return path
+
+
+def test_agy_session_is_parsed_and_found_by_search(fts_env):
+    sid = "abababab-1111-2222-3333-444444444444"
+    path = _write_agy_session(fts_env["agy"], sid, [
+        {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+         "created_at": "2026-10-17T10:00:00Z",
+         "content": "<USER_REQUEST>\nannounce the release to recent stargazers\n</USER_REQUEST>\n<ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>"},
+        {"step_index": 2, "source": "MODEL", "type": "PLANNER_RESPONSE",
+         "created_at": "2026-10-17T10:00:05Z", "thinking": "private reasoning zzzthink",
+         "content": "drafting the zebracorn v5.38.0 announcement",
+         "tool_calls": [{"name": "run_command", "args": {"CommandLine": "gh api x", "Cwd": "/Users/x/dev/my-agy-repo"}}]},
+    ])
+    r = session_fts.parse_agy(str(path))
+    assert r is not None
+    assert r["engine"] == "agy"
+    assert r["cwd"] == "/Users/x/dev/my-agy-repo"
+    assert "recent stargazers" in r["user_text"]
+    assert "USER_REQUEST" not in r["user_text"]
+    assert "zzzthink" not in r["assistant_text"]
+
+    hits = session_fts.search_sessions("zebracorn announcement")
+    assert sid in [h["session_id"] for h in hits]
+
+
+def test_agy_candidates_prefer_full_transcript_and_skip_chunks(fts_env):
+    sid = "cdcdcdcd-1111-2222-3333-444444444444"
+    step = {"type": "USER_INPUT", "content": "<USER_REQUEST>\nhello\n</USER_REQUEST>"}
+    full = _write_agy_session(fts_env["agy"], sid, [step])
+    _write_agy_session(fts_env["agy"], sid, [step], name="transcript.jsonl")
+    (full.parent / "chunks" / "transcript_full").mkdir(parents=True)
+    (full.parent / "chunks" / "transcript_full" / "00000000.jsonl").write_text("{}\n")
+    agy = [c for c in session_fts._candidate_files() if c[0] == "agy"]
+    assert [c[1] for c in agy] == [str(full)]

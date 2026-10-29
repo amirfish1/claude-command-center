@@ -1,0 +1,1 @@
+- README: new first screen with the latest 33-second product video, fresh v5.41 screenshots (helper lanes, a session asking a question), a clearer pitch, and a single Docs list in place of a dozen one-link sections.

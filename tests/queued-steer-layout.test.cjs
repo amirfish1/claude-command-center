@@ -89,7 +89,7 @@ test('a repeated queue acknowledgement still renders only one set of controls pe
 });
 test('one later durable occurrence retires only one stale queued copy across repeated syncs',async()=>{
  const page=await fixture();try{
-  const count=await page.evaluate(()=>{const now=Date.now();makeRow('again','server',now-10000);makeRow('again','server',now-5000);makeRow('again','durable',now);sync();sync();return queuedSteerCardCount(document.querySelector('.queued-steer-tray'));});
+  const count=await page.evaluate(()=>{const now=Date.now();for(const ts of [now-10000,now-5000]){const row=makeRow('again','local',ts);markPendingSendQueued(row._pendingRef);}makeRow('again','durable',now);sync();sync();return queuedSteerCardCount(document.querySelector('.queued-steer-tray'));});
   assert.equal(count,1);
  }finally{await page.close();}
 });
@@ -170,6 +170,35 @@ test('an authoritative queue snapshot retires a server card that was already del
  const page=await fixture();try{
   const out=await page.evaluate(()=>{makeRow('already delivered','server');sync();syncQueuedSteerTray(getConvView(),'left',true);return {tray:!!document.querySelector('.queued-steer-tray'),rows:getConvView().querySelectorAll('.event.user_text').length};});
   assert.deepEqual(out,{tray:false,rows:0});
+ }finally{await page.close();}
+});
+test('coalesced Codex submissions retire each delivered card after a first FIFO acknowledgement',async()=>{
+ const page=await fixture();try{
+  const out=await page.evaluate(()=>{
+   const now=Date.now();
+   for(const text of ['Please use the requested layout.','Which setting is active?']){
+    const row=makeRow(text,'local',now-5000);markPendingSendQueued(row._pendingRef);
+   }
+   sync();
+   const durable=makeRow('Keep the titles readable.\n\nPlease use the requested layout.\n\nWhich setting is active?','durable',now);
+   durable.dataset.sendAcknowledged='true';
+   durable.dataset.sendAcknowledgedText='Keep the titles readable.';
+   sync();sync();
+   return {tray:!!document.querySelector('.queued-steer-tray'),removed:removedPending.length,durable:durable.isConnected,draft:document.querySelector('textarea').value};
+  });
+  assert.deepEqual(out,{tray:false,removed:2,durable:true,draft:'Unsent draft'});
+ }finally{await page.close();}
+});
+test('coalesced receipts cannot acknowledge overlapping text, inline quotes, or newer sends',async()=>{
+ const page=await fixture();try{
+  const out=await page.evaluate(()=>{
+   const now=Date.now();
+   const row=makeRow('First paragraph.\n\nSecond paragraph.','durable',now);
+   const take=(text,time=now-1000)=>takeQueuedSendAcknowledgement([row],_normSend(text),time);
+   const first=take('First paragraph.');
+   return [first,take('First paragraph.'),take('First paragraph.\n\nSecond paragraph.'),take('paragraph.'),take('Second paragraph.',now+1),take('Second paragraph.'),take('Second paragraph.')];
+  });
+  assert.deepEqual(out,[true,false,false,false,false,true,false]);
  }finally{await page.close();}
 });
 test('queued Steer button is hidden for Devin',async()=>{

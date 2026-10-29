@@ -56,10 +56,18 @@ irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scrip
 Installs into the Cellar, puts `ccc` on `PATH`, and uses a brew-managed Python.
 
 ```bash
-brew tap amirfish1/ccc
-brew install ccc
+brew install amirfish1/tap/ccc
 ccc
 ```
+
+The fully qualified name matters: newer Homebrew refuses to load formulae
+from third-party taps by short name ("Refusing to load formula ... from
+untrusted tap"). Installing `amirfish1/tap/ccc` trusts just that formula.
+
+The tap used to be called `amirfish1/ccc`. If you tapped it under that name
+but never installed, run `brew untap amirfish1/ccc` before the line above.
+If CCC is already installed from it and `brew upgrade ccc` hits the
+untrusted-tap error, run `brew trust --formula amirfish1/ccc/ccc` once.
 
 For a background service, use `brew services start ccc`. Update with
 `brew upgrade ccc`.
@@ -100,7 +108,9 @@ restart does not close worker-owned agent transports.
 The installer records the `PORT` and `CCC_*` environment values you set at
 installation time. Re-run it to change those values or pick up a change to the
 service definition, not for an ordinary update at the same checkout path.
-Remove the services with `./run.sh --uninstall-service`.
+Remove the services with `./run.sh --uninstall-service`. To remove everything
+(services, `ccc` link, checkout), run `scripts/uninstall.sh`; add `--purge-data`
+to also delete `~/.claude/command-center`.
 
 Logs are under `~/.claude/command-center/logs/`: dashboard logs are
 `service.out.log` and `service.err.log`; worker logs are `worker.out.log` and

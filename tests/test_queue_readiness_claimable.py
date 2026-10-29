@@ -66,15 +66,29 @@ class ReadinessGatedClaimableTests(unittest.TestCase):
         self.assertTrue(row["stuck"])
         self.assertEqual(row["state"], "stuck")
 
-    def test_a_manual_run_request_overrides_the_readiness_gate(self):
-        """Pressing ▶ on an unshaped ticket is WatchTower's explicit override."""
+    def test_a_manual_run_request_preserves_the_readiness_gate(self):
+        """A run request does not shape a ticket or override scheduler eligibility."""
         rows = _rows(
             [_ticket("FEAT-NEXT-15", readiness="needs-shaping", run_requested=True)],
             depth=1,
         )
 
+        self.assertEqual(rows["FEAT-NEXT"]["claimable"], 0)
+        self.assertFalse(rows["FEAT-NEXT"]["stuck"])
+
+    def test_future_deferrals_are_not_ready_even_with_a_delivered_answer(self):
+        from datetime import datetime, timezone, timedelta
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        rows = _rows([
+            _ticket("FEAT-NEXT-20", deferred_until=future,
+                    pending_answer={"state": "delivered"}, run_requested=True),
+            _ticket("FEAT-NEXT-21", deferred_until=past),
+            _ticket("FEAT-NEXT-22", duplicate_of="FEAT-NEXT-21"),
+            _ticket("FEAT-NEXT-23", needs_input=True),
+        ], depth=4)
         self.assertEqual(rows["FEAT-NEXT"]["claimable"], 1)
-        self.assertTrue(rows["FEAT-NEXT"]["stuck"])
+        self.assertEqual(rows["FEAT-NEXT"]["total"], 4)
 
     def test_ccc_agrees_with_watchtowers_own_unclaimable_readiness_set(self):
         from ccc_server.queue_events import _UNCLAIMABLE_READINESS

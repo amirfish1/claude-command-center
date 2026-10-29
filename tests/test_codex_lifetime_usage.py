@@ -72,7 +72,7 @@ def test_old_codex_turn_cache_reparses_once_then_reuses_memory(tmp_path, monkeyp
     calls=[]
     def extract():
         calls.append(True)
-        return [{'engine':'codex','codex_usage_schema':3,'cost_usd':1}]
+        return [{'engine':'codex','codex_usage_schema':4,'cost_usd':1}]
     assert stats._throughput_file_turns(rollout,extract)[0]['cost_usd']==1
     assert stats._throughput_file_turns(rollout,extract)[0]['cost_usd']==1
     assert len(calls)==1

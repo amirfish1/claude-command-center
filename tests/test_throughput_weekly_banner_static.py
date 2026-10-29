@@ -73,10 +73,20 @@ def test_weekly_axis_is_fixed_at_100_with_overflow_and_midnight_labels():
     assert "if (j > 0)" in throughput_html
 
 
-def test_model_weekly_contributions_normalize_to_authoritative_total():
-    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+def test_model_contributions_normalize_to_selected_window_total():
+    import json
+    import subprocess
 
-    assert "claudeWeeklyPct" in throughput_html
-    assert "claudeWeeklyTotalTokens" in throughput_html
-    assert "(tokens / total) * pct" in throughput_html
-    assert "tokens * ppt" not in throughput_html
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+    start = throughput_html.index("    function modelBreakdownContext(")
+    end = throughput_html.index("    function renderModelBreakdown(", start)
+    script = throughput_html[start:end] + """
+const models = [
+  {effective_input_tokens: 200, output_tokens: 50, raw_context_tokens: 10000},
+  {effective_input_tokens: 700, output_tokens: 50, raw_context_tokens: 20000},
+];
+const context = modelBreakdownContext(models);
+console.log(JSON.stringify(models.map(model => formatModelWeeklyPct(model, context))));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert json.loads(result.stdout) == ["25.00%", "75.00%"]

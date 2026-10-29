@@ -162,7 +162,7 @@ def test_refresh_completion_publishes_complete_model_atomically():
     assert "validateThroughputBootstrap" in complete
     assert "writeThroughputBootstrap(model)" in complete
     assert "applyThroughputBootstrap(model, 'refresh')" in complete
-    assert "fetchWeekRankings()" in complete
+    assert "loadSessions({ selectDefault: false }).then(fetchWeekRankings)" in complete
     assert "loadWeeklyHistory()" in complete
     assert "renderDashboard(" not in complete
 
@@ -258,7 +258,7 @@ def test_quota_banner_explicitly_lists_both_next_resets():
 def test_empty_auxiliary_sections_hide_instead_of_stalling():
     html = _html()
     history = _function(html, "loadWeeklyHistory", "drawWeeklyHistory")
-    sessions = _function(html, "renderTopSessions", "modelWeeklyBasisTokens")
+    sessions = _function(html, "renderTopSessions", "modelBreakdownContext")
 
     assert "hideAuxiliarySection('weekly-history-section')" in history
     assert "hideAuxiliarySection('top-sessions-section')" in sessions

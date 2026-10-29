@@ -340,7 +340,9 @@ class TestDevinExtractorIncremental(unittest.TestCase):
         self._add_row(4, "and /Users/testuser/Desktop/doc4.pdf")
         self.cj.loads_calls = 0
         result = self.devin._extract_files_from_devin_cli_conversation("devincli-alpha-one")
-        self.assertEqual(self.cj.loads_calls, 1)
+        # Rows decode in SQLite (json_extract), never json.loads in Python:
+        # a cold walk of a long session held the GIL ~20s (CCC-143).
+        self.assertEqual(self.cj.loads_calls, 0)
         self.assertEqual(result["count"], 4)
         pdfs = {r["target"]: r for r in result["groups"]["pdfs"]}
         self.assertEqual(pdfs["/Users/testuser/Desktop/doc4.pdf"]["first_line"], 4)

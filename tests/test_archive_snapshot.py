@@ -147,3 +147,24 @@ def test_server_debounce_only_counts_successful_publication(tmp_path, monkeypatc
     assert server._ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT > 0
     server._save_archive_response_cache()
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("previous_labels", [True, False])
+def test_server_rebuilds_rows_cached_before_short_action_labels(tmp_path, monkeypatch, previous_labels):
+    import server
+
+    data = snapshot()
+    data["schema_version"] = 11 if previous_labels else server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
+    data["build_id"] = str(data["schema_version"])
+    cache_file = tmp_path / "archive.json"
+    cache_file.write_text(json.dumps(data))
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache_file)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {})
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
+    server._read_archive_response_cache_file()
+    if previous_labels:
+        assert server._ARCHIVE_RESPONSE_CACHE == {}
+        assert server._ARCHIVE_STATMAP_BY_SIG == {}
+    else:
+        assert server._ARCHIVE_RESPONSE_CACHE["base"]["conversations"] == [{"session_id": "session-a"}]
+        assert "sig-a" in server._ARCHIVE_STATMAP_BY_SIG

@@ -31,7 +31,7 @@ from ccc_server import scheduled_jobs as _sj
 
 FEED_TTL_S = 45.0
 SSH_CONNECT_TIMEOUT_S = 5
-SSH_TOTAL_TIMEOUT_S = 25
+SSH_TOTAL_TIMEOUT_S = 60
 FIRST_LOAD_WAIT_S = 8.0
 
 _MARK = "@@CCCJOB:"
@@ -39,27 +39,49 @@ _MARK = "@@CCCJOB:"
 # Runs on the Hermes VM. One ssh, all units. Kept POSIX-ish (bash on Ubuntu).
 REMOTE_SCRIPT = r"""
 export LC_ALL=C SYSTEMD_COLORS=0 TZ=UTC
-for t in /etc/systemd/system/*.timer; do
-  [ -e "$t" ] || continue
-  tn=${t##*/}
-  echo "@@CCCJOB:TIMER $tn"
-  systemctl show "$tn" -p Unit,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec,TimersCalendar,TimersMonotonic 2>/dev/null
-  svc=$(systemctl show "$tn" -p Unit --value 2>/dev/null)
-  [ -n "$svc" ] || continue
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# probe <systemctl-scope-flag> <journalctl-scope-flag> <timer-name> <tag-prefix> <history-grep>
+probe() {
+  sc=$1; jc=$2; tn=$3; tp=$4; hg=$5
+  echo "@@CCCJOB:TIMER $tp$tn"
+  systemctl $sc show "$tn" -p Unit,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec,TimersCalendar,TimersMonotonic 2>/dev/null
+  svc=$(systemctl $sc show "$tn" -p Unit --value 2>/dev/null)
+  [ -n "$svc" ] || return
   echo "@@CCCJOB:SVC"
-  systemctl show "$svc" --timestamp=unix -p Description,ActiveState,Result,ExecMainStatus,ExecMainStartTimestamp,ExecMainExitTimestamp,InvocationID,WorkingDirectory,ExecStart 2>/dev/null
+  systemctl $sc show "$svc" --timestamp=unix -p Description,ActiveState,Result,ExecMainStatus,ExecMainStartTimestamp,ExecMainExitTimestamp,InvocationID,WorkingDirectory,ExecStart 2>/dev/null
   echo "@@CCCJOB:HIST"
-  journalctl -u "$svc" --since -7d _PID=1 -o short-unix --no-pager -q 2>/dev/null \
-    | grep -E "Deactivated successfully|Failed with result" | cut -c1-400 | tail -n 60
-  inv=$(systemctl show "$svc" -p InvocationID --value 2>/dev/null)
+  # Reverse + capped so a once-a-minute timer's week of logs is not scanned.
+  if [ -z "$jc" ]; then
+    journalctl -r -n 3000 -u "$svc" --since -7d _PID=1 -o short-unix --no-pager -q 2>/dev/null \
+      | grep -E "$hg" | cut -c1-400 | head -n 60 | tac
+  else
+    journalctl $jc -r -n 3000 -u "$svc" --since -7d -o short-unix --no-pager -q 2>/dev/null \
+      | grep -E "$hg" | cut -c1-400 | head -n 60 | tac
+  fi
+  inv=$(systemctl $sc show "$svc" -p InvocationID --value 2>/dev/null)
   echo "@@CCCJOB:OUT"
   if [ -n "$inv" ]; then
-    journalctl "_SYSTEMD_INVOCATION_ID=$inv" -o cat --no-pager -q 2>/dev/null | tail -n 150 | cut -c1-400
+    journalctl $jc "_SYSTEMD_INVOCATION_ID=$inv" -o cat --no-pager -q 2>/dev/null | tail -n 150 | cut -c1-400
   fi
   echo "@@CCCJOB:EVENTS"
-  journalctl -u "$svc" --since -24h -o short-unix --no-pager -q 2>/dev/null \
-    | grep "CCC_EVENT:" | cut -c1-400 | tail -n 200
+  journalctl $jc -r -n 5000 -u "$svc" --since -24h -o short-unix --no-pager -q 2>/dev/null \
+    | grep "CCC_EVENT:" | cut -c1-400 | head -n 200 | tac
   echo "@@CCCJOB:ENDUNIT"
+}
+for t in /etc/systemd/system/*.timer; do
+  [ -e "$t" ] || continue
+  probe "" "" "${t##*/}" "" "Deactivated successfully|Failed with result"
+done
+for t in "$HOME"/.config/systemd/user/*.timer; do
+  [ -e "$t" ] || continue
+  case "${t##*/}" in *@.timer) continue;; esac
+  probe "--user" "--user" "${t##*/}" "user/" "Finished |Failed with result|Failed to start"
+done
+echo "@@CCCJOB:CRON"
+crontab -l 2>/dev/null | cut -c1-400
+echo "@@CCCJOB:CRONLOGS"
+crontab -l 2>/dev/null | grep -v '^#' | grep -oE '>>? *[^ ]+' | sed -E 's/>>? *//' | sort -u | while read -r f; do
+  [ -e "$f" ] && echo "$(stat -c %Y "$f") $f"
 done
 echo "@@CCCJOB:END"
 """
@@ -412,6 +434,7 @@ def parse_hermes_output(text, now=None):
     """Parse the REMOTE_SCRIPT stdout into job dicts (pure; no I/O)."""
     now = now if now is not None else time.time()
     units = []
+    cron_lines, cron_logs = [], []
     cur = None
     section = None
     for ln in text.splitlines():
@@ -421,21 +444,32 @@ def parse_hermes_output(text, now=None):
                 cur = {"timer": tag[6:].strip(), "TIMER": [], "SVC": [], "HIST": [], "OUT": [], "EVENTS": []}
                 units.append(cur)
                 section = "TIMER"
+            elif tag in ("CRON", "CRONLOGS"):
+                cur = None
+                section = tag
+            elif tag == "END":
+                cur = None
+                section = None
             elif tag in ("SVC", "HIST", "OUT", "EVENTS"):
                 section = tag
             elif tag == "ENDUNIT":
                 section = None
             continue
-        if cur is not None and section:
+        if section in ("CRON", "CRONLOGS"):
+            (cron_lines if section == "CRON" else cron_logs).append(ln)
+        elif cur is not None and section:
             cur[section].append(ln)
 
     jobs = []
     for u in units:
         t = _parse_show(u["TIMER"])
         s = _parse_show(u["SVC"])
-        svc = t.get("Unit") or u["timer"].replace(".timer", ".service")
+        scope = "user" if u["timer"].startswith("user/") else "system"
+        timer_file = u["timer"].split("/", 1)[-1]
+        svc = t.get("Unit") or timer_file.replace(".timer", ".service")
         name = svc[:-8] if svc.endswith(".service") else svc
         timer_enabled = t.get("UnitFileState") == "enabled"
+        next_estimated = False
 
         history = []
         for ln in u["HIST"]:
@@ -446,7 +480,8 @@ def parse_hermes_output(text, now=None):
                 at = float(parts[0])
             except ValueError:
                 continue
-            history.append({"at": _iso(at), "ok": "Deactivated successfully" in parts[1]})
+            history.append({"at": _iso(at), "ok": "Deactivated successfully" in parts[1]
+                            or ("Finished " in parts[1] and "Failed" not in parts[1])})
         history = history[-30:]
 
         events = []
@@ -473,7 +508,16 @@ def parse_hermes_output(text, now=None):
         elif history and not history[-1]["ok"]:
             status = "failed"
         elif nxt is None:
-            status = "stale"
+            # Interval timers (OnUnitActiveSec/OnBootSec) report no realtime
+            # next-elapse; judge them by whether the last run is recent enough.
+            interval_s = (systemd_timeline(t.get("TimersCalendar"), t.get("TimersMonotonic")) or {}).get("interval_s")
+            if (interval_s and t.get("ActiveState") == "active" and start
+                    and now - start <= max(3 * interval_s, interval_s + 600)):
+                status = "ok"
+                nxt = start + interval_s
+                next_estimated = True
+            else:
+                status = "stale"
         else:
             status = "ok"
 
@@ -486,10 +530,11 @@ def parse_hermes_output(text, now=None):
             project, repo_path = wd.rstrip("/").rsplit("/", 1)[-1], wd
 
         jobs.append({
-            "id": f"hermes:{svc}",
+            "id": f"hermes:{svc}" if scope == "system" else f"hermes:user/{svc}",
             "name": name,
             "host": "hermes",
             "manager": "systemd",
+            "scope": scope,
             "description": nodash(s.get("Description", "")),
             "project": project,
             "repo_path": repo_path,
@@ -501,12 +546,14 @@ def parse_hermes_output(text, now=None):
             "last_duration_s": duration,
             "exit_code": exit_code,
             "next_run_at": _iso(nxt) if timer_enabled else None,
+            "next_run_estimated": next_estimated,
             "history": history,
             "outcome": outcome,
             "outcome_kind": outcome_kind,
             "tickets": extract_tickets(u["OUT"]),
             "events": events,
         })
+    jobs.extend(parse_crontab(cron_lines, cron_logs, now))
     return jobs
 
 
@@ -802,6 +849,120 @@ def collect_laptop(now=None):
 
 
 # ── Ordering + payload ──────────────────────────────────────────────────────
+
+# ── crontab ─────────────────────────────────────────────────────────────────
+
+_CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
+
+
+def _cron_field(spec, lo, hi):
+    """Cron field -> set of ints, or None when unparseable."""
+    out = set()
+    for part in spec.split(","):
+        step = 1
+        if "/" in part:
+            part, st = part.split("/", 1)
+            if not st.isdigit() or int(st) < 1:
+                return None
+            step = int(st)
+        if part == "*":
+            a, b = lo, hi
+        elif "-" in part:
+            x, y = part.split("-", 1)
+            if not (x.isdigit() and y.isdigit()):
+                return None
+            a, b = int(x), int(y)
+        elif part.isdigit():
+            a = int(part)
+            b = hi if step > 1 else a
+        else:
+            return None
+        if a < lo - (1 if hi == 6 else 0) or b > hi + (1 if hi == 6 else 0) or a > b:
+            return None
+        out.update(range(a, b + 1, step))
+    if hi == 6:
+        out = {v % 7 for v in out}
+    return out
+
+
+def cron_next_run(fields, now):
+    """Next fire epoch (UTC) within 8 days for a 5-field spec, else None."""
+    sets = [_cron_field(f, lo, hi) for f, (lo, hi) in zip(fields, _CRON_RANGES)]
+    if any(x is None for x in sets):
+        return None
+    t = int(now // 60 + 1) * 60
+    for _ in range(8 * 1440):
+        dt = datetime.fromtimestamp(t, timezone.utc)
+        if (dt.minute in sets[0] and dt.hour in sets[1] and dt.month in sets[3]
+                and dt.day in sets[2] and (dt.weekday() + 1) % 7 in sets[4]):
+            return float(t)
+        t += 60
+    return None
+
+
+def _cron_schedule_text(fields):
+    m, h, dom, mon, dow = fields
+    if fields == ["*"] * 5:
+        return "Every minute"
+    if m.startswith("*/") and fields[1:] == ["*"] * 4 and m[2:].isdigit():
+        return f"Every {m[2:]}min"
+    if m.isdigit() and h.isdigit() and (dom, mon, dow) == ("*", "*", "*"):
+        return f"Daily {int(h):02d}:{int(m):02d} UTC"
+    if m.isdigit() and h.startswith("*/") and (dom, mon, dow) == ("*", "*", "*"):
+        return f"Every {h[2:]}h at :{int(m):02d}"
+    return "cron " + " ".join(fields)
+
+
+def parse_crontab(lines, log_lines, now=None):
+    """Crontab lines -> job dicts (pure). Cron keeps no run history, so the
+    last run is known only when the entry redirects to a log file we can stat."""
+    now = now if now is not None else time.time()
+    logs = {}
+    for ln in log_lines:
+        parts = ln.split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            logs[parts[1].strip()] = float(parts[0])
+    jobs = []
+    for ln in lines:
+        raw = ln.strip()
+        if not raw or raw.startswith("#") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", raw):
+            continue
+        parts = raw.split(None, 5)
+        if len(parts) < 6:
+            continue
+        fields, cmd = parts[:5], parts[5]
+        paths = re.findall(r"(/[^\s;>|&]+)", cmd)
+        script = next((x for x in paths if not x.startswith(("/bin", "/usr", "/sbin"))), paths[0] if paths else cmd)
+        name = os.path.basename(script) or cmd[:40]
+        log_m = re.search(r">>?\s*(\S+)", cmd)
+        last = logs.get(log_m.group(1)) if log_m else None
+        nxt = cron_next_run(fields, now)
+        jobs.append({
+            "id": f"hermes:cron/{len(jobs) + 1}-{name}",
+            "name": name,
+            "host": "hermes",
+            "manager": "cron",
+            "scope": "cron",
+            "description": cmd[:200],
+            "project": project_from_paths(paths)[0],
+            "repo_path": project_from_paths(paths)[1],
+            "schedule": _cron_schedule_text(fields),
+            "timeline": {"kind": "cron", "interval_s": None, "minutes": [], "weekdays": []},
+            "enabled": True,
+            "status": "unknown",
+            "last_run_at": _iso(last) if last else None,
+            "last_duration_s": None,
+            "exit_code": None,
+            "next_run_at": _iso(nxt) if nxt else None,
+            "history": [],
+            "outcome": ("cron keeps no run history; last run is the log file's modified time"
+                        if last else "cron keeps no run history and this entry has no log file, so success is unverifiable"),
+            "outcome_kind": "",
+            "tickets": [],
+            "events": [],
+        })
+    return jobs
+
 
 def sort_jobs(jobs):
     """Most recent run first; disabled at the bottom. (The UI groups by project.)"""

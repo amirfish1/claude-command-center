@@ -1,0 +1,1 @@
+- Keep productivity snapshots in memory when the state directory is read-only, so startup succeeds and polling reuses the completed report.

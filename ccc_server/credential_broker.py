@@ -2,20 +2,17 @@
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
 """Bounded, one-shot credential requests. No transcript, event or log writes.
 
-Only explicitly remembered values touch disk: owner-only plaintext files in
-an owner-only directory. This is the documented portable fallback, not an
-additional encryption scheme. Local processes sharing the OS user are trusted.
+Only explicitly remembered values are persisted, and only in the CCC Vault
+(macOS Keychain, or the Vault's encrypted-file fallback elsewhere). Unremembered
+values live in server memory and are delivered once.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
-import os
-from pathlib import Path
 import re
 import secrets
-import stat
 import threading
 import time
 import urllib.parse
@@ -49,87 +46,64 @@ def valid_value(value):
     return value  # passwords may have significant leading/trailing whitespace
 
 
-class PrivateStore:
-    """Fail closed on unsafe directory/files; atomic writes, private from birth."""
-
-    def __init__(self, root):
-        self.root = Path(root)
-
-    def _directory(self):
-        self.root.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            self.root.mkdir(mode=0o700)
-        except FileExistsError:
-            pass
-        fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        info = os.fstat(fd)
-        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
-            os.close(fd)
-            raise BrokerError("Credential directory must be owned by you with mode 0700", 503)
-        return fd
+class VaultStore:
+    """Remembered credentials live in the CCC Vault (Keychain or encrypted file)."""
 
     @staticmethod
-    def _filename(name, kind):
-        return hashlib.sha256((name + "\0" + kind).encode()).hexdigest() + ".json"
+    def _entry(name, kind):
+        entry = (name if kind == "password" else name + "." + kind).lower()
+        if len(entry) > 64:
+            entry = "cb-" + hashlib.sha256((name + "\0" + kind).encode()).hexdigest()[:40]
+        return entry
+
+    @staticmethod
+    def _vault():
+        from ccc_server import vault
+        return vault
+
+    def entry_name(self, name, kind):
+        return self._entry(name, kind)
 
     def read(self, name, kind):
-        if not self.root.exists() and not self.root.is_symlink():
-            return None
-        directory = self._directory()
+        vault = self._vault()
+        entry = self._entry(name, kind)
         try:
-            try:
-                fd = os.open(self._filename(name, kind), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                             dir_fd=directory)
-            except FileNotFoundError:
+            meta = vault.vault_get_entry(entry)
+            if meta is None:
                 return None
-            with os.fdopen(fd, "rb") as stream:
-                info = os.fstat(stream.fileno())
-                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
-                    raise BrokerError("Saved credential file is not private", 503)
-                payload = json.loads(stream.read(MAX_BODY_BYTES + 1))
-                if payload.get("name") != name or payload.get("kind") != kind:
-                    raise BrokerError("Saved credential is invalid", 503)
-                return valid_value(payload.get("value"))
-        finally:
-            os.close(directory)
+            source = meta.get("source") or {}
+            if source.get("broker_name") != name or source.get("broker_kind") != kind:
+                raise BrokerError("Saved credential is invalid", 503)
+            return valid_value(vault.vault_get_value(entry))
+        except vault.VaultError as error:
+            raise BrokerError("Vault unavailable: " + str(error), 503)
 
     def write(self, name, kind, value):
-        directory = self._directory()
-        temporary = "." + secrets.token_hex(16) + ".tmp"
+        vault = self._vault()
+        entry = self._entry(name, kind)
         try:
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                         0o600, dir_fd=directory)
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump({"name": name, "kind": kind, "value": value}, stream)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self._filename(name, kind),
-                       src_dir_fd=directory, dst_dir_fd=directory)
-        finally:
-            try:
-                os.unlink(temporary, dir_fd=directory)
-            except FileNotFoundError:
-                pass
-            os.close(directory)
+            if vault.vault_get_entry(entry) is None:
+                vault.vault_create_entry(
+                    entry, value, kind="other", service=name,
+                    notes="Saved by the credential broker",
+                    source={"broker_name": name, "broker_kind": kind})
+            else:
+                vault.vault_update_entry(entry, value=value)
+        except vault.VaultError as error:
+            raise BrokerError("Vault unavailable: " + str(error), 503)
 
     def forget(self, name):
-        if not self.root.exists() and not self.root.is_symlink():
-            return
-        directory = self._directory()
+        vault = self._vault()
         try:
             for kind in KINDS:
-                try:
-                    os.unlink(self._filename(name, kind), dir_fd=directory)
-                except FileNotFoundError:
-                    pass
-        finally:
-            os.close(directory)
+                vault.vault_delete_entry(self._entry(name, kind))
+        except vault.VaultError as error:
+            raise BrokerError("Vault unavailable: " + str(error), 503)
 
 
 class Broker:
-    def __init__(self, root, clock=time.monotonic):
-        self.store = PrivateStore(root)
+    def __init__(self, store=None, clock=time.monotonic):
+        self.store = store or VaultStore()
         self.clock = clock
         self.lock = threading.RLock()
         self.requests = {}
@@ -175,6 +149,11 @@ class Broker:
         kind = data.get("kind", "password")
         if kind not in KINDS:
             raise BrokerError("Unknown credential kind")
+        store_only = data.get("store_only", False)
+        if type(store_only) is not bool:
+            raise BrokerError("store_only must be true or false")
+        if store_only and kind == "otp":
+            raise BrokerError("One-time codes cannot be stored; request them with a returned value")
         reason = data.get("reason")
         session_id = data.get("session_id", "")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
@@ -188,12 +167,12 @@ class Broker:
             self._purge()
             if len(self.requests) >= MAX_REQUESTS:
                 raise BrokerError("Too many pending credential requests", 429)
-            value = self.store.read(name, kind) if kind != "otp" else None
+            value = self.store.read(name, kind) if kind != "otp" and not store_only else None
             request_id = secrets.token_urlsafe(24)
             token = secrets.token_urlsafe(32)
             self.requests[request_id] = {
                 "id": request_id, "name": name, "kind": kind, "reason": reason,
-                "session_id": session_id, "expires_at": time.time() + timeout,
+                "session_id": session_id, "store_only": store_only, "expires_at": time.time() + timeout,
                 "deadline": self.clock() + timeout,
                 "token_hash": hashlib.sha256(token.encode()).digest(),
                 "status": "ready" if value is not None else "pending", "value": value,
@@ -209,7 +188,7 @@ class Broker:
     def pending(self):
         with self.lock:
             self._purge()
-            keys = ("id", "name", "kind", "reason", "session_id", "expires_at")
+            keys = ("id", "name", "kind", "reason", "session_id", "store_only", "expires_at")
             return [{k: r[k] for k in keys} for r in self.requests.values() if r["status"] == "pending"]
 
     def _row(self, request_id):
@@ -230,6 +209,11 @@ class Broker:
             if type(data.get("remember", False)) is not bool:
                 raise BrokerError("Remember must be true or false")
             value = valid_value(data.get("value"))
+            if row["store_only"]:
+                self.store.write(row["name"], row["kind"], value)
+                row["value"] = None  # never retained in memory; the agent gets only the entry name
+                row["status"] = "stored"
+                return
             if data.get("remember"):
                 if row["kind"] == "otp":
                     raise BrokerError("One-time codes cannot be remembered")
@@ -250,6 +234,8 @@ class Broker:
             result = {"status": row["status"]}
             if row["status"] == "ready":
                 result["value"] = row["value"]
+            if row["status"] == "stored":
+                result["entry"] = self.store.entry_name(row["name"], row["kind"])
             if row["status"] != "pending":
                 del self.requests[row["id"]]
             return result
@@ -272,8 +258,7 @@ def broker():
     global _INSTANCE
     with _INSTANCE_LOCK:
         if _INSTANCE is None:
-            from ccc_server.paths import COMMAND_CENTER_STATE_DIR
-            _INSTANCE = Broker(COMMAND_CENTER_STATE_DIR / "secrets")
+            _INSTANCE = Broker()
         return _INSTANCE
 
 

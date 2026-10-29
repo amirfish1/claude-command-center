@@ -160,6 +160,25 @@ class TestInstallScript(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("macOS or Linux", result.stderr)
 
+    def test_service_needs_a_systemd_user_bus_on_linux(self):
+        # A container or bare SSH login has systemctl but no user bus; a
+        # "yes" there used to end the install with "Failed to connect to bus".
+        for bus_status, expected in ((0, 0), (1, 1)):
+            with self.subTest(bus_status=bus_status):
+                result = _run_install_script_function(
+                    "service_supported",
+                    prelude=('uname() { printf "Linux"; }\n'
+                             f'systemctl() {{ return {bus_status}; }}'),
+                )
+                self.assertEqual(result.returncode, expected)
+
+    def test_service_is_always_offered_on_macos(self):
+        result = _run_install_script_function(
+            "service_supported",
+            prelude='uname() { printf "Darwin"; }',
+        )
+        self.assertEqual(result.returncode, 0)
+
 
     def _clt_gate(self, xcode_select_status):
         return _run_install_script_function(
@@ -202,6 +221,40 @@ class TestInstallBehavior(unittest.TestCase):
             env_extra={"CCC_INSTALL_MODE": "app"},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def _app_launch(self, run_sh_status, app_service):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            run_sh = os.path.join(td, "run.sh")
+            with open(run_sh, "w") as fh:
+                fh.write(f'#!/bin/bash\necho "run.sh $*" >> "{td}/calls"\n'
+                         f'[ "${{1:-}}" = "--install-service" ] && exit {run_sh_status}\nexit 0\n')
+            os.chmod(run_sh, 0o755)
+            env = {"CCC_INSTALL_MODE": "app", "CCC_INSTALL_DIR": td}
+            if app_service:
+                env["CCC_APP_SERVICE"] = "1"
+            result = _run_install_script_function(
+                "launch_server",
+                prelude='uname() { printf "Darwin"; }\nlaunchctl() { return 1; }',
+                env_extra=env,
+            )
+            with open(os.path.join(td, "calls")) as fh:
+                return result, fh.read().splitlines()
+
+    def test_app_service_mode_installs_service_and_exits(self):
+        result, calls = self._app_launch(0, True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, ["run.sh --install-service"])
+
+    def test_app_service_mode_falls_back_to_app_server_on_failure(self):
+        result, calls = self._app_launch(1, True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, ["run.sh --install-service", "run.sh "])
+
+    def test_app_mode_without_consent_runs_app_server(self):
+        result, calls = self._app_launch(0, False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, ["run.sh "])
 
     def test_default_mode_is_not_app(self):
         result = _run_install_script_function("is_app_install")
@@ -349,6 +402,7 @@ class TestPrePushScript(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 env=env,
+                stdin=subprocess.DEVNULL,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pre-push: running perf-budget gate", result.stdout)
@@ -412,10 +466,6 @@ class TestParseChannel(unittest.TestCase):
                 )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PickPortTests(unittest.TestCase):
     """A clean machine can already have another program on 8090."""
 
@@ -450,3 +500,146 @@ class PickPortTests(unittest.TestCase):
             port = busy.getsockname()[1]
             picked, _url = self._pick(port, explicit=True)
         self.assertEqual(int(picked), port)
+
+
+class TailnetInstallTests(unittest.TestCase):
+    """Tailscale integration in scripts/install.sh for headless installs."""
+
+    def _run_parse_tailnet(self, env_extra=None, args=()):
+        env = os.environ.copy()
+        env.pop("CCC_TAILNET", None)
+        if env_extra:
+            for k, v in env_extra.items():
+                if v is None:
+                    env.pop(k, None)
+                else:
+                    env[k] = v
+        bash_program = (
+            f'source "{INSTALL_SCRIPT}"; '
+            'parse_tailnet_flag "$@"'
+        )
+        result = subprocess.run(
+            ["bash", "-c", bash_program, "bash", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_parse_tailnet_flags_and_env(self):
+        self.assertEqual(self._run_parse_tailnet(args=("--tailnet",)), "enable")
+        self.assertEqual(self._run_parse_tailnet(args=("--tailscale",)), "enable")
+        self.assertEqual(self._run_parse_tailnet(args=("--no-tailnet",)), "disable")
+        self.assertEqual(self._run_parse_tailnet(args=("--no-tailscale",)), "disable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "1"}), "enable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "true"}), "enable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "0"}), "disable")
+        self.assertEqual(self._run_parse_tailnet(env_extra={"CCC_TAILNET": "false"}), "disable")
+        self.assertEqual(self._run_parse_tailnet(), "")
+
+    def test_apply_tailnet_network_config_writes_network_json(self):
+        import json
+        with tempfile.TemporaryDirectory() as fake_home:
+            env = os.environ.copy()
+            env["HOME"] = fake_home
+            info_json = json.dumps({
+                "ip": "100.108.91.118",
+                "ips": ["100.108.91.118"],
+                "dns": "hermes-vps.tail1234.ts.net",
+            })
+            bash_program = (
+                f'source "{INSTALL_SCRIPT}"; '
+                f'apply_tailnet_network_config 8090 \'{info_json}\''
+            )
+            result = subprocess.run(
+                ["bash", "-c", bash_program],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            net_json_path = Path(fake_home) / ".claude" / "command-center" / "network.json"
+            self.assertTrue(net_json_path.exists())
+            data = json.loads(net_json_path.read_text())
+            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertTrue(data.get("trust_tailnet"))
+            origins = data.get("allowed_origins", [])
+            self.assertIn("http://hermes-vps.tail1234.ts.net:8090", origins)
+            self.assertIn("https://hermes-vps.tail1234.ts.net:8090", origins)
+            self.assertIn("http://100.108.91.118:8090", origins)
+
+    def test_apply_tailnet_network_config_preserves_existing_origins(self):
+        import json
+        with tempfile.TemporaryDirectory() as fake_home:
+            net_dir = Path(fake_home) / ".claude" / "command-center"
+            net_dir.mkdir(parents=True)
+            net_json_path = net_dir / "network.json"
+            net_json_path.write_text(json.dumps({
+                "bind_host": "127.0.0.1",
+                "allowed_origins": ["http://existing-origin:8090"],
+                "trust_tailnet": False,
+            }))
+
+            env = os.environ.copy()
+            env["HOME"] = fake_home
+            info_json = json.dumps({
+                "ip": "100.108.91.118",
+                "ips": ["100.108.91.118"],
+                "dns": "hermes-vps.tail1234.ts.net",
+            })
+            bash_program = (
+                f'source "{INSTALL_SCRIPT}"; '
+                f'apply_tailnet_network_config 8090 \'{info_json}\''
+            )
+            result = subprocess.run(
+                ["bash", "-c", bash_program],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            data = json.loads(net_json_path.read_text())
+            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertTrue(data.get("trust_tailnet"))
+            origins = data.get("allowed_origins", [])
+            self.assertIn("http://existing-origin:8090", origins)
+            self.assertIn("http://hermes-vps.tail1234.ts.net:8090", origins)
+
+
+class ServiceInstallWaitTests(unittest.TestCase):
+    def test_run_sh_waits_20s_and_detects_systemd_failure(self):
+        run_sh = Path(__file__).resolve().parent.parent / "run.sh"
+        content = run_sh.read_text(encoding="utf-8")
+        self.assertIn("seq 1 40", content)
+        self.assertIn("within 20s", content)
+        self.assertIn("systemctl --user is-failed --quiet", content)
+        self.assertIn("is_port_bound", content)
+
+    def test_install_sh_checks_active_systemd_before_foreground_exec(self):
+        content = Path(INSTALL_SCRIPT).read_text(encoding="utf-8")
+        self.assertIn("systemctl --user is-active --quiet ccc.service", content)
+        self.assertIn("CCC is running in the background (it was slow to start)", content)
+
+    def test_run_sh_is_port_bound_accepts_explicit_host(self):
+        run_sh = Path(__file__).resolve().parent.parent / "run.sh"
+        content = run_sh.read_text(encoding="utf-8")
+        # Extract is_port_bound definition
+        self.assertIn("explicit_host", content)
+        bash_program = (
+            f'eval "$(sed -n \'/^is_port_bound()/,/^}}/p\' "{run_sh}")"; '
+            'type is_port_bound'
+        )
+        result = subprocess.run(
+            ["bash", "-c", bash_program],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("explicit_host", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -94,7 +94,8 @@ reports priorities. It starts only after you press **Confirm** on its card.
 - The backing Codex thread is ephemeral, sandboxed read-only, with
   `approvalPolicy: never`. Its window into CCC is the dynamic
   tools: `ccc_attention`, `ccc_session`, `ccc_sessions`, `ccc_queues`,
-  `ccc_ticket`, `ccc_models` (all read-only), plus `ccc_triage_queue` and
+  `ccc_ticket`, `ccc_jobs` (scheduled jobs: systemd timers and cron),
+  `ccc_models` (all read-only; each result names its source and as-of time), plus `ccc_triage_queue` and
   `ccc_propose_action`, which can only create a pending-action card
   through the same confirmation path the Ask agent uses. Approval
   requests from the model are denied outright.

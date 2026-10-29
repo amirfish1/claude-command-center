@@ -4,13 +4,30 @@
 
 **Your coding agents outgrew your terminal.**
 
-CCC puts every session on one local board and tells you which one needs you. Not affiliated with Anthropic.
+CCC is a free, local command center for coding agents. Every Claude Code, Codex,
+Cursor, Grok, Devin and Kimi session lands on one live board. Each row tells you
+what the agent did and what it needs from you, so you answer the one that's
+blocked and leave the rest working. Not affiliated with Anthropic.
 
-_Start the next while Claude builds the first._
+<table>
+<tr>
+<td width="40%" align="center">
+  <a href="docs/product-story/assets/video/V-21-one-board-9x16.mp4"><img src="docs/product-story/assets/video/V-21-one-board-9x16.gif" alt="CCC in 33 seconds: every coding agent on one board, a session asking a question answered with one tap, and a Claude Opus planner handing slices to Codex, Gemini, Grok and Devin" width="100%" /></a>
+  <br><sub>33 seconds, real UI, demo data. <a href="docs/product-story/assets/video/V-21-one-board-9x16.mp4">MP4 with sound</a></sub>
+</td>
+<td width="60%" valign="middle">
 
-![A CCC share card: 5.82B tokens processed, 429 agent hours, 98% cache hits over the last 30 days, with a daily activity heatmap](docs/images/share-card-example.png)
+### Stop babysitting terminals
 
-<sub>A real share card from one of the maintainer's machines. Yours comes from the throughput page: totals only, no prompts, code, or project names.</sub>
+- **See who needs you.** Working, waiting, done: every row says what the agent did and what it's asking for. You often don't have to open it.
+- **Answer in one tap.** When a session stops with a question, you get the options with a summary of each. Pick one and it keeps going.
+- **Plan with the smart model, build with cheap ones.** An Opus planner can hand slices to Codex, Gemini (via Antigravity), Grok or Devin and review every diff.
+- **Never lose a session.** Close the dashboard and your agents keep running. Search everything they ever said.
+- **Reply from your phone**, in the same live view.
+
+</td>
+</tr>
+</table>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
@@ -18,20 +35,26 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 
 <sub>Needs Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
 
-- **One board for eight agents.** Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin, however you launched them.
-- **Start free in 5 minutes.** The first-run wizard runs your first task on a $0 model and shows what it would have cost.
-- **Local and source-available.** No account, no cloud, free to use at work ([FSL-1.1-MIT](LICENSE)). Not affiliated with Anthropic.
+Or `brew install amirfish1/tap/ccc && ccc`, or grab the [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest).
+Want to look first? The [live demo](https://ccc.amirfish.ai/demo/) runs in your browser with fake data, no install.
 
 [![CI](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/amirfish1/claude-command-center/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/amirfish1/claude-command-center?color=blue)](https://github.com/amirfish1/claude-command-center/releases)
 [![Stars](https://img.shields.io/github/stars/amirfish1/claude-command-center?style=flat&color=yellow)](https://github.com/amirfish1/claude-command-center/stargazers)
 [![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-green)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![Zero dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-purple)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)](CONTRIBUTING.md)
 [![Discord](https://img.shields.io/badge/Discord-join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/aK325db94M)
+
+![CCC v5.41: a parent session with two helper lanes in the sidebar, each row summarizing what its agent did, next to the live transcript](docs/images/ccc-v5-41-hero.png)
+
+<sub>CCC v5.41 on demo data. The refunds session split its tests out to Codex and its review to a second Claude; both lanes report back under it.</sub>
+
+> “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
+> CCC user
+
+### Works with the agents you already use
 
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white)
 ![Codex](https://img.shields.io/badge/Codex-000000)
@@ -39,28 +62,20 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ![Antigravity](https://img.shields.io/badge/Antigravity-4285F4?logo=google&logoColor=white)
 ![Kilo Code](https://img.shields.io/badge/Kilo%20Code-F8F675?logoColor=black)
 ![Kimi Code](https://img.shields.io/badge/Kimi%20Code-1A1A2E)
-![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B) ![Devin](https://img.shields.io/badge/Devin-0EA5E9)
+![OpenCode](https://img.shields.io/badge/OpenCode-2B2B2B) ![Grok](https://img.shields.io/badge/Grok-111111) ![Devin](https://img.shields.io/badge/Devin-0EA5E9)
+
+Nine engines on one board, however you launched them: from CCC, a terminal, or
+an IDE. CCC reads each agent's own session files, so there's nothing to wrap
+or migrate. Local and source-available: no account, no cloud, free to use at
+work ([FSL-1.1-MIT](LICENSE)).
+
+### When an agent stops to ask, you see it
+
+![A Claude session asking how cancelled-stay refunds should work, with two options and their summaries, answerable from the dashboard](docs/images/ccc-v5-41-question.png)
+
+### When you hit your usage limit, the fleet keeps going
 
 <a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="A Claude session hits its usage limit and CCC keeps all 12 sessions going on a free model through your own router" width="100%" /></a>
-
-> “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
-> CCC user
-
-![CCC v5.37 showing the session fleet, an active agent conversation, and the composer](docs/images/ccc-v5-37-hero.png)
-
-Other ways to install. With Homebrew:
-
-```bash
-brew tap amirfish1/ccc
-brew install ccc
-ccc
-```
-
-Or download the [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest)
-and drag `CCC.app` to Applications.
-
-Try the [read-only demo](https://ccc.amirfish.ai/demo/) first: the full dashboard
-with seeded fake data, no install required. [Alternate demo](https://amirfish1.github.io/claude-command-center/demo/).
 
 ## Start free in 5 minutes
 
@@ -79,7 +94,7 @@ training; CCC asks for consent before enabling it. Do not send it private code.
 <tr>
 <td width="50%" valign="middle">
 
-### One board, eight engines
+### One board, nine engines
 
 See sessions you started in a terminal or from CCC. Each agent's own files
 keep the list up to date.
@@ -232,15 +247,10 @@ You can skip them, review the diff, or remove them later in Settings.
 
 ## Engine support
 
-All eight engines can start sessions from CCC. Follow-up and model controls
+All nine engines can start sessions from CCC. Follow-up and model controls
 vary; Kilo Code has no resume, and Cursor IDE sync is metadata-only.
-**GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** are read-only,
+**GitHub Copilot CLI** and **VS Code Copilot Chat** are read-only,
 as are Devin cloud sessions. [Full engine support matrix](docs/engine-support.md).
-
-## What you get
-
-[Explore features](docs/features.md): approvals, search, worktrees, settings,
-cost-aware continuations, voice, queues, and the optional board view.
 
 ## Why this exists
 
@@ -253,82 +263,30 @@ every session through it. Close the dashboard and your agents keep running.
 CCC is a session dashboard and coordination tool. Routers provide the model
 backends it can use. [Comparisons and scope](docs/features.md#how-it-compares).
 
+## Share your fleet
+
+![A CCC share card: 5.82B tokens processed, 429 agent hours, 98% cache hits over the last 30 days, with a daily activity heatmap](docs/images/share-card-example.png)
+
+<sub>A real share card from one of the maintainer's machines. Yours comes from the throughput page: totals only, no prompts, code, or project names.</sub>
+
 ## Recent
+
+v5.41: Routine / Deep model picks that weigh cost and your remaining usage, helper lanes as real rows under their parent, model prices in the picker, voice switching mid-read, and `ccc restart`.
 
 See [CHANGELOG.md](CHANGELOG.md) and [releases](https://github.com/amirfish1/claude-command-center/releases).
 Choose **Watch > Releases** on GitHub for update notifications.
 
-## Core concepts
+## Docs
 
-[Sessions, Flow objects, and the board](docs/features.md#organize-and-read-work).
-
-## Codex conversations
-
-[Codex workspace guide](docs/codex-workspace.md): shared transcripts, live turns,
-connection limits, and desktop-owned tasks.
-
-## Bring your own key (BYOK)
-
-[Provider keys and Vault](docs/byok-and-vault.md): profiles, supported routes,
-secret storage, and safe CLI use.
-
-### Vault: any other secret
-
-[Store and use non-provider secrets](docs/byok-and-vault.md#vault-any-other-secret).
-
-[Request credentials through the dashboard](docs/credential-broker.md) when an
-agent needs a password, token, passphrase or one-time code.
-
-## Features
-
-[Full feature guide](docs/features.md) · [Free models](docs/free-models.md) ·
-[Phone access](docs/phone-access.md) · [Realtime voice](docs/realtime-voice.md).
-
-## Decision Inbox
-
-[Choose the next step for stalled work](docs/decision-inbox.md).
-
-## Throughput usage database
-
-[Local usage database and cost comparisons](docs/usage-db.md).
-
-## Orchestration skill
-
-[CLI commands](docs/cli.md) · [Spawn, send, and ask APIs](docs/orchestration.md) ·
-[12-skill pack](skills/README.md). Usage integrations read `GET /api/usage/current`.
-
-### The `ccc` CLI
-
-[Check sessions, start work, and send replies from your terminal](docs/cli.md).
-
-## Works with your skills
-
-[Skill integrations](docs/features.md#agents-working-together) ·
-[Installed-pack inventory](docs/skills-ecosystem-inventory.md).
-
-## Cookbook
-
-[Wire your own app into CCC](cookbook/README.md).
-
-## Architecture
-
-[Dashboard, persistent worker, and state](docs/architecture.md).
-
-## Configuration
-
-[Environment variables, defaults, and persistent settings](docs/configuration.md).
-
-[Optional shared-clone Git guard for Claude Code](docs/shared-clone-guard.md).
-
-## Python stack diagnostics
-
-[Dump thread stacks without a restart](docs/configuration.md#python-stack-diagnostics).
-
-## Roadmap
-
-For current capabilities and limits, see [Features](docs/features.md) and
-[Engine support](docs/engine-support.md). Request improvements through
-[GitHub issues](https://github.com/amirfish1/claude-command-center/issues).
+- [Full feature guide](docs/features.md) · [Free models](docs/free-models.md) · [Phone access](docs/phone-access.md) · [Realtime voice](docs/realtime-voice.md)
+- [Codex workspace](docs/codex-workspace.md): shared transcripts, live turns, desktop-owned tasks
+- [Bring your own key (BYOK) and Vault](docs/byok-and-vault.md) · [other secrets](docs/byok-and-vault.md#vault-any-other-secret) · [credential requests](docs/credential-broker.md) when an agent needs a password, token or one-time code
+- [Decision Inbox](docs/decision-inbox.md): choose the next step for stalled work
+- [Throughput usage database](docs/usage-db.md) and cost comparisons
+- Orchestration: [CLI](docs/cli.md) · [spawn, send, and ask APIs](docs/orchestration.md) · [12-skill pack](skills/README.md). Usage integrations read `GET /api/usage/current`
+- [Skill integrations](docs/features.md#agents-working-together) · [installed-pack inventory](docs/skills-ecosystem-inventory.md) · [Cookbook: wire your own app into CCC](cookbook/README.md)
+- [Architecture](docs/architecture.md) · [Configuration](docs/configuration.md) · [Shared-clone Git guard](docs/shared-clone-guard.md)
+- Roadmap: see [Features](docs/features.md) and [Engine support](docs/engine-support.md); request improvements in [GitHub issues](https://github.com/amirfish1/claude-command-center/issues)
 
 ## Community
 

@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+/* Opt-in, read-only browser audit; only --file writes deduplicated WT tickets. */
+'use strict';
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const {execFileSync} = require('node:child_process');
+const audit = require('../static/row-audit.js');
+const digest = value => crypto.createHash('sha256').update(value).digest('hex').slice(0, 20);
+// The /all?stale_ok rows and a freshly booted page can trail the transcript by up to ~5 min,
+// so a just-finished turn renders its previous row state (CCC-200). Next hourly run rechecks it.
+const SETTLE_MS = 6 * 60 * 1000;
+function incident(result, sid, now = Date.now()) {
+  if (result.findings.some(x => x.kind === 'pending') || !result.source.answer) return null;
+  if (result.source.answeredAt && now - result.source.answeredAt < SETTLE_MS) return null;
+  const failures = result.findings.filter(x => x.code);
+  if (!failures.length) return null;
+  return {sid, turn: digest(result.source.answer), failures};
+}
+// The dashboard restarts many times a day; ride out the brief outage instead of failing the hourly run.
+async function fetchJson(url, {attempts = 8, delayMs = 5000, fetchImpl = fetch} = {}) {
+  for (let attempt = 1; ; attempt++) {
+    let response;
+    try {response = await fetchImpl(url, {signal:AbortSignal.timeout(30000)});}
+    catch (error) {if (attempt >= attempts) throw error;}
+    if (response) {
+      if (response.ok) return response.json();
+      if (response.status < 500 || attempt >= attempts) throw Error(`${url.pathname || url}: HTTP ${response.status}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+}
+async function main() {
+  const args = process.argv.slice(2);
+  const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
+  const home = path.join(os.homedir(), '.claude', 'command-center');
+  const base = option('--url', null) || fs.readFileSync(path.join(home, 'port.txt'), 'utf8').trim();
+  const queue = option('--queue', 'CCC');
+  const out = option('--output', path.join(home, 'row-audit'));
+  fs.mkdirSync(out, {recursive:true});
+  const report = {started:new Date().toISOString(), url:base, queue, scope:'Features and Small bugs, last 7 days, desktop and mobile', checked:[], skipped:[], incidents:[], errors:[]};
+  const get = endpoint => fetchJson(new URL(endpoint, base));
+  const sessions = new Map((await get('/api/conversations/all?stale_ok=1')).conversations.map(row => [row.session_id,row]));
+  const puppeteer = require('../require-puppeteer');
+  const {findChromePath} = require('../puppeteer-browser-config');
+  const browser = await puppeteer.launch({headless:true, executablePath:findChromePath(), args:['--no-sandbox']});
+  const incidents = new Map();
+  try {
+    for (const viewport of [{name:'desktop',width:1280,height:900},{name:'mobile',width:390,height:844}]) {
+      const page = await browser.newPage();
+      await page.setViewport(viewport);
+      await page.evaluateOnNewDocument(() => {localStorage.setItem('ccc-pwa-install-dismissed','1'); localStorage.setItem('ccc-tour-done','skipped'); localStorage.setItem('ccc-onboarded','1'); localStorage.setItem('ccc-engines-first-run-done','1'); localStorage.setItem('ccc-archive-window','7d'); localStorage.setItem('ccc-archive-engine-filter','');});
+      await page.goto(base, {waitUntil:'domcontentloaded',timeout:60000});
+      await page.waitForSelector('[data-conv-tab="ideas"]',{timeout:60000});
+      await page.evaluate(() => {for (const id of ['etsLater','updLaterBtn']) document.getElementById(id)?.click();});
+      for (const tab of ['ideas','smallbugs']) {
+        await page.$eval(`[data-conv-tab="${tab}"]`, el => el.click());
+        await new Promise(resolve => setTimeout(resolve, 1800));
+        const ids = await page.$$eval('#convList .conv-item[data-session-id]', els => [...new Set(els.filter(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0).map(el => el.dataset.sessionId))]);
+        console.log(`${viewport.name}/${tab}: ${ids.length} rendered rows`);
+        for (const sid of ids) {
+          const row = sessions.get(sid);
+          if (!row || row.archived || row.trashed) continue;
+          try {
+            const selector = `#convList .conv-item[data-session-id="${sid}"]`;
+            // A list re-render (ccc.service restart, reconnect, re-sort) can drop a row
+            // collected moments ago; that is no missing control, so skip rather than fail.
+            if (!await page.$(selector)) {
+              await new Promise(resolve => setTimeout(resolve, 4000));
+              if (!await page.$(selector)) {report.skipped.push({sid,tab,viewport:viewport.name,reason:'row left the rendered list'}); continue;}
+            }
+            await page.$eval(selector, el => el.scrollIntoView({block:'center'}));
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const measure = () => page.$eval(selector, el => {
+              const visible = e => !!e && e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().height > 0 && getComputedStyle(e).visibility !== 'hidden';
+              const first = query => [...el.querySelectorAll(query)].find(visible);
+              const action = first('.conv-quick-action');
+              const key = action?.dataset.quickActionKey;
+              let reply = '';try {reply=JSON.parse(key)[2].reply;} catch (_) {}
+              return {checked:true, close:!!first('.conv-ready-close'), questions:!!first('.qtag-chip'),
+                working:!!first('.conv-working-dot,.wa-dot'),
+                action:action ? {label:action.textContent.trim(),reply} : null};
+            });
+            let rendered = await measure();
+            const data = await get(`/api/conversations/${encodeURIComponent(sid)}?tail=80`);
+            let result = audit.inspect(row, data.events || [], rendered);
+            // A list re-render or ultra-fresh repaint can drop a control for a moment; the
+            // screenshot right after showed it back (CCC-204). File only if it stays missing.
+            if (incident(result,sid)) {
+              await new Promise(resolve => setTimeout(resolve, 4000));
+              rendered = await measure();
+              result = audit.inspect(row, data.events || [], rendered);
+            }
+            report.checked.push({sid,tab,viewport:viewport.name,status:result.status,findings:result.findings});
+            const issue = incident(result,sid);
+            if (issue) {
+              const entry = incidents.get(sid) || {...issue,title:row.ai_title || row.display_name || sid, views:[]};
+              entry.views.push({viewport:viewport.name, failures:issue.failures, rendered});
+              incidents.set(sid,entry);
+              const screenshot = path.join(out, `${sid}-${viewport.name}.png`);
+              await page.screenshot({path:screenshot});
+            }
+          } catch (error) {report.errors.push({sid,viewport:viewport.name,error:String(error)});}
+        }
+      }
+      await page.close();
+    }
+  } finally {await browser.close();}
+  if (!report.checked.length) report.errors.push({error:'No session rows were inspected; audit coverage is unavailable.'});
+  // Recheck the source before ticketing: a new turn supersedes the observation.
+  const current = new Map((await get('/api/conversations/all?stale_ok=1')).conversations.map(row => [row.session_id,row]));
+  for (const entry of incidents.values()) {
+    const row = current.get(entry.sid);
+    const data = await get(`/api/conversations/${entry.sid}?tail=80`);
+    if (!row || ['working','running'].includes(row.state) || row.codex_state === 'working' || row.pending_spawn) continue;
+    const source = audit.latest(data.events || []);
+    if (source.userAfter || digest(source.answer) !== entry.turn) continue;
+    const key = `ccc-row-audit:${digest(os.hostname())}:${entry.sid}:${entry.turn}`;
+    const text = `Hourly rendered-row audit found an explicitly finished turn without its expected control.\n\nSession: ${entry.sid}\nURL: ${base}\nTurn digest: ${entry.turn}\nObserved: ${new Date().toISOString()}\n\n${entry.views.map(view => `${view.viewport}: ${view.failures.map(f => f.text).join(' ')}`).join('\n')}\n\nEvidence screenshots: ${out}/${entry.sid}-<viewport>.png\nVerify the current transcript and rendered controls before repairing. Active or newer-request turns were excluded; completion claims are self-reported.`;
+    let ticket = null;
+    if (args.includes('--file')) ticket = execFileSync('wt',['add','-q',queue,'--title',`Session row missing control: ${entry.title}`.slice(0,150),'--text',text,'--type','bug','--dedupe-key',key],{encoding:'utf8',timeout:30000}).trim();
+    report.incidents.push({...entry,dedupeKey:key,ticket});
+  }
+  report.finished = new Date().toISOString();
+  fs.writeFileSync(path.join(out,'last-run.json'), JSON.stringify(report,null,2)+'\n');
+  console.log(JSON.stringify({checked:report.checked.length,skipped:report.skipped.length,incidents:report.incidents.length,errors:report.errors.length,report:path.join(out,'last-run.json')}));
+  if (report.errors.length) process.exitCode=1;
+}
+module.exports = {incident,digest,fetchJson};
+if (require.main === module) main().catch(error => {console.error(error); process.exitCode=1;});

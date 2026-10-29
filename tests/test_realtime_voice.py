@@ -15,6 +15,7 @@ import stat
 import sys
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,7 @@ def voice_env(tmp_path, monkeypatch):
                              "session_id": "sess_12345",
                              "question_text": "Approve the plan?"},
                         ]})
+    monkeypatch.setattr(server, "_ux_fixes_list_items_cached", lambda *a, **kw: [])
     monkeypatch.setattr(server, "_watchtower_queue_rollup",
                         lambda: {"open_total": 4, "queues_total": 2,
                                  "workers_live": 1, "stuck_total": 0})
@@ -643,6 +645,8 @@ def test_ccc_session_falls_back_to_archive_row_for_non_claude_ids(monkeypatch):
              "title": "kimi job", "folder_label": "repo",
              "last_assistant_text": "waiting"}]
     monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
+    # This host's live Claude registry would push the row past the limit.
+    monkeypatch.setattr(rv.VoiceSession, "_registry_sessions", lambda self: {})
     vs = object.__new__(rv.VoiceSession)
     out = vs._tool_session({"session_id": "abc"})  # bare uuid still resolves
     assert "engine=kimi" in out and "session_abc" in out and "live" in out
@@ -682,3 +686,173 @@ def test_ccc_session_resolves_eight_char_id_prefix(monkeypatch):
     assert "01a103a3-1111" in out and "Alpha" in out
     amb = vs._tool_session({"session_id": "01a103b9"})
     assert "multiple matches" in amb and "Beta" in amb and "Gamma" in amb
+
+
+def test_ccc_sessions_unions_pid_verified_registry_and_cites_proof(monkeypatch):
+    """A process-verified session missing from the archive rows is still listed."""
+    now = time.time()
+    rows = [{"session_id": "aaa", "engine": "claude", "is_live": True, "title": "In archive",
+             "modified": now - 30, "state": "working"}]
+    monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
+    monkeypatch.setattr(server, "_load_session_registry", lambda: {
+        "aaa": {"pid": 11, "sessionId": "aaa"},
+        "bbb": {"pid": 22, "sessionId": "bbb", "name": "idle-open", "cwd": "/x/repo",
+                "status": "idle", "updatedAt": (now - 3000) * 1000},
+    })
+    vs = object.__new__(rv.VoiceSession)
+    out = vs._tool_sessions({})
+    assert "2 of 2 session(s) as of" in out and "2 Claude process(es) verified alive" in out
+    assert "session=bbb" in out and "proof=process pid 22" in out
+    assert "session=aaa" in out and "state=working" in out
+    # live_only=false must not invent registry rows
+    assert "session=bbb" not in vs._tool_sessions({"live_only": False})
+
+
+def test_ccc_sessions_reports_truncation(monkeypatch):
+    rows = [{"session_id": f"s{i}", "engine": "claude", "is_live": True, "title": f"t{i}",
+             "modified": i + 1} for i in range(5)]
+    monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
+    monkeypatch.setattr(server, "_load_session_registry", lambda: {})
+    out = rv.VoiceSession._tool_sessions(object.__new__(rv.VoiceSession), {"limit": 2})
+    assert "2 of 5" in out and "3 more not shown" in out
+    assert "proof=engine/hook signal" in out
+
+
+def _ticket(ref, status, ago_s, **extra):
+    when = datetime.fromtimestamp(time.time() - ago_s, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dict({"ref": ref, "project": ref.rsplit("-", 1)[0], "status": status,
+                 "needs_input": True, "blocked_at": when, "updated_at": when,
+                 "block_kind": "input", "block_question": f"question for {ref}"}, **extra)
+
+
+def test_ccc_attention_reconciles_with_recorded_ticket_questions(monkeypatch):
+    """Empty session feed must not read as 'nothing needs input' while tickets are parked."""
+    monkeypatch.setattr(server, "compute_attention_feed", lambda **kw: {"items": []})
+    monkeypatch.setattr(server, "_ux_fixes_list_items_cached", lambda *a, **kw: [
+        _ticket("OPS-2", "awaiting_answer", 3 * 86400),
+        _ticket("PROJECTS-9", "in_progress", 600),
+        {"ref": "OPS-5", "project": "OPS", "status": "closed", "needs_input": True},
+    ])
+    monkeypatch.setattr(server, "_ux_fixes_list_synced_at", lambda *a: time.time() - 20)
+    out = rv.VoiceSession._tool_attention(object.__new__(rv.VoiceSession), {})
+    assert "No live session is waiting" in out
+    assert "recorded reports, not verified current" in out
+    assert "OPS-2 parked on the user for 3d" in out and "question for OPS-2" in out
+    assert "PROJECTS-9" in out and "may be answered already" in out
+    assert "OPS-5" not in out  # closed tickets never need input
+    assert "synced" in out
+
+
+def test_ccc_attention_says_none_only_when_tickets_are_clear(monkeypatch):
+    monkeypatch.setattr(server, "compute_attention_feed", lambda **kw: {"items": []})
+    monkeypatch.setattr(server, "_ux_fixes_list_items_cached", lambda *a, **kw: [])
+    out = rv.VoiceSession._tool_attention(object.__new__(rv.VoiceSession), {})
+    assert "No tickets are recorded as needing input" in out
+
+    def boom(*a, **kw):
+        raise RuntimeError("down")
+    monkeypatch.setattr(server, "_ux_fixes_list_items_cached", boom)
+    out = rv.VoiceSession._tool_attention(object.__new__(rv.VoiceSession), {})
+    assert "unavailable" in out and "unknown" in out
+
+
+def test_ccc_queues_cites_sources_and_recorded_block_age(monkeypatch):
+    monkeypatch.setattr(server, "build_ux_fixes_health_payload", lambda: {
+        "queues": [{"queue": "OPS", "depth": 3, "workers": 0, "stuck": False,
+                    "last_activity_seconds": 7200}]})
+    monkeypatch.setattr(server, "_wt_read_config", lambda: {"OPS": {}})
+    monkeypatch.setattr(server, "_ux_fixes_list_items_cached", lambda *a, **kw: [
+        _ticket("OPS-2", "awaiting_answer", 2 * 86400, block_question="Deploy v5.38 needs a credential"),
+        _ticket("OPS-9", "in_progress", 60),
+    ])
+    monkeypatch.setattr(server, "_ux_fixes_health_snapshot", {"ts": time.time() - 5, "data": {}})
+    out = rv.VoiceSession._tool_queues(object.__new__(rv.VoiceSession), {"queue": "ops"})
+    assert "queue health snapshot" in out and "ticket records synced" in out
+    assert "not verified current state" in out
+    assert "last activity 2h ago" in out
+    assert "OPS-2 awaiting_answer [input] for 2d (recorded): Deploy v5.38 needs a credential" in out
+    assert "flagged while a worker holds them" in out and "OPS-9" in out
+
+
+def test_ccc_sessions_registry_overrides_lagging_archive_liveness(monkeypatch):
+    """Archive row says not live, but the pid is alive: the session must be listed."""
+    now = time.time()
+    rows = [{"session_id": "ccc", "engine": "claude", "is_live": False, "title": "Idle but open",
+             "modified": now - 3000, "state": "ended"}]
+    monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
+    monkeypatch.setattr(server, "_load_session_registry", lambda: {"ccc": {"pid": 7, "status": "idle"}})
+    out = rv.VoiceSession._tool_sessions(object.__new__(rv.VoiceSession), {})
+    assert "1 of 1 session(s)" in out and "Idle but open" in out and "proof=process pid 7" in out
+    assert "state=idle" in out and "state=ended" not in out
+    assert rows[0]["is_live"] is False  # archive cache rows are not mutated
+
+
+def _job(name, status, **kw):
+    now = time.time()
+    iso = lambda d: datetime.fromtimestamp(now + d, timezone.utc).isoformat()
+    return dict({"id": f"hermes:{name}.service", "name": name, "scope": "user", "manager": "systemd",
+                 "schedule": "Daily 15:00", "status": status, "description": f"{name} job",
+                 "last_run_at": iso(-3600), "next_run_at": iso(39600), "exit_code": 0,
+                 "outcome": "", "events": [], "tickets": []}, **kw)
+
+
+def _stub_feed(monkeypatch, jobs, host=None):
+    from ccc_server import scheduled_jobs_feed as feed
+    hosts = {"hermes": dict({"status": "online", "collected_at": datetime.now(timezone.utc).isoformat(),
+                             "stale_data": False, "error": None}, **(host or {}))}
+    monkeypatch.setattr(feed, "get_jobs_feed", lambda wait_s=0, force=False:
+                        {"jobs": jobs, "hosts": hosts, "local_host": "hermes"})
+
+
+def test_ccc_jobs_explains_why_a_release_is_not_out(monkeypatch):
+    _stub_feed(monkeypatch, [
+        _job("bym-ship", "ok", outcome="PR #2371 held for a risky migration batch (needs Amir).",
+             tickets=[{"ref": "PR #2371", "url": "https://example.test/pull/2371"}]),
+        _job("bym-digest-send", "failed", exit_code=1, outcome="sqlite3.OperationalError"),
+        _job("other", "ok"),
+    ])
+    vs = object.__new__(rv.VoiceSession)
+    out = vs._tool_jobs({"query": "bym ship"})
+    assert "bym-ship" in out and "bym-digest-send" not in out
+    assert "held for a risky migration batch" in out
+    assert "on schedule: last ran 60m ago" in out and "collected" in out
+    assert "https://example.test/pull/2371" in out
+    bad = vs._tool_jobs({"problems_only": True})
+    assert "bym-digest-send" in bad and "FAILED with exit code 1" in bad and "bym-ship" not in bad
+    assert "No scheduled jobs matching 'nope'" in vs._tool_jobs({"query": "nope"})
+
+
+def test_ccc_jobs_reports_disabled_cron_and_stale_host(monkeypatch):
+    _stub_feed(monkeypatch, [
+        _job("off", "disabled", next_run_at=None),
+        _job("tab", "unknown", scope="cron", manager="cron"),
+        _job("dead", "stale", next_run_at=None),
+    ], host={"status": "offline", "stale_data": True, "error": "ssh timeout"})
+    vs = object.__new__(rv.VoiceSession)
+    out = vs._tool_jobs({"limit": 5})
+    assert "HOST OFFLINE" in out and "ssh timeout" in out
+    assert "timer is disabled" in out
+    assert "cron keeps no run history" in out
+    assert "no upcoming run is scheduled" in out
+
+
+def test_ccc_jobs_reports_loading_and_is_registered(monkeypatch):
+    from ccc_server import scheduled_jobs_feed as feed
+    monkeypatch.setattr(feed, "get_jobs_feed", lambda wait_s=0, force=False:
+                        {"jobs": [], "hosts": {"hermes": {"status": "loading"}}})
+    vs = object.__new__(rv.VoiceSession)
+    assert "still loading" in vs._tool_jobs({})
+    assert "ccc_jobs" in rv.TOOL_NAMES
+    assert "ccc_jobs" in [t["name"] for t in rv._tool_specs()]
+
+
+def test_ccc_session_reports_pid_verified_liveness(monkeypatch):
+    monkeypatch.setattr(server, "compute_session_detail",
+                        lambda sid: ({"ok": True, "title": "demo", "engine": "claude"}, 200))
+    monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: ([], True))
+    monkeypatch.setattr(server, "_load_session_registry",
+                        lambda: {"abc": {"pid": 42, "status": "idle"}})
+    vs = object.__new__(rv.VoiceSession)
+    out = vs._tool_session({"session_id": "abc"})
+    assert "process pid 42 verified alive" in out and "Claude reports idle" in out
+    assert "no running Claude process" in vs._tool_session({"session_id": "zzz"})
