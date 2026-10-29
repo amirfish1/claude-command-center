@@ -70,6 +70,7 @@ def fts_env(tmp_path, monkeypatch):
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
     session_fts._bg_sync_running = False
     session_fts._backfill_running = False
     ship_graph._last_sync_ts = 0.0

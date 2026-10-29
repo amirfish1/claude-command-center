@@ -19,6 +19,8 @@ the child exits when its parent goes away.
   when older than the TTL, coalesced); the dashboard only parses it.
 * ship-graph-warm: ``ship_sync`` starts the full index sync in the child.
   The index is on-disk SQLite, so dashboard reads see the result.
+* session-fts-warm: ``fts_sync`` does the same for the recall index
+  (MEMORY-20); the dashboard re-reads vectors only when ``semb`` changed.
 
 Fallback: ``CCC_BG_HELPER=0`` disables the child. Any connect, timeout or
 protocol error runs the old in-process path, so behaviour degrades to what
@@ -270,13 +272,19 @@ class _Child:
         ship_graph._start_background_sync()
         return {"ok": True, "indexing": bool(ship_graph.is_indexing())}
 
+    # session-fts-warm (MEMORY-20) ---------------------------------------
+    def fts_sync(self, req):
+        from ccc_server import session_fts
+        session_fts._start_background_sync()
+        return {"ok": True, "indexing": bool(session_fts.is_indexing())}
+
     def handle(self, conn):
         try:
             conn.settimeout(READ_TIMEOUT_S)
             req = json.loads(conn.makefile("rb").readline() or b"{}")
             op = str(req.get("op") or "")
             fn = {"gh_tick": self.gh_tick, "ux_health": self.ux_health,
-                  "ship_sync": self.ship_sync,
+                  "ship_sync": self.ship_sync, "fts_sync": self.fts_sync,
                   "ping": lambda r: {"ok": True}}.get(op)
             try:
                 reply = fn(req) if fn else {"ok": False, "error": "unknown op"}
@@ -345,11 +353,13 @@ def serve(path, parent_pid):
     threading.Thread(target=_watch_parent,
                      args=(parent_pid, path, _socket_inode(path)),
                      name="bg-helper-parent-watch", daemon=True).start()
-    # The dashboard defers its boot-time ship-graph warm to this process.
-    try:
-        child.ship_sync({})
-    except Exception:
-        pass
+    # The dashboard defers its boot-time ship-graph and session-fts warms
+    # to this process.
+    for warm in (child.ship_sync, child.fts_sync):
+        try:
+            warm({})
+        except Exception:
+            pass
     while True:
         conn, _ = listener.accept()
         threading.Thread(target=child.handle, args=(conn,),

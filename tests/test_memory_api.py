@@ -105,6 +105,7 @@ def mock_memory_env(tmp_path, monkeypatch):
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
     # ship_graph.search_sessions() re-ranks a separate dynamically-loaded copy
     # of session_fts with its own TTL clock (see _get_base_search_sessions);
     # force a fresh copy so it isn't skipped as still-warm from a prior test.

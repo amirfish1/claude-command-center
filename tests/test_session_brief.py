@@ -204,6 +204,7 @@ def mock_brief_env(tmp_path, monkeypatch):
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
     ship_graph._base_search_sessions = None
 
     # lineage.py and report_routes.py both resolve to a fixed per-pid temp

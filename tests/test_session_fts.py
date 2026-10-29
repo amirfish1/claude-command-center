@@ -5,6 +5,7 @@
 import json
 import os
 import time
+from array import array
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,7 @@ def fts_env(tmp_path, monkeypatch):
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
     session_fts._bg_sync_running = False
     session_fts._backfill_running = False
 
@@ -359,10 +361,11 @@ def test_drain_embeddings_queues_jobs_when_ollama_down(fts_env, monkeypatch):
 
 
 def _insert_sdoc_row(conn, sid: str) -> None:
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO sdoc VALUES (?, ?, ?, ?, ?, ?, ?)",
         (sid, "title", "prompt text", "report text", "body text", "meta", ""),
     )
+    conn.execute("INSERT INTO sdoc_map (sid, rid) VALUES (?, ?)", (sid, cur.lastrowid))
 
 
 def test_backfill_missing_embeddings_queues_unembedded_sdoc_sids(fts_env):
@@ -631,7 +634,9 @@ def test_kimi_sid_migration_rekeys_existing_rows(fts_env):
     session_fts._init_db(conn)
     st = os.stat(wire_path)
     # Simulate a pre-MEMORY-18 DB: indexed under the old prefixed sid, section
-    # migration already done (user_version 1).
+    # migration already done (user_version 1), and older than sdoc_map
+    # (MEMORY-20), so the next _init_db backfills the map.
+    conn.execute("DROP TABLE sdoc_map")
     conn.execute(
         "INSERT INTO file_cache (path, sid, mtime, size, indexed, cwd, engine) VALUES (?, ?, ?, ?, 1, ?, ?)",
         (str(wire_path), prefixed_sid, st.st_mtime, st.st_size, "/Users/test/kimi-proj", "kimi"),
@@ -695,3 +700,93 @@ def test_devin_acp_transcript_is_searchable(fts_env, tmp_path):
     assert [hit["session_id"] for hit in hits] == ["devincli-sample-session"]
     assert session_fts.search_sessions("PRIVATE-999") == []
     assert session_fts.search_sessions("TOOL-999") == []
+
+
+def _map_matches_sdoc(conn) -> bool:
+    sdoc = sorted(conn.execute("SELECT sid, rowid FROM sdoc").fetchall())
+    smap = sorted(conn.execute("SELECT sid, rid FROM sdoc_map").fetchall())
+    return sdoc == smap
+
+
+def _turns(text):
+    return [
+        {"type": "user", "cwd": "/repo", "message": {"role": "user", "content": text}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+    ]
+
+
+def test_sdoc_map_tracks_sdoc_across_insert_reindex_and_delete(fts_env):
+    """MEMORY-20: sdoc_map(sid, rid) stays exactly 1:1 with sdoc rows through
+    the real sync path: first index, re-index of a changed file, and removal
+    of a deleted one; readers resolve rows through it."""
+    from ccc_server import memory_api
+
+    root = fts_env["projects"] / "repo"
+    for i in range(4):
+        _write_claude_jsonl(root / f"map-{i}.jsonl", f"map-{i}", _turns(f"wombat task {i}"))
+    conn = session_fts._get_connection()
+    session_fts._sync_index(conn, force=True)
+    assert conn.execute("SELECT COUNT(*) FROM sdoc").fetchone()[0] == 4
+    assert _map_matches_sdoc(conn)
+
+    time.sleep(0.02)
+    _write_claude_jsonl(root / "map-1.jsonl", "map-1", _turns("wombat task 1 rewritten longer"))
+    (root / "map-2.jsonl").unlink()
+    session_fts._sync_index(conn, force=True)
+    assert sorted(r[0] for r in conn.execute("SELECT sid FROM sdoc")) == ["map-0", "map-1", "map-3"]
+    assert _map_matches_sdoc(conn)
+
+    rows = memory_api._sdoc_rows(["map-1", "map-3", "map-2", "no-such"])
+    assert set(rows) == {"map-1", "map-3"}
+    assert "rewritten" in rows["map-1"]["snippet"]
+    assert set(session_fts._plain_snippets(conn, ["map-0", "map-2"])) == {"map-0"}
+
+
+def test_sdoc_map_backfills_an_index_built_before_it(fts_env):
+    """An existing index with no sdoc_map gets it backfilled once by
+    _init_db, and later deletes go through it."""
+    root = fts_env["projects"] / "repo"
+    for i in range(3):
+        _write_claude_jsonl(root / f"old-{i}.jsonl", f"old-{i}", _turns(f"numbat task {i}"))
+    conn = session_fts._get_connection()
+    session_fts._sync_index(conn, force=True)
+    conn.execute("DROP TABLE sdoc_map")
+    conn.commit()
+
+    session_fts._init_db(conn)
+    assert conn.execute("SELECT COUNT(*) FROM sdoc_map").fetchone()[0] == 3
+    assert _map_matches_sdoc(conn)
+    session_fts._init_db(conn)  # idempotent: no double backfill
+    assert conn.execute("SELECT COUNT(*) FROM sdoc_map").fetchone()[0] == 3
+
+    (root / "old-0.jsonl").unlink()
+    session_fts._sync_index(conn, force=True)
+    assert conn.execute("SELECT COUNT(*) FROM sdoc WHERE sid = 'old-0'").fetchone()[0] == 0
+    assert _map_matches_sdoc(conn)
+
+
+def test_semb_counter_moves_on_rowid_reuse_and_gates_vec_reload(fts_env):
+    """The vector cache reloads only when semb changed, including the case a
+    COUNT/MAX(rowid) signature misses: delete the newest rows and re-insert
+    the same number (SQLite reuses those rowids)."""
+    conn = session_fts._get_connection()
+    session_fts._init_db(conn)
+    blob = array("f", [1.0, 0.0]).tobytes()
+    conn.execute("INSERT INTO semb (sid, kind, vec) VALUES ('a', 'doc', ?)", (blob,))
+    conn.commit()
+    session_fts._refresh_vec_cache(conn)
+    assert session_fts._vec_cache["sids"] == ["a"]
+    before = session_fts._semb_sig(conn)
+
+    session_fts._vec_cache["sids"] = ["stale-marker"]
+    session_fts._refresh_vec_cache(conn)  # unchanged counter: no reload
+    assert session_fts._vec_cache["sids"] == ["stale-marker"]
+    session_fts._vec_cache["sids"] = ["a"]
+
+    conn.execute("DELETE FROM semb WHERE sid = 'a'")
+    conn.execute("INSERT INTO semb (sid, kind, vec) VALUES ('b', 'doc', ?)", (blob,))
+    conn.commit()
+    assert conn.execute("SELECT MAX(rowid), COUNT(*) FROM semb").fetchone() == (1, 1)  # rowid reused
+    assert session_fts._semb_sig(conn) != before
+    session_fts._refresh_vec_cache(conn)
+    assert session_fts._vec_cache["sids"] == ["b"]

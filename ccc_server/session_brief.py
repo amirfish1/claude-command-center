@@ -137,7 +137,7 @@ def _sdoc_row(sid: str) -> dict:
         fconn = _sfts._get_connection()
         _sfts._sync_index(fconn, force=False)
         row = fconn.execute(
-            "SELECT title, prompts, report FROM sdoc WHERE sid = ?", (sid,)
+            f"SELECT title, prompts, report FROM sdoc WHERE {_sfts.sdoc_rowids_sql(1)}", (sid,)
         ).fetchone()
     except Exception:
         return {"title": "", "prompts": "", "report": ""}

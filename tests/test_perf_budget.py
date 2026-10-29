@@ -4189,6 +4189,7 @@ def test_session_fts_embeddings_warm_search_does_no_reembed(tmp_path, monkeypatc
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
 
     monkeypatch.setattr(session_fts, "_ollama_available", lambda: True)
 
@@ -4270,6 +4271,7 @@ def test_recall_path_search_does_not_block_on_document_embedding(tmp_path, monke
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
 
     monkeypatch.setattr(session_fts, "_ollama_available", lambda: True)
 
@@ -4336,6 +4338,7 @@ def test_vector_rank_caps_query_embed_to_short_timeout(monkeypatch):
     finally:
         session_fts._vec_cache["sids"] = []
         session_fts._vec_cache["vecs"] = []
+        session_fts._vec_cache["sig"] = None
 
 
 def test_decision_extraction_warm_scan_does_no_reparse_or_subprocesses(tmp_path, monkeypatch):
@@ -5132,3 +5135,70 @@ def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_pa
         assert {q for _, q in sent} == {x}, "resolution followed a second hop"
     finally:
         memory_fanout.reset_state()
+
+
+def test_session_fts_recall_sync_kicks_and_sdoc_lookups_are_bounded(monkeypatch, tmp_path):
+    """MEMORY-20: above the inline threshold, a burst of recall requests
+    within one sync TTL sends at most ONE fts_sync to the background helper
+    and starts no dashboard sync thread; and looking up a page of hits'
+    sdoc rows costs the same SQLite work at 100 or 2000 indexed sessions
+    (rowid lookups via sdoc_map, not a scan of the UNINDEXED sid column)."""
+    from ccc_server import bg_helper, memory_api, session_fts
+
+    monkeypatch.setenv("CCC_SESSION_FTS_DB", str(tmp_path / "fts.sqlite"))
+    monkeypatch.delenv(bg_helper.CHILD_ENV, raising=False)
+    if getattr(session_fts._tls, "conn", None):
+        session_fts._tls.conn.close()
+    session_fts._tls.conn = None
+    saved_state = dict(bg_helper._state)
+    saved_ts = session_fts._last_sync_ts
+    calls = []
+    try:
+        conn = session_fts._get_connection()
+        session_fts._init_db(conn)
+
+        def fill(n):
+            with conn:
+                for i in range(n):
+                    sid = f"perf-{i:05d}"
+                    cur = conn.execute("INSERT INTO sdoc VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                       (sid, "t", "p " * 50, "r", "b " * 200, "m", ""))
+                    conn.execute("INSERT INTO sdoc_map (sid, rid) VALUES (?, ?)", (sid, cur.lastrowid))
+                for i in range(session_fts._BG_SYNC_THRESHOLD + 1):
+                    conn.execute("INSERT OR REPLACE INTO file_cache (path, sid, mtime, size, indexed) "
+                                 "VALUES (?, '', 0, 0, 0)", (f"/x/{i}",))
+
+        def ops(sids):
+            n = [0]
+            conn.set_progress_handler(lambda: n.__setitem__(0, n[0] + 1) or 0, 10)
+            try:
+                rows = memory_api._sdoc_rows(sids)
+            finally:
+                conn.set_progress_handler(None, 0)
+            assert set(rows) == set(sids)
+            return n[0]
+
+        fill(100)
+        small = ops([f"perf-{i:05d}" for i in range(0, 100, 10)])
+        with conn:
+            conn.execute("DELETE FROM sdoc"); conn.execute("DELETE FROM sdoc_map")
+        fill(2000)
+        large = ops([f"perf-{i:05d}" for i in range(0, 2000, 200)])
+        assert large <= small * 2 + 20, f"sdoc lookup grew with corpus: {small} -> {large} VM steps"
+
+        bg_helper._state.update(ready=True, sock=str(tmp_path / "h.sock"), started_at=0.0)
+        monkeypatch.setattr(bg_helper, "call", lambda op, timeout=None, **k: calls.append(op) or {"ok": True})
+        monkeypatch.setattr(session_fts, "_refresh_vec_cache_async", lambda: None)
+        monkeypatch.setattr(session_fts.threading, "Thread",
+                            lambda *a, **k: pytest.fail("recall started an in-process sync thread"))
+        session_fts._last_sync_ts = 0.0
+        for _ in range(50):
+            session_fts._sync_index(conn, force=False)
+        assert calls == ["fts_sync"], f"expected one helper kick per TTL, got {len(calls)}"
+    finally:
+        bg_helper._state.clear()
+        bg_helper._state.update(saved_state)
+        session_fts._last_sync_ts = saved_ts
+        if getattr(session_fts._tls, "conn", None):
+            session_fts._tls.conn.close()
+        session_fts._tls.conn = None
