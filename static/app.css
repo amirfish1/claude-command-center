@@ -31778,6 +31778,13 @@ body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:n
    folded run. Empty span + ::before (like .cc-run-chip) so copy/read-aloud
    never pick it up; shown in compact only, where the calls are folded away. */
 .cc-orch-chip { display: none; }
+.te-conversation-annotation { margin: 8px 0 12px; }
+.te-conversation-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 9px;
+  font-size: 11px; font-weight: 600; line-height: 16px;
+  color: #d2b4ff; background: rgba(163,113,247,0.16);
+  border: 1px solid rgba(163,113,247,0.45);
+}
 body.conv-compact .conversations-view .cc-orch-chip {
   display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px;
   font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap;

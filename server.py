@@ -30719,6 +30719,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             conv_id = path.split("/")[-2]
             payload = _extract_files_from_conversation(conv_id)
             self.send_json(payload)
+        elif re.match(r"^/api/conversations/[^/]+/tokeneconomizer$", path):
+            from ccc_server.tokeneconomizer import session_annotation
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            self.send_json(session_annotation(conv_id))
         elif re.match(r"^/api/conversations/[^/]+/transcript-path$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             qs = urllib.parse.parse_qs(parsed.query)
