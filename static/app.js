@@ -53203,13 +53203,6 @@
     _uxqRenderWorkersQueueHealth(health, workers);
     const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
     const queues = Array.isArray(health.queues) ? health.queues : [];
-    // Stage sessions (planner/verifier/...) run under a per-ticket queue name
-    // like PLAN-WT-28-R3-D1; count them under the ticket's own queue.
-    const queueNames = [...new Set(workers.map(w => _uxqProjectKey(w.ticket_queue || w.queue)).filter(Boolean))];
-    const summary = _uxqPicker.isMobile
-      ? (workers.length ? String(workers.length) : '0')
-      : (workers.length + ' agent' + (workers.length === 1 ? '' : 's') + ' · '
-         + queueNames.length + ' queue' + (queueNames.length === 1 ? '' : 's'));
     // One row per worker. A worker can hold several in_progress tickets (a
     // needs_input one plus the one it moved on to); a first-match join showed
     // the parked one and hid the live one. The row now leads with the newest
@@ -53293,6 +53286,15 @@
         elapsedTip, workerAge, chips, stage,
         pid: parseInt(w.pid, 10) || 0, workerId: String(w.worker_id || ''), sid: sid };
     }).filter(Boolean);
+    // The roster is local to this server. Idle/parked processes are not
+    // working tickets, and remote claims must not imply local liveness.
+    const workingCount = rows.filter(r => r.ref || r.stage).length;
+    const waitingCount = rows.filter(r => !r.ref && !r.stage && r.chips.length).length;
+    const summary = [String(workingCount),
+      idleQueues.length ? idleQueues.length + ' idle' : '',
+      waitingCount ? waitingCount + ' waiting' : '',
+      !_uxqItemsCache.ts && workers.length ? 'loading tickets' : '',
+      'this machine'].filter(Boolean).join(' · ');
     const rowsHtml = rows.map(r => {
         // CCC-1050: one-click kill — releases the worker from queue staffing
         // and terminates its process (server route does both, release first).
@@ -53372,7 +53374,11 @@
       const $rows = $el.querySelector('.fq-working-rows');
       const $summary = $el.querySelector('.fq-working-summary');
       const $head = $el.querySelector('.fq-working-head');
-      if ($summary) $summary.textContent = summary;
+      if ($summary) {
+        $summary.textContent = summary;
+        $summary.title = 'Live workers on this dashboard’s machine only; workers on other machines are not included. Idle and waiting workers do not count as working.';
+      }
+      $el.setAttribute('aria-label', 'Working now on this machine');
       if ($head) $head.classList.toggle('is-only', rows.length === 0);
       // Mobile: rows duplicate the ticket list right below and eat the whole
       // screen, so they start collapsed to a header-only summary; tapping the
