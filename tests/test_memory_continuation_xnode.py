@@ -270,3 +270,15 @@ def test_family_http_preserves_spawn_tree_and_resolves_only_requested_session(wo
     assert out["tree"]["node_name"] == "mac"
     assert out["tree"]["children"][1]["node_name"] == "hermes-gcp"
     assert world["calls"] == [(PEER["node_id"], "memory_brief", {"q": X})]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_family_before_memory_index_initialization(world, monkeypatch, legacy):
+    conn = sqlite3.connect(":memory:")
+    if legacy:
+        conn.execute("CREATE TABLE session_meta (sid TEXT PRIMARY KEY, start_ts REAL)")
+    monkeypatch.setattr(ship_graph, "_get_connection", lambda: conn)
+    out = mf.family_continuations(Y)
+    assert out["session_id"] == Y and out["indexing"] is True
+    assert out["predecessor"] is None and out["successors"] == []
+    assert not world["calls"]

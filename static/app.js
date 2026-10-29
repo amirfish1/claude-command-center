@@ -71686,7 +71686,7 @@
         + escapeHtml(role + ' ' + label) + '</div>';
     };
     const links = link(data.predecessor, 'Continued from') + (data.successors || []).map(s => link(s, 'Continued as')).join('');
-    if (!links) return '';
+    if (!links) return data.indexing ? '<div class="orch-continuation-status">Continuation index is warming</div>' : '';
     const statuses = (data.continuation_status || []).filter(n => n.status !== 'ok' || n.stale)
       .map(n => '[' + n.name + '] ' + (n.stale ? 'cached answer' : String(n.status).replace(/_/g, ' ')));
     return links + (statuses.length ? '<div class="orch-continuation-status">' + escapeHtml(statuses.join(' · ')) + '</div>' : '');

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -675,9 +676,17 @@ def family_continuations(sid: str) -> dict:
                 **lineage.continuation_links(conn, query)}
 
     out = {"session_id": sid, "node_id": node["node_id"], "node_name": node["name"],
-           "local": True, **lineage.continuation_links(conn, sid)}
+           "local": True, "node_names": _node_names(node, peers)}
+    try:
+        out.update(lineage.continuation_links(conn, sid))
+    except sqlite3.OperationalError as exc:
+        if str(exc) not in {"no such table: session_meta", "no such column: continuation_origin"}:
+            raise
+        # Startup indexing owns schema initialization/migration. Keep the
+        # existing spawn map usable without starting a sync on its read path.
+        out.update(predecessor=None, successors=[], indexing=True)
+        return out
     _resolve_continuations(out, local_links, peers, node)
-    out["node_names"] = _node_names(node, peers)
     return out
 
 
