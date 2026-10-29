@@ -73,6 +73,7 @@ def queues_for_session(cfg: dict, session_id: str) -> list:
     return sorted(
         str(name).upper() for name, conf in (cfg or {}).items()
         if isinstance(conf, dict) and str(conf.get("session_id") or "") == session_id
+        and not conf.get("archived")
     )
 
 

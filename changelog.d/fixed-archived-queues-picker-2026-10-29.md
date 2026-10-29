@@ -1,0 +1,1 @@
+- Queue picker dropdowns and the Queues health strip no longer list queues retired via `wt queue archive` — CCC reads queue-config.json directly and now honors the `archived` flag like `wt status` does.

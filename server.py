@@ -2569,6 +2569,10 @@ def _queue_config_options():
     queues = []
     for name, conf in cfg.items():
         conf = conf if isinstance(conf, dict) else {}
+        # `wt queue archive` retires a queue in place; keep it out of every
+        # picker this payload feeds.
+        if conf.get("archived"):
+            continue
         queues.append({"queue": str(name).upper(), "config": conf})
         if conf.get("repo_path"):
             repo_paths.add(str(conf["repo_path"]))

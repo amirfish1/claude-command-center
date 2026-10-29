@@ -696,10 +696,15 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     cfg_github_repo = {}
     cfg_raw = {}
     cfg_names = set()
+    # Queues retired via `wt queue archive` carry archived:true in their
+    # config entry; wt status hides them, so the dashboard must too.
+    cfg_archived = set()
     try:
         for name, conf in (_core._wt_read_config() or {}).items():
             qn = _norm(name)
             cfg_names.add(qn)
+            if isinstance(conf, dict) and conf.get("archived"):
+                cfg_archived.add(qn)
             cfg_raw[qn] = conf if isinstance(conf, dict) else {}
             cfg_drain[qn] = bool((conf or {}).get("auto_drain", False))
             rp = str((conf or {}).get("repo_path") or "").strip()
@@ -722,6 +727,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
         cfg_github_repo = {}
         cfg_raw = {}
         cfg_names = set()
+        cfg_archived = set()
     # One read of spawn-defaults.json per rollup (not per queue) for the
     # effective worker plan below.
     try:
@@ -847,6 +853,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     names.update(total_by_q.keys())
     names.discard("")
     names.discard("?")
+    names -= cfg_archived
 
     # Drop explicitly-deleted queues (CCC-425 reopen) unless they've had NEW
     # activity since the deletion — a re-filed ticket legitimately resurrects
