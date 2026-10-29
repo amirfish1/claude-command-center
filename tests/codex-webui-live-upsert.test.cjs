@@ -31,6 +31,7 @@ async function loadHelpers(page) {
   await page.evaluate((code) => {
     (0, eval)('window.__fns = (() => {\n'
       + 'const _kimiRegroupTools = () => {};\n'
+      + 'const _kimiTidyToolGroups = () => {};\n'
       + code
       + '\nreturn { _kimiAppendAssistantEvent };\n})();');
   }, helpersCode);

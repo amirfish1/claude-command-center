@@ -67092,9 +67092,45 @@
       const namesSuffix = names.length ? ' (' + names.join(', ') + ')' : '';
       title.textContent = count + ' tool call' + (count === 1 ? '' : 's') + namesSuffix;
     }
+    // CCC-254: purple wt / ccc / CCC API chips in the header, so a collapsed
+    // group still shows its orchestration use outside compact view too.
+    const orch = [];
+    for (const r of rows) {
+      (r.dataset.ccOrch || '').split('|').filter(Boolean).forEach(l => { if (!orch.includes(l)) orch.push(l); });
+    }
+    const want = orch.slice(0, 4).concat(orch.length > 4 ? ['+' + (orch.length - 4)] : []);
+    let orchEl = grp.querySelector(':scope > .kimi-tool-group-head > .kimi-tg-orch');
+    if (want.length && !orchEl && title) {
+      orchEl = document.createElement('span');
+      orchEl.className = 'kimi-tg-orch';
+      title.insertAdjacentElement('afterend', orchEl);
+    }
+    if (orchEl && orchEl.dataset.orch !== want.join('|')) {
+      orchEl.dataset.orch = want.join('|');
+      orchEl.innerHTML = want.map(l => '<span class="kimi-tg-orch-chip" data-cc-orch="' + escapeAttr(l) + '"></span>').join('');
+    }
     const meta = grp.querySelector('.kimi-tg-meta');
     if (meta) meta.textContent = '· ' + state;
   }
+
+  // CCC-254: provisional (live overlay) tool rows are removed outside the
+  // regroup path when the rollout supersedes them. Recount every group in
+  // `root`, and dissolve groups left with fewer than two rows, so the header
+  // never reads "4 tool calls" over three rows.
+  function _kimiTidyToolGroups(root) {
+    if (!root || !root.querySelectorAll) return;
+    const groups = root.matches && root.matches('.kimi-tool-group')
+      ? [root] : Array.from(root.querySelectorAll('.kimi-tool-group'));
+    for (const grp of groups) {
+      if (!grp.isConnected) continue;
+      const n = grp.querySelectorAll(':scope > .kimi-tool-group-body > .kimi-tool').length;
+      const turn = grp.parentElement && grp.parentElement.closest('.kimi-turn');
+      if (n < 2 && turn) _kimiRegroupTools(turn);
+      else if (n < 1) grp.remove();
+      else _kimiUpdateToolGroupHead(grp);
+    }
+  }
+  window.CCCKimiTidyToolGroups = _kimiTidyToolGroups;
 
   // kimi-web parity (messagesToTurns flushGroup): when the session is IDLE,
   // a tool row still marked "running" is a result that never landed (missed
@@ -67236,6 +67272,7 @@
                 || (sameItem && answer !== previousAnswer)) block.remove();
             else delete block.dataset.liveKey;
           }
+          _kimiTidyToolGroups(oldTurn);
         }
         break;
       }
@@ -67559,9 +67596,11 @@
   function _removeStaleProvisionalsForTurn(view, turnId) {
     if (turnId == null) return;
     const prefix = String(turnId) + ':';
+    let removed = false;
     view.querySelectorAll('[data-live-key]').forEach((node) => {
-      if (String(node.dataset.liveKey || '').startsWith(prefix)) node.remove();
+      if (String(node.dataset.liveKey || '').startsWith(prefix)) { node.remove(); removed = true; }
     });
+    if (removed) _kimiTidyToolGroups(view);
   }
 
   // Reverse reconcile: true when the rollout has already recorded a turn's

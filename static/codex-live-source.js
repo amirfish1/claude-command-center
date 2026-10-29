@@ -100,8 +100,12 @@
   // in a merged kimi-turn, so both keyed nodes must leave together.
   function clearProvisional(viewEl) {
     if (!viewEl || typeof viewEl.querySelectorAll !== 'function') return;
-    viewEl.querySelectorAll('[data-live-key]')
-      .forEach((node) => node.remove());
+    const nodes = viewEl.querySelectorAll('[data-live-key]');
+    nodes.forEach((node) => node.remove());
+    // A removed provisional tool row leaves its tool group's count stale.
+    if (nodes.length && typeof window.CCCKimiTidyToolGroups === 'function') {
+      window.CCCKimiTidyToolGroups(viewEl);
+    }
   }
 
   function sameContext(a, b) {
