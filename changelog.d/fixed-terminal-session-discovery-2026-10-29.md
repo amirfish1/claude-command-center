@@ -1,0 +1,1 @@
+- Sessions started from a terminal now show up in the sidebar within seconds, instead of waiting up to five minutes (or indefinitely on a heavily loaded machine) for the next session-list refresh.

@@ -16632,11 +16632,79 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
     _phase("wt_ms")
-    extra = (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
+    # CCC-153: a session started in a terminal (Claude writes
+    # ~/.claude/sessions/<pid>.json at launch) was invisible until the next
+    # snapshot refresh: >=5 min at the serve TTL, and never while the load
+    # gate holds refreshes off a saturated host. Overlay those live
+    # registry-only rows; the work runs only when the registry dir changes.
+    claude_overlay = _archive_overlay_claude_registry_sessions(rows)
+    if claude_overlay:
+        rows = list(rows or []) + claude_overlay
+    _phase("claude_reg_ms")
+    extra = ((overlay or []) + (devin_overlay or []) + (worker_overlay or [])
+             + (claude_overlay or []))
     body_ver = _archive_list_body_ver(key, rows, extra)
     _phase("ver_ms")
     return rows, from_cache, body_ver
 
+
+
+_ARCHIVE_CLAUDE_REG_CACHE = {"sig": None, "rows": [], "changed_at": 0.0, "built_at": 0.0}
+_ARCHIVE_CLAUDE_REG_LOCK = threading.Lock()
+
+
+def _archive_claude_registry_rows():
+    """Archive-shaped rows for every live ~/.claude/sessions entry, rebuilt
+    only when that directory's mtime changes (a launch adds a pid file, an
+    exit removes one). Same producer the archive build uses for
+    registry-only sessions, so the row shape matches."""
+    try:
+        sig = SESSIONS_REGISTRY.stat().st_mtime_ns
+    except OSError:
+        return []
+    now = time.monotonic()
+    # Keep re-reading briefly after a change: _load_session_registry is
+    # 3s-memoized, so the first read after a launch can predate its pid file.
+    if (_ARCHIVE_CLAUDE_REG_CACHE["sig"] == sig
+            and now - _ARCHIVE_CLAUDE_REG_CACHE.get("changed_at", 0.0) > 5.0):
+        return _ARCHIVE_CLAUDE_REG_CACHE["rows"]
+    if _ARCHIVE_CLAUDE_REG_CACHE["sig"] == sig and now - _ARCHIVE_CLAUDE_REG_CACHE.get("built_at", 0.0) < 1.0:
+        return _ARCHIVE_CLAUDE_REG_CACHE["rows"]
+    if not _ARCHIVE_CLAUDE_REG_LOCK.acquire(blocking=False):
+        return _ARCHIVE_CLAUDE_REG_CACHE["rows"]
+    try:
+        out = []
+        try:
+            archived, trashed = _load_conversation_lifecycle_sets()
+            for sid, meta in _load_session_registry().items():
+                if sid in archived or sid in trashed:
+                    continue
+                try:
+                    row = _live_registry_conversation_row(
+                        sid, meta, archived_set=archived, trashed_set=trashed,
+                        resolve_worktree_dirty=False,
+                    )
+                except Exception:
+                    row = None
+                if row:
+                    out.append(row)
+        except Exception:
+            out = []  # A broken registry read must not break the sidebar.
+        if _ARCHIVE_CLAUDE_REG_CACHE["sig"] != sig:
+            _ARCHIVE_CLAUDE_REG_CACHE["changed_at"] = now
+        _ARCHIVE_CLAUDE_REG_CACHE.update(sig=sig, rows=out, built_at=now)
+        return out
+    finally:
+        _ARCHIVE_CLAUDE_REG_LOCK.release()
+
+
+def _archive_overlay_claude_registry_sessions(rows):
+    """Live terminal Claude sessions missing from the cached snapshot."""
+    reg_rows = _archive_claude_registry_rows()
+    if not reg_rows:
+        return []
+    existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
+    return [r for r in reg_rows if str(r.get("session_id") or r.get("id") or "") not in existing]
 
 
 _ARCHIVE_WT_WORKERS_LOCK = threading.Lock()
