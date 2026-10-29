@@ -1,0 +1,1 @@
+- Codex tool groups no longer count a live tool row that the saved transcript already replaced ("4 tool calls" over three rows), and their headers now show the purple wt / ccc / CCC API chips in every view, not only in compact view.

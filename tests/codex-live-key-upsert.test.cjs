@@ -47,7 +47,7 @@ async function withPage(fn) {
 // Loads the helper functions into `window.__fns` inside the page.
 async function loadHelpers(page) {
   await page.evaluate((code) => {
-    (0, eval)(code.replace(/^/, 'window.__fns = (() => {\n')
+    (0, eval)(code.replace(/^/, 'window.__fns = (() => {\nconst _kimiTidyToolGroups = () => {};\n')
       + '\nreturn { _turnOrdinalBefore, _lastRenderedRowAnchor, _upsertProvisionalNode, _findMatchingProvisionalNode, _removeStaleProvisionalsForTurn, _confirmedResultForTurn };\n})();');
   }, helpersCode);
 }

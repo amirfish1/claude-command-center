@@ -31081,6 +31081,11 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .ns-selection-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ns-model-change { text-decoration: underline; text-underline-offset: 3px; }
 .ns-model-overrides .conv-model-picker-inner { margin-top: 8px; }
+/* CCC-255: the composer's engine/model/effort selects, lifted above the
+   ranked chips while the override is open. */
+.ns-model-override-selects { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.ns-model-override-selects:empty { display: none; }
+.ns-model-override-selects > select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .ns-model-overrides.is-legacy > summary { display: none; }
 .conv-pane:has(.conv-model-picker-strip.has-auto-selection) .ns-model-comparison:not(.is-manual-expanded) { display: none; }
 .conv-pane.has-new-session-context:has(.has-auto-selection):not(:has(#nsModelOverrides[open])) :is(#convInputEngineSelect, #convInputModelSelect, #convInputEffortSelect) { display: none !important; }
@@ -31783,6 +31788,16 @@ body.conv-compact .conversations-view .cc-orch-chip::before { content: attr(data
 /* A run with no preceding text hosts its chips inside the bare head line,
    whose other children are hidden while folded. */
 body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open):not(.tool-call-group) > .cc-orch-chip { display: inline-block !important; }
+/* Same purple pills in a Codex/Kimi tool-group header, in every view mode
+   (CCC-254): the header is all a collapsed group shows. */
+.kimi-tg-orch { display: inline-flex; gap: 4px; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.kimi-tg-orch-chip {
+  display: inline-block; padding: 0 7px; border-radius: 9px;
+  font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap;
+  color: #d2b4ff; background: rgba(163,113,247,0.16);
+  border: 1px solid rgba(163,113,247,0.45);
+}
+.kimi-tg-orch-chip::before { content: attr(data-cc-orch); }
 
 /* Toned-down narration in compact: no cards, no heavy weight or wide
    tracking, so it reads as plain prose. User messages keep their theme
