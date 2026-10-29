@@ -52356,6 +52356,27 @@
   // ('' when none). WatchTower computes waiting_on (WT-9) with the same rule
   // its claim gate uses, and the server attaches it to the list; CCC keeps no
   // copy of that rule. An older WatchTower sends no waiting_on: no chip.
+  // One adapter for row and modal: claim metadata alone is not liveness,
+  // and queue configuration is needed to explain why work is paused.
+  function _uxqTicketAttention(it) {
+    const QA = window.QueueAttention;
+    if (!QA || !it) return null;
+    const health = _uxqHealthCache || {};
+    const project = _uxqProjectKey(it.project);
+    const session = String(it.claimed_session_id || '').trim();
+    const claimant = String(it.claimed_by || '').trim();
+    const hasClaim = !!(claimant || it.claimed_at);
+    const liveClaim = hasClaim && (health.wt_workers || []).some(w => {
+      if (!w || w.alive === false || w.released_at) return false;
+      if (project && _uxqProjectKey(w.queue) !== project) return false;
+      const sid = String(w.session_id || '').trim();
+      const wid = String(w.worker_id || '').trim();
+      return !!((session && session === sid) || (claimant && (claimant === sid || claimant === wid)));
+    });
+    return QA.project(it, { explain: true, liveClaim,
+      queue: (health.queues || []).find(q => _uxqProjectKey(q.queue) === project) });
+  }
+
   function _uxqWaitingOn(it) {
     if (!it || it.status !== 'open' || !Array.isArray(it.waiting_on) || !it.waiting_on.length) return '';
     return String(it.waiting_on[0]);
@@ -53900,7 +53921,7 @@
     const runBusy = _uxqRunBusyRefs.has(ref);
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
     // Who it waits on (CCC-244), same projection as the queue row.
-    const attention = window.QueueAttention ? window.QueueAttention.project(item, { explain: true }) : null;
+    const attention = _uxqTicketAttention(item);
 
     // Sidebar property row helpers
     function _propRow(key, valHtml) {
@@ -55348,11 +55369,7 @@
       // only for an owner decision; external/dependency/answer-handoff/
       // deferred each get their own label and tone. A comment after the
       // question is never read as an answer.
-      const _uxqAttention = it => {
-        const QA = window.QueueAttention;
-        if (!QA) return null;
-        return QA.project(it, { explain: true, liveClaim: _hasLiveClaim(it), queue: ((_uxqHealthCache || {}).queues || []).find(q => _uxqProjectKey(q.queue) === _uxqProjectKey(it.project)) });
-      };
+      const _uxqAttention = _uxqTicketAttention;
       // After deferred tickets: WIP → needs input → unresolved attention → claimable work →
       // non-claimable, unready, or otherwise inert open work → clean closes.
       // Open work of any kind stays above closed, full stop.
