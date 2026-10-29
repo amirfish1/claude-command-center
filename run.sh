@@ -458,12 +458,14 @@ worker_systemd_managed() {
     && [ "$(systemctl --user show -p LoadState --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null)" = "loaded" ]
 }
 
-# Freeze Codex admissions in the worker before a stale-code roll, then
-# recheck the live-turn count (CCC-250). Succeeds only when frozen with zero
-# live turns; an older worker without the gate fails, which defers the roll.
+# Freeze Codex admissions in the worker before any worker kill (CCC-250).
+# Succeeds only when the worker froze and proved no Codex thread is loaded
+# and none of its turns is live; an older worker without the gate, or one
+# that does not answer, fails, which defers the kill. Callers run it again
+# as the last step before the kill.
 codex_restart_freeze_ok() {
-  "$PYTHON" "$HERE/ccc_worker.py" --codex-restart-freeze >/dev/null 2>&1 || return 1
-  if ! "$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null | "$PYTHON" -c '
+  "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-freeze >/dev/null 2>&1 || return 1
+  if ! "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health 2>/dev/null | "${PYTHON:-python3}" -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
@@ -471,10 +473,21 @@ except Exception:
     raise SystemExit(1)
 raise SystemExit(0 if data.get("ok") and data.get("codex_live_turns") == 0 else 1)
 '; then
-    "$PYTHON" "$HERE/ccc_worker.py" --codex-restart-release >/dev/null 2>&1 || true
+    "${PYTHON:-python3}" "$HERE/ccc_worker.py" --codex-restart-release >/dev/null 2>&1 || true
     return 1
   fi
   return 0
+}
+
+# 0 when stopping the worker cannot abort a Codex turn: it froze admissions
+# with nothing loaded, or no worker answers and none runs. A worker that runs
+# but does not answer is unknown, never safe (CCC-250).
+worker_stop_safe() {
+  if "${PYTHON:-python3}" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+    codex_restart_freeze_ok
+    return
+  fi
+  ! pgrep -f -- "$HERE/ccc_worker\\.py\$" >/dev/null 2>&1
 }
 
 # Restart the systemd-managed worker. A stray worker outside the unit (pid
@@ -603,6 +616,12 @@ EOF
   # Without this, re-running --install-service to repair a partial install
   # (e.g. a missing worker unit) always fails: the dashboard unit it already
   # installed is still bound to the port.
+  if systemctl --user is-active --quiet "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null \
+    && ! worker_stop_safe; then
+    # Stopping the worker would abort its live Codex turns (CCC-250).
+    echo "Error: the CCC worker has running Codex turns (or cannot report them). Re-run --install-service once they finish." >&2
+    exit 1
+  fi
   systemctl --user stop "$SYSTEMD_UNIT_NAME" "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
   sleep 0.3
 
@@ -1046,10 +1065,12 @@ except Exception:
 worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
 capabilities = worker.get("capabilities") or []
 # codex_live_turns: Codex turns on the worker's stdio app-server hold no
-# ledger job, but a worker restart aborts them all (CCC-250).
-idle = not any(int(data.get(key) or 0) for key in (
-    "active", "queued", "uncertain", "codex_live_turns",
-))
+# ledger job, but a worker restart aborts them all (CCC-250). A failed reply
+# or a missing field (an older worker) is unknown, never idle.
+idle = bool(data.get("ok")) and all(
+    key in data and not int(data.get(key) or 0)
+    for key in ("active", "queued", "uncertain", "codex_live_turns")
+)
 print(
     int(worker.get("pid") or 0),
     int(bool(data.get("ok")) and idle),
@@ -1059,7 +1080,8 @@ print(
 EOF
     if [ "${worker_compatible:-0}" != "1" ] \
       && [ "${existing_worker_idle:-0}" = "1" ] \
-      && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
+      && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null \
+      && codex_restart_freeze_ok; then
       # A pre-engine-control worker owns no live work. Retire that exact PID;
       # launchd/systemd may replace it, otherwise the detached start below
       # does. Never roll an older worker with unresolved work.
@@ -1086,7 +1108,11 @@ raise SystemExit(0 if "engine-execution-v1" in caps else 1)
       echo "⚠ Older persistent worker still has unresolved work; using compatibility execution." >&2
     elif [ "${worker_compatible:-0}" != "1" ] && worker_systemd_managed; then
       # Never start a second worker beside the unit's own: (re)start the unit.
-      if [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
+      if [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null && ! worker_stop_safe; then
+        # A worker that stopped answering may still run Codex turns, and a
+        # restart would abort them (CCC-250). Leave it; compatibility mode.
+        echo "⚠ Older worker is unreachable or busy; restart deferred, using compatibility execution." >&2
+      elif [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
         restart_worker_via_systemd "$existing_worker_pid" || true
       else
         systemctl --user start "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
@@ -1175,7 +1201,11 @@ EOF
         fi
         echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
         worker_kicked=0
-        if worker_systemd_managed; then
+        if ! codex_restart_freeze_ok; then
+          # Re-prove the freeze as the last step before the kill (CCC-250).
+          echo "→ Codex state changed before the restart — restart deferred"
+          worker_kicked=deferred
+        elif worker_systemd_managed; then
           # Even if the restart call fails, never fall through to a
           # detached spawn: the unit's Restart=always owns recovery.
           restart_worker_via_systemd "${existing_worker_pid:-0}" || true
@@ -1183,7 +1213,9 @@ EOF
         elif launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
           worker_kicked=1
         fi
-        if [ "$worker_kicked" != "1" ]; then
+        if [ "$worker_kicked" = "deferred" ]; then
+          :
+        elif [ "$worker_kicked" != "1" ]; then
           # No launchd worker service on this install path (brew service or
           # DMG app spawn): kill the stale worker AND immediately replace it,
           # or the dashboard runs workerless (legacy execution) until the

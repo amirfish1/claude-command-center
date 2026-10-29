@@ -18488,16 +18488,12 @@ def _restart_stale_worker():
     # Never roll a worker that owns unresolved work: the code on disk changes
     # far more often than the worker's behaviour does, and a restart cuts off
     # active turns. Defer; the next maintenance tick or run.sh launch retries.
-    busy = {
-        key: int(health.get(key) or 0)
-        for key in ("active", "queued", "uncertain")
-    }
     # Live Codex app-server turns hold no ledger job but die with the worker
     # (CCC-250). A missing count (older worker) is unknown, never idle.
-    try:
-        busy["codex_live_turns"] = int(health.get("codex_live_turns", -1))
-    except (TypeError, ValueError):
-        busy["codex_live_turns"] = -1
+    busy = {
+        key: _worker_health_count(health, key)
+        for key in ("active", "queued", "uncertain", "codex_live_turns")
+    }
     if any(busy.values()):
         print(
             "  [maintenance] worker stale, deferred "
@@ -18617,27 +18613,27 @@ def _restart_worker_process(worker=None, *, was=None, now=None, codex_final_chec
     exact pid ourselves, the same pid this function always confirmed launchd
     would not touch, never a different real launchd-owned worker.
     """
-    if worker is None or codex_final_check:
+    if worker is None:
         try:
             health = _control_plane_request("health")
         except Exception:
             health = {}
-        if codex_final_check:
-            # Callers froze Codex admissions first; this closes the gap for
-            # turns the app-server started on its own since (CCC-250).
-            turns = _codex_restart_final_check(health)
-            if turns:
-                _log_activity(
-                    "worker", "RESTART_CODEX_ABORT",
-                    f"codex_live_turns={turns} at final check; not restarting",
-                )
-                return {"restarted": False, "reason": "codex_turns_running",
-                        "codex_live_turns": turns}
-        if worker is None:
-            worker = health.get("worker") if isinstance(health, dict) and isinstance(health.get("worker"), dict) else {}
+        worker = health.get("worker") if isinstance(health, dict) and isinstance(health.get("worker"), dict) else {}
     target = f"gui/{os.getuid()}/{_WORKER_LAUNCHD_LABEL}"
     pid = worker.get("pid")
     systemd_scope, pid_in_unit = _worker_systemd_scope(pid)
+    if codex_final_check:
+        # Callers froze Codex admissions first. Re-prove it as the last
+        # step before any kill: a lapsed freeze or a thread the app-server
+        # loaded since is caught here, not trusted (CCC-250).
+        turns = _codex_restart_final_check()
+        if turns:
+            _log_activity(
+                "worker", "RESTART_CODEX_ABORT",
+                f"codex_live_turns={turns} at final check; not restarting",
+            )
+            return {"restarted": False, "reason": "codex_turns_running",
+                    "codex_live_turns": turns}
     if systemd_scope:
         return _restart_systemd_worker(
             systemd_scope, pid, pid_in_unit, was=was, now=now,
@@ -18770,14 +18766,24 @@ def _codex_restart_release(reason=""):
         pass
 
 
-def _codex_restart_final_check(health):
-    """Recheck right before the kill. The freeze stops CCC-issued turns; a
-    turn the app-server starts on its own (server-side queue, goal) can
-    still appear, and unknown counts as busy."""
-    if not isinstance(health, dict) or not health.get("ok"):
-        return -1
+def _codex_restart_final_check(health=None):
+    """Re-run the worker's freeze proof right before the kill: 0 only when
+    the worker answers frozen with no loaded Codex thread. Anything else
+    (live turns, a lapsed freeze, an error, no reply) is nonzero; -1 means
+    unknown. `health` is ignored; the count in health is local bookkeeping,
+    not the native proof."""
     try:
-        return int(health.get("codex_live_turns", -1))
+        resp = _control_plane_request("codex.restart_freeze", {
+            "enabled": True, "reason": "final pre-kill check",
+        })
+    except Exception:
+        return -1
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return -1
+    if resp.get("frozen") is True:
+        return 0
+    try:
+        return max(int(resp.get("live_turns") or 0), 1)
     except (TypeError, ValueError):
         return -1
 
@@ -18912,6 +18918,17 @@ _WORKER_COMPAT_CACHE = {
 }
 
 
+def _worker_health_count(health, key):
+    """A busy count from a worker health reply; -1 (busy) when the reply
+    failed or lacks the field. Unknown is never idle (CCC-250)."""
+    if not isinstance(health, dict) or not health.get("ok") or key not in health:
+        return -1
+    try:
+        return int(health.get(key) or 0)
+    except (TypeError, ValueError):
+        return -1
+
+
 def _worker_compat_snapshot(health=None):
     """Build the worker_compat status dict from a control-plane health reply.
 
@@ -18932,7 +18949,7 @@ def _worker_compat_snapshot(health=None):
     reachable = bool(health.get("ok"))
     compatible = "engine-execution-v1" in capabilities
     idle = not any(
-        int(health.get(key) or 0)
+        _worker_health_count(health, key)
         for key in ("active", "queued", "uncertain", "codex_live_turns")
     )
     return {
@@ -19517,7 +19534,7 @@ def _auto_update_busy_reasons(now=None):
     except Exception:
         health = {}
     if isinstance(health, dict):
-        busy = {k: int(health.get(k) or 0) for k in ("active", "queued", "uncertain", "codex_live_turns")}
+        busy = {k: _worker_health_count(health, k) for k in ("active", "queued", "uncertain", "codex_live_turns")}
         if any(busy.values()):
             reasons.append("worker busy (" + " ".join(f"{k}={v}" for k, v in busy.items()) + ")")
     try:

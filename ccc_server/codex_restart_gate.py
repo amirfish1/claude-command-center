@@ -5,17 +5,19 @@ SIGTERMs it, which aborts every turn in flight. turn/start returns at once,
 so those turns hold no ledger job and the ledger drain cannot see them.
 
 Contract: a caller about to restart the worker calls acquire(). Under the
-app-server condition it counts in-flight turns (including a turn/start
-already admitted but not yet answered) and, only when there are none, sets
-the freeze in that same critical section. The transport send path checks
-frozen() under the same condition before writing any mutating request, so
-no CCC-issued turn can start between the count and the restart. The freeze
-expires after its TTL, and release() lifts it, so an aborted restart never
-blocks Codex for long. It dies with the worker process on a real restart.
-
-Not covered: a turn the app-server starts on its own (a server-side queued
-message or goal continuation) with no CCC request. The restart path rechecks
-just before the kill to narrow that window; it cannot close it.
+app-server condition it sets the freeze, so from then on the transport send
+path refuses every method outside ALLOWED_WHILE_FROZEN. Only then does it
+ask for proof that nothing can run: server._codex_app_server_restart_barrier()
+checks CCC's own turn bookkeeping, unanswered mutating requests, and the
+app-server's native `thread/loaded/list`. Codex only runs a turn on its own
+(a server-side queued message or goal continuation) on a loaded thread, and
+loading a thread needs a client request the freeze refuses, so an empty
+loaded list held under the freeze means nothing can start before the kill.
+Anything else -- a loaded thread, an error, a timeout, an untracked child --
+releases the freeze and refuses the restart. Callers re-run acquire() right
+before the kill, so a freeze that lapsed in between is re-proved, not
+trusted. release() lifts it; the TTL only bounds how long an abandoned
+restart blocks Codex, and a lapsed freeze is never treated as proof.
 
 Stdlib-only and free of server imports so the worker can freeze before it
 ever loaded the Codex stack (no transport then means no turns to protect).
@@ -25,8 +27,12 @@ import sys
 import threading
 import time
 
-# Cancellation must keep working while frozen.
-ALLOWED_WHILE_FROZEN = frozenset({"turn/interrupt"})
+# Everything else is refused while frozen, reads included: no method may
+# load a thread. Cancellation keeps working; the rest are the barrier's own
+# query, the liveness probe, and the handshake of a fresh transport.
+ALLOWED_WHILE_FROZEN = frozenset({
+    "turn/interrupt", "thread/loaded/list", "thread/list", "initialize",
+})
 DEFAULT_TTL_S = 300.0
 MAX_TTL_S = 900.0
 
@@ -42,7 +48,7 @@ def frozen(now=None):
 
 def blocks(method, now=None):
     """True if `method` must not be sent right now. Callers hold the
-    app-server condition, which is what makes acquire() atomic with it."""
+    app-server condition, which acquire() sets the freeze under."""
     return method not in ALLOWED_WHILE_FROZEN and frozen(now)
 
 
@@ -61,20 +67,28 @@ def _app_server_lock():
     return getattr(server, "_CODEX_APP_SERVER_LOCK", None) if server else None
 
 
-def live_turn_threads(now=None):
+def _barrier():
     server = sys.modules.get("server")
     if server is None:
-        return []
-    return list(server._codex_app_server_live_turns(now=now))
+        return {"safe": True, "reason": "no_codex_stack", "threads": []}
+    return server._codex_app_server_restart_barrier()
+
+
+def _set_unlocked(until, reason):
+    """Caller holds _state_lock."""
+    global _frozen_until, _frozen_reason
+    _frozen_until = until
+    _frozen_reason = str(reason or "")[:200]
 
 
 def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None):
-    """Freeze native admissions if no Codex turn is in flight.
+    """Freeze native admissions, then prove no Codex turn can run.
 
-    Returns {"ok": True, "frozen": bool, "live_turns": n, "threads": [...]}.
-    frozen=False with live_turns>0 means: do not restart now.
+    Returns {"ok": True, "frozen": bool, "live_turns": n, "threads": [...],
+    "reason": why}. frozen=False means: do not restart now. Safe to call
+    again while frozen (the final pre-kill check does): it renews the TTL
+    and re-runs the whole proof.
     """
-    global _frozen_until, _frozen_reason
     try:
         ttl_s = min(max(float(ttl_s), 1.0), MAX_TTL_S)
     except (TypeError, ValueError):
@@ -84,20 +98,33 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None):
         with _state_lock:
             if _app_server_lock() is None:
                 now = time.time() if now is None else now
-                _frozen_until = now + ttl_s
-                _frozen_reason = str(reason or "")[:200]
-                return {"ok": True, "frozen": True, "live_turns": 0, "threads": []}
+                _set_unlocked(now + ttl_s, reason)
+                return {"ok": True, "frozen": True, "live_turns": 0,
+                        "threads": [], "reason": "no_codex_stack"}
         lock = _app_server_lock()
-    with lock:
+    with lock, _state_lock:
         now = time.time() if now is None else now
-        threads = live_turn_threads(now=now)
-        if threads:
-            return {"ok": True, "frozen": False, "live_turns": len(threads),
-                    "threads": threads[:20]}
-        with _state_lock:
-            _frozen_until = now + ttl_s
-            _frozen_reason = str(reason or "")[:200]
-        return {"ok": True, "frozen": True, "live_turns": 0, "threads": []}
+        _set_unlocked(now + ttl_s, reason)
+    try:
+        proof = _barrier()
+    except Exception as e:
+        proof = {"safe": False, "reason": f"barrier_error:{e!r}"[:200], "threads": []}
+    if not isinstance(proof, dict) or proof.get("safe") is not True:
+        proof = proof if isinstance(proof, dict) else {}
+        release()
+        threads = list(proof.get("threads") or [])
+        return {"ok": True, "frozen": False, "live_turns": max(len(threads), 1),
+                "threads": threads[:20],
+                "reason": str(proof.get("reason") or "unknown")}
+    with _state_lock:
+        still = _frozen_until > time.time()
+    if not still:
+        # The TTL lapsed while the barrier ran: something may have been
+        # admitted in that gap, so this proof proves nothing.
+        return {"ok": True, "frozen": False, "live_turns": 1, "threads": [],
+                "reason": "freeze_lapsed"}
+    return {"ok": True, "frozen": True, "live_turns": 0, "threads": [],
+            "reason": str(proof.get("reason") or "proved")}
 
 
 def release():

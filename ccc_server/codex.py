@@ -112,6 +112,9 @@ _CODEX_THREAD_LIST_WAIT_TIMEOUT = 5.0
 # request wedged the app-server's in-order stdio channel). Diagnostic for
 # the liveness-miss investigation (docs/HANDOFF_codex_appserver_liveness.md).
 _CODEX_APP_SERVER_ORPHANED_WAITERS = {}
+# req_id -> (method, transport) for mutating requests sent without a reply
+# yet. Never aged out: only the reply or that transport's death clears one.
+_CODEX_APP_SERVER_MUTATING_PENDING = {}
 # Wall time of the most recent message (response OR notification) received
 # from the app-server. Any recent traffic proves the connection works in
 # both directions, making the thread/list liveness probe redundant -- and
@@ -2850,6 +2853,7 @@ def _codex_app_server_handle_message(payload):
                         _core._codex_app_server_record_thread(thread_id, thread)
                         _core._save_codex_app_server_state_unlocked()
             orphaned = _CODEX_APP_SERVER_ORPHANED_WAITERS.pop(payload.get("id"), None)
+            _CODEX_APP_SERVER_MUTATING_PENDING.pop(payload.get("id"), None)
             _core._app_server_trace(
                 "msg-response", id=payload.get("id"),
                 has_result=isinstance(payload.get("result"), dict),
@@ -3241,10 +3245,14 @@ def _codex_app_server_request_to_transport(
             # Worker restart freeze (CCC-250): checked under the same
             # condition codex_restart_gate.acquire() counts turns under.
             from ccc_server import codex_restart_gate
-            if codex_method_is_mutating(method) and codex_restart_gate.blocks(method):
+            if codex_restart_gate.blocks(method):
                 return codex_restart_gate.refusal()
             req_id = _CODEX_APP_SERVER_NEXT_ID
             _CODEX_APP_SERVER_NEXT_ID += 1
+            if codex_method_is_mutating(method):
+                # Unanswered until its reply arrives or the transport dies;
+                # the restart barrier refuses while any is (CCC-250).
+                _CODEX_APP_SERVER_MUTATING_PENDING[req_id] = (method, transport)
             try:
                 transport.send_json({
                     "jsonrpc": "2.0",
@@ -3260,11 +3268,14 @@ def _codex_app_server_request_to_transport(
                 )
             except (BrokenPipeError, OSError) as e:
                 send_error = e
+                # A partial write may still have reached the child, so the
+                # request stays pending (CCC-250).
             if send_error is None:
                 deadline = time.time() + timeout
                 while time.time() < deadline:
                     response = _core._CODEX_APP_SERVER_RESPONSES.pop(req_id, None)
                     if response is not None:
+                        _CODEX_APP_SERVER_MUTATING_PENDING.pop(req_id, None)
                         _core._app_server_trace(
                             "resp-ok", id=req_id, method=method,
                             elapsed=round(time.time() - sent_at, 3),
@@ -3619,7 +3630,7 @@ def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=Tr
     with _core._CODEX_APP_SERVER_LOCK:
         if in_progress() and mutating:
             return {"ok": False, "code": "codex_handover_pending", "error": "Desktop handover has an active writer gate; retry when it finishes."}
-        if mutating and codex_restart_gate.blocks(method):
+        if codex_restart_gate.blocks(method):
             return codex_restart_gate.refusal()
     thread_id = _codex_app_server_request_thread_id(method, params)
     if method == "turn/start" and thread_id:
@@ -3912,44 +3923,131 @@ def _codex_app_server_active_turn_fresh(now):
     return False
 
 
-_CODEX_APP_SERVER_RESTART_TURN_STALE_S = 600.0
-
-
 def _codex_app_server_live_turns(now=None):
-    """Thread ids with a turn in flight on CCC's own stdio app-server.
+    """Thread ids CCC's own bookkeeping shows with a turn in flight.
 
-    That child dies with this process (the atexit shutdown SIGTERMs it), and
-    Codex then aborts every in-flight turn as "interrupted". turn/start
-    returns at once, so these turns hold no ledger job and the ledger's
-    active count cannot see them; restart gates read this instead (CCC-250).
-    A managed-unix daemon outlives us, so its turns are not at risk. A turn
-    silent for _CODEX_APP_SERVER_RESTART_TURN_STALE_S stops counting, so a
-    wedged one cannot block restarts. Lock-free: health must stay fast.
+    A worker restart closes the app-server transport, and on stdio the
+    child's SIGTERM makes Codex abort every in-flight turn as "interrupted".
+    turn/start returns at once, so these turns hold no ledger job and the
+    ledger's active count cannot see them (CCC-250). A turn stops counting
+    only when it completes or its transport is gone -- never by silence, so
+    a long tool call stays protected. A managed-unix daemon counts too:
+    whether its turns survive our disconnect is unproven. Lock-free: health
+    must stay fast. `now` is accepted for callers; nothing here ages.
     """
     transport = _core._CODEX_APP_SERVER_TRANSPORT
-    if transport is None or transport.kind != "stdio" or not transport.alive():
+    if transport is None or not transport.alive():
         return []
-    now = time.time() if now is None else now
     live = []
     for thread_id, state in list(_core._CODEX_APP_SERVER_THREAD_STATE.items()):
         if not isinstance(state, dict):
             continue
-        if not (
+        if (
             state.get("active_turn_id")
             or state.get("ccc_turn_start_pending")
             or str(state.get("status") or "").lower() == "active"
         ):
-            continue
-        last = 0.0
-        for key in ("last_activity_at", "last_event_at", "turn_started_at",
-                    "ccc_turn_start_pending_at"):
-            try:
-                last = max(last, float(state.get(key) or 0.0))
-            except (TypeError, ValueError):
-                continue
-        if now - last < _CODEX_APP_SERVER_RESTART_TURN_STALE_S:
             live.append(thread_id)
     return live
+
+
+def _codex_app_server_our_children():
+    """PIDs of live Codex app-server children of this process, or None when
+    the process table cannot be read."""
+    my_pid = os.getpid()
+    try:
+        out = subprocess.check_output(["ps", "-eo", "pid,ppid,command"], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    pids = []
+    for line in out.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if ppid == my_pid and "app-server" in parts[2]:
+            pids.append(pid)
+    return pids
+
+
+_CODEX_RESTART_BARRIER_MAX_PAGES = 50
+
+
+def _codex_app_server_restart_barrier(timeout=5.0):
+    """Prove a worker restart aborts no Codex turn (CCC-250).
+
+    The caller holds codex_restart_gate's freeze, so no CCC request outside
+    its allow-list can be sent while this runs. Safe only when CCC tracks no
+    live turn and no unanswered mutating request, no untracked app-server
+    child survives, and the app-server itself reports no loaded thread:
+    Codex runs a turn on its own (queued message, goal continuation) only on
+    a loaded thread, and loading one needs a request the freeze refuses.
+    Every other outcome is unknown and refuses.
+    """
+    def unsafe(reason, threads=()):
+        return {"safe": False, "reason": reason, "threads": list(threads)}
+
+    def snapshot():
+        with _core._CODEX_APP_SERVER_LOCK:
+            transport = _core._CODEX_APP_SERVER_TRANSPORT
+            for req_id, (_m, t) in list(_CODEX_APP_SERVER_MUTATING_PENDING.items()):
+                # A dead child whose reader has drained can reply no more.
+                if not t.alive() and getattr(t, "reader_exited", False):
+                    _CODEX_APP_SERVER_MUTATING_PENDING.pop(req_id, None)
+            pending = sorted({m for m, _t in _CODEX_APP_SERVER_MUTATING_PENDING.values()})
+            return transport, pending, _codex_app_server_live_turns()
+
+    transport, pending, live = snapshot()
+    if pending:
+        return unsafe("requests_unanswered:" + ",".join(pending))
+    if live:
+        return unsafe("live_turns", live)
+    children = _codex_app_server_our_children()
+    if children is None:
+        return unsafe("process_table_unreadable")
+    tracked = getattr(getattr(transport, "proc", None), "pid", None)
+    if transport is not None and transport.alive() and tracked is not None:
+        stray = [p for p in children if p != tracked]
+    else:
+        stray = children
+    if stray:
+        return unsafe("untracked_app_server:" + ",".join(map(str, stray)))
+    if transport is None or not transport.alive():
+        # No transport and no child of ours: nothing a restart can abort
+        # here. A managed daemon with no live socket is not ours to stop.
+        return {"safe": True, "reason": "no_app_server", "threads": []}
+    loaded, cursor = [], None
+    for _ in range(_CODEX_RESTART_BARRIER_MAX_PAGES):
+        params = {"limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        response = _core._codex_app_server_request_to_transport(
+            transport, "thread/loaded/list", params, timeout=timeout,
+        )
+        result = response.get("result") if isinstance(response, dict) else None
+        if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+            error = response.get("error") if isinstance(response, dict) else None
+            return unsafe(f"loaded_list_failed:{error!r}"[:200])
+        for item in result["data"]:
+            loaded.append(str(item.get("id") if isinstance(item, dict) else item))
+        cursor = result.get("nextCursor")
+        if not cursor:
+            break
+    else:
+        return unsafe("loaded_list_unbounded", loaded)
+    if loaded:
+        return unsafe("threads_loaded", loaded)
+    # The query released the condition while it waited; recheck that the
+    # world it answered for is still the one a restart would close.
+    after, pending, live = snapshot()
+    if after is not transport or not transport.alive():
+        return unsafe("transport_changed")
+    if pending or live:
+        return unsafe("admitted_during_proof", live)
+    return {"safe": True, "reason": "no_loaded_threads", "threads": []}
 
 
 def _ensure_codex_app_server(*, allow_stdio=True):

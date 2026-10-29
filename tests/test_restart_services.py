@@ -143,7 +143,9 @@ class RestartWorkerProcessTests(unittest.TestCase):
     @staticmethod
     def _idle_cpr(health):
         """Idle worker on the gated build: zero live Codex turns, freeze ok."""
-        health = dict(health, codex_live_turns=0)
+        # A missing count is unknown and blocks the roll, so send them all.
+        health = {"active": 0, "queued": 0, "uncertain": 0,
+                  **health, "codex_live_turns": 0}
 
         def fake(method, params=None, *, engine_timeout=False):
             if method == "codex.restart_freeze":
@@ -700,22 +702,39 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
 
     def test_final_check_aborts_kill_when_a_turn_appeared(self):
         server = self.server
-        with mock.patch.object(
-            server, "_control_plane_request",
-            return_value={"ok": True, "codex_live_turns": 1, "worker": {"pid": 4242}},
-        ), mock.patch.object(server, "_worker_systemd_scope") as scope, \
+
+        def fake_cpr(method, params=None, *, engine_timeout=False):
+            if method == "codex.restart_freeze":
+                return {"ok": True, "frozen": False, "live_turns": 1,
+                        "reason": "threads_loaded"}
+            return {"ok": True, "codex_live_turns": 0, "worker": {"pid": 4242}}
+
+        with mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr), \
+                mock.patch.object(server, "_worker_systemd_scope", return_value=(None, False)), \
+                mock.patch.object(server.subprocess, "run") as run, \
+                mock.patch.object(server.os, "kill") as kill, \
                 mock.patch.object(server, "_log_activity"):
             outcome = server._restart_worker_process(codex_final_check=True)
         self.assertFalse(outcome["restarted"])
         self.assertEqual(outcome["reason"], "codex_turns_running")
-        scope.assert_not_called()
+        run.assert_not_called()
+        kill.assert_not_called()
 
     def test_final_check_unknown_state_is_busy(self):
-        check = self.server._codex_restart_final_check
-        self.assertEqual(check({"ok": True, "codex_live_turns": 0}), 0)
-        self.assertNotEqual(check({"ok": True}), 0)  # older worker
-        self.assertNotEqual(check({"ok": False, "available": False}), 0)
-        self.assertNotEqual(check({"ok": True, "codex_live_turns": -1}), 0)
+        server = self.server
+        check = server._codex_restart_final_check
+        for reply, want_zero in (
+            ({"ok": True, "frozen": True, "live_turns": 0}, True),
+            ({"ok": True, "frozen": False, "live_turns": 0, "reason": "freeze_lapsed"}, False),
+            ({"ok": False, "code": "method_not_found"}, False),  # older worker
+            ({"ok": False, "available": False}, False),
+            (None, False),
+        ):
+            with mock.patch.object(server, "_control_plane_request", return_value=reply):
+                self.assertEqual(check() == 0, want_zero, reply)
+        with mock.patch.object(server, "_control_plane_request",
+                               side_effect=OSError("worker gone")):
+            self.assertEqual(check(), -1)
 
     def test_stale_roll_defers_on_codex_turns_and_unknown(self):
         server = self.server
@@ -766,10 +785,34 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
         )
         self.assertFalse(snap["idle"])
 
+    def test_missing_or_failed_health_is_never_idle(self):
+        server = self.server
+        idle = {"ok": True, "active": 0, "queued": 0, "uncertain": 0, "codex_live_turns": 0}
+        self.assertTrue(server._worker_compat_snapshot(dict(idle))["idle"])
+        old = {k: v for k, v in idle.items() if k != "codex_live_turns"}
+        for health in (old, {}, {"ok": False}, dict(idle, ok=False),
+                       dict(idle, codex_live_turns="?")):
+            self.assertFalse(server._worker_compat_snapshot(health)["idle"], health)
+        with mock.patch.object(server, "_control_plane_request",
+                               side_effect=OSError("unreachable")):
+            self.assertFalse(server._worker_compat_snapshot()["idle"])
+
+    def test_auto_update_counts_missing_codex_field_as_busy(self):
+        server = self.server
+        old = {"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+               "worker": {"pid": 1}}
+        with mock.patch.object(server, "_dashboard_owned_active_executions", return_value=[]), \
+                mock.patch.object(server, "_control_plane_request", return_value=old), \
+                mock.patch.object(server, "_wt_live_workers", return_value=[]), \
+                mock.patch.object(server, "_load_last_interactions", return_value={}):
+            reasons = server._auto_update_busy_reasons()
+        self.assertTrue(any("codex_live_turns=-1" in r for r in reasons), reasons)
+
     def test_run_sh_gates_the_stale_roll(self):
         run_sh = (pathlib.Path(self.server.__file__).parent / "run.sh").read_text()
         self.assertIn('"active", "queued", "uncertain", "codex_live_turns"', run_sh)
         self.assertIn("&& ! codex_restart_freeze_ok; then", run_sh)
+        self.assertIn('worker_kicked=deferred', run_sh)
 
 
 class CodexLiveTurnsCountTests(unittest.TestCase):
@@ -788,16 +831,29 @@ class CodexLiveTurnsCountTests(unittest.TestCase):
                 mock.patch.object(server, "_CODEX_APP_SERVER_THREAD_STATE", states):
             return server._codex_app_server_live_turns(now=now)
 
-    def test_counts_fresh_active_turns_only(self):
+    def test_silence_never_expires_an_uncompleted_turn(self):
+        # A long tool call is silent; it is still live until it completes.
         states = {
             "t-active": {"active_turn_id": "u1", "last_activity_at": 9_990.0},
             "t-pending": {"ccc_turn_start_pending": True, "ccc_turn_start_pending_at": 9_999.0},
             "t-idle": {"status": "idle", "last_activity_at": 9_999.0},
-            "t-wedged": {"active_turn_id": "u2", "last_activity_at": 1_000.0},
+            "t-599": {"active_turn_id": "u3", "last_activity_at": 10_000.0 - 599},
+            "t-601": {"active_turn_id": "u4", "last_activity_at": 10_000.0 - 601},
+            "t-silent": {"active_turn_id": "u2", "last_activity_at": 1_000.0},
+            "t-no-clock": {"status": "active"},
         }
-        self.assertEqual(sorted(self._count(states)), ["t-active", "t-pending"])
+        self.assertEqual(
+            sorted(self._count(states)),
+            ["t-599", "t-601", "t-active", "t-no-clock", "t-pending", "t-silent"],
+        )
+        self.assertEqual(
+            sorted(self._count(states, now=10_000.0 + 86_400 * 30)),
+            ["t-599", "t-601", "t-active", "t-no-clock", "t-pending", "t-silent"],
+        )
 
-    def test_managed_or_dead_transport_has_no_turns_at_risk(self):
+    def test_managed_transport_counts_dead_transport_does_not(self):
+        # Whether a managed daemon's turns survive our disconnect is
+        # unproven, so they count. A dead transport is proof nothing runs.
         states = {"t": {"active_turn_id": "u1", "last_activity_at": 9_999.0}}
-        self.assertEqual(self._count(states, kind="managed-unix"), [])
+        self.assertEqual(self._count(states, kind="managed-unix"), ["t"])
         self.assertEqual(self._count(states, alive=False), [])
