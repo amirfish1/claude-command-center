@@ -29580,6 +29580,8 @@ html:not(.ccc-debug-mode) #statsModal {
 }
 .orch-map.is-narrow .orch-map-ancestor { text-align: left; padding-left: 4px; }
 .orch-map-root { position: relative; display: flex; justify-content: center; z-index: 1; }
+.orch-map-continuation { position: relative; z-index: 1; font-size: 11px; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
+.orch-continuation-status { color: #d29922; }
 .orch-map-lanes {
   position: relative;
   display: flex;

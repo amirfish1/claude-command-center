@@ -5079,13 +5079,22 @@ def test_federation_pipe_warm_fanout_and_prewarm_tick_spawn_nothing(monkeypatch)
         memory_fanout.reset_state()
 
 
-def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_path):
+@pytest.mark.parametrize("surface", ["brief", "family"])
+def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_path, surface):
     """multi-machine S6: a brief whose lineage is all on this node builds no
     peer client and sends nothing; a dangling origin costs at most one
     routed request per paired peer (one hop, no recursion). A request per
     successor, or a second hop, is the O(chain x peers) path S6 must avoid."""
     import federation
-    from ccc_server import memory_fanout
+    from ccc_server import memory_fanout, lineage, ship_graph
+
+    def render(sid, local):
+        if surface == "brief":
+            return memory_fanout.brief_all(sid, local)
+        monkeypatch.setattr(ship_graph, "_get_connection", lambda: None)
+        monkeypatch.setattr(ship_graph, "_sync_all", lambda *a, **k: pytest.fail("family synced transcripts"))
+        monkeypatch.setattr(lineage, "continuation_links", lambda conn, query: local(query))
+        return memory_fanout.family_continuations(sid)
 
     here = "11111111-0000-0000-0000-00000000000a"
     peers = [{"node_id": f"2222222{i}-0000-0000-0000-00000000000b", "name": f"n{i}",
@@ -5120,14 +5129,14 @@ def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_pa
                 "predecessor": {"session_id": x, "ref": x},
                 "successors": [{"session_id": f"{i:08x}" + y[8:], "ref": f"{i:08x}" + y[8:]} for i in range(20)]},
         }
-        out = memory_fanout.brief_all(y, lambda q: local_chain[q])
+        out = render(y, lambda q: local_chain[q])
         assert out["predecessor"]["local"] is True
         assert built == [] and sent == [], "same-node lineage touched the network"
 
         dangling = {y: {"query": y, "session_id": y, "found": True,
                         "predecessor": {"session_id": x, "ref": x, "dangling": True},
                         "successors": []}}
-        out = memory_fanout.brief_all(y, lambda q: dangling.get(q, {"query": q, "found": False}))
+        out = render(y, lambda q: dangling.get(q, {"query": q, "found": False}))
         assert len(sent) <= len(peers), f"dangling origin cost {len(sent)} requests for {len(peers)} peers"
         assert {q for _, q in sent} == {x}, "resolution followed a second hop"
     finally:

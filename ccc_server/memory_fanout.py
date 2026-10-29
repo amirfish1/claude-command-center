@@ -656,6 +656,31 @@ def _node_names(here: dict, peers: list[dict]) -> dict:
     return names
 
 
+def family_continuations(sid: str) -> dict:
+    """Direct neighbours of the requested family-map session, lazily resolved.
+
+    Read the existing local index, without brief's recall fallback, transcript
+    sync, or commit probes. Reuse brief's one-hop resolver; never resolve every
+    node in a spawn tree (which would multiply peer requests by family size).
+    """
+    from ccc_server import lineage, ship_graph
+
+    conn = ship_graph._get_connection()
+    node = _self_node()
+    peers = federation.load_peers()
+
+    def local_links(query):
+        return {"session_id": query,
+                "found": bool(conn.execute("SELECT 1 FROM session_meta WHERE sid = ?", (query,)).fetchone()),
+                **lineage.continuation_links(conn, query)}
+
+    out = {"session_id": sid, "node_id": node["node_id"], "node_name": node["name"],
+           "local": True, **lineage.continuation_links(conn, sid)}
+    _resolve_continuations(out, local_links, peers, node)
+    out["node_names"] = _node_names(node, peers)
+    return out
+
+
 # -- file history ------------------------------------------------------------
 
 

@@ -9,6 +9,9 @@ node's forced-local brief. The resolution logic is the real brief_all.
 """
 
 import sqlite3
+import json
+import threading
+import urllib.request
 
 import pytest
 
@@ -191,3 +194,79 @@ def test_local_brief_links_mark_unindexed_origin_dangling():
     conn = make_node([(X, ""), (Y, X)])
     assert lineage.continuation_links(conn, X)["successors"] == [{"session_id": Y, "ref": Y}]
     assert lineage.continuation_links(conn, Y)["predecessor"] == {"session_id": X, "ref": X}
+
+
+@pytest.mark.parametrize("case", ["origin", "successor", "local", "missing", "offline", "ambiguous", "cycle"])
+def test_family_continuations_share_brief_resolution(world, monkeypatch, case):
+    here = make_node([(X, "")]) if case == "successor" else make_node([(Y, X)])
+    query = X if case == "successor" else Y
+    if case == "local":
+        here = make_node([(X, ""), (Y, X)])
+    remote = [(X, ""), (Y, X)] if case == "successor" else [(X, Y if case == "cycle" else "")]
+    world["briefs"][PEER["node_id"]] = node_brief(make_node(remote))
+    if case == "successor":
+        federation.write_lease(X, PEER["node_id"], note="handoff")
+    if case == "missing":
+        world["briefs"][PEER["node_id"]] = node_brief(make_node([]))
+    if case == "offline":
+        world["down"].add(PEER["node_id"])
+        world["peers"].append(THIRD)  # unsupported peer
+    if case == "ambiguous":
+        world["peers"].append(THIRD)
+        world["briefs"][THIRD["node_id"]] = node_brief(make_node([(X, "")]))
+    monkeypatch.setattr(ship_graph, "_get_connection", lambda: here)
+    monkeypatch.setattr(ship_graph, "_sync_all", lambda *a, **k: pytest.fail("family scanned transcripts"))
+    out = mf.family_continuations(query)
+    assert out["session_id"] == query
+    assert out["node_name"] == "mac"
+    assert len(world["calls"]) <= len(world["peers"])
+    if case == "successor":
+        assert out["successors"][0]["ref"] == f"{PEER['node_id']}:{Y}"
+        assert out["successors"][0]["node_name"] == "hermes-gcp"
+    elif case in {"missing", "offline"}:
+        assert out["predecessor"] == {"session_id": X, "ref": X, "dangling": True}
+        if case == "offline":
+            assert out["partial"] is True
+            assert {s["status"] for s in out["continuation_status"]} == {"peer_offline", "unsupported_capability"}
+    elif case == "ambiguous":
+        assert out["predecessor"]["ambiguous"] is True
+        assert len(out["predecessor"]["candidates"]) == 2
+    elif case == "local":
+        assert out["predecessor"]["ref"] == X
+        assert out["predecessor"]["node_name"] == "mac"
+        assert not world["calls"]
+    else:
+        assert out["predecessor"]["ref"] == f"{PEER['node_id']}:{X}"
+        assert out["predecessor"]["node_name"] == "hermes-gcp"
+
+
+def test_family_http_preserves_spawn_tree_and_resolves_only_requested_session(world, monkeypatch):
+    import server
+
+    here = make_node([(Y, X)])
+    world["briefs"][PEER["node_id"]] = node_brief(make_node([(X, "")]))
+    monkeypatch.setattr(ship_graph, "_get_connection", lambda: here)
+    # The selected session is below the root. Resolving every node would
+    # multiply network work and would describe the wrong session in the UI.
+    tree = {"session_id": "dddddddd-1111-2222-3333-444444444444", "children": [
+        {"session_id": Y, "children": []},
+        {"session_id": f"{PEER['node_id']}:{X}", "children": []},
+    ]}
+    monkeypatch.setattr(server, "_session_graph_family_tree", lambda sid: tree)
+    monkeypatch.setattr(server, "_load_spawn_registry", lambda: [])
+    httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_port}/api/sessions/family?sid={Y}", timeout=5) as resp:
+            out = json.load(resp)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+    assert out["ok"] and out["root"] == tree["session_id"] and out["total_nodes"] == 3
+    assert out["continuation"]["session_id"] == Y
+    assert out["continuation"]["predecessor"]["ref"] == f"{PEER['node_id']}:{X}"
+    assert out["tree"]["node_name"] == "mac"
+    assert out["tree"]["children"][1]["node_name"] == "hermes-gcp"
+    assert world["calls"] == [(PEER["node_id"], "memory_brief", {"q": X})]

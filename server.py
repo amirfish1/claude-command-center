@@ -29448,6 +29448,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if tree is None:
                     self.send_json({"ok": False, "error": "no family found"}, 404)
                 else:
+                    from ccc_server.memory_fanout import family_continuations
+                    continuation = family_continuations(sid)
                     # Join spawn-registry metadata (name, model, engine,
                     # spawned_at, cwd, command_summary) onto each node so the
                     # frontend has something to display without a second
@@ -29463,6 +29465,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         if not isinstance(node, dict):
                             return node
                         nsid = node.get("session_id", "")
+                        owner, _native = federation.parse_session_ref(nsid)
+                        owner = owner or continuation["node_id"]
+                        node.update(ref=nsid, node_id=owner,
+                                    node_name=continuation["node_names"].get(owner, owner[:8]),
+                                    local=owner == continuation["node_id"])
                         reg = reg_by_sid.get(nsid)
                         if reg:
                             for field in ("name", "model", "engine", "spawned_at", "cwd", "command_summary"):
@@ -29484,6 +29491,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "root": tree.get("session_id"),
                         "total_nodes": total,
                         "tree": tree,
+                        "continuation": continuation,
                     })
         elif re.match(r"^/api/sessions/spawned/\d+/log$", path):
             try:

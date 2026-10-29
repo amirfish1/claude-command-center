@@ -71373,12 +71373,14 @@
           depth,
           isTaskSubagent: true,
           source: node.source || '',
+          nodeName: node.node_name || '',
         });
       } else {
         const lane = orchLane(row, spawn || { session_id: sid, name: node.name, model: node.model, engine: node.engine, spawned_at: null });
         lane.depth = depth;
         lane.isTaskSubagent = false;
         lane.source = node.source || '';
+        lane.nodeName = node.node_name || '';
         out.push(lane);
       }
       (node.children || []).forEach(c => walk(c, depth + 1, sid));
@@ -71483,16 +71485,21 @@
   let _orchChildren = [];
   let _orchFamilyTreeSid = '';
   let _orchFamilyTree = null;
-  async function orchRefreshRegistry(force, rootSid) {
+  let _orchFamilyContinuation = null;
+  let _orchFamilyRequestKey = '';
+  async function orchRefreshRegistry(force, rootSid, selectedSid) {
     if (_orchRegistryInFlight) return;
-    const sidChanged = rootSid && rootSid !== _orchChildrenSid;
+    const familySid = selectedSid || rootSid;
+    const familyKey = (rootSid || '') + '|' + (familySid || '');
+    const sidChanged = rootSid && familyKey !== _orchFamilyRequestKey;
     if (!force && !sidChanged && Date.now() - _orchRegistryFetchedAt < 5000) return;
     _orchRegistryInFlight = true;
+    _orchFamilyRequestKey = familyKey;
     try {
       const [r1, r2, r3] = await Promise.all([
         fetch('/api/sessions/spawned', { signal: convScopeSignal() }),
         rootSid ? fetch('/api/sessions/children?parent=' + encodeURIComponent(rootSid), { signal: convScopeSignal() }) : Promise.resolve(null),
-        rootSid ? fetch('/api/sessions/family?sid=' + encodeURIComponent(rootSid), { signal: convScopeSignal() }) : Promise.resolve(null),
+        rootSid ? fetch('/api/sessions/family?sid=' + encodeURIComponent(familySid), { signal: convScopeSignal() }) : Promise.resolve(null),
       ]);
       const live = r1 && r1.ok ? await r1.json() : [];
       let kids = [];
@@ -71511,21 +71518,23 @@
         if (d && d.ok && d.tree) {
           _orchFamilyTreeSid = rootSid;
           _orchFamilyTree = d.tree;
+          _orchFamilyContinuation = d.continuation || null;
           if (rememberSidebarFamilyParents(d.tree)) renderSidebar(conversationsData);
         }
       } else if (rootSid === _orchFamilyTreeSid) {
         // keep cached tree
       } else {
         _orchFamilyTree = null;
+        _orchFamilyContinuation = null;
       }
       const seen = new Set();
       const merged = [];
       (Array.isArray(live) ? live : []).forEach(sp => { if (sp && sp.session_id) { seen.add(sp.session_id); merged.push(sp); } });
       kids.forEach(sp => { if (sp && sp.session_id && !seen.has(sp.session_id)) { seen.add(sp.session_id); merged.push(sp); } });
       _orchSpawnedRegistry = merged;
-      _orchRegistryFetchedAt = Date.now();
       orchLaneMetaRemember(merged);
     } catch (_) {}
+    _orchRegistryFetchedAt = Date.now();
     _orchRegistryInFlight = false;
     if (orchPaneVisible()) {
       updateOrchestrationPane(currentConversation);
@@ -71655,11 +71664,32 @@
     return indent
       + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(lane.engine) + '">' + glyph + '</span>'
       + '<span class="orch-node-body">'
-      + '<span class="orch-node-name">' + escapeHtml(lane.name) + '</span>'
+      + '<span class="orch-node-name">' + escapeHtml((lane.nodeName ? '[' + lane.nodeName + '] ' : '') + lane.name) + '</span>'
       + (compact ? '' : '<span class="orch-node-model">' + escapeHtml(lane.model || lane.engine) + '</span>')
       + '</span>'
       + taskBadge
       + '<span class="orch-node-status"><span class="orch-node-dot"></span>' + escapeHtml(statusWord) + '</span>';
+  }
+  function orchContinuationHtml(data) {
+    if (!data) return '';
+    const names = data.node_names || {};
+    const labelRef = ref => {
+      const parts = String(ref || '').split(':');
+      return parts.length === 2 ? '[' + (names[parts[0]] || parts[0].slice(0, 8)) + '] ' + parts[1].slice(0, 8) : String(ref || '').slice(0, 8);
+    };
+    const link = (edge, role) => {
+      if (!edge) return '';
+      let label = edge.node_name ? '[' + edge.node_name + '] ' + (edge.title || edge.session_id.slice(0, 8)) : labelRef(edge.ref || edge.session_id);
+      if (edge.dangling) label += ' · unresolved';
+      if (edge.ambiguous) label += ' · multiple copies: ' + (edge.candidates || []).map(labelRef).join(', ');
+      return '<div class="orch-continuation-link" title="' + escapeAttr(edge.ref || edge.session_id || '') + '">'
+        + escapeHtml(role + ' ' + label) + '</div>';
+    };
+    const links = link(data.predecessor, 'Continued from') + (data.successors || []).map(s => link(s, 'Continued as')).join('');
+    if (!links) return '';
+    const statuses = (data.continuation_status || []).filter(n => n.status !== 'ok' || n.stale)
+      .map(n => '[' + n.name + '] ' + (n.stale ? 'cached answer' : String(n.status).replace(/_/g, ' ')));
+    return links + (statuses.length ? '<div class="orch-continuation-status">' + escapeHtml(statuses.join(' · ')) + '</div>' : '');
   }
   function updateOrchestrationPane(convId) {
     const pane = document.getElementById('statusRailOrchestrationPane');
@@ -71679,10 +71709,17 @@
     playbooksEl.classList.toggle('is-disabled', !hasSession);
     orchPaintFamilyRows(ctx);
     if (pane.hidden) return;   // nothing visible to measure — skip the work
-    if (hasSession) orchRefreshRegistry(false, ctx.rootSid || ctx.sid);
+    if (hasSession) orchRefreshRegistry(false, ctx.rootSid || ctx.sid, ctx.sid);
 
     const sid = ctx.rootSid || ctx.sid;
     const hereSid = ctx.sid;
+    const continuation = !_orchSim && _orchFamilyContinuation && _orchFamilyContinuation.session_id === hereSid
+      ? _orchFamilyContinuation : null;
+    const continuationEl = document.getElementById('orchMapContinuation');
+    if (continuationEl) {
+      continuationEl.innerHTML = orchContinuationHtml(continuation);
+      continuationEl.hidden = !continuationEl.innerHTML;
+    }
     const atRoot = !ctx.rootSid || ctx.rootSid === ctx.sid;
     if (sid !== _orchLastSid) { _orchLastKeys = new Set(); _orchLastSid = sid; }
     const clock = _orchSim ? null : orchReplayClock();
@@ -71699,13 +71736,26 @@
     const rootEngine = _orchSim ? _orchSim.root.engine : ((rootRow && rootRow.engine) || 'claude');
     const rootModel = _orchSim ? _orchSim.root.model : ((rootRow && rootRow.model) || '');
     const rootConv = (rootRow && rootRow.id) || '';
+    const rootNodeName = (() => {
+      if (_orchSim || _orchFamilyTreeSid !== sid) return '';
+      const find = (node, depth) => {
+        if (!node || depth > 12) return '';
+        if (node.session_id === sid) return node.node_name || '';
+        for (const child of (node.children || [])) {
+          const name = find(child, depth + 1);
+          if (name) return name;
+        }
+        return '';
+      };
+      return find(_orchFamilyTree, 0);
+    })();
     rootEl.innerHTML = hasSession || _orchSim
       ? '<button type="button" class="orch-node orch-node-root' + (working ? ' is-fanning' : '') + (atRoot ? ' is-here' : '') + '"'
         + (rootConv && !atRoot ? ' data-conv-id="' + escapeAttr(rootConv) + '" title="Back to the orchestrator"' : '') + '>'
         + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(rootEngine) + '">' + (ORCH_ENGINE_GLYPH[rootEngine] || '?') + '</span>'
         + '<span class="orch-node-body">'
         + '<span class="orch-node-role">Orchestrator</span>'
-        + '<span class="orch-node-name">' + escapeHtml(rootName) + '</span>'
+        + '<span class="orch-node-name">' + escapeHtml((rootNodeName ? '[' + rootNodeName + '] ' : '') + rootName) + '</span>'
         + '<span class="orch-node-model">' + escapeHtml(rootModel || rootEngine) + '</span>'
         + '</span></button>'
       : '';
@@ -71912,7 +71962,7 @@
       if (!orchPaneVisible()) return;
       if (document.hidden) return;
       const c = orchContext();
-      orchRefreshRegistry(false, c.rootSid || c.sid).then(() => updateOrchestrationPane(currentConversation));
+      orchRefreshRegistry(false, c.rootSid || c.sid, c.sid).then(() => updateOrchestrationPane(currentConversation));
     }, 6000);
   }
 
