@@ -44357,6 +44357,11 @@ def main():
     # Conversation opens get their own process (and GIL) so background work
     # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
     _conv_reader.start()
+    # The heaviest background warmers (gh-queue-watch, uxq-health-refresh,
+    # ship-graph-warm) run in a helper process too, so /list reads stop
+    # queueing behind them for this GIL (CCC-142). CCC_BG_HELPER=0 disables.
+    from ccc_server import bg_helper as _bg_helper
+    _bg_helper.start()
     # Keep spawn stats across a dashboard restart -- otherwise restarting
     # mid-investigation throws away the evidence you restarted to look at.
     _spawn_timeline_load()
