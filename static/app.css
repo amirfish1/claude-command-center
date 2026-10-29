@@ -33400,3 +33400,6 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   line-height: 1.5;
   border-bottom: 1px solid var(--border);
 }
+
+/* A scheduled deferral takes precedence over historical claim/stage colors. */
+.fq-row.is-deferred .fq-status { background: var(--text-muted, #8b949e); box-shadow: none; animation: none; }

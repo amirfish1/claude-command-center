@@ -55453,7 +55453,7 @@
           c.push('<span class="fq-chip fq-waiting-on" role="button" tabindex="0" data-blocker-ref="' + escapeAttr(waitingOn) + '"'
             + ' title="' + escapeAttr('Blocked by ' + waitingOn + ': no worker picks this up until it closes as completed. Click to open ' + waitingOn + '.') + '">'
             + 'waiting on ' + escapeHtml(waitingOn) + '</span>');
-        } else if (!waitingOn && it.readiness && it.status !== 'closed' && (!att || att.key !== 'readiness')) {
+        } else if (!waitingOn && it.readiness && it.status !== 'closed' && (!att || (att.key !== 'readiness' && att.key !== 'deferred'))) {
           c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
         }
         if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '-') + '/' + escapeHtml(it.confidence || '-') + '</span>');
@@ -55511,7 +55511,7 @@
         // input / closed. Pressing ▶ again while still queued cancels.
         const queuedToRun = status === 'open' && !!it.run_requested;
         const runBusy = _uxqRunBusyRefs.has(ref);
-        const stageTone = _uxqStageTone(it);
+        const stageTone = att && att.key === 'deferred' ? null : _uxqStageTone(it);
         const stageSince = stageTone && stageTone !== 'verified' && it.stages && Date.parse(it.stages.since || '');
         const stageToneTitle = !stageTone ? ''
           : (stageTone === 'stuck' && it.stages && it.stages.current && !(rawStatus === 'in_progress' && staleClaim)
@@ -55522,7 +55522,7 @@
           ? 'Queued to run - click to cancel'
           : (att && att.key === 'deferred' ? att.label + ' - ' : '')
             + (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
-        const statusTitle = (blocked && att) ? att.label : blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
+        const statusTitle = (att && att.key === 'deferred') ? att.title : (blocked && att) ? att.label : blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
           : (att && att.tone === 'answer') ? att.label
           : (stageTone && !queuedToRun) ? stageToneTitle
           : unverifiedClaim ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
@@ -55545,7 +55545,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(blocked && !ownerBlocked ? 'waiting' : status) + (att ? ' is-att-' + escapeAttr(att.tone) : '') + (att && att.key === 'answer-working' ? ' is-att-working' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(blocked && !ownerBlocked ? 'waiting' : status) + (att ? ' is-att-' + escapeAttr(att.tone) : '') + (att && att.key === 'deferred' ? ' is-deferred' : '') + (att && att.key === 'answer-working' ? ' is-att-working' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(compactRef) + '</span>'
           + queueLabelHtml
