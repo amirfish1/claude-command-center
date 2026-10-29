@@ -34,6 +34,7 @@ def test_every_popup_has_a_gate():
         "leftover-offer": "static/leftover.js",
         "leftover-notification": "static/leftover.js",
         "restart-interrupted": "static/restart-recovery.js",
+        "runaway-session": "static/runaway.js",
     }
     assert set(gates) | {"notify-task", "notify-digest", "notify-milestone",
                          "notify-other", "notify-session-died"} == set(popups.ALL)
@@ -47,7 +48,7 @@ def test_gate_loads_before_the_popups():
     html = (ROOT / "static" / "index.html").read_text()
     first = html.index('src="/static/popups.js"')
     for name in ("limit-failover", "fleet-failover", "onboarding/onboarding", "savings", "notify",
-                 "router-detected", "star-ask", "leftover", "restart-recovery"):
+                 "router-detected", "star-ask", "leftover", "restart-recovery", "runaway"):
         assert first < html.index('src="/static/%s.js"' % name), name
 
 

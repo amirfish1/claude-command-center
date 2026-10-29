@@ -5141,3 +5141,45 @@ def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_pa
         assert {q for _, q in sent} == {x}, "resolution followed a second hop"
     finally:
         memory_fanout.reset_state()
+
+
+def test_runaway_scan_opens_only_changed_active_transcripts(tmp_path, monkeypatch):
+    """ccc_server/runaway.py: candidacy is stat-only and warm rescans read
+    nothing. Stale transcripts are never opened; an unchanged active one is
+    not re-read; an appended one is read once from its saved offset."""
+    import builtins
+    from ccc_server import runaway
+
+    now = time.time()
+    projects = tmp_path / "projects" / "p"
+    projects.mkdir(parents=True)
+    rec = json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z", "turnOrigin": "scheduled",
+                      "message": {"role": "user", "content": "tick"}}) + "\n"
+    for i in range(300):  # stale: outside the active window
+        stale = projects / ("stale-%04d-aaaa.jsonl" % i)
+        stale.write_text(rec)
+        os.utime(stale, (now - 30 * 86400, now - 30 * 86400))
+    active = projects / "active-0001-aaaa.jsonl"
+    active.write_text(rec * 50)
+    kw = dict(projects_root=tmp_path / "projects", codex_root=tmp_path / "no-codex",
+              state_file=tmp_path / "scan.json")
+
+    opened = []
+    real_open = builtins.open
+
+    def counting_open(path, *args, **kwargs):
+        if str(path).endswith(".jsonl"):
+            opened.append(str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("runaway scan forked"))
+    runaway.scan(now=now, **kw)
+    assert opened == [str(active)]
+    opened.clear()
+    runaway.scan(now=now, **kw)
+    assert opened == []
+    with real_open(active, "a") as fh:
+        fh.write(rec)
+    runaway.scan(now=now, **kw)
+    assert opened == [str(active)]

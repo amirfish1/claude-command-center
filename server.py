@@ -28698,6 +28698,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Sessions a machine restart cut off mid-turn (scanned once per boot).
             from ccc_server import restart_recovery
             restart_recovery.handle_api_get(self)
+        elif path == "/api/runaway":
+            # Sessions working on autonomously with nothing changing (timers,
+            # goals, WatchTower pings). Report-only; see ccc_server/runaway.py.
+            from ccc_server import runaway
+            runaway.handle_api_get(self, parsed)
         elif path == "/api/config":
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
@@ -33035,6 +33040,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import auto_rerun
             auto_rerun.handle_api_post(self)
             return
+        if path.startswith("/api/runaway/"):
+            # Lease ("let it run") / dismiss for a flagged runaway session.
+            # Same-origin was already enforced at the top of do_POST.
+            from ccc_server import runaway
+            if runaway.handle_api_post(self, path):
+                return
         if path.startswith("/api/restart-recovery/"):
             # Dismiss / resume-prompt for sessions a restart cut off mid-turn.
             # Same-origin was already enforced at the top of do_POST.
