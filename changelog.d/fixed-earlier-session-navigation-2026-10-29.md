@@ -1,0 +1,1 @@
+Earlier-message loading now bypasses background polling, times out with a retry button, and clears its loading indicator reliably. Search rows with folded earlier sessions now provide an expandable list to open them.

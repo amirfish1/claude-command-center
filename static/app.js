@@ -40190,9 +40190,11 @@
       // into the newest leg (see lineage.collapse_chain_hits) and reports
       // how many earlier legs got folded in chain_collapsed.
       const historyChainBadgeHtml = (c._historyMatch && c._historyChainCollapsed > 0)
-        ? '<span class="conv-chain-badge" title="' + escapeAttr(
-            (c._historyChainCollapsedSids || []).join(', ') + ' folded into this row as the newest leg')
-          + '">+' + c._historyChainCollapsed + ' earlier</span>'
+        ? _sessionFamilyDetailsHtml(
+          '+' + c._historyChainCollapsed + ' earlier',
+          (c._historyChainCollapsedSids || []).map(sid =>
+            _sessionProvenanceById.get(sid) || { id: sid }),
+          c.id + ':history-earlier')
         : '';
       const repoBadgeHtml = c._repoSearchMatch
         ? '<span class="conv-history-badge" title="Matched repo search; showing latest sessions from ' + escapeHtml(c._repoSearchLabel || 'repo') + '">repo</span>'
@@ -59309,21 +59311,23 @@
           paneAfter.loadAncestorHop = true;
           await fetchConversationEvents(paneId);
         }
-        // Restore the reader's spot, then force a paint: the freshly rendered
-        // content can stay blank until a real scroll event fires (a browser
-        // quirk the user hit — "black screen until I move the scroll").
+        // Restore after the prepend without leaving cleanup dependent on a
+        // paint callback (background tabs can suspend animation frames).
+        _restoreAnchor($view, anchor);
         requestAnimationFrame(() => {
-          _restoreAnchor($view, anchor);
-          requestAnimationFrame(() => {
-            $view.scrollTop += 1; $view.scrollTop -= 1;
-            try { $view.dispatchEvent(new Event('scroll')); } catch (_) {}
-            overlay.remove();
-            loading = false;
-          });
+          $view.scrollTop += 1; $view.scrollTop -= 1;
+          try { $view.dispatchEvent(new Event('scroll')); } catch (_) {}
         });
-      } catch (_) {
+      } catch (err) {
+        banner.textContent = '↑ Retry loading earlier messages';
+        banner.title = err.message || 'History could not be loaded';
+      } finally {
         overlay.remove();
         loading = false;
+        banner.disabled = false;
+        if (banner.textContent === 'Loading earlier messages…') {
+          banner.textContent = '↑ Load earlier messages';
+        }
       }
       return;
     }
@@ -59682,6 +59686,7 @@
     // Set once a saved copy (IndexedDB) is on screen for this open; the
     // catch below keeps it, marked, instead of blanking the pane.
     let _cachedPreview = null;
+    let historyRequest = false;
     try {
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
@@ -59697,6 +59702,7 @@
       const _segs = _pane0 ? _contEnsureSegments(_pane0, id) : [];
       const _hopSid = _hop ? _contNextParentForPane(_pane0, id) : '';
       const _loadingEarlier = !!_loadBefore || !!_hopSid;
+      historyRequest = _loadingEarlier;
       // Earlier-window fetches walk the continuation chain: within the top
       // segment's own file first, then (hop) the previous session's tail.
       const _fetchSid = _hopSid || (_loadBefore && _segs.length ? String(_segs[0].sid) : id);
@@ -59730,8 +59736,14 @@
         if (_freshOpen && !_loadingEarlier) {
           return _fetchConvJsonTimed(_url, undefined, true);
         }
-        const res = await fetch(_url);
-        return res.json();
+        const res = await fetch(_url, _loadingEarlier ? {
+          cccPriority: 'user',
+          signal: AbortSignal.timeout(20000),
+        } : undefined);
+        if (!res.ok) throw new Error('Conversation request failed (' + res.status + ')');
+        const payload = await res.json();
+        if (payload.error) throw new Error(payload.error);
+        return payload;
       };
       _netP = _netP ? _netP.then(d => d || _loadNet()) : _loadNet();
       if (_cacheP) {
@@ -60010,6 +60022,7 @@
         fetchSessionUsage(sid);
       }
     } catch (err) {
+      if (historyRequest) throw err;
       if (_cachedPreview && convLastLine === 0 && $view.querySelector(':scope > .conv-cache-preview')) {
         _markConvCachePreview($view, 'failed', _cachedPreview.saved_at);
       } else if (convLastLine === 0) {
