@@ -2754,6 +2754,9 @@ def test_throughput_refresh_reports_live_session_progress(monkeypatch):
     monkeypatch.setattr(server, "_throughput_payload", fake_payload)
     monkeypatch.setattr(server, "_throughput_build_bootstrap", lambda *a, **k: {})
     monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *a, **k: True)
+    # Unpatched, the real weekly scan can outlast the wait below on a cold
+    # cache (same flake as the metadata test further down).
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda *a, **k: {})
     with server._THROUGHPUT_REFRESH_LOCK:
         server._THROUGHPUT_REFRESH_JOBS.clear()
 
