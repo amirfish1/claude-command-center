@@ -186,6 +186,12 @@ def _synth(text, voice, fg=True):
             return hit[0], hit[1]
     _SYNTH_LOCK.acquire(fg)
     try:
+        # A fg read may re-request a clip a bg prepare is making; whichever
+        # waited for the lock reuses the piece the other just made.
+        with _SYNTH_CACHE_LOCK:
+            hit = _SYNTH_CACHE.get(key)
+        if hit is not None:
+            return hit[0], hit[1]
         samples, rate = _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
     finally:
         _SYNTH_LOCK.release()

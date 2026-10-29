@@ -14786,7 +14786,7 @@
       return;
     }
     _ttsMarkCache(mk, head.text, 'partial', 0);
-    const entry = { ready: false, got: null };
+    const entry = { ready: false, got: null, bg: true };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
     entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '', 'bg').then((got) => {
@@ -14903,7 +14903,7 @@
         const c = rest[i];
         let entry = _ttsHeadCache.get(c.text);
         if (!entry) {
-          entry = { ready: false, got: null, voice: headGot.voice };
+          entry = { ready: false, got: null, voice: headGot.voice, bg: true };
           entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg', jobs[i]).then((got) => {
             entry.got = got;
             got.done.then(() => { entry.ready = true; }).catch(() => {
@@ -15428,7 +15428,15 @@
       const hit = _ttsHeadCache.get(c.text);
       let p;
       if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
-        p = hit.p;
+        // Prepare-ahead makes clips at bg priority, behind every other
+        // message being prepared. A clip the listener now waits on is asked
+        // for again at fg; the voice server shares made pieces, so the bg
+        // request does not repeat the work (CCC-144: cold clicks waited 5-12s
+        // on a bg head).
+        p = !hit.bg || hit.ready ? hit.p : hit.p.then((got) => {
+          if (hit.ready) return got;
+          try { return _ttsFetchNeural(c.text, got.voice, 'fg').catch(() => got); } catch (_) { return got; }
+        });
         // Prepared blobs remain reusable after playback, seeks and rate changes.
         try {
           if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
