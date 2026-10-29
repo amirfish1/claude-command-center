@@ -58836,6 +58836,107 @@
     if (pending) _convTailPrefetches.delete(id);
     return pending;
   }
+  // Last-seen conversation tails in IndexedDB (CCC-143 / CCC-208). A click
+  // paints the saved copy at once, marked as refreshing, while the real
+  // fetch runs; the fresh response then replaces it wholesale, so the saved
+  // copy only ever decides the first frame. When the host is saturated the
+  // fetch can wait 1-3s before the server even sees it; reopens no longer
+  // show a blank pane for that long. Any IndexedDB failure (private mode,
+  // quota, blocked upgrade) degrades to today's uncached open.
+  // localStorage ccc-conv-cache=0 turns it off.
+  const CONV_CACHE_DB = 'ccc-conv-cache';
+  const CONV_CACHE_MAX_ENTRIES = 60;
+  const CONV_CACHE_MAX_BYTES = 1500000;
+  // Longer than this and the network usually wins anyway; a slow disk must
+  // never delay the fresh render.
+  const CONV_CACHE_READ_BUDGET_MS = 250;
+  let _convCacheDbP = null;
+  function _convCacheDb() {
+    if (_convCacheDbP) return _convCacheDbP;
+    _convCacheDbP = new Promise((resolve) => {
+      try {
+        if (!window.indexedDB || localStorage.getItem('ccc-conv-cache') === '0') { resolve(null); return; }
+        const req = indexedDB.open(CONV_CACHE_DB, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('tails')) {
+            db.createObjectStore('tails', { keyPath: 'id' }).createIndex('saved_at', 'saved_at');
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+        req.onblocked = () => resolve(null);
+      } catch (_) { resolve(null); }
+    });
+    return _convCacheDbP;
+  }
+  function _convCacheEligible(id, source) {
+    if (!id || source === 'hermes') return false;
+    return !/^(backlog|spawning|pkood|issue)-/.test(String(id));
+  }
+  async function _convCacheGet(id) {
+    const db = await _convCacheDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const req = db.transaction('tails', 'readonly').objectStore('tails').get(String(id));
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      } catch (_) { resolve(null); }
+    });
+  }
+  function _convCachePutSoon(id, data) {
+    if (!data || !Array.isArray(data.events) || !data.events.length) return;
+    const bytes = data.__perf && data.__perf.bytes;
+    if (bytes && bytes > CONV_CACHE_MAX_BYTES) return;
+    const entry = {
+      id: String(id),
+      saved_at: Date.now(),
+      events: data.events,
+      engine: data.engine || '',
+      last_line: data.last_line || 0,
+      truncated_before: !!data.truncated_before,
+    };
+    // Off the open's critical path: the structured clone of the events
+    // costs main-thread time the user should not see on click.
+    setTimeout(async () => {
+      try {
+        const db = await _convCacheDb();
+        if (!db) return;
+        const tx = db.transaction('tails', 'readwrite');
+        const store = tx.objectStore('tails');
+        store.put(entry);
+        const count = store.count();
+        count.onsuccess = () => {
+          let excess = count.result - CONV_CACHE_MAX_ENTRIES;
+          if (excess <= 0) return;
+          const cur = store.index('saved_at').openKeyCursor();
+          cur.onsuccess = () => {
+            const c = cur.result;
+            if (!c || excess <= 0) return;
+            store.delete(c.primaryKey);
+            excess -= 1;
+            c.continue();
+          };
+        };
+      } catch (_) {}
+    }, 400);
+  }
+  function _markConvCachePreview($view, state, savedAt) {
+    if (!$view) return;
+    let el = $view.querySelector(':scope > .conv-cache-preview');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'conv-cache-preview';
+      el.setAttribute('role', 'status');
+      $view.prepend(el);
+    }
+    const age = savedAt ? ' from ' + timeAgo(savedAt) : '';
+    el.dataset.state = state;
+    el.textContent = state === 'failed'
+      ? 'Showing the saved copy' + age + ' · could not refresh'
+      : 'Showing the saved copy' + age + ' · refreshing…';
+  }
   function prefetchRestoredConversationTails() {
     for (const pane of splitState.panes) {
       if (pane && pane.conversationId) _prefetchConversationTail(pane.conversationId);
@@ -59462,6 +59563,9 @@
         return;
       }
     }
+    // Set once a saved copy (IndexedDB) is on screen for this open; the
+    // catch below keeps it, marked, instead of blanking the pane.
+    let _cachedPreview = null;
     try {
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
@@ -59491,24 +59595,83 @@
       // Perf metric 2 detail: did this open serve from the pre-warmed tail
       // (kicked in selectConversation) or fall through to a fresh fetch?
       let _perfPrefetchHit = false;
+      let _netP = null;
+      let _cacheP = null;
+      let _cacheEligible = false;
       if (_freshOpen && !_wantFull && !_loadingEarlier) {
         const _prefetchRow = (conversationsData || []).find(x => x.id === id)
           || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
         const _prefetchSource = sessionSourceByConv[id] || (_prefetchRow && _prefetchRow.source) || '';
         const prefetched = _takePrefetchedConversationTail(id);
         if (prefetched && _prefetchSource !== 'hermes') {
-          data = await prefetched;
+          _netP = prefetched;
           _perfPrefetchHit = true;
         }
+        _cacheEligible = _convCacheEligible(id, _prefetchSource);
+        if (_cacheEligible) _cacheP = _convCacheGet(id);
       }
-      if (!data) {
+      const _loadNet = async () => {
         if (_freshOpen && !_loadingEarlier) {
-          data = await _fetchConvJsonTimed(_url, undefined, true);
-        } else {
-          const res = await fetch(_url);
-          data = await res.json();
+          return _fetchConvJsonTimed(_url, undefined, true);
+        }
+        const res = await fetch(_url);
+        return res.json();
+      };
+      _netP = _netP ? _netP.then(d => d || _loadNet()) : _loadNet();
+      if (_cacheP) {
+        // Paint the saved copy only if it beats the network; the fresh
+        // response below always replaces it.
+        let _netDone = false;
+        _netP = _netP.then(d => { _netDone = true; return d; }, e => { _netDone = true; throw e; });
+        const cached = await Promise.race([
+          _cacheP,
+          _netP.then(() => null, () => null),
+          new Promise(r => setTimeout(() => r(null), CONV_CACHE_READ_BUDGET_MS)),
+        ]);
+        const _pv = paneByPaneId(fetchPaneId);
+        if (cached && !_netDone && convLastLine === 0 && _pv && _pv.conversationId === id
+            && Array.isArray(cached.events) && cached.events.length) {
+          const savedIdxPv = splitState.activeIndex;
+          splitState.activeIndex = paneIndexByPaneId(fetchPaneId);
+          try {
+            if (cached.engine) {
+              const _pvEl = convPaneElById(fetchPaneId);
+              if (_pvEl) {
+                _pvEl.classList.toggle('is-codex-session', cached.engine === 'codex');
+                _pvEl.classList.toggle('is-webui-session', cached.engine === 'kimi' || cached.engine === 'codex');
+              }
+            }
+            $view.innerHTML = '';
+            const _pvOk = renderConversationEvents(cached.events, fetchPaneId, {
+              initialLoad: true, isTruncated: cached.truncated_before, cachedPreview: true,
+            }) !== false;
+            if (_pvOk) {
+              _markConvCachePreview($view, 'refreshing', cached.saved_at);
+              _cachedPreview = { saved_at: cached.saved_at };
+              if (_perfConvOpen && _perfConvOpen.id === id && _perfConvOpen.paneId === fetchPaneId
+                  && !_perfConvOpen.cachedPainted) {
+                _perfConvOpen.cachedPainted = true;
+                const _pvEnd = performance.now();
+                _cachedPreview.ms = Math.round(_pvEnd - _perfConvOpen.t0);
+                _perfEvent('conv_open_cached', _perfActiveElapsed(_perfConvOpen.t0, _pvEnd), {
+                  conv_id: id,
+                  detail: {
+                    events: cached.events.length,
+                    engine: cached.engine || sessionSourceByConv[id] || '',
+                    age_ms: Math.max(0, Date.now() - (cached.saved_at || Date.now())),
+                    wall_ms: _cachedPreview.ms,
+                  },
+                });
+              }
+            }
+          } catch (_) {
+            $view.innerHTML = '';
+          } finally {
+            splitState.activeIndex = savedIdxPv;
+          }
         }
       }
+      data = await _netP;
       const _perfDataAt = performance.now();
       // Tail is in hand: release the parked select-time fetches once this
       // render has painted (see _afterConvTail).
@@ -59597,6 +59760,7 @@
           const _perfRenderAt = performance.now();
           const _renderOk = renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
           if (_renderOk) convLastLine = data.last_line;
+          if (_renderOk && _cacheEligible) _convCachePutSoon(id, data);
           if (_renderOk && _freshOpen && data.truncated_before && data.first_prompt) {
             _renderFirstPromptPin($view, data.first_prompt, fetchPaneId);
           }
@@ -59615,6 +59779,9 @@
                 detail: {
                   events: Array.isArray(data.events) ? data.events.length : 0,
                   prefetch_hit: _perfPrefetchHit,
+                  // conv_open stays click -> FRESH render; the saved-copy
+                  // paint is its own kind (conv_open_cached).
+                  cached_preview_ms: _cachedPreview ? (_cachedPreview.ms ?? null) : null,
                   truncated: !!data.truncated_before,
                   wall_ms: Math.round(_perfWall),
                   hidden_ms: Math.round(_perfWall - _perfActive),
@@ -59727,7 +59894,9 @@
         fetchSessionUsage(sid);
       }
     } catch (err) {
-      if (convLastLine === 0) {
+      if (_cachedPreview && convLastLine === 0 && $view.querySelector(':scope > .conv-cache-preview')) {
+        _markConvCachePreview($view, 'failed', _cachedPreview.saved_at);
+      } else if (convLastLine === 0) {
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: ' + escapeHtml(err.message) + '</div>';
       }
     }
@@ -67312,11 +67481,18 @@
     opts = opts || {};
     const pane = paneByPaneId(paneId);
     const renderedConversationId = (pane && pane.conversationId) || currentConversation || '';
-    if (!opts.isTruncated) _ultraFreshFeed((pane && pane.currentSession && pane.currentSession.id) || renderedConversationId, events);
+    // A saved-copy preview is old data: never feed it to live freshness.
+    if (!opts.isTruncated && !opts.cachedPreview) _ultraFreshFeed((pane && pane.currentSession && pane.currentSession.id) || renderedConversationId, events);
     if (pane && opts.isTruncated) {
       pane.firstUserMsgRendered = true;
     }
     const $view = getConvViewForPane(paneId) || $conversationsView;
+    // Real data replaces a saved-copy preview (CCC-143) wholesale -- e.g. a
+    // stream/poll landing after the refresh fetch failed -- so stale rows
+    // and the "saved copy" badge never mix with live ones.
+    if (!opts.cachedPreview && $view.querySelector(':scope > .conv-cache-preview')) {
+      $view.innerHTML = '';
+    }
     // Webui panes (kimi + codex) render kimi-web style: merged turns,
     // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
     // path below stays byte-for-byte the shared legacy renderer.

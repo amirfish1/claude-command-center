@@ -8,6 +8,8 @@ The frontend beacons two kinds of client-measured timings here:
   labeled warm/cold from the archive-load snapshot (see
   ``_archive_load_snapshot`` in server.py).
 - ``conv_open`` — how long opening a single conversation took.
+- ``conv_open_cached`` — click to the saved-copy (IndexedDB) paint of a reopened
+  conversation; conv_open still measures click to the fresh render.
 
 Each POST (``/api/perf-event``, wired in server.py) appends one line to a
 JSONL sink and returns whether that sample breached its threshold. A
@@ -188,10 +190,12 @@ def _in_warmup(now=None):
 
 
 _VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
-                "tts_start", "tts_gap")
+                "tts_start", "tts_gap", "conv_open_cached")
 # Recorded and summarized with a breach verdict, but never self-filed: the
-# speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates.
-_NO_SELF_FILE_KINDS = ("tts_start", "tts_gap")
+# speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates;
+# conv_open_cached (click -> saved-copy paint) by CCC-143 next to conv_open,
+# which keeps measuring click -> fresh render.
+_NO_SELF_FILE_KINDS = ("tts_start", "tts_gap", "conv_open_cached")
 
 
 def _perf_tickets_enabled():
