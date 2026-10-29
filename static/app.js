@@ -20937,8 +20937,10 @@
     const isSession = !!row && !String(row.id || '').startsWith('backlog-issue-')
       && !String(row.id || '').startsWith('xrepo-issue-');
     show('archive', isSession && !row.archived && !row.trashed);
-    show('unarchive', isSession && !!row.archived && !row.trashed);
-    show('untrash', isSession && !!row.trashed);
+    // Ticket sessions only ever say "Archived": Unarchive clears Trash too.
+    const ticketRow = !!(row && ideaTicketsOn() && row.idea_ticket && row.idea_ticket.ref);
+    show('unarchive', isSession && !!row.archived && (!row.trashed || ticketRow));
+    show('untrash', isSession && !!row.trashed && !ticketRow);
     const ideaQueue = row && row.idea_ticket && row.idea_ticket.queue;
     const ideasOn = isSession && ideaTicketsOn();
     show('idea-IDEAS', ideasOn && ideaQueue !== 'IDEAS');
@@ -39568,8 +39570,13 @@
       const subagentCompact = !!opts.subagentCompact;
       const subagentBridge = !!opts.subagentBridge;
       const subagentClusterMeta = opts.subagentClusterMeta || null;
-      const lifecycleContext = opts.lifecycleContext
+      // Features / Small bugs rows only ever say "Archived": Trash still
+      // exists underneath, but a trashed ticket row reads and restores as
+      // archived (unarchiving clears Trash server-side).
+      const _archiveOnlyRow = ideaTicketsOn() && !!(c.idea_ticket && (c.idea_ticket.ref || c.idea_ticket.pending));
+      const _lifecycleContext0 = opts.lifecycleContext
         || (c.trashed ? 'trash' : (c.archived ? 'all-main' : (_sidebarTab === 'archived' ? 'all-main' : 'active')));
+      const lifecycleContext = _archiveOnlyRow && _lifecycleContext0 === 'trash' ? 'all-main' : _lifecycleContext0;
       // Inline NYA lookup (In-progress rows only, when Details is on). Resolved
       // once here so both the row chevron and the appended block agree.
       const _nyaInlineItem = _nyaDetailsForRows
@@ -40284,6 +40291,10 @@
         lifecycleButtons = '<button class="conv-archive-btn is-close" data-role="archive" data-archived="true" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
       } else if (isGithubPrRow) {
         lifecycleButtons = '';
+      } else if (_archiveOnlyRow) {
+        lifecycleButtons = (c.archived || c.trashed)
+          ? '<button class="conv-archive-btn is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Active</span></button>'
+          : '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive" aria-label="Archive">&#128229;</button>';
       } else if (lifecycleContext === 'trash') {
         lifecycleButtons = '<button class="conv-trash-btn is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">&#8617;</button>';
       } else if (lifecycleContext === 'all-main') {
@@ -40297,7 +40308,7 @@
       } else {
         lifecycleButtons = '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive" aria-label="Archive">&#128229;</button>';
       }
-      const quickTrashBtn = (!isBacklogRow && !isGithubPrRow && !opts.hideTrash)
+      const quickTrashBtn = (!isBacklogRow && !isGithubPrRow && !opts.hideTrash && !_archiveOnlyRow)
         ? (lifecycleContext === 'trash'
           ? '<button type="button" class="conv-trash-btn is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">&#8617;</button>'
           : '<button type="button" class="conv-trash-btn" data-role="trash" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>')
@@ -40780,7 +40791,7 @@
         : (_outcomeText || c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
           || _waPreviewText(c.session_state && c.session_state.did)
           || _waPreviewText(cleanFirst));
-      const _waStatus = c.trashed
+      const _waStatus = (c.trashed && !_archiveOnlyRow)
         ? '<button type="button" class="conv-trash-btn conv-ready-archive is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">Restore</button>'
         : c.archived
           ? '<button type="button" class="conv-archive-btn conv-ready-archive is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active">Restore</button>'
@@ -43310,7 +43321,9 @@
       );
       const activeRefs = new Set(_allTabConvs.filter(c => _allTabLaneFor(c) === lane
         && inWindow(c) && c.idea_ticket && !c.archived && !c.trashed && !c.idea_ticket.closed).map(c => c.idea_ticket.ref));
-      const candidates = bucket === 'trash' ? _allTabTrashConvs : _allTabConvs;
+      // Archived includes trashed tickets: these tabs never say "Trash".
+      const candidates = bucket === 'trash' ? _allTabTrashConvs
+        : bucket === 'archived' ? _allTabConvs.concat(_allTabTrashConvs) : _allTabConvs;
       const members = new Map();
       candidates.forEach(c => {
         if (_allTabLaneFor(c) !== lane || !inWindow(c)) return;
@@ -43320,7 +43333,7 @@
         const _handedOff = !c.archived && !c.trashed && !c.idea_ticket.closed
           && ['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state);
         if (bucket === 'handoff' && !_handedOff) return;
-        if (bucket === 'archived' && (c.trashed || activeRefs.has(ref)
+        if (bucket === 'archived' && (activeRefs.has(ref)
           || (!c.archived && !c.idea_ticket.closed))) return;
         if (bucket === 'trash' && !c.trashed) return;
         if (!members.has(ref)) members.set(ref, []);
@@ -43686,7 +43699,6 @@
     };
     if (_ticketLifecycleView) {
       _ideaArchivedHtml = _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
-      _trashHtml = _lifecycleSection('Trash', 'ccc-' + _allTabView + '-trash-collapsed', _ideaTicketRows(_allTabView, 'trash'));
     } else if (_allTabView !== 'workers') {
       const _trashItems = [];
       for (const c of _allTabTrashConvs) {
