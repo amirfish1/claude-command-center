@@ -76843,6 +76843,10 @@
     // which stretches when a fresh page's main thread is busy booting.
     let _perfHdrAt = 0;
     let _perfBodyMs = 0;
+    // Server list handler time (Server-Timing list;dur) and the fetched URL
+    // (its ?since= varies) for the Resource Timing split (CCC-229).
+    let _perfServer = null;
+    let _perfFetchUrl = url;
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
@@ -76874,6 +76878,10 @@
               ttfb_ms: _perfHdrAt ? Math.round(_perfHdrAt - _perfT0) : null,
               body_ms: _perfBodyMs ? Math.round(_perfBodyMs) : null,
               start_nav_ms: Math.round(_perfT0),
+              server_ms: _perfServer ? _perfServer.ms : null,
+              server_cpu_ms: _perfServer ? _perfServer.cpu : null,
+              longtask_ms: _perfLongTaskMs(_perfT0, _perfEnd),
+              rt: _perfHdrAt ? _convResourceTiming(_perfFetchUrl, _perfT0) : null,
             },
           });
         }
@@ -76900,13 +76908,18 @@
             r = await _archiveBootstrapFetchPromise;
           }
           if (!r) {
-            r = await backgroundApiFetch(
-              deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url, init);
+            _perfFetchUrl = deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url;
+            r = await backgroundApiFetch(_perfFetchUrl, init);
           }
         } finally {
           clearTimeout(timeoutId);
         }
         _perfHdrAt = performance.now();
+        try {
+          const st = r.headers.get('Server-Timing') || '';
+          const m = st.match(/(?:^|,)\s*list;dur=([0-9.]+)/), c = st.match(/listcpu;dur=([0-9.]+)/);
+          if (m) _perfServer = { ms: Math.round(+m[1]), cpu: c ? Math.round(+c[1]) : null };
+        } catch (_) {}
         _lastArchiveListHttpStatus = r.status;
         // 304 → the server confirms our cached payload is still current, so we
         // skip re-parsing ~500KB and reuse the last conversations as-is. The
