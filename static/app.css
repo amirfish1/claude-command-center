@@ -33564,3 +33564,15 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 /* Doubled id + :has(mini) outranks the CCC-261 desktop child-row indent
    (+36px, sized for the old avatar), so lane titles start beside the mark. */
 #convList#convList .conv-item.is-current-child-row:has(.conv-idea-avatar.is-child-mini) { --conv-content-left: calc(var(--conv-icon-left) + 22px); }
+/* Same mark in the chat-list (wa) row layout: an inline 14px slot. */
+#convList#convList .conv-item .wa-row > .conv-idea-avatar.is-child-mini {
+  position: static;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  align-self: center;
+  transform: none;
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+}

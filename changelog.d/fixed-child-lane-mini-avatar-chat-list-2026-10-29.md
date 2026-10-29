@@ -1,0 +1,1 @@
+- Child lanes in the chat-list sidebar layout now show only the tiny model mark under their parent ticket, not a second full numbered avatar.

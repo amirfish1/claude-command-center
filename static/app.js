@@ -26011,8 +26011,8 @@
     if (event.target.matches && event.target.matches('.repo-avatar img')) event.target.hidden = true;
   }, true);
 
-  function _waAvatarHtml(c, title) {
-    const ideaAvatar = _ideaAvatarHtml(c, true);
+  function _waAvatarHtml(c, title, childLane = false) {
+    const ideaAvatar = _ideaAvatarHtml(c, true, childLane);
     if (ideaAvatar) return ideaAvatar;
     const repoAvatar = _repoSessionAvatarHtml(c, true);
     if (repoAvatar) return repoAvatar;
@@ -40801,7 +40801,7 @@
       const waHtml = '<div class="wa-row">'
         // Ticket rows keep the AUTO switch under the avatar here too.
         + (autoSwitchHtml ? '<div class="wa-av-col">' + _waAvatarHtml(c, _waTitle) + autoSwitchHtml + '</div>'
-          : _waAvatarHtml(c, _waTitle))
+          : _waAvatarHtml(c, _waTitle, _childLaneRow))
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
