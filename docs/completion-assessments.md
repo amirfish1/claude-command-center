@@ -21,7 +21,7 @@ string. Gates are independent; scores are never averaged.
 | --- | --- | --- |
 | Resolution | At least 0.9 | Original request handled, required work complete |
 | Verification | At least 0.8 | Relevant behavior checks passed; limitations stated |
-| Delivery | Exactly 1, or explicitly not applicable | Push, deployment, save, or reason delivery is unnecessary |
+| Delivery | Exactly 1, and applicable | Evidence the intended working result was pushed, deployed, or saved |
 | Decision dependency | Exactly 0 | No consequential choice or required approval remains |
 
 A blocking caveat or any remaining action prevents Close. Material caveats
@@ -30,6 +30,21 @@ appropriate; moving essential unfinished work into another ticket does not
 complete the current task. Malformed or missing assessment fields are
 unassessed, never ready. Active work, a newer user event, or an outstanding
 question/approval overrides an assessment. Archive is always manual.
+
+## Explanations are not delivery
+
+Answering a theoretical or design question does not close an unbuilt topic.
+The intended outcome is working software: explain the approach, then implement
+and verify it within the authorized scope. Keep the topic open, with a concrete
+next step, while the result is only proposed. Do not redefine the goal as
+"explain the design" after answering a question about missing product behavior.
+Explicit requests for explanation only or no changes still prohibit edits; they
+do not make an unbuilt result ready to close or require a fabricated approval.
+
+Legacy `delivery.applicable:false` remains valid metadata, but blocks Close even
+with a delivery score of 1. It cannot bypass delivery in the server, transcript
+card, or row audit. This is still a self-report: CCC cannot independently prove
+that the cited artifact implements the user's goal.
 
 ## Ongoing topics and milestones
 

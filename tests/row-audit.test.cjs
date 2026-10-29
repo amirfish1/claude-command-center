@@ -54,7 +54,9 @@ test('each independent Close gate blocks an incorrect recommendation', () => {
     {caveats:[{text:'Blocking',blocking:true}]},{remaining_actions:[{text:'More work'}]},
     {scope:undefined},{verification:{score:1}},{version:2},{caveats:[{text:'Bad caveat'}]}];
   for(const variant of variants) assert.match(messages(audit.inspect(row(),events({assessment:completion(variant)}),{close:true})),/Close is shown despite/);
-  assert.deepEqual(audit.closeReasons(completion({delivery:{score:0,applicable:false,evidence:'Explanation only'}})),[]);
+  for (const score of [0, 1]) {
+    assert(audit.closeReasons(completion({delivery:{score,applicable:false,evidence:'Explanation only'}})).includes('delivery gate is not met.'));
+  }
 });
 test('missing, malformed, tool-only, and in-progress answers stay unassessed', () => {
   assert.equal(audit.inspect(row(),[]).status,'unknown');

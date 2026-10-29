@@ -17526,7 +17526,7 @@
       if (openTopic) reasons.push('topic goal is not yet met');
       if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
       if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
-      if (assessment.delivery.applicable !== false && assessment.delivery.score !== 1) reasons.push('delivery incomplete');
+      if (assessment.delivery.applicable === false || assessment.delivery.score !== 1) reasons.push('delivery incomplete');
       if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
       if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
       if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');

@@ -1193,8 +1193,15 @@ keeps resolution below 0.9, and must be continued before ending the turn when
 possible. A repair awaiting authorization also belongs in remaining_actions
 and must have nonzero decision_dependency. Do not mark a known unresolved
 malfunction ready to close merely because its cause has been explained.
-For a genuinely explanation-only request, an evidence-backed answer may be
-complete without implementation or a fabricated approval request.
+Answering a theoretical or design question does not meet the topic's close
+criteria. The goal is a working, delivered result, not an explanation of what
+could be built. If nothing has been built, keep closure_met false and resolution
+below 0.9; state the next concrete implementation step in remaining_actions.
+Treat questions about how to add missing product behavior as requests to build
+it when that work is authorized. Respect an explicit request for explanation
+only or no changes, but keep the unbuilt topic open without fabricating approval
+or treating the explanation itself as delivery. Never narrow done_when to
+"explain the design" to close a topic whose intended result is working software.
 
 Keep the footer scoped to the ongoing requested task across informational
 follow-ups. A side question such as "which folder are you using?" must not
@@ -1269,8 +1276,10 @@ Resolution: 0=unhandled, 0.5=partial, 0.9=all required work handled with only
 nonessential caveats, 1=fully resolved. Verification: 0=unchecked, 0.5=partial
 checks, 0.8=relevant checks of requested behavior passed, 1=strong direct evidence;
 name the checks and limits. Delivery: 0=local/unshipped, 0.5=partly delivered,
-1=at the intended destination; cite the push/deployment/save evidence. Delivery
-may have applicable:false only when no delivery is required, with a reason.
+1=at the intended destination; cite the push/deployment/save evidence. An answer,
+proposal, or design alone is not delivery of the intended working result.
+Legacy applicable:false is accepted as metadata but never bypasses the delivery
+gate or makes an unbuilt topic ready to close.
 Decision_dependency: 0=no meaningful decision or approval remains, 0.5=material
 choice remains, 1=blocked on the user; describe the actual tradeoff, not a ritual
 confirmation. Missing evidence means unassessed, not complete. Do not manufacture
@@ -1284,8 +1293,8 @@ blocking:true prevents closure. Queue actionable optional follow-ups where
 appropriate and cite their ticket in the caveat text; do not queue work required
 to finish the current request merely to declare it complete.
 
-CCC computes Close only if resolution>=0.9, verification>=0.8, delivery=1 (or
-explicitly not applicable), decision_dependency=0, no blocking caveat, and no
+CCC computes Close only if resolution>=0.9, verification>=0.8, delivery=1 with
+delivery applicable, decision_dependency=0, no blocking caveat, and no
 remaining action. These are independent gates, never an average. This recommends
 manual archive only; never archive a session yourself. An explicit scope with
 closure_met false also prevents Close, regardless of the numeric scores.
@@ -1379,7 +1388,7 @@ def _completion_assessment(value):
         reasons.append("Resolution is below 0.9.")
     if result["verification"]["score"] < 0.8:
         reasons.append("Verification is below 0.8.")
-    if result["delivery"]["applicable"] and result["delivery"]["score"] != 1:
+    if not result["delivery"]["applicable"] or result["delivery"]["score"] != 1:
         reasons.append("Delivery is incomplete.")
     if result["decision_dependency"]["score"] != 0:
         reasons.append("A user decision remains.")

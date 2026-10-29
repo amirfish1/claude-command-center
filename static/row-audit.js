@@ -35,7 +35,10 @@
     if (!c.scope || typeof c.scope.closure_met !== 'boolean' || !c.scope.goal || !c.scope.done_when || !c.scope.evidence) reasons.push('Topic closure criteria are missing.');
     else if (!c.scope.closure_met) reasons.push('Topic goal is still open.');
     for (const [key, minimum] of [['resolution', .9], ['verification', .8], ['delivery', 1]]) {
-      if (key === 'delivery' && c.delivery?.applicable === false && c.delivery.evidence) continue;
+      if (key === 'delivery' && c.delivery?.applicable === false) {
+        reasons.push('delivery gate is not met.');
+        continue;
+      }
       const axis = c[key];
       if (!axis || !Number.isFinite(axis.score) || axis.score < minimum || axis.score > 1 || !axis.evidence) reasons.push(key + ' gate is not met.');
     }

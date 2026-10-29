@@ -96,10 +96,14 @@ def test_scores_must_be_finite_real_numbers_in_range(bad):
     assert _completion_assessment(assessment)["valid"] is False
 
 
-def test_delivery_not_applicable_still_requires_evidence_and_an_explicit_boolean():
+@pytest.mark.parametrize("delivery_score", [0, 1])
+def test_delivery_not_applicable_blocks_close_and_still_requires_valid_metadata(delivery_score):
     assessment = completed()
-    assessment["delivery"] = {"score": 0, "applicable": False, "evidence": "Analysis-only request; no artifact to deliver."}
-    assert _completion_assessment(assessment)["ready_to_close"] is True
+    assessment["delivery"] = {"score": delivery_score, "applicable": False, "evidence": "Analysis-only request; no artifact to deliver."}
+    result = _completion_assessment(assessment)
+    assert result["valid"] is True
+    assert result["ready_to_close"] is False
+    assert "Delivery is incomplete." in result["reasons"]
     assessment["delivery"]["applicable"] = "false"
     assert _completion_assessment(assessment)["valid"] is False
     assessment["delivery"] = {"score": 0, "applicable": False, "evidence": " "}
@@ -181,13 +185,14 @@ def test_diagnosed_malfunction_stays_open_until_the_remedy_is_handled(requires_a
         assert "next_action" not in state
 
 
-def test_explicit_explanation_only_can_finish_without_fabricated_approval():
+def test_explicit_explanation_only_keeps_unbuilt_topic_open_without_fabricated_approval():
     assessment = completed()
     assessment["resolution"]["evidence"] = "Answered the explicit explanation-only request with the verified cause."
     assessment["delivery"] = {"applicable": False, "score": 0,
         "evidence": "User explicitly requested an explanation without changes."}
     state = _parse_session_state(footer(assessment))
-    assert state["completion"]["ready_to_close"] is True
+    assert state["completion"]["ready_to_close"] is False
+    assert "Delivery is incomplete." in state["completion"]["reasons"]
     assert state["next_step_user"] == "None."
     assert "next_action" not in state
 
@@ -218,3 +223,11 @@ def test_prompt_forbids_narrowing_an_open_ended_goal():
     # disabling two leftovers while the reply itself proposed the next cut.
     for term in ("never a narrower subset", "targets the whole set", "the next useful reduction", "caveat is\nblocking"):
         assert term in _CCC_SESSION_STATE_SYSTEM_PROMPT
+
+
+def test_prompt_keeps_theoretical_answers_open_until_a_working_result_is_delivered():
+    for term in ("Answering a theoretical or design question", "If nothing has been built",
+                 "keep closure_met false", "next concrete implementation step",
+                 "never bypasses the delivery", "explanation\nonly or no changes"):
+        assert term in _CCC_SESSION_STATE_SYSTEM_PROMPT
+    assert "complete without implementation" not in _CCC_SESSION_STATE_SYSTEM_PROMPT
