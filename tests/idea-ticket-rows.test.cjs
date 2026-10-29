@@ -149,16 +149,12 @@ test('moving an old session makes it visible and selects it in the destination',
   }
 });
 
-test('a running handoff leaves the main list for the Handed off section', () => {
+test('a handed-off ticket stays in place in the main list', () => {
   const rows = [row('h', 'EXAMPLE-1', 20), row('n', 'EXAMPLE-2', 15)];
-  rows[0].idea_ticket.handoff = { state: 'running' };
-  assert.deepEqual(representatives(rows, 'ideas', 'active'), ['n']);
-  assert.deepEqual(representatives(rows, 'ideas', 'handoff'), ['h']);
-  rows[0].idea_ticket.handoff.state = 'blocked';  // a question puts it back on top
-  assert.deepEqual(representatives(rows, 'ideas', 'active'), ['h', 'n']);
-  assert.deepEqual(representatives(rows, 'ideas', 'handoff'), []);
-  rows[0].idea_ticket.handoff.state = 'waiting';  // parked on a dependency: stays handed off
-  assert.deepEqual(representatives(rows, 'ideas', 'handoff'), ['h']);
+  for (const state of ['running', 'waiting', 'blocked']) {
+    rows[0].idea_ticket.handoff = { state };
+    assert.deepEqual(representatives(rows, 'ideas', 'active'), ['h', 'n']);
+  }
 });
 
 test('sessionAttentionStep labels handoffs and owner-held tails', () => {

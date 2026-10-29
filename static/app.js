@@ -43341,10 +43341,9 @@
         });
       });
       const rowsOut = Array.from(best.values()).sort(byRecency);
-      // A handed-off ticket leaves the main list for its own collapsed
-      // section until it closes (then Archived) or blocks (back on top).
-      return bucket === 'active'
-        ? rowsOut.filter(c => !['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state)) : rowsOut;
+      // Handed-off tickets stay in place in the main list (owner's call
+      // while learning how handoff behaves); the AUTO switch marks them.
+      return rowsOut;
     };
     const _allTabIdeaConvs = _ideaTicketsOn ? _ideaTicketRows('ideas') : [];
     const _allTabSmallBugConvs = _ideaTicketsOn ? _ideaTicketRows('smallbugs') : [];
@@ -43686,8 +43685,7 @@
         })).join('') + '</div></div>';
     };
     if (_ticketLifecycleView) {
-      _ideaArchivedHtml = _lifecycleSection('Handed off', 'ccc-' + _allTabView + '-handoff-collapsed', _ideaTicketRows(_allTabView, 'handoff'))
-        + _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
+      _ideaArchivedHtml = _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
       _trashHtml = _lifecycleSection('Trash', 'ccc-' + _allTabView + '-trash-collapsed', _ideaTicketRows(_allTabView, 'trash'));
     } else if (_allTabView !== 'workers') {
       const _trashItems = [];
