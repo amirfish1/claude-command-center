@@ -47,6 +47,7 @@ def fts_env(tmp_path, monkeypatch):
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
 
     return {"db": db_path, "projects": projects_dir, "codex": codex_dir}
 

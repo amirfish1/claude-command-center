@@ -87,12 +87,13 @@ def _lease_fields(sids: list[str]) -> dict[str, dict]:
 
 
 def _sdoc_rows(sids: list[str]) -> dict[str, dict]:
-    placeholders = ",".join("?" for _ in sids)
     out: dict[str, dict] = {}
     try:
         conn = _sfts._get_connection()
+        # By rowid via sdoc_map: `sid IN` on the UNINDEXED FTS column is a
+        # full-table scan (MEMORY-20).
         cur = conn.execute(
-            f"SELECT sid, title, prompts FROM sdoc WHERE sid IN ({placeholders})",
+            f"SELECT sid, title, prompts FROM sdoc WHERE {_sfts.sdoc_rowids_sql(len(sids))}",
             sids,
         )
     except sqlite3.OperationalError:

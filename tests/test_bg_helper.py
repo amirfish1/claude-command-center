@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import server
-from ccc_server import bg_helper, ship_graph
+from ccc_server import bg_helper, session_fts, ship_graph
 
 
 class _FakeServer:
@@ -213,3 +213,70 @@ def test_child_exits_when_a_restarted_dashboard_replaces_its_socket(module, tmp_
     with pytest.raises(SystemExit):
         mod._watch_parent(os.getppid(), path, inode)
     assert exits == [0]
+
+
+@pytest.fixture
+def fts_state():
+    saved = (session_fts._last_sync_ts, dict(session_fts._helper_indexing),
+             session_fts._bg_sync_running)
+    session_fts._last_sync_ts = 0.0
+    session_fts._helper_indexing.update(value=False, ts=0.0)
+    try:
+        yield
+    finally:
+        session_fts._last_sync_ts = saved[0]
+        session_fts._helper_indexing.clear()
+        session_fts._helper_indexing.update(saved[1])
+        session_fts._bg_sync_running = saved[2]
+
+
+def test_fts_sync_delegates_to_child_once_per_ttl(helper, fts_state, monkeypatch):
+    """MEMORY-20: with the helper up, the recall-index sync runs in the
+    child, not on a dashboard thread, and kicks are throttled to the sync
+    TTL (the dashboard never sees the child's own last-sync time)."""
+    started = []
+    monkeypatch.setattr(session_fts.threading, "Thread",
+                        lambda *a, **k: pytest.fail("dashboard must not sync in-process"))
+    monkeypatch.setattr(session_fts, "_refresh_vec_cache_async", lambda: None)
+    monkeypatch.setattr(bg_helper._Child, "fts_sync",
+                        lambda self, req: started.append(1) or {"ok": True, "indexing": True})
+    session_fts._start_background_sync()
+    assert started == [1]
+    assert session_fts.is_indexing() is True
+    assert time.time() - session_fts._last_sync_ts < 1  # next kick waits a TTL
+
+
+def test_fts_sync_child_op_runs_real_sync_in_process(monkeypatch, fts_state):
+    """Inside the child, the op runs session_fts's in-process path."""
+    monkeypatch.setenv(bg_helper.CHILD_ENV, "1")
+    ran = []
+
+    class _T:
+        def __init__(self, target=None, **k):
+            self.target = target
+
+        def start(self):
+            ran.append(self.target)
+
+    monkeypatch.setattr(session_fts.threading, "Thread", _T)
+    session_fts._bg_sync_running = False
+    reply = bg_helper._Child(object()).fts_sync({})
+    assert reply["ok"] is True and len(ran) == 1
+
+
+def test_fts_sync_falls_back_in_process_when_helper_unavailable(monkeypatch, fts_state):
+    saved = dict(bg_helper._state)
+    try:
+        monkeypatch.delenv(bg_helper.CHILD_ENV, raising=False)
+        bg_helper._state.update(ready=False, sock=None, started_at=0.0)
+        assert session_fts._delegate_background_sync() is False  # down / CCC_BG_HELPER=0
+        bg_helper._state["started_at"] = time.monotonic()
+        assert session_fts._delegate_background_sync() is True  # booting: child syncs on start
+        # Ready but the socket is gone: the call fails, so run in-process.
+        bg_helper._state.update(ready=True, sock="/nonexistent/bg.sock", started_at=0.0)
+        assert session_fts._delegate_background_sync() is False
+        monkeypatch.setenv(bg_helper.CHILD_ENV, "1")
+        assert session_fts._delegate_background_sync() is False  # the child itself
+    finally:
+        bg_helper._state.clear()
+        bg_helper._state.update(saved)

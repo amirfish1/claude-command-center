@@ -144,6 +144,7 @@ def fts_env(tmp_path, monkeypatch, hermes_env):
     session_fts._ollama_state["ok"] = False
     session_fts._vec_cache["sids"] = []
     session_fts._vec_cache["vecs"] = []
+    session_fts._vec_cache["sig"] = None
 
 
 def test_search_sessions_includes_hermes_only_sid_via_rrf(fts_env, hermes_env):

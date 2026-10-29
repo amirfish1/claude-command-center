@@ -133,7 +133,10 @@ _OLLAMA_TTL = 30.0  # seconds between "is Ollama up" liveness probes
 _MAX_EMBED_SESSIONS_PER_SYNC = int(os.environ.get("CCC_SESSION_FTS_EMBED_BATCH_CAP", "64"))
 
 _ollama_state = {"ts": 0.0, "ok": False}
-_vec_cache: dict = {"sids": [], "vecs": []}
+_vec_cache: dict = {"sids": [], "vecs": [], "sig": None}
+# MEMORY-20: a sync delegated to the background helper reports back on each
+# kick; is_indexing() trusts that answer for a short while.
+_helper_indexing = {"value": False, "ts": 0.0}
 
 # Catch-up backfill for sdoc rows that never got a semb row (eg. everything
 # indexed while Ollama was unreachable, before semb_pending queueing existed).
@@ -999,6 +1002,12 @@ def _init_db(conn: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS ssec_map (sid TEXT, rid INTEGER);
         CREATE INDEX IF NOT EXISTS idx_ssec_map_sid ON ssec_map(sid);
+        CREATE TABLE IF NOT EXISTS semb_rev (n INTEGER NOT NULL);
+        INSERT INTO semb_rev (n) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM semb_rev);
+        CREATE TRIGGER IF NOT EXISTS semb_rev_ins AFTER INSERT ON semb
+            BEGIN UPDATE semb_rev SET n = n + 1; END;
+        CREATE TRIGGER IF NOT EXISTS semb_rev_del AFTER DELETE ON semb
+            BEGIN UPDATE semb_rev SET n = n + 1; END;
     """)
     # MEMO-FIX-19: file_cache gained cwd/engine so the sidebar-search
     # endpoints (search-history, search-recall-sessions) can be served
@@ -1010,14 +1019,42 @@ def _init_db(conn: sqlite3.Connection) -> None:
     if "engine" not in cols:
         conn.execute("ALTER TABLE file_cache ADD COLUMN engine TEXT DEFAULT ''")
     conn.commit()
+    _ensure_sdoc_map(conn)
+
+
+def _ensure_sdoc_map(conn: sqlite3.Connection) -> None:
+    """MEMORY-20: sdoc_map(sid, rid) does for sdoc what ssec_map does for
+    ssec. `sid` is UNINDEXED in the FTS table, so `WHERE sid IN (...)` scans
+    every row (~115 ms on a 10k-session index); the map turns it into rowid
+    lookups. An index built before the map is backfilled once, under a write
+    lock so the dashboard and the background helper can't both do it."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sdoc_map'").fetchone():
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sdoc_map'").fetchone():
+            conn.execute("CREATE TABLE sdoc_map (sid TEXT, rid INTEGER)")
+            conn.execute("CREATE INDEX idx_sdoc_map_sid ON sdoc_map(sid)")
+            conn.execute("INSERT INTO sdoc_map (sid, rid) SELECT sid, rowid FROM sdoc")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def sdoc_rowids_sql(n: int) -> str:
+    """`rowid IN (...)` clause selecting the sdoc rows of `n` sids via
+    sdoc_map; bind the sids after it."""
+    return "rowid IN (SELECT rid FROM sdoc_map WHERE sid IN (" + ",".join("?" for _ in range(n)) + "))"
 
 
 def _delete_session_rows(conn: sqlite3.Connection, sid: str) -> None:
-    conn.execute("DELETE FROM sdoc WHERE sid = ?", (sid,))
+    # sdoc and ssec rows are deleted by rowid via their maps: `WHERE sid = ?`
+    # on an UNINDEXED FTS column is a full scan.
+    conn.execute("DELETE FROM sdoc WHERE rowid IN (SELECT rid FROM sdoc_map WHERE sid = ?)", (sid,))
+    conn.execute("DELETE FROM sdoc_map WHERE sid = ?", (sid,))
     conn.execute("DELETE FROM semb WHERE sid = ?", (sid,))
     conn.execute("DELETE FROM semb_pending WHERE sid = ?", (sid,))
-    # ssec rows are deleted by rowid via ssec_map: `WHERE sid = ?` on an
-    # UNINDEXED FTS column is a full scan, and ssec is the big table.
     conn.execute("DELETE FROM ssec WHERE rowid IN (SELECT rid FROM ssec_map WHERE sid = ?)", (sid,))
     conn.execute("DELETE FROM ssec_map WHERE sid = ?", (sid,))
 
@@ -1196,7 +1233,18 @@ def _rrf(lists: list[list[str]], k: int = 60, weights: list[float] | None = None
 _VECTOR_RRF_WEIGHT = float(os.environ.get("CCC_SESSION_FTS_VECTOR_RRF_WEIGHT", "0.15"))
 
 
+def _semb_sig(conn: sqlite3.Connection):
+    """`semb`'s change counter, bumped by triggers on every insert/delete in
+    any process (MEMORY-20). COUNT/MAX(rowid) is not enough: re-embedding
+    the newest session reuses the same rowids."""
+    row = conn.execute("SELECT n FROM semb_rev").fetchone()
+    return row[0] if row else None
+
+
 def _refresh_vec_cache(conn: sqlite3.Connection) -> None:
+    sig = _semb_sig(conn)
+    if sig == _vec_cache.get("sig"):
+        return  # unchanged: skip re-reading every vector blob
     sids: list[str] = []
     vecs: list[array] = []
     for sid, _kind, blob in conn.execute("SELECT sid, kind, vec FROM semb"):
@@ -1204,6 +1252,7 @@ def _refresh_vec_cache(conn: sqlite3.Connection) -> None:
         vecs.append(array("f", blob))
     _vec_cache["sids"] = sids
     _vec_cache["vecs"] = vecs
+    _vec_cache["sig"] = sig
 
 
 def _vector_rank(query: str, limit: int) -> list[str]:
@@ -1259,9 +1308,8 @@ def _drain_embeddings(conn: sqlite3.Connection, embed_jobs: list[tuple[str, list
     if not embed_jobs:
         pending = [r[0] for r in conn.execute("SELECT sid FROM semb_pending")]
         if pending:
-            placeholders = ",".join("?" for _ in pending)
             rows = conn.execute(
-                f"SELECT sid, title, prompts, report FROM sdoc WHERE sid IN ({placeholders})", pending,
+                f"SELECT sid, title, prompts, report FROM sdoc WHERE {sdoc_rowids_sql(len(pending))}", pending,
             ).fetchall()
             for sid, title, prompts, report in rows:
                 first_prompt = (prompts or "").split("\n---\n")[0]
@@ -1499,7 +1547,7 @@ def _sync_index(conn: sqlite3.Connection, force: bool = False) -> None:
                     if sid != old_sid:
                         _delete_session_rows(conn, sid)
                     if r.get("scratch", 0) == 0 and r.get("n_user", 0) > 0:
-                        conn.execute(
+                        cur = conn.execute(
                             "INSERT INTO sdoc VALUES (?, ?, ?, ?, ?, ?, ?)",
                             (
                                 sid,
@@ -1511,6 +1559,7 @@ def _sync_index(conn: sqlite3.Connection, force: bool = False) -> None:
                                 r["summary"],
                             ),
                         )
+                        conn.execute("INSERT INTO sdoc_map (sid, rid) VALUES (?, ?)", (sid, cur.lastrowid))
                         _insert_sections(conn, sid, r.get("sections") or [])
                         conn.execute(
                             "INSERT OR REPLACE INTO file_cache (path, sid, mtime, size, indexed, cwd, engine) "
@@ -1561,7 +1610,61 @@ def is_indexing() -> bool:
     recall() surfaces this so a caller hitting a cold index gets an honest
     'indexing: true' instead of silently-incomplete results.
     """
-    return _bg_sync_running
+    if _bg_sync_running:
+        return True
+    return bool(_helper_indexing["value"]) and time.time() - _helper_indexing["ts"] < 30
+
+
+_vec_refresh_lock = threading.Lock()
+
+
+def _refresh_vec_cache_async() -> None:
+    try:
+        if _semb_sig(_get_connection()) == _vec_cache.get("sig"):
+            return  # one 1-row read; nothing new to load
+    except Exception:
+        return
+    if not _vec_refresh_lock.acquire(blocking=False):
+        return  # one already running
+
+    def _worker() -> None:
+        try:
+            conn2 = _connect(_get_db_path())
+            try:
+                _refresh_vec_cache(conn2)
+            finally:
+                conn2.close()
+        except Exception:
+            pass
+        finally:
+            _vec_refresh_lock.release()
+
+    threading.Thread(target=_worker, daemon=True, name="session-fts-vec-refresh").start()
+
+
+def _delegate_background_sync() -> bool:
+    """MEMORY-20: run the full sync (corpus walk + parse + embed drain) in the
+    background-helper process, off the dashboard's GIL; the index is shared
+    on-disk SQLite. Same shape as ship_graph._delegate_background_sync
+    (CCC-142). True when handled: delegated, or deferred while the helper is
+    still booting (it syncs on start). False runs it in-process as before
+    (helper down, CCC_BG_HELPER=0, or we are the helper)."""
+    try:
+        from ccc_server import bg_helper
+    except Exception:
+        return False
+    if bg_helper.is_child():
+        return False
+    if bg_helper.ready():
+        reply = bg_helper.call("fts_sync", timeout=5)
+        if reply is not None:
+            _helper_indexing.update(value=bool(reply.get("indexing")), ts=time.time())
+            # The child's embeddings land in on-disk `semb`; re-read them
+            # here only when its counter moved, and never on this thread.
+            _refresh_vec_cache_async()
+            return True
+        return False
+    return bg_helper.starting()
 
 
 def _start_background_sync() -> None:
@@ -1569,8 +1672,14 @@ def _start_background_sync() -> None:
     its own connection. Idempotent while already running. This is what turns
     a 66s cold-start parse into a non-blocking warm-up: the request thread
     returns immediately and future requests see is_indexing() until it's done.
+    With the background helper up, the sync runs there instead (MEMORY-20).
     """
-    global _bg_sync_running
+    global _bg_sync_running, _last_sync_ts
+    if _delegate_background_sync():
+        # One kick per _SYNC_TTL: the dashboard never sees the child's own
+        # _last_sync_ts, so without this every request would kick again.
+        _last_sync_ts = time.time()
+        return
     with _bg_sync_state_lock:
         if _bg_sync_running:
             return
@@ -1944,10 +2053,9 @@ def _plain_snippets(conn: sqlite3.Connection, sids: list[str]) -> dict[str, str]
     out: dict[str, str] = {}
     if not sids:
         return out
-    placeholders = ",".join("?" for _ in sids)
     try:
         cur = conn.execute(
-            f"SELECT sid, title, prompts FROM sdoc WHERE sid IN ({placeholders})", sids,
+            f"SELECT sid, title, prompts FROM sdoc WHERE {sdoc_rowids_sql(len(sids))}", sids,
         )
     except sqlite3.OperationalError:
         return out
