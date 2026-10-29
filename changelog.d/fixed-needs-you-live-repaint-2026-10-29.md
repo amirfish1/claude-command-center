@@ -1,0 +1,1 @@
+- A session's "needs you" dot now appears as soon as it asks for permission and clears within seconds of you answering, instead of lingering for about 90 seconds; a terminal session's next turn also shows as working from its first tool.

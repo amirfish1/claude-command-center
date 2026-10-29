@@ -39634,10 +39634,11 @@
       }
       // Running turns remain visible between tools, using the same working
       // state as the live explanation updater. Tool pills remain a fallback
-      // for engines without turn-level status.
+      // for engines without turn-level status. The is-question pill (Needs
+      // approval / Question) is a wait, not work: counting it as working
+      // suppressed the needs-you dot while the session was blocked on us.
       const _isWorkingRow = sidebarSessionWorking(c, _applyLiveOverlayToRow(c)) || !!liveToolHtml
-        && (liveToolHtml.indexOf('conv-live-tool in-flight') !== -1
-          || liveToolHtml.indexOf('conv-live-tool is-question') !== -1);
+        && liveToolHtml.indexOf('conv-live-tool in-flight') !== -1;
       const isCodexRow = c.source === 'codex' || c.engine === 'codex';
       const isKimiRow = c.source === 'kimi' || c.engine === 'kimi';
       const isGeminiRow = c.source === 'gemini' || c.engine === 'gemini';
@@ -40387,7 +40388,15 @@
       const _readyToCloseRow = !isBacklogRow && !isGithubPrRow && !_isWorkingRow
         && !sessionIsOptimisticallySending(c.session_id || c.id)
         && sessionReadyToClose(c, _applyLiveOverlayToRow(c));
-      const _needsYouRow = !_isWorkingRow && !_readyToCloseRow && ((_applyLiveOverlayToRow(c).state || c.state) === 'waiting') && !c.archived && !c.verified;
+      // A live approval/question ask counts at once: the row's own state only
+      // turns 'waiting' on the next list refresh (CCC-245).
+      const _nyLive = _applyLiveOverlayToRow(c);
+      const _nyAsk = !!(_nyLive.is_live && (_nyLive.needs_approval || _nyLive.question_waiting));
+      // Same lag in reverse: once the ask is answered, live activity newer
+      // than the row's snapshot proves the row's 'waiting' is stale.
+      const _nyStateStale = !_nyAsk && _nyLive.is_live && _nyLive.sidecar_status === 'active'
+        && (_nyLive.sidecar_ts || 0) > (c.sidecar_ts || 0);
+      const _needsYouRow = !_isWorkingRow && !_readyToCloseRow && (_nyAsk || (!_nyStateStale && (_nyLive.state || c.state) === 'waiting')) && !c.archived && !c.verified;
       const needsYouHtml = _needsYouRow
         ? '<span class="conv-needs-you" title="Needs you - the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';

@@ -10376,6 +10376,7 @@ _WORKING_GAP_WINDOW = 120
 # (state=="ended") drops the pin instantly — you resume, not reply.
 _WAITING_STICKY_WINDOW = 90  # seconds
 _waiting_sticky_seen = {}    # session_id -> monotonic ts of last real "waiting"
+_waiting_sticky_sidecar = {}  # session_id -> newest sidecar_ts seen while "waiting"
 
 
 def _stamp_session_state(c):
@@ -10398,16 +10399,28 @@ def _stamp_session_state(c):
     now = time.monotonic()
     if raw == "waiting":
         _waiting_sticky_seen[sid] = now
+        # Evidence clock, not wall clock: live snapshots are coalesced, so a
+        # stale pre-answer entry stamped after the answer must not move this
+        # past the answering tool's sidecar_ts.
+        _waiting_sticky_sidecar[sid] = max(
+            _waiting_sticky_sidecar.get(sid, 0.0), float(c.get("sidecar_ts") or 0))
         return raw
     # A dead process is "ended" — never hold it as waiting (you resume it, you
     # do not reply to it). Drop the pin and report the real state.
     if raw == "ended" or not c.get("is_live"):
         _waiting_sticky_seen.pop(sid, None)
+        _waiting_sticky_sidecar.pop(sid, None)
         return raw
+    # The ask was answered, not flapped: only a tool that ran after the human
+    # replied writes a fresh "active" sidecar, so release the pin at once
+    # instead of holding the badge ~90s past the answer (CCC-245).
+    answered = (c.get("sidecar_status") == "active"
+                and float(c.get("sidecar_ts") or 0) > _waiting_sticky_sidecar.get(sid, float("inf")))
     seen = _waiting_sticky_seen.get(sid)
-    if seen is not None and (now - seen) < _WAITING_STICKY_WINDOW:
+    if not answered and seen is not None and (now - seen) < _WAITING_STICKY_WINDOW:
         return "waiting"
     _waiting_sticky_seen.pop(sid, None)
+    _waiting_sticky_sidecar.pop(sid, None)
     return raw
 
 
@@ -24084,6 +24097,13 @@ def _add_sidecar_fields(entry):
         entry["sidecar_file"] = _shell_command_activity_label(file_ref) if tool == "Bash" else file_ref
         entry["sidecar_ts"] = inflight.get("started_at", 0)
         entry["sidecar_in_flight"] = True
+        # Only PostToolUse writes status=active, so a new turn's first tool
+        # still reads Stop's 'waiting' until it finishes. A tool started after
+        # that status write proves the turn resumed (CCC-245); an interrupted
+        # tool's stale marker predates Stop and stays 'waiting'.
+        if (sc and sc.get("status") == "waiting"
+                and float(inflight.get("started_at") or 0) > float(sc.get("timestamp") or 0)):
+            entry["sidecar_status"] = "active"
         if inflight.get("tool") == "AskUserQuestion":
             ask_payload = _enrich_ask_payload_from_transcript(
                 sid, _ask_payload_from_state(inflight)

@@ -309,6 +309,28 @@ class TestWaitingStickyHysteresis(unittest.TestCase):
         self.assertEqual(
             self._stamp(question_waiting=False, sidecar_in_flight=True), "working")
 
+    def test_answered_ask_releases_pin_immediately(self):
+        # CCC-245: PostToolUse writes a fresh "active" sidecar only after the
+        # tool ran, i.e. after the human answered — that is not a flap.
+        self.assertEqual(self._stamp(needs_approval=True, sidecar_ts=time.time() - 5), "waiting")
+        self.assertEqual(
+            self._stamp(sidecar_status="active", sidecar_ts=time.time() + 1), "working")
+        self.assertNotIn(self.sid, self.server._waiting_sticky_seen)
+
+    def test_stale_snapshot_after_answer_does_not_hide_it(self):
+        # Coalesced live snapshots can replay the pre-answer entry after the
+        # answering tool finished; the pin compares sidecar_ts, not wall time.
+        self.assertEqual(self._stamp(needs_approval=True, sidecar_ts=100.0), "waiting")
+        self.assertEqual(self._stamp(needs_approval=True, sidecar_ts=100.0), "waiting")
+        self.assertEqual(
+            self._stamp(sidecar_status="active", sidecar_ts=time.time()), "working")
+
+    def test_older_active_sidecar_keeps_pin(self):
+        # An "active" write from before the ask proves nothing was answered.
+        self.assertEqual(self._stamp(needs_approval=True, sidecar_ts=time.time() - 10), "waiting")
+        self.assertEqual(
+            self._stamp(sidecar_status="active", sidecar_ts=time.time() - 30), "waiting")
+
     def test_ended_drops_pin_immediately(self):
         # A dead process is "ended" even if it was waiting last poll — you resume
         # it, not reply to it; the pin must not survive death.
