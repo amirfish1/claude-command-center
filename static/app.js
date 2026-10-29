@@ -27367,8 +27367,10 @@
       }
     }
 
-    const rowKeys = Array.from(group.children)
-      .filter(child => child.classList && child.classList.contains('conv-item'))
+    // Active mode nests rows inside [data-role=current-object-group-rows], so
+    // read descendants (of this group only), not direct children.
+    const rowKeys = Array.from(group.querySelectorAll('.conv-item'))
+      .filter(child => child.closest('[data-object-drop-zone]') === group)
       .map(conversationNodeIdForElement)
       .filter(Boolean);
     const nextKeys = rowKeys.filter(key => movedKeys.indexOf(key) === -1);
