@@ -16,6 +16,19 @@ transcript or tool content, files, absolute paths, repository identity, branches
 environment/auth state, command output, usernames, hostnames, contact details,
 Git identity, session UUIDs, full worker IDs, source IPs, or raw logs.
 
+## Report a problem
+
+The rail's **⚑ Report** flag and the dashboard's **Report a problem** link
+use the same private channel by default. The report text is the visible
+preview (**Show exactly what's sent**): your description, optional name and
+contact, CCC version, current session ID, user agent, and, unless you untick
+it, the 7-day local health report described in
+[telemetry.md](telemetry.md#local-health-report-nothing-is-sent). Nothing is
+added after you review it. A public GitHub issue is still available as the
+second option.
+
+## Support endpoint
+
 The dedicated support endpoint accepts only `schema_version`, `request_id`,
 `ccc_version`, and `report_text`. It rate-limits at the edge without application
 storage of the source IP, sends the report to a maintainer-only inbox using a

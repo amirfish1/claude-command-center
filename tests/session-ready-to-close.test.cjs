@@ -41,7 +41,7 @@ test('ready explanation ends in a Close button instead of a CLOSE label (CCC-136
   const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
   const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
     c: { ...completed, session_state: {} }, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
-    _codexStateWorking: false, _readyToCloseRow: true,
+    _codexStateWorking: false, _readyToCloseRow: true, _childLaneRow: false,
     sessionIsOptimisticallySending: () => false, preSendPreviewFor: () => null,
     _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
   });
@@ -52,6 +52,23 @@ test('ready explanation ends in a Close button instead of a CLOSE label (CCC-136
   assert.match(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), /data-role="archive" data-archived="true"/);
   assert.doesNotMatch(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), />Archive</);
   assert.doesNotMatch(html, /data-label="Next"/);
+});
+
+test('child lanes get no Close or attention chips; they report to their parent', () => {
+  const start = app.indexOf('      // Outcome line (GOAL-1)');
+  const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
+  const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
+    c: { ...completed, session_state: {} }, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
+    _codexStateWorking: false, _readyToCloseRow: true, _childLaneRow: true,
+    sessionIsOptimisticallySending: () => false, preSendPreviewFor: () => null,
+    _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
+    rowHandoff: () => null, sessionAttentionStep: () => null,
+    attentionChipsHtml: () => '<button data-role="handoff-answer">Answer</button>',
+  });
+  assert.match(html, /archive when ready/);
+  assert.doesNotMatch(html, /conv-ready-close|handoff-answer/);
+  assert.match(app, /const _canHandOff = ideaTicketsOn\(\) && !_childLaneRow/);
+  assert.match(app, /const autoSwitchHtml = _ideaAvatarHtml\(c\) && !_childLaneRow/);
 });
 
 

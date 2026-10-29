@@ -1,0 +1,1 @@
+- The runaway-session detector now also watches Kimi, Devin CLI and Hermes sessions, not just Claude and Codex.

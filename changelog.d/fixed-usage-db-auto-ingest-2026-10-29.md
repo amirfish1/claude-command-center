@@ -1,0 +1,1 @@
+- The usage database (`throughput.sqlite3`) now refreshes itself: the dashboard runs an incremental ingest every hour when the database exists, so notification digests and savings lines stop reading a frozen copy. Set `CCC_USAGE_INGEST_DISABLED=1` to turn it off.

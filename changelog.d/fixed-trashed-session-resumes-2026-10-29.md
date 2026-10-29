@@ -1,0 +1,1 @@
+- A trashed session that gets a new prompt now returns to Active (marked unarchived) instead of staying hidden in Trash; finishing an in-flight turn still leaves it trashed.

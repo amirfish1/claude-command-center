@@ -25,7 +25,10 @@ reports):
   uploading is ever added, that change re-asks for consent, the way
   Syncthing handles report-version bumps.
 
-Cost: one tail read of perf-events.jsonl and of activity.log, the session
+``?hours=N`` (default 24, at most 168) sets the look-back window; the
+"Report a problem" form attaches a 7-day report.
+
+Cost: one bounded tail read of perf-events.jsonl and of activity.log, the session
 row list the dashboard already caches, decision-inbox cards, and two ``wt``
 calls cached for an hour. It runs only when someone requests a report,
 never on a poll.
@@ -34,6 +37,7 @@ never on a poll.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
 import re
 import sys
@@ -56,7 +60,14 @@ _COUNT_BUCKETS = ((0, 0), (1, 1), (2, 5), (6, 20), (21, 50), (51, 100),
 _BUILTIN_VIEWS = {"sessions", "queues", "morning", "decision-inbox",
                   "spawn-ledger", "savings", "pipeline-canvas"}
 
-_ACTIVITY_TAIL_BYTES = 4 * 1024 * 1024
+_ACTIVITY_TAIL_BYTES = 16 * 1024 * 1024
+# A busy install writes ~8 MB of perf events a day; a 7-day report reads at
+# most this much of the sink's tail (on request only, never on a poll).
+_PERF_TAIL_BYTES = 64 * 1024 * 1024
+MAX_WINDOW_HOURS = 7 * 24
+# record_event writes json.dumps(row) with fixed key order, so most rows
+# can skip the full JSON parse; anything that does not match falls back.
+_PERF_ROW_RE = re.compile(r'^\{"ts": "([^"]+)", "kind": "(\w+)", "ms": (-?\d+)')
 _WT_CACHE_TTL_S = 3600
 _wt_cache = {"at": 0.0, "value": None}
 _wt_lock = threading.Lock()
@@ -141,8 +152,7 @@ def _waiting_on_user(row):
     return bool(step) and step.rstrip(".").lower() != "none"
 
 
-def _session_section(rows, cards, now, exact):
-    since = now - 24 * 3600
+def _session_section(rows, cards, since, exact):
     active = [r for r in rows if (r.get("mtime") or 0) >= since]
     active_ids = {r.get("session_id") for r in active if r.get("session_id")}
     waiting = sum(1 for r in active if _waiting_on_user(r))
@@ -162,7 +172,7 @@ def _session_section(rows, cards, now, exact):
         return int(round(100.0 * n / len(active) / 5.0) * 5) if active else None
 
     return {
-        "active_24h": _count(len(active), exact),
+        "active": _count(len(active), exact),
         "live": _count(sum(1 for r in active if r.get("is_live")), exact),
         "pct_with_open_decision": pct(with_card),
         "pct_waiting_on_user": pct(waiting),
@@ -173,8 +183,7 @@ def _session_section(rows, cards, now, exact):
 _INJECT_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC\s+\S+\s+INJECT\s.*?\bsource=(\S+)")
 
 
-def _messages_section(path, now, exact):
-    since = now - 24 * 3600
+def _messages_section(path, since, exact):
     by_source = {}
     try:
         size = os.path.getsize(path)
@@ -199,7 +208,7 @@ def _messages_section(path, now, exact):
     except OSError:
         pass
     return {
-        "sent_24h": _count(sum(by_source.values()), exact),
+        "sent": _count(sum(by_source.values()), exact),
         "by_source": {k: _count(v, exact) for k, v in sorted(by_source.items())},
     }
 
@@ -226,12 +235,59 @@ def _wt_counts():
     return value
 
 
+def read_perf_window(since_ts, path=None, max_bytes=_PERF_TAIL_BYTES):
+    """Perf rows with ts >= since_ts from the last ``max_bytes`` of the sink.
+
+    perf_events.read_events tails only 2 MB, which is a few hours on a busy
+    install. A multi-day report needs more, so it reads a bounded tail and
+    parses only the fields it uses: the detail dict only for the two kinds
+    whose detail the report reads.
+    """
+    path = path or _perf._events_path()
+    since_iso = datetime.fromtimestamp(since_ts, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S")
+    events = []
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+                f.readline()
+            for raw in f:
+                line = raw.decode("utf-8", errors="ignore")
+                m = _PERF_ROW_RE.match(line)
+                if m and m.group(2) not in ("view_switch", "rail_apps"):
+                    if m.group(1) >= since_iso:
+                        events.append({"kind": m.group(2), "ms": int(m.group(3))})
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                ts = _perf._parse_iso(row.get("ts"))
+                if ts is not None and ts >= since_ts:
+                    events.append(row)
+    except OSError:
+        pass
+    return events
+
+
 def build_report(exact=False, now=None, rows=None, cards=None, wt_counts=None,
-                 events=None, activity_path=None):
-    """The report dict. Every source degrades to empty instead of raising."""
+                 events=None, activity_path=None, hours=24):
+    """The report dict. Every source degrades to empty instead of raising.
+
+    ``hours`` is the look-back window, clamped to 1..MAX_WINDOW_HOURS.
+    """
     now = time.time() if now is None else now
+    try:
+        hours = max(1, min(MAX_WINDOW_HOURS, int(hours)))
+    except (TypeError, ValueError):
+        hours = 24
+    since = now - hours * 3600
     if events is None:
-        events = _perf.read_events(now - 24 * 3600)
+        events = read_perf_window(since)
     if rows is None:
         from ccc_server import decision_inbox as _di
         rows = _di._server_rows()
@@ -259,7 +315,7 @@ def build_report(exact=False, now=None, rows=None, cards=None, wt_counts=None,
     return {
         "report_version": REPORT_VERSION,
         "generated_at": datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
-        "window_hours": 24,
+        "window_hours": hours,
         "exact": bool(exact),
         "ccc_version": str(getattr(_core, "__version__", "") or ""),
         "platform": sys.platform,
@@ -267,7 +323,7 @@ def build_report(exact=False, now=None, rows=None, cards=None, wt_counts=None,
         "latency": latency,
         "view_switch": view_switch,
         "rail_apps": rail,
-        "sessions": _session_section(rows or [], cards or [], now, exact),
-        "messages": _messages_section(activity_path, now, exact),
+        "sessions": _session_section(rows or [], cards or [], since, exact),
+        "messages": _messages_section(activity_path, since, exact),
         "watchtower": wt,
     }

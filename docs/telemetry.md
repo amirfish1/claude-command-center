@@ -301,9 +301,11 @@ This is the website only. The installed CCC app never loads PostHog, and
 ## Local health report (nothing is sent)
 
 `GET /api/telemetry/health-report` returns a snapshot of how this install
-has performed over the last 24 hours, for pasting into a bug report. It is
-built only when requested, from files already on disk, and **it never
-leaves the machine on its own**. It is not part of the beacon above, and
+has performed, for pasting into a bug report. `?hours=N` sets the window
+(default 24, at most 168). It is built only when requested, from files
+already on disk, and **it never leaves the machine on its own**; the
+**Report a problem** form (below) attaches a 7-day copy only when you send
+a report. It is not part of the beacon above, and
 `CCC_TELEMETRY_DISABLED` does not affect it.
 
 It contains a closed set of fields: `report_version`, CCC version,
@@ -311,7 +313,7 @@ platform, latency histograms (fixed buckets in `latency_buckets_ms`, plus
 p50/p75/p95) for each perf-event kind including `view_switch` (rail click
 to painted view) and `rail_apps` (the left rail's app-list fetch), rail
 fetch ok/failed/retry counts, and bucketed counts ("21-50"): active and
-live sessions in 24h, open Decision cards, messages sent by source
+live sessions in the window, open Decision cards, messages sent by source
 (`composer` for typed by a person, `api`, `wt`, `other`), and WatchTower
 queues, open tickets, and alive/known workers. The share of active sessions
 with an open Decision card or waiting on the user is rounded to 5%. View
@@ -321,6 +323,22 @@ returns raw counts instead of buckets, for private support.
 It carries no session ids, paths, repo or queue names, ticket or prompt
 text, user app names, or identity. Histograms rather than percentiles are
 the unit because histograms from many reports add up exactly.
+
+## Report a problem
+
+A **⚑ Report** flag sits at the foot of the left rail on every CCC page (it
+never opens on its own; after a page switch over 5 s or a failed rail load
+it only shows a dot). It opens a form with **What went wrong?**, an
+**Include diagnostics from the last 7 days** box (ticked by default), and
+**Show exactly what's sent**, which displays the full report text. The
+diagnostics are the health report above, as JSON inside that text, so
+what you see is exactly what is sent.
+
+The default destination is private support (see
+[private-diagnostics.md](private-diagnostics.md)): the report goes to the
+maintainer only and you get a report ID back. Private reports carry exact
+counts. The other destination, a public GitHub issue, carries the bucketed
+counts instead.
 
 ## State files
 

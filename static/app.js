@@ -3530,8 +3530,10 @@
     const next = String(summary.next_step_user || '').trim();
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(next);
     const hasAnswer = !!text;
+    const attn = (working || ready || (hasNext && !rowHandoff(c))) ? null : sessionAttentionStep(c);
     return working ? { label: 'Working', kind: 'working', hasAnswer, text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
       : ready ? { label: 'Close', kind: 'ready', hasAnswer, text: summary.did || 'Reviewed as complete; archive when ready.' }
+      : attn ? { label: attn.label, kind: attn.kind, hasAnswer, text: attn.text }
       : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update', hasAnswer,
         text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
   }
@@ -3753,6 +3755,58 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _ultraFreshStart, { once: true });
   else _ultraFreshStart();
 
+  // Mirrors idea_tickets.attention() on the server for the owner-facing
+  // cases: a handed-off ticket (running, or blocked on a question) and a
+  // finished turn that needs the owner without naming a next step (a
+  // decision, or a remaining action the owner holds). Done and agent-owned
+  // turns are closed or handed off by the server autopilot.
+  const _ATTN_NONE_RE = /^(?:none|nothing|no action(?: is)?(?: needed| required)?|n\/?a|not applicable)?\s*[.!]?\s*(?:[—–(:-][\s\S]*)?$/i;
+  const _ATTN_OWNER_RE = /\bowner\s*[:=]\s*(agent|user|external|amir|human)\b|^\s*\(?(agent|user|external|amir|human)\)?\s*[:—–-]/i;
+  function _attentionActionOwner(a) {
+    if (!a || typeof a !== 'object') return '';
+    let owner = String(a.owner || '').trim().toLowerCase();
+    if (!owner) {
+      const m = String(a.text || '').match(_ATTN_OWNER_RE);
+      owner = m ? String(m[1] || m[2]).toLowerCase() : '';
+    }
+    return owner === 'amir' || owner === 'human' ? 'user' : owner;
+  }
+  function rowHandoff(c) {
+    const h = c && c.idea_ticket && !c.idea_ticket.closed && c.idea_ticket.handoff;
+    return h && (h.state === 'running' || h.state === 'blocked' || h.state === 'waiting') ? h : null;
+  }
+  function sessionAttentionStep(c) {
+    const h = rowHandoff(c);
+    if (h && h.state === 'blocked') {
+      return { label: 'Needs you', kind: 'next', handoff: 'blocked',
+        text: String(h.question || 'The handed-off session is waiting on you.') };
+    }
+    const ss = (c && c.session_state) || {};
+    if (h && h.state === 'waiting') {
+      // Parked on another ticket, a worker or a client: not the owner's turn.
+      return { label: 'Waiting', kind: 'handoff', handoff: 'running',
+        text: 'Waiting on ' + String(h.waiting_on || 'a dependency')
+          + (h.question ? ': ' + String(h.question) : '') };
+    }
+    if (h) {
+      return { label: 'Handed off', kind: 'handoff', handoff: 'running',
+        text: String(ss.did || 'CCC is driving this to a close.') };
+    }
+    const next = String(ss.next_step_user || '').trim();
+    if (next && !_ATTN_NONE_RE.test(next)) return null;
+    const comp = ss.completion;
+    if (!comp || comp.valid !== true || comp.ready_to_close) return null;
+    const mine = (comp.remaining_actions || []).find(a => _attentionActionOwner(a) === 'user');
+    if (mine) {
+      return { label: 'Next', kind: 'next', needsYou: true,
+        text: String(mine.text || '').replace(/^\s*(?:owner\s*[:=]\s*)?\(?(?:user|amir|human)\)?\s*[:—–-]\s*/i, '') };
+    }
+    if (Number((comp.decision_dependency || {}).score) > 0) {
+      return { label: 'Next', kind: 'next', needsYou: true,
+        text: 'Decision needed: ' + String((comp.decision_dependency || {}).evidence || 'see the last reply') };
+    }
+    return null;
+  }
   // The server derives readiness from evidence-backed completion gates.
   // Existing explicit reviews remain valid until new transcript activity.
   function sessionReadyToClose(c, live = c) {
@@ -3778,6 +3832,39 @@
   function readyToCloseArchiveHtml() {
     return '<button type="button" class="conv-archive-btn conv-ready-archive conv-ready-close" data-role="archive" data-archived="true"'
       + ' title="Close: archive this finished session" aria-label="Close: archive this finished session">Close</button>';
+  }
+
+  // Chips at the end of an owner-facing row: answer a blocked handoff, take
+  // a handed-off ticket back, or open the session when there's no one-tap reply.
+  function attentionChipsHtml(c, attn) {
+    if (!attn) return '';
+    if (attn.handoff === 'blocked') {
+      return '<button type="button" class="conv-attn-chip is-primary" data-role="handoff-answer" title="Answer the question; the session continues">Answer</button>'
+        + '<button type="button" class="conv-attn-chip" data-role="handoff-takeback" title="Take this back: CCC stops watching it">Take back</button>';
+    }
+    if (attn.handoff === 'running') {
+      return '<button type="button" class="conv-attn-chip" data-role="handoff-takeback" title="Take this back: CCC stops watching it">Take back</button>';
+    }
+    if (attn.needsYou && !sessionQuickAction((c.session_state || {}).next_action)) {
+      return '<button type="button" class="conv-attn-chip is-primary" data-role="attn-open" title="Open the session to decide">Open</button>';
+    }
+    return '';
+  }
+
+  // AUTO switch under a ticket row's avatar: who drives the work. On (CCC
+  // drives it to a close, animated), paused (it asked you), off (you drive).
+  // Clicking hands off or takes back through the same handlers as the chips.
+  function autonomySwitchHtml(c, canHandOff) {
+    const h = rowHandoff(c);
+    if (!h && !canHandOff) return '';
+    const state = !h ? 'off' : h.state === 'blocked' ? 'paused' : 'on';
+    const title = state === 'off' ? 'Interactive: you drive this. Click to hand it off; CCC drives it to a close and asks you only if stuck.'
+      : state === 'paused' ? 'Autonomous, paused on your answer. Click to take it back.'
+      : (h.state === 'waiting' ? 'Autonomous, waiting on ' + (h.waiting_on || 'a dependency') : 'Autonomous: CCC is driving this to a close')
+        + '. Click to take it back.';
+    return '<button type="button" class="conv-auto-switch is-' + state + '" data-role="' + (h ? 'handoff-takeback' : 'handoff') + '"'
+      + ' aria-pressed="' + (h ? 'true' : 'false') + '" title="' + escapeAttr(title) + '" aria-label="' + escapeAttr(title) + '">'
+      + '<span class="conv-auto-label">AUTO</span></button>';
   }
 
   function _trackedRowStatus(c) {
@@ -17351,6 +17438,41 @@
     }
   }, true);
 
+  // Handoff chips and the row's Hand off button. Delegated so they survive
+  // row repaints; the server restamps the row, and the list refresh shows it.
+  document.addEventListener('click', async ev => {
+    const btn = ev.target.closest && ev.target.closest(
+      '[data-role="handoff"], [data-role="handoff-answer"], [data-role="handoff-takeback"]');
+    if (!btn || !btn.closest('#convList')) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    const row = btn.closest('.conv-item[data-session-id]');
+    const sid = row && row.dataset.sessionId;
+    if (!sid || btn.disabled) return;
+    const role = btn.dataset.role;
+    const body = { session_id: sid };
+    let url = '/api/idea-tickets/handoff';
+    if (role === 'handoff-takeback') url = '/api/idea-tickets/takeback';
+    if (role === 'handoff-answer') {
+      const step = row.querySelector('.conv-outcome-step');
+      const text = window.prompt((step && step.textContent ? step.textContent + '\n\n' : '') + 'Your answer:');
+      if (!text || !text.trim()) return;
+      url = '/api/idea-tickets/answer';
+      body.text = text.trim();
+    }
+    btn.disabled = true;
+    try {
+      const data = await ccPostJson(url, body);
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Request failed');
+      showOpToast(role === 'handoff' ? 'Handed off ' + (data.ref || '') + ': CCC will drive it to a close'
+        : role === 'handoff-takeback' ? 'Taken back: CCC stopped watching ' + (data.ref || '')
+        : 'Answer sent to the session');
+      refreshConversationList();
+    } catch (error) {
+      btn.disabled = false;
+      showOpToast(String(error.message || error), 'error');
+    }
+  }, true);
+
   // CCC-1218: turn a "Needs you" ask into buttons. Built from what agents
   // actually write there: decide/confirm/tell/answer (-> Reply), reload or
   // hard-refresh CCC (-> Reload), a CCC launchctl kickstart (-> Restart CCC),
@@ -25886,7 +26008,7 @@
       + _avatarModelBadgeHtml(presentation)
       + '<span class="session-activity-dot" aria-hidden="true"></span></span>';
   }
-  function _ideaAvatarHtml(c, mobile = false) {
+  function _ideaAvatarHtml(c, mobile = false, childLane = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
     // CCC-139: Small bugs rows get the same numbered avatar as Ideas.
     const match = ref && ref.match(/^(IDEAS|SMALL-BUGS)-(\d+)$/);
@@ -25897,6 +26019,14 @@
     const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
     const presentation = sessionIconPresentation(c, false);
     const repoPath = sessionRepoAvatarPath(c);
+    // A child lane sits under its parent's numbered avatar: just the model mark.
+    if (childLane) {
+      return '<button type="button" class="conv-idea-avatar is-child-mini conv-session-icon"'
+        + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
+        + ' title="' + escapeAttr(ref + ' · ' + presentation.title) + '"'
+        + ' aria-label="Open ' + noun + ' ' + escapeAttr(num) + '">'
+        + _avatarModelBadgeHtml(presentation) + '</button>';
+    }
     const background = repoPath ? repoAvatarHtml(repoPath, repo, 'conv-avatar-background') : '';
     return '<button type="button" class="conv-idea-avatar' + (background ? ' has-repo-background' : '') + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
       + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
@@ -31790,6 +31920,9 @@
     '[data-role="move-lane"]',
     '[data-role="move-idea"]',
     '[data-role="idea-ticket"]',
+    '[data-role="handoff"]',
+    '[data-role="handoff-answer"]',
+    '[data-role="handoff-takeback"]',
     '[data-role="read-row-answer"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
@@ -39686,7 +39819,7 @@
             + '</svg>';
       }
 
-      const ideaAvatarHtml = _ideaAvatarHtml(c);
+      const ideaAvatarHtml = _ideaAvatarHtml(c, false, Number(opts.currentChildDepth || 0) > 0);
       const sessionIconHtml = ideaAvatarHtml || (iconType
         ? '<span class="conv-session-icon ' + iconType + ' is-not-working" title="' + escapeAttr(iconTitle) + '" aria-hidden="true">'
             + svgMarkup
@@ -40091,6 +40224,20 @@
         && !c.archived && !c.trashed && (lifecycleContext === 'all-main' || lifecycleContext === 'active'))
         ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="IDEAS" title="File in Features" aria-label="File in Features">&#128161;</button>'
           + '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="SMALL-BUGS" title="File in Small bugs" aria-label="File in Small bugs">&#128027;</button>'
+        : '';
+      // Hand off: CCC tells the session it owns its ticket and watches it to
+      // a close (or a "needs input" block). Any tab; a row without a ticket
+      // gets one in Small bugs.
+      // Child lanes run, end and report back to their parent: no chips.
+      const _childLaneRow = Number(opts.currentChildDepth || 0) > 0;
+      const _canHandOff = ideaTicketsOn() && !_childLaneRow && !isBacklogRow && !isGithubPrRow && !c.archived && !c.trashed
+        && !rowHandoff(c) && !(c.idea_ticket && c.idea_ticket.closed) && !c.pending_spawn
+        && lifecycleContext !== 'trash' && !sessionReadyToClose(c);
+      // Numbered-avatar rows carry the AUTO switch under the avatar instead.
+      const autoSwitchHtml = _ideaAvatarHtml(c) && !_childLaneRow
+        ? autonomySwitchHtml(c, _canHandOff) : '';
+      const handoffBtn = (_canHandOff && !autoSwitchHtml)
+        ? '<button class="conv-lane-btn conv-handoff-btn" data-role="handoff" title="Hand off: CCC drives this to a close and only asks you if it gets stuck" aria-label="Hand off">&#129309;</button>'
         : '';
       const moveLaneBtn = _ideaRef
         ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="' + _ideaToQueue + '" title="Move to ' + _ideaToLabel + '" aria-label="Move to ' + _ideaToLabel + '">' + (_ideaToQueue === 'IDEAS' ? '&#128161;' : '&#128027;') + '</button>'
@@ -40504,7 +40651,7 @@
         // One label carries the state (no separate status column):
         // Working + current activity, Next + user action, Update + summary, or Close
         // after an explicit review or passing completion assessment.
-        let _label, _kind, _stepText;
+        let _label, _kind, _stepText, _attn = null;
         if (_outWorking) {
           _label = 'Working'; _kind = 'working';
           const _turnText = (_latest && !_latestStale) ? _latest : '';
@@ -40512,6 +40659,8 @@
             || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
         } else if (_readyToCloseRow || c.archived || c.trashed) {
           _label = 'Close'; _kind = 'ready'; _stepText = _did || 'Reviewed as complete; archive when ready.';
+        } else if ((_attn = (_hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c))) {
+          _label = _attn.label; _kind = _attn.kind; _stepText = _attn.text;
         } else if (_hasNext) {
           // A next step is always "yours"; one green label, no separate
           // NEEDS YOU variant.
@@ -40535,11 +40684,12 @@
           + (_hasNext ? 'Next step: ' + _next : '')
           + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Last reply: ' + _latest : '') + _assessmentTip;
         // A finished row's label is its Close button, after the text.
-        const _closeBtn = _kind === 'ready' && _readyToCloseRow;
+        const _closeBtn = _kind === 'ready' && _readyToCloseRow && !_childLaneRow;
         outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + (_closeBtn ? ' has-close-btn' : '') + '" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-step"' + (_closeBtn ? '' : ' data-label="' + escapeAttr(_label) + '"') + '>' + escapeHtml(_stepText) + '</span>'
             + (_closeBtn ? readyToCloseArchiveHtml() : '')
+            + (_childLaneRow ? '' : attentionChipsHtml(c, _attn))
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
@@ -40606,11 +40756,13 @@
         ? '<button type="button" class="conv-trash-btn conv-ready-archive is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">Restore</button>'
         : c.archived
           ? '<button type="button" class="conv-archive-btn conv-ready-archive is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active">Restore</button>'
-        : _readyToCloseRow ? readyToCloseArchiveHtml()
+        : (_readyToCloseRow && !_childLaneRow) ? readyToCloseArchiveHtml()
         : _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'
-        + _waAvatarHtml(c, _waTitle)
+        // Ticket rows keep the AUTO switch under the avatar here too.
+        + (autoSwitchHtml ? '<div class="wa-av-col">' + _waAvatarHtml(c, _waTitle) + autoSwitchHtml + '</div>'
+          : _waAvatarHtml(c, _waTitle))
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
@@ -40628,6 +40780,7 @@
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row' + (_outcomeInline ? ' has-inline-step' : '') + '">'
             + sessionIconHtml
+            + autoSwitchHtml
             + _nyaChevronHtml
             + needsYouHtml
             + workingDotHtml
@@ -40670,7 +40823,7 @@
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
             + (opts.evergreenAgent ? '' : (lifetimeTokensHtml || ''))
             + '</span>'
-            + (_readyToCloseRow && !_outcomeInline ? readyToCloseArchiveHtml() : '')
+            + (_readyToCloseRow && !_outcomeInline && !_childLaneRow ? readyToCloseArchiveHtml() : '')
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Single-line evergreen variant: the badges that normally drop to a
             // second meta line sit inline here, just left of the time slot.
@@ -40686,7 +40839,7 @@
             +     quickTrashBtn
             +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '</span>'
-            +   '<span class="conv-row-actions">' + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
+            +   '<span class="conv-row-actions">' + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + handoffBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
@@ -43136,6 +43289,9 @@
         const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
         if (!ref) return;
         if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
+        const _handedOff = !c.archived && !c.trashed && !c.idea_ticket.closed
+          && ['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state);
+        if (bucket === 'handoff' && !_handedOff) return;
         if (bucket === 'archived' && (c.trashed || activeRefs.has(ref)
           || (!c.archived && !c.idea_ticket.closed))) return;
         if (bucket === 'trash' && !c.trashed) return;
@@ -43156,7 +43312,11 @@
           if (!prev || byRecency(c, prev) < 0) best.set(ref, c);
         });
       });
-      return Array.from(best.values()).sort(byRecency);
+      const rowsOut = Array.from(best.values()).sort(byRecency);
+      // A handed-off ticket leaves the main list for its own collapsed
+      // section until it closes (then Archived) or blocks (back on top).
+      return bucket === 'active'
+        ? rowsOut.filter(c => !['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state)) : rowsOut;
     };
     const _allTabIdeaConvs = _ideaTicketsOn ? _ideaTicketRows('ideas') : [];
     const _allTabSmallBugConvs = _ideaTicketsOn ? _ideaTicketRows('smallbugs') : [];
@@ -43498,7 +43658,8 @@
         })).join('') + '</div></div>';
     };
     if (_ticketLifecycleView) {
-      _ideaArchivedHtml = _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
+      _ideaArchivedHtml = _lifecycleSection('Handed off', 'ccc-' + _allTabView + '-handoff-collapsed', _ideaTicketRows(_allTabView, 'handoff'))
+        + _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
       _trashHtml = _lifecycleSection('Trash', 'ccc-' + _allTabView + '-trash-collapsed', _ideaTicketRows(_allTabView, 'trash'));
     } else if (_allTabView !== 'workers') {
       const _trashItems = [];
@@ -46022,7 +46183,7 @@
         if (!(await moveSessionIdeaTicket(sessionId, queue))) btn.disabled = false;
       });
     });
-    $convList.querySelectorAll('.conv-lane-btn:not(.conv-idea-move-btn)').forEach(btn => {
+    $convList.querySelectorAll('.conv-lane-btn:not(.conv-idea-move-btn):not(.conv-handoff-btn)').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         ev.preventDefault();
@@ -84673,10 +84834,15 @@
     });
   })();
 
-  // ── In-app bug reporting ────────────────────────────────────────
-  // Topbar link → modal → POST /api/bug-report → server shells out
-  // to `gh issue create`. On gh failure the handler returns the
-  // rendered markdown so we can offer a copy-to-clipboard fallback.
+  // ── In-app problem reporting ────────────────────────────────────
+  // Topbar link or the rail's floating flag → modal. The default
+  // destination is private support (POST /api/bug-report/private, which
+  // answers with a report ID). The secondary one, a public GitHub issue,
+  // posts to /api/bug-report, which shells out to `gh issue create`; on
+  // gh failure the handler returns the rendered markdown so we can offer
+  // a copy-to-clipboard fallback. Diagnostics from
+  // /api/telemetry/health-report ride inside the visible report text, so
+  // the preview stays exactly what is sent.
   const $bugLink = document.getElementById('bugReportLink');
   const $bugModal = document.getElementById('bugReportModal');
   const $bugBackdrop = document.getElementById('bugReportBackdrop');
@@ -84701,6 +84867,15 @@
   const $bugAutoOptOut = document.getElementById('bugAutoOptOut');
   const $bugShotSection = document.getElementById('bugReportScreenshotSection');
   const $bugShotEmailNote = document.getElementById('bugShotEmailNote');
+  const $bugDiagInclude = document.getElementById('bugDiagInclude');
+  const $bugDiagStatus = document.getElementById('bugDiagStatus');
+  const BUG_DIAG_HOURS = 168;
+  const BUG_DIAG_NOTE = 'Timings, counts, and versions only. No prompts, paths, session names, or ticket text.';
+  const BUG_PRIVATE_MAX_CHARS = 48000;
+  // Per open of the modal: one fetch per destination. Private reports get
+  // exact counts; a public issue gets the bucketed ("21-50") ones.
+  let bugDiag = { private: null, github: null };
+  let bugReportFrom = '';
   let bugCachedVersion = null;
   let bugFallbackMarkdown = '';
   let bugShotB64 = '';  // raw base64 PNG (no data: prefix), '' when no screenshot
@@ -84708,6 +84883,7 @@
   let bugDiagnosticRequestId = '';
   const bugDiagnosticSections = [
     'bugReportDestinationSection', 'bugReportIdentitySection',
+    'bugReportDiagSection',
     'bugReportScreenshotSection', 'bugReportContextSection',
     'bugReportPreviewSection', 'bugShotEmailNote',
   ].map((id) => document.getElementById(id));
@@ -84728,10 +84904,10 @@
     const title = document.getElementById('bugReportTitle');
     const intro = document.getElementById('bugReportIntro');
     const privacy = document.getElementById('bugReportPrivacyCopy');
-    if (title) title.textContent = diagnostic ? 'Report diagnostics' : 'Report a bug';
+    if (title) title.textContent = diagnostic ? 'Report diagnostics' : 'Report a problem';
     if (intro) intro.innerHTML = diagnostic
       ? 'Review the complete report below, edit it if needed, then send it directly to private support.'
-      : 'Tell us what broke privately by email (recommended) or as a public GitHub issue against <strong>amirfish1/claude-command-center</strong>.';
+      : 'Tell the maintainer what went wrong. Private reports get a report ID you can quote later.';
     if (privacy) privacy.textContent = diagnostic
       ? 'Only the text visible in Details will be sent. Prompts, ticket text, files, paths, and raw logs are never included.'
       : 'Only the data shown in the preview below is sent. No code, no file contents, no personal data is included.';
@@ -84765,7 +84941,66 @@
 
   function bugDestination() {
     const r = document.querySelector('input[name="bugDest"]:checked');
-    return (r && r.value) === 'github' ? 'github' : 'email';
+    return (r && r.value) === 'github' ? 'github' : 'private';
+  }
+
+  function bugDiagSetStatus(text, isError) {
+    if (!$bugDiagStatus) return;
+    $bugDiagStatus.textContent = text;
+    $bugDiagStatus.style.color = isError ? 'var(--danger, #f85149)' : '';
+  }
+
+  // Fetches the health report for the current destination once per modal
+  // open. Returns the cache entry {state: 'loading'|'ok'|'error', ...}.
+  function bugLoadDiagnostics() {
+    const dest = bugDestination();
+    const entry = bugDiag[dest];
+    if (entry) return entry.promise;
+    const fresh = { state: 'loading', text: '', error: '' };
+    bugDiag[dest] = fresh;
+    if ($bugDiagInclude && $bugDiagInclude.checked) bugDiagSetStatus('Collecting diagnostics…');
+    const url = '/api/telemetry/health-report?hours=' + BUG_DIAG_HOURS +
+      (dest === 'private' ? '&exact=1' : '');
+    fresh.promise = fetch(url, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then((data) => {
+        fresh.state = 'ok';
+        fresh.text = JSON.stringify(data, null, 1);
+      })
+      .catch((e) => {
+        fresh.state = 'error';
+        fresh.error = (e && e.message) || 'unknown error';
+      })
+      .then(() => {
+        if (bugDiag[dest] !== fresh) return;  // modal reopened meanwhile
+        if (bugDestination() === dest) {
+          if (fresh.state === 'ok') bugDiagSetStatus(BUG_DIAG_NOTE);
+          else bugDiagSetStatus('Could not collect diagnostics: ' + fresh.error, true);
+        }
+        bugRenderPreview();
+      });
+    return fresh.promise;
+  }
+
+  // The diagnostics appendix, or '' when unchecked or unavailable. Always
+  // part of the visible preview, never added behind the user's back.
+  function bugDiagnosticsMarkdown() {
+    if (!$bugDiagInclude || !$bugDiagInclude.checked) return '';
+    const entry = bugDiag[bugDestination()];
+    const lines = ['## Diagnostics (last 7 days)', ''];
+    if (bugReportFrom) lines.push('Reported from: `' + bugReportFrom + '`', '');
+    if (!entry || entry.state === 'loading') lines.push('(collecting…)');
+    else if (entry.state === 'error') lines.push('(unavailable: ' + entry.error + ')');
+    else lines.push('```json', entry.text, '```');
+    return lines.join('\n');
+  }
+
+  // The Details text plus the diagnostics appendix: the description body a
+  // GitHub issue gets, and the Description section of a private report.
+  function bugFullDescription() {
+    const desc = $bugDescInput ? $bugDescInput.value.trim() : '';
+    const diag = bugDiagnosticsMarkdown();
+    return diag ? desc + '\n\n' + diag : desc;
   }
 
   // Renders the exact outbound report body. Mirrors server.py's
@@ -84775,7 +85010,7 @@
   // screenshot attached for the GitHub destination is uploaded only at
   // submit time, so the preview shows a placeholder image line.
   function bugBuildReportMarkdown() {
-    const desc = $bugDescInput ? $bugDescInput.value.trim() : '';
+    const desc = bugFullDescription();
     const name = $bugName ? $bugName.value.trim() : '';
     const contact = $bugContact ? $bugContact.value.trim() : '';
     const version = bugCachedVersion || '';
@@ -84804,11 +85039,16 @@
 
   // Destination toggle: screenshots can only ride along with a GitHub
   // issue (they're pushed to a public branch at submit time), so the
-  // screenshot section swaps out for an explanatory note on email.
+  // screenshot section swaps out for an explanatory note on private.
   function bugApplyDestinationUI() {
+    if (bugDiagnosticMode) return;
     const isGithub = bugDestination() === 'github';
     if ($bugShotSection) $bugShotSection.style.display = isGithub ? '' : 'none';
     if ($bugShotEmailNote) $bugShotEmailNote.style.display = isGithub ? 'none' : '';
+    const entry = bugDiag[bugDestination()];
+    if (entry && entry.state === 'ok') bugDiagSetStatus(BUG_DIAG_NOTE);
+    else if (entry && entry.state === 'error') bugDiagSetStatus('Could not collect diagnostics: ' + entry.error, true);
+    if ($bugDiagInclude && $bugDiagInclude.checked) bugLoadDiagnostics();
     bugRenderPreview();
   }
 
@@ -84906,6 +85146,10 @@
     bugResetState();
     bugDiagnosticRequestId = '';
     bugApplyMode(false);
+    bugDiag = { private: null, github: null };
+    bugReportFrom = typeof opts.from === 'string' ? opts.from.slice(0, 64) : '';
+    if ($bugDiagInclude) $bugDiagInclude.checked = true;
+    bugDiagSetStatus(BUG_DIAG_NOTE);
     if ($bugAutoBanner) $bugAutoBanner.style.display = auto ? '' : 'none';
     if ($bugAutoOptOut) $bugAutoOptOut.checked = false;
     if ($bugDescInput) {
@@ -84969,7 +85213,23 @@
     bugOpenDiagnosticReport(queue);
   }
 
-  if ($bugLink) $bugLink.addEventListener('click', bugOpenModal);
+  // ?report_problem=<view> arrives from the rail's flag on pages that do
+  // not carry this modal; the param names the page it was clicked on.
+  function bugOpenProblemFromLocation() {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('report_problem')) return;
+    const from = url.searchParams.get('report_problem') || '';
+    url.searchParams.delete('report_problem');
+    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    bugOpenModal({ from: from });
+  }
+  window.cccOpenReport = function (from) {
+    if ($bugModal && $bugModal.classList.contains('open')) return true;
+    bugOpenModal({ from: String(from || '') });
+    return true;
+  };
+
+  if ($bugLink) $bugLink.addEventListener('click', () => bugOpenModal());
   if ($bugBackdrop) $bugBackdrop.addEventListener('click', bugCloseModal);
   if ($bugCancelBtn) $bugCancelBtn.addEventListener('click', bugCloseModal);
   document.addEventListener('keydown', (e) => {
@@ -84986,43 +85246,16 @@
   document.querySelectorAll('input[name="bugDest"]').forEach((r) => {
     r.addEventListener('change', bugApplyDestinationUI);
   });
+  if ($bugDiagInclude) $bugDiagInclude.addEventListener('change', () => {
+    if ($bugDiagInclude.checked) bugLoadDiagnostics();
+    bugRenderPreview();
+  });
   if ($bugAutoOptOut) $bugAutoOptOut.addEventListener('change', () => {
     try {
       if ($bugAutoOptOut.checked) localStorage.setItem(BUG_AUTO_OPTOUT_KEY, '1');
       else localStorage.removeItem(BUG_AUTO_OPTOUT_KEY);
     } catch (_) {}
   });
-
-  // Email destination: open a pre-filled mailto draft addressed to the
-  // maintainer (address is already public in LICENSE / SECURITY.md).
-  // Nothing is sent automatically — the user reviews the draft and presses
-  // send. The full report body is also copied to the clipboard in case the
-  // mail client drops or truncates the mailto body.
-  function bugSubmitEmail(desc) {
-    const md = bugBuildReportMarkdown();
-    let subject = 'CCC bug report';
-    for (const line of desc.split('\n')) {
-      const t = line.trim();
-        if (t) { subject = 'CCC bug report: ' + (t.length > 80 ? t.slice(0, 80).trimEnd() + '…' : t); break; }
-    }
-    // Some mail clients choke on very long mailto URLs — keep the encoded
-    // body under ~1800 chars and say so in the body when we had to cut.
-    let body = md;
-    if (encodeURIComponent(body).length > 1800) {
-      const note = '\n\n[…truncated; the full report text was copied to your clipboard]';
-      while (body.length > 0 && encodeURIComponent(body + note).length > 1800) {
-        body = body.slice(0, Math.floor(body.length * 0.8));
-      }
-      body = body.trimEnd() + note;
-    }
-    try { navigator.clipboard.writeText(md); } catch (_) {}
-    window.location.href = 'mailto:amir.fish@gmail.com?subject=' +
-      encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-    try {
-      showOpToast('Draft opened in your mail app. Review and press send. (The report text was also copied to your clipboard.)', 'success');
-    } catch (_) {}
-    bugCloseModal();
-  }
 
   async function bugSubmitPrivateDiagnostic(desc) {
     if ($bugSubmitBtn) {
@@ -85053,7 +85286,8 @@
     }
     if (data && data.ok && data.report_id) {
       if ($bugSuccess) {
-        $bugSuccess.textContent = 'Sent privately as ' + String(data.report_id);
+        $bugSuccess.textContent = 'Sent privately as ' + String(data.report_id) +
+          (bugDiagnosticMode ? '' : '. Quote this ID if you follow up.');
         $bugSuccess.classList.add('visible');
       }
       if ($bugSubmitBtn) $bugSubmitBtn.textContent = 'Sent';
@@ -85061,11 +85295,16 @@
       return;
     }
     if ($bugError) {
-      $bugError.textContent = 'Could not send diagnostics: ' +
-        ((data && data.error) || 'private support is unavailable');
+      $bugError.textContent = 'Could not send privately: ' +
+        ((data && data.error) || 'private support is unavailable') +
+        (bugDiagnosticMode ? '' : '. You can copy the report and send it another way.');
       $bugError.classList.add('visible');
     }
-    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = false; $bugSubmitBtn.textContent = 'Send privately'; }
+    if (!bugDiagnosticMode) {
+      bugFallbackMarkdown = desc;
+      if ($bugCopyBtn) $bugCopyBtn.style.display = 'inline-block';
+    }
+    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = false; $bugSubmitBtn.textContent = bugDiagnosticMode ? 'Send privately' : 'Try again'; }
     if ($bugCancelBtn) $bugCancelBtn.disabled = false;
   }
 
@@ -85076,7 +85315,7 @@
     // explicitly added it and expects it to ride along with this submit.
     bugResetMessages();
     if (!desc) {
-      if ($bugError) { $bugError.textContent = 'Please describe the bug.'; $bugError.classList.add('visible'); }
+      if ($bugError) { $bugError.textContent = 'Please describe the problem.'; $bugError.classList.add('visible'); }
       $bugDescInput.focus();
       return;
     }
@@ -85084,7 +85323,28 @@
       await bugSubmitPrivateDiagnostic(desc);
       return;
     }
-    if (bugDestination() === 'email') { bugSubmitEmail(desc); return; }
+    // Wait for diagnostics still being collected, so what is sent matches
+    // the finished preview rather than a "(collecting…)" placeholder.
+    if ($bugDiagInclude && $bugDiagInclude.checked) {
+      if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Collecting diagnostics…'; }
+      await bugLoadDiagnostics();
+      bugRenderPreview();
+      if ($bugSubmitBtn) $bugSubmitBtn.disabled = false;
+    }
+    if (bugDestination() === 'private') {
+      const text = bugBuildReportMarkdown();
+      if (text.length > BUG_PRIVATE_MAX_CHARS) {
+        if ($bugError) {
+          $bugError.textContent = 'The report is ' + text.length + ' characters; private reports are limited to ' +
+            BUG_PRIVATE_MAX_CHARS + '. Shorten the description or untick the diagnostics.';
+          $bugError.classList.add('visible');
+        }
+        if ($bugSubmitBtn) $bugSubmitBtn.textContent = 'Send report';
+        return;
+      }
+      await bugSubmitPrivateDiagnostic(text);
+      return;
+    }
     if ($bugSubmitBtn) {
       $bugSubmitBtn.disabled = true;
       // Sending an image takes a couple of seconds (push to a public branch
@@ -85098,7 +85358,7 @@
     // Server derives the GitHub issue title from the first non-empty line
     // of `description`, so we only send the unified Details field now.
     const payload = {
-      description: desc,
+      description: bugFullDescription(),
       ccc_version: version || '',
       user_agent: (navigator && navigator.userAgent) || '',
       session_id: sid,
@@ -85195,6 +85455,7 @@
   });
 
   bugOpenDiagnosticFromLocation();
+  bugOpenProblemFromLocation();
 
   // Spawn defaults — inlined directly into Settings > Sessions & Spawning
   // (CCC-902). These controls are the ONLY writer of /api/spawn-defaults;

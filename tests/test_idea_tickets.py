@@ -348,6 +348,31 @@ class IdeaTicketsTest(unittest.TestCase):
         it.sweep_rows(rows)
         self.assertEqual(len([c for c in self.calls if c[0] == "edit"]), 1)
 
+    def test_sweep_retitles_only_from_started_session(self):
+        # CCC-263: a continuation/child row's title must not rename the topic.
+        self._ui_session("s1", "Ideas tickets: who owns what")
+        ref = it.attach_or_file("s1", classify_fn=lambda t: "idea")["ref"]
+        self.transcripts["k1"] = {"text": "child"}
+        self.transcripts["c1"] = {"text": "continuation"}
+        it.attach_or_file("k1", parent_hint="s1")
+        it.attach_or_file("c1", continued_from_hint="s1")
+        self.assertEqual(it.ticket_for_session("k1")["ref"], ref)
+        self.assertEqual(it.ticket_for_session("c1")["ref"], ref)
+        rows = [
+            {"session_id": "k1", "parent_session_id": "s1", "display_name": "Child review",
+             "auto_titled": True, "first_message": "child"},
+            {"session_id": "c1", "continued_from_session_id": "s1",
+             "display_name": "Previous sessions without GitHub tickets",
+             "auto_titled": True, "first_message": "continuation"},
+        ]
+        it.sweep_rows(rows)
+        self.assertFalse([c for c in self.calls if c[0] == "edit"])
+        rows.append({"session_id": "s1", "display_name": "Ideas tickets: ownership",
+                     "auto_titled": True, "first_message": "Ideas tickets: who owns what"})
+        it.sweep_rows(rows)
+        self.assertEqual([c for c in self.calls if c[0] == "edit"],
+                         [["edit", ref, "--title", "Ideas tickets: ownership"]])
+
     def test_sweep_files_replied_pending_and_children_only(self):
         self._ui_session("c1")  # pending, replied
         self._ui_session("c2")  # pending, no reply yet

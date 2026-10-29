@@ -928,7 +928,7 @@
             <a href="#" class="sh-more-item sh-whats-new-link" role="menuitem" id="cccWhatsNewLink" title="View what is new in this version">What's new</a>
             <a href="#" class="sh-more-item sh-check-updates" role="menuitem" id="cccCheckUpdatesLink" title="Check GitHub for a newer release">Check for updates</a>
             <div class="sh-more-divider" role="separator"></div>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="bugReportLink">Report a bug…</button>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="bugReportLink">Report a problem…</button>
             <a href="https://discord.gg/aK325db94M" class="sh-more-item" role="menuitem" target="_blank" rel="noopener" title="Join the CCC Community on Discord">Discord community</a>
             <div class="sh-more-info">Last updated <span id="cccLastUpdated">…</span></div>
           </div>
@@ -1110,8 +1110,8 @@
         <button type="button" id="todayToggleBtn" class="bug-link today-toggle-btn" title="Toggle the Today's projects tray - a lightweight list of the sessions you're working on today." aria-label="Toggle Today's projects" aria-pressed="false">
           <span aria-hidden="true">&#9788;</span><span class="sh-action-label">Today</span>
         </button>
-        <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature, by private email or a public GitHub issue." aria-label="Report a bug">
-          <span aria-hidden="true">&#128027;</span><span class="sh-action-label">Report a bug</span>
+        <button type="button" id="bugReportLink" class="bug-link" title="Report a problem or request a feature, privately or as a public GitHub issue." aria-label="Report a problem">
+          <span aria-hidden="true">&#128027;</span><span class="sh-action-label">Report a problem</span>
         </button>
         <!-- Topbar TTS control: visible whenever TTS is playing or paused,
              regardless of which conversation is focused. Left of Annotate.
@@ -2438,11 +2438,12 @@
     </div>
   </div>
 
-  <!-- Bug-report modal. Opened from #bugReportLink. POSTs to
-       /api/bug-report which shells out to `gh issue create` against
-       amirfish1/claude-command-center. If gh is missing or fails, the
-       handler returns a rendered markdown blob and we offer a
-       copy-to-clipboard fallback. -->
+  <!-- Report-a-problem modal. Opened from #bugReportLink and the rail's
+       floating flag. Default destination is private support
+       (/api/bug-report/private, answers with a report ID); the secondary
+       one is /api/bug-report, which shells out to `gh issue create`
+       against amirfish1/claude-command-center and offers a
+       copy-to-clipboard fallback if gh fails. -->
   <div id="chatFindModal" style="display:none; position:fixed; top:20px; right:40px; background:#2d1a4a; border:2px solid #b266ff; padding:8px; z-index:99999; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.5); gap:6px; align-items:center;">
     <input type="text" id="chatFindInput" placeholder="Find (purple = new build)..." style="background:#1a0d2e; color:#e9d5ff; border:2px solid #b266ff; padding:4px 8px; border-radius:4px; outline:none; width:180px;">
     <span id="chatFindCount" style="color:#e9d5ff; font-size:11px; min-width:48px; text-align:center; font-variant-numeric:tabular-nums; opacity:0.85;"></span>
@@ -2470,10 +2471,10 @@
   <div id="bugReportModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="bugReportTitle">
     <div class="upd-backdrop" id="bugReportBackdrop"></div>
     <div class="upd-dialog" style="width:min(560px,92vw); max-height:92vh; overflow-y:auto;">
-      <div class="upd-title" id="bugReportTitle">Report a bug</div>
+      <div class="upd-title" id="bugReportTitle">Report a problem</div>
       <div class="upd-versions" id="bugReportIntro">
-        Tell us what broke privately by email (recommended) or as a public
-        GitHub issue against <strong>amirfish1/claude-command-center</strong>.
+        Tell the maintainer what went wrong. Private reports get a report ID
+        you can quote later.
       </div>
       <div class="bug-auto-banner" id="bugAutoBanner" style="display:none;">
         We noticed spawning a new session didn't finish within 30 seconds.
@@ -2488,9 +2489,17 @@
         contents, no personal data is included.
       </div>
       <div>
-        <label class="bug-label" for="bugReportDescInput">Details</label>
+        <label class="bug-label" for="bugReportDescInput">What went wrong?</label>
         <textarea id="bugReportDescInput" class="bug-input bug-textarea"
-                  placeholder="What did you see? What did you expect? Steps to reproduce… The first line becomes the issue title."></textarea>
+                  placeholder="What did you see? What did you expect? Steps to reproduce… The first line becomes the title."></textarea>
+      </div>
+      <div id="bugReportDiagSection">
+        <label class="bug-diag-toggle" for="bugDiagInclude">
+          <input type="checkbox" id="bugDiagInclude" checked>
+          <span>Include diagnostics from the last 7 days
+            <span class="bug-dest-sub" id="bugDiagStatus">Timings, counts, and versions only. No prompts, paths, session names, or ticket text.</span>
+          </span>
+        </label>
       </div>
       <div class="bug-field-row" id="bugReportIdentitySection">
         <div>
@@ -2505,10 +2514,10 @@
       <div class="bug-dest-group" id="bugReportDestinationSection" role="radiogroup" aria-label="Send via">
         <label class="bug-label">Send via</label>
         <label class="bug-dest-option">
-          <input type="radio" name="bugDest" value="email" checked>
+          <input type="radio" name="bugDest" value="private" checked>
           <span class="bug-dest-text">
-            <span class="bug-dest-title">Private email to the maintainer (recommended)</span>
-            <span class="bug-dest-sub">Opens a pre-filled draft in your mail app. Nothing is posted publicly; only you and the maintainer see it. You review it and press send yourself.</span>
+            <span class="bug-dest-title">Send privately to the maintainer (recommended)</span>
+            <span class="bug-dest-sub">Sent straight from CCC to private support, which emails it to the maintainer and keeps no copy. Nothing is posted publicly. You get a report ID.</span>
           </span>
         </label>
         <label class="bug-dest-option">
@@ -2541,17 +2550,17 @@
         </div>
       </div>
       <div id="bugShotEmailNote" class="bug-shot-help" style="display:none;">
-        Screenshots can't be attached to an email draft. Choose the GitHub
-        issue option above if you want to include one.
+        Private reports are text only. Choose the GitHub issue option above
+        if you want to include a screenshot.
       </div>
       <div id="bugReportContextSection">
         <label class="bug-label">Auto-attached context</label>
         <div class="bug-meta" id="bugReportMeta">Loading…</div>
       </div>
-      <div id="bugReportPreviewSection">
-        <label class="bug-label" for="bugPreview">Exactly what will be sent</label>
-        <textarea id="bugPreview" class="bug-input bug-preview" readonly tabindex="-1"></textarea>
-      </div>
+      <details id="bugReportPreviewSection" class="bug-preview-details">
+        <summary class="bug-label">Show exactly what's sent</summary>
+        <textarea id="bugPreview" class="bug-input bug-preview" readonly tabindex="-1" aria-label="Exactly what will be sent"></textarea>
+      </details>
       <div class="upd-error" id="bugReportError"></div>
       <div class="bug-success" id="bugReportSuccess"></div>
       <div class="bug-fallback" id="bugReportFallback"></div>

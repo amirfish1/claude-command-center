@@ -3168,6 +3168,26 @@ def _wt_item_ts(item):
     return 0
 
 
+def _wt_item_worked_by_session(item, sid):
+    """True unless the history shows ``sid`` never claimed the ticket.
+
+    A bare `wt close` stamps claimed_session_id on the closer, so a session
+    that only filed/closed a ticket would otherwise be retitled after it
+    (CCC-268). Items without a history list keep the old behavior.
+    """
+    history = item.get("history")
+    if not isinstance(history, list) or not history:
+        return True
+    for ev in history:
+        if not isinstance(ev, dict) or ev.get("event") != "claim":
+            continue
+        by = ev.get("by") if isinstance(ev.get("by"), dict) else {}
+        claim_sid = str(by.get("session_id") or "").strip()
+        if not claim_sid or claim_sid == sid:
+            return True
+    return False
+
+
 # The archive walk stamps WT ticket titles onto worker rows. Its only ticket
 # source, `_q.list_items()`, can be GitHub-backed: on a cold process that is
 # four `gh` subprocess round-trips (~5s), and WatchTower's own in-memory cache
@@ -3305,6 +3325,8 @@ def _apply_watchtower_worker_display_names(rows):
         if not sid:
             sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
         if not sid:
+            continue
+        if not _wt_item_worked_by_session(it, sid):
             continue
         rank = 1 if status == "in_progress" else 0
         score = (rank, _wt_item_ts(it))
@@ -12813,6 +12835,8 @@ def _overlay_wt_worker_display_names_on_census(out):
             sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
         if not sid or sid not in out:
             continue
+        if not _wt_item_worked_by_session(it, sid):
+            continue
         rank = 1 if status == "in_progress" else 0
         score = (rank, _wt_item_ts(it))
         prev = titles_by_sid.get(sid)
@@ -16575,6 +16599,12 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     # gated to pending UI spawns and children of ticketed sessions.
     try:
         _idea_tickets.sweep_rows(projected)
+    except Exception:
+        pass
+    # Done tickets close and archive themselves; agent-owned tails are handed
+    # off and watched to a close (only rows the owner needs stay visible).
+    try:
+        _idea_tickets.autopilot_rows(projected)
     except Exception:
         pass
     # One-time catch-up for an install where the flag just turned on: ticket
@@ -22476,7 +22506,7 @@ CCC_HOOK_SCRIPT_NAMES = (
     # see ensure_codex_hooks_installed) share this same copy step and the
     # same HOOK_SCRIPTS_DIR location so both engines' scripts stay in sync
     # with the repo from one place.
-    "_reorient_shared.py", "post-compact-codex.py",
+    "_reorient_shared.py", "post-compact-codex.py", "user-prompt-submit.py",
 )
 # Legacy marker (pre-rename) — kept so ensure_hooks_installed can detect old
 # entries in ~/.claude/settings.json and rewrite them to the new path.
@@ -28700,6 +28730,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Sessions a machine restart cut off mid-turn (scanned once per boot).
             from ccc_server import restart_recovery
             restart_recovery.handle_api_get(self)
+        elif path == "/api/runaway/holds":
+            # Sessions on Hold (runaway card); see ccc_server/runaway_hold.py.
+            from ccc_server import runaway_hold
+            runaway_hold.handle_api_get(self)
         elif path == "/api/runaway":
             # Sessions working on autonomously with nothing changing (timers,
             # goals, WatchTower pings). Report-only; see ccc_server/runaway.py.
@@ -29734,7 +29768,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import health_report as _health_report
             qs = urllib.parse.parse_qs(parsed.query)
             exact = qs.get("exact", ["0"])[0] in ("1", "true")
-            self.send_json(_health_report.build_report(exact=exact))
+            hours = qs.get("hours", ["24"])[0]
+            self.send_json(_health_report.build_report(exact=exact, hours=hours))
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("federated", ["0"])[0] in ("1", "true"):
@@ -33072,9 +33107,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             auto_rerun.handle_api_post(self)
             return
         if path.startswith("/api/runaway/"):
-            # Lease ("let it run") / dismiss for a flagged runaway session.
-            # Same-origin was already enforced at the top of do_POST.
-            from ccc_server import runaway
+            # Lease ("let it run") / dismiss / hold / release for a flagged
+            # runaway session. Same-origin was already enforced at the top of do_POST.
+            from ccc_server import runaway, runaway_hold
+            if runaway_hold.handle_api_post(self, path):
+                return
             if runaway.handle_api_post(self, path):
                 return
         if path.startswith("/api/restart-recovery/"):
@@ -38629,6 +38666,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "session_ids must be a list"}, 400)
                 return
             self.send_json(_idea_tickets.backfill(ids[:200]))
+        elif path in ("/api/idea-tickets/handoff", "/api/idea-tickets/takeback",
+                      "/api/idea-tickets/answer"):
+            # Handoff: CCC tells the session it owns its ticket and watches it
+            # to a close (filing a SMALL-BUGS ticket if it has none). Take back
+            # stops watching; answer replies to a blocked handoff's question.
+            # Body: {session_id, text?}.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not _feature_flag("idea_tickets"):
+                self.send_json({"ok": False, "error": "idea_tickets flag is off"}, 400)
+                return
+            sid = str(payload.get("session_id") or "").strip()
+            action = path.rsplit("/", 1)[-1]
+            if action == "handoff":
+                result = _idea_tickets.handoff(sid)
+            elif action == "takeback":
+                result = _idea_tickets.takeback(sid)
+            else:
+                result = _idea_tickets.answer(sid, payload.get("text"))
+            if result.get("ok"):
+                _restamp_archive_serve_cache_after_mutation(mutated_sids=[sid])
+            self.send_json(result, 200 if result.get("ok") else 400)
         elif path == "/api/conversations/all-lane" or re.match(r"^/api/conversations/[^/]+/all-lane$", path):
             conv_id = "" if path == "/api/conversations/all-lane" else urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))
@@ -40463,6 +40526,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         return
                     if continuation_origin != sid:
                         inject_options["attr"] = _attribution.relay(inject_options["attr"], "continuation", delivered=sid)
+                    # CCC-265: a session on runaway Hold takes no automatic
+                    # wakes (WatchTower, peers, CCC's own); WatchTower keeps a
+                    # refused message in its outbox. A composer send is the
+                    # human taking over, so it releases the hold.
+                    from ccc_server import runaway_hold as _runaway_hold
+                    if _runaway_hold.is_held(sid):
+                        if browser_composer:
+                            _runaway_hold.release(sid, why="composer")
+                        else:
+                            _log_activity("inject", "HELD_REFUSED", f"{sid} source={source}")
+                            self.send_json({"ok": False, "held": True, "code": "runaway_hold",
+                                            "error": "session is on Hold (runaway card); release it to deliver"}, 409)
+                            return
                     try:
                         # Cloud-relay presence: composer sends are human input;
                         # every other source is remembered as machine input.
@@ -41830,6 +41906,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return
         is_codex = parser is _parse_codex_event
         codex_token_usage = None
+        # Live rows need the turn_id the snapshot readers thread on from
+        # turn_context: the Codex live overlay reconciles by it (CCC-260).
+        codex_turn_meta = None
         native_path = _resolve_codex_rollout_path(conversation_id) if is_codex or parser is _parse_codex_exec_log_event else None
         if parser is _parse_codex_exec_log_event or (native_path and _codex_rollout_is_stub(native_path)):
             self._stream_codex_capture(conversation_id, native_path, after_line)
@@ -41881,6 +41960,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     file_offset = 0
                     line_num = 0
                     codex_token_usage = None
+                    codex_turn_meta = None
                 try:
                     with open(filepath, "r") as f:
                         if file_offset > 0:
@@ -41890,6 +41970,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 f.seek(0)
                                 line_num = 0
                                 codex_token_usage = None
+                                codex_turn_meta = None
                         while True:
                             pos_before = f.tell()
                             line = f.readline()
@@ -41904,7 +41985,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                     break
                             line_num_current = line_num + 1
                             if line_num_current <= after_line:
-                                if is_codex and '"token_count"' in stripped:
+                                if is_codex and ('"token_count"' in stripped or '"turn_context"' in stripped):
                                     try:
                                         ev = json.loads(stripped)
                                     except json.JSONDecodeError:
@@ -41913,6 +41994,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                         usage = _codex_token_usage_from_event(ev)
                                         if usage:
                                             codex_token_usage = usage
+                                        turn_meta = _codex_turn_meta_from_event(ev)
+                                        if turn_meta:
+                                            codex_turn_meta = turn_meta
                                 line_num = line_num_current
                                 continue
                             line_num = line_num_current
@@ -41923,11 +42007,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             except json.JSONDecodeError:
                                 continue
                             if is_codex:
+                                turn_meta = _codex_turn_meta_from_event(ev)
+                                if turn_meta:
+                                    codex_turn_meta = turn_meta
+                                    continue
                                 usage = _codex_token_usage_from_event(ev)
                                 if usage:
                                     codex_token_usage = usage
                                     continue
-                                parsed = parser(ev, line_num, codex_token_usage)
+                                parsed = parser(ev, line_num, codex_token_usage, codex_turn_meta=codex_turn_meta)
                             else:
                                 parsed = parser(ev, line_num)
                             if parsed:
@@ -44998,6 +45086,12 @@ def main():
     # the config file's `enabled` flag is re-read every wake.
     if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_DECISION_EXTRACTION_DISABLED"):
         threading.Thread(target=decision_extraction_loop, daemon=True, name="ccc-decision-extraction").start()
+    # Hourly incremental usage-DB ingest (ccc_server/usage_db/autoingest.py),
+    # only when the DB already exists; the digest and savings lines read it.
+    # Off for ephemeral processes and via CCC_USAGE_INGEST_DISABLED=1.
+    if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_USAGE_INGEST_DISABLED"):
+        from ccc_server.usage_db import autoingest as _usage_autoingest
+        threading.Thread(target=_usage_autoingest.ingest_loop, daemon=True, name="ccc-usage-ingest").start()
     # Recover in-progress group-chat coordinations and start background watcher.
     _start_coordination_watcher()
     _start_resume_queue_watcher()

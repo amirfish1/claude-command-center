@@ -1812,8 +1812,103 @@ def _is_recently_unarchived(sid, now=None) -> bool:
     return (now - ts) < _RECENTLY_UNARCHIVED_WINDOW_S
 
 
-def _auto_unarchive_live_sessions(archived):
+_RESUME_TAIL_BYTES = 256 * 1024
+
+
+def _iso_epoch(value):
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _last_user_turn_epoch(path):
+    """Epoch of the newest real user prompt in a Claude/Codex JSONL tail.
+
+    Tool results, meta/command records and compaction summaries don't count:
+    only a new prompt proves someone resumed the session. Engines with other
+    transcript formats return None (no resume evidence).
+    """
+    from ccc_server import restart_recovery
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            if size > _RESUME_TAIL_BYTES:
+                fh.seek(size - _RESUME_TAIL_BYTES)
+                raw = fh.read()
+                raw = raw[raw.find(b"\n") + 1:]
+            else:
+                raw = fh.read()
+    except OSError:
+        return None
+    latest = None
+    for rec in restart_recovery._records(raw):
+        ts = None
+        if rec.get("type") == "user" and not rec.get("isSidechain"):
+            blocks = restart_recovery._blocks(rec)
+            if (not restart_recovery._is_bookkeeping_user(rec)
+                    and any(b.get("type") == "text" for b in blocks)
+                    and not any(b.get("type") == "tool_result" for b in blocks)):
+                ts = _iso_epoch(rec.get("timestamp"))
+        elif rec.get("type") == "event_msg":
+            payload = rec.get("payload") or {}
+            if isinstance(payload, dict) and payload.get("type") == "user_message":
+                ts = _iso_epoch(rec.get("timestamp"))
+        if ts is not None and (latest is None or ts > latest):
+            latest = ts
+    return latest
+
+
+def _auto_untrash_resumed(sids, candidates, now):
+    """Bring trashed sessions back to Active once a NEW user turn lands (CCC-262).
+
+    Trash is sticky against plain liveness (a cascade-trashed lane finishing
+    its turn stays put), but a prompt written after the trash time means
+    someone resumed the session; leaving it trashed hid it for days.
+    """
+    resumed = []
+    for sid in sids:
+        trashed_at = _core._archive_grace.get(sid)
+        if trashed_at is None or sid not in candidates:
+            continue
+        try:
+            if not _core._archive_session_is_live(sid):
+                continue
+            path, _parser = _core._resolve_conversation_reader(sid)
+            if not (path and path.is_file() and now - path.stat().st_mtime < 300):
+                continue
+            last_user = _last_user_turn_epoch(path)
+        except Exception:
+            continue
+        if last_user is None or last_user <= trashed_at + 5:
+            continue
+        resumed.append(sid)
+        _recently_auto_unarchived[sid] = now
+        _core._log_archive_event(
+            "auto-untrash", sid,
+            f"new user turn {last_user - trashed_at:.0f}s after trash",
+        )
+    if not resumed:
+        return []
+    try:
+        _core._update_trashed_conversations(remove=resumed, reason="auto-untrash")
+        _core._update_archived_conversations(remove=resumed, reason="auto-untrash")
+    except Exception:
+        return []
+    for sid in resumed:
+        _core._archive_grace.pop(sid, None)
+        _archive_grace_removed.add(sid)
+    _core._save_archive_grace()
+    for sid in resumed:
+        _idea_tickets_on_archive(sid, False)
+    return resumed
+
+
+def _auto_unarchive_live_sessions(archived, *, trashed=()):
     """Drop archived sids showing fresh activity (CCC-117).
+
+    ``trashed`` sids in ``archived`` skip the liveness bounce and only leave
+    when a new user turn resumes them (_auto_untrash_resumed, CCC-262).
 
     A session that's actively writing its transcript doesn't belong in the
     Archived bucket — auto-unarchive it. Perf gate: runs at most every 30s,
@@ -1839,9 +1934,17 @@ def _auto_unarchive_live_sessions(archived):
     #     resume-arg scan can never see (CCC-435), via one cached bulk query.
     candidates = _core._discover_live_session_ids() | _core._codex_pool_candidate_sids(now)
     _refresh_archive_grace()
+    trashed = set(trashed)
+    untrashed = set(_auto_untrash_resumed(
+        [sid for sid in archived if sid in trashed], candidates, now,
+    )) if trashed else set()
     keep = []
     unarchived = []
     for sid in archived:
+        if sid in trashed:
+            if sid not in untrashed:
+                keep.append(sid)
+            continue
         fresh = False
         # Sticky manual archives are exempt: a session the user deliberately
         # archived stays archived even while it streams (CCC-149 follow-up).
@@ -1915,11 +2018,8 @@ def _load_archived_conversations(*, sweep=True):
                 archived = archived + missing
         if not sweep:
             return archived
-        trashed_set = set(trashed)
-        sweepable = [sid for sid in archived if sid not in trashed_set]
-        swept = _core._auto_unarchive_live_sessions(sweepable)
-        swept_set = set(swept)
-        return [sid for sid in archived if sid in trashed_set or sid in swept_set]
+        swept_set = set(_core._auto_unarchive_live_sessions(archived, trashed=trashed))
+        return [sid for sid in archived if sid in swept_set]
 
 
 def _write_archived_conversations(archived, *, before=None, reason=""):

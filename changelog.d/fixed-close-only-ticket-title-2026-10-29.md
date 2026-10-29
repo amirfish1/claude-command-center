@@ -1,0 +1,1 @@
+- A session that only closed a WatchTower ticket (never claimed it) is no longer renamed after that ticket, so idea-tracked sessions keep their own title.

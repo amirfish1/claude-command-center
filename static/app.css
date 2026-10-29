@@ -13378,7 +13378,16 @@
   .bug-dest-text { display: flex; flex-direction: column; gap: 2px; }
   .bug-dest-title { font-size: 12.5px; color: var(--text); }
   .bug-dest-sub { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
+  .bug-diag-toggle {
+    display: flex; align-items: flex-start; gap: 8px; cursor: pointer;
+    font-size: 12.5px; color: var(--text);
+  }
+  .bug-diag-toggle input { margin-top: 2px; accent-color: var(--accent); }
+  .bug-diag-toggle > span { display: flex; flex-direction: column; gap: 2px; }
+  .bug-preview-details > summary { cursor: pointer; }
+  .bug-preview-details[open] > summary { margin-bottom: 6px; }
   .bug-preview {
+    width: 100%; box-sizing: border-box;
     min-height: 150px; max-height: 260px; resize: vertical;
     font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
     font-size: 11px; line-height: 1.45; white-space: pre;
@@ -33288,6 +33297,66 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   }
   #convList#convList .conv-item .conv-main-row.has-inline-step:has(> .conv-working-dot) > .conv-outcome.is-inline { margin-right: 18px; }
   #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-working-dot::after { background: var(--green, #3fb950); }
+  /* CCC-261: a child session is one line: smaller avatar, title, then the
+     details in a smaller ellipsized font, then % and age. No preview lines. */
+  #convList#convList .conv-item.is-current-child-row:has(.conv-main-row.has-inline-step) {
+    --conv-content-left: calc(var(--conv-icon-left) + 36px);
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step {
+    grid-template-columns: fit-content(42%) minmax(0, 1fr) auto auto auto;
+    align-items: center;
+    gap: 0 6px;
+    min-height: 28px;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-title {
+    font-size: 14px !important;
+    line-height: 18px !important;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The worker's ticket chips are the parent's to show; a child keeps one line. */
+  #convList#convList .conv-item.is-current-child-row:has(.conv-main-row.has-inline-step) > :is(.conv-worker-history, .conv-worker-no-tickets) { display: none; }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-outcome.is-inline {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    align-items: center;
+    min-height: 0;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-outcome.is-inline .conv-outcome-step {
+    display: block;
+    min-height: 0;
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-meta-col {
+    grid-column: 3;
+    grid-row: 1;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-pct-badge { grid-column: 4; margin: 0; }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-row-end { grid-column: 5; margin: 0; }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-idea-avatar {
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-avatar-number { font-size: 11px; }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-avatar-initials { font-size: 8px; }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-avatar-stack > .conv-avatar-number { font-size: 8px; }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-avatar-model {
+    transform: scale(0.65);
+    transform-origin: bottom right;
+  }
   #convList#convList .conv-gap-separator { display: none; }
 }
 
@@ -33396,3 +33465,102 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 /* A scheduled deferral takes precedence over historical claim/stage colors. */
 .fq-row.is-deferred.is-att-neutral .fq-status.fq-status { background: var(--text-muted, #8b949e); box-shadow: none; animation: none; }
 .fq-row.is-deferred.is-att-neutral .fq-status::after { content: none; display: none; animation: none; }
+
+/* Handoff and needs-you chips (idea tickets): answer a blocked handoff,
+   take a handed-off ticket back, or open a session that needs a decision. */
+.conv-item .conv-outcome.is-handoff { border-left-color: rgba(163,113,247,0.5); background: rgba(163,113,247,0.06); }
+.conv-item .conv-outcome.is-handoff .conv-outcome-step::before { color: #a371f7; }
+.conv-item .conv-outcome.is-handoff .conv-outcome-step { color: var(--text-muted); }
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-attn-chip) {
+  display: flex !important; align-items: flex-end; gap: 6px;
+}
+#convList#convList .conv-item .conv-outcome:has(.conv-attn-chip) .conv-outcome-step {
+  flex: 1 1 auto; min-width: 0; width: auto;
+}
+.conv-attn-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--text-muted);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  padding: 2px 10px;
+  min-height: 24px;
+  font: 600 12px/18px inherit;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.conv-attn-chip.is-primary { border-color: var(--accent); color: var(--accent); }
+.conv-attn-chip:hover, .conv-attn-chip:focus-visible { color: var(--text); border-color: var(--text); }
+.conv-attn-chip:disabled { opacity: .6; cursor: default; }
+
+/* AUTO switch under a ticket row's avatar: who drives the work. On narrow
+   screens it sits in .wa-av-col below the phone-row avatar. */
+#convList .conv-item .wa-av-col {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+#convList .conv-item .conv-main-row > .conv-auto-switch,
+#convList .conv-item .wa-av-col > .conv-auto-switch {
+  position: absolute;
+  left: var(--conv-icon-left);
+  top: 42px;
+  z-index: 4;
+  width: 32px;
+  height: 13px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+  background: transparent;
+  color: var(--text-muted);
+  font: 700 7.5px/11px system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  overflow: hidden;
+  opacity: 0.4;
+  transition: opacity 0.12s ease;
+}
+#convList .conv-item .conv-main-row.has-inline-step > .conv-auto-switch { top: 58px; left: calc(var(--conv-icon-left) + 7px); }
+#convList .conv-item .wa-av-col > .conv-auto-switch { position: static; flex: 0 0 auto; opacity: 0.7; }
+#convList .conv-item:hover .conv-main-row > .conv-auto-switch.is-off { opacity: 0.85; }
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-on,
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-on,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-paused { opacity: 1; color: #fff; border-color: transparent; }
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-on,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-on {
+  background: linear-gradient(90deg, #6d4bd8, #a98bff, #6d4bd8);
+  background-size: 200% 100%;
+  animation: conv-auto-flow 2.4s linear infinite;
+  box-shadow: 0 0 6px rgba(150, 120, 255, 0.55);
+}
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-paused { background: #b7791f; }
+.conv-auto-label { position: relative; pointer-events: none; }
+@keyframes conv-auto-flow { from { background-position: 200% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .conv-auto-switch.is-on { animation: none; } }
+
+/* Child lanes: no numbered avatar, only a tiny model mark. */
+#convList#convList .conv-item .conv-main-row > .conv-idea-avatar.is-child-mini,
+#convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-idea-avatar.is-child-mini {
+  width: 14px;
+  height: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  box-shadow: none;
+}
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-model {
+  position: static;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+}
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine,
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine svg { width: 11px; height: 11px; opacity: 0.8; filter: none; }
+/* Doubled id + :has(mini) outranks the CCC-261 desktop child-row indent
+   (+36px, sized for the old avatar), so lane titles start beside the mark. */
+#convList#convList .conv-item.is-current-child-row:has(.conv-idea-avatar.is-child-mini) { --conv-content-left: calc(var(--conv-icon-left) + 22px); }
