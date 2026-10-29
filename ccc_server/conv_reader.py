@@ -23,6 +23,9 @@ costs a few socket calls instead of hundreds of GIL slices.
   or protocol error, or a session the child declines (ACP; Codex with
   engine routing off), is built in-process exactly as before.
 
+memory_recall runs here too (MEMORY-20); the dashboard keeps owning the
+index sync and only forwards the query.
+
 Wire protocol (one request per connection): the client sends one JSON line
 ``{"conv_id", "query", "accept"}``; the child answers one JSON line
 ``{"ok": true, "len": N, "encoding", "cache"}`` followed by N body bytes, or
@@ -65,6 +68,15 @@ def enabled():
 
 def socket_path(parent_pid=None):
     return COMMAND_CENTER_STATE_DIR / f"conv-reader-{parent_pid or os.getpid()}.sock"
+
+
+def is_child():
+    return os.environ.get("CCC_CONV_READER_CHILD") == "1"
+
+
+def ready():
+    with _lock:
+        return bool(_state["ready"])
 
 
 # ---------------------------------------------------------------- dashboard
@@ -181,6 +193,33 @@ def forward(conv_id, query, accept):
             "cache": f"reader-{cache}" if cache else "reader"}
 
 
+def call(op, timeout=None, **fields):
+    """The child's JSON reply to `op` (one JSON line each way), or None so
+    the caller runs it in-process. Same fallback shape as forward()."""
+    with _lock:
+        path = _state["sock"] if _state["ready"] else None
+    if not path:
+        return None
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(CONNECT_TIMEOUT_S)
+        sock.connect(path)
+        sock.settimeout(timeout or READ_TIMEOUT_S)
+        sock.sendall(json.dumps(dict(fields, op=op)).encode() + b"\n")
+        reply = json.loads(sock.makefile("rb").readline() or b"{}")
+        if not isinstance(reply, dict) or not reply.get("ok"):
+            raise ConnectionError(f"conv reader declined {op}")
+    except Exception:
+        _note_error()
+        return None
+    finally:
+        sock.close()
+    with _lock:
+        _stats["served"] += 1
+        _state["errors"] = 0
+    return reply
+
+
 def status():
     with _lock:
         proc = _state.get("proc")
@@ -197,6 +236,9 @@ def _handle(conn, server_mod):
         conn.settimeout(READ_TIMEOUT_S)
         reader = conn.makefile("rb")
         req = json.loads(reader.readline() or b"{}")
+        if req.get("op"):
+            conn.sendall(json.dumps(_handle_op(req)).encode() + b"\n")
+            return
         conv_id = str(req.get("conv_id") or "")
         out = None
         if conv_id:
@@ -221,6 +263,21 @@ def _handle(conn, server_mod):
             conn.close()
         except OSError:
             pass
+
+
+def _handle_op(req):
+    """JSON ops (call() above). memory_recall (MEMORY-20): the query is ~60
+    SQLite calls, each a GIL round trip; on a busy dashboard those cost a
+    switch interval each (71 ms alone, 0.5-2.5 s live on hermes-gcp)."""
+    op = str(req.get("op") or "")
+    try:
+        if op == "memory_recall":
+            from ccc_server import memory_api
+            return {"ok": True, "result": memory_api.recall_in_process(
+                str(req.get("q") or ""), limit=int(req.get("limit") or 20))}
+    except Exception as exc:
+        print(f"  [conv-reader] {op}: {exc!r}", flush=True)
+    return {"ok": False}
 
 
 def _socket_inode(path):

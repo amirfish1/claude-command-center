@@ -1352,6 +1352,11 @@ def _sync_all(conn: sqlite3.Connection, force: bool = False) -> None:
     now = time.time()
     if not force and (now - _last_sync_ts < _SYNC_TTL):
         return
+    if not force and os.environ.get("CCC_CONV_READER_CHILD") == "1":
+        # MEMORY-20: the conv-reader child only answers recall queries; the
+        # dashboard owns the sync.
+        _last_sync_ts = now
+        return
 
     # Non-blocking acquire for regular (non-forced) callers -- see the
     # matching comment in session_fts._sync_index. force=True (explicit

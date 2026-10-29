@@ -123,6 +123,43 @@ def recall(query: str, limit: int = 20, scope: str = "local") -> dict:
     if scope == "all":
         from ccc_server import memory_fanout as _fanout
         return _fanout.recall_all(query, limit, lambda q, n: recall(q, limit=n))
+    forwarded = _recall_via_reader(query, limit)
+    if forwarded is not None:
+        return forwarded
+    return recall_in_process(query, limit)
+
+
+# Past this the dashboard answers the recall itself.
+_READER_RECALL_TIMEOUT_S = 15.0
+
+
+def _recall_via_reader(query: str, limit: int) -> dict | None:
+    """MEMORY-20: run the query in the conv-reader child, off the dashboard's
+    GIL. Recall is ~60 SQLite calls and each gives the GIL back, so with any
+    other dashboard thread busy every call waits a switch interval: 71 ms
+    alone became 0.5-2.5 s on hermes-gcp's live server. The dashboard still
+    owns the index sync (the TTL kicks below are cheap and hand the corpus
+    walk to the bg helper) and the `indexing` flag; None = run in-process."""
+    from ccc_server import conv_reader as _reader
+    if _reader.is_child() or not _reader.ready():
+        return None
+    try:
+        _sg._sync_all(_sg._get_connection())
+        _sfts._sync_index(_sfts._get_connection())
+    except Exception:
+        pass
+    reply = _reader.call("memory_recall", timeout=_READER_RECALL_TIMEOUT_S,
+                         q=query, limit=limit)
+    out = (reply or {}).get("result")
+    if not isinstance(out, dict):
+        return None
+    out["indexing"] = _sfts.is_indexing() or _sg.is_indexing()
+    return out
+
+
+def recall_in_process(query: str, limit: int = 20) -> dict:
+    """Local recall in this process (the dashboard's fallback, and what the
+    conv-reader child runs)."""
     # MEMO-FIX-lineage: over-fetch so collapsing lineage-linked hits into
     # their newest member still leaves `limit` rows on the table, rather than
     # quietly returning fewer than asked for.

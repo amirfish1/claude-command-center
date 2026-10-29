@@ -6,8 +6,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from ccc_server import conv_reader
+from ccc_server import conv_reader, memory_api, session_fts, ship_graph
 
 
 class _FakeServer:
@@ -86,6 +87,75 @@ class ConvReaderProtocolTest(unittest.TestCase):
         self.assertEqual(conv_reader._state["errors"],
                          conv_reader.MAX_CONSECUTIVE_ERRORS)
 
+
+    # MEMORY-20: memory_recall runs in the child; the dashboard keeps the
+    # index sync and the indexing flag, and falls back in-process.
+    def _patch_dashboard_side(self, local):
+        kicks = []
+        patches = [
+            mock.patch.object(memory_api, "recall_in_process", local),
+            mock.patch.object(ship_graph, "_get_connection", lambda: "sg"),
+            mock.patch.object(session_fts, "_get_connection", lambda: "sf"),
+            mock.patch.object(ship_graph, "_sync_all", lambda c: kicks.append(c)),
+            mock.patch.object(session_fts, "_sync_index", lambda c: kicks.append(c)),
+            mock.patch.object(session_fts, "is_indexing", lambda: True),
+            mock.patch.object(ship_graph, "is_indexing", lambda: False),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return kicks
+
+    def test_memory_recall_runs_in_child(self):
+        local = mock.Mock(return_value={"query": "q", "results": [{"session_id": "s1"}],
+                                        "indexing": False})
+        kicks = self._patch_dashboard_side(local)
+        out = memory_api.recall("pipe lease", limit=7)
+        self.assertEqual(out["results"], [{"session_id": "s1"}])
+        self.assertTrue(out["indexing"])  # the dashboard's flag, not the child's
+        local.assert_called_once_with("pipe lease", limit=7)
+        self.assertEqual(kicks, ["sg", "sf"])
+
+    def test_memory_recall_falls_back_when_child_fails(self):
+        local = mock.Mock(side_effect=[RuntimeError("child"), {"results": [], "indexing": False}])
+        self._patch_dashboard_side(local)
+        out = memory_api.recall("pipe", limit=3)
+        self.assertEqual(out, {"results": [], "indexing": False})
+        self.assertEqual(local.call_count, 2)
+
+    def test_memory_recall_in_process_when_reader_down(self):
+        conv_reader._state["ready"] = False
+        local = mock.Mock(return_value={"results": []})
+        kicks = self._patch_dashboard_side(local)
+        memory_api.recall("pipe", limit=3)
+        local.assert_called_once_with("pipe", 3)
+        self.assertEqual(kicks, [])
+
+
+class ReaderChildSyncTest(unittest.TestCase):
+    """MEMORY-20: the reader child never walks the corpus itself."""
+
+    def setUp(self):
+        p = mock.patch.dict(os.environ, {"CCC_CONV_READER_CHILD": "1"})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_session_fts_sync_is_skipped_in_child(self):
+        refresh = mock.Mock()
+        with mock.patch.object(session_fts, "_last_sync_ts", 0.0), \
+                mock.patch.object(session_fts, "_refresh_vec_cache_async", refresh), \
+                mock.patch.object(session_fts, "_start_background_sync") as bg:
+            session_fts._sync_index(None)
+            self.assertGreater(session_fts._last_sync_ts, 0.0)
+        refresh.assert_called_once_with()
+        bg.assert_not_called()
+
+    def test_ship_graph_sync_is_skipped_in_child(self):
+        with mock.patch.object(ship_graph, "_last_sync_ts", 0.0), \
+                mock.patch.object(ship_graph, "_start_background_sync") as bg:
+            ship_graph._sync_all(None)
+            self.assertGreater(ship_graph._last_sync_ts, 0.0)
+        bg.assert_not_called()
 
 class ConvReaderSwitchTest(unittest.TestCase):
     def test_kill_switch(self):

@@ -1443,10 +1443,20 @@ def _get_connection() -> sqlite3.Connection:
     return _tls.conn
 
 
+def _in_conv_reader() -> bool:
+    return os.environ.get("CCC_CONV_READER_CHILD") == "1"
+
+
 def _sync_index(conn: sqlite3.Connection, force: bool = False) -> None:
     global _last_sync_ts
     now = time.time()
     if not force and (now - _last_sync_ts < _SYNC_TTL):
+        return
+    if not force and _in_conv_reader():
+        # MEMORY-20: the reader child only answers queries; the dashboard
+        # owns the sync. Pick up the bg helper's new embeddings, if any.
+        _last_sync_ts = now
+        _refresh_vec_cache_async()
         return
 
     # Non-blocking acquire for regular (non-forced) callers: if a sync is
