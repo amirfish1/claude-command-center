@@ -50958,6 +50958,12 @@
   }
 
   let _uxqItemsCache = { ts: 0, items: [], syncedAt: 0 };
+  // Freshness (`ts`) is zeroed on every invalidation hint; `loaded` flips once
+  // a list has actually landed. Renders must key "loading" placeholders off
+  // `loaded`, not `ts` — under SSE churn `ts` spends most of its life at 0
+  // while real items sit in the cache, which painted 'loading ticket…' rows
+  // over live data every event.
+  let _uxqItemsLoaded = false;
   let _uxqItemsPromise = null;
   // Every server-confirmed ticket mutation advances this version. A list read
   // that began before that mutation is stale and must not overwrite its row.
@@ -50986,7 +50992,7 @@
     // Scope changes only filter this already-complete snapshot. Let that
     // interaction repaint immediately even when the normal TTL has elapsed;
     // the live poll can finish any refresh independently.
-    if (allowStale && _uxqItemsCache.ts) return _uxqItemsCache.items;
+    if (allowStale && _uxqItemsLoaded) return _uxqItemsCache.items;
     if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
     if (_uxqItemsPromise) return _uxqItemsPromise;
     const requestVersion = _uxqItemsVersion;
@@ -51013,6 +51019,7 @@
       // this response (may be older than `now` under stale-while-revalidate).
       const syncedAt = typeof (data && data.synced_at) === 'number' ? data.synced_at * 1000 : now;
       _uxqItemsCache = { ts: now, items, syncedAt };
+      _uxqItemsLoaded = true;
     } catch (_) { /* keep stale cache */ }
     finally { _uxqItemsPromise = null; }
     return _uxqItemsCache.items;
@@ -51022,6 +51029,8 @@
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
   let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], worker_session_map: {}, past_workers: [], github_sync: null };
+  // Same never-loaded vs stale split as _uxqItemsLoaded.
+  let _uxqHealthLoaded = false;
   // A queue-health refresh can finish after a drain click but before its POST.
   // Keep the requested state separately so that stale snapshot cannot repaint
   // the button back to its former value or hide its in-progress spinner.
@@ -51108,7 +51117,7 @@
     }).catch(() => {}).then(() => { _wtWarmInFlight = false; });
   }
   async function _fetchUxqHealth(allowStale, force) {
-    if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
+    if (allowStale && _uxqHealthLoaded) return _uxqHealthCache;
     if (!force && Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
     if (_uxqHealthPromise) {
       if (!force) return _uxqHealthPromise;
@@ -51148,6 +51157,7 @@
       if (seq >= _uxqHealthAppliedSeq) {
         _uxqHealthAppliedSeq = seq;
         _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, worker_session_map, past_workers, github_sync };
+        _uxqHealthLoaded = true;
         try { _uxqMaybeOfferWorkers(queues); } catch (_) {}
         // A brand-new sub-queue can arrive here before any of its tickets do, so
         // re-derive the families off the fresh queue list.
@@ -53302,7 +53312,7 @@
       const stageItem = stageRef ? items.find(it => it && _uxqItemRef(it) === stageRef) : null;
       // Until the ticket list lands every worker looks claim-less; keep them
       // as rows then rather than folding the whole fleet into idle chips.
-      if (!stage && !claims.length && _uxqItemsCache.ts) { idleQueues.push(qKey || String(w.queue || '')); return null; }
+      if (!stage && !claims.length && _uxqItemsLoaded) { idleQueues.push(qKey || String(w.queue || '')); return null; }
       const on = stageItem || claims.find(it => !it.needs_input) || null;
       const chips = claims.filter(it => it !== on).map(it => {
         const cRef = _uxqItemRef(it);
@@ -53323,7 +53333,7 @@
       });
       const ref = on ? _uxqItemRef(on) : stageRef;
       const title = on ? String(on.note || on.title || on.text || '').split('\n')[0]
-        : (stage || !_uxqItemsCache.ts ? 'loading ticket…' : (chips.length ? 'waiting on input' : 'idle'));
+        : (stage || !_uxqItemsLoaded ? 'loading ticket…' : (chips.length ? 'waiting on input' : 'idle'));
       // Ticket age from its own claim; a stage session is as old as itself,
       // and without a live claim only the worker's age is left.
       const elapsed = on && !stage ? ageOf(on.claimed_at) : workerAge;
@@ -53340,7 +53350,7 @@
     // working tickets, and remote claims must not imply local liveness.
     const workingCount = rows.filter(r => r.ref || r.stage).length;
     const waitingCount = rows.filter(r => !r.ref && !r.stage && r.chips.length).length;
-    const summary = [!health.ts ? 'loading workers' : !_uxqItemsCache.ts ? 'loading tickets' : String(workingCount),
+    const summary = [!_uxqHealthLoaded ? 'loading workers' : !_uxqItemsLoaded ? 'loading tickets' : String(workingCount),
       idleQueues.length ? idleQueues.length + ' idle' : '',
       waitingCount ? waitingCount + ' waiting' : '',
       'this machine'].filter(Boolean).join(' · ');
@@ -78103,13 +78113,23 @@
       if (typeof EventSource !== 'function') return;
       let es = null;
       let retryMs = 1000;
+      // workers.json rewrites on every worker heartbeat, so queue_changed
+      // hints can arrive ~1/s under a busy fleet. Expire the caches right away
+      // but coalesce the repaint: a full board render + the multi-MB
+      // /api/queue/list refetch per event kept the strip oscillating in and
+      // out of its "loading" paint nonstop.
+      let invalidateTimer = null;
       const invalidateAndRender = () => {
         _uxqItemsCache.ts = 0;
         _uxqHealthCache.ts = 0;
         _wtWorkersCache.ts = 0;
-        if (_queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
-          _renderQueuePanel();
-        }
+        if (invalidateTimer) return;
+        invalidateTimer = setTimeout(() => {
+          invalidateTimer = null;
+          if (_queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
+            _renderQueuePanel();
+          }
+        }, 750);
       };
       const schedule = () => {
         if (_dashboardEventStreamHealthy) return;
