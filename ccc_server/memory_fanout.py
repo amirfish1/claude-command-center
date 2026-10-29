@@ -151,7 +151,7 @@ def _call_peer_inner(peer, node, key, action, args, timeout, t0) -> dict:
     try:
         envelope = federation.make_route_envelope(action, args, hops=1)
         routed = federation.PeerClient(peer).request(
-            "POST", "/api/federation/v1/route", envelope, timeout=timeout)
+            "POST", "/api/federation/v1/route", envelope, timeout=timeout, pipe=True)
         inner = routed.get("result") if isinstance(routed, dict) else None
         if not isinstance(inner, dict):
             raise federation.PeerError("bad_response", "peer returned no action result")

@@ -5024,3 +5024,53 @@ def test_dead_session_check_reads_only_on_a_transition(monkeypatch, tmp_path):
         assert looked == ["s1"]
     finally:
         notify.reset_for_tests()
+
+
+def test_federation_pipe_warm_fanout_and_prewarm_tick_spawn_nothing(monkeypatch):
+    """multi-machine S5: with a peer's persistent pipe live, a scope=all
+    memory fan-out sends over it (zero subprocess spawns per request), and
+    a prewarm refresh tick for already-warm peers spawns nothing either.
+    A spawn per request or per tick is the cold-ssh cost S5 exists to drop."""
+    import federation
+    from ccc_server import federation_pipe, memory_fanout
+
+    class FakePipe:
+        sent = 0
+
+        def alive(self):
+            return True
+
+        def request(self, envelope, timeout):
+            FakePipe.sent += 1
+            return {"status": 200, "body": {"ok": True, "result": {"ok": True, "results": []}}}
+
+        def close(self):
+            pass
+
+    peers = [{"node_id": f"n{i}", "name": f"n{i}", "secret": "s",
+              "transport": {"type": "ssh", "host": f"u@h{i}"}} for i in range(3)]
+    federation_pipe.reset_state()
+    memory_fanout.reset_state()
+    try:
+        for p in peers:
+            federation_pipe._PIPES[p["node_id"]] = (federation_pipe._fingerprint(p), FakePipe())
+
+        def forbidden(*a, **k):
+            raise AssertionError(f"warm federation path spawned a subprocess: {a[:1]}")
+
+        monkeypatch.setattr(subprocess, "run", forbidden)
+        monkeypatch.setattr(subprocess, "Popen", forbidden)
+        started = []
+        monkeypatch.setattr(federation_pipe, "_start", lambda *a, **k: started.append(a))
+        for _ in range(5):
+            entries = memory_fanout.fan_out("memory_recall", {"q": "x", "limit": 5}, peers=peers)
+            assert [e["status"] for e in entries] == ["ok"] * 3
+        assert FakePipe.sent == 15
+        federation_pipe.refresh(peers)
+        time.sleep(0.1)
+        assert started == [], "prewarm tick restarted an already-warm pipe"
+        assert all(federation_pipe._PIPES[p["node_id"]][1].alive() for p in peers)
+    finally:
+        federation_pipe._PIPES.clear()
+        federation_pipe.reset_state()
+        memory_fanout.reset_state()
