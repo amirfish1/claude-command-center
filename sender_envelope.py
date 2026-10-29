@@ -24,7 +24,9 @@ import uuid
 from ccc_server.paths import _is_pid_alive
 
 ENV = 'WT_MESSAGE_ENVELOPE'
-HEADER = '[Message attribution v1: '
+HEADER = '[Message attribution v1: '  # legacy full-JSON carrier; still parsed
+COMPACT = '[sender: '
+_COMPACT_RE = re.compile(r'^\[sender: (?P<name>.+?) \((?P<kind>session|service|human|unknown)\) \u00b7 msg (?P<id>[0-9a-fA-F-]{36})(?: \u00b7 reply: ccc send (?P<reply>[^\]]+))?\]$')
 MAX_BYTES = 32768
 MAX_HOPS = 20
 BASES = ('runtime', 'peer_cred', 'claimed', 'unknown')
@@ -283,37 +285,81 @@ def relay(attr, via, *, attested_mode='', delivered=None):
     return out
 
 
+def _parse_line(line):
+    """Syntax only (no journal read): a header dict, a compact match, or None."""
+    if line.startswith(COMPACT) and line.endswith(']'):
+        m = _COMPACT_RE.match(line)
+        if m:
+            try:
+                uuid.UUID(m['id'])
+                return m
+            except ValueError:
+                return None
+        return None
+    if line.startswith(HEADER) and line.endswith(']'):
+        try:
+            raw = line[len(HEADER):-1]
+            if raw.startswith('{'):
+                return validate(json.loads(raw))
+            return validate(json.loads(base64.urlsafe_b64decode(raw).decode()))
+        except (ValueError, TypeError, UnicodeError):
+            return None
+    return None
+
+
 def from_text(text):
     for line in str(text or '').splitlines()[:5]:
-        if line.startswith(HEADER) and line.endswith(']'):
-            try:
-                raw = line[len(HEADER):-1]
-                if raw.startswith('{'):
-                    return validate(json.loads(raw))
-                return validate(json.loads(base64.urlsafe_b64decode(raw).decode()))
-            except (ValueError, TypeError, UnicodeError):
-                return None
+        parsed = _parse_line(line)
+        if isinstance(parsed, dict):
+            return parsed
+        if parsed is not None:
+            # Compact header: the full record is the local journal row.
+            found = lookup(message_id=parsed['id'])
+            if found:
+                return found
+            claim = make(who=author(parsed['kind'], '', parsed['name']), basis='claimed',
+                         evidence={'source': 'unmatched_header'}, message_id=parsed['id'])
+            if parsed['reply']:
+                claim['reply_to'] = {'addr': parsed['reply'], 'method': 'ccc send <addr> <reply>'}
+            return claim
+        if line.startswith((HEADER, COMPACT)):
+            return None
     return None
 
 
 def strip_header(text):
     lines = str(text or '').split('\n')
     for index, line in enumerate(lines[:5]):
-        if line.startswith(HEADER) and from_text(line):
+        if _parse_line(line) is not None:
             del lines[index]
             break
     return '\n'.join(lines)
+
+
+def _label(value):
+    return ' '.join(re.sub(r'[\[\]()\u00b7]', ' ', str(value or '')).split())[:60]
+
+
+def header(attr):
+    """One short line for the model; the full record stays in the journal."""
+    a = attr['author']
+    line = f"{COMPACT}{_label(a.get('name_at_send') or a.get('id')) or 'unnamed'} ({a['kind']}) · msg {attr['message_id']}"
+    reply = _label((attr.get('reply_to') or {}).get('addr'))
+    return line + (f' · reply: ccc send {reply}' if reply else '') + ']'
 
 
 def carry(text, attr, *, app):
     if not enabled(app) or re.match(r'^\s*/', str(text)):
         return str(text)
     text = strip_header(text)
-    raw = json.dumps(validate(attr), separators=(',', ':'), ensure_ascii=True).encode()
-    header = HEADER + raw.decode() + ']'
+    attr = validate(attr)
+    if attr['author']['kind'] == 'human':
+        # A person typing into a session needs no carrier; the journal and
+        # queue metadata keep the record.
+        return text
     lines = text.split('\n')
     at = 1 if lines and lines[0].startswith('orig_msg_id:') else 0
-    lines.insert(at, header)
+    lines.insert(at, header(attr))
     return '\n'.join(lines)
 
 

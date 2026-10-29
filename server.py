@@ -26,6 +26,7 @@ import fcntl
 import gzip
 import html
 import hashlib
+import hmac
 import collections
 import contextlib
 import errno
@@ -16631,11 +16632,79 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
     _phase("wt_ms")
-    extra = (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
+    # CCC-153: a session started in a terminal (Claude writes
+    # ~/.claude/sessions/<pid>.json at launch) was invisible until the next
+    # snapshot refresh: >=5 min at the serve TTL, and never while the load
+    # gate holds refreshes off a saturated host. Overlay those live
+    # registry-only rows; the work runs only when the registry dir changes.
+    claude_overlay = _archive_overlay_claude_registry_sessions(rows)
+    if claude_overlay:
+        rows = list(rows or []) + claude_overlay
+    _phase("claude_reg_ms")
+    extra = ((overlay or []) + (devin_overlay or []) + (worker_overlay or [])
+             + (claude_overlay or []))
     body_ver = _archive_list_body_ver(key, rows, extra)
     _phase("ver_ms")
     return rows, from_cache, body_ver
 
+
+
+_ARCHIVE_CLAUDE_REG_CACHE = {"sig": None, "rows": [], "changed_at": 0.0, "built_at": 0.0}
+_ARCHIVE_CLAUDE_REG_LOCK = threading.Lock()
+
+
+def _archive_claude_registry_rows():
+    """Archive-shaped rows for every live ~/.claude/sessions entry, rebuilt
+    only when that directory's mtime changes (a launch adds a pid file, an
+    exit removes one). Same producer the archive build uses for
+    registry-only sessions, so the row shape matches."""
+    try:
+        sig = SESSIONS_REGISTRY.stat().st_mtime_ns
+    except OSError:
+        return []
+    now = time.monotonic()
+    # Keep re-reading briefly after a change: _load_session_registry is
+    # 3s-memoized, so the first read after a launch can predate its pid file.
+    if (_ARCHIVE_CLAUDE_REG_CACHE["sig"] == sig
+            and now - _ARCHIVE_CLAUDE_REG_CACHE.get("changed_at", 0.0) > 5.0):
+        return _ARCHIVE_CLAUDE_REG_CACHE["rows"]
+    if _ARCHIVE_CLAUDE_REG_CACHE["sig"] == sig and now - _ARCHIVE_CLAUDE_REG_CACHE.get("built_at", 0.0) < 1.0:
+        return _ARCHIVE_CLAUDE_REG_CACHE["rows"]
+    if not _ARCHIVE_CLAUDE_REG_LOCK.acquire(blocking=False):
+        return _ARCHIVE_CLAUDE_REG_CACHE["rows"]
+    try:
+        out = []
+        try:
+            archived, trashed = _load_conversation_lifecycle_sets()
+            for sid, meta in _load_session_registry().items():
+                if sid in archived or sid in trashed:
+                    continue
+                try:
+                    row = _live_registry_conversation_row(
+                        sid, meta, archived_set=archived, trashed_set=trashed,
+                        resolve_worktree_dirty=False,
+                    )
+                except Exception:
+                    row = None
+                if row:
+                    out.append(row)
+        except Exception:
+            out = []  # A broken registry read must not break the sidebar.
+        if _ARCHIVE_CLAUDE_REG_CACHE["sig"] != sig:
+            _ARCHIVE_CLAUDE_REG_CACHE["changed_at"] = now
+        _ARCHIVE_CLAUDE_REG_CACHE.update(sig=sig, rows=out, built_at=now)
+        return out
+    finally:
+        _ARCHIVE_CLAUDE_REG_LOCK.release()
+
+
+def _archive_overlay_claude_registry_sessions(rows):
+    """Live terminal Claude sessions missing from the cached snapshot."""
+    reg_rows = _archive_claude_registry_rows()
+    if not reg_rows:
+        return []
+    existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
+    return [r for r in reg_rows if str(r.get("session_id") or r.get("id") or "") not in existing]
 
 
 _ARCHIVE_WT_WORKERS_LOCK = threading.Lock()
@@ -28287,6 +28356,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def do_GET(self):
+        if not self._check_proxy_secret():
+            return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
             return
@@ -30062,7 +30133,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "ok": True,
                 "session_id": sid,
                 "outstanding": _inject_receipts.outstanding(sid),
+                # CCC-237: queued input an explicit Stop parked. It waits for
+                # a release on purpose; it is not a stuck delivery.
+                "stop_held": len(_stop_held_inputs_view(sid)["items"]),
             })
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/stop-held$", path):
+            # CCC-237: inspect queued input held by an explicit Stop.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(dict(_stop_held_inputs_view(sid), ok=True))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/forward-target$", path):
             # MEMORY-5: read-only lookup so an external process (WatchTower,
             # over its own HTTP delegate) can ask "does this sid currently
@@ -32427,6 +32505,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return ip in ipaddress.ip_network("100.64.0.0/10")
         return ip in ipaddress.ip_network("fd7a:115c:a1e0::/48")
 
+    def _check_proxy_secret(self):
+        """SECURITY: reject requests missing or carrying an invalid proxy secret.
+
+        When CCC_PROXY_SECRET or CCC_PROXY_SECRET_FILE is configured (e.g. in
+        hardened reverse-proxy deployments), direct requests to the backend that
+        bypass the proxy are rejected with 401 Unauthorized.
+
+        Accepted secret carriers:
+          - X-CCC-Proxy-Secret: <secret>
+          - Authorization: Bearer <secret>
+        """
+        secret = os.environ.get("CCC_PROXY_SECRET", "").strip()
+        if not secret:
+            secret_file = os.environ.get("CCC_PROXY_SECRET_FILE", "").strip()
+            if secret_file:
+                try:
+                    with open(secret_file, "r", encoding="utf-8") as f:
+                        secret = f.read().strip()
+                except OSError:
+                    pass
+        if not secret:
+            return True
+
+        provided = (self.headers.get("X-CCC-Proxy-Secret") or "").strip()
+        if not provided:
+            auth = (self.headers.get("Authorization") or "").strip()
+            if auth.lower().startswith("bearer "):
+                provided = auth[7:].strip()
+
+        if provided and hmac.compare_digest(provided, secret):
+            return True
+
+        body = json.dumps({
+            "ok": False,
+            "error": "unauthorized",
+            "detail": "missing or invalid proxy secret",
+        }).encode("utf-8")
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("WWW-Authenticate", 'Bearer realm="CCC Backend"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def _phone_pin_blocked(self, path):
         """Phone access PIN gate. When a PIN is set, a request that arrived
         from off this machine (tailscale serve, a tunnel, a non-loopback
@@ -32671,6 +32795,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         return "api"
 
     def do_POST(self):
+        if not self._check_proxy_secret():
+            return
         if not self._check_same_origin():
             return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
@@ -34647,6 +34773,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/wait-on":
+            # Say who a blocked ticket waits on (CCC-244), the API twin of
+            # `wt wait-on`: owner | external (+actor) | dependency (+wait_ref)
+            # | worker. Leaves the question and needs_input alone; WatchTower
+            # appends a history event, so nothing earlier is erased.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            ref = str(payload.get("ref") or "").strip()
+            on = str(payload.get("on") or "").strip()
+            set_wait = getattr(_q, "set_wait", None)
+            if not ref or not on:
+                self.send_json({"ok": False, "error": "ref and on required"}, 400)
+                return
+            if not callable(set_wait):
+                self.send_json({"ok": False, "error": "WatchTower too old for wait-on; update it"}, 501)
+                return
+            try:
+                item = set_wait(
+                    ref, on,
+                    actor=str(payload.get("actor") or ""),
+                    ref=str(payload.get("wait_ref") or ""),
+                    note=str(payload.get("note") or ""),
+                    by=str(payload.get("worker") or ""),
+                )
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            if not item:
+                self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                return
+            try:
+                _ux_fixes_cache_ack(item, keys=("wait", "history", "updated_at"))
+            except Exception:
+                pass
+            self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             return
         if path == "/api/watchtower/alerts/investigate":
             length = int(self.headers.get("Content-Length", "0"))
@@ -39823,6 +39995,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "already_consumed": True,
                     "session_id": sid,
                 })
+        elif path in ("/api/stop-held/release", "/api/stop-held/cancel"):
+            # CCC-237: {session_id, ids?: [...]} -- omit ids for all. Release
+            # re-sends through the normal inject path (still after any running
+            # turn); cancel discards. Nothing else ever delivers held input.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            raw_ids = payload.get("ids")
+            ids = None if raw_ids is None else [str(i) for i in raw_ids if str(i or "").strip()]
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            elif raw_ids is not None and not isinstance(raw_ids, list):
+                self.send_json({"ok": False, "error": "ids must be a list"}, 400)
+            elif path.endswith("/release"):
+                _record_interaction(sid)
+                result = _release_stop_held_inputs(sid, ids)
+                self.send_json(result, 200 if result.get("ok") else 502)
+            else:
+                _record_interaction(sid)
+                self.send_json(_cancel_stop_held_inputs(sid, ids))
         elif path == "/api/usage-limit/cancel":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -40058,10 +40256,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             elif verb == "abort":
                 # Control verb: interrupt the turn, deliver nothing.
                 _record_interaction(sid)
-                self.send_json(_annotate_inject_result(
+                held_queued = _hold_queued_inputs_for_stop(sid, "abort")
+                result = _annotate_inject_result(
                     _interrupt_session(sid), requested="abort",
                     fields={"aborted": True, "landed": "none", "effect": "aborted"},
-                ))
+                )
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
+                self.send_json(result)
             elif presentation_bootstrap and verb_mode != "send":
                 self.send_json({"ok": False, "error": "presentation bootstrap requires send mode"}, 400)
             elif announced_from_error:
@@ -40098,6 +40300,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         and not str(queued_text).lstrip().startswith("/")
                     ):
                         text = _mode3_prompt(text)
+                held_queued = 0
                 try:
                     inject_options = {
                         "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
@@ -40153,6 +40356,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _presence.note_inject(sid, queued_text, source)
                     except Exception:
                         pass
+                    # CCC-237: a steer that is itself a Stop ("STOP ... end
+                    # your turn", or stop:true) holds the after-turn queue
+                    # first, so the stopped turn cannot end and replay it.
+                    from ccc_server import stop_holds as _stop_holds
+                    if verb_mode == "steer" and not replace_queued and (
+                        bool(payload.get("stop"))
+                        or _stop_holds.is_stop_steer_text(_attribution.strip_header(str(queued_text)))
+                    ):
+                        held_queued = _hold_queued_inputs_for_stop(sid, "stop-steer")
                     result = _inject_text_into_session(
                         sid, text, mode=verb_mode,
                         requested_verb=verb,
@@ -40170,6 +40382,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # "Failed to fetch" with no way to tell what went wrong.
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
                 if replace_queued_texts:
                     result = _finalize_queued_steer_batch_result(
                         sid, replace_queued_texts, result,
@@ -40326,7 +40540,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 "cloud_readonly": True}, 400)
             else:
                 _record_interaction(sid)
-                self.send_json(_interrupt_session(sid))
+                # CCC-237: Stop parks queued after-turn input before the
+                # interrupt, so it waits for an explicit release.
+                held_queued = _hold_queued_inputs_for_stop(sid, "stop")
+                result = _interrupt_session(sid)
+                if held_queued:
+                    result = dict(result, held_queued=held_queued)
+                self.send_json(result)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/force-restart$", path):
             # CCC-27: manual escape hatch for a live session that will not
             # take input (Stop only interrupts a running turn).
@@ -44302,6 +44522,11 @@ def main():
     # Conversation opens get their own process (and GIL) so background work
     # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
     _conv_reader.start()
+    # The heaviest background warmers (gh-queue-watch, uxq-health-refresh,
+    # ship-graph-warm) run in a helper process too, so /list reads stop
+    # queueing behind them for this GIL (CCC-142). CCC_BG_HELPER=0 disables.
+    from ccc_server import bg_helper as _bg_helper
+    _bg_helper.start()
     # Keep spawn stats across a dashboard restart -- otherwise restarting
     # mid-investigation throws away the evidence you restarted to look at.
     _spawn_timeline_load()

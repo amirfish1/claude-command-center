@@ -22,6 +22,8 @@ command, without opening the dashboard:
 
     ccc send <session> "message"        # fire-and-forget into a session
     ccc send <session> "…" --steer      # interrupt the current turn with it
+    ccc send <session> "STOP …" --steer --stop   # stop: hold queued after-turn sends
+    ccc held <session> [--release ID|all] [--cancel ID|all]   # input a Stop held
     ccc send <session> "…" --new-if-large-and-stale   # continuation instead of a cold resume, when warranted
     ccc ask <session> "question"        # send and wait for the reply text
 
@@ -569,6 +571,9 @@ def cmd_send(args):
         print("ccc send: missing message (pass it as an argument or pipe it on stdin)",
               file=sys.stderr)
         return 2
+    if getattr(args, "stop", False) and not args.steer:
+        print("ccc send: --stop only applies to --steer", file=sys.stderr)
+        return 2
     sid, err = _resolve_target(base, args.target)
     if err:
         print(err, file=sys.stderr)
@@ -613,6 +618,8 @@ def cmd_send(args):
         payload["peer_sender_sid"] = resolved_sender or sender_sid
     if args.steer:
         payload["mode"] = "steer"
+        if getattr(args, "stop", False):
+            payload["stop"] = True
     elif args.queue:
         payload["mode"] = "queue"
     try:
@@ -633,7 +640,55 @@ def cmd_send(args):
         return 1
     effect = result.get("effect") or result.get("landed") or "delivered"
     print(f"sent to {sid} ({effect})")
+    if result.get("held_queued"):
+        print(f"held {result['held_queued']} queued message(s) for release: ccc held {sid}")
     return 0
+
+
+def cmd_held(args):
+    """Inspect, release, or cancel queued input an explicit Stop held."""
+    base = _resolve_server(args.server)
+    if not base:
+        print("ccc: no server found — is CCC running?", file=sys.stderr)
+        return 1
+    sid, err = _resolve_target(base, args.target)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    action, chosen = None, None
+    if args.release is not None:
+        action, chosen = "release", args.release
+    elif args.cancel is not None:
+        action, chosen = "cancel", args.cancel
+    try:
+        if action:
+            ids = None if "all" in chosen else chosen
+            status, result = _post_json(
+                base, f"/api/stop-held/{action}",
+                {"session_id": sid, **({} if ids is None else {"ids": ids})},
+            )
+            view = result.get("held") or {}
+        else:
+            status, result = 200, _get_json(base, f"/api/session/{sid}/stop-held")
+            view = result
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if action == "release":
+        print(f"released {result.get('released', 0)}"
+              + (f", {result['failed']} failed (still held)" if result.get("failed") else ""))
+    elif action == "cancel":
+        print(f"cancelled {result.get('cancelled', 0)}")
+    items = view.get("items") or []
+    if not items:
+        print(f"no held input for {sid}")
+    for item in items:
+        preview = " ".join(str(item.get("text") or "").split())[:100]
+        print(f"  {item.get('id')}  {preview}")
+    return 0 if result.get("ok") else 1
 
 
 def cmd_ask(args):
@@ -2601,8 +2656,26 @@ def main(argv=None):
     p.add_argument("--report-to", metavar="SESSION_ID",
                    help="with --new-if-large-and-stale: override the report-to the "
                         "spawned continuation inherits (default: the old session's own)")
+    p.add_argument("--stop", action="store_true",
+                   help="with --steer: this steer stops the turn, so hold the "
+                        "session's queued after-turn sends until released (`ccc held`)")
     p.add_argument("--json", action="store_true", help="raw inject/decision result JSON")
     p.set_defaults(func=cmd_send)
+
+    p = sub.add_parser(
+        "held",
+        help="list, release, or cancel queued input an explicit Stop held",
+        description="A Stop (or a stop steer) parks the session's queued "
+                    "after-turn sends so they never replay on their own. "
+                    "Release re-sends them (still after any running turn); "
+                    "cancel discards them.",
+    )
+    p.add_argument("target", help="session id, id prefix, or name fragment")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--release", nargs="+", metavar="ID", help="held ids to send, or 'all'")
+    g.add_argument("--cancel", nargs="+", metavar="ID", help="held ids to discard, or 'all'")
+    p.add_argument("--json", action="store_true", help="raw JSON")
+    p.set_defaults(func=cmd_held)
 
     p = sub.add_parser(
         "ask",

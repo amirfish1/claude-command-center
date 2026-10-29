@@ -333,6 +333,7 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
     monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows: [])
     monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
     monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows: [])
+    monkeypatch.setattr(server, "_archive_overlay_claude_registry_sessions", lambda rows: [], raising=False)
     options = {"include_prs": False}
 
     rows, from_cache, body_ver = server._archive_list_source_rows_cached(options)
@@ -1820,6 +1821,27 @@ def test_archive_cache_load_is_single_flight(isolated_archive_cache, monkeypatch
     first.join(5)
     second.join(5)
     assert [r.get("session_id") for r in seen["entry"]["conversations"]] == ["persisted"]
+
+
+def test_claude_registry_overlay_reads_registry_only_on_dir_change(monkeypatch, tmp_path):
+    """CCC-153: the /list overlay for terminal-started Claude sessions runs on
+    every poll; an unchanged ~/.claude/sessions dir must not re-read it."""
+    reg = tmp_path / "sessions"
+    reg.mkdir()
+    loads = []
+    monkeypatch.setattr(server, "SESSIONS_REGISTRY", reg)
+    monkeypatch.setattr(server, "_ARCHIVE_CLAUDE_REG_CACHE",
+                        {"sig": None, "rows": [], "changed_at": 0.0, "built_at": 0.0})
+    monkeypatch.setattr(server, "_load_session_registry",
+                        lambda: loads.append(1) or {"s1": {"pid": 1}})
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+    monkeypatch.setattr(server, "_live_registry_conversation_row",
+                        lambda sid, meta, **kw: {"session_id": sid})
+    server._archive_claude_registry_rows()
+    server._ARCHIVE_CLAUDE_REG_CACHE["changed_at"] -= 60
+    for _ in range(200):
+        server._archive_overlay_claude_registry_sessions([])
+    assert len(loads) == 1
 
 
 def test_devin_overlay_cold_miss_does_not_block_list(monkeypatch):

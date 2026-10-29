@@ -8363,6 +8363,48 @@ def _codex_headless_exec_refusal(session_id, action):
     }
 
 
+def _codex_wt_app_worker_delivery(session_id, text):
+    """Steer a Codex thread hosted by a WatchTower app-server worker.
+
+    Such a worker (`wt config --codex-transport app-server`, CODEX-CCC-WT-10)
+    owns the thread on its own `codex app-server --listen unix://`; CCC's
+    app-server must not resume it (second writer, -32600). WatchTower owns the
+    socket protocol, so this shells out to `wt codex-app steer` -- but only
+    when WatchTower has advertised a worker for this thread, so every other
+    Codex send pays one stat(). Returns None when no such worker exists."""
+    record = Path(_core._WT_HOME) / "codex-app" / f"{session_id}.json"
+    if not session_id or "/" in str(session_id) or not record.exists():
+        return None
+    wt = _core._wt_cli_path()
+    if not wt:
+        return None
+    try:
+        proc = subprocess.run(
+            [wt, "codex-app", "steer", str(session_id)],
+            input=str(text or ""), capture_output=True, text=True, timeout=45,
+        )
+    except subprocess.TimeoutExpired:
+        # The steer may have landed; reporting a rejection would invite a
+        # double-post retry (CCC-238).
+        return {
+            "ok": False, "code": "codex_steer_unknown", "uncertain": True,
+            "via": "wt-app-worker", "error": "wt codex-app steer timed out",
+        }
+    except OSError as exc:
+        return {"ok": False, "code": "codex_app_worker_unreachable",
+                "via": "wt-app-worker", "error": str(exc)}
+    if proc.returncode == 2:
+        return None
+    try:
+        result = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        result = {"ok": False, "error": (proc.stderr or proc.stdout or "").strip()[-300:]}
+    result["via"] = "wt-app-worker-steer"
+    if not result.get("ok"):
+        result.setdefault("code", "codex_app_worker_steer_failed")
+    return result
+
+
 def _codex_interrupt_needs_local_transport():
     """Whether this process must hold the app-server transport itself.
 

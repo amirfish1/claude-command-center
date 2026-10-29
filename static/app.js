@@ -2562,7 +2562,11 @@
   // after a restart) it waited that long client-side. It skips the queue.
   function _backgroundApiReadSkipsQueue(input) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
-    return url.startsWith('/api/conversations/list');
+    // Queue panels also need their status and ticket snapshot to paint.
+    // These reads are coalesced by their caches; they must not wait behind
+    // unrelated service probes or a slow live-activity response.
+    return url.startsWith('/api/conversations/list')
+      || /^\/api\/queue\/(status|list)(?:[?]|$)/.test(url);
   }
 
   function backgroundApiFetch(input, init) {
@@ -3069,7 +3073,7 @@
     // Queue notes may be shortened before reaching this renderer. Remove a
     // carrier line even when its JSON was truncated; retain the task text.
     const lines = String(value || '').split('\n');
-    return lines.filter((line, index) => index >= 5 || !line.startsWith('[Message attribution v1: ')).join('\n') || 'Attributed message';
+    return lines.filter((line, index) => index >= 5 || !(line.startsWith('[Message attribution v1: ') || /^\[sender: .* · msg [0-9a-fA-F-]{36}/.test(line))).join('\n') || 'Attributed message';
   }
 
   function cleanIssuePrompt(s) {
@@ -10390,6 +10394,46 @@
     showOpToast('Copied message', 'ok');
   });
 
+  // CCC-237: release or cancel input held by an explicit Stop. The next poll
+  // brings the new store revision; drop the acted-on rows right away.
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-stop-held-action]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const block = btn.closest('.stop-held-block');
+    const sid = btn.dataset.sessionId || '';
+    const action = btn.dataset.stopHeldAction === 'release' ? 'release' : 'cancel';
+    const id = btn.dataset.stopHeldId || '';
+    if (!sid || !id) return;
+    const buttons = block ? Array.from(block.querySelectorAll('[data-stop-held-action]')) : [btn];
+    buttons.forEach(b => { b.disabled = true; });
+    try {
+      const response = await fetch('/api/stop-held/' + action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(id === 'all' ? { session_id: sid } : { session_id: sid, ids: [id] }),
+      });
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+      const remaining = new Set(((data.held && data.held.items) || []).map(item => String(item.id)));
+      if (block) {
+        block.querySelectorAll('[data-stop-held-item]').forEach(row => {
+          if (!remaining.has(row.dataset.stopHeldItem)) row.remove();
+        });
+        if (!remaining.size) block.hidden = true;
+      }
+      if (!response.ok || !data.ok) throw new Error(data.error || ((data.failed || 0) + ' not sent; still held'));
+      showOpToast(action === 'release'
+        ? ('Released ' + (data.released || 0) + ' held message' + (data.released === 1 ? '' : 's') + '.')
+        : ('Cancelled ' + (data.cancelled || 0) + ' held message' + (data.cancelled === 1 ? '' : 's') + '.'));
+    } catch (err) {
+      showOpToast((action === 'release' ? 'Release' : 'Cancel') + ' failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      buttons.forEach(b => { if (b.isConnected) b.disabled = false; });
+    }
+  });
+
   // Cancel one durable queued message. Remove the row only after the server
   // confirms the persisted FIFO entry was withdrawn.
   document.addEventListener('click', async (ev) => {
@@ -14746,7 +14790,7 @@
       return;
     }
     _ttsMarkCache(mk, head.text, 'partial', 0);
-    const entry = { ready: false, got: null };
+    const entry = { ready: false, got: null, bg: true };
     const t0 = Date.now();
     _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
     entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '', 'bg').then((got) => {
@@ -14863,7 +14907,7 @@
         const c = rest[i];
         let entry = _ttsHeadCache.get(c.text);
         if (!entry) {
-          entry = { ready: false, got: null, voice: headGot.voice };
+          entry = { ready: false, got: null, voice: headGot.voice, bg: true };
           entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg', jobs[i]).then((got) => {
             entry.got = got;
             got.done.then(() => { entry.ready = true; }).catch(() => {
@@ -15388,7 +15432,15 @@
       const hit = _ttsHeadCache.get(c.text);
       let p;
       if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
-        p = hit.p;
+        // Prepare-ahead makes clips at bg priority, behind every other
+        // message being prepared. A clip the listener now waits on is asked
+        // for again at fg; the voice server shares made pieces, so the bg
+        // request does not repeat the work (CCC-144: cold clicks waited 5-12s
+        // on a bg head).
+        p = !hit.bg || hit.ready ? hit.p : hit.p.then((got) => {
+          if (hit.ready) return got;
+          try { return _ttsFetchNeural(c.text, got.voice, 'fg').catch(() => got); } catch (_) { return got; }
+        });
         // Prepared blobs remain reusable after playback, seeks and rate changes.
         try {
           if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
@@ -20136,14 +20188,14 @@
   // gates mobile-vs-desktop CHROME). This gates plain-language labels and
   // progressive disclosure of technical info within whatever chrome is
   // already showing. Explicit user choice (localStorage 'ccc-ui-mode')
-  // always wins. Without a saved choice, mobile starts on Simple Home;
-  // desktop keeps the Advanced workspace.
+  // always wins. Without a saved choice, keep the Advanced workspace on all
+  // screen sizes; mobile layout is handled independently by the chrome rules.
   function getUiMode() {
     try {
       const stored = localStorage.getItem('ccc-ui-mode');
       if (stored === 'simple' || stored === 'advanced') return stored;
     } catch (_) {}
-    return isMobileRedesign() ? 'simple' : 'advanced';
+    return 'advanced';
   }
   function setUiMode(mode) {
     const value = mode === 'simple' ? 'simple' : 'advanced';
@@ -50882,6 +50934,12 @@
     return !!(queuePane && queuePane.classList.contains('is-active'));
   }
 
+  function _queueSnapshotIsForeground() {
+    let tab = '';
+    try { tab = localStorage.getItem('ccc-sidebar-tab') || ''; } catch (_) {}
+    return tab === 'workers' || tab === 'queues' || _queuePanelIsVisible();
+  }
+
   let _uxqItemsCache = { ts: 0, items: [], syncedAt: 0 };
   let _uxqItemsPromise = null;
   // Every server-confirmed ticket mutation advances this version. A list read
@@ -50917,7 +50975,7 @@
     const requestVersion = _uxqItemsVersion;
     _uxqItemsPromise = (async () => {
     try {
-      const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store' });
+      const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store', cccPriority: _queueSnapshotIsForeground() ? 'user' : undefined });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
       if (requestVersion !== _uxqItemsVersion) return _uxqItemsCache.items;
@@ -51045,7 +51103,7 @@
     const seq = ++_uxqHealthReqSeq;
     _uxqHealthPromise = (async () => {
     try {
-      const res = await backgroundApiFetch('/api/queue/status', { cache: 'no-store' });
+      const res = await backgroundApiFetch('/api/queue/status', { cache: 'no-store', cccPriority: _queueSnapshotIsForeground() ? 'user' : undefined });
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data && data.projects) ? data.projects
         : (Array.isArray(data) ? data : []);
@@ -52300,6 +52358,27 @@
   // ('' when none). WatchTower computes waiting_on (WT-9) with the same rule
   // its claim gate uses, and the server attaches it to the list; CCC keeps no
   // copy of that rule. An older WatchTower sends no waiting_on: no chip.
+  // One adapter for row and modal: claim metadata alone is not liveness,
+  // and queue configuration is needed to explain why work is paused.
+  function _uxqTicketAttention(it) {
+    const QA = window.QueueAttention;
+    if (!QA || !it) return null;
+    const health = _uxqHealthCache || {};
+    const project = _uxqProjectKey(it.project);
+    const session = String(it.claimed_session_id || '').trim();
+    const claimant = String(it.claimed_by || '').trim();
+    const hasClaim = !!(claimant || it.claimed_at);
+    const liveClaim = hasClaim && (health.wt_workers || []).some(w => {
+      if (!w || w.alive === false || w.released_at) return false;
+      if (project && _uxqProjectKey(w.queue) !== project) return false;
+      const sid = String(w.session_id || '').trim();
+      const wid = String(w.worker_id || '').trim();
+      return !!((session && session === sid) || (claimant && (claimant === sid || claimant === wid)));
+    });
+    return QA.project(it, { explain: true, liveClaim,
+      queue: (health.queues || []).find(q => _uxqProjectKey(q.queue) === project) });
+  }
+
   function _uxqWaitingOn(it) {
     if (!it || it.status !== 'open' || !Array.isArray(it.waiting_on) || !it.waiting_on.length) return '';
     return String(it.waiting_on[0]);
@@ -52551,7 +52630,11 @@
       if (!k || k === '?') continue;
       if (it.status === 'closed') continue;
       openByQ.set(k, (openByQ.get(k) || 0) + 1);
-      if (it.needs_input) needsByQ.set(k, (needsByQ.get(k) || 0) + 1);
+      // Owner decisions only (CCC-244): waits on a client, a dependency or a
+      // worker are not "needs input" for the person reading this count.
+      if (it.needs_input && (!window.QueueAttention || window.QueueAttention.needsOwner(it))) {
+        needsByQ.set(k, (needsByQ.get(k) || 0) + 1);
+      }
     }
     // sub-queue counts per root
     const subsByRoot = new Map();
@@ -52722,8 +52805,9 @@
       gh: false,
       hasRepo: false,
       repo: '',
-      hasNeeds: !!t.needs_input && t.status !== 'closed',
-      needs: (t.needs_input && t.status !== 'closed') ? 'needs input' : '',
+      hasNeeds: !!t.needs_input && t.status !== 'closed' && (!window.QueueAttention || window.QueueAttention.needsOwner(t)),
+      needs: (t.needs_input && t.status !== 'closed')
+        ? ((window.QueueAttention && (window.QueueAttention.project(t) || {}).label) || 'needs input') : '',
       openLabel: '',
       last: age,
       drainOn: false,
@@ -53152,13 +53236,6 @@
     _uxqRenderWorkersQueueHealth(health, workers);
     const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
     const queues = Array.isArray(health.queues) ? health.queues : [];
-    // Stage sessions (planner/verifier/...) run under a per-ticket queue name
-    // like PLAN-WT-28-R3-D1; count them under the ticket's own queue.
-    const queueNames = [...new Set(workers.map(w => _uxqProjectKey(w.ticket_queue || w.queue)).filter(Boolean))];
-    const summary = _uxqPicker.isMobile
-      ? (workers.length ? String(workers.length) : '0')
-      : (workers.length + ' agent' + (workers.length === 1 ? '' : 's') + ' · '
-         + queueNames.length + ' queue' + (queueNames.length === 1 ? '' : 's'));
     // One row per worker. A worker can hold several in_progress tickets (a
     // needs_input one plus the one it moved on to); a first-match join showed
     // the parked one and hid the live one. The row now leads with the newest
@@ -53215,11 +53292,15 @@
         // Same-queue refs shrink to their number so chips fit the narrow
         // sidebar strip; the tooltip keeps the full ref and title.
         const short = qKey && cRef.indexOf(qKey + '-') === 0 ? cRef.slice(qKey.length + 1) : cRef;
+        // Only an owner decision earns the "needs input" marker (CCC-244);
+        // a block on a client, ticket or worker names who it waits on.
+        const att = it.needs_input && window.QueueAttention ? window.QueueAttention.project(it) : null;
+        const ownerAsk = !!it.needs_input && (!att || att.owner || att.key === 'gate');
         return {
           ref: cRef,
-          label: (it.needs_input ? '?' : '#') + short,
-          needsInput: !!it.needs_input,
-          tip: cRef + (it.needs_input ? ' needs input: ' : ' also claimed: ')
+          label: (ownerAsk ? '?' : '#') + short,
+          needsInput: ownerAsk,
+          tip: cRef + (ownerAsk ? ' needs input: ' : (att ? ' ' + att.label + ': ' : ' also claimed: '))
             + String(it.title || it.note || it.text || '').split('\n')[0],
         };
       });
@@ -53238,6 +53319,14 @@
         elapsedTip, workerAge, chips, stage,
         pid: parseInt(w.pid, 10) || 0, workerId: String(w.worker_id || ''), sid: sid };
     }).filter(Boolean);
+    // The roster is local to this server. Idle/parked processes are not
+    // working tickets, and remote claims must not imply local liveness.
+    const workingCount = rows.filter(r => r.ref || r.stage).length;
+    const waitingCount = rows.filter(r => !r.ref && !r.stage && r.chips.length).length;
+    const summary = [!health.ts ? 'loading workers' : !_uxqItemsCache.ts ? 'loading tickets' : String(workingCount),
+      idleQueues.length ? idleQueues.length + ' idle' : '',
+      waitingCount ? waitingCount + ' waiting' : '',
+      'this machine'].filter(Boolean).join(' · ');
     const rowsHtml = rows.map(r => {
         // CCC-1050: one-click kill — releases the worker from queue staffing
         // and terminates its process (server route does both, release first).
@@ -53317,7 +53406,11 @@
       const $rows = $el.querySelector('.fq-working-rows');
       const $summary = $el.querySelector('.fq-working-summary');
       const $head = $el.querySelector('.fq-working-head');
-      if ($summary) $summary.textContent = summary;
+      if ($summary) {
+        $summary.textContent = summary;
+        $summary.title = 'Live workers on this dashboard’s machine only; workers on other machines are not included. Idle and waiting workers do not count as working.';
+      }
+      $el.setAttribute('aria-label', 'Working now on this machine');
       if ($head) $head.classList.toggle('is-only', rows.length === 0);
       // Mobile: rows duplicate the ticket list right below and eat the whole
       // screen, so they start collapsed to a header-only summary; tapping the
@@ -53829,6 +53922,8 @@
     const runQueued = canRequestRun && !!item.run_requested;
     const runBusy = _uxqRunBusyRefs.has(ref);
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
+    // Who it waits on (CCC-244), same projection as the queue row.
+    const attention = _uxqTicketAttention(item);
 
     // Sidebar property row helpers
     function _propRow(key, valHtml) {
@@ -53860,6 +53955,10 @@
     }
     const topBadges = _jumpBadge(statusClass, status === 'in_review' ? _uxqReviewLabel(item) : status,
         status === 'in_review' ? '.uxq-td-review-sec' : statusJumpTarget)
+      + (attention && attention.key !== 'gate'
+        ? '<span class="uxq-td-badge fq-chip fq-att fq-att-' + escapeAttr(attention.tone) + '" data-attention="' + escapeAttr(attention.key)
+          + '" title="' + escapeAttr(attention.title) + '">' + escapeHtml(attention.label) + '</span>'
+        : '')
       + (item.lane ? _jumpBadge('uxq-bs-lane', item.lane, '.uxq-td-pg-origin') : '')
       + (item.priority ? _jumpBadge(priorityClass, item.priority, '.uxq-td-pg-properties') : '')
       + (item.type ? _jumpBadge('uxq-bs-type', item.type, '.uxq-td-pg-properties') : '')
@@ -54053,7 +54152,8 @@
       : '';
 
     if (!item.closed_at) {
-      const verb = status === 'in_progress' ? 'In progress' : status === 'blocked' ? 'Agent needs your input'
+      const verb = status === 'in_progress' ? 'In progress' : status === 'blocked'
+        ? (attention && !attention.owner && attention.key !== 'gate' ? 'Blocked: ' + attention.label : 'Agent needs your input')
         : status === 'in_review' ? 'Closed by worker, ' + _uxqReviewLabel(item) : 'Open';
       tlHtml += _tlEvt('uxq-tl-open',
         '<span class="uxq-tl-verb">' + verb + '</span>' + _tlWorker(item.claimed_by), '');
@@ -54215,7 +54315,9 @@
             + '<div class="uxq-td-answer-hint" style="margin-top:6px;">Approve or decline this product-gate pitch. CLI: <code>wt ack ' + escapeHtml(ref) + '</code> / <code>wt nack ' + escapeHtml(ref) + '</code></div>'
             + '</div>'
           : '<div class="uxq-td-sec uxq-td-answer-sec">'
-            + '<div class="uxq-td-sec-label">Your Decision</div>'
+            + '<div class="uxq-td-sec-label">' + (attention && !attention.owner
+              ? escapeHtml('Not waiting on you: ' + attention.label + '. Answer only to override.')
+              : 'Your Decision') + '</div>'
             + '<div class="uxq-answer-row">'
             + '<input class="uxq-answer-input" type="text" placeholder="Type your decision / answer…" aria-label="Answer this blocked ticket">'
             + '<button type="button" class="ann-btn ann-primary uxq-answer-send">Send</button>'
@@ -55265,13 +55367,23 @@
         return !_isStaleClaim(it) && it.claimable !== false && it.watchtower_runnable !== false && !_unready(it)
           && !_uxqWaitingOn(it);
       };
-      // WIP → needs input → unresolved attention → claimable work →
+      // Who the ticket waits on (CCC-244, static/queue-attention.js): red
+      // only for an owner decision; external/dependency/answer-handoff/
+      // deferred each get their own label and tone. A comment after the
+      // question is never read as an answer.
+      const _uxqAttention = _uxqTicketAttention;
+      // After deferred tickets: WIP → needs input → unresolved attention → claimable work →
       // non-claimable, unready, or otherwise inert open work → clean closes.
       // Open work of any kind stays above closed, full stop.
       const _operationalBucket = it => {
         const status = _effectiveStatus(it);
         if (_isLiveWip(it)) return 0;
-        if (status === 'blocked' || status === 'in_review') return 1;
+        if (status === 'blocked') {
+          // Owner decisions first; waits on someone else sink below them.
+          const att = _uxqAttention(it);
+          return (!att || att.owner || att.key === 'gate') ? 1 : 2;
+        }
+        if (status === 'in_review') return 1;
         if (_hasUnresolved(it)) return 2;
         if (_isWaitingToDrain(it)) return 3;
         if (status === 'closed') return 5;
@@ -55279,6 +55391,8 @@
       };
       const historyOrder = _uxqGetFilter() === 'all';
       const rows = scoped.slice().sort((a, b) => {
+        const deferred = window.QueueAttention ? window.QueueAttention.compareDeferred(a, b) : 0;
+        if (deferred) return deferred;
         const bucket = _operationalBucket(a) - _operationalBucket(b); if (bucket) return bucket;
         if (_effectiveStatus(a) === 'open') {
           const p = _prioRank(a) - _prioRank(b); if (p) return p;
@@ -55307,29 +55421,16 @@
       // own amber marker instead of a new backend status (closed/unresolved
       // is a property of the resolution, not a distinct queue state the
       // engine needs to reason about).
-      // A human `wt comment` after the block does not clear needs_input (only
-      // `wt answer` does), so the row would read "needs input" for a question
-      // the owner already replied to. Surface that as "replied".
-      const _uxqRepliedAfterBlock = it => {
-        const h = it && Array.isArray(it.history) ? it.history : [];
-        let blockAt = '';
-        for (let i = h.length - 1; i >= 0; i--) {
-          if (h[i] && h[i].event === 'block') { blockAt = String(h[i].at || ''); break; }
-        }
-        if (!blockAt) return false;
-        return h.some(e => e && e.event === 'comment' && e.kind === 'human' && String(e.at || '') > blockAt);
-      };
       const _uxqChips = (it, priorityBumpHtml = '') => {
         const c = [];
-        if (it.needs_input && it.status !== 'closed') {
-          if (it.block_kind === 'rationale') {
-            c.push('<span class="fq-chip fq-gated" title="' + escapeAttr(it.block_question || 'pitch awaiting decision') + '">GATE</span>');
-          } else {
-            const replied = _uxqRepliedAfterBlock(it);
-            c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr((replied ? 'Owner commented after this question; worker has not picked it up yet. ' : '') + (it.block_question || 'needs human input')) + '">' + (replied ? 'replied' : 'needs input') + '</span>');
-          }
+        const att = _uxqAttention(it);
+        if (att && att.key === 'gate') {
+          c.push('<span class="fq-chip fq-gated" title="' + escapeAttr(att.title) + '">GATE</span>');
+        } else if (att) {
+          c.push('<span class="fq-chip fq-att fq-att-' + escapeAttr(att.tone) + (att.owner ? ' fq-blocked' : '')
+            + '" data-attention="' + escapeAttr(att.key) + '" title="' + escapeAttr(att.title) + '">' + escapeHtml(att.label) + '</span>');
         }
-        if (it.status === 'in_review') {
+        if (it.status === 'in_review' && (!att || att.key !== 'review')) {
           const label = _uxqReviewLabel(it);
           c.push('<span class="fq-chip fq-review" title="' + escapeAttr('Closed by its worker, ' + label + ' (wt accept / wt reject)') + '">'
             + escapeHtml(label.replace('awaits review · ', 'review · ')) + '</span>');
@@ -55350,11 +55451,11 @@
         // Readiness is meaningless once closed; while a blocker is still open
         // the ticket is not READY either, so name what it waits on (WT-4).
         const waitingOn = _uxqWaitingOn(it);
-        if (waitingOn) {
+        if (waitingOn && (!att || att.key !== 'dependency')) {
           c.push('<span class="fq-chip fq-waiting-on" role="button" tabindex="0" data-blocker-ref="' + escapeAttr(waitingOn) + '"'
             + ' title="' + escapeAttr('Blocked by ' + waitingOn + ': no worker picks this up until it closes as completed. Click to open ' + waitingOn + '.') + '">'
             + 'waiting on ' + escapeHtml(waitingOn) + '</span>');
-        } else if (it.readiness && it.status !== 'closed') {
+        } else if (!waitingOn && it.readiness && it.status !== 'closed' && (!att || (att.key !== 'readiness' && att.key !== 'deferred'))) {
           c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
         }
         if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '-') + '/' + escapeHtml(it.confidence || '-') + '</span>');
@@ -55377,11 +55478,13 @@
         const unverifiedClaim = _isUnverifiedClaim(it);
         const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
-        const blocked = !!it.needs_input && rawStatus !== 'closed';
+        const blocked = (!!it.needs_input || rawStatus === 'blocked') && rawStatus !== 'closed';
         const unresolvedNotes = _uxqUnresolvedNotes(it);
         const hasUnresolved = rawStatus === 'closed' && unresolvedNotes.length > 0;
+        const att = _uxqAttention(it);
+        const ownerBlocked = blocked && !!att && (att.owner || att.key === 'gate');
         const noteShown = blocked && it.block_question ? visibleQueueNote(it.block_question) : noteFull;
-        const tip = (blocked && it.block_question ? ('Needs input: ' + visibleQueueNote(it.block_question) + '\n\n') : '')
+        const tip = (att ? (visibleQueueNote(att.title) + '\n\n') : '')
           + (hasUnresolved ? ('Closed with unresolved follow-up:\n' + unresolvedNotes.join('\n\n') + '\n\n') : '')
           + noteFull + '\n\nClick to view ticket details.';
         const nextPrio = { '': 'p2', p3: 'p2', p2: 'p1', p1: 'p0', p0: 'p0' };
@@ -55410,7 +55513,7 @@
         // input / closed. Pressing ▶ again while still queued cancels.
         const queuedToRun = status === 'open' && !!it.run_requested;
         const runBusy = _uxqRunBusyRefs.has(ref);
-        const stageTone = _uxqStageTone(it);
+        const stageTone = att && att.key === 'deferred' ? null : _uxqStageTone(it);
         const stageSince = stageTone && stageTone !== 'verified' && it.stages && Date.parse(it.stages.since || '');
         const stageToneTitle = !stageTone ? ''
           : (stageTone === 'stuck' && it.stages && it.stages.current && !(rawStatus === 'in_progress' && staleClaim)
@@ -55419,8 +55522,10 @@
             + (stageSince ? ' for ' + timeAgo(stageSince).replace(/\s+ago$/, '') : '');
         const runTitle = queuedToRun
           ? 'Queued to run - click to cancel'
-          : (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
-        const statusTitle = blocked ? (_uxqRepliedAfterBlock(it) ? 'replied - awaiting worker' : 'needs input') : hasUnresolved ? 'closed - unresolved follow-up'
+          : (att && att.key === 'deferred' ? att.label + ' - ' : '')
+            + (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
+        const statusTitle = (att && att.key === 'deferred') ? att.title : (blocked && att) ? att.label : blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
+          : (att && att.tone === 'answer') ? att.label
           : (stageTone && !queuedToRun) ? stageToneTitle
           : unverifiedClaim ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
           : staleClaim ? 'stale claim - no current live worker'
@@ -55442,7 +55547,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(blocked && !ownerBlocked ? 'waiting' : status) + (att ? ' is-att-' + escapeAttr(att.tone) : '') + (att && att.key === 'deferred' ? ' is-deferred' : '') + (att && att.key === 'answer-working' ? ' is-att-working' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(compactRef) + '</span>'
           + queueLabelHtml
@@ -55461,7 +55566,19 @@
       // Keep creation with the tickets it affects, instead of crowding the
       // queue header. This stays after the empty state too, so an empty queue
       // still offers its primary action.
-      $queue.innerHTML = pendingAddsHtml + queueRowsHtml
+      // Summarize the whole selected queue, independent of search/type filters.
+      const workloadQueues = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
+        .filter(q => !proj || (noSubs ? _uxqProjectKey(q.queue) === proj : _uxqInScope(q.queue, proj)));
+      const unfinished = inScope.filter(it => it.status !== 'closed').length;
+      const working = inScope.filter(it => !it.needs_input && it.status === 'in_progress' && _hasLiveClaim(it)).length;
+      const ready = workloadQueues.length && workloadQueues.every(q => q.claimable != null)
+        ? workloadQueues.reduce((n, q) => n + Number(q.claimable), 0) : '—';
+      const budget = workloadQueues.length && workloadQueues.every(q => q.desired_workers != null)
+        ? workloadQueues.reduce((n, q) => n + Number(q.desired_workers), 0) : '—';
+      const workloadHtml = '<div class="fq-workload-summary" role="status"'
+        + ' title="All unfinished tickets in this scope, including deferred and blocked. Ready comes from scheduler eligibility; working requires a live ticket owner. Worker slots are the configured budget, not a live process count.">'
+        + unfinished + ' unfinished · ' + ready + ' ready · ' + working + ' working · ' + budget + ' worker slots</div>';
+      $queue.innerHTML = workloadHtml + pendingAddsHtml + queueRowsHtml
         + historyPagerHtml
         + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>'
         + '<div class="fq-create-session-queue-wrap"><button class="fq-create-session-queue" id="filesQueueCreateForSession" type="button" title="Create a new WatchTower queue for this session\'s repo, auto-drain off">Create queue for this session</button></div>';
@@ -58798,6 +58915,107 @@
     if (pending) _convTailPrefetches.delete(id);
     return pending;
   }
+  // Last-seen conversation tails in IndexedDB (CCC-143 / CCC-208). A click
+  // paints the saved copy at once, marked as refreshing, while the real
+  // fetch runs; the fresh response then replaces it wholesale, so the saved
+  // copy only ever decides the first frame. When the host is saturated the
+  // fetch can wait 1-3s before the server even sees it; reopens no longer
+  // show a blank pane for that long. Any IndexedDB failure (private mode,
+  // quota, blocked upgrade) degrades to today's uncached open.
+  // localStorage ccc-conv-cache=0 turns it off.
+  const CONV_CACHE_DB = 'ccc-conv-cache';
+  const CONV_CACHE_MAX_ENTRIES = 60;
+  const CONV_CACHE_MAX_BYTES = 1500000;
+  // Longer than this and the network usually wins anyway; a slow disk must
+  // never delay the fresh render.
+  const CONV_CACHE_READ_BUDGET_MS = 250;
+  let _convCacheDbP = null;
+  function _convCacheDb() {
+    if (_convCacheDbP) return _convCacheDbP;
+    _convCacheDbP = new Promise((resolve) => {
+      try {
+        if (!window.indexedDB || localStorage.getItem('ccc-conv-cache') === '0') { resolve(null); return; }
+        const req = indexedDB.open(CONV_CACHE_DB, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('tails')) {
+            db.createObjectStore('tails', { keyPath: 'id' }).createIndex('saved_at', 'saved_at');
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+        req.onblocked = () => resolve(null);
+      } catch (_) { resolve(null); }
+    });
+    return _convCacheDbP;
+  }
+  function _convCacheEligible(id, source) {
+    if (!id || source === 'hermes') return false;
+    return !/^(backlog|spawning|pkood|issue)-/.test(String(id));
+  }
+  async function _convCacheGet(id) {
+    const db = await _convCacheDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const req = db.transaction('tails', 'readonly').objectStore('tails').get(String(id));
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      } catch (_) { resolve(null); }
+    });
+  }
+  function _convCachePutSoon(id, data) {
+    if (!data || !Array.isArray(data.events) || !data.events.length) return;
+    const bytes = data.__perf && data.__perf.bytes;
+    if (bytes && bytes > CONV_CACHE_MAX_BYTES) return;
+    const entry = {
+      id: String(id),
+      saved_at: Date.now(),
+      events: data.events,
+      engine: data.engine || '',
+      last_line: data.last_line || 0,
+      truncated_before: !!data.truncated_before,
+    };
+    // Off the open's critical path: the structured clone of the events
+    // costs main-thread time the user should not see on click.
+    setTimeout(async () => {
+      try {
+        const db = await _convCacheDb();
+        if (!db) return;
+        const tx = db.transaction('tails', 'readwrite');
+        const store = tx.objectStore('tails');
+        store.put(entry);
+        const count = store.count();
+        count.onsuccess = () => {
+          let excess = count.result - CONV_CACHE_MAX_ENTRIES;
+          if (excess <= 0) return;
+          const cur = store.index('saved_at').openKeyCursor();
+          cur.onsuccess = () => {
+            const c = cur.result;
+            if (!c || excess <= 0) return;
+            store.delete(c.primaryKey);
+            excess -= 1;
+            c.continue();
+          };
+        };
+      } catch (_) {}
+    }, 400);
+  }
+  function _markConvCachePreview($view, state, savedAt) {
+    if (!$view) return;
+    let el = $view.querySelector(':scope > .conv-cache-preview');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'conv-cache-preview';
+      el.setAttribute('role', 'status');
+      $view.prepend(el);
+    }
+    const age = savedAt ? ' from ' + timeAgo(savedAt) : '';
+    el.dataset.state = state;
+    el.textContent = state === 'failed'
+      ? 'Showing the saved copy' + age + ' · could not refresh'
+      : 'Showing the saved copy' + age + ' · refreshing…';
+  }
   function prefetchRestoredConversationTails() {
     for (const pane of splitState.panes) {
       if (pane && pane.conversationId) _prefetchConversationTail(pane.conversationId);
@@ -59424,6 +59642,9 @@
         return;
       }
     }
+    // Set once a saved copy (IndexedDB) is on screen for this open; the
+    // catch below keeps it, marked, instead of blanking the pane.
+    let _cachedPreview = null;
     try {
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
@@ -59453,24 +59674,83 @@
       // Perf metric 2 detail: did this open serve from the pre-warmed tail
       // (kicked in selectConversation) or fall through to a fresh fetch?
       let _perfPrefetchHit = false;
+      let _netP = null;
+      let _cacheP = null;
+      let _cacheEligible = false;
       if (_freshOpen && !_wantFull && !_loadingEarlier) {
         const _prefetchRow = (conversationsData || []).find(x => x.id === id)
           || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
         const _prefetchSource = sessionSourceByConv[id] || (_prefetchRow && _prefetchRow.source) || '';
         const prefetched = _takePrefetchedConversationTail(id);
         if (prefetched && _prefetchSource !== 'hermes') {
-          data = await prefetched;
+          _netP = prefetched;
           _perfPrefetchHit = true;
         }
+        _cacheEligible = _convCacheEligible(id, _prefetchSource);
+        if (_cacheEligible) _cacheP = _convCacheGet(id);
       }
-      if (!data) {
+      const _loadNet = async () => {
         if (_freshOpen && !_loadingEarlier) {
-          data = await _fetchConvJsonTimed(_url, undefined, true);
-        } else {
-          const res = await fetch(_url);
-          data = await res.json();
+          return _fetchConvJsonTimed(_url, undefined, true);
+        }
+        const res = await fetch(_url);
+        return res.json();
+      };
+      _netP = _netP ? _netP.then(d => d || _loadNet()) : _loadNet();
+      if (_cacheP) {
+        // Paint the saved copy only if it beats the network; the fresh
+        // response below always replaces it.
+        let _netDone = false;
+        _netP = _netP.then(d => { _netDone = true; return d; }, e => { _netDone = true; throw e; });
+        const cached = await Promise.race([
+          _cacheP,
+          _netP.then(() => null, () => null),
+          new Promise(r => setTimeout(() => r(null), CONV_CACHE_READ_BUDGET_MS)),
+        ]);
+        const _pv = paneByPaneId(fetchPaneId);
+        if (cached && !_netDone && convLastLine === 0 && _pv && _pv.conversationId === id
+            && Array.isArray(cached.events) && cached.events.length) {
+          const savedIdxPv = splitState.activeIndex;
+          splitState.activeIndex = paneIndexByPaneId(fetchPaneId);
+          try {
+            if (cached.engine) {
+              const _pvEl = convPaneElById(fetchPaneId);
+              if (_pvEl) {
+                _pvEl.classList.toggle('is-codex-session', cached.engine === 'codex');
+                _pvEl.classList.toggle('is-webui-session', cached.engine === 'kimi' || cached.engine === 'codex');
+              }
+            }
+            $view.innerHTML = '';
+            const _pvOk = renderConversationEvents(cached.events, fetchPaneId, {
+              initialLoad: true, isTruncated: cached.truncated_before, cachedPreview: true,
+            }) !== false;
+            if (_pvOk) {
+              _markConvCachePreview($view, 'refreshing', cached.saved_at);
+              _cachedPreview = { saved_at: cached.saved_at };
+              if (_perfConvOpen && _perfConvOpen.id === id && _perfConvOpen.paneId === fetchPaneId
+                  && !_perfConvOpen.cachedPainted) {
+                _perfConvOpen.cachedPainted = true;
+                const _pvEnd = performance.now();
+                _cachedPreview.ms = Math.round(_pvEnd - _perfConvOpen.t0);
+                _perfEvent('conv_open_cached', _perfActiveElapsed(_perfConvOpen.t0, _pvEnd), {
+                  conv_id: id,
+                  detail: {
+                    events: cached.events.length,
+                    engine: cached.engine || sessionSourceByConv[id] || '',
+                    age_ms: Math.max(0, Date.now() - (cached.saved_at || Date.now())),
+                    wall_ms: _cachedPreview.ms,
+                  },
+                });
+              }
+            }
+          } catch (_) {
+            $view.innerHTML = '';
+          } finally {
+            splitState.activeIndex = savedIdxPv;
+          }
         }
       }
+      data = await _netP;
       const _perfDataAt = performance.now();
       // Tail is in hand: release the parked select-time fetches once this
       // render has painted (see _afterConvTail).
@@ -59559,6 +59839,7 @@
           const _perfRenderAt = performance.now();
           const _renderOk = renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
           if (_renderOk) convLastLine = data.last_line;
+          if (_renderOk && _cacheEligible) _convCachePutSoon(id, data);
           if (_renderOk && _freshOpen && data.truncated_before && data.first_prompt) {
             _renderFirstPromptPin($view, data.first_prompt, fetchPaneId);
           }
@@ -59577,6 +59858,9 @@
                 detail: {
                   events: Array.isArray(data.events) ? data.events.length : 0,
                   prefetch_hit: _perfPrefetchHit,
+                  // conv_open stays click -> FRESH render; the saved-copy
+                  // paint is its own kind (conv_open_cached).
+                  cached_preview_ms: _cachedPreview ? (_cachedPreview.ms ?? null) : null,
                   truncated: !!data.truncated_before,
                   wall_ms: Math.round(_perfWall),
                   hidden_ms: Math.round(_perfWall - _perfActive),
@@ -59689,7 +59973,9 @@
         fetchSessionUsage(sid);
       }
     } catch (err) {
-      if (convLastLine === 0) {
+      if (_cachedPreview && convLastLine === 0 && $view.querySelector(':scope > .conv-cache-preview')) {
+        _markConvCachePreview($view, 'failed', _cachedPreview.saved_at);
+      } else if (convLastLine === 0) {
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load conversation: ' + escapeHtml(err.message) + '</div>';
       }
     }
@@ -67274,11 +67560,18 @@
     opts = opts || {};
     const pane = paneByPaneId(paneId);
     const renderedConversationId = (pane && pane.conversationId) || currentConversation || '';
-    if (!opts.isTruncated) _ultraFreshFeed((pane && pane.currentSession && pane.currentSession.id) || renderedConversationId, events);
+    // A saved-copy preview is old data: never feed it to live freshness.
+    if (!opts.isTruncated && !opts.cachedPreview) _ultraFreshFeed((pane && pane.currentSession && pane.currentSession.id) || renderedConversationId, events);
     if (pane && opts.isTruncated) {
       pane.firstUserMsgRendered = true;
     }
     const $view = getConvViewForPane(paneId) || $conversationsView;
+    // Real data replaces a saved-copy preview (CCC-143) wholesale -- e.g. a
+    // stream/poll landing after the refresh fetch failed -- so stale rows
+    // and the "saved copy" badge never mix with live ones.
+    if (!opts.cachedPreview && $view.querySelector(':scope > .conv-cache-preview')) {
+      $view.innerHTML = '';
+    }
     // Webui panes (kimi + codex) render kimi-web style: merged turns,
     // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
     // path below stays byte-for-byte the shared legacy renderer.
@@ -67754,7 +68047,41 @@
       }
 
       if (ev.type === 'system') {
-        if (ev.subtype === 'peer_held') {
+        if (ev.subtype === 'stop_held_inputs') {
+          // CCC-237: queued after-turn input an explicit Stop parked. It never
+          // sends on its own; Release re-sends (still after any running turn),
+          // Cancel discards. Each store revision is a new block that replaces
+          // the previous one; an emptied record renders hidden to clear it.
+          const _shSid = String(ev.session_id || '');
+          $view.querySelectorAll('.event.stop-held-block').forEach(el => {
+            if (el.dataset.sessionId === _shSid) el.remove();
+          });
+          const _shItems = Array.isArray(ev.items) ? ev.items : [];
+          div.classList.add('stop-held-block');
+          div.dataset.sessionId = _shSid;
+          if (!_shItems.length) {
+            div.hidden = true;
+          } else {
+            const _shAttr = 'data-session-id="' + escapeAttr(_shSid) + '"';
+            div.innerHTML = '<div class="stop-held-head"><span class="label">Held after Stop</span>'
+              + '<span class="stop-held-sub">' + _shItems.length + ' queued message'
+              + (_shItems.length === 1 ? '' : 's') + ' will not send until you release '
+              + (_shItems.length === 1 ? 'it' : 'them') + '</span>'
+              + (_shItems.length > 1
+                ? '<button type="button" class="stop-held-btn" data-stop-held-action="release" data-stop-held-id="all" ' + _shAttr + '>Release all</button>'
+                  + '<button type="button" class="stop-held-btn" data-stop-held-action="cancel" data-stop-held-id="all" ' + _shAttr + '>Cancel all</button>'
+                : '')
+              + '</div>'
+              + _shItems.map(item => '<div class="stop-held-item" data-stop-held-item="' + escapeAttr(String(item.id || '')) + '">'
+                + '<span class="stop-held-text" data-raw-text="' + escapeAttr(String(item.text || '')) + '">'
+                + escapeHtml(truncate(String(item.text || ''), 400)) + '</span>'
+                + '<button type="button" class="stop-held-btn" data-stop-held-action="release" data-stop-held-id="' + escapeAttr(String(item.id || '')) + '" ' + _shAttr
+                + ' title="Send this message (after the current turn, if one is running)">Release</button>'
+                + '<button type="button" class="stop-held-btn" data-stop-held-action="cancel" data-stop-held-id="' + escapeAttr(String(item.id || '')) + '" ' + _shAttr
+                + ' title="Discard this message">Cancel</button>'
+                + '</div>').join('');
+          }
+        } else if (ev.subtype === 'peer_held') {
           // A teammate's peer message was held by Claude's mode-parity rule
           // and never reached the model. Muted, one line, expandable.
           const who = String(ev.name || '').trim() || String(ev.from || '').replace(/^uds:/, '') || 'peer';
@@ -87218,7 +87545,34 @@
     return out.slice(0, SPAWN_CWD_CHIP_LIMIT);
   }
 
+  // Jev picks the repo from the prompt, so the folder picker starts
+  // collapsed to one line like the model choice (CCC-243).
+  let spawnCwdExpanded = false;
+  function renderSpawnCwdSummary() {
+    const host = document.getElementById('spawnCwdSummary');
+    if (!host) return;
+    let jevOn = false;
+    try { jevOn = smartRepoConfigured === true; } catch (_) {}   // declared below; may be in TDZ at boot
+    const collapsed = jevOn && !spawnCwdExpanded;
+    document.body.classList.toggle('ccc-spawn-cwd-collapsed', collapsed);
+    host.hidden = !collapsed;
+    if (!collapsed) { host.textContent = ''; return; }
+    const cwd = getSpawnCwd();
+    const label = cwd ? spawnCwdLabel(cwd) : '';
+    host.innerHTML = '<span class="ns-selection-mode">' + (repoGuessUserPicked ? 'Custom' : 'Auto') + '</span>'
+      + '<span class="ns-selection-name">' + (cwd ? repoAvatarHtml(cwd, label) + escapeHtml(label) : 'Picked from your prompt') + '</span>'
+      + '<button type="button" class="ns-model-change spawn-cwd-change">Change</button>';
+    host.title = (repoGuessUserPicked ? 'Folder you chose: ' : 'Jev picks the repo from your prompt. Now: ') + (cwd || 'none yet');
+    host.querySelector('.spawn-cwd-change').addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      spawnCwdExpanded = true;
+      renderSpawnCwdSummary();
+    });
+  }
+
   function renderSpawnCwdQuickChips() {
+    renderSpawnCwdSummary();
     const wrap = document.getElementById('spawnCwdQuickChips');
     if (!wrap) return;
     const current = getSpawnCwd();
@@ -87756,6 +88110,7 @@
       const data = await res.json();
       const configured = data.jev_configured === true;
       smartRepoConfigured = configured;
+      renderSpawnCwdSummary();
       icon.classList.toggle('is-enabled', configured);
       icon.setAttribute('aria-disabled', String(configured));
       icon.setAttribute('aria-label', configured ? 'Smart repo enabled' : 'Smart repo off: add token');
@@ -87770,6 +88125,7 @@
     } catch (_) {
       smartRepoConfigured = null;
       icon.hidden = true;
+      renderSpawnCwdSummary();
     }
   }
   async function openSmartRepoTokenSetup(button) {
@@ -87835,11 +88191,12 @@
     host.textContent = '';
     if (repoGuessAuto) {
       const note = document.createElement('span');
+      note.className = 'spawn-cwd-guess-note';
       note.textContent = 'Auto-picked ' + spawnCwdLabel(repoGuessAuto.path) + ' \u00b7 ';
       note.title = 'Folder chosen from your prompt: ' + repoGuessAuto.path;
       const undo = document.createElement('button');
       undo.type = 'button';
-      undo.className = 'spawn-cwd-guess-btn';
+      undo.className = 'spawn-cwd-guess-btn spawn-cwd-guess-note';
       undo.textContent = 'undo';
       undo.title = 'Go back to ' + (repoGuessAuto.prev || 'the previous folder');
       undo.addEventListener('click', () => {
@@ -87864,6 +88221,7 @@
       host.appendChild(btn);
     }
     host.hidden = !host.childNodes.length;
+    renderSpawnCwdSummary();
   }
 
   function applyRepoGuess(data) {
@@ -87895,6 +88253,7 @@
     repoGuessUserPicked = false;
     repoGuessAuto = null;
     repoGuessSuggestion = '';
+    spawnCwdExpanded = false;
     renderRepoGuessChips();
   }
 
@@ -93810,7 +94169,10 @@
       .catch(function () { return { ids: [], sessions: {} }; });
   }
   function loadConversations() {
-    return fetchJSON('/api/conversations/list?window=all&stale_ok=1', 14000).then(function (data) {
+    // The splash only counts the last 24h and names live sessions, so the
+    // 1d window is enough. window=all made every page boot build and parse a
+    // ~30MB body next to the sidebar's own read (CCC-229).
+    return fetchJSON('/api/conversations/list?window=1d&stale_ok=1', 14000).then(function (data) {
       var rows = Array.isArray(data && data.conversations) ? data.conversations : [];
       var cutoff = Date.now() / 1000 - 86400;
       var recent = rows.filter(function (r) { return Number(r.mtime || r.modified || 0) >= cutoff; });

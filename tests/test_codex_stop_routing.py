@@ -116,3 +116,37 @@ def test_single_exec_in_same_directory_needs_matching_rollout_start(tmp_path, mo
     assert sg.find_headless_codex_exec_owner("native-session", str(tmp_path)) is None
     monkeypatch.setattr(sg, "_ps_etimes", lambda pids: {123: 5000})
     assert sg.find_headless_codex_exec_owner("native-session", str(tmp_path)) is proc
+
+
+def test_steer_to_wt_app_server_worker_goes_through_wt_not_ccc_app_server(monkeypatch, tmp_path):
+    """CODEX-CCC-WT-10: a thread hosted by a WatchTower app-server worker is
+    steered via `wt codex-app steer` (the worker's own server); CCC's own
+    app-server would be a second writer. Threads without a worker record
+    never spawn `wt`."""
+    sid = "11111111-2222-7333-8444-555555555555"
+    calls = tmp_path / "calls.txt"
+    fake_wt = tmp_path / "wt"
+    fake_wt.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"open({str(calls)!r}, 'a').write(json.dumps([sys.argv[1:], sys.stdin.read()]) + '\\n')\n"
+        "print(json.dumps({'ok': True, 'via': 'wt-app-worker-steer', 'turn_id': 't1'}))\n"
+    )
+    fake_wt.chmod(0o755)
+    monkeypatch.setattr(server, "_WT_HOME", tmp_path)
+    monkeypatch.setattr(server, "_wt_cli_path", lambda: str(fake_wt))
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("CCC app-server path reached for a WT-hosted thread")
+    monkeypatch.setattr(server, "_codex_headless_exec_refusal", _must_not_run)
+    monkeypatch.setattr(server, "_resume_session_codex_native_delivery", _must_not_run)
+
+    assert codex_mod._codex_wt_app_worker_delivery(sid, "hi") is None
+    assert not calls.exists()
+
+    (tmp_path / "codex-app").mkdir()
+    (tmp_path / "codex-app" / f"{sid}.json").write_text("{}")
+    res = server.resume_session_codex(sid, "REPORT-TOKEN", steer=True, _native_delivery=True)
+    assert res["ok"] is True and res["via"] == "wt-app-worker-steer"
+    argv, text = json.loads(calls.read_text().splitlines()[0])
+    assert argv == ["codex-app", "steer", sid] and text == "REPORT-TOKEN"

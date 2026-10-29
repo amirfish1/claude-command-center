@@ -236,6 +236,30 @@
 
   function isLiveWip(it) { return statusOf(it) === 'in_progress' && hasLiveClaim(it); }
 
+  // Who the ticket is waiting on (CCC-244): owner decision, external actor,
+  // dependency, worker or answer delivery. Shared with the main dashboard via
+  // static/queue-attention.js, so labels, colours and counts agree.
+  // GitHub-backed blocks are answered on GitHub. Only an owner decision asks
+  // the owner to answer; any other wait names who must act instead (CCC-244).
+  function githubBlockedHint(it) {
+    var a = attentionOf(it);
+    if (!a || a.owner || a.key === 'gate') {
+      return 'This ticket needs input, but is synced from GitHub \u2014 answer it there.';
+    }
+    var who = a.label.charAt(0).toUpperCase() + a.label.slice(1);
+    return who + '; nothing for you to answer. Synced from GitHub \u2014 changes to the wait happen there.';
+  }
+  function attentionOf(it) {
+    var QA = window.QueueAttention;
+    if (!QA || !it) return null;
+    return QA.project(it, { explain: true, liveClaim: hasLiveClaim(it) && !isStaleClaim(it), queue: (state.queues || []).find(function (q) { return projectKey(q.queue) === projectKey(it.project); }) });
+  }
+  // A blocked ticket only counts as "needs input" when the owner must act.
+  function blockedOnOwner(it) {
+    var a = attentionOf(it);
+    return !a || a.owner || a.key === 'gate';
+  }
+
   // The store's status key is `blocked`; the word shown to a person is always
   // "needs input". Keep the key internal (it drives classes and sorting) and
   // translate at every render point, so the raw key can never leak into copy.
@@ -243,6 +267,8 @@
     blocked: 'needs input',
     in_progress: 'in progress',
     in_review: 'awaits review',
+    // A block someone else must clear (CCC-244); the attention chip says who.
+    waiting: 'blocked',
     open: 'open',
     closed: 'closed'
   };
@@ -307,7 +333,8 @@
   function operationalBucket(it) {
     var st = statusOf(it);
     if (isLiveWip(it)) return 0;
-    if (st === 'blocked' || st === 'in_review') return 1;
+    if (st === 'in_review' || (st === 'blocked' && blockedOnOwner(it))) return 1;
+    if (st === 'blocked') return 2;
     if (String(it.status) === 'closed' && unresolvedNotes(it).length) return 2;
     if (isWaitingToDrain(it)) return 3;
     if (st === 'closed') return 4;
@@ -418,7 +445,8 @@
       }
       if (it.needs_input) {
         if (it.block_kind === 'rationale') b.gated = (b.gated || 0) + 1;
-        b.needsInput++;
+        if (blockedOnOwner(it)) b.needsInput++;
+        else b.waitingOn = (b.waitingOn || 0) + 1;
       }
       else if (st === 'in_review') b.review++;
       else if (st === 'in_progress') b.wip++;
@@ -461,9 +489,13 @@
           + '<b>' + f.gated + '</b> gated</span>'
         : '',
       needsInput: (f.needsInput
-        ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
+        ? '<span class="q2-n is-blocked" title="Blocked on a decision only you can make">'
           + '<b>' + f.needsInput + '</b> needs input</span>'
         : '')
+        + (f.waitingOn
+          ? '<span class="q2-n is-waiting-on" title="Blocked on someone else (client, another ticket, a worker), not on you">'
+            + '<b>' + f.waitingOn + '</b> waiting</span>'
+          : '')
         + (f.review
           ? '<span class="q2-n is-review" title="Closed by a worker, waiting on its review gate (accept / reject)">'
             + '<b>' + f.review + '</b> review</span>'
@@ -1066,12 +1098,13 @@
     });
 
     var allItems = (state.items || []).filter(function (it) { return statusOf(it) !== 'closed'; });
-    var allFacts = { waiting: 0, wip: 0, needsInput: 0, gated: 0, review: 0 };
+    var allFacts = { waiting: 0, wip: 0, needsInput: 0, waitingOn: 0, gated: 0, review: 0 };
     allItems.forEach(function (it) {
       var st = statusOf(it);
       if (st === 'blocked') {
         if (it.block_kind === 'rationale') allFacts.gated++;
-        allFacts.needsInput++;
+        if (blockedOnOwner(it)) allFacts.needsInput++;
+        else allFacts.waitingOn++;
       }
       else if (st === 'in_review') allFacts.review++;
       else if (st === 'in_progress') allFacts.wip++;
@@ -1100,7 +1133,7 @@
       // 0 open but old closed history still has something to lose, so it
       // gets a confirm too. Only a truly untouched queue (0 and 0) deletes
       // with no prompt.
-      var totalTickets = (f.waiting || 0) + (f.wip || 0) + (f.needsInput || 0) + (q.closed || 0);
+      var totalTickets = (f.waiting || 0) + (f.wip || 0) + (f.needsInput || 0) + (f.waitingOn || 0) + (q.closed || 0);
       var delTitle = totalTickets > 0
         ? ('Delete queue ' + q.queue + ' (' + totalTickets + ' ticket' + (totalTickets === 1 ? '' : 's') + ' - asks to confirm)')
         : ('Delete queue ' + q.queue + ' (empty - no confirmation needed)');
@@ -1540,7 +1573,7 @@
       var live = m.working.length > 0;
       var label = live
         ? 'In progress: ' + m.working.map(function (it) { return miniRef(it.ref); }).join(', ')
-        : 'Idle' + (m.blocked.length ? ' · ' + m.blocked.length + ' need input' : '');
+        : 'Idle' + (m.blocked.filter(blockedOnOwner).length ? ' · ' + m.blocked.filter(blockedOnOwner).length + ' need input' : '');
       host.innerHTML = '<div class="q2-diagram-mini" data-q2-dg-expand'
         + ' title="Expand queue mechanics" role="button" tabindex="0">'
         + '<span class="q2-mini-dot' + (live ? '' : ' is-idle') + '" aria-hidden="true"></span>'
@@ -1590,8 +1623,8 @@
             + m.parked.length + ' parked</div>'
             + '<div class="q2-dg-stack is-parked">' + stackHtml(m.parked.slice(0, 6), 'is-parked') + '</div>'
           : '')
-      + (m.blocked.length
-          ? '<div class="q2-dg-sub is-blocked">' + m.blocked.length + ' needs input</div>' : '')
+      + (m.blocked.filter(blockedOnOwner).length
+          ? '<div class="q2-dg-sub is-blocked">' + m.blocked.filter(blockedOnOwner).length + ' needs input</div>' : '')
       + '</div>'
       // link: backlog -> watcher
       + '<div class="q2-dg-link' + (feedLive ? ' is-flowing' : '') + '" aria-hidden="true">'
@@ -2083,6 +2116,12 @@
     var c = [];
     if (it.needs_input && it.block_kind === 'rationale') {
       c.push('<span class="q2-tchip is-gated" title="Product-gate pitch awaiting decision">GATE</span>');
+    } else {
+      var att = attentionOf(it);
+      if (att && !att.owner) {
+        c.push('<span class="q2-tchip q2-att is-att-' + esc(att.tone) + '" data-attention="' + esc(att.key) + '"'
+          + ' title="' + esc(att.title) + '">' + esc(att.label) + '</span>');
+      }
     }
     if (it.type) {
       // Colour carries the TYPE only. Tinting the same chip by priority as
@@ -2276,8 +2315,13 @@
     var st = statusOf(it);
     var ref = it.ref || '';
     var title = titleOf(it).split('\n')[0];
-    var stale = isStaleClaim(it);
-    var unverified = isUnverifiedClaim(it);
+    var att = st !== 'closed' ? attentionOf(it) : null;
+    // A blocked worker has already left, and an answer in flight already
+    // says whether a worker has it: who/what the ticket waits on is the
+    // signal, not whether the claim that asked is still alive.
+    var claimShown = st !== 'blocked' && !(att && att.tone === 'answer');
+    var stale = claimShown && isStaleClaim(it);
+    var unverified = claimShown && isUnverifiedClaim(it);
     var unresolved = String(it.status) === 'closed' && unresolvedNotes(it).length > 0;
     // Same source the main dashboard uses: last touch, or close time once
     // closed. Rendered without the trailing " ago", as it is there.
@@ -2296,10 +2340,18 @@
     // request is still true but no longer the thing to tell someone; showing
     // "run requested" here reads as if nothing had happened yet.
     var queued = canRun && !!it.run_requested && st !== 'blocked';
+    // A block someone else must clear reads "waiting", never "needs input".
+    var rowSt = (st === 'blocked' && att && !att.owner && att.key !== 'gate') ? 'waiting' : st;
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + withMachine(it.claimed_by, it.claimed_machine) + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
       : queued ? 'launching\u2026'
+      : (st === 'blocked' && att) ? (att.owner ? statusLabel(st) : att.label)
+      // A future defer is a scheduled check, not plain "open" work (CCC-244).
+      : (att && att.key === 'deferred') ? att.label
+      // An answer in flight (queued/sending) or received names that state, so
+      // the status word never reads plain "in progress" over an amber chip.
+      : (att && att.tone === 'answer') ? att.label
       : statusLabel(st);
     // Hover-only detail for the stale-claim dot: names the actual source
     // (workers.json + a liveness check) so "stale claim" isn't an opaque
@@ -2308,7 +2360,7 @@
     var dotHoverTitle = (stale && st !== 'blocked' && !unresolved && !unverified)
       ? dotTitle + ' (source: claimed_by/claimed_session_id on this ticket matches no worker in '
         + 'workers.json whose process is still alive -- os.kill liveness check, per worker record)'
-      : dotTitle;
+      : (att ? dotTitle + ' \u2014 ' + att.title : dotTitle);
     // GitHub labels ride on the row only when there is room: the container
     // shrinks below its content and clips instead of pushing the title or
     // the age/status signals off the row.
@@ -2318,10 +2370,14 @@
     // to the claiming worker, so a stale/unverified claim still wins there;
     // in plan, verify or review the builder being gone is expected.
     var claimIssue = (stale && st !== 'blocked') || unverified;
-    var stageText = (sp && !sp.queued && st !== 'closed' && !queued && !(claimIssue && sp.current === 'build'))
+    var stageText = (sp && !sp.queued && st !== 'closed' && !queued && !(claimIssue && sp.current === 'build')
+        && !(att && att.tone === 'answer'))
       ? stageNowText(it, sp, true) : '';
     var stuckAtStage = sp ? stageStuck(it, sp) : false;
-    return '<button type="button" class="q2-trow is-' + esc(st)
+    return '<button type="button" class="q2-trow is-' + esc(rowSt)
+      + (att ? ' is-att-' + esc(att.tone) : '')
+      + (att && att.key === 'answer-working' ? ' is-att-working' : '')
+      + (att && att.key === 'deferred' ? ' is-deferred' : '')
       + (stageText ? ' has-stage' : '')
       + (stuckAtStage ? ' is-stage-stuck' : '')
       + (ref === state.ref ? ' is-selected' : '')
@@ -2456,6 +2512,8 @@
     // bucket first, then open rows by priority and oldest-first (engine order),
     // everything else newest-first.
     function bySameOrderAsMainCcc(a, b) {
+      var deferred = window.QueueAttention ? window.QueueAttention.compareDeferred(a, b) : 0;
+      if (deferred) return deferred;
       var bucket = operationalBucket(a) - operationalBucket(b);
       if (bucket) return bucket;
       if (statusOf(a) === 'open') {
@@ -2466,7 +2524,10 @@
       return (b.number || 0) - (a.number || 0);
     }
     if (state.viewAll) {
-      openish.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });
+      openish.sort(function (a, b) {
+        var deferred = window.QueueAttention ? window.QueueAttention.compareDeferred(a, b) : 0;
+        return deferred || touchedAt(b) - touchedAt(a);
+      });
     } else {
       openish.sort(bySameOrderAsMainCcc);
     }
@@ -2715,7 +2776,10 @@
       // it. Say so plainly for the unclaimed case, since "Open" alone reads
       // like an action someone just took.
       var verb = st === 'in_progress' ? 'In progress'
-        : st === 'blocked' ? 'Needs your input'
+        : st === 'blocked' ? (function () {
+            var a = attentionOf(item);
+            return a && !a.owner && a.key !== 'gate' ? 'Blocked \u00b7 ' + a.label : 'Needs your input';
+          })()
         : st === 'in_review' ? 'Closed by worker · awaits review by ' + reviewer(item)
         : 'Open · unclaimed';
       rows += evt('now', '<span class="q2-tl-verb" title="Current status, not a new event">' + esc(verb) + '</span>'
@@ -2849,8 +2913,14 @@
     // too: this row is the ticket's identity summary in the details view.
     var gh = ghLabels(item);
     var chips = ''
-      + '<span class="q2-status is-' + esc(st) + (runQueued ? ' is-run-requested' : '') + '">'
-      + esc(runQueued ? 'launching\u2026' : statusLabel(st)) + '</span>'
+      + '<span class="q2-status is-' + esc(st === 'blocked' && !blockedOnOwner(item) ? 'waiting' : st) + (runQueued ? ' is-run-requested' : '') + '">'
+      + esc(runQueued ? 'launching\u2026' : statusLabel(st === 'blocked' && !blockedOnOwner(item) ? 'waiting' : st)) + '</span>'
+      + (function () {
+          var a = attentionOf(item);
+          return a && !a.owner && a.key !== 'gate'
+            ? '<span class="q2-chip q2-att is-att-' + esc(a.tone) + '" data-attention="' + esc(a.key) + '" title="' + esc(a.title) + '">' + esc(a.label) + '</span>'
+            : '';
+        })()
       + (item.lane ? '<span class="q2-chip is-lane">' + esc(item.lane) + '</span>' : '')
       + gh.map(ghLabelChip).join('')
       + editChip('type', item.type ? (TYPE_SHORT[item.type] || item.type) : 'type?',
@@ -3018,7 +3088,7 @@
               // user explicitly where to actually respond instead of
               // silently dropping the box.
               ? '<div class="q2-inline q2-inline-answer">'
-                + '<span class="q2-dim">This ticket needs input, but is synced from GitHub — answer it there.'
+                + '<span class="q2-dim">' + esc(githubBlockedHint(item))
                 + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
                 + '</span></div>'
               // The question is NOT repeated here. The timeline's last "Needs input"

@@ -223,13 +223,30 @@ def _handle(conn, server_mod):
             pass
 
 
-def _watch_parent(parent_pid, path):
+def _socket_inode(path):
+    """Identity of the file at `path` (inode + ctime: inode numbers recycle)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_ctime_ns)
+
+
+def _watch_parent(parent_pid, path, inode=None):
+    """Exit when the parent dies, or when our socket path no longer is ours.
+
+    The dashboard restarts in place (exec keeps its pid), so getppid() alone
+    never notices: the new dashboard spawns a fresh child on the same path
+    and this one would linger forever, a full server.py import per restart.
+    """
     while True:
         if os.getppid() != parent_pid:
             try:
                 path.unlink()
             except OSError:
                 pass
+            os._exit(0)
+        if inode is not None and _socket_inode(path) != inode:
             os._exit(0)
         time.sleep(1.0)
 
@@ -239,8 +256,6 @@ def serve(path, parent_pid):
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
     import server as server_mod  # noqa: E402  (heavy; child only)
-    threading.Thread(target=_watch_parent, args=(parent_pid, path),
-                     name="conv-reader-parent-watch", daemon=True).start()
     try:
         path.unlink()
     except OSError:
@@ -255,6 +270,9 @@ def serve(path, parent_pid):
     listener.listen(64)
     # Publish atomically: the supervisor treats the path's existence as ready.
     os.replace(tmp, path)
+    threading.Thread(target=_watch_parent,
+                     args=(parent_pid, path, _socket_inode(path)),
+                     name="conv-reader-parent-watch", daemon=True).start()
     while True:
         conn, _ = listener.accept()
         threading.Thread(target=_handle, args=(conn, server_mod),

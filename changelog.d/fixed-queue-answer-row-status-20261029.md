@@ -1,0 +1,1 @@
+- In both the q2 board and the sidebar, an in-progress or stale-claimed ticket whose answer is still queued or being delivered now has an amber status word, dot and row tint. A live worker on a delivered answer shows a green "working on answer". A GitHub-synced ticket that is waiting on someone else no longer tells you to answer it on GitHub.

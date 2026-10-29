@@ -14,6 +14,10 @@ When a user says a session "got stuck", "won't take input", or a message sits on
    closed the moment the terminal-queue watcher (or auto-recovery, or
    force-restart) proves the text reached the session — it is what steps 1-2
    below exist to reconstruct by hand when this field is unavailable.
+   A non-zero `stop_held` count is not a stuck delivery: an explicit Stop
+   (or a stop steer) parked that queued input on purpose (CCC-237). It sends
+   only when released (`ccc held <sid> --release all`, or the "Held after
+   Stop" block in the conversation); `Q_STOP_HELD` in `activity.log`.
 1. **Was something injected after the last turn?** Compare
    `~/.claude/command-center/last-interactions.json` for the sid against the
    transcript mtime. An interaction newer than the last transcript line means a

@@ -141,7 +141,9 @@ class FrontendWiringTest(unittest.TestCase):
     def test_queue_panel(self):
         src = (ROOT / "static" / "app.js").read_text()
         self.assertIn("function _uxqReviewLabel(it)", src)
-        self.assertIn("status === 'blocked' || status === 'in_review'", src)
+        # Review shares the top attention bucket with owner decisions (CCC-244
+        # sank non-owner waits below them).
+        self.assertIn("if (status === 'in_review') return 1;", src)
         self.assertIn("'/api/ux-fixes/accept'", src)
 
     def test_decision_inbox_page(self):

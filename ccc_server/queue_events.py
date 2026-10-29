@@ -745,6 +745,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     closed_by_q = {}
     total_by_q = {}
     gated_by_q = {}
+    now_epoch = time.time()
     claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim
     in_progress_by_q = {}  # queue → items currently claimed/in progress
     in_review_by_q = {}  # queue → items closed by a worker, awaiting a gate (WT-5)
@@ -787,6 +788,12 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             if it.get("status") == "open":
                 if it.get("claimable") is False:
                     continue
+                # A scheduled return is not runnable work, even after an
+                # answer or a manual run request has been recorded.
+                if (_core._uxq_parse_ts(it.get("deferred_until")) or 0) > now_epoch:
+                    continue
+                if it.get("duplicate_of") or it.get("needs_input"):
+                    continue
                 # Dependency gating (WT-4): WatchTower skips a ticket until
                 # every blocked_by ref is closed as completed, so it is not
                 # claimable work and must not read as an unstaffed queue.
@@ -804,10 +811,9 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
                 # to copy only the claim_types half, which made those queues
                 # read "stuck" forever: an alarm about work no worker is
                 # allowed to touch, which no restart or spawn could ever clear.
-                # A ticket a human pressed ▶ on is claimable regardless — that
-                # is the manual override WT honours too.
+                # A run request does not bypass WatchTower's readiness gate.
                 readiness = str(it.get("readiness") or "").strip().lower()
-                if readiness in _UNCLAIMABLE_READINESS and not it.get("run_requested"):
+                if readiness in _UNCLAIMABLE_READINESS:
                     continue
                 types = cfg_claim.get(qn, [])
                 # Untyped == bug (matches WatchTower's claim filter): a ticket
@@ -1002,15 +1008,15 @@ _ux_fixes_list_cache_lock = threading.Lock()
 _ux_fixes_list_refreshing = set()
 
 
-def _ux_fixes_cache_ack(item):
+def _ux_fixes_cache_ack(item, keys=("resolution", "history", "updated_at")):
     """Keep a successful resolution ack visible through cached list polls.
 
-    Patch only fields ack_resolution writes, preserving computed list fields
-    and the snapshot age. Copy the list so slim-mode memoization also expires.
+    Patch only fields ack_resolution writes (or ``keys``: wait-on passes its
+    own), preserving computed list fields and the snapshot age. Copy the list
+    so slim-mode memoization also expires.
     """
     ref = item.get("ref")
-    changes = {key: item[key] for key in ("resolution", "history", "updated_at")
-               if key in item}
+    changes = {key: item[key] for key in keys if key in item}
     with _ux_fixes_list_cache_lock:
         for entry in _ux_fixes_list_cache.values():
             if any(row.get("ref") == ref for row in entry["items"]):
@@ -1023,6 +1029,18 @@ def _ux_fixes_cache_ack(item):
 def _ux_fixes_list_refresh(status_filter, lane_filter):
     key = (status_filter or "", lane_filter or "")
     try:
+        # CCC-142: the unfiltered board is kept current by the helper's
+        # GitHub watch; take its copy instead of rebuilding it here.
+        if key == ("", "") and _gh_watch["subscribers"] > 0:
+            with _ux_fixes_list_cache_lock:
+                current = _ux_fixes_list_cache.get(key) or {}
+            if (current.get("all_sig") or (None,))[0] != "bg-helper":
+                _gh_proxy["board_rev"] = -1  # memo was rebuilt here: resend
+            try:
+                if _gh_queue_proxy_tick(want_items=True):
+                    return
+            except Exception:
+                pass
         items = _list_items_with_waiting_on(status_filter, lane_filter)
         with _ux_fixes_list_cache_lock:
             _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
@@ -1053,6 +1071,8 @@ def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None, fresh=Fals
             _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
         return items
     now = time.time()
+    if key == ("", ""):
+        _gh_proxy["read_at"] = now
     with _ux_fixes_list_cache_lock:
         ent = _ux_fixes_list_cache.get(key)
     if ent and now - ent["ts"] < _UX_FIXES_LIST_TTL:
@@ -1312,6 +1332,52 @@ def _gh_queue_note_sig(sig):
     return changed
 
 
+# CCC-142: when the background-helper process is up, the real poll runs
+# there (ccc_server.bg_helper) and this loop only mirrors its result.
+_GH_PROXY_INTERVAL_S = 1.0
+# The board memo is ~16MB of JSON on a busy store (~0.18s to parse), so it is
+# pulled only while something here reads it (a board is open).
+_GH_PROXY_BOARD_READ_WINDOW_S = 60.0
+_gh_proxy = {"version": None, "board_rev": -1, "read_at": 0.0}
+
+
+def _gh_queue_proxy_tick(want_items=None):
+    """Mirror the helper's GitHub watch into this process. False when the
+    helper is unavailable, so the caller polls in-process instead."""
+    from ccc_server import bg_helper
+    if bg_helper.is_child() or not bg_helper.ready():
+        return False
+    if want_items is None:
+        want_items = time.time() - _gh_proxy["read_at"] < _GH_PROXY_BOARD_READ_WINDOW_S
+    reply = bg_helper.call(
+        "gh_tick", timeout=10,
+        have_board_rev=_gh_proxy["board_rev"] if want_items else "skip",
+    )
+    if reply is None:
+        return False
+    version = reply.get("version")
+    with _gh_watch_lock:
+        if _gh_proxy["version"] is not None and version != _gh_proxy["version"]:
+            _gh_watch["version"] += 1
+        _gh_proxy["version"] = version
+    board_ts = reply.get("board_ts")
+    with _ux_fixes_list_cache_lock:
+        if isinstance(reply.get("items"), list):
+            _ux_fixes_list_cache[("", "")] = {
+                "items": reply["items"],
+                "all_sig": ("bg-helper", reply.get("board_rev")),
+                "ts": float(board_ts or time.time()),
+            }
+            _gh_proxy["board_rev"] = reply.get("board_rev")
+        elif board_ts:
+            existing = _ux_fixes_list_cache.get(("", ""))
+            if existing is not None and existing.get("all_sig") == (
+                "bg-helper", reply.get("board_rev"),
+            ):
+                existing["ts"] = max(float(existing.get("ts") or 0), float(board_ts))
+    return True
+
+
 def _gh_queue_watch_loop():
     interval = _GH_POLL_INTERVAL_S
     while True:
@@ -1319,6 +1385,16 @@ def _gh_queue_watch_loop():
             if _gh_watch["subscribers"] <= 0:
                 _gh_watch["thread"] = None
                 return
+        try:
+            proxied = _gh_queue_proxy_tick()
+        except Exception:
+            proxied = False
+        if proxied:
+            _gh_watch_wake.wait(_GH_PROXY_INTERVAL_S)
+            _gh_watch_wake.clear()
+            continue
+        # Helper down: forget its board revision so a recovery resends it.
+        _gh_proxy["board_rev"] = -1
         # Re-read config every pass so a queue switched to the GitHub backend
         # starts being watched without needing a reconnect.
         if _github_queue_configured():
@@ -1476,10 +1552,22 @@ def _build_ux_fixes_health_payload_uncached():
 _ux_fixes_health_refreshing = False
 
 
+def _ux_fixes_health_from_helper(force=False):
+    """CCC-142: the health payload built in the background-helper process,
+    or None (build in-process). Only the JSON parse costs this process."""
+    from ccc_server import bg_helper
+    if bg_helper.is_child() or not bg_helper.ready():
+        return None
+    reply = bg_helper.call("ux_health", force=bool(force))
+    if reply is None or not isinstance(reply.get("data"), dict):
+        return None
+    return reply["data"]
+
+
 def _ux_fixes_health_refresh():
     global _ux_fixes_health_refreshing
     try:
-        data = _build_ux_fixes_health_payload_uncached()
+        data = _ux_fixes_health_from_helper() or _build_ux_fixes_health_payload_uncached()
         with _ux_fixes_health_snapshot_lock:
             _core._ux_fixes_health_snapshot["data"] = data
             _core._ux_fixes_health_snapshot["ts"] = time.time()
@@ -1520,7 +1608,8 @@ def build_ux_fixes_health_payload(force=False):
         now = time.time()
         if not force and snap["data"] is not None and now - snap["ts"] < _core._UX_FIXES_HEALTH_TTL:
             return copy.deepcopy(snap["data"])
-        data = _build_ux_fixes_health_payload_uncached()
+        data = (_ux_fixes_health_from_helper(force=force)
+                or _build_ux_fixes_health_payload_uncached())
         snap["data"] = data
         snap["ts"] = time.time()
         return copy.deepcopy(data)
@@ -2397,6 +2486,12 @@ def resume_session_codex(
         if routed is not None:
             return routed
     text = _core._strip_ccc_session_state_instruction(text)
+    if text and not _from_queue:
+        # A WatchTower app-server worker is mid-task by construction: steer it
+        # now rather than parking behind the writer gates below.
+        hosted = _core._codex_wt_app_worker_delivery(session_id, text)
+        if hosted is not None:
+            return hosted
     if (
         _from_queue
         and not _native_delivery

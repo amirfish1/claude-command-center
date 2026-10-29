@@ -52,12 +52,43 @@ def test_line_order_and_slash_exemption():
     carried = envelope.carry(text, a, app='wt')
     lines = carried.splitlines()
     assert lines[0] == 'orig_msg_id: reply-id'
-    assert lines[1].startswith(envelope.HEADER)
+    assert lines[1].startswith(envelope.COMPACT)
     assert lines[-1] == '⟨wt:dlv-1234⟩'
+    assert envelope.journal(a, app='wt')
     assert envelope.from_text(carried) == a
     assert envelope.strip_header(carried) == text
     assert envelope.carry('/compact', a, app='wt') == '/compact'
-    assert envelope.carry(carried, a, app='wt').count(envelope.HEADER) == 1
+    assert envelope.carry(carried, a, app='wt').count(envelope.COMPACT) == 1
+
+
+def test_compact_header_is_short_and_human_text_has_none():
+    a = envelope.service('wt:notify', 'recipient')
+    line = envelope.carry('body', a, app='wt').splitlines()[0]
+    assert line == '[sender: wt:notify (service) · msg ' + a['message_id'] + ']'
+    human = envelope.make('recipient', who=envelope.author('human', '', 'You (dashboard)'), basis='claimed')
+    assert envelope.carry('body', human, app='ccc') == 'body'
+    assert envelope.carry('orig_msg_id: x\nbody', human, app='ccc') == 'orig_msg_id: x\nbody'
+
+
+def test_unmatched_compact_header_is_a_name_only_claim():
+    a = envelope.make('recipient', who=envelope.author('session', 'sid', 'Worker [7] · x', 'claude'), basis='runtime')
+    a['reply_to'] = {'addr': 'route-123', 'route_token': 'route-123'}
+    carried = envelope.carry('body', a, app='ccc')
+    assert carried.splitlines()[0].endswith(' · reply: ccc send route-123]')
+    found = envelope.from_text(carried)
+    assert found['basis'] == 'claimed' and found['evidence'] == {'source': 'unmatched_header'}
+    assert found['author']['kind'] == 'session' and found['author']['name_at_send'] == 'Worker 7 x'
+    assert found['message_id'] == a['message_id']
+    assert found['reply_to']['addr'] == 'route-123'
+    assert envelope.lookup(text=carried)['basis'] == 'claimed'
+
+
+def test_legacy_full_json_header_still_parses_and_strips():
+    a = envelope.service('wt:notify', 'recipient')
+    legacy = envelope.HEADER + json.dumps(a, separators=(',', ':')) + ']\nbody'
+    assert envelope.from_text(legacy) == a
+    assert envelope.strip_header(legacy) == 'body'
+    assert envelope.carry(legacy, a, app='wt').count('\n') == 1
 
 
 def test_cross_application_journal_after_sender_exit_and_rename():

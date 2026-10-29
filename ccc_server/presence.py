@@ -41,11 +41,11 @@ _HUMAN_SOURCES = ("composer",)
 # Text that marks input CCC or the harness produced, not the person.
 _MACHINE_PREFIXES = (
     "[From ", "[Sent from a remote client through CCC Cloud Relay",
-    "Announced from:", "[Message attribution v1:", "<system-reminder", "<task-notification",
+    "Announced from:", "[Message attribution v1:", "[sender: ", "<system-reminder", "<task-notification",
     "<local-command-", "<command-name>", "<command-message>", "Caveat:",
     "[Request interrupted", "Stop hook feedback", "<user-prompt-submit-hook",
 )
-_MACHINE_MARKERS = ("CCC Cloud Relay", "Announced from:", "[Message attribution v1:")
+_MACHINE_MARKERS = ("CCC Cloud Relay", "Announced from:", "[Message attribution v1:", "[sender: ")
 
 _lock = threading.Lock()
 _ui_input: dict = {}       # sid -> epoch of the last composer send

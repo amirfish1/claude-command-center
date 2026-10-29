@@ -62,6 +62,38 @@ class PieceSplitTests(unittest.TestCase):
 
 
 class VoicePriorityTests(unittest.TestCase):
+    def test_waiting_request_reuses_piece_made_while_it_waited(self):
+        # A fg read re-requests a clip a bg prepare is making; the request
+        # that waited for the lock must not make the same piece again.
+        import os
+        import threading
+        import time
+        src = SCRIPT.read_text(encoding="utf-8")
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def create(text, **kw):
+            calls.append(text)
+            started.set()
+            release.wait(5)
+            return [0.1], 24000
+
+        fake_kokoro = mock.MagicMock()
+        fake_kokoro.create.side_effect = create
+        ns = {"re": re, "os": os, "threading": threading, "time": time, "_kokoro": fake_kokoro}
+        exec(src[src.index("class _PriorityLock:"):src.index("class Handler(")], ns)
+        synth = ns["_synth"]
+        bg = threading.Thread(target=synth, args=("Same piece.", "af_heart", False))
+        bg.start()
+        started.wait(5)
+        fg = threading.Thread(target=synth, args=("Same piece.", "af_heart", True))
+        fg.start()
+        time.sleep(0.05)
+        release.set()
+        bg.join(5)
+        fg.join(5)
+        self.assertEqual(calls, ["Same piece."])
+
     def test_threads_scale_with_cores(self):
         with mock.patch("os.cpu_count", return_value=16):
             self.assertEqual(free_runtime._local_tts_threads(), 8)

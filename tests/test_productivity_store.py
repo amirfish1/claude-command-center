@@ -87,3 +87,19 @@ def test_presence_pruning_removes_samples_older_than_18_weeks(tmp_path):
     with sqlite3.connect(store.path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM presence").fetchone()[0]
     assert count == 1
+
+
+def test_unwritable_state_dir_degrades_instead_of_raising(tmp_path):
+    blocker = tmp_path / "state"
+    blocker.write_text("not a directory")
+    store = ProductivityStore(blocker / "productivity.db")
+    assert store.available is False
+    assert store.load_payload() is None
+    payload = {"ok": True, "summary": {"features": 2}}
+    store.save_payload(payload, generated_at=100.0)
+    store.record_presence(datetime.now(UTC), active=True, idle_seconds=1.0)
+    cached = store.load_payload()
+    assert cached == {"generated_at": 100.0, "payload": payload}
+    cached["payload"]["summary"]["features"] = 99
+    assert store.load_payload()["payload"]["summary"]["features"] == 2
+    assert not store.path.exists()

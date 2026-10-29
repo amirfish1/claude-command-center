@@ -2685,6 +2685,25 @@ def _get_queued_events_for_session(session_id):
         ev = _queued_event(text)
         if ev:
             events.append(ev)
+    # CCC-237: one block for input an explicit Stop held. The line id carries
+    # the store revision, so each change renders a fresh block that replaces
+    # the old one; an emptied record keeps emitting (items=[]) to clear it.
+    try:
+        held = _stop_held_inputs_view(session_id)
+    except Exception:
+        held = None
+    if held and held["revision"]:
+        events.append({
+            "line": f"stopheld-{session_id[:8]}-{held['revision']}",
+            "ts": datetime.fromtimestamp(
+                held["updated_at"] or now, timezone.utc,
+            ).isoformat().replace("+00:00", "Z"),
+            "type": "system",
+            "subtype": "stop_held_inputs",
+            "session_id": session_id,
+            "revision": held["revision"],
+            "items": held["items"],
+        })
     # Codex threads also surface durable desktop↔CCC coordination events
     # (external turn detected, input queued, CCC turn boundaries) so the
     # ownership story is part of the conversation, not just transient status.
@@ -2862,6 +2881,136 @@ def _consume_matching_pending_input(session_id, text):
             _core._complete_pending_input_handoff(removed_item)
             return 1
     return 0
+
+
+def _hold_queued_inputs_for_stop(session_id, reason="stop"):
+    """CCC-237: an explicit Stop parks the session's queued after-turn input.
+
+    The queued text was written for the plan the user just stopped; letting
+    the queue pump deliver it when the stopped turn ends replays obsolete
+    instructions as new turns. Atomically move every queued entry out of the
+    delivery queues into ccc_server.stop_holds, where only an explicit
+    release or cancel takes it out again. Returns the held item count.
+    Call it BEFORE interrupting, so the turn cannot end and drain first.
+    """
+    from ccc_server import stop_holds
+    if not session_id:
+        return 0
+    transaction = _core._apply_pending_input_operations(session_id, [
+        {"field": "resume", "action": "clear"},
+        {"field": "terminal", "action": "clear"},
+    ])
+    if not transaction.get("ok"):
+        _core._log_activity(
+            "inject", "Q_STOP_HOLD_FAILED",
+            f"session={session_id} reason={reason} "
+            f"error={transaction.get('error') or transaction.get('code') or '-'}",
+        )
+        return 0
+    removed = transaction.get("value") or [[], []]
+    entries = []
+    for queue_name, items in zip(("resume", "terminal"), removed):
+        for item in items or []:
+            with _pending_queued_meta_lock:
+                meta = dict(_pending_queued_meta.pop((session_id, item), None) or {})
+            entries.append({
+                "id": getattr(item, "pending_id", None),
+                "text": str(item),
+                "queue": queue_name,
+                "queued_at": meta.get("queued_at"),
+                "attr": getattr(item, "attr", None),
+            })
+    if not entries:
+        return 0
+    stop_holds.hold(session_id, entries, reason=reason)
+    for items in removed:
+        for item in items or []:
+            _core._complete_pending_input_handoff(item)
+    _core._log_activity(
+        "inject", "Q_STOP_HELD",
+        f"session={session_id} reason={reason} held={len(entries)} "
+        f"text=\"{_core._activity_log_preview(_queued_text_key(entries[0]['text']))}\"",
+    )
+    return len(entries)
+
+
+def _stop_held_inputs_view(session_id):
+    """Client-facing held state: ids, header-free text, timestamps."""
+    from ccc_server import stop_holds
+    snap = stop_holds.snapshot(session_id) or {"revision": 0, "updated_at": 0, "items": []}
+    return {
+        "session_id": session_id,
+        "revision": snap["revision"],
+        "updated_at": snap["updated_at"],
+        "items": [
+            {
+                "id": item.get("id"),
+                "text": _core._strip_mode3_instruction(_queued_text_key(item.get("text"))),
+                "queue": item.get("queue"),
+                "held_at": item.get("held_at"),
+                "reason": item.get("reason"),
+            }
+            for item in snap["items"]
+        ],
+    }
+
+
+def _release_stop_held_inputs(session_id, ids=None):
+    """Re-send held items (all, or the given ids) through the normal inject
+    path, oldest first. A send still waits behind a running turn. Items that
+    fail to send go back to the held list instead of being lost."""
+    import sender_envelope as attribution
+    from ccc_server import stop_holds
+    taken = stop_holds.take(session_id, ids)
+    released, failed, results = [], [], []
+    for item in taken:
+        stored = str(item.get("text") or "")
+        kwargs = {
+            "mode": "send",
+            "source": "stop-hold-release",
+            "allow_duplicate": True,
+            "idempotency_key": f"stop-hold-release:{item.get('id')}",
+        }
+        attr = (item.get("attr") if isinstance(item.get("attr"), dict) else None) \
+            or attribution.from_text(stored)
+        if attr:
+            kwargs["attr"] = attr
+        try:
+            result = _core._inject_text_into_session(
+                session_id, attribution.strip_header(stored) if attr else stored, **kwargs,
+            )
+        except Exception as e:  # keep the text: put it back below
+            result = {"ok": False, "error": str(e) or "release failed"}
+        results.append({"id": item.get("id"), "ok": bool(result.get("ok")),
+                        "queued": bool(result.get("queued")),
+                        "error": result.get("error") if not result.get("ok") else None})
+        (released if result.get("ok") else failed).append(item)
+    if failed:
+        stop_holds.restore(session_id, failed)
+    if taken:
+        _core._log_activity(
+            "inject", "Q_STOP_RELEASED",
+            f"session={session_id} released={len(released)} failed={len(failed)}",
+        )
+    return {"ok": not failed, "released": len(released), "failed": len(failed),
+            "results": results, "held": _stop_held_inputs_view(session_id)}
+
+
+def _cancel_stop_held_inputs(session_id, ids=None):
+    """Discard held items (all, or the given ids) without delivering them."""
+    from ccc_server import inject_receipts, stop_holds
+    taken = stop_holds.take(session_id, ids)
+    for item in taken:
+        try:
+            inject_receipts.close_receipt(session_id, text=item.get("text"), outcome="dropped")
+        except Exception:
+            pass
+    if taken:
+        _core._log_activity(
+            "inject", "Q_STOP_CANCELLED",
+            f"session={session_id} cancelled={len(taken)}",
+        )
+    return {"ok": True, "cancelled": len(taken), "held": _stop_held_inputs_view(session_id)}
 
 
 def _snapshot_matching_pending_input_id_quick(session_id, text):

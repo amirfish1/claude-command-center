@@ -149,6 +149,18 @@ class TestRecordEvent(PerfEventsTestBase):
         self.assertIsNone(pe.evaluate_breach_pattern(rows))
         self.assertIsNone(pe.evaluate_saturation(rows))
 
+    def test_conv_open_cached_records_but_never_self_files(self):
+        # CCC-143: the saved-copy paint is measured apart from conv_open
+        # (click -> fresh render) and must not open its own perf ticket.
+        verdict = pe.record_event("conv_open_cached", 40, conv_id="c1",
+                                  detail={"age_ms": 5000})
+        self.assertEqual(verdict["threshold_ms"], pe.CONV_OPEN_MS)
+        rows = [json.loads(l) for l in self.events_path().read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([r["kind"] for r in rows], ["conv_open_cached"])
+        now = time.time()
+        breaches = [_row("conv_open_cached", 30000, now - i, pe.CONV_OPEN_MS) for i in range(5)]
+        self.assertIsNone(pe.evaluate_breach_pattern(breaches))
+
     def test_non_numeric_ms_raises(self):
         with self.assertRaises(ValueError):
             pe.record_event("conv_open", "abc")
