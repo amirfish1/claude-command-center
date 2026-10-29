@@ -21,6 +21,11 @@ The database lives at `~/.claude/command-center/usage/throughput.sqlite3`
 (override with `--db` or `CCC_THROUGHPUT_DB`). It is a cache of the source
 stores: `ingest --full-rebuild` recreates every row.
 
+Once the database exists, the dashboard keeps it current: it runs an
+incremental `ingest` in a niced child process five minutes after startup and
+then every hour (`CCC_USAGE_INGEST_INTERVAL_S`, minimum 300). It never creates
+the database; `CCC_USAGE_INGEST_DISABLED=1` turns the refresh off.
+
 ## Commands
 
 | Command | What it does |

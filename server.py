@@ -45017,6 +45017,12 @@ def main():
     # the config file's `enabled` flag is re-read every wake.
     if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_DECISION_EXTRACTION_DISABLED"):
         threading.Thread(target=decision_extraction_loop, daemon=True, name="ccc-decision-extraction").start()
+    # Hourly incremental usage-DB ingest (ccc_server/usage_db/autoingest.py),
+    # only when the DB already exists; the digest and savings lines read it.
+    # Off for ephemeral processes and via CCC_USAGE_INGEST_DISABLED=1.
+    if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_USAGE_INGEST_DISABLED"):
+        from ccc_server.usage_db import autoingest as _usage_autoingest
+        threading.Thread(target=_usage_autoingest.ingest_loop, daemon=True, name="ccc-usage-ingest").start()
     # Recover in-progress group-chat coordinations and start background watcher.
     _start_coordination_watcher()
     _start_resume_queue_watcher()
