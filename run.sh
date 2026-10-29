@@ -143,6 +143,9 @@ unload_service() {
 
 load_service() {
   if launchctl_supports_bootstrap; then
+    # --uninstall-service disables the label; a disabled label refuses
+    # bootstrap with the same bare "5: Input/output error", so enable first.
+    launchctl enable "$(service_target)" >/dev/null 2>&1 || true
     if ! launchctl bootstrap "$(service_domain)" "$PLIST_PATH"; then
       # The LaunchAgent Label is the same string as the .app's bundle
       # identifier (both "com.github.claude-command-center"). While the .app
