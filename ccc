@@ -1593,7 +1593,9 @@ def _post_restart(base, target):
         return -1, {"ok": False, "error": str(e)}
 
 
-def _wait_dashboard_back(base, before_pid, timeout=120):
+def _wait_dashboard_back(base, before_pid, timeout=120, before_started_at=None):
+    """Poll /api/version until a new process generation answers. The dashboard
+    restarts by execvp (same pid), so started_at is the primary identity."""
     import time
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -1602,7 +1604,10 @@ def _wait_dashboard_back(base, before_pid, timeout=120):
             v = _get_json(base, "/api/version", timeout=5)
         except (OSError, ValueError):
             continue
-        if v.get("pid") and v.get("pid") != before_pid:
+        if before_started_at and v.get("started_at") \
+                and v.get("started_at") != before_started_at:
+            return v
+        if v.get("pid") and before_pid and v.get("pid") != before_pid:
             return v
     return None
 
@@ -1614,8 +1619,8 @@ def _restart_now(base, target, wait=True):
         _restart_state_update(lambda s: s.update(last_restart=time.time(), last_target=target))
         print(f"ccc restart: {target} restart started")
         if target != "worker" and wait:
-            before = (payload.get("before") or {}).get("pid")
-            back = _wait_dashboard_back(base, before)
+            b = payload.get("before") or {}
+            back = _wait_dashboard_back(base, b.get("pid"), before_started_at=b.get("started_at"))
             if back:
                 print(f"ccc restart: dashboard back (pid {back.get('pid')}, rev {back.get('code_rev') or '?'})")
             else:

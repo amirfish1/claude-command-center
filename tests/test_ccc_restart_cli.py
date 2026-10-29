@@ -131,5 +131,49 @@ class CccRestartCliTests(unittest.TestCase):
         self.assertIn("failed", r.stderr)
 
 
+class WaitDashboardBackTests(unittest.TestCase):
+    """_wait_dashboard_back identifies a new process generation; execvp keeps the pid."""
+
+    def setUp(self):
+        from importlib.machinery import SourceFileLoader
+        self.m = SourceFileLoader("ccc_cli_under_test", CCC).load_module()
+        import time as _t
+        self._sleep = _t.sleep
+        _t.sleep = lambda s: None
+
+    def tearDown(self):
+        import time as _t
+        _t.sleep = self._sleep
+
+    def _feed(self, answers):
+        it = iter(answers)
+
+        def fake(base, path, timeout=5):
+            a = next(it)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        self.m._get_json = fake
+
+    def test_same_pid_exec_detected_by_started_at(self):
+        self._feed([{"pid": 7, "started_at": 2.0}])
+        v = self.m._wait_dashboard_back("b", 7, before_started_at=1.0)
+        self.assertEqual(v["started_at"], 2.0)
+
+    def test_delayed_startup_waits_through_old_and_down(self):
+        self._feed([{"pid": 7, "started_at": 1.0}, OSError("down"),
+                    {"pid": 7, "started_at": 3.0}])
+        v = self.m._wait_dashboard_back("b", 7, before_started_at=1.0)
+        self.assertEqual(v["started_at"], 3.0)
+
+    def test_failed_restart_times_out(self):
+        self._feed([{"pid": 7, "started_at": 1.0}] * 50)
+        self.assertIsNone(self.m._wait_dashboard_back("b", 7, timeout=0.01, before_started_at=1.0))
+
+    def test_pid_change_still_works_without_started_at(self):
+        self._feed([{"pid": 8}])
+        self.assertEqual(self.m._wait_dashboard_back("b", 7)["pid"], 8)
+
+
 if __name__ == "__main__":
     unittest.main()
