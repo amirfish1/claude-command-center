@@ -57,7 +57,7 @@
     var t = Date.parse(iso || '');
     if (!isFinite(t)) return str(iso);
     try {
-      return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
     } catch (_) { return new Date(t).toISOString().slice(0, 16).replace('T', ' '); }
   }
 
@@ -75,6 +75,14 @@
     var status = str(it.status || 'open');
     if (status === 'closed' || status === 'in_review') return null;
     var question = str(it.block_question);
+
+    // Duplicate followers wait for the original's completion and checks.
+    if (it.duplicate_of) {
+      var original = str(it.duplicate_of);
+      return make('dependency', 'neutral', 'waiting on ' + original,
+        'Duplicate of ' + original + '. Waiting for its fix and required verification; no separate worker is needed.',
+        { blocked: true, actor: original, depRef: original });
+    }
 
     if (it.needs_input) {
       if (it.block_kind === 'rationale') {
@@ -109,6 +117,24 @@
         'Needs your decision.' + why + (question ? '\n\n' + question : '') + noteComments, { blocked: true });
     }
 
+    // Current scheduling state takes precedence over past answer delivery.
+    var until = Date.parse(it.deferred_until || '');
+    var now = opts.now != null ? opts.now : Date.now();
+    if (status === 'open' && isFinite(until) && until > now) {
+      var minutes = Math.max(1, Math.ceil((until - now) / 60000));
+      var remaining = minutes < 60 ? minutes + 'm'
+        : minutes < 1440 ? Math.ceil(minutes / 60) + 'h' : Math.ceil(minutes / 1440) + 'd';
+      return make('deferred', 'neutral', 'deferred · in ' + remaining,
+        'Deferred until ' + shortDate(it.deferred_until) + '\n'
+          + new Date(until).toISOString()
+          + (it.defer_reason ? '\n' + it.defer_reason : '') + '\nNot ready for a worker yet.');
+    }
+    // Legacy blocked rows do not necessarily request an owner decision.
+    if (status === 'blocked') {
+      return make('blocked', 'neutral', 'blocked',
+        question || 'Blocked; no owner decision is recorded. Open the ticket for details.', { blocked: true });
+    }
+
     var live = opts.liveClaim !== undefined ? !!opts.liveClaim : status === 'in_progress';
     var pa = it.pending_answer;
     if (pa && typeof pa === 'object' && pa.state) {
@@ -121,7 +147,7 @@
         routing: ['answer queued', 'Your answer is recorded and queued for delivery to the worker.'],
         queued: ['answer queued', 'Your answer is queued; the worker session has not received it yet.'],
         delivering: ['answer sending', 'Your answer is being delivered; no receipt yet.'],
-        delivered: ['answer delivered', 'Your answer reached the worker session; waiting for a worker to resume.'],
+        delivered: ['awaiting worker', 'Your answer was received earlier, but this ticket is not currently being worked. Delivery confirmation is historical, not proof of an active worker.'],
         affinity: ['answer waiting', 'Your answer is reserved for the worker that asked; it has not resumed yet.'],
         handed_off: ['answer handed off', 'The asking session could not take your answer; the next worker gets it with the question.'],
       }[pa.state];
@@ -144,13 +170,19 @@
       }
     }
 
-    var until = Date.parse(it.deferred_until || '');
-    var now = opts.now != null ? opts.now : Date.now();
-    if (isFinite(until) && until > now) {
-      return make('deferred', 'neutral', 'deferred until ' + shortDate(it.deferred_until),
-        'Deferred until ' + shortDate(it.deferred_until) + (it.defer_reason ? ': ' + it.defer_reason : '') + '. Not waiting on you.');
-    }
     return null;
+  }
+
+  // Deferred work stays together at the top, soonest return first.
+  // Zero leaves the caller's existing ordering intact for every other row.
+  function compareDeferred(a, b, now) {
+    now = now == null ? Date.now() : now;
+    function due(it) {
+      var t = Date.parse(it && it.deferred_until || '');
+      return it && it.status === 'open' && !it.needs_input && isFinite(t) && t > now ? t : 0;
+    }
+    var at = due(a), bt = due(b);
+    return at && bt ? at - bt : at ? -1 : bt ? 1 : 0;
   }
 
   // The "needs you" predicate for counts and filters.
@@ -159,5 +191,5 @@
     return !!(a && a.owner);
   }
 
-  return { project: project, needsOwner: needsOwner, currentWait: currentWait, commentsSinceBlock: commentsSinceBlock, WAIT_ON: WAIT_ON };
+  return { compareDeferred: compareDeferred, project: project, needsOwner: needsOwner, currentWait: currentWait, commentsSinceBlock: commentsSinceBlock, WAIT_ON: WAIT_ON };
 });

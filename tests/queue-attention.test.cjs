@@ -91,7 +91,7 @@ test('local answer receipts read queued, sending, delivered, handed off', () => 
   assert.equal(QA.project(answered('queued')).label, 'answer queued');
   assert.equal(QA.project(answered('routing')).label, 'answer queued');
   assert.equal(QA.project(answered('delivering')).label, 'answer sending');
-  assert.equal(QA.project(answered('delivered')).label, 'answer delivered');
+  assert.equal(QA.project(answered('delivered')).label, 'awaiting worker');
   assert.equal(QA.project(answered('handed_off')).label, 'answer handed off');
   assert.equal(QA.project(answered('queued')).tone, 'answer');
   assert.equal(QA.needsOwner(answered('queued')), false);

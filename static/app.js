@@ -55338,7 +55338,7 @@
         if (!QA) return null;
         return QA.project(it, { liveClaim: !_isStaleClaim(it) && !_isUnverifiedClaim(it) });
       };
-      // WIP → needs input → unresolved attention → claimable work →
+      // After deferred tickets: WIP → needs input → unresolved attention → claimable work →
       // non-claimable, unready, or otherwise inert open work → clean closes.
       // Open work of any kind stays above closed, full stop.
       const _operationalBucket = it => {
@@ -55357,6 +55357,8 @@
       };
       const historyOrder = _uxqGetFilter() === 'all';
       const rows = scoped.slice().sort((a, b) => {
+        const deferred = window.QueueAttention ? window.QueueAttention.compareDeferred(a, b) : 0;
+        if (deferred) return deferred;
         const bucket = _operationalBucket(a) - _operationalBucket(b); if (bucket) return bucket;
         if (_effectiveStatus(a) === 'open') {
           const p = _prioRank(a) - _prioRank(b); if (p) return p;
@@ -55442,7 +55444,7 @@
         const unverifiedClaim = _isUnverifiedClaim(it);
         const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
-        const blocked = !!it.needs_input && rawStatus !== 'closed';
+        const blocked = (!!it.needs_input || rawStatus === 'blocked') && rawStatus !== 'closed';
         const unresolvedNotes = _uxqUnresolvedNotes(it);
         const hasUnresolved = rawStatus === 'closed' && unresolvedNotes.length > 0;
         const att = _uxqAttention(it);
@@ -55528,7 +55530,19 @@
       // Keep creation with the tickets it affects, instead of crowding the
       // queue header. This stays after the empty state too, so an empty queue
       // still offers its primary action.
-      $queue.innerHTML = pendingAddsHtml + queueRowsHtml
+      // Summarize the whole selected queue, independent of search/type filters.
+      const workloadQueues = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
+        .filter(q => !proj || (noSubs ? _uxqProjectKey(q.queue) === proj : _uxqInScope(q.queue, proj)));
+      const unfinished = inScope.filter(it => it.status !== 'closed').length;
+      const working = inScope.filter(it => !it.needs_input && it.status === 'in_progress' && _hasLiveClaim(it)).length;
+      const ready = workloadQueues.length && workloadQueues.every(q => q.claimable != null)
+        ? workloadQueues.reduce((n, q) => n + Number(q.claimable), 0) : '—';
+      const budget = workloadQueues.length && workloadQueues.every(q => q.desired_workers != null)
+        ? workloadQueues.reduce((n, q) => n + Number(q.desired_workers), 0) : '—';
+      const workloadHtml = '<div class="fq-workload-summary" role="status"'
+        + ' title="All unfinished tickets in this scope, including deferred and blocked. Ready comes from scheduler eligibility; working requires a live ticket owner. Worker slots are the configured budget, not a live process count.">'
+        + unfinished + ' unfinished · ' + ready + ' ready · ' + working + ' working · ' + budget + ' worker slots</div>';
+      $queue.innerHTML = workloadHtml + pendingAddsHtml + queueRowsHtml
         + historyPagerHtml
         + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>'
         + '<div class="fq-create-session-queue-wrap"><button class="fq-create-session-queue" id="filesQueueCreateForSession" type="button" title="Create a new WatchTower queue for this session\'s repo, auto-drain off">Create queue for this session</button></div>';

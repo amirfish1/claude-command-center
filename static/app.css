@@ -33386,3 +33386,12 @@ body.ccc-spawn-cwd-collapsed #spawnCwdQuickChips,
 body.ccc-spawn-cwd-collapsed .spawn-cwd-row > :not(#spawnCwdSummary):not(#spawnCwdGuessChip),
 body.ccc-spawn-cwd-collapsed .spawn-cwd-guess-note { display: none !important; }
 body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-template-areas: "cwd worktree"; }
+
+/* Workload and available capacity, kept visible above filtered ticket rows. */
+.fq-workload-summary {
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}

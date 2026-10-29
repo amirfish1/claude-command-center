@@ -2490,6 +2490,8 @@
     // bucket first, then open rows by priority and oldest-first (engine order),
     // everything else newest-first.
     function bySameOrderAsMainCcc(a, b) {
+      var deferred = window.QueueAttention ? window.QueueAttention.compareDeferred(a, b) : 0;
+      if (deferred) return deferred;
       var bucket = operationalBucket(a) - operationalBucket(b);
       if (bucket) return bucket;
       if (statusOf(a) === 'open') {
@@ -2500,7 +2502,10 @@
       return (b.number || 0) - (a.number || 0);
     }
     if (state.viewAll) {
-      openish.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });
+      openish.sort(function (a, b) {
+        var deferred = window.QueueAttention ? window.QueueAttention.compareDeferred(a, b) : 0;
+        return deferred || touchedAt(b) - touchedAt(a);
+      });
     } else {
       openish.sort(bySameOrderAsMainCcc);
     }
