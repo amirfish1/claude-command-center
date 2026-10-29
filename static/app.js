@@ -3851,6 +3851,22 @@
     return '';
   }
 
+  // AUTO switch under a ticket row's avatar: who drives the work. On (CCC
+  // drives it to a close, animated), paused (it asked you), off (you drive).
+  // Clicking hands off or takes back through the same handlers as the chips.
+  function autonomySwitchHtml(c, canHandOff) {
+    const h = rowHandoff(c);
+    if (!h && !canHandOff) return '';
+    const state = !h ? 'off' : h.state === 'blocked' ? 'paused' : 'on';
+    const title = state === 'off' ? 'Interactive: you drive this. Click to hand it off; CCC drives it to a close and asks you only if stuck.'
+      : state === 'paused' ? 'Autonomous, paused on your answer. Click to take it back.'
+      : (h.state === 'waiting' ? 'Autonomous, waiting on ' + (h.waiting_on || 'a dependency') : 'Autonomous: CCC is driving this to a close')
+        + '. Click to take it back.';
+    return '<button type="button" class="conv-auto-switch is-' + state + '" data-role="' + (h ? 'handoff-takeback' : 'handoff') + '"'
+      + ' aria-pressed="' + (h ? 'true' : 'false') + '" title="' + escapeAttr(title) + '" aria-label="' + escapeAttr(title) + '">'
+      + '<span class="conv-auto-label">AUTO</span></button>';
+  }
+
   function _trackedRowStatus(c) {
     if (c.archived || c.trashed || (!sessionIsOptimisticallySending(c.session_id || c.id)
         && sessionReadyToClose(c))) return { key: 'ready', label: 'Close' };
@@ -25992,7 +26008,7 @@
       + _avatarModelBadgeHtml(presentation)
       + '<span class="session-activity-dot" aria-hidden="true"></span></span>';
   }
-  function _ideaAvatarHtml(c, mobile = false) {
+  function _ideaAvatarHtml(c, mobile = false, childLane = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
     // CCC-139: Small bugs rows get the same numbered avatar as Ideas.
     const match = ref && ref.match(/^(IDEAS|SMALL-BUGS)-(\d+)$/);
@@ -26003,6 +26019,14 @@
     const hue = Number.isFinite(c.folder_chip_hue) ? c.folder_chip_hue : _hashHue(repo);
     const presentation = sessionIconPresentation(c, false);
     const repoPath = sessionRepoAvatarPath(c);
+    // A child lane sits under its parent's numbered avatar: just the model mark.
+    if (childLane) {
+      return '<button type="button" class="conv-idea-avatar is-child-mini conv-session-icon"'
+        + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
+        + ' title="' + escapeAttr(ref + ' · ' + presentation.title) + '"'
+        + ' aria-label="Open ' + noun + ' ' + escapeAttr(num) + '">'
+        + _avatarModelBadgeHtml(presentation) + '</button>';
+    }
     const background = repoPath ? repoAvatarHtml(repoPath, repo, 'conv-avatar-background') : '';
     return '<button type="button" class="conv-idea-avatar' + (background ? ' has-repo-background' : '') + (mobile ? ' wa-avatar wa-av' : ' conv-session-icon') + '"'
       + ' data-role="idea-ticket" data-idea-ref="' + escapeAttr(ref) + '"'
@@ -39795,7 +39819,7 @@
             + '</svg>';
       }
 
-      const ideaAvatarHtml = _ideaAvatarHtml(c);
+      const ideaAvatarHtml = _ideaAvatarHtml(c, false, Number(opts.currentChildDepth || 0) > 0);
       const sessionIconHtml = ideaAvatarHtml || (iconType
         ? '<span class="conv-session-icon ' + iconType + ' is-not-working" title="' + escapeAttr(iconTitle) + '" aria-hidden="true">'
             + svgMarkup
@@ -40206,9 +40230,13 @@
       // gets one in Small bugs.
       // Child lanes run, end and report back to their parent: no chips.
       const _childLaneRow = Number(opts.currentChildDepth || 0) > 0;
-      const handoffBtn = (ideaTicketsOn() && !_childLaneRow && !isBacklogRow && !isGithubPrRow && !c.archived && !c.trashed
+      const _canHandOff = ideaTicketsOn() && !_childLaneRow && !isBacklogRow && !isGithubPrRow && !c.archived && !c.trashed
         && !rowHandoff(c) && !(c.idea_ticket && c.idea_ticket.closed) && !c.pending_spawn
-        && lifecycleContext !== 'trash' && !sessionReadyToClose(c))
+        && lifecycleContext !== 'trash' && !sessionReadyToClose(c);
+      // Numbered-avatar rows carry the AUTO switch under the avatar instead.
+      const autoSwitchHtml = _ideaAvatarHtml(c) && !_childLaneRow
+        ? autonomySwitchHtml(c, _canHandOff) : '';
+      const handoffBtn = (_canHandOff && !autoSwitchHtml)
         ? '<button class="conv-lane-btn conv-handoff-btn" data-role="handoff" title="Hand off: CCC drives this to a close and only asks you if it gets stuck" aria-label="Hand off">&#129309;</button>'
         : '';
       const moveLaneBtn = _ideaRef
@@ -40750,6 +40778,7 @@
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row' + (_outcomeInline ? ' has-inline-step' : '') + '">'
             + sessionIconHtml
+            + autoSwitchHtml
             + _nyaChevronHtml
             + needsYouHtml
             + workingDotHtml

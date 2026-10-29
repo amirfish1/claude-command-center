@@ -67,7 +67,8 @@ test('child lanes get no Close or attention chips; they report to their parent',
   });
   assert.match(html, /archive when ready/);
   assert.doesNotMatch(html, /conv-ready-close|handoff-answer/);
-  assert.match(app, /const handoffBtn = \(ideaTicketsOn\(\) && !_childLaneRow/);
+  assert.match(app, /const _canHandOff = ideaTicketsOn\(\) && !_childLaneRow/);
+  assert.match(app, /const autoSwitchHtml = _ideaAvatarHtml\(c\) && !_childLaneRow/);
 });
 
 

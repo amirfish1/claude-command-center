@@ -33493,3 +33493,58 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .conv-attn-chip.is-primary { border-color: var(--accent); color: var(--accent); }
 .conv-attn-chip:hover, .conv-attn-chip:focus-visible { color: var(--text); border-color: var(--text); }
 .conv-attn-chip:disabled { opacity: .6; cursor: default; }
+
+/* AUTO switch under a ticket row's avatar: who drives the work. */
+#convList .conv-item .conv-main-row > .conv-auto-switch {
+  position: absolute;
+  left: var(--conv-icon-left);
+  top: 42px;
+  z-index: 4;
+  width: 32px;
+  height: 13px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+  background: transparent;
+  color: var(--text-muted);
+  font: 700 7.5px/11px system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  overflow: hidden;
+  opacity: 0.4;
+  transition: opacity 0.12s ease;
+}
+#convList .conv-item .conv-main-row.has-inline-step > .conv-auto-switch { top: 58px; left: calc(var(--conv-icon-left) + 7px); }
+#convList .conv-item:hover .conv-main-row > .conv-auto-switch.is-off { opacity: 0.85; }
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-on,
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused { opacity: 1; color: #fff; border-color: transparent; }
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-on {
+  background: linear-gradient(90deg, #6d4bd8, #a98bff, #6d4bd8);
+  background-size: 200% 100%;
+  animation: conv-auto-flow 2.4s linear infinite;
+  box-shadow: 0 0 6px rgba(150, 120, 255, 0.55);
+}
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused { background: #b7791f; }
+.conv-auto-label { position: relative; pointer-events: none; }
+@keyframes conv-auto-flow { from { background-position: 200% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .conv-auto-switch.is-on { animation: none; } }
+
+/* Child lanes: no numbered avatar, only a tiny model mark. */
+#convList#convList .conv-item .conv-main-row > .conv-idea-avatar.is-child-mini,
+#convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-idea-avatar.is-child-mini {
+  width: 14px;
+  height: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  box-shadow: none;
+}
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-model {
+  position: static;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+}
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine,
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine svg { width: 11px; height: 11px; opacity: 0.8; filter: none; }
+.conv-item.is-current-child-row:has(.conv-idea-avatar.is-child-mini) { --conv-content-left: calc(var(--conv-icon-left) + 22px); }
