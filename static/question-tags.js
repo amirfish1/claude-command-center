@@ -16,23 +16,32 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  var TAG_RE = /\[Q(\d+):([a-z0-9-]+)\]/g;
-  var TARGETS = '.assistant-text, .user-msg, .conv-outcome-step, .wa-preview';
+  // Full tag, slugless [Q<n>], or a bare Q<n> (2+ digits). Agents often
+  // restate a question as plain "Q528" (Codex session-state cards do), so the
+  // short forms chip too, but only for numbers the index knows (CCC-258).
+  var TAG_RE = /\[Q(\d+):([a-z0-9-]+)\]|\[Q(\d+)\]|\bQ(\d{2,})\b/g;
+  var HAS_REF_RE = /Q\d/;
+  var TARGETS = '.assistant-text, .user-msg, .conv-outcome-step, .wa-preview, .session-state-block';
   var POLL_MS = 60000;
   var index = { byN: {}, list: [], scanning: false, at: 0 };
   var loadGeneration = 0;
 
-  function splitTags(text) {
+  // known(n) gates the short forms; without it only full tags split out.
+  function splitTags(text, known) {
     var out = [], last = 0, m;
     TAG_RE.lastIndex = 0;
     while ((m = TAG_RE.exec(text))) {
+      var n = +(m[1] || m[3] || m[4]);
+      if (!m[1] && !(known && known(n))) continue;
       if (m.index > last) out.push({ text: text.slice(last, m.index) });
-      out.push({ n: +m[1], slug: m[2], tag: m[0] });
+      out.push({ n: n, slug: m[2] || '', tag: m[0], short: !m[1] });
       last = m.index + m[0].length;
     }
     if (last < text.length) out.push({ text: text.slice(last) });
     return out;
   }
+
+  function knownQuestion(n) { return !!index.byN[n]; }
 
   function openQuestions(list) { return (list || []).filter(function (q) { return !q.answered; }); }
 
@@ -42,7 +51,7 @@
     hosts.forEach(function (host) {
       var walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
         acceptNode: function (n) {
-          if (n.nodeValue.indexOf('[Q') < 0) return NodeFilter.FILTER_REJECT;
+          if (!HAS_REF_RE.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
           if (n.parentElement && n.parentElement.closest('.qtag-chip, pre, code, textarea, script')) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         },
@@ -50,7 +59,7 @@
       var nodes = [], n;
       while ((n = walker.nextNode())) nodes.push(n);
       nodes.forEach(function (node) {
-        var parts = splitTags(node.nodeValue);
+        var parts = splitTags(node.nodeValue, knownQuestion);
         if (!parts.some(function (p) { return p.tag; })) return;
         var frag = document.createDocumentFragment();
         parts.forEach(function (p) {
@@ -59,8 +68,10 @@
           b.type = 'button';
           b.className = 'qtag-chip';
           b.setAttribute('data-qn', p.n);
-          b.textContent = host.closest('.conv-item') ? 'Q' + p.n : p.tag;
-          b.title = p.tag + ' — view question and answer';
+          var q = index.byN[p.n];
+          var full = p.short && q && q.tag ? q.tag : p.tag;
+          b.textContent = p.short || host.closest('.conv-item') ? 'Q' + p.n : p.tag;
+          b.title = full + ' — view question and answer';
           b.setAttribute('aria-label', b.title);
           frag.appendChild(b);
         });
@@ -84,9 +95,13 @@
     return fetch('/api/question-tags').then(function (r) { return r.json(); }).then(function (d) {
       if (generation !== loadGeneration) return index;
       if (!d || !d.ok) return index;
+      var before = index.list.length;
       index.list = d.questions || [];
       index.byN = {};
       index.list.forEach(function (q) { index.byN[q.n] = q; });
+      // Short refs chip only once their number is known: rescan when the
+      // set of known questions grows (first load, new questions).
+      if (index.list.length > before && typeof document !== 'undefined') chipify(document.body);
       index.scanning = !!d.scanning;
       index.refreshing = !!d.refreshing;
       index.at = Date.now();
