@@ -12,6 +12,13 @@ class ServerNavigationController: UINavigationController {
         }
         #endif
         navigationBar.prefersLargeTitles = false
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = .systemBackground
+        appearance.titleTextAttributes = [.foregroundColor: UIColor.label]
+        navigationBar.standardAppearance = appearance
+        navigationBar.scrollEdgeAppearance = appearance
+        navigationBar.compactAppearance = appearance
         if let url = ServerAddress.saved {
             showServer(url, animated: false)
         } else {
