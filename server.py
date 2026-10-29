@@ -29709,6 +29709,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 hours = 24
             self.send_json(summarize(hours=hours))
+        elif path == "/api/telemetry/health-report":
+            # Local-only health snapshot (latency histograms, view-switch
+            # and rail timings, bucketed fleet counts) for a user to paste
+            # into a bug report. Sends nothing; built on request only. See
+            # ccc_server/health_report.py and docs/telemetry.md.
+            from ccc_server import health_report as _health_report
+            qs = urllib.parse.parse_qs(parsed.query)
+            exact = qs.get("exact", ["0"])[0] in ("1", "true")
+            self.send_json(_health_report.build_report(exact=exact))
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("federated", ["0"])[0] in ("1", "true"):

@@ -298,6 +298,30 @@ It is configured to keep as little as possible:
 This is the website only. The installed CCC app never loads PostHog, and
 `CCC_TELEMETRY_DISABLED` does not affect it.
 
+## Local health report (nothing is sent)
+
+`GET /api/telemetry/health-report` returns a snapshot of how this install
+has performed over the last 24 hours, for pasting into a bug report. It is
+built only when requested, from files already on disk, and **it never
+leaves the machine on its own**. It is not part of the beacon above, and
+`CCC_TELEMETRY_DISABLED` does not affect it.
+
+It contains a closed set of fields: `report_version`, CCC version,
+platform, latency histograms (fixed buckets in `latency_buckets_ms`, plus
+p50/p75/p95) for each perf-event kind including `view_switch` (rail click
+to painted view) and `rail_apps` (the left rail's app-list fetch), rail
+fetch ok/failed/retry counts, and bucketed counts ("21-50"): active and
+live sessions in 24h, open Decision cards, messages sent by source
+(`composer` for typed by a person, `api`, `wt`, `other`), and WatchTower
+queues, open tickets, and alive/known workers. The share of active sessions
+with an open Decision card or waiting on the user is rounded to 5%. View
+ids outside CCC's built-in apps are reported as `custom`. `?exact=1`
+returns raw counts instead of buckets, for private support.
+
+It carries no session ids, paths, repo or queue names, ticket or prompt
+text, user app names, or identity. Histograms rather than percentiles are
+the unit because histograms from many reports add up exactly.
+
 ## State files
 
 All under `~/.config/claude-command-center/` (mode `0700`):

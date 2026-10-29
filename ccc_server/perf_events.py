@@ -93,6 +93,10 @@ LIVE_BUILD_MS = _env_int("CCC_PERF_LIVE_BUILD_MS", 3000)
 # tts_gap = longest silence between consecutive clips within one read.
 TTS_START_MS = _env_int("CCC_PERF_TTS_START_MS", 300)
 TTS_GAP_MS = _env_int("CCC_PERF_TTS_GAP_MS", 250)
+# view_switch = left-rail click -> the target view painted (in-page core
+# switch or a full navigation); rail_apps = the rail's /api/apps fetch.
+VIEW_SWITCH_MS = _env_int("CCC_PERF_VIEW_SWITCH_MS", 3000)
+RAIL_APPS_MS = _env_int("CCC_PERF_RAIL_APPS_MS", 1000)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -190,12 +194,16 @@ def _in_warmup(now=None):
 
 
 _VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
-                "tts_start", "tts_gap", "conv_open_cached")
+                "tts_start", "tts_gap", "conv_open_cached",
+                "view_switch", "rail_apps")
 # Recorded and summarized with a breach verdict, but never self-filed: the
 # speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates;
 # conv_open_cached (click -> saved-copy paint) by CCC-143 next to conv_open,
-# which keeps measuring click -> fresh render.
-_NO_SELF_FILE_KINDS = ("tts_start", "tts_gap", "conv_open_cached")
+# which keeps measuring click -> fresh render. view_switch / rail_apps feed
+# the health report (ccc_server/health_report.py) until their budgets are
+# calibrated on real installs.
+_NO_SELF_FILE_KINDS = ("tts_start", "tts_gap", "conv_open_cached",
+                       "view_switch", "rail_apps")
 
 
 def _perf_tickets_enabled():
@@ -264,6 +272,10 @@ def _threshold_for(kind, warm):
         return TTS_START_MS
     if kind == "tts_gap":
         return TTS_GAP_MS
+    if kind == "view_switch":
+        return VIEW_SWITCH_MS
+    if kind == "rail_apps":
+        return RAIL_APPS_MS
     return CONV_OPEN_MS
 
 
@@ -522,6 +534,8 @@ def summarize(hours=24, now=None):
             "live_build_ms": LIVE_BUILD_MS,
             "tts_start_ms": TTS_START_MS,
             "tts_gap_ms": TTS_GAP_MS,
+            "view_switch_ms": VIEW_SWITCH_MS,
+            "rail_apps_ms": RAIL_APPS_MS,
         },
         "kinds": kinds,
         "ticket": _ticket_summary(_load_ticket_state()),

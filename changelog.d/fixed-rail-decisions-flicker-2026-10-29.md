@@ -1,0 +1,1 @@
+The left rail now paints your full app list (Decisions, Savings, your own apps) immediately on every page from the last good answer, and retries a failed fetch; before, a slow or failed app-list fetch left only Sessions and Queues showing.
