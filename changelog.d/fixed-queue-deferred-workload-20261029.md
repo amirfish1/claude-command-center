@@ -1,0 +1,1 @@
+- Show deferred tickets first by return time, prioritize current deferrals over past answer delivery, label legacy blocked tickets, and summarize unfinished work, ready tickets, active work, and worker slots in the queue panel. Exclude future deferrals, duplicate followers, and readiness-gated tickets from the ready count.

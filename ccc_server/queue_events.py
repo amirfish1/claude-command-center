@@ -745,6 +745,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     closed_by_q = {}
     total_by_q = {}
     gated_by_q = {}
+    now_epoch = time.time()
     claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim
     in_progress_by_q = {}  # queue → items currently claimed/in progress
     in_review_by_q = {}  # queue → items closed by a worker, awaiting a gate (WT-5)
@@ -787,6 +788,12 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             if it.get("status") == "open":
                 if it.get("claimable") is False:
                     continue
+                # A scheduled return is not runnable work, even after an
+                # answer or a manual run request has been recorded.
+                if (_core._uxq_parse_ts(it.get("deferred_until")) or 0) > now_epoch:
+                    continue
+                if it.get("duplicate_of") or it.get("needs_input"):
+                    continue
                 # Dependency gating (WT-4): WatchTower skips a ticket until
                 # every blocked_by ref is closed as completed, so it is not
                 # claimable work and must not read as an unstaffed queue.
@@ -804,10 +811,9 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
                 # to copy only the claim_types half, which made those queues
                 # read "stuck" forever: an alarm about work no worker is
                 # allowed to touch, which no restart or spawn could ever clear.
-                # A ticket a human pressed ▶ on is claimable regardless — that
-                # is the manual override WT honours too.
+                # A run request does not bypass WatchTower's readiness gate.
                 readiness = str(it.get("readiness") or "").strip().lower()
-                if readiness in _UNCLAIMABLE_READINESS and not it.get("run_requested"):
+                if readiness in _UNCLAIMABLE_READINESS:
                     continue
                 types = cfg_claim.get(qn, [])
                 # Untyped == bug (matches WatchTower's claim filter): a ticket
