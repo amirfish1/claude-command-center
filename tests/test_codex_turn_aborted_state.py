@@ -181,6 +181,34 @@ class TestTailTerminalReceipts(_Base):
         self.append(path, [aborted(T0 + 3, TURN_B)])
         self.assertEqual(self.meta(path)["last_event_type"], "result")
 
+    def test_delayed_duplicate_receipt_for_ended_turn_keeps_newer_turn(self):
+        # Verifier case: A aborts, B starts with its own prompt and tool, then
+        # a delayed duplicate abort for A (original timestamp) lands.
+        path = self.rollout([
+            task_started(T0, TURN_A), user(T0 + 1), aborted(T0 + 10, TURN_A),
+            task_started(T0 + 20, TURN_B), user(T0 + 21), tool_call(T0 + 22),
+        ])
+        self.assertEqual(self.meta(path)["last_event_type"], "assistant")
+        self.append(path, [aborted(T0 + 10, TURN_A)])
+        m = self.meta(path)
+        self.assertEqual(m["last_event_type"], "assistant")
+        self.assertEqual(m["current_turn_id"], TURN_B)
+        self.assertTrue(m["pending_tool"])
+        self.assertEqual(m["turn_started_ts"], T0 + 20)
+        self.assertEqual(m["last_terminal_turn_id"], TURN_A)
+        # B's own receipt still ends it.
+        self.append(path, [aborted(T0 + 60, TURN_B)])
+        m = self.meta(path)
+        self.assertEqual((m["last_event_type"], m["last_terminal_turn_id"]), ("result", TURN_B))
+
+    def test_duplicate_receipt_in_one_full_parse(self):
+        path = self.rollout([
+            task_started(T0, TURN_A), user(T0 + 1), completed(T0 + 10, TURN_A),
+            task_started(T0 + 20, TURN_B), user(T0 + 21),
+            completed(T0 + 10, TURN_A),
+        ])
+        self.assertEqual(self.meta(path)["last_event_type"], "user")
+
     def test_outer_receipt_ends_turn_with_prompted_nested_subturn(self):
         # Real shape: a nested sub-turn starts (with its own prompt) and never
         # closes; the outer turn's task_complete still ends the session turn.
@@ -258,6 +286,24 @@ class TestStateFieldsDecision(_Base):
         self.assertEqual(fields["codex_state"], "working")
         self.assertEqual(fields["working_since"], T0 + 600)
 
+    def test_app_server_active_turn_survives_later_stamped_other_receipt(self):
+        # Verifier case: app state says B is active (started t+20); the tail's
+        # newest receipt is for A but stamped t+40, after B started.
+        srv = self.server
+        sid = "ccc248-app-later"
+        path = self.rollout([task_started(T0, TURN_A), user(T0 + 1), aborted(T0 + 40, TURN_A)])
+        mtime = path.stat().st_mtime
+        srv._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+            "thread_id": sid, "active_turn_id": TURN_B, "active_writer": "ccc",
+            "status": "active", "turn_started_at": T0 + 20, "last_activity_at": T0 + 21,
+        }
+        self.addCleanup(srv._CODEX_APP_SERVER_THREAD_STATE.pop, sid, None)
+        fields = self.state(path, sid=sid, now=mtime + 5, mtime=mtime)
+        self.assertEqual(fields["codex_state"], "working")
+        self.assertEqual(fields["working_since"], T0 + 20)
+        stats = srv._queue_health_stats([dict(fields, session_id=sid)])
+        self.assertEqual(stats.get("unfinished_turns"), 1)
+
     def test_app_server_turn_ended_by_its_own_receipt(self):
         srv = self.server
         sid = "ccc248-app-same"
@@ -306,13 +352,101 @@ class TestSessionStatusApi(_Base):
         def get():
             with urllib.request.urlopen(url, timeout=30) as r:
                 return json.loads(r.read())
+
+        def append_aged(events):
+            # Age the rollout past the external-writer window after every
+            # write so the decision comes from the turn receipts, not from
+            # the mtime "something is writing" heuristic.
+            self.append(path, events)
+            nonlocal old
+            old += 1
+            os.utime(path, (old, old))
         body = get()
         self.assertEqual(body["codex_state"], "idle")
         self.assertNotEqual(body.get("state"), "working")
 
-        self.append(path, [task_started(time.time() - 2, TURN_B), user(time.time() - 1)])
+        append_aged([task_started(time.time() - 2, TURN_B), user(time.time() - 1), tool_call(time.time())])
         body = get()
         self.assertEqual(body["codex_state"], "working")
+
+        # A delayed duplicate abort for the already-ended turn A must not
+        # idle B, in the API or in the consuming queue-health decision.
+        append_aged([aborted(T0 + 500, TURN_A)])
+        body = get()
+        self.assertEqual(body["codex_state"], "working")
+        self.assertTrue(body.get("working_since"))
+        stats = srv._queue_health_stats([dict(body, session_id=sid)])
+        self.assertEqual(stats.get("unfinished_turns"), 1)
+
+        append_aged([aborted(time.time(), TURN_B)])
+        body = get()
+        self.assertEqual(body["codex_state"], "idle")
+
+    def _serve(self, sid, path):
+        srv = self.server
+        saved = {
+            name: getattr(srv, name) for name in (
+                "_is_codex_session", "_resolve_codex_rollout_path", "find_session_cwd",
+            )
+        }
+        srv._is_codex_session = lambda s: s == sid
+        srv._resolve_codex_rollout_path = lambda s: path if s == sid else None
+        srv.find_session_cwd = lambda s: self.tmp.name
+
+        def restore():
+            for k, v in saved.items():
+                setattr(srv, k, v)
+        self.addCleanup(restore)
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), srv.CommandCenterHandler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        url = "http://127.0.0.1:%d/api/session-status?session_id=%s" % (httpd.server_address[1], sid)
+
+        def get():
+            with urllib.request.urlopen(url, timeout=30) as r:
+                body = json.loads(r.read())
+            unfinished = srv._queue_health_stats([dict(body, session_id=sid)])["unfinished_turns"]
+            return body["codex_state"], unfinished
+        return get
+
+    def _aged_rollout(self, events, name):
+        path = self.rollout(events, name)
+        old = time.time() - 360
+        os.utime(path, (old, old))
+        return path
+
+    def test_api_unknown_old_receipt_keeps_prompted_turn_working(self):
+        sid = "ccc248-api-unknown"
+        path = self._aged_rollout([
+            task_started(T0, TURN_B), user(T0 + 1), tool_call(T0 + 2),
+            aborted(T0 + 3, "turn-from-elsewhere"),
+        ], "unknown.jsonl")
+        self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def test_api_nested_parent_completion_ends_turn(self):
+        sid = "ccc248-api-nested"
+        path = self._aged_rollout([
+            task_started(T0, TURN_A), user(T0 + 1),
+            task_started(T0 + 20, "f4d6c532-3810-4d18-90a7-57d66cfcbb99"), user(T0 + 21, "sub"),
+            completed(T0 + 800, TURN_A),
+        ], "nested.jsonl")
+        self.assertEqual(self._serve(sid, path)(), ("idle", 0))
+
+    def test_api_app_active_turn_survives_later_stamped_other_receipt(self):
+        srv = self.server
+        sid = "ccc248-api-app-later"
+        path = self._aged_rollout([task_started(T0, TURN_A), user(T0 + 1), aborted(T0 + 40, TURN_A)], "later.jsonl")
+        get = self._serve(sid, path)
+        srv._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+            "thread_id": sid, "active_turn_id": TURN_B, "active_writer": "ccc",
+            "status": "active", "turn_started_at": T0 + 20, "last_activity_at": T0 + 21,
+        }
+        self.addCleanup(srv._CODEX_APP_SERVER_THREAD_STATE.pop, sid, None)
+        self.assertEqual(get(), ("working", 1))
+        # The active turn's own receipt ends it.
+        srv._CODEX_APP_SERVER_THREAD_STATE[sid]["active_turn_id"] = TURN_A
+        self.assertNotEqual(get()[0], "working")
 
 
 if __name__ == "__main__":
