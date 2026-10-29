@@ -257,6 +257,8 @@
     blocked: 'needs input',
     in_progress: 'in progress',
     in_review: 'awaits review',
+    // A block someone else must clear (CCC-244); the attention chip says who.
+    waiting: 'blocked',
     open: 'open',
     closed: 'closed'
   };
@@ -2885,7 +2887,7 @@
     var gh = ghLabels(item);
     var chips = ''
       + '<span class="q2-status is-' + esc(st === 'blocked' && !blockedOnOwner(item) ? 'waiting' : st) + (runQueued ? ' is-run-requested' : '') + '">'
-      + esc(runQueued ? 'launching\u2026' : statusLabel(st)) + '</span>'
+      + esc(runQueued ? 'launching\u2026' : statusLabel(st === 'blocked' && !blockedOnOwner(item) ? 'waiting' : st)) + '</span>'
       + (function () {
           var a = attentionOf(item);
           return a && !a.owner && a.key !== 'gate'
