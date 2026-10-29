@@ -2397,6 +2397,10 @@ def _codex_app_server_activity_fields(session_id):
     # not last_activity (which advances on every delta and would pin the
     # timer near zero).
     turn_start = state.get("turn_started_at") or state.get("ccc_turn_start_pending_at")
+    # Turn identity lets the status merge drop this overlay once the rollout
+    # carries this exact turn's terminal receipt (CCC-248).
+    if state.get("active_turn_id"):
+        fields["sidecar_turn_id"] = str(state.get("active_turn_id"))
     if item and item.get("tool") and item.get("tool") != "Thinking":
         fields.update({
             "sidecar_status": "active",
@@ -11135,13 +11139,11 @@ def _extract_codex_tail_meta(path):
             "last_user_ts": 0,
             # Turn identity (CCC-248). current_turn_id is the latest
             # task_started turn not yet closed by a terminal receipt;
-            # current_turn_prompted is set once that turn carries its own
-            # user prompt; started_turn_ids / ended_turn_ids are bounded lists
+            # started_turn_ids / ended_turn_ids are bounded lists
             # of turn ids this rollout started / closed with a receipt.
             # last_terminal_* describe the newest terminal receipt
             # (task_complete / turn_aborted) applied.
             "current_turn_id": "",
-            "current_turn_prompted": False,
             "started_turn_ids": [],
             "ended_turn_ids": [],
             "last_terminal_turn_id": "",
@@ -11291,7 +11293,6 @@ def _extract_codex_tail_meta(path):
                         # task_complete below. Drives the sidebar WIP timer.
                         started_id = str(payload.get("turn_id") or "")
                         meta["current_turn_id"] = started_id
-                        meta["current_turn_prompted"] = False
                         if started_id:
                             meta["started_turn_ids"] = (
                                 meta["started_turn_ids"] + [started_id]
@@ -11311,7 +11312,6 @@ def _extract_codex_tail_meta(path):
                             meta["first_message"] = meta["first_message"] or text
                             meta["last_prompt"] = text
                         meta["last_event_type"] = "user"
-                        meta["current_turn_prompted"] = bool(meta.get("current_turn_id"))
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
@@ -11335,15 +11335,16 @@ def _extract_codex_tail_meta(path):
                         # turns) ends a turn exactly like task_complete; before
                         # CCC-248 it was ignored, so an interrupted turn kept
                         # reading as mid-turn ("working") until the stale-tool
-                        # threshold. A late receipt for another turn must not
-                        # end the open current turn: one naming a turn that
-                        # already ended (a delayed duplicate), or a turn this
-                        # rollout never started while the current turn has
-                        # its own prompt. The FIRST receipt for an earlier,
-                        # still-open turn does apply: Codex nests sub-turns
+                        # threshold. A receipt naming another turn never ends
+                        # the open current turn when that turn already ended
+                        # (a delayed duplicate) or never started in this
+                        # rollout (unknown), with or without a prompt yet.
+                        # The FIRST receipt for an earlier, still-open turn
+                        # that started here does apply: Codex nests sub-turns
                         # (task_started, sometimes prompted, often never
                         # closed) inside the outer turn, and the outer turn's
-                        # receipt is what ends the session's turn.
+                        # receipt is what ends the session's turn. Id-less
+                        # (legacy) receipts keep ending the turn.
                         term_turn_id = str(payload.get("turn_id") or "")
                         cur_turn_id = meta.get("current_turn_id") or ""
                         if ptype == "task_complete":
@@ -11357,10 +11358,7 @@ def _extract_codex_tail_meta(path):
                             and term_turn_id != cur_turn_id
                             and (
                                 term_turn_id in meta["ended_turn_ids"]
-                                or (
-                                    term_turn_id not in meta["started_turn_ids"]
-                                    and meta.get("current_turn_prompted")
-                                )
+                                or term_turn_id not in meta["started_turn_ids"]
                             )
                         ):
                             continue
@@ -11370,7 +11368,6 @@ def _extract_codex_tail_meta(path):
                                 + [term_turn_id]
                             )[-_CODEX_STARTED_TURN_IDS_MAX:]
                         meta["current_turn_id"] = ""
-                        meta["current_turn_prompted"] = False
                         meta["last_terminal_turn_id"] = term_turn_id
                         meta["last_terminal_reason"] = (
                             "completed" if ptype == "task_complete"
@@ -11410,7 +11407,6 @@ def _extract_codex_tail_meta(path):
                             meta["first_message"] = meta["first_message"] or text
                             meta["last_prompt"] = text
                         meta["last_event_type"] = "user"
-                        meta["current_turn_prompted"] = bool(meta.get("current_turn_id"))
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
@@ -11670,6 +11666,15 @@ def _codex_app_activity_superseded_by_tail(app_activity, tail):
     # label with ordinary "Thinking" while the watchdog continuation runs.
     if app_activity.get("sidecar_tool") == "Recovery":
         return False
+    # The rollout's terminal receipt for this exact turn ends it, however
+    # close its timestamp is to the cached app activity (CCC-248).
+    app_turn_id = str(app_activity.get("sidecar_turn_id") or "")
+    if (
+        app_turn_id
+        and tail.get("last_event_type") == "result"
+        and str(tail.get("last_terminal_turn_id") or "") == app_turn_id
+    ):
+        return True
     try:
         app_ts = float(app_activity.get("sidecar_ts") or 0)
         tail_ts = float(tail.get("last_meaningful_ts") or 0)
@@ -11685,6 +11690,19 @@ def _codex_app_activity_superseded_by_tail(app_activity, tail):
     if not pending_tool:
         return True
     return pending_tool != app_activity.get("sidecar_tool")
+
+
+def _codex_tail_ended_app_turn(tail, app_state):
+    """True when the rollout's last applied terminal receipt names exactly the
+    app-server's active turn (CCC-248). That receipt is authoritative: the
+    turn ended, however close its timestamp is to the cached app activity."""
+    active_id = str((app_state or {}).get("active_turn_id") or "")
+    term_id = str((tail or {}).get("last_terminal_turn_id") or "")
+    return bool(
+        active_id
+        and term_id == active_id
+        and (tail or {}).get("last_event_type") == "result"
+    )
 
 
 def _codex_tail_terminal_is_other_turn(tail, app_state):
@@ -11835,6 +11853,7 @@ def _codex_state_fields(
         fields["codex_fresh"] = True
         fields["codex_state_reason"] = _codex_app_server_thread_approval_message(app_state)
         return fields
+    app_turn_ended = _codex_tail_ended_app_turn(tail, app_state)
     try:
         # Writer attribution (desktop ↔ CCC coordination): reuses the rollout
         # stat above + the TTL-cached desktop-attachment map. Also feeds the
@@ -11872,7 +11891,7 @@ def _codex_state_fields(
         return 0.0
 
     try:
-        if app_state and (app_state.get("active_turn_id") or str(app_state.get("status") or "").lower() == "active"):
+        if not app_turn_ended and app_state and (app_state.get("active_turn_id") or str(app_state.get("status") or "").lower() == "active"):
             try:
                 app_ts = float(app_state.get("last_activity_at") or app_state.get("last_event_at") or 0)
                 tail_ts = float((tail or {}).get("last_meaningful_ts") or 0)

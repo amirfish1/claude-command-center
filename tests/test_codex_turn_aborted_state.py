@@ -173,6 +173,22 @@ class TestTailTerminalReceipts(_Base):
         self.assertTrue(m["pending_tool"])
         self.assertEqual(m["current_turn_id"], TURN_B)
 
+    def test_unknown_receipt_before_new_turn_prompt_keeps_turn_open(self):
+        # The receipt lands between B's task_started and B's prompt.
+        path = self.rollout([
+            task_started(T0, TURN_A), user(T0 + 1), completed(T0 + 50, TURN_A),
+            task_started(T0 + 100, TURN_B), aborted(T0 + 101, "turn-from-elsewhere"),
+        ])
+        m = self.meta(path)
+        self.assertEqual(m["current_turn_id"], TURN_B)
+        self.assertEqual(m["turn_started_ts"], T0 + 100)
+        self.assertEqual(m["last_terminal_turn_id"], TURN_A)
+        self.append(path, [user(T0 + 102), tool_call(T0 + 103)])
+        m = self.meta(path)
+        self.assertEqual(m["current_turn_id"], TURN_B)
+        self.assertEqual(m["turn_started_ts"], T0 + 100)
+        self.assertTrue(m["pending_tool"])
+
     def test_late_receipt_across_incremental_resume(self):
         path = self.rollout([task_started(T0, TURN_B), user(T0 + 1)])
         self.assertEqual(self.meta(path)["last_event_type"], "user")
@@ -317,6 +333,27 @@ class TestStateFieldsDecision(_Base):
         fields = self.state(path, sid=sid, now=mtime + 5, mtime=mtime)
         self.assertNotEqual(fields["codex_state"], "working")
 
+    def test_exact_receipt_ends_app_turn_regardless_of_timestamp_gap(self):
+        srv = self.server
+        for delta in (0, 1, 2):
+            with self.subTest(app_activity_before_abort=delta):
+                sid = "ccc248-app-exact-%d" % delta
+                path = self.rollout(
+                    [task_started(T0, TURN_A), user(T0 + 1), aborted(T0 + 500, TURN_A)],
+                    "exact-%d.jsonl" % delta,
+                )
+                mtime = path.stat().st_mtime
+                srv._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                    "thread_id": sid, "active_turn_id": TURN_A, "active_writer": "ccc",
+                    "status": "active", "turn_started_at": T0,
+                    "last_activity_at": T0 + 500 - delta,
+                }
+                self.addCleanup(srv._CODEX_APP_SERVER_THREAD_STATE.pop, sid, None)
+                fields = self.state(path, sid=sid, now=mtime + 360, mtime=mtime)
+                self.assertNotEqual(fields["codex_state"], "working")
+                stats = srv._queue_health_stats([dict(fields, session_id=sid)])
+                self.assertEqual(stats.get("unfinished_turns"), 0)
+
 
 class TestSessionStatusApi(_Base):
     """The real /api/session-status handler returns the same decision."""
@@ -447,6 +484,55 @@ class TestSessionStatusApi(_Base):
         # The active turn's own receipt ends it.
         srv._CODEX_APP_SERVER_THREAD_STATE[sid]["active_turn_id"] = TURN_A
         self.assertNotEqual(get()[0], "working")
+
+    def test_api_exact_receipt_ends_stale_app_turn_at_close_timestamps(self):
+        srv = self.server
+        for delta in (0, 1, 2):
+            with self.subTest(app_activity_before_abort=delta):
+                sid = "ccc248-api-exact-%d" % delta
+                path = self._aged_rollout(
+                    [task_started(T0, TURN_A), user(T0 + 1), tool_call(T0 + 2), aborted(T0 + 500, TURN_A)],
+                    "api-exact-%d.jsonl" % delta,
+                )
+                get = self._serve(sid, path)
+                srv._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                    "thread_id": sid, "active_turn_id": TURN_A, "active_writer": "ccc",
+                    "status": "active", "turn_started_at": T0,
+                    "last_activity_at": T0 + 500 - delta,
+                }
+                self.addCleanup(srv._CODEX_APP_SERVER_THREAD_STATE.pop, sid, None)
+                self.assertEqual(get(), ("idle", 0))
+
+    def test_api_unknown_receipt_before_new_turn_prompt_keeps_working(self):
+        sid = "ccc248-api-unknown-preprompt"
+        path = self._aged_rollout([
+            task_started(T0, TURN_A), user(T0 + 1), completed(T0 + 50, TURN_A),
+            task_started(T0 + 100, TURN_B), aborted(T0 + 101, "turn-from-elsewhere"),
+            user(T0 + 102), tool_call(T0 + 103),
+        ], "unknown-preprompt.jsonl")
+        self.assertEqual(self._serve(sid, path)(), ("working", 1))
+        # With the app-server reporting B active, the unknown receipt does
+        # not supersede it either.
+        srv = self.server
+        srv._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+            "thread_id": sid, "active_turn_id": TURN_B, "active_writer": "ccc",
+            "status": "active", "turn_started_at": T0 + 100, "last_activity_at": T0 + 100,
+        }
+        self.addCleanup(srv._CODEX_APP_SERVER_THREAD_STATE.pop, sid, None)
+        self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def test_api_app_active_tool_survives_other_turn_receipt(self):
+        srv = self.server
+        sid = "ccc248-api-app-tool"
+        path = self._aged_rollout([task_started(T0, TURN_A), user(T0 + 1), aborted(T0 + 40, TURN_A)], "tool.jsonl")
+        get = self._serve(sid, path)
+        srv._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+            "thread_id": sid, "active_turn_id": TURN_B, "active_writer": "ccc",
+            "status": "active", "turn_started_at": T0 + 20, "last_activity_at": T0 + 39,
+            "current_item": {"tool": "Bash", "started_at": T0 + 30},
+        }
+        self.addCleanup(srv._CODEX_APP_SERVER_THREAD_STATE.pop, sid, None)
+        self.assertEqual(get(), ("working", 1))
 
 
 if __name__ == "__main__":
