@@ -26,6 +26,7 @@ import fcntl
 import gzip
 import html
 import hashlib
+import hmac
 import collections
 import contextlib
 import errno
@@ -28287,6 +28288,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def do_GET(self):
+        if not self._check_proxy_secret():
+            return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
             return
@@ -32434,6 +32437,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return ip in ipaddress.ip_network("100.64.0.0/10")
         return ip in ipaddress.ip_network("fd7a:115c:a1e0::/48")
 
+    def _check_proxy_secret(self):
+        """SECURITY: reject requests missing or carrying an invalid proxy secret.
+
+        When CCC_PROXY_SECRET or CCC_PROXY_SECRET_FILE is configured (e.g. in
+        hardened reverse-proxy deployments), direct requests to the backend that
+        bypass the proxy are rejected with 401 Unauthorized.
+
+        Accepted secret carriers:
+          - X-CCC-Proxy-Secret: <secret>
+          - Authorization: Bearer <secret>
+        """
+        secret = os.environ.get("CCC_PROXY_SECRET", "").strip()
+        if not secret:
+            secret_file = os.environ.get("CCC_PROXY_SECRET_FILE", "").strip()
+            if secret_file:
+                try:
+                    with open(secret_file, "r", encoding="utf-8") as f:
+                        secret = f.read().strip()
+                except OSError:
+                    pass
+        if not secret:
+            return True
+
+        provided = (self.headers.get("X-CCC-Proxy-Secret") or "").strip()
+        if not provided:
+            auth = (self.headers.get("Authorization") or "").strip()
+            if auth.lower().startswith("bearer "):
+                provided = auth[7:].strip()
+
+        if provided and hmac.compare_digest(provided, secret):
+            return True
+
+        body = json.dumps({
+            "ok": False,
+            "error": "unauthorized",
+            "detail": "missing or invalid proxy secret",
+        }).encode("utf-8")
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("WWW-Authenticate", 'Bearer realm="CCC Backend"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def _phone_pin_blocked(self, path):
         """Phone access PIN gate. When a PIN is set, a request that arrived
         from off this machine (tailscale serve, a tunnel, a non-loopback
@@ -32678,6 +32727,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         return "api"
 
     def do_POST(self):
+        if not self._check_proxy_secret():
+            return
         if not self._check_same_origin():
             return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")

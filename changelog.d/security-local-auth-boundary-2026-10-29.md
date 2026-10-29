@@ -1,0 +1,1 @@
+- Add `CCC_PROXY_SECRET` / `CCC_PROXY_SECRET_FILE` backend authentication boundary (`X-CCC-Proxy-Secret` or `Authorization: Bearer <secret>`) to protect against local-program and Docker bridge bypass when running behind an authenticating reverse proxy.
