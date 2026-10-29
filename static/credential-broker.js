@@ -43,7 +43,7 @@
     form.append(element('p', request.reason, 'credential-reason'));
     form.append(element('p', request.session_id ? `Session (reported): ${request.session_id}` : 'Local program · no session provided', 'credential-session'));
     const expiry = new Date(request.expires_at * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-    form.append(element('p', `Expires at ${expiry} · Delivered once, outside chat.`, 'credential-note'));
+    form.append(element('p', `Expires at ${expiry} · ${request.store_only ? 'Stored in the Vault' : 'Delivered once'}, outside chat.`, 'credential-note'));
     const label = element('label', request.kind === 'otp' ? 'One-time code' : 'Credential');
     const input = element('input');
     input.type = 'password';
@@ -55,15 +55,19 @@
     input.setAttribute('autocapitalize', 'none');
     label.htmlFor = input.id;
     form.append(label, input);
-    const rememberLabel = element('label', '', 'credential-remember');
     const remember = element('input');
     remember.type = 'checkbox';
-    remember.disabled = request.kind === 'otp';
-    rememberLabel.append(remember, document.createTextNode('Remember for this service on this machine'));
-    form.append(rememberLabel);
-    form.append(element('p', request.kind === 'otp'
-      ? 'One-time codes are never saved.'
-      : 'Optional: save in a private local file, without encryption. Future requests for this service and kind reuse it.', 'credential-note'));
+    if (request.store_only) {
+      form.append(element('p', 'Saved to the CCC Vault. The requesting program is told only the entry name.', 'credential-note'));
+    } else {
+      const rememberLabel = element('label', '', 'credential-remember');
+      remember.disabled = request.kind === 'otp';
+      rememberLabel.append(remember, document.createTextNode('Remember for this service on this machine'));
+      form.append(rememberLabel);
+      form.append(element('p', request.kind === 'otp'
+        ? 'One-time codes are never saved.'
+        : 'Optional: save in the CCC Vault. Future requests for this service and kind reuse it.', 'credential-note'));
+    }
     const error = element('p', '', 'credential-error');
     error.setAttribute('role', 'status');
     const actions = element('div', '', 'credential-actions');

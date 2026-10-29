@@ -13,6 +13,9 @@ WatchTower server restart needed: Y/N
 - `static/*`, `docs/`, `changelog.d/`, `tests/`, markdown → N/N/N (browser reload is enough).
 - WatchTower (`ai.watchtower.watcher`, `:8787`) is a separate repo → N unless you edited it.
 
-Restart (order doesn't matter; `run.sh` refreshes a stale worker; worker restart marks running queue items "needs reconciliation"):
-`launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center` (add `.worker` for the worker).
-"Could not find service" while the .app is open: see `docs/agent-rules.md` (bundle-ID collision).
+Restart with `ccc restart` (default `all`; or `ccc restart dashboard` / `ccc restart worker`). Never run
+`systemctl --user restart ccc*` or `launchctl kickstart` yourself: each restart costs a ~30s cold warmup, and
+agents restarting after their own commits caused most restarts on a busy host (OPS-150). `ccc restart` goes
+through the drain-aware `/api/restart*` endpoints, merges requests within 5 min of the last restart into one
+deferred restart, and retries a restart the server refuses as unsafe. `--now` only when a human asks for it now.
+Worker restart marks running queue items "needs reconciliation". Details: `docs/agent-rules.md`.

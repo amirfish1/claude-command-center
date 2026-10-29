@@ -24,7 +24,8 @@ _TEMP_SLUG_PREFIXES = ("-private-var-folders-", "-var-folders-", "-private-tmp",
 _HOUR = 3600
 _DAY = 86400
 _CACHE = {"ts": 0.0, "payload": None}
-_CACHE_TTL = 15
+_CACHE_TTL = 60
+_TOKEN_MEMO = {}
 
 
 def is_temp_project_slug(name):
@@ -60,7 +61,11 @@ def _estimate_cost(model, tin, tcache, tout):
     return (tin * w["rate_in"] + tcache * w["rate_cache_read"] + tout * w["rate_out"]) / 1_000_000
 
 
-def _tokens(path):
+def _tokens(path, mtime=None):
+    if mtime is not None:
+        cached = _TOKEN_MEMO.get(path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
     agg = _core._stats_get_file_agg(path) or {}
     total = {"in": 0, "cache": 0, "out": 0, "messages": 0, "cost": 0.0}
     models = {}
@@ -74,6 +79,10 @@ def _tokens(path):
         total["messages"] += day.get("messages", 0)
     top = max(models, key=models.get) if models else ""
     total["cost"] = _estimate_cost(top, total["in"], total["cache"], total["out"])
+    if mtime is not None:
+        if len(_TOKEN_MEMO) > 20000:
+            _TOKEN_MEMO.clear()
+        _TOKEN_MEMO[path] = (mtime, total)
     return total
 
 
@@ -101,10 +110,80 @@ def _log_new_alerts(alerts):
     _ALERTED.update(now_keys)
 
 
+def cpu_pressure():
+    """Cheap host CPU pressure: load per core plus Linux PSI when available.
+
+    Returns {} when nothing is readable. ``level`` is ok/busy/saturated from
+    load-per-core (>=1 busy, >=2 saturated); PSI avg10 is reported verbatim.
+    """
+    out = {}
+    try:
+        load = os.getloadavg()
+        cores = os.cpu_count() or 1
+        per_core = load[0] / cores
+        out.update(load1=round(load[0], 2), load5=round(load[1], 2), load15=round(load[2], 2),
+                   cores=cores, load_per_core=round(per_core, 2),
+                   level="saturated" if per_core >= 2 else "busy" if per_core >= 1 else "ok")
+    except (OSError, AttributeError):
+        return out
+    try:
+        with open("/proc/pressure/cpu") as fh:
+            for line in fh:
+                parts = line.split()
+                if parts and parts[0] == "some":
+                    vals = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+                    out["psi_some_avg10"] = float(vals.get("avg10", 0))
+                    out["psi_some_avg60"] = float(vals.get("avg60", 0))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def memory_pressure():
+    """Cheap host memory pressure from /proc/meminfo plus memory PSI (Linux).
+
+    Returns {} when /proc is unavailable (macOS). ``level`` is ok/busy/saturated
+    from used% (>=80 busy, >=90 saturated) or PSI some avg10 (>=10 / >=25).
+    """
+    out = {}
+    try:
+        info = {}
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                k, _, rest = line.partition(":")
+                if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                    info[k] = int(rest.split()[0])
+        total, avail = info["MemTotal"], info["MemAvailable"]
+        used_pct = round(100.0 * (total - avail) / total, 1) if total else 0.0
+        out.update(total_mb=total // 1024, available_mb=avail // 1024, used_pct=used_pct)
+        if info.get("SwapTotal"):
+            out["swap_used_pct"] = round(100.0 * (info["SwapTotal"] - info.get("SwapFree", 0)) / info["SwapTotal"], 1)
+    except (OSError, ValueError, KeyError, IndexError):
+        return {}
+    psi = 0.0
+    try:
+        with open("/proc/pressure/memory") as fh:
+            for line in fh:
+                parts = line.split()
+                if parts and parts[0] == "some":
+                    vals = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+                    psi = float(vals.get("avg10", 0))
+                    out["psi_some_avg10"] = psi
+    except (OSError, ValueError):
+        pass
+    out["level"] = ("saturated" if used_pct >= 90 or psi >= 25
+                    else "busy" if used_pct >= 80 or psi >= 10 else "ok")
+    return out
+
+
+def _with_pressure(payload):
+    return dict(payload, cpu=cpu_pressure(), memory=memory_pressure())
+
+
 def background_runs_payload(now=None, projects_root=None, markers=None, use_cache=True):
     now = time.time() if now is None else now
     if use_cache and _CACHE["payload"] is not None and now - _CACHE["ts"] < _CACHE_TTL:
-        return _CACHE["payload"]
+        return _with_pressure(_CACHE["payload"])
     root = projects_root or _core.PROJECTS_ROOT
     markers = _core._load_spawn_markers() if markers is None else markers
     groups = {}
@@ -116,7 +195,7 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
             "out_tokens": 0, "tokens_last_day": 0, "cost_usd": 0.0,
             "cost_usd_last_day": 0.0, "last_run_ts": 0.0,
         })
-        t = _tokens(path)
+        t = _tokens(path, mtime=mtime)
         age = now - mtime
         g["runs"] += 1
         g["in_tokens"] += t["in"]
@@ -152,4 +231,4 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
     _log_new_alerts(payload["alerts"])
     if use_cache:
         _CACHE.update(ts=now, payload=payload)
-    return payload
+    return _with_pressure(payload)

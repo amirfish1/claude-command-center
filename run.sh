@@ -51,7 +51,24 @@ KIMI_WEB_SYSTEMD_UNIT_NAME="ccc-kimi-web.service"
 KIMI_WEB_SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${KIMI_WEB_SYSTEMD_UNIT_NAME}"
 
 is_port_bound() {
-  (echo > "/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
+  local p="$1"
+  local explicit_host="${2:-}"
+  if [ -n "$explicit_host" ]; then
+    (echo > "/dev/tcp/$explicit_host/$p") >/dev/null 2>&1 && return 0
+  fi
+  if (echo > "/dev/tcp/127.0.0.1/$p") >/dev/null 2>&1; then
+    return 0
+  fi
+  local host="${CCC_BIND_HOST:-}"
+  if [ -z "$host" ] && [ -f "$HOME/.claude/command-center/network.json" ]; then
+    host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+  fi
+  if [ -n "$host" ] && [ "$host" != "127.0.0.1" ] && [ "$host" != "0.0.0.0" ]; then
+    if (echo > "/dev/tcp/$host/$p") >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 service_domain() {
@@ -379,6 +396,7 @@ write_systemd_unit() {
 Description=Claude Command Center
 After=network-online.target $WORKER_SYSTEMD_UNIT_NAME
 Wants=network-online.target $WORKER_SYSTEMD_UNIT_NAME
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -402,6 +420,7 @@ EOF
 Description=Claude Command Center persistent execution worker
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -496,10 +515,20 @@ EOF
     systemctl --user enable --now "$KIMI_WEB_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
   fi
 
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 40); do
     sleep 0.5
     if is_port_bound "$target_port"; then
-      echo "✓ Service started. Open: http://localhost:$target_port"
+      local display_host="localhost"
+      if [ -n "${CCC_BIND_HOST:-}" ] && [ "$CCC_BIND_HOST" != "127.0.0.1" ] && [ "$CCC_BIND_HOST" != "0.0.0.0" ]; then
+        display_host="$CCC_BIND_HOST"
+      elif [ -f "$HOME/.claude/command-center/network.json" ]; then
+        local net_host
+        net_host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+        if [ -n "$net_host" ] && [ "$net_host" != "127.0.0.1" ] && [ "$net_host" != "0.0.0.0" ]; then
+          display_host="$net_host"
+        fi
+      fi
+      echo "✓ Service started. Open: http://$display_host:$target_port"
       echo "  Status   : systemctl --user status $SYSTEMD_UNIT_NAME"
       echo "  Logs     : journalctl --user -u $SYSTEMD_UNIT_NAME -f"
       echo "  Uninstall: ./run.sh --uninstall-service"
@@ -509,9 +538,10 @@ EOF
       echo "  sudo loginctl enable-linger $USER"
       return 0
     fi
+    systemctl --user is-failed --quiet "$SYSTEMD_UNIT_NAME" 2>/dev/null && break
   done
 
-  echo "⚠ Unit started but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Unit didn't bind port $target_port within 20s." >&2
   echo "  Check: journalctl --user -u $SYSTEMD_UNIT_NAME" >&2
   exit 1
 }
@@ -605,16 +635,29 @@ EOF
     load_kimi_web_service
   fi
 
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 40); do
     sleep 0.5
     if is_port_bound "$target_port"; then
-      echo "✓ Service started. Open: http://localhost:$target_port"
+      local display_host="localhost"
+      if [ -n "${CCC_BIND_HOST:-}" ] && [ "$CCC_BIND_HOST" != "127.0.0.1" ] && [ "$CCC_BIND_HOST" != "0.0.0.0" ]; then
+        display_host="$CCC_BIND_HOST"
+      elif [ -f "$HOME/.claude/command-center/network.json" ]; then
+        local net_host
+        net_host="$(grep -o '"bind_host"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/command-center/network.json" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)"
+        if [ -n "$net_host" ] && [ "$net_host" != "127.0.0.1" ] && [ "$net_host" != "0.0.0.0" ]; then
+          display_host="$net_host"
+        fi
+      fi
+      echo "✓ Service started. Open: http://$display_host:$target_port"
       echo "  Uninstall: ./run.sh --uninstall-service"
       return 0
     fi
+    if ! launchctl print "$(service_target)" >/dev/null 2>&1; then
+      break
+    fi
   done
 
-  echo "⚠ Plist loaded but port $target_port didn't bind in 2.5s." >&2
+  echo "⚠ Plist loaded but port $target_port didn't bind within 20s." >&2
   echo "  Check: $SERVICE_LOG_DIR/service.err.log" >&2
   exit 1
 }

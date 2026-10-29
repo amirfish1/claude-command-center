@@ -70,7 +70,8 @@ console.log(JSON.stringify(chunks));
             self.source, "_ttsBindChunkCompletion", "_ttsStartChunkedSpeech"
         )
         result = self.run_node(
-            binder
+            "const window = { addEventListener: () => {} };\n"
+            + binder
             + """
 const utterance = {};
 const settled = [];
@@ -81,6 +82,348 @@ console.log(JSON.stringify(settled));
 """
         )
         self.assertEqual(result, [True])
+
+    def test_live_prefetch_waits_for_changed_text_without_poll_starvation(self):
+        scheduler = function_block(
+            self.source, "scheduleTtsPrefetch", "_ttsShowVoice"
+        )
+        result = self.run_node(
+            """
+let now = 0, nextTimer = 0, text = 'A settled reply.';
+let _ttsPrefetchTimer = null, _ttsPrefetchTarget = null;
+const timers = new Map(), requests = [];
+const activePaneId = () => 'p1';
+const lastMessageTtsData = () => ({ text });
+const document = { hidden: false, querySelectorAll: () => [] };
+const _ttsActive = false, _ttsPaused = false;
+const _ttsMarkCache = () => {}, _ttsLog = () => {};
+const _ttsPrefetchHead = (text, paneId) => requests.push({ at: now, text, paneId });
+const setTimeout = (fn, delay) => {
+  const id = ++nextTimer;
+  timers.set(id, { fn, at: now + delay });
+  return id;
+};
+const clearTimeout = id => timers.delete(id);
+function tick(to) {
+  for (;;) {
+    const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!next || next[1].at > to) break;
+    now = next[1].at;
+    timers.delete(next[0]);
+    next[1].fn();
+  }
+  now = to;
+}
+"""
+            + scheduler
+            + """
+scheduleTtsPrefetch();
+tick(900); scheduleTtsPrefetch();
+tick(1800); scheduleTtsPrefetch();
+tick(2500);
+const stable = requests.splice(0);
+text = 'A reply still being written.';
+scheduleTtsPrefetch();
+tick(3400); text += ' Now complete.'; scheduleTtsPrefetch();
+tick(4300); scheduleTtsPrefetch();
+tick(5899);
+const beforeQuiet = requests.length;
+tick(5900);
+console.log(JSON.stringify({ stable, beforeQuiet, changed: requests }));
+"""
+        )
+        self.assertEqual(result["stable"], [
+            {"at": 2500, "text": "A settled reply.", "paneId": "p1"}
+        ])
+        self.assertEqual(result["beforeQuiet"], 0)
+        self.assertEqual(result["changed"], [
+            {"at": 5900, "text": "A reply still being written. Now complete.", "paneId": "p1"}
+        ])
+
+    def test_viewport_prefetch_tracks_stable_target_and_waits_for_playback(self):
+        scheduler = function_block(self.source, "scheduleTtsViewportPrefetch", "scheduleTtsPrefetch")
+        result = self.run_node("""
+let now = 0, nextTimer = 0, _ttsActive = false, _ttsPaused = false;
+const timers = new Map(), requests = [];
+let _ttsPrefetchTimer = null;
+const document = { hidden: false };
+const activePaneId = () => 'p1';
+const isConversationAtBottom = v => v.bottom;
+const _ttsSpeakButtonData = b => ({ text: b.text });
+const _ttsLog = () => {};
+const _ttsPrefetchHead = (text, pane, kind, btn) => requests.push({text, at: now, kind});
+const setTimeout = (fn, delay) => { const id = ++nextTimer; timers.set(id, {fn, at: now + delay}); return id; };
+const clearTimeout = id => timers.delete(id);
+function tick(to) {
+  for (;;) {
+    const next = [...timers].sort((a,b) => a[1].at - b[1].at)[0];
+    if (!next || next[1].at > to) break;
+    now = next[1].at; timers.delete(next[0]); next[1].fn();
+  }
+  now = to;
+}
+const pane = { dataset: { paneId: 'p1' } };
+const first = { isConnected: true, text: 'First older answer.' };
+const second = { isConnected: true, text: 'Second older answer.' };
+const view = { closest: () => pane, _convSpeakButton: { _speakTarget: first }, bottom: false };
+""" + scheduler + """
+scheduleTtsViewportPrefetch(view, first);
+tick(100); scheduleTtsViewportPrefetch(view, first);
+tick(200);
+view._convSpeakButton._speakTarget = second;
+_ttsActive = true;
+scheduleTtsViewportPrefetch(view, second);
+tick(400);
+const whilePlaying = requests.length;
+_ttsActive = false;
+tick(1600);
+view._convSpeakButton._speakTarget = first;
+scheduleTtsViewportPrefetch(view, first);
+tick(1650);
+view.bottom = true;
+scheduleTtsViewportPrefetch(view, first);
+tick(2000);
+console.log(JSON.stringify({ requests, whilePlaying }));
+""")
+        self.assertEqual(result["whilePlaying"], 1)
+        self.assertEqual(result["requests"], [
+            {"text": "First older answer.", "at": 200, "kind": "viewport"},
+            {"text": "Second older answer.", "at": 1600, "kind": "viewport"},
+        ])
+
+    def test_cache_coverage_uses_actual_ready_characters_including_uncached_tail(self):
+        coverage = function_block(self.source, "_ttsTextCacheCoverage", "_ttsRefreshCacheCoverage")
+        chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        chunker += "const _TTS_SECOND_CHARS = 160;\n" + function_block(self.source, "_ttsRestChunks", "_ttsSetPlay")
+        result = self.run_node(chunker + """
+const text = 'a'.repeat(80) + 'b'.repeat(160) + 'c'.repeat(400) + 'd'.repeat(400) + 'e'.repeat(400) + 'f'.repeat(400);
+const _ttsHeadCache = new Map();
+const _ttsChunkState = null;
+const _ttsDebugJobs = [];
+const _ttsCacheDebug = true;
+const _ttsHeadChunk = s => _chunkTtsText(s, 80)[0];
+_ttsHeadCache.set('a'.repeat(80), {debugReady:false});
+_ttsHeadCache.set('b'.repeat(160), {debugReady:false});
+for (const letter of 'cde') _ttsHeadCache.set(letter.repeat(400), {debugReady:false});
+""" + coverage + """
+const sentOnly = _ttsTextCacheCoverage(text);
+_ttsHeadCache.get('a'.repeat(80)).debugReady = true;
+const partial = _ttsTextCacheCoverage(text);
+for (const entry of _ttsHeadCache.values()) entry.debugReady = true;
+const capped = _ttsTextCacheCoverage(text);
+_ttsHeadCache.set('f'.repeat(400), {debugReady:true});
+const ready = _ttsTextCacheCoverage(text);
+console.log(JSON.stringify({sentOnly, partial, capped, ready}));
+""")
+        self.assertEqual(result["sentOnly"]["fraction"], 0)
+        self.assertAlmostEqual(result["sentOnly"]["sentFraction"], 1440 / 1840)
+        self.assertTrue(result["sentOnly"]["pending"])
+        self.assertAlmostEqual(result["partial"]["fraction"], 80 / 1840)
+        self.assertTrue(result["partial"]["pending"])
+        self.assertAlmostEqual(result["partial"]["sentFraction"], 1440 / 1840)
+        self.assertAlmostEqual(result["capped"]["fraction"], 1440 / 1840)
+        self.assertFalse(result["capped"]["pending"])
+        self.assertAlmostEqual(result["capped"]["sentFraction"], 1440 / 1840)
+        self.assertEqual(result["ready"], {"fraction": 1, "sentFraction": 1, "cancelledFraction": 0, "pending": False})
+
+    def test_priority_change_cancels_waiting_work_but_keeps_sent_and_ready(self):
+        select = function_block(self.source, "_ttsSelectPrefetchTarget", "_ttsRenderDebugQueue")
+        result = self.run_node("""
+const _ttsPrefetchTargets = new Map([['pane', 'old']]);
+const _ttsChainTokens = {pane: 3};
+const _ttsDebugJobs = [
+  {owner:'pane', status:'queued'}, {owner:'pane', status:'processing'},
+  {owner:'pane', status:'ready'}, {owner:'other', status:'queued'}
+];
+const _ttsScheduleCacheDebug = () => {};
+""" + select + """
+_ttsSelectPrefetchTarget('pane', 'new');
+_ttsSelectPrefetchTarget('pane', 'new');
+console.log(JSON.stringify({statuses:_ttsDebugJobs.map(j => j.status), token:_ttsChainTokens.pane}));
+""")
+        self.assertEqual(result, {"statuses": ["cancelled", "processing", "ready", "queued"], "token": 4})
+
+    def test_superseded_head_completion_does_not_restart_old_chain(self):
+        start = self.source.index("  function _ttsStartChain(")
+        end = self.source.index("  const _TTS_PREFETCH_WIDTH", start)
+        result = self.run_node("""
+const _ttsPrefetchTargets = new Map([['pane', 'new head']]);
+""" + self.source[start:end] + """
+// No scheduler/cache stubs: reaching any scheduling code would fail.
+_ttsStartChain('old head and more text', {text:'old head',start:0}, {voice:'voice'}, 'pane');
+console.log(JSON.stringify({skipped:true}));
+""")
+        self.assertTrue(result["skipped"])
+
+    def test_cancelled_coverage_yields_to_new_requests_and_ready_cache(self):
+        coverage = function_block(self.source, "_ttsTextCacheCoverage", "_ttsRefreshCacheCoverage")
+        chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        chunker += "const _TTS_SECOND_CHARS = 160;\n" + function_block(self.source, "_ttsRestChunks", "_ttsSetPlay")
+        result = self.run_node(chunker + """
+const text = 'a'.repeat(80) + 'b'.repeat(160);
+const _ttsHeadCache = new Map([['a'.repeat(80), {debugReady:true}]]);
+const _ttsChunkState = null;
+const _ttsDebugJobs = [{text:'b'.repeat(160),status:'cancelled'}];
+let _ttsCacheDebug = true;
+const _ttsHeadChunk = s => _chunkTtsText(s, 80)[0];
+""" + coverage + """
+const cancelled = _ttsTextCacheCoverage(text);
+_ttsDebugJobs.push({text:'b'.repeat(160),status:'queued'});
+const requeued = _ttsTextCacheCoverage(text);
+_ttsDebugJobs.push({text:'b'.repeat(160),status:'cancelled'});
+_ttsHeadCache.set('b'.repeat(160), {debugReady:true});
+const ready = _ttsTextCacheCoverage(text);
+_ttsHeadCache.delete('b'.repeat(160));
+_ttsCacheDebug = false;
+const disabled = _ttsTextCacheCoverage(text);
+console.log(JSON.stringify({cancelled,requeued,ready,disabled}));
+""")
+        self.assertAlmostEqual(result["cancelled"]["cancelledFraction"], 160 / 240)
+        self.assertEqual(result["requeued"]["cancelledFraction"], 0)
+        self.assertEqual(result["ready"]["fraction"], 1)
+        self.assertEqual(result["ready"]["cancelledFraction"], 0)
+        self.assertEqual(result["disabled"]["cancelledFraction"], 0)
+
+    def test_second_clip_is_short_and_prepare_ahead_runs_during_another_read(self):
+        # CCC-144: a cold read's second clip is ~160 chars so it is made while
+        # the head plays; the focused pane's latest reply keeps preparing
+        # (head + one clip) while ANOTHER message is read, never the one read.
+        chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        rest = function_block(self.source, "_ttsRestChunks", "_ttsSetPlay")
+        during = function_block(self.source, "_ttsReadingOther", "_ttsStartChain")
+        result = self.run_node(chunker + "const _TTS_SECOND_CHARS = 160;\n" + rest + """
+const _TTS_PREFETCH_CLIPS = 4, _TTS_PREFETCH_CLIPS_QUIET = 1;
+let _ttsActive = false, _ttsPaused = false, _ttsChunkState = null, _ttsBoundUtteranceText = '';
+""" + during + """
+const words = Array.from({length: 200}, (_, i) => 'word' + i).join(' ');
+const chunks = _ttsRestChunks('  ' + words, 80);
+const idle = _ttsPrefetchClipCount('pane-1');
+_ttsActive = true; _ttsChunkState = {}; _ttsBoundUtteranceText = 'Reading the older answer now.';
+const reading = _ttsPrefetchClipCount('pane-1');
+console.log(JSON.stringify({
+  lens: chunks.map(c => c.text.length), start0: chunks[0].start,
+  joined: chunks.map(c => c.text).join(' ') === words,
+  idle, reading,
+  other: _ttsReadingOther('The latest reply head'),
+  same: _ttsReadingOther('the older answer'),
+}));
+""")
+        self.assertLessEqual(result["lens"][0], 160)
+        self.assertGreater(result["lens"][0], 100)
+        self.assertTrue(all(n <= 400 for n in result["lens"][1:]))
+        self.assertGreater(max(result["lens"][1:]), 300)
+        self.assertEqual(result["start0"], 82)
+        self.assertTrue(result["joined"])
+        self.assertEqual(result["idle"], 4)
+        self.assertEqual(result["reading"], 1)
+        self.assertTrue(result["other"])
+        self.assertFalse(result["same"])
+
+    def test_neural_word_progress_uses_audio_time_and_whole_utf16_words(self):
+        helper = function_block(self.source, "_ttsWordAtProgress", "_ttsSpeakChunkNeural")
+        result = self.run_node(helper + """
+const text = '  Hello,  🌍 world!';
+console.log(JSON.stringify({
+  first:_ttsWordAtProgress(text, 0, 10),
+  whitespace:_ttsWordAtProgress(text, 4.5, 10),
+  unicode:_ttsWordAtProgress(text, 6, 10),
+  last:_ttsWordAtProgress(text, 10, 10),
+  streaming:_ttsWordAtProgress(text, 0.9, Infinity),
+  empty:_ttsWordAtProgress('   ', 2, 10)
+}));
+""")
+        self.assertEqual(result["first"], {"start": 2, "length": 6})
+        self.assertEqual(result["whitespace"], {"start": 2, "length": 6})
+        self.assertEqual(result["unicode"], {"start": 10, "length": 2})
+        self.assertEqual(result["last"], {"start": 13, "length": 6})
+        self.assertEqual(result["streaming"], {"start": 13, "length": 6})
+        self.assertIsNone(result["empty"])
+
+    def test_prepared_clips_survive_playback_and_replay_without_fetching(self):
+        start = self.source.index("  function _ttsSpeakChunkNeural(")
+        end = self.source.index("  // One-time iOS-Safari", start)
+        result = self.run_node("""
+let _ttsNeuralToken = 0, _ttsUtterance, _ttsChunkState, _ttsNeural, _ttsAudio;
+let _ttsRate = 1.25, _ttsActivePaneId = 'p1', _ttsLastCharIndex;
+let fetches = 0, plays = 0, urls = 0, blockNext = false, _ttsPaused = false;
+const _ttsDirectBtn = {};
+const _setTtsDirectBtnState = (btn, state) => {btn.state = state;};
+const showOpToast = () => {};
+const revoked = [], audios = [], _ttsHeadCache = new Map();
+const window = {};
+const URL = {createObjectURL: () => 'play-' + (++urls), revokeObjectURL: u => revoked.push(u)};
+const _ttsScheduleCacheDebug = () => {}, _ttsSetPlay = () => {}, _ttsSetStreaming = () => {};
+const clearTtsHighlight = () => {}, clearTtsCaption = () => {};
+const _ttsFetchNeural = () => { fetches++; throw Error('Unexpected cache miss'); };
+const _ttsContinuousOk = () => false;
+const setTtsButtonsState = () => {}, setTtsButtonsBusy = () => {};
+const ttsButtons = () => [], _ttsShowVoice = () => {}, _ttsLog = () => {};
+const _ttsPerfStart = () => {}, _ttsPerfSilence = () => {};
+function Audio(url) {
+  this.url = url; this.addEventListener = () => {};
+  this.play = () => {
+    if (blockNext) { blockNext=false; return Promise.reject({name:'NotAllowedError'}); }
+    plays++; return Promise.resolve();
+  }; audios.push(this);
+}
+for (const text of ['Prepared head.', 'Prepared continuation.']) {
+  const got = {url: 'cache-' + text, blob: {}, voice: 'Kokoro:test', done: Promise.resolve()};
+  _ttsHeadCache.set(text, {p: Promise.resolve(got), got, voice: got.voice, debugReady: true, ready: true});
+}
+function _ttsSpeakNextChunk() {
+  if (_ttsChunkState.index < _ttsChunkState.chunks.length)
+    _ttsSpeakChunkNeural(_ttsChunkState, _ttsChunkState.chunks[_ttsChunkState.index]);
+}
+const drain = async () => { for(let i=0; i<8; i++) await Promise.resolve(); };
+""" + self.source[start:end] + """
+(async () => {
+  for (let replay=0; replay<2; replay++) {
+    _ttsChunkState = {chunks: [{text:'Prepared head.',start:0},{text:'Prepared continuation.',start:15}],index:0,paneId:'p1'};
+    _ttsSpeakNextChunk(); await drain();
+    audios[audios.length-1].onended(); await drain();
+    audios[audios.length-1].onended(); await drain();
+  }
+  const completed = {fetches, plays, cacheSize: _ttsHeadCache.size, players: audios.length, revoked};
+  blockNext = true;
+  _ttsChunkState = {chunks:[{text:'Prepared head.',start:0},{text:'Prepared continuation.',start:15}],index:1,paneId:'p1'};
+  _ttsSpeakNextChunk(); await drain();
+  console.log(JSON.stringify({...completed, blocked:{paused:_ttsPaused,index:_ttsChunkState.index,button:_ttsDirectBtn.state,cacheSize:_ttsHeadCache.size,fetches}}));
+})();
+""")
+        self.assertEqual(result["fetches"], 0)
+        self.assertEqual(result["plays"], 4)
+        self.assertEqual(result["cacheSize"], 2)
+        self.assertEqual(result["players"], 1)
+        self.assertEqual(result["revoked"], ["play-1", "play-2", "play-3", "play-4"])
+        self.assertEqual(result["blocked"], {"paused":True,"index":1,"button":"paused","cacheSize":2,"fetches":0})
+
+    def test_floating_speaker_targets_text_near_circle_instead_of_larger_footer(self):
+        selector = function_block(self.source, "_visibleSpeakButton", "attachConversationEndAffordance")
+        result = self.run_node("""
+const rect = (top, bottom) => ({top, bottom, height: bottom-top, width:200});
+let circle = rect(550, 610);
+function answer(id, box, spoken) {
+  const node = {id, elements:[{getBoundingClientRect: () => box}], spoken};
+  return {id, closest: s => s === '.event.result' ? null : node};
+}
+const old = answer('older', rect(0, 500), [rect(20, 80)]);
+const current = answer('current', rect(550, 630), [rect(550, 610)]);
+const assistantTextElements = node => node.elements;
+const buildTtsDataFromElements = elements => {
+  const node = elements === old.closest('').elements ? old.closest('') : current.closest('');
+  return {mapping: node.spoken.map(r => ({node:{nodeValue:'Spoken answer.', rect:r},nodeOffsetStart:0,start:0,end:14}))};
+};
+function Range() { this.setStart = node => {this.node=node}; this.setEnd=()=>{}; this.getClientRects=()=>[this.node.rect]; }
+const view = {getBoundingClientRect:()=>rect(0,700), _convSpeakButton:{getBoundingClientRect:()=>circle}, querySelectorAll:()=>[old,current]};
+""" + selector + """
+const below = _visibleSpeakButton(view).id;
+circle = rect(20,80);
+const above = _visibleSpeakButton(view).id;
+old.closest('').spoken = []; // Only the excluded status footer remains visible.
+const footerExcluded = _visibleSpeakButton(view).id;
+console.log(JSON.stringify({below,above,footerExcluded}));
+""")
+        self.assertEqual(result, {"below":"current", "above":"older", "footerExcluded":"current"})
 
     def test_failed_chunk_advances_queue_and_warns_non_blockingly(self):
         chunker = function_block(
@@ -122,6 +465,9 @@ let _ttsNeuralCooldownUntil = Infinity;
 const _ttsNeuralCooldownWhy = "test";
 const _ttsHeadChunk = () => null;
 const _ttsHeadCache = new Map();
+const _ttsCacheState = new Map();
+const _perfEvent = () => {};
+const _perfActiveElapsed = (a, b) => b - a;
 const _TTS_HEAD_CHARS = 160;
 let _ttsStartWhy = "";
 let _ttsKeepVoice = null;
@@ -132,6 +478,7 @@ const _ttsNeuralUsable = () => false;
 const _ttsSpeakChunkNeural = () => {};
 const _ttsEnginePause = () => {};
 const window = {
+  addEventListener: () => {},
   speechSynthesis: {
     speak: utterance => utterances.push(utterance),
     pause: () => {},

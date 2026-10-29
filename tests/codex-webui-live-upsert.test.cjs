@@ -2,17 +2,20 @@ const assert = require('node:assert/strict');
 const { before, after, test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
-const puppeteer = require('puppeteer');
+const puppeteer = require('../require-puppeteer.js');
+const { findChromePath } = require('../puppeteer-browser-config.js');
 
 const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 const helpersStart = source.indexOf('  function _kimiNormBlockText(');
 const helpersEnd = source.indexOf('  function _kimiMoonHtml(', helpersStart);
 assert.ok(helpersStart >= 0 && helpersEnd > helpersStart,
   'web-UI merged-turn helpers exist before _kimiMoonHtml');
-const helpersCode = source.slice(helpersStart, helpersEnd);
+const anchorCode = source.slice(source.indexOf('  function anchorCodexStateBadge('),
+  source.indexOf('  function _reanchorToTailUnlessOnlyTransientBetween('));
+const helpersCode = anchorCode + source.slice(helpersStart, helpersEnd);
 
 let browser;
-before(async () => { browser = await puppeteer.launch({ headless: true }); });
+before(async () => { browser = await puppeteer.launch({ headless: true, executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
 
 async function withPage(fn) {
@@ -242,3 +245,28 @@ for (const saved of [false, true]) {
     });
   });
 }
+
+test('working status stays after merged assistant updates without splitting the turn', async () => {
+  await withPage(async (page) => {
+    await page.setContent('<div class="conversations-view"><div class="conv-codex-state">Working</div></div>');
+    await loadHelpers(page);
+    const result = await page.evaluate(() => {
+      const view = document.querySelector('.conversations-view');
+      const badge = view.firstElementChild;
+      for (let i = 0; i < 4; i++) {
+        const marker = document.createElement('div');
+        marker.className = 'event assistant kimi-marker';
+        const text = document.createElement('div');
+        text.className = 'assistant-text';
+        text.textContent = 'Update ' + i;
+        window.__fns._kimiAppendAssistantEvent(view, marker, [text], null);
+      }
+      return {
+        turns: view.querySelectorAll('.kimi-turn').length,
+        messages: view.querySelectorAll('.assistant-text').length,
+        statusLast: view.lastElementChild === badge,
+      };
+    });
+    assert.deepEqual(result, { turns: 1, messages: 4, statusLast: true });
+  });
+});

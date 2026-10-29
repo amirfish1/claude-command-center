@@ -8,6 +8,8 @@ The frontend beacons two kinds of client-measured timings here:
   labeled warm/cold from the archive-load snapshot (see
   ``_archive_load_snapshot`` in server.py).
 - ``conv_open`` — how long opening a single conversation took.
+- ``conv_open_cached`` — click to the saved-copy (IndexedDB) paint of a reopened
+  conversation; conv_open still measures click to the fresh render.
 
 Each POST (``/api/perf-event``, wired in server.py) appends one line to a
 JSONL sink and returns whether that sample breached its threshold. A
@@ -83,6 +85,14 @@ def _env_float(name, default):
 ARCHIVE_COLD_MS = _env_int("CCC_PERF_ARCHIVE_COLD_MS", 5000)
 ARCHIVE_WARM_MS = _env_int("CCC_PERF_ARCHIVE_WARM_MS", 1000)
 CONV_OPEN_MS = _env_int("CCC_PERF_CONV_OPEN_MS", 5000)
+# list_read = client-observed /api/conversations/list fetch+parse per poll;
+# live_build = server-side live-activity rebuild (build_live_sessions_activity).
+LIST_READ_MS = _env_int("CCC_PERF_LIST_READ_MS", 3000)
+LIVE_BUILD_MS = _env_int("CCC_PERF_LIVE_BUILD_MS", 3000)
+# tts_start = speaker click -> first audible audio (active time, one per read);
+# tts_gap = longest silence between consecutive clips within one read.
+TTS_START_MS = _env_int("CCC_PERF_TTS_START_MS", 300)
+TTS_GAP_MS = _env_int("CCC_PERF_TTS_GAP_MS", 250)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -90,6 +100,11 @@ WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 # startup stalls from alerting. Conversation opens retain warmup suppression.
 _PROCESS_STARTED_AT = time.time()
 WARMUP_S = _env_int("CCC_PERF_WARMUP_S", 300)
+# Ticket stats (CCC-168): the filed p95 counts only steady-state samples --
+# warmup=false, load1 <= ncpu, and >= this long after the dashboard booted.
+# Frequent sibling restarts plus an overloaded host otherwise dominate the
+# p95; excluded samples are reported separately in the ticket body.
+BOOT_EXCLUDE_S = _env_int("CCC_PERF_BOOT_EXCLUDE_S", 1800)
 
 # Machine-saturation attribution (CCC-1154 option B). The recurring p1 "slow
 # archive load" stream (CCC-1128/1138/1159) was whole-machine saturation, not
@@ -174,7 +189,23 @@ def _in_warmup(now=None):
     return (t - _PROCESS_STARTED_AT) < WARMUP_S
 
 
-_VALID_KINDS = ("archive_load", "conv_open")
+_VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
+                "tts_start", "tts_gap", "conv_open_cached")
+# Recorded and summarized with a breach verdict, but never self-filed: the
+# speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates;
+# conv_open_cached (click -> saved-copy paint) by CCC-143 next to conv_open,
+# which keeps measuring click -> fresh render.
+_NO_SELF_FILE_KINDS = ("tts_start", "tts_gap", "conv_open_cached")
+
+
+def _perf_tickets_enabled():
+    """Self-filing is opt-in: the daemon records and evaluates breaches on
+    every install, but only a maintainer box that sets CCC_PERF_TICKETS=1
+    opens WatchTower tickets. Regular users never spawn queue work."""
+    return str(os.environ.get("CCC_PERF_TICKETS") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 _TAIL_READ_BYTES = 2 * 1024 * 1024  # the JSONL sink grows forever; only tail this much
 _OPEN_STATUSES = {"open", "in_progress", "claimed", "blocked"}
 
@@ -225,6 +256,14 @@ def archive_is_warm(page_start_ts=None, now=None):
 def _threshold_for(kind, warm):
     if kind == "archive_load":
         return ARCHIVE_WARM_MS if warm else ARCHIVE_COLD_MS
+    if kind == "list_read":
+        return LIST_READ_MS
+    if kind == "live_build":
+        return LIVE_BUILD_MS
+    if kind == "tts_start":
+        return TTS_START_MS
+    if kind == "tts_gap":
+        return TTS_GAP_MS
     return CONV_OPEN_MS
 
 
@@ -269,14 +308,24 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
     breach = ms_f >= threshold_ms
     load1, ncpu = _machine_load()
 
+    try:
+        build = str(getattr(_core, "_SERVER_CODE_REV", "") or "")
+    except Exception:
+        build = ""
     row = {
         "ts": _iso_now(),
         "kind": kind,
         "ms": ms_int,
+        # Server git HEAD at process start: lets an acceptance gate count only
+        # samples measured on a build that contains the fix (scripts/perf_gate.py).
+        "build": build,
         "boot_id": str(boot_id or ""),
         "conv_id": str(conv_id or ""),
         "warm": warm,
         "warmup": warmup,
+        # Seconds since this server process booted; ticket stats drop samples
+        # inside BOOT_EXCLUDE_S of a restart.
+        "up_s": int(max(0.0, now - _PROCESS_STARTED_AT)),
         "load1": load1,
         "ncpu": ncpu,
         "threshold_ms": threshold_ms,
@@ -310,6 +359,45 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         "threshold_ms": threshold_ms,
         "breach": breach,
     }
+
+
+# Server-only diagnostic kinds (CCC-142): per-phase timings of the list
+# request and of each archive rebuild. They share the JSONL sink so
+# scripts/perf_gate.py --kind can read them, but stay out of _VALID_KINDS:
+# no breach verdict, no summary row, no self-filed ticket, no [PERF] line
+# (the list is polled every few seconds per tab).
+_DIAG_KINDS = ("list_server", "archive_rebuild")
+
+
+def record_diag(kind, ms, detail=None):
+    """Append one diagnostic sample. Never raises."""
+    try:
+        if kind not in _DIAG_KINDS:
+            return
+        ms_f = float(ms)
+        if not math.isfinite(ms_f) or ms_f < 0:
+            return
+        try:
+            build = str(getattr(_core, "_SERVER_CODE_REV", "") or "")
+        except Exception:
+            build = ""
+        load1, ncpu = _machine_load()
+        row = {
+            "ts": _iso_now(),
+            "kind": kind,
+            "ms": int(round(ms_f)),
+            "build": build,
+            "warmup": _in_warmup(),
+            "load1": load1,
+            "ncpu": ncpu,
+            "detail": detail if isinstance(detail, dict) else None,
+        }
+        path = _events_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
 
 
 def _iso_now():
@@ -430,6 +518,10 @@ def summarize(hours=24, now=None):
             "archive_load_cold_ms": ARCHIVE_COLD_MS,
             "archive_load_warm_ms": ARCHIVE_WARM_MS,
             "conv_open_ms": CONV_OPEN_MS,
+            "list_read_ms": LIST_READ_MS,
+            "live_build_ms": LIVE_BUILD_MS,
+            "tts_start_ms": TTS_START_MS,
+            "tts_gap_ms": TTS_GAP_MS,
         },
         "kinds": kinds,
         "ticket": _ticket_summary(_load_ticket_state()),
@@ -445,6 +537,8 @@ def _alert_rows(events):
     """Apply startup budgets to both new and previously recorded samples."""
     rows = []
     for event in events:
+        if event.get("kind") in _NO_SELF_FILE_KINDS:
+            continue
         if event.get("warmup"):
             if event.get("kind") != "archive_load":
                 continue
@@ -453,6 +547,39 @@ def _alert_rows(events):
                          breach=(event.get("ms") or 0) >= threshold)
         rows.append(event)
     return rows
+
+
+def _exclusion_reason(row):
+    """Why a row is left out of the filed p95, or '' when it counts.
+    Rows predating the load/up_s fields count (fail toward filing)."""
+    if row.get("warmup"):
+        return "warmup"
+    try:
+        load1, ncpu = row.get("load1"), row.get("ncpu")
+        if load1 is not None and ncpu is not None and float(load1) > float(ncpu):
+            return "load"
+    except (TypeError, ValueError):
+        pass
+    try:
+        up_s = row.get("up_s")
+        if up_s is not None and float(up_s) < BOOT_EXCLUDE_S:
+            return "boot"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
+def _steady_split(rows):
+    """(kept, excluded, reason_counts) for the filed ticket stats."""
+    kept, excluded, reasons = [], [], {}
+    for row in rows:
+        reason = _exclusion_reason(row)
+        if reason:
+            excluded.append(row)
+            reasons[reason] = reasons.get(reason, 0) + 1
+        else:
+            kept.append(row)
+    return kept, excluded, reasons
 
 
 def evaluate_breach_pattern(events):
@@ -656,10 +783,20 @@ def refresh_ticket_status(state):
 
 def _build_note(pattern, state):
     lines = [
-        "Thresholds: archive_load_cold_ms=%d archive_load_warm_ms=%d conv_open_ms=%d"
-        % (ARCHIVE_COLD_MS, ARCHIVE_WARM_MS, CONV_OPEN_MS),
+        "Thresholds: archive_load_cold_ms=%d archive_load_warm_ms=%d conv_open_ms=%d list_read_ms=%d live_build_ms=%d"
+        % (ARCHIVE_COLD_MS, ARCHIVE_WARM_MS, CONV_OPEN_MS, LIST_READ_MS, LIVE_BUILD_MS),
         "kind=%s count=%d p50=%sms p95=%sms max=%sms"
         % (pattern["kind"], pattern["count"], pattern["p50"], pattern["p95"], pattern["max"]),
+        "Stats count steady-state samples only: warmup=false, load1<=ncpu, >=%dmin after a dashboard boot."
+        % (BOOT_EXCLUDE_S // 60),
+        "Excluded: %d samples, p95=%sms (warmup=%d load1>ncpu=%d near-boot=%d)"
+        % (
+            pattern.get("excluded_count", 0),
+            pattern.get("excluded_p95", 0),
+            (pattern.get("excluded_reasons") or {}).get("warmup", 0),
+            (pattern.get("excluded_reasons") or {}).get("load", 0),
+            (pattern.get("excluded_reasons") or {}).get("boot", 0),
+        ),
         "Startup archive loads use the cold-load budget (including persisted warm caches).",
         "",
         "Worst samples (ts  ms  warm/cold  conv_id):",
@@ -814,6 +951,8 @@ def perf_ticket_check_once(now=None):
     never raises (the daemon loop would otherwise die on the first bug)."""
     now = time.time() if now is None else now
     try:
+        if not _perf_tickets_enabled():
+            return "disabled"
         # The 24-hour window supplies useful ticket context, but must not
         # resurrect an already-recovered incident after its old outliers keep
         # the aggregate above threshold. A ticket is actionable only when a
@@ -831,8 +970,27 @@ def perf_ticket_check_once(now=None):
         ]
         if not rows:
             return "ok"
-        pattern = {"kind": recent_pattern["kind"], **_kind_stats(rows)}
+        kept, excluded, reasons = _steady_split(rows)
+        # Lowest budget for the kind (archive: warm) -- fail toward filing.
+        threshold = _threshold_for(recent_pattern["kind"], True)
+        steady_p95 = _kind_stats(kept)["p95"]
+        # One extreme sample still files (startup archive stalls included);
+        # otherwise a p95 that is only over budget because of warmup, an
+        # overloaded host, or restart churn is not a CCC regression.
+        extreme = any(
+            (r.get("ms") or 0)
+            >= _SINGLE_SAMPLE_BREACH_FACTOR * (r.get("threshold_ms") or 1)
+            and not _row_grossly_saturated(r)
+            for r in _alert_rows(recent_events)
+            if r.get("kind") == recent_pattern["kind"]
+        )
+        if not extreme and (not kept or steady_p95 < threshold):
+            return _saturation_ticket_check(recent_events, now)
+        pattern = {"kind": recent_pattern["kind"], **_kind_stats(kept or rows)}
         pattern.pop("breaches", None)
+        pattern["excluded_count"] = len(excluded)
+        pattern["excluded_p95"] = _kind_stats(excluded)["p95"]
+        pattern["excluded_reasons"] = reasons
 
         state = _load_ticket_state()
         state = refresh_ticket_status(state)

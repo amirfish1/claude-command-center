@@ -78,8 +78,8 @@ class EngineHost:
                     server._ccc_closure = None
                 # server.main() installs this for the dashboard process, but
                 # the worker never calls main() -- it only imports server as
-                # a library here. Without this, SIGUSR2-triggered dumps (used
-                # by e.g. _codex_app_server_dump_stacks_on_liveness_miss) are
+                # a library here. Without this, liveness-miss stack dumps
+                # (e.g. _codex_app_server_dump_stacks_on_liveness_miss) are
                 # silent no-ops in the one process that actually owns Codex
                 # app-server execution and liveness churn.
                 server._install_python_stack_dump_handler()
@@ -656,6 +656,7 @@ class EngineHost:
                     force_queue=bool(args.get("force_queue")),
                     source=args.get("source") or "api",
                     peer_sender_sid=args.get("peer_sender_sid"),
+                    attr=args.get("attr"),
                     idempotency_key=args.get("idempotency_key"),
                 )
             if operation == "retire_idle":
@@ -697,6 +698,7 @@ class EngineHost:
                     timeout_ms=int(args.get("timeout_ms") or 30000),
                     cwd=args.get("cwd"),
                     peer_sender_sid=args.get("peer_sender_sid"),
+                    attr=args.get("attr"),
                 )
             if operation == "compact":
                 return legacy.compact_session_context(

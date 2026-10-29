@@ -109,7 +109,14 @@ def open_receipt(sid, inject_id, text, *, source="", now=None, path=None):
             "sent_ts": now,
         }
 
-    _mutate(path, fn)
+    import sender_envelope as attribution
+    attr = attribution.from_text(text)
+    original_fn = fn
+    def with_attr(state):
+        original_fn(state)
+        if attr and isinstance(state.get(sid), dict):
+            state[sid].update(attr=attr, message_id=attr["message_id"])
+    _mutate(path, with_attr)
 
 
 def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,
@@ -125,6 +132,7 @@ def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,
     if outcome not in ("landed", "dropped"):
         raise ValueError("unknown receipt outcome")
     now = time.time() if now is None else now
+    import sender_envelope as attribution
 
     def fn(state):
         e = state.get(sid)
@@ -132,7 +140,12 @@ def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,
             return
         if inject_id is not None and e.get("inject_id") != str(inject_id):
             return
-        if text is not None and e.get("text_preview") != str(text or "")[:160]:
+        # Queue drains close with the attribution-carrying text, while the
+        # composer opened the receipt with the header-free text.
+        if text is not None and (
+            attribution.strip_header(e.get("text_preview") or "")
+            != attribution.strip_header(str(text or ""))[:160]
+        ):
             return
         state.pop(sid, None)
         bucket = "_landed" if outcome == "landed" else "_dropped"

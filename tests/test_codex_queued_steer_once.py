@@ -73,7 +73,7 @@ def _cross_process_pump_worker(
 
 
 def _cross_process_rmw_worker(
-    pending_file, session_id, action, both_loaded, first_saved, results,
+    pending_file, session_id, action, both_loaded, start_mutations, first_saved, results,
 ):
     import server as process_server
 
@@ -85,6 +85,8 @@ def _cross_process_rmw_worker(
         process_server._auto_resume_opt_in.clear()
         process_server._load_pending_inputs()
         both_loaded.put(os.getpid())
+        if not start_mutations.wait(10):
+            raise AssertionError("both writers did not finish loading")
         if action == "update" and not first_saved.wait(5):
             raise AssertionError("delete writer did not persist")
         with process_server._pending_resume_lock:
@@ -991,25 +993,28 @@ def test_two_process_session_rmw_neither_resurrects_nor_loses_rows(tmp_path):
     }))
     context = multiprocessing.get_context("spawn")
     both_loaded = context.Queue()
+    start_mutations = context.Event()
     first_saved = context.Event()
     results = context.Queue()
     delete_writer = context.Process(
         target=_cross_process_rmw_worker,
-        args=(pending_file, "sid-a", "delete", both_loaded, first_saved, results),
+        args=(pending_file, "sid-a", "delete", both_loaded, start_mutations, first_saved, results),
     )
     update_writer = context.Process(
         target=_cross_process_rmw_worker,
-        args=(pending_file, "sid-b", "update", both_loaded, first_saved, results),
+        args=(pending_file, "sid-b", "update", both_loaded, start_mutations, first_saved, results),
     )
     delete_writer.start()
     update_writer.start()
     assert both_loaded.get(timeout=10) != both_loaded.get(timeout=10)
+    # Both children must hold the stale snapshot before either mutates it.
+    start_mutations.set()
     outcomes = [results.get(timeout=10), results.get(timeout=10)]
     delete_writer.join(10)
     update_writer.join(10)
 
     assert all(outcome[0] != "error" for outcome in outcomes), outcomes
-    assert all(outcome[2] is True for outcome in outcomes)
+    assert all(outcome[2] is True for outcome in outcomes), outcomes
     payload = json.loads(pending_file.read_text())
     assert "sid-a" not in payload["resume_queue"]
     assert payload["resume_queue"]["sid-b"] == ["new-b"]

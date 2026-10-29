@@ -470,3 +470,178 @@ test('plan endpoint missing degrades to a friendly card, not a crash', async () 
     await page.close();
   }
 });
+
+test('hostNoun adapts copy for Darwin and Linux (local and remote)', async () => {
+  const page = await openFixture();
+  try {
+    const nouns = await page.evaluate(() => {
+      const fn = window.cccOnboarding._hostNoun;
+      window.__cccHostOverride = '127.0.0.1';
+      const darwinLocal = fn({ os: 'Darwin', hostname: 'my-mac' });
+      const linuxLocal = fn({ os: 'Linux', hostname: 'my-linux' });
+      const winLocal = fn({ os: 'Windows', hostname: 'my-pc' });
+
+      window.__cccHostOverride = 'remote.example.com';
+      const darwinRemote = fn({ os: 'Darwin', hostname: 'mac-server' });
+      const linuxRemote = fn({ os: 'Linux', hostname: 'hetzner-vps' });
+      const winRemote = fn({ os: 'Windows', hostname: 'azure-pc' });
+
+      delete window.__cccHostOverride;
+      return { darwinLocal, linuxLocal, winLocal, darwinRemote, linuxRemote, winRemote };
+    });
+
+    assert.equal(nouns.darwinLocal, 'this Mac');
+    assert.equal(nouns.linuxLocal, 'this server');
+    assert.equal(nouns.winLocal, 'this PC');
+    assert.equal(nouns.darwinRemote, 'your Mac (mac-server)');
+    assert.equal(nouns.linuxRemote, 'the server hetzner-vps');
+    assert.equal(nouns.winRemote, 'the PC azure-pc');
+  } finally {
+    await page.close();
+  }
+});
+
+test('setup page wording and CLT step visibility with stubbed Darwin vs Linux getPlan', async () => {
+  const page = await openFixture();
+  try {
+    // 1. Stub Darwin plan
+    await page.evaluate(() => {
+      delete window.__cccHostOverride;
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({
+          steps: [
+            { id: 'clt', label: 'Mac tools from Apple', mac_only: true, status: 'ok' },
+            { id: 'node', label: 'Node.js', status: 'missing', needs_consent: true, est_seconds: 60 },
+          ],
+          machine: { os: 'Darwin', arch: 'arm64', hostname: 'local-mac' },
+        }),
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-steps-card', { visible: true });
+    const darwinHeader = await page.$eval('.mz-steps-head p', (el) => el.textContent);
+    assert.ok(darwinHeader.includes('this Mac'), `expected "this Mac" in darwin header, got: ${darwinHeader}`);
+    const darwinStepIds = await page.$$eval('.mz-step-row', (rows) => rows.map((r) => r.dataset.stepId));
+    assert.ok(darwinStepIds.includes('clt'), 'expected clt step to be visible on Darwin');
+    const darwinNodeBlurb = await page.$eval('.mz-step-row[data-step-id="node"] .mz-step-desc', (el) => el.textContent);
+    assert.ok(darwinNodeBlurb.includes('this Mac'), `expected "this Mac" in node blurb, got: ${darwinNodeBlurb}`);
+
+    // 2. Stub remote Linux plan
+    await page.evaluate(() => {
+      window.cccOnboarding.close();
+      window.__cccHostOverride = 'remote-hetzner.lan';
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({
+          steps: [
+            { id: 'clt', label: 'Mac tools from Apple', mac_only: true, applies: false, status: 'not_applicable' },
+            { id: 'node', label: 'Node.js', status: 'missing', needs_consent: true, est_seconds: 60 },
+          ],
+          machine: { os: 'Linux', arch: 'x86_64', hostname: 'hetzner-srv' },
+        }),
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-step-row[data-step-id="node"]', { visible: true });
+    const linuxHeader = await page.$eval('.mz-steps-head p', (el) => el.textContent);
+    assert.ok(linuxHeader.includes('the server hetzner-srv'), `expected "the server hetzner-srv" in linux header, got: ${linuxHeader}`);
+    const linuxStepIds = await page.$$eval('.mz-step-row', (rows) => rows.map((r) => r.dataset.stepId));
+    assert.ok(!linuxStepIds.includes('clt'), 'expected clt step to be hidden on Linux');
+    const linuxNodeBlurb = await page.$eval('.mz-step-row[data-step-id="node"] .mz-step-desc', (el) => el.textContent);
+    assert.ok(linuxNodeBlurb.includes('the server hetzner-srv'), `expected "the server hetzner-srv" in node blurb, got: ${linuxNodeBlurb}`);
+
+    // Verify no "Mac" anywhere on the setup page on remote Linux
+    const setupCardText = await page.$eval('.mz-steps-card', (el) => el.textContent);
+    assert.equal(/Mac/i.test(setupCardText), false, `expected no "Mac" in setup card on Linux, got: ${setupCardText}`);
+    assert.deepEqual(page.__errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+test('step still pending after done job shows visible reason instead of silent loop', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({
+          steps: [
+            { id: 'gh', label: 'GitHub CLI', status: 'missing', needs_consent: false, optional: true },
+          ],
+        }),
+        runSteps: async () => ({ job_id: 'job-gh-failed' }),
+        pollJob: async () => ({
+          status: 'done',
+          step: 'gh',
+          progress: 1,
+          lines: ['GitHub CLI is optional · install failed'],
+        }),
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+
+    await page.waitForSelector('.mz-step-cta .mz-btn-primary', { visible: true });
+    await page.click('.mz-step-cta .mz-btn-primary');
+
+    await page.waitForFunction(() => {
+      const live = document.getElementById('mzLive');
+      return live && live.textContent.includes("Couldn't install automatically");
+    });
+
+    const liveText = await page.$eval('#mzLive', (el) => el.textContent);
+    assert.ok(liveText.includes("Couldn't install automatically"), `expected failure note in mzLive, got: ${liveText}`);
+    assert.ok(liveText.includes("Skip this step"), `expected skip prompt in mzLive, got: ${liveText}`);
+
+    // Click "Skip this step"
+    await page.click('.mz-step-cta .mz-linklike');
+
+    const sideText = await page.$eval('.mz-step-row[data-step-id="gh"] .mz-step-side', (el) => el.textContent);
+    assert.ok(sideText.includes('Skipped') || sideText.includes('Done'), `expected Skipped or Done, got: ${sideText}`);
+
+    // Reopen/reload plan
+    await page.evaluate(() => {
+      window.cccOnboarding.close();
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    const sideTextAfter = await page.$eval('.mz-step-row[data-step-id="gh"] .mz-step-side', (el) => el.textContent);
+    assert.ok(sideTextAfter.includes('Skipped') || sideTextAfter.includes('Done'));
+
+    assert.deepEqual(page.__errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+test('skipped optional step stays skipped across plan reload', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({
+          steps: [
+            { id: 'gh', label: 'GitHub CLI', status: 'missing', needs_consent: false, optional: true },
+            { id: 'node', label: 'Node.js', status: 'missing', needs_consent: false },
+          ],
+        }),
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+
+    await page.waitForSelector('.mz-step-row[data-step-id="gh"]', { visible: true });
+    await page.click('.mz-step-cta .mz-linklike');
+
+    const skipped = await page.evaluate(() => localStorage.getItem('ccc-onboarding-skipped-steps'));
+    assert.ok(skipped && skipped.includes('gh'), `expected gh in skipped localStorage, got ${skipped}`);
+
+    await page.evaluate(() => {
+      window.cccOnboarding.close();
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+
+    await page.waitForSelector('.mz-step-row[data-step-id="node"]', { visible: true });
+    const ctaText = await page.$eval('.mz-step-cta .mz-btn-primary', (el) => el.textContent);
+    assert.ok(ctaText.includes('Continue setup') || ctaText.includes('Node'), `expected cta for node, got ${ctaText}`);
+    assert.deepEqual(page.__errors, []);
+  } finally {
+    await page.close();
+  }
+});

@@ -33,7 +33,7 @@ assert.ok(helpersStart >= 0 && helpersEnd > helpersStart, 'provisional helper bl
 const dedupeHelpersCode = appSource.slice(helpersStart, helpersEnd);
 
 let browser;
-before(async () => { browser = await puppeteer.launch({ headless: true }); });
+before(async () => { browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
 
 async function withPage(fn) {

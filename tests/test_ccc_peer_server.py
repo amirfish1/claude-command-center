@@ -265,9 +265,21 @@ def test_inbound_connection_wrong_token_is_rejected(monkeypatch, tmp_path, sock_
     socket_path, token = _start_real_peer(monkeypatch, tmp_path, sock_dir)
     calls = []
     monkeypatch.setattr(server, "_inject_text_into_session", lambda *a, **k: calls.append((a, k)))
-    s = _send_frame(socket_path, "wrong-token", json.dumps({"session_id": "x", "text": "y"}))
-    time.sleep(0.3)
-    s.close()
+    # Send both frames together: the server may close immediately after an
+    # invalid auth frame, before a second sendall() could write the payload.
+    frames = [
+        {"type": "auth", "token": "wrong-token"},
+        {"type": "user", "message": {"role": "user", "content":
+            json.dumps({"session_id": "x", "text": "y"})}, "msg_id": "m-1"},
+    ]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(2.0)
+        connection.connect(socket_path)
+        connection.sendall(b"".join(json.dumps(frame).encode() + b"\n" for frame in frames))
+        try:
+            assert connection.recv(1) == b""
+        except ConnectionResetError:
+            pass  # Closing with an unread user frame can reset the connection.
     assert calls == []
 
 

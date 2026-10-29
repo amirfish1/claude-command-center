@@ -1382,24 +1382,13 @@ def _sync_all(conn: sqlite3.Connection, force: bool = False) -> None:
                 _migrate_continuation_origin(conn)
 
         if not force:
-            # MEMO-FIX-14: `_count_pending_transcripts()` calls
-            # `_candidate_transcript_files()`, which walks and stat()s every
-            # transcript on disk regardless of how many actually changed --
-            # cheap against a small corpus, but on a real restart with
-            # thousands of prior sessions it's an O(corpus) scan against a
-            # cold OS metadata cache, measured at 20-45s wall clock for a
-            # single `recall()` even when the eventual pending count is
-            # small. `_last_sync_ts == 0.0` (this process's first sync) plus
-            # an already-large `transcripts` table (a fast indexed COUNT, no
-            # filesystem I/O) is the cold-restart shape: hand it to the
-            # background sync before ever touching the filesystem. A
-            # small/fresh corpus (tests, a new install) still gets the fast
-            # inline path below.
-            if _last_sync_ts == 0.0:
-                existing = conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0]
-                if existing > _BG_SYNC_THRESHOLD:
-                    _start_background_sync()
-                    return
+            # Counting changed transcripts still walks the entire corpus.
+            # Defer every large-corpus refresh, including warm processes
+            # whose TTL expired, so recall never waits for that scan.
+            existing = conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0]
+            if existing > _BG_SYNC_THRESHOLD:
+                _start_background_sync()
+                return
 
             pending = _count_pending_transcripts(conn, days)
             if pending > _BG_SYNC_THRESHOLD:
@@ -1420,15 +1409,44 @@ def _sync_all(conn: sqlite3.Connection, force: bool = False) -> None:
         _sync_lock.release()
 
 
+_helper_indexing = {"value": False, "ts": 0.0}
+
+
 def is_indexing() -> bool:
     """True while a background cold-start/catch-up sync is in flight."""
-    return _bg_sync_running
+    if _bg_sync_running:
+        return True
+    # CCC-142: a sync delegated to the background helper reports back on each
+    # kick; trust that answer for a short while.
+    return bool(_helper_indexing["value"]) and time.time() - _helper_indexing["ts"] < 30
+
+
+def _delegate_background_sync() -> bool:
+    """CCC-142: run the full sync in the background-helper process, off the
+    dashboard's GIL (the index is shared on-disk SQLite). True when handled:
+    delegated, or deferred while the helper is still booting (it syncs on
+    start). False runs it in-process as before."""
+    try:
+        from ccc_server import bg_helper
+    except Exception:
+        return False
+    if bg_helper.is_child():
+        return False
+    if bg_helper.ready():
+        reply = bg_helper.call("ship_sync", timeout=5)
+        if reply is not None:
+            _helper_indexing.update(value=bool(reply.get("indexing")), ts=time.time())
+            return True
+        return False
+    return bg_helper.starting()
 
 
 def _start_background_sync() -> None:
     """Kick a full (blocking, force=True) sync on a background thread against
     its own connection. Idempotent while already running."""
     global _bg_sync_running
+    if _delegate_background_sync():
+        return
     with _bg_sync_state_lock:
         if _bg_sync_running:
             return

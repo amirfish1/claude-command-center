@@ -1,6 +1,7 @@
 import pathlib
 import re
 import unittest
+import xml.etree.ElementTree as ET
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -71,21 +72,24 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         self.assertIn(f'<span class="ver">v{full}</span>', landing_page)
         self.assertIn(f'<span class="version">v{mm}</span>', landing_page)
         self.assertIn(f'<span class="badge">v{mm}</span>', landing_page)
-        self.assertIn(f"v{full} macOS app, source, and Homebrew release", landing_page)
+        dmg_version = ET.parse(PROJECT_ROOT / "docs" / "appcast.xml").findtext(
+            "./channel/item/{http://www.andymatuschak.org/xml-namespaces/sparkle}version"
+        )
+        self.assertIn(f"macOS app v{dmg_version} &middot; source and Homebrew v{full}", landing_page)
 
     def test_current_release_screenshot_is_used_on_public_surfaces(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         landing_page = (PROJECT_ROOT / "docs" / "index.html").read_text(
             encoding="utf-8"
         )
-        _, mm = _current_version()
-        slug = mm.replace(".", "-")
-        rel = f"images/ccc-v{slug}-hero.png"
-        screenshot = PROJECT_ROOT / "docs" / rel
-
-        self.assertTrue(screenshot.exists())
+        # A screenshot describes its capture, which can predate the release.
+        match = re.search(r'src="\./(images/ccc-v[0-9-]+-hero\.png)"', landing_page)
+        self.assertIsNotNone(match)
+        rel = match.group(1)
+        self.assertTrue((PROJECT_ROOT / "docs" / rel).exists())
         self.assertIn(f"docs/{rel}", readme)
-        self.assertIn(f"./{rel}", landing_page)
+        captured = re.search(r"ccc-v(\d+)-(\d+)-hero", rel)
+        self.assertIn(f"CCC v{captured.group(1)}.{captured.group(2)} showing", landing_page)
 
 
 if __name__ == "__main__":

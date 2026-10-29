@@ -19,7 +19,7 @@ const TOUR_JS = path.join(ROOT, 'static', 'tour.js');
 const APP_JS = path.join(ROOT, 'static', 'app.js');
 const INDEX_HTML = path.join(ROOT, 'static', 'index.html');
 const SCRATCH = process.env.FTUE_SCRATCH
-  || '/var/folders/sl/4np1qd1j7tdd956l4kf8t_ph0000gn/T/grok-goal-10a44204be19/implementer';
+  || path.join(os.tmpdir(), 'ccc-ftue-scratch');
 
 const TOPICS = [
   'reviewing existing conversations',
@@ -646,10 +646,13 @@ test('headless dashboard launch starts the guide twice with a non-empty first st
         }
       });
       if (loadErr) throw new Error(tag + ' start failed: ' + loadErr);
+      // This drives the live dashboard, whose main thread can stall for
+      // seconds while it renders a large session list; 8s flaked under the
+      // parallel .cjs suite even though the guide advanced fine on its own.
       await page.waitForFunction(() => {
         const title = document.querySelector('.fft-title');
         return !!(title && title.textContent.trim());
-      }, { timeout: 8000 });
+      }, { timeout: 20000 });
       const first = await page.evaluate(() => ({
         title: (document.querySelector('.fft-title') || {}).textContent || '',
         overlay: !!document.querySelector('.fft-center-card, .fft-card'),
@@ -664,7 +667,7 @@ test('headless dashboard launch starts the guide twice with a non-empty first st
       await page.waitForFunction((prev) => {
         const title = document.querySelector('.fft-title');
         return title && title.textContent.trim() && title.textContent.trim() !== prev;
-      }, { timeout: 8000 }, first.title.trim());
+      }, { timeout: 20000 }, first.title.trim());
       const second = await page.evaluate(() => (document.querySelector('.fft-title') || {}).textContent || '');
       assert.notEqual(second.trim(), first.title.trim(), tag + ' Next did not change the step');
       if (tag === 'launch-1') {

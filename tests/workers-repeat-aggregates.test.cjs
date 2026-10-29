@@ -48,7 +48,7 @@ test('a folded group summarises the span it hides, not just its newest row', () 
 });
 
 test('the group context span is styled, not an unstyled leftover', async () => {
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1400, height: 800 });

@@ -24,6 +24,7 @@
   const LS_FIRST_TASK = 'ccc-onboarding-first-task';
   const LS_ENG_DONE = 'ccc-engines-first-run-done';
   const LS_SOUNDS = 'ccc-sounds-enabled';
+  const LS_SKIPPED = 'ccc-onboarding-skipped-steps';
   const POLL_MS = 900;
   const Z_BASE = 100300;
 
@@ -37,6 +38,32 @@
   function lsGet(k) { try { return window.localStorage.getItem(k); } catch (_) { return null; } }
   function lsSet(k, v) { try { window.localStorage.setItem(k, v); } catch (_) {} }
   function lsDel(k) { try { window.localStorage.removeItem(k); } catch (_) {} }
+
+  function getSkippedSteps() {
+    try {
+      const val = lsGet(LS_SKIPPED);
+      if (!val) return [];
+      const parsed = JSON.parse(val);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function setStepSkipped(id) {
+    if (!id) return;
+    try {
+      const current = getSkippedSteps();
+      if (!current.includes(id)) {
+        current.push(id);
+        lsSet(LS_SKIPPED, JSON.stringify(current));
+      }
+    } catch (_) {}
+  }
+
+  function isStepSkipped(id) {
+    return getSkippedSteps().includes(id);
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -149,6 +176,16 @@
   };
   let driver = realDriver;
 
+  function hostNoun(machine) {
+    const locHost = window.__cccHostOverride || location.hostname;
+    const local = ['localhost', '127.0.0.1', '::1'].includes(locHost);
+    const os = (machine && machine.os) || '';
+    const host = (machine && machine.hostname) || locHost;
+    if (os === 'Darwin') return local ? 'this Mac' : 'your Mac (' + host + ')';
+    const kind = os === 'Windows' ? 'PC' : 'server';
+    return local ? 'this ' + kind : 'the ' + kind + ' ' + host;
+  }
+
   // ── Per-step novice copy. The plan's own label wins when present. ──
   const STEP_META = {
     clt: {
@@ -158,7 +195,7 @@
     },
     git: { title: 'Git', blurb: 'Keeps every version of the work safe.', running: 'Setting up Git.' },
     python: { title: 'Python', blurb: 'The engine under Command Center itself.', running: 'Setting up Python.' },
-    node: { title: 'Node.js', blurb: 'Runs your free-model router, right on this Mac.', running: 'Setting up Node.js.' },
+    node: { title: 'Node.js', blurb: 'Runs your free-model router, right on {host}.', running: 'Setting up Node.js.' },
     claude_cli: { title: 'Claude Code', blurb: 'The agent that does the actual coding.', running: 'Installing Claude Code.' },
     gh: { title: 'GitHub CLI', blurb: 'Lets your agents open pull requests. Optional but handy.', running: 'Installing the GitHub CLI.' },
     free_router: {
@@ -371,15 +408,32 @@
   }
 
   function planSteps() {
-    return (S.plan && Array.isArray(S.plan.steps)) ? S.plan.steps : [];
+    const raw = (S.plan && Array.isArray(S.plan.steps)) ? S.plan.steps : [];
+    const os = S.plan && S.plan.machine && S.plan.machine.os;
+    return raw.filter((st) => {
+      if (st.applies === false) return false;
+      if (st.status === 'not_applicable') return false;
+      if (st.mac_only && os && os !== 'Darwin') return false;
+      if (st.id === 'clt' && os && os !== 'Darwin') return false;
+      return true;
+    });
   }
 
   function stepState(st) {
+    if (!st) return 'pending';
+    if (isStepSkipped(st.id)) return 'done';
     const raw = st && st.status;
-    if (raw === 'ok') return 'done';
+    if (raw === 'ok' || raw === 'skipped') return 'done';
     if (raw === 'error') return 'error';
     if (S.consented[st.id] || !st.needs_consent) return 'pending';
     return 'consent';
+  }
+
+  function updateStepsSub() {
+    const sub = document.getElementById('mzStepsSub');
+    if (sub) {
+      sub.textContent = 'One click per step. Everything installs on ' + hostNoun(S.plan && S.plan.machine) + ', nothing leaves it.';
+    }
   }
 
   function renderSteps() {
@@ -387,8 +441,10 @@
     const head = el('div', 'mz-steps-head');
     head.appendChild(el('div', 'mz-eyebrow', 'Setup'));
     head.appendChild(el('h2', 'mz-title', 'Getting your team ready'));
-    head.appendChild(el('p', 'mz-sub mz-sub-left',
-      'One click per step. Everything installs on your Mac, nothing leaves it.'));
+    const sub = el('p', 'mz-sub mz-sub-left',
+      'One click per step. Everything installs on ' + hostNoun(S.plan && S.plan.machine) + ', nothing leaves it.');
+    sub.id = 'mzStepsSub';
+    head.appendChild(sub);
     card.appendChild(head);
 
     const list = el('div', 'mz-step-list');
@@ -420,7 +476,7 @@
         list.appendChild(renderPlanFallback());
       } else {
         const d = el('div', 'mz-loading');
-        d.innerHTML = '<span class="mz-spinner" aria-hidden="true"></span> Checking what your Mac already has…';
+        d.innerHTML = '<span class="mz-spinner" aria-hidden="true"></span> Checking what\'s already installed…';
         list.appendChild(d);
       }
       return;
@@ -443,7 +499,8 @@
       const meta = STEP_META[st.id] || {};
       const title = el('div', 'mz-step-title', meta.title || st.label || st.id);
       main.appendChild(title);
-      const blurb = meta.blurb || st.detail || '';
+      const rawBlurb = meta.blurb || st.detail || '';
+      const blurb = rawBlurb.replace('{host}', hostNoun(S.plan && S.plan.machine));
       if (blurb) main.appendChild(el('div', 'mz-step-desc', blurb));
       if (st.detail && meta.blurb) main.appendChild(el('div', 'mz-step-detail', st.detail));
       if (state === 'running' && meta.running) {
@@ -453,7 +510,10 @@
 
       const side = el('div', 'mz-step-side');
       const est = st.est_seconds && state !== 'done' ? '~' + Math.max(1, Math.round(st.est_seconds / 60)) + ' min' : '';
-      if (state === 'done') side.appendChild(el('span', 'mz-step-state is-ok', 'Done'));
+      if (state === 'done') {
+        const isSkip = isStepSkipped(st.id) || st.status === 'skipped';
+        side.appendChild(el('span', 'mz-step-state is-ok', isSkip ? 'Skipped' : 'Done'));
+      }
       else if (state === 'running') side.appendChild(el('span', 'mz-step-state is-run', 'Working'));
       else if (state === 'error') side.appendChild(el('span', 'mz-step-state is-err', 'Needs attention'));
       else if (est) side.appendChild(el('span', 'mz-step-est', est));
@@ -498,6 +558,7 @@
       else { S.planFailed = true; S.plan = null; }
     }
     if (S.scene === 'steps') {
+      updateStepsSub();
       renderStepRows();
       maybeOfferResume();
     }
@@ -560,7 +621,7 @@
       const port = found.port || (found.base_url ? String(found.base_url).replace(/.*:(\d+).*/, '$1') : '');
       note.appendChild(el('span', 'mz-detected-dot'));
       note.appendChild(el('span', null,
-        'Found ' + name + ' already running on this Mac' + (port ? ' (port ' + port + ')' : '') + '. You can connect it from Free models in Settings.'));
+        'Found ' + name + ' already running on ' + hostNoun(S.plan && S.plan.machine) + (port ? ' (port ' + port + ')' : '') + '. You can connect it from Free models in Settings.'));
       host.appendChild(note);
     }
 
@@ -579,6 +640,7 @@
     const skipStep = el('button', 'mz-linklike', 'Skip this step');
     skipStep.type = 'button';
     skipStep.addEventListener('click', () => {
+      setStepSkipped(next.id);
       next.status = 'ok';
       S.consented[next.id] = true;
       sfx('step');
@@ -598,6 +660,7 @@
     // free_key and first_task are interactive scenes, not runner work.
     const runnable = ids.filter((id) => id !== 'free_key' && id !== 'first_task');
     if (!runnable.length) { renderStepRows(); return; }
+    S.lastRunStepIds = runnable.slice();
     S.running = true;
     renderStepDetail();
     try {
@@ -636,8 +699,12 @@
       updateJobUi(j || {});
       if (j && (j.status === 'done' || j.status === 'error')) {
         const wasError = j.status === 'error';
+        const ranStepIds = S.lastRunStepIds || [];
+        const lines = Array.isArray(j.lines) ? j.lines : [];
+        const lastLine = lines.length ? String(lines[lines.length - 1] || '').trim() : '';
         S.jobId = null;
         S.jobRunningStep = null;
+        S.lastRunStepIds = null;
         lsDel(LS_JOB);
         const live = document.getElementById('mzLive');
         if (live) live.textContent = '';
@@ -646,6 +713,15 @@
         if (wasError) {
           const live = document.getElementById('mzLive');
           if (live) live.textContent = 'One step hit a snag. You can retry it, skip it, or finish setup later from Settings.';
+        } else {
+          const next = nextActionableStep();
+          if (next && ranStepIds.includes(next.id)) {
+            const live = document.getElementById('mzLive');
+            if (live) {
+              const reason = lastLine ? (': ' + lastLine) : '';
+              live.textContent = "Couldn't install automatically" + reason + '. Use "Skip this step" below to continue.';
+            }
+          }
         }
         return;
       }
@@ -712,7 +788,12 @@
 
     const skip = el('button', 'mz-linklike', 'Add a provider later');
     skip.type = 'button';
-    skip.addEventListener('click', () => { step.status = 'ok'; sfx('step'); renderStepRows(); });
+    skip.addEventListener('click', () => {
+      setStepSkipped(step.id);
+      step.status = 'ok';
+      sfx('step');
+      renderStepRows();
+    });
     box.appendChild(skip);
     host.appendChild(box);
 
@@ -1144,5 +1225,9 @@
     shouldAutoOpen: autoEligible,
     _setDriver: (d) => { driver = d || realDriver; },
     _state: S,
+    _hostNoun: hostNoun,
+    _getSkippedSteps: getSkippedSteps,
+    _setStepSkipped: setStepSkipped,
+    _isStepSkipped: isStepSkipped,
   };
 })();
