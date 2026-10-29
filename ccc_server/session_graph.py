@@ -747,6 +747,21 @@ def _session_graph_ingest_grok_subagents():
     return added
 
 
+def _local_continuation_ancestors(sid):
+    """`sid`'s continuation ancestors that have a transcript on THIS node.
+    An origin with none lives on another machine (multi-machine S6): the
+    trash cascade never reaches into a peer's session, and listing that sid
+    as trashed here would hide it after a handoff back. The walk already
+    ends at the first such origin, so it can only be the last entry."""
+    out = []
+    for anc in _core._find_continuation_ancestors(sid):
+        if (_core._find_session_jsonl(anc) is None
+                and _core._find_session_jsonl_any_project(anc) is None):
+            break
+        out.append(anc)
+    return out
+
+
 def _session_graph_family_tree(sid):
     """Return the family tree for ``sid``, with Claude Task-tool and Kimi
     Code Agent subagent enrichment.
@@ -867,7 +882,7 @@ def _set_conversation_trashed(sid, trashed):
     if want_trashed:
         descendants = list(_core._find_descendant_sessions(sid))
         seen_extra = {sid, *descendants}
-        for anc in _core._find_continuation_ancestors(sid):
+        for anc in _local_continuation_ancestors(sid):
             if anc not in seen_extra:
                 descendants.append(anc)
                 seen_extra.add(anc)

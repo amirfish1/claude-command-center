@@ -108,3 +108,22 @@ class TestFindContinuationAncestors(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTrashCascadeStaysLocal(TestFindContinuationAncestors):
+    """Multi-machine S6: an origin with no transcript here is a peer's
+    session; the trash cascade must not list it as trashed on this node."""
+
+    def test_remote_origin_is_not_cascaded(self):
+        from ccc_server import session_graph
+
+        self._register("mid-session-01", origin_session_id="origin-on-peer-01")
+        self._register("successor-session-01", origin_session_id="mid-session-01")
+        self.assertEqual(
+            server._find_continuation_ancestors("successor-session-01"),
+            ["mid-session-01", "origin-on-peer-01"],
+        )
+        self.assertEqual(
+            session_graph._local_continuation_ancestors("successor-session-01"),
+            ["mid-session-01"],
+        )

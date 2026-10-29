@@ -343,6 +343,7 @@ def brief(query: str) -> dict:
     repo_root = roots.get(meta.get("repo", ""), "")
     lineage = _lineage.chain_summary(conn, sid)
     children = _lineage.spawn_children_of(sid)
+    links = _lineage.continuation_links(conn, sid)
     nodes = _node_tags([lineage["parent"], lineage["latest"], *lineage["continuation_ancestors"], *children])
 
     def _date(ts):
@@ -372,6 +373,11 @@ def brief(query: str) -> dict:
         "latest": lineage["latest"],
         "continuation_ancestors": lineage["continuation_ancestors"],
         "children": children,
+        # Direct continuation neighbours (multi-machine S6). A predecessor
+        # not indexed here carries `dangling: True`; only a scope=all brief
+        # (memory_fanout.brief_all) asks peers to resolve it.
+        "predecessor": links["predecessor"],
+        "successors": links["successors"],
         # {ref: owner_node_id} for any of the refs above that name a peer
         # node (multi-machine spec S6) -- empty on a single-machine setup.
         "nodes": nodes,

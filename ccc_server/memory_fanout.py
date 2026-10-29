@@ -490,6 +490,116 @@ def shipped_all(topic: str, local_shipped) -> dict:
 # -- brief -------------------------------------------------------------------
 
 
+_RESOLVE_DEADLINE_S = 1.5  # continuation resolution: one more hop, within the CLI's 2 s
+
+
+def _exact_hit(res, sid: str) -> bool:
+    """A peer brief for a bare sid falls back to a recall search when the sid
+    isn't indexed there, so `found` alone can name some other session.
+    Only an exact (native) sid match resolves a continuation edge."""
+    return (isinstance(res, dict) and res.get("found")
+            and _norm_sid(res.get("session_id") or "") == _norm_sid(sid))
+
+
+def _link(sid: str, node_id: str, node_name: str, local: bool, title: str = "") -> dict:
+    out = {"session_id": sid,
+           "ref": sid if local else federation.format_session_ref(node_id, sid),
+           "node_id": node_id, "node_name": node_name, "local": local}
+    if title:
+        out["title"] = title
+    return out
+
+
+def _resolve_continuations(out: dict, local_brief, peers: list[dict], here: dict) -> None:
+    """Multi-machine S6: node-tag `out`'s predecessor/successors and resolve
+    the cross-node ones, in place. Asks peers only when
+      (a) the predecessor is `dangling` (its origin isn't indexed on the node
+          that answered), or
+      (b) this node's handoff lease says another node owns the session now
+          (its successors live there).
+    One request per relevant peer, one hop, never transitive, under
+    _RESOLVE_DEADLINE_S. An unresolved edge stays dangling, with the per-peer
+    status in `continuation_status` -- never read as "no predecessor"."""
+    src_node = out.get("node_id") or here["node_id"]
+    src_name = out.get("node_name") or here["name"]
+    src_local = out.get("local") is not False
+    pred = out.get("predecessor")
+    if isinstance(pred, dict) and not pred.get("dangling"):
+        out["predecessor"] = _link(pred.get("session_id") or "", src_node, src_name, src_local)
+    out["successors"] = [_link(s.get("session_id") or "", src_node, src_name, src_local)
+                         for s in out.get("successors") or [] if isinstance(s, dict)]
+
+    by_node = {p.get("node_id"): p for p in peers if p.get("node_id")}
+    asks: dict[str, str] = {}  # peer node_id -> sid to brief there
+    origin = pred.get("session_id") if isinstance(pred, dict) and pred.get("dangling") else ""
+    candidates: list[dict] = []
+    if origin:
+        if not src_local:
+            # Dangling on a peer: the origin may well be here. Local, no network.
+            res = local_brief(origin)
+            if _exact_hit(res, origin):
+                candidates.append(_link(res["session_id"], here["node_id"], here["name"], True,
+                                        res.get("title") or ""))
+        for node in by_node:
+            if node != src_node:
+                asks[node] = origin
+    lease_owner = ""
+    if src_local:
+        lease_owner = federation.lease_owner(out.get("session_id") or "") or ""
+        if lease_owner and lease_owner != here["node_id"] and lease_owner in by_node:
+            asks.setdefault(lease_owner, out["session_id"])  # (a) wins on a shared peer
+    if not asks and not candidates:
+        return
+
+    groups: dict[str, list[dict]] = {}
+    for node, q in asks.items():
+        groups.setdefault(q, []).append(by_node[node])
+    entries: list[dict] = []
+    if groups:
+        with ThreadPoolExecutor(max_workers=len(groups)) as ex:
+            futs = [ex.submit(fan_out, "memory_brief", {"q": q}, _RESOLVE_DEADLINE_S, ps)
+                    for q, ps in groups.items()]
+            for f in futs:
+                entries.extend(f.result())
+
+    for e in entries:
+        res = e.get("result")
+        if e["status"] != OK and not e.get("stale"):
+            continue
+        q = asks.get(e["node_id"])
+        if q == origin and _exact_hit(res, origin):
+            candidates.append(_link(res["session_id"], e["node_id"], e["name"], False,
+                                    res.get("title") or ""))
+        elif q == out.get("session_id") and _exact_hit(res, q):
+            seen = {s["session_id"] for s in out["successors"]}
+            for s in res.get("successors") or []:
+                sid = (s or {}).get("session_id") if isinstance(s, dict) else ""
+                if sid and sid not in seen:
+                    seen.add(sid)
+                    out["successors"].append(_link(sid, e["node_id"], e["name"], False))
+
+    if origin:
+        if len(candidates) == 1:
+            out["predecessor"] = candidates[0]
+        elif candidates:
+            # Same sid on several nodes: the lease owner's copy is canonical
+            # (as in recall's dedupe); without one the ambiguity stays explicit.
+            owner = federation.lease_owner(origin) or ""
+            chosen = next((c for c in candidates if c["node_id"] == owner), None)
+            if chosen:
+                chosen = dict(chosen, also_on=[c["node_name"] for c in candidates if c is not chosen])
+                out["predecessor"] = chosen
+            else:
+                out["predecessor"] = {"session_id": origin, "ref": origin, "ambiguous": True,
+                                      "candidates": [c["ref"] for c in candidates]}
+    env = _envelope(here, 0, {}, entries)
+    out["continuation_status"] = env["nodes"][1:]
+    if env["partial"]:
+        out["partial"] = True
+        out["peers_unreachable"] = sorted(set(out.get("peers_unreachable") or []) |
+                                          set(env["peers_unreachable"]))
+
+
 def brief_all(query: str, local_brief) -> dict:
     """Local first. Only when this node can't resolve the session (or the
     query is a global ref naming a peer) ask peers; the first peer that
@@ -510,6 +620,8 @@ def brief_all(query: str, local_brief) -> dict:
         if local.get("found"):
             local = dict(local)
             local.update(node_id=node["node_id"], node_name=node["name"], local=True)
+            _resolve_continuations(local, local_brief, peers, node)
+            local["node_names"] = _node_names(node, peers)
             return local
     entries = fan_out("memory_brief", {"q": query}, peers=peers)
     env = _envelope(node, local_ms, local, entries)
@@ -524,12 +636,22 @@ def brief_all(query: str, local_brief) -> dict:
             out["node_status"] = env["nodes"]
             out["peers_unreachable"] = env["peers_unreachable"]
             out["partial"] = env["partial"]
+            _resolve_continuations(out, local_brief, federation.load_peers(), node)
+            out["node_names"] = _node_names(node, federation.load_peers())
             return out
     out = dict(local)
     out["node_status"] = env["nodes"]
     out["peers_unreachable"] = env["peers_unreachable"]
     out["partial"] = env["partial"]
     return out
+
+
+def _node_names(here: dict, peers: list[dict]) -> dict:
+    """{node_id: display name}, so a caller can label any ref in `nodes`."""
+    names = {p.get("node_id"): p.get("name") or (p.get("node_id") or "")[:8]
+             for p in peers if p.get("node_id")}
+    names[here["node_id"]] = here["name"]
+    return names
 
 
 # -- file history ------------------------------------------------------------

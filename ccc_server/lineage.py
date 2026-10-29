@@ -210,6 +210,27 @@ def chain_summary(conn: sqlite3.Connection, sid: str, session_graph_path=None, r
     }
 
 
+def continuation_links(conn: sqlite3.Connection, sid: str) -> dict:
+    """`sid`'s direct continuation neighbours, one hop each way (multi-machine
+    S6): {"predecessor": {...} | None, "successors": [{...}, ...]}.
+
+    The predecessor is the session `sid` names as its origin. When that sid
+    isn't indexed on this node (the session moved between machines), it is
+    kept with `dangling: True` -- never dropped and never guessed -- so a
+    scope=all brief can resolve it lazily on a peer. Two indexed lookups,
+    no walk, no network."""
+    origin = _sg.continuation_origin_of(conn, sid)
+    predecessor = None
+    if origin:
+        known = conn.execute("SELECT 1 FROM session_meta WHERE sid = ?", (origin,)).fetchone()
+        predecessor = {"session_id": origin, "ref": origin}
+        if not known:
+            predecessor["dangling"] = True
+    successors = [{"session_id": c, "ref": c}
+                  for c in _sg.continuation_children_of(conn, sid) if c != sid][:MAX_CHAIN_DEPTH]
+    return {"predecessor": predecessor, "successors": successors}
+
+
 def collapse_chain_hits(
     hits: list[dict],
     conn: sqlite3.Connection,

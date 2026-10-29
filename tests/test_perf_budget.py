@@ -5074,3 +5074,58 @@ def test_federation_pipe_warm_fanout_and_prewarm_tick_spawn_nothing(monkeypatch)
         federation_pipe._PIPES.clear()
         federation_pipe.reset_state()
         memory_fanout.reset_state()
+
+
+def test_memory_brief_continuation_resolution_request_bounds(monkeypatch, tmp_path):
+    """multi-machine S6: a brief whose lineage is all on this node builds no
+    peer client and sends nothing; a dangling origin costs at most one
+    routed request per paired peer (one hop, no recursion). A request per
+    successor, or a second hop, is the O(chain x peers) path S6 must avoid."""
+    import federation
+    from ccc_server import memory_fanout
+
+    here = "11111111-0000-0000-0000-00000000000a"
+    peers = [{"node_id": f"2222222{i}-0000-0000-0000-00000000000b", "name": f"n{i}",
+              "secret": "s", "transport": {"type": "ssh", "host": f"u@h{i}"}} for i in range(3)]
+    x, y = "aaaaaaaa-1111-2222-3333-444444444444", "bbbbbbbb-1111-2222-3333-444444444444"
+    built, sent = [], []
+
+    class CountingClient:
+        def __init__(self, peer, self_node_id=None):
+            built.append(peer["node_id"])
+            self.peer = peer
+
+        def request(self, method, path, body=None, timeout=30.0, pipe=False):
+            sent.append((self.peer["node_id"], body["args"]["q"]))
+            q = body["args"]["q"]
+            # Every peer answers with a session that also has a dangling
+            # origin: resolution must not follow it.
+            return {"ok": True, "result": {"query": q, "session_id": q, "found": True,
+                                           "predecessor": {"session_id": "c" * 8 + y[8:], "ref": "c" * 8 + y[8:],
+                                                           "dangling": True},
+                                           "successors": []}}
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(federation, "PeerClient", CountingClient)
+    monkeypatch.setattr(federation, "load_peers", lambda: list(peers))
+    monkeypatch.setattr(federation, "node_id", lambda: here)
+    monkeypatch.setattr(federation, "node_identity", lambda: {"node_id": here, "display_name": "mac"})
+    memory_fanout.reset_state()
+    try:
+        local_chain = {
+            y: {"query": y, "session_id": y, "found": True,
+                "predecessor": {"session_id": x, "ref": x},
+                "successors": [{"session_id": f"{i:08x}" + y[8:], "ref": f"{i:08x}" + y[8:]} for i in range(20)]},
+        }
+        out = memory_fanout.brief_all(y, lambda q: local_chain[q])
+        assert out["predecessor"]["local"] is True
+        assert built == [] and sent == [], "same-node lineage touched the network"
+
+        dangling = {y: {"query": y, "session_id": y, "found": True,
+                        "predecessor": {"session_id": x, "ref": x, "dangling": True},
+                        "successors": []}}
+        out = memory_fanout.brief_all(y, lambda q: dangling.get(q, {"query": q, "found": False}))
+        assert len(sent) <= len(peers), f"dangling origin cost {len(sent)} requests for {len(peers)} peers"
+        assert {q for _, q in sent} == {x}, "resolution followed a second hop"
+    finally:
+        memory_fanout.reset_state()
