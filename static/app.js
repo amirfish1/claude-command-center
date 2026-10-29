@@ -3545,6 +3545,8 @@
     const info = _ultraFreshExplanation(c);
     for (const row of document.querySelectorAll('#convList .conv-item[data-session-id="' + CSS.escape(sid) + '"]')) {
       if (row.dataset.sessionId !== sid) continue;
+      // Child lanes just report back to their parent: never offer Close.
+      const offerClose = info.kind === 'ready' && !row.classList.contains('is-current-child-row');
       const main = row.querySelector('.conv-main-row');
       if (main) {
         let dot = main.querySelector('.conv-working-dot');
@@ -3564,10 +3566,10 @@
           main.insertBefore(outcome, end);
         }
         // Completion can arrive after this row was rendered as Working/Next.
-        if (info.kind === 'ready' && !outcome.querySelector('.conv-ready-close')) {
+        if (offerClose && !outcome.querySelector('.conv-ready-close')) {
           outcome.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
         }
-        const closeBtn = info.kind === 'ready' && outcome.querySelector('.conv-ready-close');
+        const closeBtn = offerClose && outcome.querySelector('.conv-ready-close');
         outcome.className = 'conv-outcome is-next-step is-inline is-' + info.kind + (closeBtn ? ' has-close-btn' : '');
         outcome.title = 'Ultra-fresh · agent message\n' + info.text;
         let step = outcome.querySelector('.conv-outcome-step');
@@ -3594,10 +3596,10 @@
           if (info.kind !== 'working' && dot) dot.remove();
           if (info.kind === 'working') waLine.querySelectorAll('.wa-badge').forEach(el => el.remove());
         }
-        if (info.kind === 'ready' && waLine && !waLine.querySelector('.conv-ready-close')) {
+        if (offerClose && waLine && !waLine.querySelector('.conv-ready-close')) {
           waLine.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
         }
-        const waClose = info.kind === 'ready' && row.querySelector('.wa-line2 .conv-ready-close');
+        const waClose = offerClose && row.querySelector('.wa-line2 .conv-ready-close');
         if (waClose) { if (label) label.remove(); }
         else {
           if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
@@ -3617,8 +3619,8 @@
       if (info.kind !== 'ready') {
         row.style.removeProperty('min-height');
         row.classList.remove('is-ready-to-close');
-        row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
       }
+      if (!offerClose) row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
     }
     // Live activity invalidates any pending one-tap reply immediately.
     syncRowQuickActions(sid);
