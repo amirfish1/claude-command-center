@@ -669,6 +669,11 @@ def _init_db(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_edge_src ON edges(src);
         CREATE INDEX IF NOT EXISTS idx_edge_dst ON edges(dst);
+        -- MEMORY-20: recall maps each commit hit to the sessions that made it.
+        -- idx_edge_dst also walks every 'mentioned' edge of a commit (99.9%
+        -- of 7.7M edges on hermes-gcp): ~36 ms per recall; this is ~6k rows.
+        CREATE INDEX IF NOT EXISTS idx_edge_dst_owner ON edges(dst)
+            WHERE kind IN ('made', 'window');
 
         CREATE TABLE IF NOT EXISTS transcripts (
             path TEXT PRIMARY KEY,

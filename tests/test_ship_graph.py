@@ -1219,3 +1219,19 @@ def test_classify_non_main_commit_warm_call_spawns_no_subprocess(mock_graph_env,
 
 
 
+
+
+def test_commit_owner_edge_lookup_uses_partial_index(tmp_path):
+    # MEMORY-20: commit -> session lookups must not walk every 'mentioned'
+    # edge of a commit (99.9% of edges on a large host).
+    conn = sqlite3.connect(tmp_path / "sg.sqlite")
+    ship_graph._init_db(conn)
+    for sql, args in (
+        ("SELECT src, w FROM edges WHERE dst IN (?, ?, ?, ?) AND kind IN ('made', 'window')",
+         ("commit:a", "commit:b", "a", "b")),
+        ("SELECT src FROM edges WHERE dst IN (?, ?) AND kind IN ('made', 'window') LIMIT 1",
+         ("commit:a", "a")),
+    ):
+        plan = " ".join(r[-1] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, args))
+        assert "idx_edge_dst_owner" in plan, plan
+    conn.close()
