@@ -1,0 +1,49 @@
+name: iOS server setup
+
+on:
+  push:
+    branches: [main]
+    paths: ['ios-app/**', '.github/workflows/ios-server-setup.yml']
+  pull_request:
+    paths: ['ios-app/**', '.github/workflows/ios-server-setup.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-server-setup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ios-app/package-lock.json
+      - name: Check address validation and persistence
+        run: |
+          swiftc ios-app/ios/App/App/ServerAddress.swift ios-app/tests/main.swift -o "$RUNNER_TEMP/server-address-tests"
+          "$RUNNER_TEMP/server-address-tests"
+      - name: Install and sync native dependencies
+        working-directory: ios-app
+        run: |
+          npm ci
+          npx cap sync ios
+      - name: Build and test first launch, settings, and offline recovery
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; print(next(d["udid"] for devices in json.load(sys.stdin)["devices"].values() for d in devices if d["name"].startswith("iPhone")))')
+          xcodebuild test -workspace ios-app/ios/App/App.xcworkspace -scheme App \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -resultBundlePath "$RUNNER_TEMP/ServerSetup.xcresult" \
+            CODE_SIGNING_ALLOWED=NO
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-server-setup-results
+          path: ${{ runner.temp }}/ServerSetup.xcresult

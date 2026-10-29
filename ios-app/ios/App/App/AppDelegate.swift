@@ -26,11 +26,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // WhatsApp-style keyboard dismissal: let a downward drag on the
-        // webview's scroll view pull the keyboard away interactively.
-        if let vc = window?.rootViewController as? CAPBridgeViewController {
-            vc.webView?.scrollView.keyboardDismissMode = .interactive
-        }
+        // The active bridge configures keyboard dismissal when it loads.
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
