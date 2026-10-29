@@ -739,5 +739,108 @@ class TestExactTurnPipeline(TestSessionStatusApi):
                 self.assertEqual(self._serve(sid, path)(), ("idle", 0))
 
 
+class TestReceiptOnlyTerminal(TestExactTurnPipeline):
+    """Cycle 5: no cached app-server state (absent, empty or pruned). The
+    rollout's own exact terminal receipt proves the turn ended, so a fresh
+    rollout mtime explained by that receipt must not read as an active
+    writer. Real parser, real writer attribution, loopback HTTP and queue
+    health; nothing in the decision path is stubbed."""
+
+    AGES = (0, 19, 21)
+
+    def _receipt_witness(self, at, end):
+        return [task_started(at - 50, TURN_A), user(at - 49), tool_call(at - 3), end]
+
+    def _no_app_cases(self, sid):
+        n = self.now
+        return {
+            "absent": lambda: None,
+            "empty": lambda: self._app(sid),
+            "pruned": lambda: self._app(sid, last_turn_id=TURN_A,
+                                        last_activity_at=n - 900),
+        }
+
+    def test_receipt_only_abort_and_completion_idle_at_every_age(self):
+        for kind, end_of in (("abort", aborted), ("complete", completed)):
+            for age in self.AGES:
+                for state_kind in ("absent", "empty", "pruned"):
+                    with self.subTest(end=kind, mtime_age=age, app_state=state_kind):
+                        # Fresh clock per case: a stale now would push the
+                        # 19s case past the 20s writer window.
+                        self.now = time.time()
+                        sid = self._sid("ro")
+                        at = self.now - age
+                        path = self._file(
+                            self._receipt_witness(at, end_of(at, TURN_A)), mtime_age=age)
+                        self._no_app_cases(sid)[state_kind]()
+                        m = self.meta(path)
+                        self.assertEqual(m["last_event_type"], "result")
+                        self.assertEqual(m["last_terminal_turn_id"], TURN_A)
+                        self.assertEqual(m["current_turn_id"], "")
+                        api, direct = self._both(sid, path)
+                        self.assertEqual(api, ("idle", 0))
+                        self.assertEqual(direct, ("idle", 0))
+
+    def test_independent_write_after_receipt_stays_working(self):
+        # The receipt is 10s old but the file was written just now: that
+        # later write is independent evidence of a live writer.
+        for state_kind in ("absent", "empty"):
+            with self.subTest(app_state=state_kind):
+                self.now = time.time()
+                sid = self._sid("roind")
+                at = self.now - 10
+                path = self._file(self._receipt_witness(at, aborted(at, TURN_A)), mtime_age=0)
+                self._no_app_cases(sid)[state_kind]()
+                self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def test_idless_legacy_receipt_keeps_conservative_window(self):
+        sid = self._sid("rolegacy")
+        at = self.now
+        legacy = _ev(at, "event_msg", {"type": "task_complete", "last_agent_message": "x"})
+        path = self._file(self._receipt_witness(at, legacy), mtime_age=0)
+        self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def test_new_turn_b_after_receipt_is_not_cleared(self):
+        n = self.now
+        cases = {
+            "preprompt B": [task_started(n - 1, TURN_B)],
+            "prompted B": [task_started(n - 2, TURN_B), user(n - 1)],
+            "B then duplicate A": [task_started(n - 2, TURN_B), user(n - 1), aborted(n - 50, TURN_A)],
+            "B then unknown": [task_started(n - 2, TURN_B), user(n - 1), completed(n, "turn-elsewhere")],
+        }
+        for name, extra in cases.items():
+            for incremental in (False, True):
+                with self.subTest(case=name, incremental=incremental):
+                    sid = self._sid("rob")
+                    at = n - 20
+                    base = self._receipt_witness(at, aborted(at, TURN_A))
+                    if incremental:
+                        path = self._file(base, mtime_age=20)
+                        self.meta(path)
+                        self.append(path, extra)
+                        os.utime(path, (n, n))
+                    else:
+                        path = self._file(base + extra, mtime_age=0)
+                    api, direct = self._both(sid, path)
+                    self.assertEqual(api, ("working", 1))
+                    self.assertEqual(direct, ("working", 1))
+
+    def test_native_app_turn_b_survives_receipt_only_a(self):
+        n = self.now
+        for writer in self.WRITERS:
+            with self.subTest(active_writer=writer):
+                sid = self._sid("roappb")
+                path = self._file(self._receipt_witness(n, aborted(n, TURN_A)), mtime_age=0)
+                self._app(sid, active_turn_id=TURN_B, status="active",
+                          active_writer=writer, turn_started_at=n, last_activity_at=n)
+                self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+
+# Reuse the pipeline helpers without re-running the inherited tests.
+for _name in dir(TestExactTurnPipeline):
+    if _name.startswith("test_") and _name not in TestReceiptOnlyTerminal.__dict__:
+        setattr(TestReceiptOnlyTerminal, _name, None)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6079,6 +6079,19 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
         active_turn_id = None
         active_status = False
         ended_same_turn = True
+    elif (
+        ended_turn.get("turn_id")
+        and ended_turn.get("receipt_only")
+        and not active_turn_id
+        and not active_status
+        and not state.get("ccc_turn_start_pending")
+    ):
+        # No cached app-server turn (absent, empty or pruned state) and the
+        # rollout itself ends in an exact terminal receipt with no open turn:
+        # the receipt is the rollout's last turn event, so a fresh mtime is
+        # explained by it rather than an active writer (CCC-248). A write more
+        # than 2s after the receipt is still independent evidence.
+        ended_same_turn = True
     ccc_turn_active = bool(
         state.get("ccc_turn_start_pending")
         or (active_turn_id and active_writer == "ccc")
@@ -6119,7 +6132,7 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
         except (TypeError, ValueError):
             pass
     if mtime_recent and ended_same_turn:
-        if active_writer == "ccc":
+        if active_writer == "ccc" and not ended_turn.get("receipt_only"):
             mtime_recent = False
         else:
             try:
@@ -11744,6 +11757,21 @@ def _codex_tail_ended_app_turn(tail, app_state):
     )
 
 
+def _codex_tail_receipt_closed_turn(tail):
+    """True when the parsed rollout ends in an exact (turn-id) terminal
+    receipt with no turn open after it: no newer task_started, prompt, tool
+    or approval (CCC-248). Id-less legacy receipts don't qualify."""
+    tail = tail or {}
+    return bool(
+        tail.get("last_event_type") == "result"
+        and tail.get("last_terminal_turn_id")
+        and tail.get("last_terminal_ts")
+        and not tail.get("current_turn_id")
+        and not tail.get("pending_tool")
+        and not tail.get("needs_approval")
+    )
+
+
 def _codex_tail_terminal_is_other_turn(tail, app_state):
     """True when the rollout's last terminal receipt names a different turn
     than the app-server's active one (CCC-248). Whatever its timestamp, a
@@ -11893,6 +11921,7 @@ def _codex_state_fields(
         fields["codex_state_reason"] = _codex_app_server_thread_approval_message(app_state)
         return fields
     app_turn_ended = _codex_tail_ended_app_turn(tail, app_state)
+    tail_receipt_closed = _codex_tail_receipt_closed_turn(tail)
     try:
         # Writer attribution (desktop ↔ CCC coordination): reuses the rollout
         # stat above + the TTL-cached desktop-attachment map. Also feeds the
@@ -11905,7 +11934,13 @@ def _codex_state_fields(
                     "turn_id": tail.get("last_terminal_turn_id"),
                     "ts": tail.get("last_terminal_ts"),
                 }
-                if app_turn_ended else None
+                if app_turn_ended
+                else {
+                    "turn_id": tail.get("last_terminal_turn_id"),
+                    "ts": tail.get("last_terminal_ts"),
+                    "receipt_only": True,
+                }
+                if tail_receipt_closed else None
             ),
         )
         if note_writer_transition:
