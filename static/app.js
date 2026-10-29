@@ -40198,7 +40198,9 @@
       // Hand off: CCC tells the session it owns its ticket and watches it to
       // a close (or a "needs input" block). Any tab; a row without a ticket
       // gets one in Small bugs.
-      const handoffBtn = (ideaTicketsOn() && !isBacklogRow && !isGithubPrRow && !c.archived && !c.trashed
+      // Child lanes run, end and report back to their parent: no chips.
+      const _childLaneRow = Number(opts.currentChildDepth || 0) > 0;
+      const handoffBtn = (ideaTicketsOn() && !_childLaneRow && !isBacklogRow && !isGithubPrRow && !c.archived && !c.trashed
         && !rowHandoff(c) && !(c.idea_ticket && c.idea_ticket.closed) && !c.pending_spawn
         && lifecycleContext !== 'trash' && !sessionReadyToClose(c))
         ? '<button class="conv-lane-btn conv-handoff-btn" data-role="handoff" title="Hand off: CCC drives this to a close and only asks you if it gets stuck" aria-label="Hand off">&#129309;</button>'
@@ -40648,12 +40650,12 @@
           + (_hasNext ? 'Next step: ' + _next : '')
           + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Last reply: ' + _latest : '') + _assessmentTip;
         // A finished row's label is its Close button, after the text.
-        const _closeBtn = _kind === 'ready' && _readyToCloseRow;
+        const _closeBtn = _kind === 'ready' && _readyToCloseRow && !_childLaneRow;
         outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + (_closeBtn ? ' has-close-btn' : '') + '" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-step"' + (_closeBtn ? '' : ' data-label="' + escapeAttr(_label) + '"') + '>' + escapeHtml(_stepText) + '</span>'
             + (_closeBtn ? readyToCloseArchiveHtml() : '')
-            + attentionChipsHtml(c, _attn)
+            + (_childLaneRow ? '' : attentionChipsHtml(c, _attn))
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
@@ -40720,7 +40722,7 @@
         ? '<button type="button" class="conv-trash-btn conv-ready-archive is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">Restore</button>'
         : c.archived
           ? '<button type="button" class="conv-archive-btn conv-ready-archive is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active">Restore</button>'
-        : _readyToCloseRow ? readyToCloseArchiveHtml()
+        : (_readyToCloseRow && !_childLaneRow) ? readyToCloseArchiveHtml()
         : _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'
@@ -40784,7 +40786,7 @@
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
             + (opts.evergreenAgent ? '' : (lifetimeTokensHtml || ''))
             + '</span>'
-            + (_readyToCloseRow && !_outcomeInline ? readyToCloseArchiveHtml() : '')
+            + (_readyToCloseRow && !_outcomeInline && !_childLaneRow ? readyToCloseArchiveHtml() : '')
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Single-line evergreen variant: the badges that normally drop to a
             // second meta line sit inline here, just left of the time slot.
