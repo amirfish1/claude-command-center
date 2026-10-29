@@ -25830,10 +25830,13 @@
     }
     return hit;
   }
+  function repoInitials(repoPath, label = '') {
+    return String(label || String(repoPath || '').split('/').filter(Boolean).pop() || '?')
+      .split(/[-_\s]+/).slice(0, 2).map(word => word[0] || '').join('').toUpperCase();
+  }
   function repoAvatarHtml(repoPath, label = '', extraClass = '') {
     if (!repoPath) return '';
-    const initials = String(label || repoPath.split('/').filter(Boolean).pop() || '?')
-      .split(/[-_\s]+/).slice(0, 2).map(word => word[0] || '').join('').toUpperCase();
+    const initials = repoInitials(repoPath, label);
     return '<span class="repo-avatar ' + extraClass + '" aria-hidden="true" data-repo-avatar="' + escapeAttr(repoPath) + '">'
       + '<span class="repo-avatar-initials">' + escapeHtml(initials) + '</span>'
       + '<img src="/api/repo/avatar?repo_path=' + encodeURIComponent(repoPath) + '&v=' + ((repoAvatarHtml.versions || {})[repoPath] || '0') + '" alt="" loading="lazy" decoding="async"></span>';
@@ -25888,7 +25891,9 @@
       + ' title="' + escapeAttr(ref + (repo ? ' · ' + repo : '') + ' · ' + presentation.title) + '"'
       + ' aria-label="Open ' + noun + ' ' + escapeAttr(num) + '">'
       + background
-      + '<span class="conv-avatar-number">' + escapeHtml(num) + '</span>'
+      + '<span class="conv-avatar-stack">'
+      + '<span class="conv-avatar-initials">' + escapeHtml(repoInitials(repoPath, c.folder_label_chip || c.folder_label || repo)) + '</span>'
+      + '<span class="conv-avatar-number">' + escapeHtml(num) + '</span></span>'
       + _avatarModelBadgeHtml(presentation) + '</button>';
   }
   // Same cleanup as server _archive_list_preview, for rows that arrive with

@@ -13,26 +13,31 @@ Think of a queue as a to-do list that AI agents pull work from — instead of yo
 
 Why bother? Because it turns "I need to remember to ask 5 agents to do 5 things" into "I filed 5 tickets, go drain the queue" — and the queue survives even if your session doesn't.
 
-## The basics: enqueue, check, drain
+## The basics: add, check, drain
 
-**Enqueue** — add a ticket to a queue:
-```
-wt enqueue QUEUE_NAME "do the thing"
-```
+Every queue command takes the queue name with `-q`. (Checked against `wt 0.8.3`; run `wt <command> --help` for the full flags.)
 
-**Check status** — see what's open, claimed, or stuck:
+**Add** a ticket to a queue:
 ```
-wt status QUEUE_NAME
+wt add -q QUEUE_NAME --title "do the thing" --note "any detail a worker needs"
 ```
 
-**Drain** — have a worker pull tickets and work through them until empty:
+**Check status** to see each queue's depth, oldest-ticket age and stuck flag, then list one queue's tickets:
 ```
-wt drain QUEUE_NAME
+wt status -q QUEUE_NAME
+wt ls -q QUEUE_NAME
 ```
 
-**Wait** — block until a queue is fully drained (handy in scripts or automations):
+**Drain**: turn on auto-drain so the WatchTower service spawns workers that claim tickets until the queue is empty. `off` puts the queue in backlog mode, where tickets wait and nothing is spawned:
 ```
-wt wait QUEUE_NAME
+wt drain on QUEUE_NAME
+wt drain off QUEUE_NAME
+```
+Auto-drain only spawns workers while the WatchTower service is running (`wt start`). To work a ticket by hand in your own session, claim it with `wt claim -q QUEUE_NAME`, then `wt close REF --summary "..."` when it's done.
+
+**Wait** blocks until a queue is fully drained, which is handy in scripts or automations:
+```
+wt wait -q QUEUE_NAME
 ```
 
 That's genuinely most of it. Everything else is a variation on these four moves.
@@ -41,25 +46,26 @@ That's genuinely most of it. Everything else is a variation on these four moves.
 
 - **Batch work** — got 10 similar small fixes? File all 10 as tickets in one queue, then dispatch a few CCC sessions to drain it in parallel. Way faster than doing them one at a time in a single session.
 - **Automation handoff** — a script or hook files a ticket automatically when something needs human-in-the-loop or agent-in-the-loop attention (e.g. "flag this for review"), instead of pinging you directly.
-- **Fan-out / fan-in** — one planning session enqueues a bunch of independent tasks, several worker sessions drain them concurrently, and a final session checks `wt status` to confirm everything closed before moving on.
-- **"Park it for later"** — if you're mid-task and think of something unrelated, enqueue it instead of context-switching. Come back to the queue when you're free.
+- **Fan-out / fan-in** — one planning session files a bunch of independent tasks, several worker sessions drain them concurrently, and a final session runs `wt status` to confirm everything closed before moving on.
+- **"Park it for later"** — if you're mid-task and think of something unrelated, file it with `wt add` instead of context-switching. Come back to the queue when you're free.
 
 ## Troubleshooting
 
 **Queue looks stuck (tickets claimed but nothing's happening):**
 - Someone claimed a ticket and then their session died, crashed, or got killed mid-task — the claim never got released.
-- Run `wt status QUEUE_NAME` and look for tickets claimed a long time ago with no recent activity.
-- Use **Reconcile** to release stale claims so another worker can pick them back up. In CCC's UI this is a one-click action; on the CLI it's the reconcile step in `wt`.
+- Run `wt status -q QUEUE_NAME` (stuck flag) and `wt liveness -q QUEUE_NAME` (who owns each claimed ticket and whether it's provably still working).
+- The WatchTower reconciler releases dead claims on its own while the service is running. To free one by hand, run `wt release REF` and another worker can pick it up.
 
 **A worker restart marks in-flight tickets "needs reconciliation":**
 - That's expected, not a bug — if you restart the CCC worker mid-drain, any ticket it was actively working gets flagged so nothing silently disappears. Just hit Reconcile once and re-drain.
 
 **Nothing's picking up new tickets:**
-- Check that a session is actually pointed at the right queue name — typos in the queue name are the #1 cause of "I enqueued it and nothing happened."
-- Confirm the queue isn't paused or held.
+- Check that a session is actually pointed at the right queue name — typos in the queue name are the #1 cause of "I filed it and nothing happened."
+- Confirm auto-drain is on (`wt config -q QUEUE_NAME --json`; turn it on with `wt drain on QUEUE_NAME`) and the service is running (`wt start`).
+- Check `wt blocked` too: tickets parked for a human decision wait for `wt answer` and won't be picked up.
 
 **Tickets pile up faster than they drain:**
-- That's a signal to spin up more parallel workers on the same queue, not to panic — queues are designed for concurrent draining.
+- That's a signal to run more parallel workers on the same queue (`wt config -q QUEUE_NAME --workers N`), not to panic — queues are designed for concurrent draining.
 
 ## Going deeper
 

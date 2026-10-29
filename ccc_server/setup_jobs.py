@@ -564,7 +564,7 @@ def _read_json_body(handler):
 
 def _load_setup_html():
     try:
-        return (Path(__file__).resolve().parent.parent / "static" / "setup.html").read_text()
+        return (Path(__file__).resolve().parent.parent / "static" / "setup.html").read_text(encoding="utf-8")
     except OSError as exc:
         return f"<h1>setup.html missing</h1><pre>{exc}</pre>"
 
