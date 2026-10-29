@@ -4651,9 +4651,9 @@ class TestServerImports(unittest.TestCase):
         ]
 
         self.assertIn("async function _fetchUxqItems(allowStale)", items_fetch)
-        self.assertIn("allowStale && _uxqItemsCache.ts", items_fetch)
+        self.assertIn("if (allowStale && _uxqItemsLoaded) return _uxqItemsCache.items;", items_fetch)
         self.assertIn("async function _fetchUxqHealth(allowStale, force)", health_fetch)
-        self.assertIn("allowStale && _uxqHealthCache.ts", health_fetch)
+        self.assertIn("if (allowStale && _uxqHealthLoaded) return _uxqHealthCache;", health_fetch)
         self.assertIn("_uxqSetScopeOverride(name);", scope_handler)
         self.assertIn("$trig.classList.toggle('is-loading', !!isLoading);", loading_helper)
         self.assertIn("$busy.classList.toggle('is-loading', !!isLoading);", loading_helper)
@@ -6085,7 +6085,7 @@ class TestServerImports(unittest.TestCase):
             app_js.index("function _renderQueuePanel", app_js.index("function _uxqOpenItemModal(item)"))
         ]
 
-        self.assertIn("status === 'blocked' ? 'Agent needs your input'", modal_js)
+        self.assertIn(": 'Agent needs your input')", modal_js)
         self.assertIn("'Open';", modal_js)
 
     def test_queue_item_payload_keeps_close_report_without_watchtower_import(self):
@@ -6163,7 +6163,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
         self.assertGreater(
             app_js.index('class="fq-add-row" id="filesQueueAdd"'),
-            app_js.index("$queue.innerHTML = pendingAddsHtml + queueRowsHtml"),
+            app_js.index("$queue.innerHTML = workloadHtml + pendingAddsHtml + queueRowsHtml"),
         )
         self.assertIn('class="fq-ticket-textarea"', app_js)
         self.assertIn('rows="7"', app_js)

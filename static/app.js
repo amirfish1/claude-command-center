@@ -55599,9 +55599,9 @@
       const unfinished = inScope.filter(it => it.status !== 'closed').length;
       const working = inScope.filter(it => !it.needs_input && it.status === 'in_progress' && _hasLiveClaim(it)).length;
       const ready = workloadQueues.length && workloadQueues.every(q => q.claimable != null)
-        ? workloadQueues.reduce((n, q) => n + Number(q.claimable), 0) : '—';
+        ? workloadQueues.reduce((n, q) => n + Number(q.claimable), 0) : '-';
       const budget = workloadQueues.length && workloadQueues.every(q => q.desired_workers != null)
-        ? workloadQueues.reduce((n, q) => n + Number(q.desired_workers), 0) : '—';
+        ? workloadQueues.reduce((n, q) => n + Number(q.desired_workers), 0) : '-';
       const workloadHtml = '<div class="fq-workload-summary" role="status"'
         + ' title="All unfinished tickets in this scope, including deferred and blocked. Ready comes from scheduler eligibility; working requires a live ticket owner. Worker slots are the configured budget, not a live process count.">'
         + unfinished + ' unfinished · ' + ready + ' ready · ' + working + ' working · ' + budget + ' worker slots</div>';

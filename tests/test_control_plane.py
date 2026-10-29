@@ -270,7 +270,7 @@ class TestWorkerServiceDefinition(unittest.TestCase):
         self.assertIn('WORKER_SYSTEMD_UNIT_NAME="ccc-worker.service"', source)
         self.assertIn("ExecStart=/usr/bin/env python3 $HERE/ccc_worker.py", source)
         self.assertIn("Wants=network-online.target $WORKER_SYSTEMD_UNIT_NAME", source)
-        self.assertIn('WORKER_PLIST_LABEL="com.github.claude-command-center.worker"', source)
+        self.assertIn('WORKER_PLIST_LABEL="${CCC_WORKER_SERVICE_LABEL:-com.github.claude-command-center.worker}"', source)
         # Dashboard upgrades must not kickstart an already-running worker.
         self.assertIn(
             'if launchctl print "$(worker_service_target)" >/dev/null 2>&1; then',
