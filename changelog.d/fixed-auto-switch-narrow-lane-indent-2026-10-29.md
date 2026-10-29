@@ -1,0 +1,1 @@
+- Phone-width session rows now show the AUTO handoff switch under the ticket avatar, and child-lane titles on desktop sit right beside their small model mark.

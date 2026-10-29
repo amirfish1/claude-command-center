@@ -40760,7 +40760,9 @@
         : _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'
-        + _waAvatarHtml(c, _waTitle)
+        // Ticket rows keep the AUTO switch under the avatar here too.
+        + (autoSwitchHtml ? '<div class="wa-av-col">' + _waAvatarHtml(c, _waTitle) + autoSwitchHtml + '</div>'
+          : _waAvatarHtml(c, _waTitle))
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))

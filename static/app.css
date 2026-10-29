@@ -33494,8 +33494,17 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .conv-attn-chip:hover, .conv-attn-chip:focus-visible { color: var(--text); border-color: var(--text); }
 .conv-attn-chip:disabled { opacity: .6; cursor: default; }
 
-/* AUTO switch under a ticket row's avatar: who drives the work. */
-#convList .conv-item .conv-main-row > .conv-auto-switch {
+/* AUTO switch under a ticket row's avatar: who drives the work. On narrow
+   screens it sits in .wa-av-col below the phone-row avatar. */
+#convList .conv-item .wa-av-col {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+#convList .conv-item .conv-main-row > .conv-auto-switch,
+#convList .conv-item .wa-av-col > .conv-auto-switch {
   position: absolute;
   left: var(--conv-icon-left);
   top: 42px;
@@ -33515,16 +33524,21 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   transition: opacity 0.12s ease;
 }
 #convList .conv-item .conv-main-row.has-inline-step > .conv-auto-switch { top: 58px; left: calc(var(--conv-icon-left) + 7px); }
+#convList .conv-item .wa-av-col > .conv-auto-switch { position: static; flex: 0 0 auto; opacity: 0.7; }
 #convList .conv-item:hover .conv-main-row > .conv-auto-switch.is-off { opacity: 0.85; }
 #convList .conv-item .conv-main-row > .conv-auto-switch.is-on,
-#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused { opacity: 1; color: #fff; border-color: transparent; }
-#convList .conv-item .conv-main-row > .conv-auto-switch.is-on {
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-on,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-paused { opacity: 1; color: #fff; border-color: transparent; }
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-on,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-on {
   background: linear-gradient(90deg, #6d4bd8, #a98bff, #6d4bd8);
   background-size: 200% 100%;
   animation: conv-auto-flow 2.4s linear infinite;
   box-shadow: 0 0 6px rgba(150, 120, 255, 0.55);
 }
-#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused { background: #b7791f; }
+#convList .conv-item .conv-main-row > .conv-auto-switch.is-paused,
+#convList .conv-item .wa-av-col > .conv-auto-switch.is-paused { background: #b7791f; }
 .conv-auto-label { position: relative; pointer-events: none; }
 @keyframes conv-auto-flow { from { background-position: 200% 0; } to { background-position: 0 0; } }
 @media (prefers-reduced-motion: reduce) { .conv-auto-switch.is-on { animation: none; } }
@@ -33547,4 +33561,6 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 }
 #convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine,
 #convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine svg { width: 11px; height: 11px; opacity: 0.8; filter: none; }
-.conv-item.is-current-child-row:has(.conv-idea-avatar.is-child-mini) { --conv-content-left: calc(var(--conv-icon-left) + 22px); }
+/* Doubled id + :has(mini) outranks the CCC-261 desktop child-row indent
+   (+36px, sized for the old avatar), so lane titles start beside the mark. */
+#convList#convList .conv-item.is-current-child-row:has(.conv-idea-avatar.is-child-mini) { --conv-content-left: calc(var(--conv-icon-left) + 22px); }
