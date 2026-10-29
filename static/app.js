@@ -2562,7 +2562,11 @@
   // after a restart) it waited that long client-side. It skips the queue.
   function _backgroundApiReadSkipsQueue(input) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
-    return url.startsWith('/api/conversations/list');
+    // Queue panels also need their status and ticket snapshot to paint.
+    // These reads are coalesced by their caches; they must not wait behind
+    // unrelated service probes or a slow live-activity response.
+    return url.startsWith('/api/conversations/list')
+      || /^\/api\/queue\/(status|list)(?:[?]|$)/.test(url);
   }
 
   function backgroundApiFetch(input, init) {
@@ -50928,6 +50932,12 @@
     return !!(queuePane && queuePane.classList.contains('is-active'));
   }
 
+  function _queueSnapshotIsForeground() {
+    let tab = '';
+    try { tab = localStorage.getItem('ccc-sidebar-tab') || ''; } catch (_) {}
+    return tab === 'workers' || tab === 'queues' || _queuePanelIsVisible();
+  }
+
   let _uxqItemsCache = { ts: 0, items: [], syncedAt: 0 };
   let _uxqItemsPromise = null;
   // Every server-confirmed ticket mutation advances this version. A list read
@@ -50963,7 +50973,7 @@
     const requestVersion = _uxqItemsVersion;
     _uxqItemsPromise = (async () => {
     try {
-      const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store' });
+      const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store', cccPriority: _queueSnapshotIsForeground() ? 'user' : undefined });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
       if (requestVersion !== _uxqItemsVersion) return _uxqItemsCache.items;
@@ -51091,7 +51101,7 @@
     const seq = ++_uxqHealthReqSeq;
     _uxqHealthPromise = (async () => {
     try {
-      const res = await backgroundApiFetch('/api/queue/status', { cache: 'no-store' });
+      const res = await backgroundApiFetch('/api/queue/status', { cache: 'no-store', cccPriority: _queueSnapshotIsForeground() ? 'user' : undefined });
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data && data.projects) ? data.projects
         : (Array.isArray(data) ? data : []);
@@ -53290,10 +53300,9 @@
     // working tickets, and remote claims must not imply local liveness.
     const workingCount = rows.filter(r => r.ref || r.stage).length;
     const waitingCount = rows.filter(r => !r.ref && !r.stage && r.chips.length).length;
-    const summary = [String(workingCount),
+    const summary = [!health.ts ? 'loading workers' : !_uxqItemsCache.ts ? 'loading tickets' : String(workingCount),
       idleQueues.length ? idleQueues.length + ' idle' : '',
       waitingCount ? waitingCount + ' waiting' : '',
-      !_uxqItemsCache.ts && workers.length ? 'loading tickets' : '',
       'this machine'].filter(Boolean).join(' · ');
     const rowsHtml = rows.map(r => {
         // CCC-1050: one-click kill — releases the worker from queue staffing
