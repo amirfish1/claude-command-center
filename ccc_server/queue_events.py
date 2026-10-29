@@ -2397,6 +2397,12 @@ def resume_session_codex(
         if routed is not None:
             return routed
     text = _core._strip_ccc_session_state_instruction(text)
+    if text and not _from_queue:
+        # A WatchTower app-server worker is mid-task by construction: steer it
+        # now rather than parking behind the writer gates below.
+        hosted = _core._codex_wt_app_worker_delivery(session_id, text)
+        if hosted is not None:
+            return hosted
     if (
         _from_queue
         and not _native_delivery
