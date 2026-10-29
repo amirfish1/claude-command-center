@@ -5365,3 +5365,44 @@ def test_send_json_reuses_encoded_body_for_memoised_payload():
         assert len(calls) == 2  # identity encoding is a separate entry
     finally:
         server.json.dumps = real
+
+
+def test_tts_clip_cache_does_not_rescan_folder_per_put_or_get(tmp_path, monkeypatch):
+    """Clip put/get must use the in-memory folder index, not a stat per clip."""
+    from ccc_server import free_runtime as fr
+    monkeypatch.setattr(fr, "_LOCAL_TTS_DIR", tmp_path)
+    monkeypatch.setattr(fr, "local_tts_precision", lambda: "int8")
+    fr._CLIP_DISK_INDEX.clear()
+    fr._CLIP_CACHE.clear()
+    voice = next(iter(fr.KOKORO_VOICES))
+    for i in range(300):
+        fr._clip_cache_put(("clip %d" % i, voice), b"x" * 64)
+    scans = []
+    real = os.scandir
+    monkeypatch.setattr(os, "scandir", lambda *a, **k: (scans.append(1), real(*a, **k))[1])
+    for i in range(300, 340):
+        fr._clip_cache_put(("clip %d" % i, voice), b"x" * 64)
+    fr._CLIP_CACHE.clear()
+    got = fr._clip_cache_get_any_voice("clip 5")
+    assert got and got[0] == voice
+    assert not scans, "clip cache rescanned the folder"
+    # eviction still bounded by the disk cap
+    monkeypatch.setattr(fr, "_CLIP_DISK_MAX_BYTES", 64 * 100)
+    fr._clip_cache_put(("evict", voice), b"x" * 64)
+    assert len(list((tmp_path / "cache" / "int8").glob("*.mp3"))) <= 100
+
+
+def test_question_tags_sources_walk_is_memoised_between_scans(tmp_path, monkeypatch):
+    from ccc_server import question_tags as qt
+    monkeypatch.setattr(qt, "_projects_root", lambda: tmp_path)
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "a.jsonl").write_text("")
+    qt._sources_memo.update(at=0.0, key=None, out=[])
+    walks = []
+    real = qt._sources_walk
+    monkeypatch.setattr(qt, "_sources_walk", lambda h: (walks.append(1), real(h))[1])
+    for _ in range(10):
+        qt._sources(use_memo=True)
+    assert len(walks) == 1
+    qt._sources(use_memo=False)
+    assert len(walks) == 2

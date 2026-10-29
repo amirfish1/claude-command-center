@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 import socket
 import threading
+import time
 
 from ccc_server import core as _core
 
@@ -694,13 +695,46 @@ def _clip_disk_path(key):
     return _clip_disk_dir() / ("%s-%s.mp3" % (_clip_text_hash(key[0]), key[1]))
 
 
+# In-memory index of the on-disk clip folder: {folder: {name: [mtime, size]}}.
+# Built by one scandir the first time a folder is used, then kept current by
+# this module's own reads, writes and evictions. Rescanning the folder (a stat
+# per clip) on every put/get was ~14% of busy dashboard samples on a VM.
+_CLIP_DISK_INDEX = {}
+_CLIP_DISK_INDEX_LOCK = threading.Lock()
+
+
+def _clip_disk_index(folder):
+    """Caller must hold _CLIP_DISK_INDEX_LOCK."""
+    key = str(folder)
+    idx = _CLIP_DISK_INDEX.get(key)
+    if idx is None:
+        idx = {}
+        try:
+            for entry in os.scandir(folder):
+                if entry.name.endswith(".mp3"):
+                    st = entry.stat()
+                    idx[entry.name] = [st.st_mtime, st.st_size]
+        except OSError:
+            pass
+        _CLIP_DISK_INDEX[key] = idx
+    return idx
+
+
 def _clip_disk_read(path):
     try:
         data = path.read_bytes()
         os.utime(path)   # mtime = last use, for eviction
-        return data or None
     except OSError:
+        with _CLIP_DISK_INDEX_LOCK:
+            idx = _CLIP_DISK_INDEX.get(str(path.parent))
+            if idx is not None:
+                idx.pop(path.name, None)
         return None
+    with _CLIP_DISK_INDEX_LOCK:
+        idx = _CLIP_DISK_INDEX.get(str(path.parent))
+        if idx is not None and path.name in idx:
+            idx[path.name][0] = time.time()
+    return data or None
 
 
 def _clip_disk_write(key, data):
@@ -711,20 +745,22 @@ def _clip_disk_write(key, data):
         temporary = target.with_suffix(".tmp%d" % threading.get_ident())
         temporary.write_bytes(data)
         temporary.replace(target)
-        files = []
-        for entry in os.scandir(folder):
-            if entry.name.endswith(".mp3"):
-                st = entry.stat()
-                files.append((st.st_mtime, st.st_size, entry.path))
-        total = sum(f[1] for f in files)
-        for _mtime, size, path in sorted(files):
-            if total <= _CLIP_DISK_MAX_BYTES:
-                break
-            try:
-                os.remove(path)
-                total -= size
-            except OSError:
-                pass
+        with _CLIP_DISK_INDEX_LOCK:
+            idx = _clip_disk_index(folder)
+            idx[target.name] = [time.time(), len(data)]
+            total = sum(v[1] for v in idx.values())
+            if total > _CLIP_DISK_MAX_BYTES:
+                for name, (_mtime, size) in sorted(idx.items(), key=lambda kv: kv[1][0]):
+                    if total <= _CLIP_DISK_MAX_BYTES:
+                        break
+                    try:
+                        os.remove(folder / name)
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        continue
+                    idx.pop(name, None)
+                    total -= size
     except OSError:
         pass
 
@@ -748,11 +784,10 @@ def _clip_cache_get_any_voice(text):
                 _CLIP_CACHE[key] = data
                 return key[1], data
     prefix = _clip_text_hash(text) + "-"
-    try:
-        hits = sorted((e.stat().st_mtime, e.name) for e in os.scandir(_clip_disk_dir())
-                      if e.name.startswith(prefix) and e.name.endswith(".mp3"))
-    except OSError:
-        return None
+    folder = _clip_disk_dir()
+    with _CLIP_DISK_INDEX_LOCK:
+        idx = _clip_disk_index(folder)
+        hits = sorted((v[0], name) for name, v in idx.items() if name.startswith(prefix))
     for _mtime, name in reversed(hits):
         voice = name[len(prefix):-len(".mp3")]
         if voice not in KOKORO_VOICES:

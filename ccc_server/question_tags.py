@@ -52,7 +52,9 @@ _loaded = False
 _scanning = False
 _ready = False  # a full index exists (loaded from disk or first scan done)
 _last_scan = 0.0
-_SCAN_MIN_GAP = 20.0
+_SCAN_MIN_GAP = 60.0
+_SOURCES_TTL = 120.0  # new transcripts show up within this; growth of known files is stat-checked every scan
+_sources_memo: dict = {"at": 0.0, "key": None, "out": []}
 
 
 def _state_path() -> Path:
@@ -298,9 +300,22 @@ def scan_devin_db(path: str, cursor: int = 0) -> tuple[list[dict], int]:
     return events, hi
 
 
-def _sources() -> list[tuple[str, str, str]]:
-    """(cache key, kind, path) for every transcript store that exists."""
+def _sources(use_memo: bool = False) -> list[tuple[str, str, str]]:
+    """(cache key, kind, path) for every transcript store that exists.
+
+    `use_memo` reuses the last directory walk for _SOURCES_TTL: the glob over
+    every project dir was the top qtags-scan cost on a large host."""
     home = Path(os.path.expanduser("~"))
+    key = (str(home), str(_projects_root()))
+    memo = _sources_memo
+    if use_memo and memo["key"] == key and time.time() - memo["at"] < _SOURCES_TTL:
+        return list(memo["out"])
+    out = _sources_walk(home)
+    memo.update(at=time.time(), key=key, out=list(out))
+    return out
+
+
+def _sources_walk(home: Path) -> list[tuple[str, str, str]]:
     out = []
 
     def glob(root: Path, pattern: str, kind: str):
@@ -344,7 +359,7 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
     try:
         seen = set()
         dirty = False
-        for key, kind, path in _sources():
+        for key, kind, path in _sources(use_memo=not force):
             seen.add(key)
             try:
                 m, sz = _stat(kind, path)
