@@ -1,0 +1,8 @@
+[Unit]
+Description=CCC daily release gate (waives unless repos are clean and enough changelog entries)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Apps/claude-command-center
+ExecStart=%h/Apps/claude-command-center/scripts/release-daily.sh
+TimeoutStartSec=3h

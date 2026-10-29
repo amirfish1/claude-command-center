@@ -143,33 +143,35 @@ class DumpStacksOnLivenessMissTests(unittest.TestCase):
     def setUpClass(cls):
         cls.server = importlib.import_module("server")
 
-    def test_noop_without_sigusr2_or_dump_file(self):
+    def test_noop_without_dump_file(self):
         server = self.server
         with mock.patch.object(server, "_PYTHON_STACK_DUMP_FILE", None), \
+             mock.patch.object(server, "_dump_python_stacks") as dump, \
              mock.patch.object(server.os, "kill") as kill:
             server._codex_app_server_dump_stacks_on_liveness_miss("miss")
+        dump.assert_not_called()
         kill.assert_not_called()
 
-    def test_writes_a_marker_and_raises_sigusr2_against_self(self):
+    def test_dumps_in_process_without_signalling_self(self):
+        # CCC-145: signalling our own process into a faulthandler dump could
+        # segfault; the dump must be plain Python with no os.kill.
         server = self.server
         dump_file = mock.Mock()
         with mock.patch.object(server, "_PYTHON_STACK_DUMP_FILE", dump_file), \
-             mock.patch.object(server.os, "kill") as kill, \
-             mock.patch.object(server.os, "getpid", return_value=4242):
+             mock.patch.object(server.os, "kill") as kill:
             server._codex_app_server_dump_stacks_on_liveness_miss("wedge-threshold")
-        dump_file.write.assert_called_once()
-        self.assertIn("wedge-threshold", dump_file.write.call_args.args[0])
-        self.assertIn("pid=4242", dump_file.write.call_args.args[0])
-        dump_file.flush.assert_called_once()
-        kill.assert_called_once_with(4242, server.signal.SIGUSR2)
+        kill.assert_not_called()
+        written = "".join(c.args[0] for c in dump_file.write.call_args_list)
+        self.assertIn("app-server liveness miss (wedge-threshold)", written)
+        self.assertIn("Thread 0x", written)
+        self.assertIn("(current thread)", written)
 
-    def test_swallows_oserror_from_kill(self):
+    def test_swallows_write_errors(self):
         server = self.server
         dump_file = mock.Mock()
-        with mock.patch.object(server, "_PYTHON_STACK_DUMP_FILE", dump_file), \
-             mock.patch.object(server.os, "kill", side_effect=OSError("nope")):
+        dump_file.write.side_effect = OSError("nope")
+        with mock.patch.object(server, "_PYTHON_STACK_DUMP_FILE", dump_file):
             server._codex_app_server_dump_stacks_on_liveness_miss("miss")  # must not raise
-
 
 if __name__ == "__main__":
     unittest.main()

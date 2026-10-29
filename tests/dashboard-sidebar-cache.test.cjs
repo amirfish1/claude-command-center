@@ -16,6 +16,7 @@ function harness() {
     localStorage: {
       getItem: key => storage.get(key) || null,
       setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
     },
     window: { requestIdleCallback: fn => idle.push(fn) },
     _archiveWindow: () => '7d',
@@ -30,7 +31,9 @@ function harness() {
     this.schedule = _scheduleArchiveSidebarCache;
     this.paint = _paintArchiveSidebarCache;
     this.state = () => ({ archiveLoaded, archiveData, _archiveFromLocalCache, archiveDataWindow });
-    this.key = ARCHIVE_SIDEBAR_CACHE_KEY;`, context);
+    this.legacyKey = ARCHIVE_SIDEBAR_CACHE_KEY;
+    this.key = _archiveSidebarCacheKey('7d');
+    this.keyFor = _archiveSidebarCacheKey;`, context);
   return { context, storage, idle, paints };
 }
 
@@ -141,4 +144,15 @@ test('network failure keeps the preview; successful empty history removes it', a
       assert.equal(c.state()._archiveFromLocalCache, false);
     }
   }
+});
+
+test('each window keeps its own snapshot so tabs on different windows do not evict each other', () => {
+  const { context: c, storage } = harness();
+  storage.set(c.legacyKey, 'stale');
+  c.write([{ id: 'week' }], '7d');
+  c.write([{ id: 'all' }], 'all');
+  assert.equal(storage.has(c.legacyKey), false);
+  assert.equal(c.read('7d')[0].id, 'week');
+  assert.equal(c.read('all')[0].id, 'all');
+  assert.equal(c.read('8h'), null);
 });

@@ -48,7 +48,9 @@ def test_etime_parse():
 
 def test_pick_owner_single_and_ambiguous():
     a, b, c = ({"pid": n} for n in (1, 2, 3))
-    assert sg.pick_headless_exec_owner([a], None, {}, 1000) is a
+    assert sg.pick_headless_exec_owner([a], None, {}, 1000) is None
+    assert sg.pick_headless_exec_owner([a], 900, {1: 100}, 1000) is a
+    assert sg.pick_headless_exec_owner([a], 100, {1: 100}, 1000) is None
     assert sg.pick_headless_exec_owner([a, b], None, {}, 1000) is None
     # a started 100s ago, b 5000s ago; session started 120s before "now"
     now = 10000.0
@@ -99,3 +101,52 @@ def test_headless_exec_refusal_message(monkeypatch):
     assert "can't be steered" in res["error"] and "Stop" in res["error"]
     monkeypatch.setattr(server, "find_headless_codex_exec_owner", lambda sid, cwd=None: None)
     assert codex_mod._codex_headless_exec_refusal("sid", "steered") is None
+
+
+def test_single_exec_in_same_directory_needs_matching_rollout_start(tmp_path, monkeypatch):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {
+        "timestamp": "2026-09-30T14:12:59Z", "originator": "codex_exec"}}) + "\n")
+    started = sg.codex_rollout_exec_meta(rollout)["started_at"]
+    monkeypatch.setattr(server, "_resolve_codex_rollout_path", lambda sid: rollout)
+    proc = {"pid": 123, "command": EXEC_CMD, "cwd": str(tmp_path)}
+    monkeypatch.setattr(sg, "find_live_codex_processes", lambda: [proc])
+    monkeypatch.setattr(sg.time, "time", lambda: started + 5000)
+    monkeypatch.setattr(sg, "_ps_etimes", lambda pids: {123: 10})
+    assert sg.find_headless_codex_exec_owner("native-session", str(tmp_path)) is None
+    monkeypatch.setattr(sg, "_ps_etimes", lambda pids: {123: 5000})
+    assert sg.find_headless_codex_exec_owner("native-session", str(tmp_path)) is proc
+
+
+def test_steer_to_wt_app_server_worker_goes_through_wt_not_ccc_app_server(monkeypatch, tmp_path):
+    """CODEX-CCC-WT-10: a thread hosted by a WatchTower app-server worker is
+    steered via `wt codex-app steer` (the worker's own server); CCC's own
+    app-server would be a second writer. Threads without a worker record
+    never spawn `wt`."""
+    sid = "11111111-2222-7333-8444-555555555555"
+    calls = tmp_path / "calls.txt"
+    fake_wt = tmp_path / "wt"
+    fake_wt.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"open({str(calls)!r}, 'a').write(json.dumps([sys.argv[1:], sys.stdin.read()]) + '\\n')\n"
+        "print(json.dumps({'ok': True, 'via': 'wt-app-worker-steer', 'turn_id': 't1'}))\n"
+    )
+    fake_wt.chmod(0o755)
+    monkeypatch.setattr(server, "_WT_HOME", tmp_path)
+    monkeypatch.setattr(server, "_wt_cli_path", lambda: str(fake_wt))
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("CCC app-server path reached for a WT-hosted thread")
+    monkeypatch.setattr(server, "_codex_headless_exec_refusal", _must_not_run)
+    monkeypatch.setattr(server, "_resume_session_codex_native_delivery", _must_not_run)
+
+    assert codex_mod._codex_wt_app_worker_delivery(sid, "hi") is None
+    assert not calls.exists()
+
+    (tmp_path / "codex-app").mkdir()
+    (tmp_path / "codex-app" / f"{sid}.json").write_text("{}")
+    res = server.resume_session_codex(sid, "REPORT-TOKEN", steer=True, _native_delivery=True)
+    assert res["ok"] is True and res["via"] == "wt-app-worker-steer"
+    argv, text = json.loads(calls.read_text().splitlines()[0])
+    assert argv == ["codex-app", "steer", sid] and text == "REPORT-TOKEN"

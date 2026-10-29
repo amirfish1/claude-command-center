@@ -13,10 +13,12 @@ Used by install.sh and run.sh. A clean machine with another program on 8090
 used to get a bind traceback after the worker had already started; this
 check runs first so the user sees one clear line instead.
 """
+import errno
 import json
 import socket
 import sys
 import urllib.request
+from pathlib import Path
 
 
 def _bindable(host: str, port: int) -> bool:
@@ -26,7 +28,11 @@ def _bindable(host: str, port: int) -> bool:
     try:
         sock.bind((host, port))
         return True
-    except OSError:
+    except OSError as err:
+        if getattr(err, "errno", None) in (errno.EADDRNOTAVAIL, errno.ENETUNREACH):
+            # Address not assigned to this machine yet (e.g. during boot before
+            # tailscaled assigns the IP). Not busy -- it's unassigned.
+            return True
         return False
     finally:
         sock.close()
@@ -35,6 +41,15 @@ def _bindable(host: str, port: int) -> bool:
 def state(port: int, host: str = "") -> str:
     # Loopback and the wildcard both, because macOS lets a wildcard bind
     # succeed beside a loopback listener; plus the configured bind host.
+    if not host:
+        try:
+            net_cfg = Path.home() / ".claude" / "command-center" / "network.json"
+            if net_cfg.exists():
+                cfg_data = json.loads(net_cfg.read_text())
+                if isinstance(cfg_data, dict) and cfg_data.get("bind_host"):
+                    host = str(cfg_data["bind_host"]).strip()
+        except Exception:
+            pass
     hosts = ["127.0.0.1", "0.0.0.0"] + ([host] if host and host not in ("localhost", "127.0.0.1", "0.0.0.0") else [])
     if all(_bindable(h, port) for h in hosts):
         return "free"
@@ -45,6 +60,14 @@ def state(port: int, host: str = "") -> str:
             return "ccc"
     except Exception:
         pass
+    if host and host not in ("localhost", "127.0.0.1", "0.0.0.0"):
+        try:
+            with urllib.request.urlopen(f"http://{host}:{port}/api/version", timeout=2) as resp:
+                data = json.loads(resp.read(4096) or b"{}")
+            if isinstance(data, dict) and data.get("version") and data.get("code_rev") is not None:
+                return "ccc"
+        except Exception:
+            pass
     return "busy"
 
 

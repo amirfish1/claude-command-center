@@ -1,11 +1,12 @@
 # Caddyfile — TLS + HTTP Basic auth in front of Claude Command Center.
 #
-# Caddy is the only reachable surface in the hardened stack. It:
+# Caddy is the remote-facing surface in this opt-in stack. It:
 #   - Terminates TLS on :8443 using a locally-generated cert (Caddy's own
 #     internal CA — no public ACME, since this is localhost/private).
 #   - Requires HTTP Basic auth before proxying anything to CCC.
 #   - Forwards authenticated traffic to the `ccc` service on the internal
-#     Docker network, which is not reachable from the host or LAN directly.
+#     Docker network. Native Linux host programs can bypass Caddy by
+#     connecting directly to the backend bridge IP; host isolation is not provided.
 #
 # The username + bcrypt hash come from the environment (set in
 # .env.hardened): CCC_BASIC_AUTH_USER and CCC_BASIC_AUTH_HASH. Generate a

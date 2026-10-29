@@ -1278,7 +1278,7 @@ def _other_instance_responding(port):
 # Nothing in service.err.log or python-stacks.log recorded the transition; the
 # only thing that ever noticed was `run.sh`'s duplicate-guard, ~10 minutes
 # later, on an unrelated fresh invocation (see `_check_duplicate_repo_instance`
-# above). The existing SIGUSR2 stack dumper (`_install_python_stack_dump_handler`)
+# above). The existing stack dumper (`_install_python_stack_dump_handler`)
 # only ever fires from the Codex app-server's own liveness probe -- a
 # different subsystem entirely -- so a hang in the dashboard's own HTTP accept
 # loop had no monitor and left no evidence.
@@ -1288,7 +1288,7 @@ def _other_instance_responding(port):
 # systematic-debugging this adds cheap, periodic self-probing instead of
 # guessing at a patch. It reuses the exact same probe `_other_instance_responding`
 # already makes against a *peer* CCC instance at startup, aimed at this
-# process's own port, plus the existing SIGUSR2 all-thread dump on repeated
+# process's own port, plus the existing all-thread stack dump on repeated
 # misses. One local HTTP GET every 5 minutes is negligible next to the
 # 30s-2h loops already running (idle reaper, telemetry, engine maintenance).
 _SELF_HEALTH_CHECK_INTERVAL_S = 300  # 5 min between self-probes.
@@ -1301,24 +1301,20 @@ _SELF_HEALTH_CHECK_FAIL_THRESHOLD = 2
 def _dump_stacks_on_self_health_miss(port, consecutive_misses):
     """All-thread traceback dump when the dashboard misses its own probe.
 
-    Reuses the SIGUSR2 handler installed by `_install_python_stack_dump_handler`
-    (see also `_codex_app_server_dump_stacks_on_liveness_miss`, the same
-    pattern for the Codex app-server subprocess) instead of duplicating dump
-    logic. Best-effort and silent on failure -- this must never be able to
-    take down the process it's trying to diagnose.
+    Reuses `_dump_python_stacks` (see also
+    `_codex_app_server_dump_stacks_on_liveness_miss`, the same pattern for the
+    Codex app-server subprocess) instead of duplicating dump logic.
+    Best-effort and silent on failure -- this must never be able to take down
+    the process it's trying to diagnose.
     """
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None or _core._PYTHON_STACK_DUMP_FILE is None:
+    if _core._PYTHON_STACK_DUMP_FILE is None:
         return
     try:
-        _core._PYTHON_STACK_DUMP_FILE.write(
-            f"\n=== dashboard self-health-check miss (port={port}, "
-            f"{consecutive_misses} consecutive) pid={os.getpid()} "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC ===\n"
+        _core._dump_python_stacks(
+            f"dashboard self-health-check miss (port={port}, "
+            f"{consecutive_misses} consecutive)"
         )
-        _core._PYTHON_STACK_DUMP_FILE.flush()
-        os.kill(os.getpid(), sigusr2)
-    except OSError:
+    except Exception:
         pass
 
 

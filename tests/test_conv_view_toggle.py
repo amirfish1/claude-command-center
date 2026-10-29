@@ -58,7 +58,7 @@ class ConvViewToggleTest(unittest.TestCase):
         js = _read("static/app.js")
         css = _read("static/app.css")
         self.assertIn("function _ccMarkRuns(view)", js)
-        self.assertIn("if (active.length >= 2 || (active.length && prevText)) {", js)
+        self.assertIn("if (active.length >= 2 || (active.length && prevText)", js)
         # Devin/Codex/ACP: tool calls and thinking live inside the
         # .event.assistant next to the text, so they are units too.
         self.assertIn("else if (cc.contains('tool-call')) { found = true; units.push({ el: c, kind: 'tool', calls: 1 }); }", js)
@@ -90,7 +90,7 @@ class ConvViewToggleTest(unittest.TestCase):
     def test_compact_tones_down_text(self):
         css = _read("static/app.css")
         # ID-level specificity beats the stitch theme's 0,9,0 !important.
-        self.assertIn("body.conv-compact:not(#cc-compact) .conversations-view .event.assistant .assistant-text {", css)
+        self.assertIn("body.conv-compact:not(#cc-compact) .conversations-view .event.assistant .assistant-text,", css)
         self.assertIn("font-weight: 400 !important; letter-spacing: normal !important;", css)
 
 

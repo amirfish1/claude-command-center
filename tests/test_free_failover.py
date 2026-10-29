@@ -392,6 +392,40 @@ class AutoResumeArmTests(_FailoverBase):
         rec = self._failover_store()[sid]
         self.assertTrue(rec["auto_resume_done"])
 
+    def test_wake_ledger_refuses_a_second_wake_without_progress(self):
+        """RESIL-5: the previous automatic wake made no progress (unknown
+        transcript), so the armed resume must not send "continue" again and
+        the owner is told instead."""
+        from ccc_server import notify, wake_guard
+        sid = "dddddddd-1111-2222-3333-444444444444"
+        ledger = str(self.server.COMMAND_CENTER_STATE_DIR / "session-wakes.json")
+        self.assertEqual(wake_guard.request(sid, source="inject-recovery", path=ledger,
+                                            notify=lambda d: None), (True, "ok"))
+        self.server._save_usage_limit_resume_entry(
+            sid, self._tracked_entry(sid, resume_in=-1))
+        self.assertTrue(self.server.free_failover_arm(sid)["ok"])
+        inject = mock.Mock(return_value={"ok": True, "via": "test"})
+        posted = mock.Mock(return_value=({"ok": True}, 200))
+        patches = self._no_candidates() + [
+            mock.patch.object(
+                self.server, "_usage_limit_session_path", return_value=None),
+            mock.patch.object(
+                self.server, "_inject_text_into_session", inject),
+            mock.patch.object(notify, "post", posted),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            self.server._usage_limit_scan_once(now=time.time())
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        inject.assert_not_called()
+        posted.assert_called_once()
+        rec = self._failover_store()[sid]
+        self.assertTrue(rec["auto_resume_done"])
+        self.assertEqual(rec["auto_resume_error"], "wake_guard:no_progress")
+
     def test_unarmed_due_stop_stays_inert(self):
         """Approval required: detection alone must never send."""
         sid = "ffffffff-1111-2222-3333-444444444444"

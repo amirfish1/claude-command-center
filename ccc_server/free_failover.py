@@ -1132,6 +1132,27 @@ def _free_failover_fire_auto_resume(sid, entry):
             "auto_resume_note": "session_resumed_on_its_own",
         })
         return
+    # RESIL-5: every unattended wake goes through the shared wake ledger
+    # (per-session cap + "did the last wake make progress?").
+    from ccc_server import wake_guard
+    allowed, why = wake_guard.request(
+        sid, source="free-failover-reset", incident=str(detected_at),
+        transcript_path=str(path) if newest_mtime else None,
+        path=str(_core.COMMAND_CENTER_STATE_DIR / "session-wakes.json"),
+    )
+    if not allowed:
+        _free_failover_save(sid, {
+            "auto_resume": False, "auto_resume_done": True,
+            "auto_resume_error": f"wake_guard:{why}",
+        })
+        try:
+            _core._log_activity(
+                "free-failover", "AUTO_RESUME_GUARDED",
+                f"session={sid} engine={engine} reason={why}",
+            )
+        except Exception:
+            pass
+        return
     try:
         result = _core._inject_text_into_session(
             sid, "continue", mode="send", source="free-failover-reset",

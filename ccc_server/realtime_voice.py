@@ -144,6 +144,7 @@ def _default_config():
         "idle_seconds": DEFAULT_IDLE_SECONDS,
         "save_transcripts": False,
         "allow_api_fallback": True,
+        "show_mobile_btn": True,
     }
 
 
@@ -175,6 +176,7 @@ def _config_sanitize(cfg):
         out["idle_seconds"] = DEFAULT_IDLE_SECONDS
     out["save_transcripts"] = bool(cfg.get("save_transcripts"))
     out["allow_api_fallback"] = bool(cfg.get("allow_api_fallback", True))
+    out["show_mobile_btn"] = bool(cfg.get("show_mobile_btn", True))
     return out
 
 

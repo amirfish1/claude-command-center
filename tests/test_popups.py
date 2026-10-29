@@ -33,9 +33,10 @@ def test_every_popup_has_a_gate():
         "fleet-limit": "static/fleet-failover.js",
         "leftover-offer": "static/leftover.js",
         "leftover-notification": "static/leftover.js",
+        "restart-interrupted": "static/restart-recovery.js",
     }
     assert set(gates) | {"notify-task", "notify-digest", "notify-milestone",
-                         "notify-other"} == set(popups.ALL)
+                         "notify-other", "notify-session-died"} == set(popups.ALL)
     for popup_id, path in gates.items():
         src = (ROOT / path).read_text()
         assert re.search(r"cccPopups\.allowed\(['\"]%s['\"]\)" % popup_id, src), path
@@ -46,7 +47,7 @@ def test_gate_loads_before_the_popups():
     html = (ROOT / "static" / "index.html").read_text()
     first = html.index('src="/static/popups.js"')
     for name in ("limit-failover", "fleet-failover", "onboarding/onboarding", "savings", "notify",
-                 "router-detected", "star-ask", "leftover"):
+                 "router-detected", "star-ask", "leftover", "restart-recovery"):
         assert first < html.index('src="/static/%s.js"' % name), name
 
 
@@ -59,3 +60,6 @@ def test_notify_kinds_map_to_popups():
     assert popups.notify_kind_id("leftover") == "leftover-notification"
     assert "leftover: 'leftover-notification'" in JS
     assert popups.notify_allowed("leftover") is False
+    assert popups.notify_kind_id("session_died") == "notify-session-died"
+    assert "session_died: 'notify-session-died'" in JS
+    assert popups.notify_allowed("session_died") is True

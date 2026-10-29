@@ -298,7 +298,7 @@ def _disable_session_auto_resume(session_id):
     }
 
 
-def usage_limit_resume_at_for_session(session_id):
+def usage_limit_resume_at_for_session(session_id, resumes=None):
     """Cheap in-memory lookup for the row-serialization path: the epoch a
     stopped session will auto-resume at, or None if it isn't tracked, is
     already fired, or the time has passed (stale defensive cutoff so a
@@ -313,7 +313,13 @@ def usage_limit_resume_at_for_session(session_id):
     sid = str(session_id or "")
     if sid.startswith("session_"):
         sid = sid[len("session_"):]
-    entry = _core._load_usage_limit_resumes().get(sid)
+    # Bulk callers (the archive list projects thousands of rows per poll)
+    # pass one pre-loaded `resumes` dict: _load_usage_limit_resumes() does a
+    # stat() + lock per call, and under GIL contention each of those hands
+    # the GIL away, which turned a 7d list into a 20s request after restart.
+    if resumes is None:
+        resumes = _core._load_usage_limit_resumes()
+    entry = resumes.get(sid)
     if not entry or entry.get("fired") or entry.get("dismissed"):
         return None
     resume_at = entry.get("resume_at")
@@ -1267,6 +1273,7 @@ def _update_spawn_session_id_in_registry(pid, session_id, spawned_via=""):
     if not pid or not session_id:
         return
     clean_via = str(spawned_via or "").strip()
+    resolved_origin = []
     try:
         def _update(entries):
             updated = False
@@ -1278,11 +1285,20 @@ def _update_spawn_session_id_in_registry(pid, session_id, spawned_via=""):
                     if clean_via and entry.get("spawned_via") != clean_via:
                         entry["spawned_via"] = clean_via
                         updated = True
+                    resolved_origin.append(entry.get("spawned_via") or "")
             return updated
 
         _core._mutate_spawn_registry(_update)
     except Exception as e:
         print(f"  [spawn-registry] could not update session_id for pid {pid} ({e})")
+    # Capture the origin during the registry mutation: a short run may be
+    # retired to history before another registry read can find it.
+    try:
+        from ccc_server import idea_tickets
+        for via in resolved_origin:
+            idea_tickets.note_ui_spawn(session_id, via)
+    except Exception:
+        pass
     # Feed the unified session graph: the session_id was unknown at spawn
     # time, so the edge wasn't added in _record_spawn_to_registry. Look up
     # the parent_session_id from the registry entry we just updated.

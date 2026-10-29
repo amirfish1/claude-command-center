@@ -1,0 +1,1 @@
+- Reopening a conversation now shows the last-seen copy instantly (saved in the browser), marked "refreshing", and swaps in the fresh transcript when it arrives; a busy host no longer leaves the pane blank for seconds. Turn off with localStorage `ccc-conv-cache=0`.

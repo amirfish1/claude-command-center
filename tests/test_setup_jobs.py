@@ -7,6 +7,7 @@ steps. No test invokes a real installer or touches the network.
 
 import hashlib
 import json
+import socket
 import sys
 import threading
 import time
@@ -272,12 +273,28 @@ def test_plan_shape_matches_contract():
         "free_router", "free_key", "first_task",
     ]
     for step in plan["steps"]:
-        assert step["status"] in ("ok", "missing", "outdated", "error")
+        assert step["status"] in ("ok", "missing", "outdated", "error", "not_applicable")
         assert isinstance(step["label"], str) and step["label"]
         assert isinstance(step["detail"], str)
         assert isinstance(step["needs_consent"], bool)
         assert isinstance(step["est_seconds"], int)
     assert plan["summary"]["total"] == len(ids)
+    assert "hostname" in plan["machine"]
+    assert plan["machine"]["hostname"] == socket.gethostname()
+
+
+def test_clt_not_ok_on_linux(monkeypatch):
+    monkeypatch.setattr(setup_steps, "_is_macos", lambda: False)
+    status, detail = setup_steps._detect_clt()
+    assert status != "ok"
+    assert status == "not_applicable"
+
+    plan = setup_steps.build_plan(force=True)
+    clt = next(s for s in plan["steps"] if s["id"] == "clt")
+    assert clt["status"] != "ok"
+    assert clt["status"] == "not_applicable"
+    assert clt.get("applies") is False
+    assert clt.get("mac_only") is True
 
 
 def test_plan_caches_and_refreshes():
@@ -321,8 +338,9 @@ def test_parse_version():
 def test_node_supported_bounds():
     assert setup_steps._node_supported((22, 11, 0))
     assert setup_steps._node_supported((20, 18, 0))
+    assert setup_steps._node_supported((26, 12, 0))
     assert not setup_steps._node_supported((20, 17, 9))
-    assert not setup_steps._node_supported((25, 0, 0))
+    assert not setup_steps._node_supported((27, 0, 0))
     assert not setup_steps._node_supported((19, 9, 9))
 
 
@@ -431,3 +449,56 @@ def test_handle_post_cancel_unknown_404():
     setup_jobs.handle_post(handler)
     status, _data = handler.last
     assert status == 404
+
+
+def test_setup_job_install_returning_false_marks_step_skipped(monkeypatch):
+    def fake_install(job):
+        job.emit("could not install fake tool")
+        return False
+
+    fake_step = {
+        "id": "fake_tool",
+        "label": "Fake Tool",
+        "status": "missing",
+        "detail": "testing",
+        "optional": True,
+        "install": fake_install,
+    }
+    monkeypatch.setattr(setup_steps, "STEPS", list(setup_steps.STEPS) + [fake_step])
+    job_id, err, status, _ = setup_jobs.run_setup(["fake_tool"])
+    assert status == 200
+    assert job_id
+    payload = _wait_done(job_id)
+    assert payload["status"] == "done"
+    assert payload["steps"][0]["state"] == "skipped"
+    assert "could not install fake tool" in payload["steps"][0]["detail"]
+
+
+def test_gh_platform_mappings(monkeypatch):
+    import platform
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    assert setup_steps._gh_platform() == "linux_amd64"
+    monkeypatch.setattr(platform, "machine", lambda: "aarch64")
+    assert setup_steps._gh_platform() == "linux_arm64"
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    assert setup_steps._gh_platform() == "linux_arm64"
+    monkeypatch.setattr(platform, "machine", lambda: "i686")
+    assert setup_steps._gh_platform() == "linux_386"
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    assert setup_steps._gh_platform() is None
+
+
+def test_resolve_gh_tarball():
+    fake_checksums = (
+        "1111111111111111111111111111111111111111111111111111111111111111  gh_2.67.0_linux_amd64.tar.gz\n"
+        "2222222222222222222222222222222222222222222222222222222222222222  gh_2.67.0_linux_arm64.tar.gz\n"
+    )
+    ver, name, sha = setup_steps._resolve_gh_tarball(
+        "linux_amd64",
+        version="2.67.0",
+        fetch=lambda url: fake_checksums,
+    )
+    assert ver == "2.67.0"
+    assert name == "gh_2.67.0_linux_amd64.tar.gz"
+    assert sha == "1111111111111111111111111111111111111111111111111111111111111111"

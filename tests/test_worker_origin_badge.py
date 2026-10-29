@@ -61,3 +61,12 @@ def test_origin_survives_title_change_and_missing_worker_record(server):
     rows = [{'session_id': 'probe-2', 'display_name': 'Renamed by a human', 'name_overridden': True}]
     out = server._apply_watchtower_worker_display_names(rows)[0]
     assert out['worker_origin']['ref'] == 'Q-24'
+
+
+def test_session_run_adhoc_spawn_nests_under_its_spawner_unbadged(server):
+    # CCC-231: a reviewer a user's session started with `wt spawn` joins the
+    # spawner's tree (and so its idea ticket) without a worker badge.
+    _write(server, {'reviewer': {'role': 'adhoc', 'parent_session_id': 'spawner'}})
+    row = _stamp(server, 'reviewer')['reviewer']
+    assert row['parent_session_id'] == 'spawner'
+    assert 'worker_origin' not in row

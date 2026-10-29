@@ -2,7 +2,7 @@
 
 [Back to the README](../README.md#engine-support) · [CLI and model catalog](cli.md)
 
-CCC began with Claude Code. Eight engines now support spawns from the
+CCC began with Claude Code. Nine engines now support spawns from the
 dashboard, but follow-up, transcript detail, and model controls vary.
 
 | Engine | Spawn | Resume / follow-up | Transcript reading | Model and effort controls |
@@ -13,12 +13,13 @@ dashboard, but follow-up, transcript detail, and model controls vary.
 | Antigravity | `agy` print mode | AGY CLI or running app language-server RPC | JSONL from `~/.gemini/antigravity/brain/` | Model detected from transcript metadata; no effort ladder |
 | Kilo Code | `kilo run --auto` | No resume; fire-and-forget | Kilo SQLite store at `~/.local/share/kilo/kilo.db`, including external sessions | Model only; default `CCC_KILO_MODEL` |
 | Kimi Code | ACP via `kimi acp`, token-level streaming | Live ACP steering and inline permission answers; TUI attach | `~/.kimi-code/sessions/`, live list and archive | Model, default `CCC_KIMI_MODEL`; effort from `config.toml` `support_efforts` |
+| Grok | ACP via `grok agent stdio` | Live ACP steering; per-session always-approve | `~/.grok/sessions/` (`updates.jsonl` replay) | Model, default `CCC_GROK_MODEL` (Grok 4.7) |
 | OpenCode | `opencode run --auto` | `opencode run --session <id> --auto` | External opencode.ai sessions | Model only; default `CCC_OPENCODE_MODEL` |
 | Devin | Local CLI `devin -p` | Local CLI resume; cloud sessions stay read-only | Local `devincli-` sessions from SQLite `message_nodes`; cloud `devin-` sessions when `DEVIN_API_KEY` is set | Consult the live catalog for available controls |
 
 ## Read-only engines
 
-**GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** sessions
+**GitHub Copilot CLI** and **VS Code Copilot Chat** sessions
 appear with their transcripts, but cannot be spawned or steered from CCC yet.
 Devin cloud API sessions are also read-only; local Devin CLI sessions are
 spawnable.

@@ -16,6 +16,7 @@ run against real repositories.
 import json
 import os
 import shutil
+import signal
 import site
 import socket
 import subprocess
@@ -42,6 +43,55 @@ def free_port() -> int:
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+NODE_MARKER_ENV = "CCC_TWO_NODE_HOME"
+
+
+def _marked_pids(marker: str):
+    """PIDs whose environment has NODE_MARKER_ENV=marker."""
+    needle = f"{NODE_MARKER_ENV}={marker}"
+    proc_root = Path("/proc")
+    if proc_root.is_dir():
+        pids = []
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                env = (entry / "environ").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if needle.encode() in env:
+                pids.append(int(entry.name))
+        return pids
+    # macOS: `ps -E` appends each process's environment to its command.
+    try:
+        out = subprocess.run(["ps", "-E", "-ww", "-ax", "-o", "pid=,command="],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [int(line.split(None, 1)[0]) for line in out.splitlines()
+            if f" {needle} " in f" {line} "]
+
+
+def _kill_marked_process_groups(marker: str):
+    """SIGKILL the process group of every process a node spawned.
+
+    Sessions run in their own sessions/process groups and hold a stdin the
+    stopped server no longer feeds, so without this they outlive teardown.
+    """
+    own_pgid = os.getpgid(0)
+    for pid in _marked_pids(marker):
+        if pid == os.getpid():
+            continue
+        try:
+            pgid = os.getpgid(pid)
+            if pgid != own_pgid:
+                os.killpg(pgid, signal.SIGKILL)
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 def git(cwd, *args, check=True):
@@ -92,6 +142,10 @@ class CCCNode:
             # Synthetic archives must refresh even when unrelated workloads
             # saturate the test host. Load-gate behavior has its own tests.
             "CCC_ARCHIVE_REFRESH_GATE_LOAD_PER_CPU": "1000000",
+            # Inherited by every session the node spawns (engines spawn with
+            # start_new_session=True, so they escape the server's process
+            # group); stop() sweeps processes carrying this marker.
+            NODE_MARKER_ENV: str(self.home),
         }
         env.pop("CCC_SSH_HOST", None)  # never let dev env leak a remote redirect
         # server.py hard-requires `watchtower`. When it's only pip-installed
@@ -140,6 +194,7 @@ class CCCNode:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait(timeout=5)
+        _kill_marked_process_groups(str(self.home))
         try:
             self._log_fh.close()
         except Exception:

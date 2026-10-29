@@ -155,10 +155,12 @@ def find_codex_conversations(
         tail_first_message = _core._strip_ccc_session_state_instruction(
             _core._strip_host_system_instruction(tail.get("first_message"))
         ).strip()
-        first_message = row_first_message or tail_first_message
+        import sender_envelope as attribution
+        first_message = attribution.strip_header(row_first_message or tail_first_message)
         title = _core._strip_ccc_session_state_instruction(
             _core._strip_host_system_instruction(row.get("title")).strip()
         ).strip()
+        title = attribution.strip_header(title)
         # Codex sometimes stores the verbatim first user message as the
         # "title" when the prompt is too short to summarize. Only treat the
         # title as AI-generated when it actually differs from first_message
@@ -566,7 +568,33 @@ def _merge_codex_compact_boundary_events(events):
     return merged
 
 
+# Codex has no Skill tool: it loads a skill by reading its SKILL.md through
+# the shell (`cat ~/.codex/skills/<name>/SKILL.md`, `sed -n 1,200p ...`).
+_CODEX_SKILL_READ_RE = re.compile(
+    r"(?:^|[\s;&|(`\"'])(?:cat|bat|less|nl(?:\s+-\w+)*|head(?:\s+-n?\s*\d+)?"
+    r"|sed\s+-n\s+\S+)\s+[\"']?([^\s\"'`;|&()<>]*skills/([\w.:-]+)/SKILL\.md)"
+)
+
+
+def _codex_skill_reads(text):
+    """Return [(name, path)] for each distinct SKILL.md a command reads."""
+    if not text or "SKILL.md" not in text:
+        return []
+    out, seen = [], set()
+    for m in _CODEX_SKILL_READ_RE.finditer(text):
+        path, name = m.group(1), m.group(2)
+        if name not in seen:
+            seen.add(name)
+            out.append((name, path))
+    return out
+
+
 def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
+    import sender_envelope as attribution
+    return attribution.decorate_event(_parse_codex_event_unattributed(ev, line_num, token_usage, codex_turn_meta))
+
+
+def _parse_codex_event_unattributed(ev, line_num, token_usage=None, codex_turn_meta=None):
     ev_type = ev.get("type", "")
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     ptype = payload.get("type", "")
@@ -859,6 +887,12 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
         blocks = [block]
         if custom_plan_entries:
             blocks.insert(0, {"kind": "plan", "entries": custom_plan_entries})
+        # Surface skill loads as the same "Skill loaded" card Claude gets.
+        skill_src = raw_input if is_custom_tool else (command_text or "")
+        for skill_name, skill_path in _codex_skill_reads(skill_src):
+            blocks.insert(len(blocks) - 1, {
+                "kind": "skill_loaded", "name": skill_name, "path": skill_path,
+            })
         result = {
             "line": line_num,
             "ts": ts,

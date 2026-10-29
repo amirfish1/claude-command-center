@@ -31,8 +31,10 @@ const config: CapacitorConfig = {
   },
   plugins: {
     Keyboard: {
-      // CCC already tracks visualViewport for the composer; don't let Capacitor
-      // resize the webview as well.
+      // Don't let Capacitor resize the webview: WKWebView never shrinks
+      // visualViewport for the keyboard anyway, so app.js drives --app-vh
+      // from the plugin's keyboardWillShow keyboardHeight instead — one
+      // discrete jump rather than re-laying out through the animation.
       resize: 'none',
     },
   },

@@ -1,18 +1,23 @@
 PODS:
   - Capacitor (7.6.9):
     - CapacitorCordova
+  - CapacitorCommunitySpeechRecognition (7.0.1):
+    - Capacitor
   - CapacitorCordova (7.6.9)
   - CapacitorKeyboard (7.0.6):
     - Capacitor
 
 DEPENDENCIES:
   - "Capacitor (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorCommunitySpeechRecognition (from `../../node_modules/@capacitor-community/speech-recognition`)"
   - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
   - "CapacitorKeyboard (from `../../node_modules/@capacitor/keyboard`)"
 
 EXTERNAL SOURCES:
   Capacitor:
     :path: "../../node_modules/@capacitor/ios"
+  CapacitorCommunitySpeechRecognition:
+    :path: "../../node_modules/@capacitor-community/speech-recognition"
   CapacitorCordova:
     :path: "../../node_modules/@capacitor/ios"
   CapacitorKeyboard:
@@ -20,9 +25,10 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Capacitor: 46067d1c8df89760dbed78780d436327d588c726
+  CapacitorCommunitySpeechRecognition: 3e03566c44c2bb3b52391a33d4518b1adbdeb38f
   CapacitorCordova: 2080fc0d6bfbc9dcc0e6d88e77fa624190d343ca
   CapacitorKeyboard: a2e0869edd229490ce36aed2549c0d6b95e27ee8
 
-PODFILE CHECKSUM: e5c6735a59ab3ddd1d1efe96c5f099f9320f2bd0
+PODFILE CHECKSUM: 510ff8fe2f0039cf8adcb9cb2234699ceedca18f
 
 COCOAPODS: 1.17.0

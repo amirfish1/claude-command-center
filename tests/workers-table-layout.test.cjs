@@ -50,8 +50,10 @@ function renderRow(row) {
         + row.tickets.map(t => '<button type="button" class="conv-worker-ticket">' + t + '</button>').join('')
         + '</span></summary><ul class="conv-worker-history-list"></ul></details>'
       : '<span class="conv-worker-no-tickets" aria-hidden="true">no tickets</span>',
-    _continuationChainBadgeHtml: () => row.legs
-      ? '<span class="conv-chain-badge">↱ ' + row.legs + ' legs</span>' : '',
+    // Optional badge helpers the template calls; this fixture has none.
+    sessionStuckWarningHtml: () => '', workerOriginBadgeHtml: () => '',
+    ideaTicketChipHtml: () => '', _ideaRowLine: () => '',
+    readyToCloseArchiveHtml: () => '', _nyaRowBlockHtml: () => '',
   };
   const ctx = new Proxy(named, {
     has: () => true,
@@ -63,7 +65,7 @@ function renderRow(row) {
 
 const ROWS = [
   { id: 'a', title: "Made cross-repository close proofs discover the caller's current repo",
-    age: '36m', pct: 16, working: true, legs: 2, tickets: ['OPS-996', '-995', '-994'] },
+    age: '36m', pct: 16, working: true, tickets: ['OPS-996', '-995', '-994'] },
   { id: 'b', title: 'Final code review', age: '37m', pct: 13, working: false, tickets: [] },
   { id: 'c', title: 'Moved the reported scheduled Codex run to Workers',
     age: '36m', pct: 20, working: true, tickets: ['CCC-1058'] },
@@ -72,7 +74,7 @@ const ROWS = [
 ];
 
 async function withList(fn) {
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
     // Desktop width: below 460px a container query hides the icon column and
@@ -105,7 +107,6 @@ const geometry = (page) => page.evaluate(() => {
     height: Math.round(item.getBoundingClientRect().height),
     title: box(item.querySelector('.conv-title')),
     chips: box(item.querySelector('.conv-worker-history, .conv-worker-no-tickets')),
-    chain: box(item.querySelector('.conv-chain-badge')),
     pct: box(item.querySelector('.conv-main-row > .conv-pct-badge')),
     end: box(item.querySelector('.conv-row-end')),
     outcomeShown: !!item.querySelector('.conv-outcome')
@@ -139,15 +140,14 @@ test('the chips share the title\'s line instead of dropping to a second one', as
     // the title row, so without explicit placement they land on row 2.
     assert.ok(Math.abs(r.chips.mid - r.title.mid) <= 2,
       `chips must be vertically centred on the title line, off by ${Math.abs(r.chips.mid - r.title.mid)}px`);
-    // One text line plus padding. The card list ran ~120px per row.
-    assert.ok(r.height <= 30, `expected a single-line row, got ${r.height}px`);
+    // CCC-135 (118eed30): titles wrap up to three 13px lines instead of
+    // ellipsizing. Cap the row at that plus padding; the card list ran ~120px.
+    assert.ok(r.title.height <= 50, `title clamps at three lines, got ${r.title.height}px`);
+    assert.ok(r.height <= r.title.height + 12, `row is title plus padding, got ${r.height}px`);
     assert.equal(r.outcomeShown, false, 'Compact drops the outcome card');
   }
   // A worker that closed nothing says so rather than leaving the cell blank.
   assert.ok(rows[1].chips.width > 0);
-  // The continuation chain states its depth on the head row.
-  assert.ok(rows[0].chain && rows[0].chain.width > 0, 'the 2-leg chain badge renders');
-  assert.equal(rows[1].chain, null, 'a single-leg session carries no chain badge');
 });
 
 test('the table is Compact-only: Cozy and Detailed keep the card list', async () => {

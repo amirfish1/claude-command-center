@@ -1,0 +1,1 @@
+- Add an opt-in Caddy TLS and Basic-auth Docker profile for remote visitors, with explicit native Linux host-bypass limitations; install the required WatchTower dependency in the Docker image.

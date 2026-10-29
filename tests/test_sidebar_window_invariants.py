@@ -24,6 +24,22 @@ import inspect
 import pytest
 import server
 
+
+def test_recent_manual_move_keeps_old_session_in_destination_window():
+    now = 2_000_000
+    row = {"modified": now - 10 * 86400, "idea_ticket": {"moved_at": now}}
+    assert server._archive_list_window_allows_row(row, now - 86400)
+    row["idea_ticket"]["moved_at"] = now - 2 * 86400
+    assert not server._archive_list_window_allows_row(row, now - 86400)
+    row["session_id"] = "old-session"
+    tickets = {"old-session": {"moved_at": now}}
+    assert server._archive_list_window_allows_row(row, now - 86400, tickets)
+
+
+def test_server_window_uses_recent_interaction_over_older_transcript():
+    row = {"modified": 1_000_000, "last_interacted": 2_000_000}
+    assert server._archive_list_row_ts(row) == 2_000_000
+
 APP_JS = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")
 
 

@@ -92,5 +92,9 @@ test('an invalid-cwd spawn failure forgets the folder before the retry', () => {
   const fn = source.indexOf('  async function spawnFromInlineInput(');
   const body = source.slice(fn, source.indexOf('\n  }\n', fn));
   assert.match(body, /invalid cwd: \(path does not exist\|not a directory\)/);
-  assert.ok(body.indexOf('forgetMissingSpawnCwd(launchCwd)') < body.indexOf('restoreDraftAfterFailure();\n        flashRed()'));
+  // In the failure branch, the folder is forgotten before the draft is restored.
+  const branch = body.indexOf('invalid cwd: (path does not exist');
+  const forget = body.indexOf('forgetMissingSpawnCwd(launchCwd)', branch);
+  const restore = body.indexOf('restoreDraftAfterFailure(', branch);
+  assert.ok(forget > branch && restore > forget, 'forget precedes restoreDraftAfterFailure');
 });

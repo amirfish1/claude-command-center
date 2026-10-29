@@ -5,21 +5,23 @@ The stock ways to run Claude Command Center — `./run.sh` or the trial
 own [`SECURITY.md`](../SECURITY.md) states the trust model plainly: anything
 that can reach the port can drive the full API, and the agent-spawn endpoints
 run with `--dangerously-skip-permissions`. On a shared or networked machine,
-and even against other local processes on your own machine, that is a large
-unauthenticated attack surface.
+that is a large unauthenticated attack surface.
 
-This document describes **Layer A hardening**: put CCC behind a
+This document describes **remote-visitor protection only**: put CCC behind a
 [Caddy](https://caddyserver.com/) reverse proxy that enforces **TLS** and
 **HTTP Basic authentication**, and remove CCC's own host-facing port so the
-only reachable surface is the authenticated proxy.
+remote-facing surface is the authenticated proxy. **Native Linux host programs
+can reach the internal backend directly by its Docker bridge IP without
+authentication.** No host-process isolation is provided; local-program
+hardening is tracked separately in [issue #222](https://github.com/amirfish1/claude-command-center/issues/222).
 
 ## What it protects (and what it doesn't)
 
 | Threat | Stock (`docker-compose.yml` / `run.sh`) | Hardened (this doc) |
 | --- | --- | --- |
 | LAN / remote machine reaching the API | Exposed if bind widened | **Blocked** unless it authenticates through Caddy |
-| Browser tab on another site (CSRF) | Same-origin check only | Same-origin check **+ auth** |
-| Other **process on the host** connecting directly | **Exposed** (127.0.0.1:8090, `port.txt`) | **Blocked** — no host CCC port exists; CCC is on an `internal` Docker network |
+| Browser tab on another site (CSRF) | Same-origin POST checks | Same-origin POST checks remain required; Basic auth alone does not prevent CSRF |
+| Native Linux **program on the host** connecting directly | **Exposed** | **Still exposed** through the backend Docker bridge IP; no host-process boundary |
 | Capability once authenticated | Full API | **Full API** — auth gates *access*, not *capability* |
 
 The last row is the important caveat: this is an **authentication** layer, not
@@ -32,8 +34,8 @@ the kanban, but it cannot use macOS-only desktop conveniences, and spawning
 host-native agent CLIs (`claude`, `codex`, …) is not wired through the
 container. This profile is aimed at a **locked-down, auth-gated dashboard**,
 not full host orchestration. If you need host-native spawn, that requires the
-non-container path plus Layer B (a listen-socket change), which is out of
-scope here.
+non-container path and a separately designed security boundary, outside
+this profile's scope.
 
 ## Files
 
@@ -76,10 +78,10 @@ scope here.
 
 ## Verification
 
-Run these after `up`. They prove the three guarantees: no direct host port,
-auth required, auth works.
+Run these after `up`. They check the proxy authentication gate and the
+absence of a published backend port. They do not establish host isolation.
 
-**1. CCC has no host-facing port (local-process bypass is closed):**
+**1. CCC has no published host port (host programs can still bypass Caddy):**
 
 ```bash
 # Expect: NO listener on 8090. (Only Caddy's 8443 should be bound, to loopback.)
@@ -103,14 +105,18 @@ curl -sk -u "$CCC_BASIC_AUTH_USER:your-strong-password" \
 # => 200
 ```
 
-**4. Confirm CCC is only reachable through the proxy network**, not from the
-host, by trying to reach the container directly (there is no published port,
-so this must fail):
+**4. Verify the native Linux host bypass is understood:**
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8090/api/sessions \
-  || echo "OK: no direct route to CCC from the host"
+backend_ip=$(docker inspect ccc-hardened --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+curl --noproxy '*' --connect-timeout 3 -s -o /dev/null -w '%{http_code}\n' \
+  "http://$backend_ip:8090/api/sessions"
+# Native Linux: HTTP 200 without proxy credentials is expected.
 ```
+
+A Docker Desktop VM may hide this route from its outer host; that behavior
+is platform-specific and must not be presented as a host-program guarantee.
+Do not expose or route the backend bridge network to remote visitors.
 
 ## Reaching it from another trusted device
 

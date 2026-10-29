@@ -472,7 +472,12 @@ def run_setup(step_ids):
             if install is None:
                 job.emit(f"{step['label']}: nothing to install.")
                 return False
-            install(job)
+            res = install(job)
+            if res is False:
+                last_line = job.lines[-1] if job.lines else ""
+                if last_line and 0 <= job._step_index < len(job._steps):
+                    job._steps[job._step_index]["detail"] = last_line
+                return False
             return True
 
         return _fn

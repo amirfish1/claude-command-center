@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ```
 **Homebrew:**
 ```bash
-brew tap amirfish1/ccc && brew install ccc && ccc
+brew install amirfish1/tap/ccc && ccc
 ```
 
 **Where to go in this server:**

@@ -72,5 +72,12 @@ def test_explicit_bind_host_is_probed():
     assert _run(port, "--host", "127.0.0.1", "--pick").stdout.strip() == str(port)
 
 
+def test_unassigned_host_treated_as_free():
+    port = _free_port()
+    # RFC 5737 test address not assigned locally raises EADDRNOTAVAIL;
+    # should be treated as free (e.g. Tailscale interface still coming up at boot).
+    assert _run(port, "--host", "198.51.100.254").stdout.strip() == "free"
+
+
 def test_bad_usage():
     assert _run("nope").returncode == 2

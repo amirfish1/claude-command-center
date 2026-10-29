@@ -10,7 +10,7 @@ import importlib.machinery
 import importlib.util
 import io
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -247,6 +247,209 @@ class ContinuationCliTests(unittest.TestCase):
                 self.assertTrue(got.dry_run)
         finally:
             sys.argv = old_argv
+
+    def test_unknown_subcommand_fails_fast_instead_of_execing_run_sh(self):
+        ccc = self.ccc
+        err = io.StringIO()
+        with mock.patch.object(ccc.os, "execv") as execv, \
+             redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                ccc.main(["sesssion", "--help"])
+        self.assertEqual(ctx.exception.code, 2)
+        execv.assert_not_called()
+        self.assertIn("invalid choice: 'sesssion'", err.getvalue())
+
+    def test_launcher_flags_and_empty_argv_exec_run_sh(self):
+        ccc = self.ccc
+        for argv in ([], ["--install-service"], ["--uninstall-service"], ["--service-status"], ["--app", "--size", "1600x1000"]):
+            with mock.patch.object(ccc.os, "execv") as execv:
+                execv.side_effect = SystemExit(0)
+                with self.assertRaises(SystemExit):
+                    ccc.main(argv)
+                execv.assert_called_once()
+                self.assertTrue(execv.call_args[0][0].endswith("run.sh"))
+                self.assertEqual(execv.call_args[0][1][1:], argv)
+
+    def test_session_singular_alias_routes_to_cmd_sessions(self):
+        ccc = self.ccc
+        with mock.patch.object(ccc, "cmd_sessions", return_value=0) as sessions_fn:
+            rc = ccc.main(["session", "--since", "5h"])
+        self.assertEqual(rc, 0)
+        sessions_fn.assert_called_once()
+        self.assertEqual(sessions_fn.call_args[0][0].since, 18000)
+
+    def test_sessions_default_24h_tree_and_continuation_folding(self):
+        ccc = self.ccc
+        requested_paths = []
+        census_payload = {
+            "ok": True,
+            "sessions": [
+                {
+                    "session_id": "cont-head",
+                    "name": "Verify Sonia $100 FSH flex registration",
+                    "state": "ended",
+                    "last_event_age_s": 300,
+                    "engine": "claude",
+                    "model": "claude-opus-5-5",
+                    "effort": "high",
+                    "repo_path": "/home/hermes/Apps/BYM+Finie",
+                    "parent_session_id": None,
+                    "continued_from_session_id": "cont-origin",
+                    "spawned_via": "ui",
+                    "has_conversation_row": True,
+                },
+                {
+                    "session_id": "cont-origin",
+                    "name": "Verify Sonia $100 FSH flex registration",
+                    "state": "idle",
+                    "last_event_age_s": 1200,
+                    "engine": "codex",
+                    "model": "gpt-6.1-sol",
+                    "effort": "medium",
+                    "repo_path": "/home/hermes/Apps/BYM+Finie",
+                    "parent_session_id": None,
+                    "continued_from_session_id": None,
+                    "spawned_via": "terminal",
+                    "has_conversation_row": True,
+                },
+                {
+                    "session_id": "child-sub",
+                    "name": '↳ ⤴︎ "Subagent audit"',
+                    "state": "ended",
+                    "last_event_age_s": 400,
+                    "engine": "codex",
+                    "model": "gpt-6.1-sol",
+                    "effort": "medium",
+                    "repo_path": "/home/hermes/Apps/BYM+Finie",
+                    "parent_session_id": "cont-origin",
+                    "continued_from_session_id": None,
+                    "spawned_via": "subagent",
+                    "has_conversation_row": True,
+                },
+                {
+                    "session_id": "wt-empty-poll",
+                    "name": "Empty CCC Queue Drain Check",
+                    "state": "ended",
+                    "last_event_age_s": 60,
+                    "engine": "claude",
+                    "model": "claude-opus-5-5",
+                    "effort": "medium",
+                    "repo_path": "/home/hermes/Apps/claude-command-center",
+                    "empty_worker_poll": True,
+                    "has_conversation_row": True,
+                },
+            ],
+        }
+
+        def fake_get_json(base, path, timeout=10.0):
+            requested_paths.append(path)
+            return census_payload
+
+        out = io.StringIO()
+        with mock.patch.object(ccc, "_resolve_server", return_value="http://127.0.0.1:8090"), \
+             mock.patch.object(ccc, "_get_json", side_effect=fake_get_json), \
+             redirect_stdout(out):
+            rc = ccc.main(["sessions"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(requested_paths, ["/api/sessions/census?since=86400"])
+        rendered = out.getvalue()
+        # Continuation head shows ↱ 1 earlier and folds cont-origin out of top-level rows.
+        self.assertIn("cont-head", rendered)
+        self.assertIn("↱ 1 earlier", rendered)
+        self.assertNotIn("cont-origin", rendered)
+        # Child of earlier continuation leg is inherited and nested under cont-head.
+        self.assertIn("child-sub", rendered)
+        self.assertIn('  ↳ "Subagent audit"', rendered)
+        # Empty WatchTower poll is hidden by default and summarized in footer.
+        self.assertNotIn("wt-empty-poll", rendered)
+        self.assertIn("1 empty queue-drain poll hidden", rendered)
+
+    def test_sessions_live_flag_queries_live_only_and_filters_ended(self):
+        ccc = self.ccc
+        requested_paths = []
+        census_payload = {
+            "ok": True,
+            "sessions": [
+                {
+                    "session_id": "live-1",
+                    "name": "Active task",
+                    "state": "working",
+                    "last_event_age_s": 5,
+                    "engine": "claude",
+                    "model": "claude-opus-5-5",
+                    "effort": "high",
+                    "has_conversation_row": True,
+                },
+                {
+                    "session_id": "ended-1",
+                    "name": "Finished task",
+                    "state": "ended",
+                    "last_event_age_s": 50,
+                    "engine": "claude",
+                    "model": "claude-opus-5-5",
+                    "effort": "high",
+                    "has_conversation_row": True,
+                },
+            ],
+        }
+
+        out = io.StringIO()
+        with mock.patch.object(ccc, "_resolve_server", return_value="http://127.0.0.1:8090"), \
+             mock.patch.object(ccc, "_get_json", side_effect=lambda base, path, timeout=10.0: requested_paths.append(path) or census_payload), \
+             redirect_stdout(out):
+            rc = ccc.main(["sessions", "--live"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(requested_paths, ["/api/sessions/census"])
+        rendered = out.getvalue()
+        self.assertIn("live-1", rendered)
+        self.assertNotIn("ended-1", rendered)
+        self.assertIn("1 live session", rendered)
+
+    def test_resolve_target_prefers_continuation_head_over_superseded_leg(self):
+        ccc = self.ccc
+        census_payload = {
+            "ok": True,
+            "sessions": [
+                {
+                    "session_id": "origin-sid",
+                    "name": "Verify Sonia $100 FSH flex registration",
+                    "state": "idle",
+                    "continued_from_session_id": None,
+                },
+                {
+                    "session_id": "head-sid",
+                    "name": "Verify Sonia $100 FSH flex registration",
+                    "state": "ended",
+                    "continued_from_session_id": "origin-sid",
+                },
+            ],
+        }
+        with mock.patch.object(ccc, "_get_json", return_value=census_payload) as get_json:
+            sid, err = ccc._resolve_target("http://127.0.0.1:8090", "Sonia $100 FSH")
+        get_json.assert_called_once_with("http://127.0.0.1:8090", "/api/sessions/census?since=604800")
+        self.assertEqual(sid, "head-sid")
+        self.assertIsNone(err)
+
+    def test_resolve_target_full_uuid_skips_census(self):
+        ccc = self.ccc
+        sid_in = "49F8AAF3-594d-42f2-a5e4-cb28a39c6f5b"
+        with mock.patch.object(ccc, "_get_json") as get_json:
+            sid, err = ccc._resolve_target("http://127.0.0.1:8090", f"  {sid_in} ")
+        get_json.assert_not_called()
+        self.assertEqual(sid, sid_in)
+        self.assertIsNone(err)
+
+    def test_resolve_target_prefix_still_uses_census_and_flags_ambiguity(self):
+        ccc = self.ccc
+        census_payload = {"sessions": [
+            {"session_id": "49f8aaf3-594d-42f2-a5e4-cb28a39c6f5b", "name": "a"},
+            {"session_id": "49f8aaf3-0000-42f2-a5e4-cb28a39c6f5b", "name": "b"},
+        ]}
+        with mock.patch.object(ccc, "_get_json", return_value=census_payload) as get_json:
+            sid, err = ccc._resolve_target("http://127.0.0.1:8090", "49f8aaf3")
+        get_json.assert_called_once()
+        self.assertIsNone(sid)
+        self.assertIn("ambiguous", err)
 
 
 if __name__ == "__main__":

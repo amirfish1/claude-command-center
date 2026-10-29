@@ -34,6 +34,7 @@
   var AGE_LIMITS = {
     task: 10 * 60 * 1000,
     needs_input: 10 * 60 * 1000,
+    session_died: 12 * 3600 * 1000,
     milestone: 12 * 3600 * 1000,
     digest: 12 * 3600 * 1000,
     info: 30 * 60 * 1000,
@@ -72,7 +73,7 @@
     if (_stylesInjected) return;
     _stylesInjected = true;
     var css = ''
-      + '#cccNotifyStack{position:fixed;right:14px;bottom:14px;z-index:2147483000;'
+      + '#cccNotifyStack{position:fixed;right:14px;top:14px;z-index:2147483000;'
       + 'display:flex;flex-direction:column;gap:8px;max-width:min(360px,calc(100vw - 28px));'
       + 'font-family:var(--font-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);}'
       + '.ccc-toast{pointer-events:auto;display:flex;gap:10px;align-items:flex-start;'
@@ -82,7 +83,7 @@
       + 'cursor:default;position:relative;overflow:hidden;}'
       + '.ccc-toast.ccc-toast-in{animation:cccToastIn .22s ease-out;}'
       + '.ccc-toast.ccc-toast-out{opacity:0;transform:translateX(12px);transition:opacity .18s,transform .18s;}'
-      + '@keyframes cccToastIn{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}'
+      + '@keyframes cccToastIn{from{opacity:0;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:none}}'
       + '@media (prefers-reduced-motion:reduce){.ccc-toast.ccc-toast-in{animation:none}.ccc-toast.ccc-toast-out{transition:none}}'
       + '.ccc-toast-bar{flex:0 0 3px;align-self:stretch;border-radius:2px;background:var(--text-muted,#888);}'
       + '.ccc-toast-kind-task .ccc-toast-bar{background:#3fb950;}'
@@ -91,6 +92,7 @@
       + '.ccc-toast-kind-milestone .ccc-toast-bar{background:linear-gradient(180deg,#a371f7,#58a6ff);}'
       + '.ccc-toast-kind-digest .ccc-toast-bar{background:#58a6ff;}'
       + '.ccc-toast-kind-error .ccc-toast-bar{background:#f85149;}'
+      + '.ccc-toast-kind-session_died .ccc-toast-bar{background:#f85149;}'
       + '.ccc-toast-body{flex:1 1 auto;min-width:0;}'
       + '.ccc-toast-title{font-weight:600;font-size:12.5px;line-height:1.35;margin:0 0 2px;}'
       + '.ccc-toast-text{font-size:12px;line-height:1.4;color:var(--text-secondary,#a6adbb);margin:0;'
@@ -129,7 +131,7 @@
 
   var _KIND_ICON = {
     task: '✓', success: '✓', needs_input: '?', milestone: '★',
-    digest: '☰', error: '!', info: 'i', leftover: '$',
+    digest: '☰', error: '!', info: 'i', leftover: '$', session_died: '!',
   };
 
   function _openItem(item) {
@@ -203,19 +205,21 @@
     });
 
     var life = null;
+    // A dead session stays up until dismissed: nothing else will tell you.
+    var sticky = kind === 'session_died';
     var ttl = (kind === 'digest' || kind === 'milestone') ? 14000 : 9000;
     var remaining = ttl;
     var armAt = Date.now();
     function arm() {
       armAt = Date.now();
       if (life) life.remove();
-      if (_reducedMotion()) return;
+      if (sticky || _reducedMotion()) return;
       life = document.createElement('div');
       life.className = 'ccc-toast-life';
       life.style.animationDuration = remaining + 'ms';
       t.appendChild(life);
     }
-    var timer = setTimeout(function tick() { _dismiss(t); }, ttl);
+    var timer = sticky ? null : setTimeout(function tick() { _dismiss(t); }, ttl);
     function _dismiss(el) {
       if (!el.parentNode) return;
       clearTimeout(timer);
@@ -224,11 +228,13 @@
       _drainQueue();
     }
     t.addEventListener('mouseenter', function () {
+      if (sticky) return;
       remaining = Math.max(500, remaining - (Date.now() - armAt));
       clearTimeout(timer);
       if (life) life.style.animationPlayState = 'paused';
     });
     t.addEventListener('mouseleave', function () {
+      if (sticky) return;
       timer = setTimeout(function () { _dismiss(t); }, remaining);
       if (life) life.style.animationPlayState = 'running';
     });
@@ -323,8 +329,26 @@
     return true;
   }
 
+  // Phones: "ready for your input" cards stack over the UI and need a manual
+  // dismiss each time. The footer "? N" pill already counts those sessions,
+  // so on a phone the in-page card is skipped (system banners still fire
+  // when the page is in the background).
+  function _phoneViewport() {
+    try { return window.matchMedia('(max-width: 700px)').matches; }
+    catch (_) { return false; }
+  }
+
   function _pageCalm() {
     return document.hidden || !document.hasFocus();
+  }
+
+  // True when `sid` is the session the user is looking at right now: an
+  // active pane shows it and the page is visible and focused.
+  function _isFrontSession(sid) {
+    if (!sid || _pageCalm()) return false;
+    try {
+      return typeof window.cccFrontSessionId === 'function' && window.cccFrontSessionId() === sid;
+    } catch (_) { return false; }
   }
 
   function _deliver(item) {
@@ -338,6 +362,13 @@
     if (age > limit) return false;
     if (!enabled()) return false;
     if (!_kindAllowed(kind)) return false;
+    if ((kind === 'needs_input' || kind === 'task') && _isFrontSession(item.session_id)) {
+      try {
+        fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msg: '[notify] suppressed (front session) kind=' + kind + ' sid=' + String(item.session_id).slice(0, 8) }) });
+      } catch (_) {}
+      return false;
+    }
     // Unapproved pop-ups stay silent (static/popups.js); the explicit
     // "Send test notification" button is not a pop-up.
     if (id.indexOf('ntf_test_') !== 0 &&
@@ -350,7 +381,12 @@
     }
     // The toast is the persistent, clickable record — always render it too
     // for actionable kinds so a glance at the dashboard shows what fired.
-    if (channel === 'toast' || kind === 'needs_input' || kind === 'milestone' || kind === 'digest') {
+    var phoneQuiet = (kind === 'needs_input' || kind === 'task') && _phoneViewport()
+      && id.indexOf('ntf_test_') !== 0;
+    if (phoneQuiet) {
+      // fall through: no card
+    } else if (channel === 'toast' || kind === 'needs_input' || kind === 'session_died'
+        || kind === 'milestone' || kind === 'digest') {
       var stack = document.getElementById('cccNotifyStack');
       if (stack && stack.children.length >= MAX_TOASTS) _toastQueue.push(item);
       else toast(item);

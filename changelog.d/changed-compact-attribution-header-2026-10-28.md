@@ -1,0 +1,1 @@
+- Messages delivered to agent sessions now carry a one-line `[sender: name (kind) · msg id]` attribution header (about 25 tokens) instead of the full JSON envelope (about 250 tokens); text you type into a session from the dashboard carries no header at all. The full record stays in the attribution journal.

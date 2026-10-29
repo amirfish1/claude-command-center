@@ -22,8 +22,16 @@ FAKE = "  obvious-test-password-XXXX\n "
 
 
 @pytest.fixture
-def broker(tmp_path):
-    instance = cb.Broker(tmp_path / "secrets")
+def vault_dir(tmp_path, monkeypatch):
+    from ccc_server import paths, vault
+    monkeypatch.setattr(paths, "COMMAND_CENTER_STATE_DIR", tmp_path)
+    monkeypatch.setattr(vault, "_vault_keychain_available", lambda: False)
+    return tmp_path / "vault"
+
+
+@pytest.fixture
+def broker(vault_dir):
+    instance = cb.Broker()
     yield instance
     instance.shutdown()
 
@@ -36,16 +44,16 @@ def capability(created):
     return {k: created[k] for k in ("id", "token")}
 
 
-def test_ephemeral_one_shot_and_metadata_allowlist(broker):
+def test_ephemeral_one_shot_and_metadata_allowlist(broker, vault_dir):
     created = request(broker)
     assert created["status"] == "pending"
     metadata = broker.pending()
-    assert set(metadata[0]) == {"id", "name", "kind", "reason", "session_id", "expires_at"}
+    assert set(metadata[0]) == {"id", "name", "kind", "reason", "session_id", "store_only", "expires_at"}
     assert created["token"] not in json.dumps(metadata)
     assert broker.take(capability(created)) == {"status": "pending"}
     broker.resolve({"id": created["id"], "value": FAKE})
     assert broker.pending() == []
-    assert not broker.store.root.exists()
+    assert not vault_dir.exists()
     assert broker.take(capability(created)) == {"status": "ready", "value": FAKE}
     with pytest.raises(cb.BrokerError) as error:
         broker.take(capability(created))
@@ -92,8 +100,8 @@ def test_deny_cancel_and_duplicate_answer(broker):
     assert not broker.pending()
 
 
-def test_expiry_purges_values_without_a_reader(tmp_path):
-    instance = cb.Broker(tmp_path / "secrets")
+def test_expiry_purges_values_without_a_reader(vault_dir):
+    instance = cb.Broker()
     try:
         created = request(instance, timeout=1)
         instance.resolve({"id": created["id"], "value": FAKE})
@@ -101,7 +109,7 @@ def test_expiry_purges_values_without_a_reader(tmp_path):
         while instance.requests and time.monotonic() < deadline:
             time.sleep(0.02)
         assert not instance.requests
-        assert not instance.store.root.exists()
+        assert not vault_dir.exists()
     finally:
         instance.shutdown()
 
@@ -117,22 +125,24 @@ def test_earlier_deadline_reschedules_and_stale_timer_cannot_duplicate(broker):
     broker.take(capability(created), cancel=True)
 
 
-def test_private_remember_survives_restart_and_forget_revokes(broker):
+def test_remember_goes_to_vault_survives_restart_and_forget_revokes(broker, vault_dir):
+    from ccc_server import vault
     created = request(broker)
     broker.resolve({"id": created["id"], "value": FAKE, "remember": True})
-    assert stat.S_IMODE(broker.store.root.stat().st_mode) == 0o700
-    files = list(broker.store.root.iterdir())
-    assert len(files) == 1
-    assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
+    entry = vault.vault_get_entry("example-service")
+    assert entry["source"] == {"broker_name": "example-service", "broker_kind": "password"}
+    assert FAKE.strip() not in (vault_dir / "index.json").read_text()
+    assert FAKE.strip() not in (vault_dir / "secrets.enc.json").read_text()
+    assert not (vault_dir.parent / "secrets").exists()
     broker.shutdown()
-    restarted = cb.Broker(broker.store.root)
+    restarted = cb.Broker()
     try:
         reused = request(restarted)
         assert reused["status"] == "ready"
-        assert restarted.take(capability(reused))["value"] == FAKE
+        assert restarted.take(capability(reused))["value"] == FAKE.strip()
         outstanding = request(restarted)
         restarted.forget("example-service")
-        assert not list(broker.store.root.iterdir())
+        assert vault.vault_get_entry("example-service") is None
         with pytest.raises(cb.BrokerError):
             restarted.take(capability(outstanding))
         assert request(restarted)["status"] == "pending"
@@ -166,35 +176,18 @@ def test_invalid_request_fields_leave_no_state(broker, patch):
 
 
 @pytest.mark.parametrize("value", [None, "", 42, "x" * (cb.MAX_VALUE_BYTES + 1), "\0"])
-def test_invalid_values_are_not_saved(broker, value):
+def test_invalid_values_are_not_saved(broker, vault_dir, value):
     created = request(broker)
     with pytest.raises(cb.BrokerError):
         broker.resolve({"id": created["id"], "value": value, "remember": True})
-    assert not broker.store.root.exists()
+    assert not vault_dir.exists()
     assert broker.take(capability(created)) == {"status": "pending"}
 
 
-def test_private_store_rejects_symlinks_and_permissive_modes(broker, tmp_path):
-    created = request(broker)
-    broker.resolve({"id": created["id"], "value": FAKE, "remember": True})
-    saved = next(broker.store.root.iterdir())
-    saved.chmod(0o644)
-    with pytest.raises(cb.BrokerError, match="not private"):
-        request(broker)
-    saved.chmod(0o600)
-    other = tmp_path / "other.json"
-    saved.rename(other)
-    saved.symlink_to(other)
-    with pytest.raises(OSError):
-        request(broker)
-    saved.unlink()
-    broker.store.root.chmod(0o755)
-    with pytest.raises(cb.BrokerError, match="0700"):
-        request(broker)
-    broker.store.root.chmod(0o700)
-    broker.store.root.rmdir()
-    broker.store.root.symlink_to(tmp_path, target_is_directory=True)
-    with pytest.raises(OSError):
+def test_vault_entry_not_written_by_broker_is_rejected(broker):
+    from ccc_server import vault
+    vault.vault_create_entry("example-service", "other-test-value-XXXX", kind="other")
+    with pytest.raises(cb.BrokerError, match="invalid"):
         request(broker)
 
 
@@ -308,9 +301,10 @@ def load_cli():
 def test_cli_refuses_unintentional_output_and_terminal(http_broker, monkeypatch, capsys):
     base, _ = http_broker
     cli = load_cli()
-    assert cli.main(["--server", base, "secret", "request", "example", "--reason", "Test"]) == 2
+    assert cli.main(["--server", base, "secret", "request", "example", "--reason", "Test", "--kind", "otp"]) == 2
+    assert "cannot be stored" in capsys.readouterr().err
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
-    assert cli.main(["--server", base, "secret", "request", "example", "--reason", "Test", "--stdout"]) == 2
+    assert cli.main(["--server", base, "secret", "request", "example", "--reason", "Test", "--return-key"]) == 2
     assert "never print credentials" in capsys.readouterr().err
 
 
@@ -327,7 +321,60 @@ def test_cli_delivers_exact_value_without_stderr_echo(http_broker, broker, capsy
     cli = load_cli()
     assert cli.main(["--server", base, "secret", "request", "example-service", "--reason", "Test", "--stdout"]) == 0
     output = capsys.readouterr()
-    assert output.out == FAKE
+    assert output.out == FAKE.strip()
     assert FAKE not in output.err
     assert cli.main(["--server", base, "secret", "forget", "example-service"]) == 0
     assert request(broker)["status"] == "pending"
+
+
+def test_store_only_saves_to_vault_and_agent_gets_only_the_entry_name(broker):
+    from ccc_server import vault
+    created = request(broker, store_only=True)
+    assert broker.pending()[0]["store_only"] is True
+    broker.resolve({"id": created["id"], "value": FAKE})
+    assert vault.vault_get_value("example-service") == FAKE.strip()
+    assert broker.requests[created["id"]]["value"] is None
+    taken = broker.take(capability(created))
+    assert taken == {"status": "stored", "entry": "example-service"}
+    assert FAKE.strip() not in json.dumps(taken)
+
+
+def test_store_only_always_prompts_so_a_saved_value_can_be_replaced(broker):
+    from ccc_server import vault
+    first = request(broker, store_only=True)
+    broker.resolve({"id": first["id"], "value": FAKE})
+    broker.take(capability(first))
+    again = request(broker, store_only=True)
+    assert again["status"] == "pending"
+    broker.resolve({"id": again["id"], "value": "replacement-test-value-XXXX"})
+    assert vault.vault_get_value("example-service") == "replacement-test-value-XXXX"
+
+
+@pytest.mark.parametrize("patch", [{"kind": "otp"}, {"store_only": "yes"}])
+def test_store_only_rejects_otp_and_non_boolean(broker, patch):
+    with pytest.raises(cb.BrokerError):
+        request(broker, **{"store_only": True, **patch})
+    assert not broker.requests
+
+
+def test_cli_defaults_to_store_only_and_prints_no_value(http_broker, broker, capsys):
+    from ccc_server import vault
+    base, _ = http_broker
+    cli = load_cli()
+    import threading as _t
+    def answer():
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            pending = broker.pending()
+            if pending:
+                broker.resolve({"id": pending[0]["id"], "value": FAKE})
+                return
+            time.sleep(0.02)
+    thread = _t.Thread(target=answer)
+    thread.start()
+    assert cli.main(["--server", base, "secret", "request", "example-service", "--reason", "Test", "--timeout", "10"]) == 0
+    thread.join()
+    output = capsys.readouterr()
+    assert output.out == "saved to Vault: example-service\n"
+    assert FAKE.strip() not in output.out + output.err
+    assert vault.vault_get_value("example-service") == FAKE.strip()

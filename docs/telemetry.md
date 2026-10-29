@@ -289,8 +289,9 @@ It is configured to keep as little as possible:
   survives a page load. The same person on two pages counts twice.
 - **Only two events.** A `$pageview` (URL including any `utm_*` tags, referrer,
   browser/OS as PostHog derives them) and a `cta_click` with `cta_kind: "download"`
-  when the download button is clicked. No autocapture, no session replay, no
-  surveys, no person profiles.
+  for direct installer links or `"install_options"` for installation options,
+  plus `cta_placement` (`"nav"`, `"hero"`, or `"install"`). No autocapture,
+  no session replay, no surveys, no person profiles.
 - **Do Not Track is honored** (`respect_dnt: true`): with DNT on, nothing is sent.
 - A blocked script changes nothing about the site; every link works without it.
 

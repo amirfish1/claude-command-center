@@ -981,7 +981,6 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-vie
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInputBar {
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
 }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convExpandBtn,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conv-input-selectors,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convEscBtn,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convSteerBtn,

@@ -80,11 +80,15 @@ class CodexRolloutDayDirsTests(unittest.TestCase):
             with mock.patch.object(
                 server, "_codex_rollout_day_dirs", return_value=[day]
             ):
-                before = server._archive_corpus_signature_uncached()
+                # Compare only the day dir's contribution: the full hash
+                # also covers this host's real transcripts, which a live
+                # machine keeps writing between the two reads.
+                before = server._archive_corpus_signature_parts()[2].get(str(day))
                 with rollout.open("a") as fh:
                     fh.write('{"turn": 2}\n')
-                after = server._archive_corpus_signature_uncached()
+                after = server._archive_corpus_signature_parts()[2].get(str(day))
 
+        self.assertIsNotNone(before)
         self.assertEqual(
             before, after,
             "an existing Codex transcript growing changed the signature; that "

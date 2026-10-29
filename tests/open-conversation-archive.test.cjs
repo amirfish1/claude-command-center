@@ -1,0 +1,85 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const start = app.indexOf('  async function _setOpenSessionLifecycle(');
+const code = app.slice(start, app.indexOf('  // Show only the lifecycle/queue items', start));
+
+function fixture(response) {
+  const row = { id: 'conversation-test', session_id: 'session-test' };
+  const calls = [];
+  const context = {
+    currentConversation: row.id,
+    _openConversationRow: () => row,
+    rowRepoPath: () => '',
+    archivePayloadForRow: (_, session_id, archived) => ({ session_id, archived }),
+    ccPostJson: async () => response,
+    conversationsData: [row], archiveData: [], currentRepoBacklogData: [],
+    setOptimisticOverride: () => {},
+    returnToConversationList: () => calls.push('list'),
+    updateInputBar: () => {}, renderSidebar: () => {}, filterConversations: () => [],
+    $convSearch: { value: '' }, showOpToast: text => calls.push(text),
+  };
+  vm.createContext(context);
+  vm.runInContext(code, context);
+  return { context, calls, row, run: kind => context._setOpenSessionLifecycle(kind) };
+}
+
+test('archive returns to the list only after successful persistence', async () => {
+  let resolve;
+  const pending = new Promise(r => { resolve = r; });
+  const f = fixture(pending);
+  const done = f.run('archive');
+  // af8451a1: the row moves optimistically with a progress toast, but the
+  // reader stays open until the archive is persisted.
+  assert.deepEqual(f.calls, ['Archiving…']);
+  resolve({ ok: true, archived: true });
+  await done;
+  assert.equal(f.row.archived, true);
+  assert.equal(f.calls[1], 'list');
+});
+
+test('archive failure preserves the open conversation', async () => {
+  const f = fixture({ ok: false, error: 'Network failed' });
+  await f.run('archive');
+  assert.equal(f.context.currentConversation, 'conversation-test');
+  assert.equal(f.calls.includes('list'), false);
+  assert.equal(f.row.archived, false, 'the optimistic archive is rolled back');
+  assert.match(f.calls.at(-1), /Archive failed/);
+});
+
+test('a delayed archive does not navigate away from another conversation', async () => {
+  let resolve;
+  const f = fixture(new Promise(r => { resolve = r; }));
+  const done = f.run('archive');
+  f.context.currentConversation = 'another-conversation';
+  resolve({ ok: true, archived: true });
+  await done;
+  assert.equal(f.row.archived, true);
+  assert.equal(f.calls.includes('list'), false);
+});
+
+test('restoring a conversation keeps its reader open', async () => {
+  const f = fixture({ ok: true, archived: false });
+  await f.run('unarchive');
+  assert.equal(f.calls.includes('list'), false);
+  assert.equal(f.row.archived, false);
+});
+
+
+test('archive and restore patch every returned group member but leave other ideas alone', async () => {
+  for (const archived of [true, false]) {
+    const f = fixture({ ok: true, archived, session_ids: ['session-test', 'child', 'continued'] });
+    const child = { id: 'child', archived: !archived };
+    const continued = { id: 'continued', archived: !archived };
+    const other = { id: 'unrelated', archived: !archived };
+    f.context.conversationsData.push(child, other);
+    f.context.archiveData.push(continued);
+    await f.run(archived ? 'archive' : 'unarchive');
+    assert.equal(f.row.archived, archived);
+    assert.equal(child.archived, archived);
+    assert.equal(continued.archived, archived);
+    assert.equal(other.archived, !archived);
+  }
+});

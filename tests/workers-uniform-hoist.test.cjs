@@ -104,7 +104,7 @@ test('hoisting drops the majority glyph, keeps the exception, reclaims the colum
     </div></div>
   </div>`;
 
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
     // Desktop width: the narrow-container rule hides .conv-session-icon

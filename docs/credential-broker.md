@@ -6,17 +6,32 @@ the conversation. No SSH session is needed to answer.
 
 ## Agent use
 
-Start the local CCC server, then pipe the credential straight into a program
-that accepts a password on stdin. For example (replace `example-cli` with your
-consumer):
+By default a request is **store-only**: the user's value goes into the CCC Vault
+and the agent is told only the entry name. The value never reaches the agent, a
+file, or the transcript.
 
 ```bash
 ccc secret request example-service --reason "Sign in to the example service" \
-  --session-id YOUR_SESSION_ID --kind password --timeout 300 --stdout \
+  --session-id YOUR_SESSION_ID --kind password --timeout 300
+# saved to Vault: example-service
+ccc vault exec --env EXAMPLE_API_KEY=example-service -- ./deploy.sh
+```
+
+The entry is named after the service (`<service>.<kind>` for kinds other than
+`password`) and also appears in Settings > Vault. Requesting a name that already
+exists always prompts, so it replaces the saved value. One-time codes cannot be
+stored.
+
+When a program has to receive the value itself, add `--return-key` (alias
+`--stdout`) and pipe straight into a program that accepts a password on stdin:
+
+```bash
+ccc secret request example-service --reason "Sign in to the example service" \
+  --session-id YOUR_SESSION_ID --kind password --timeout 300 --return-key \
   | example-cli login --password-stdin
 ```
 
-`--stdout` is required and refuses a terminal. It writes the exact value without
+`--return-key` refuses a terminal. It writes the exact value without
 an added newline; the consumer must support that format and must not echo or log
 it. Never run this command bare in an agent tool call that captures stdout into
 the transcript. Do not put credentials in command arguments, reasons, service
@@ -44,13 +59,11 @@ this service on this machine** only when you want future local requests with the
 same service name and kind to reuse the value automatically. One-time codes
 cannot be remembered. Use a distinct alias for each account or environment.
 
-Remembered values use this first slice's portable fallback: plaintext JSON files
-(mode `0600`) in `~/.claude/command-center/secrets/` (mode `0700`). Existing
-symlinks, foreign ownership and permissive file/directory modes are rejected.
-Files are written atomically with private permissions from creation. This is
-access control by your OS, without encryption or a master password: programs
-running as your OS user and administrators can read them. CCC's Vault and BYOK
-stores remain separate.
+Remembered values are stored in the CCC Vault (macOS Keychain, or the Vault's
+encrypted-file fallback elsewhere), as an entry named `<service>.<kind>` (for
+example `jev-api-key.password`) that also shows up in Settings > Vault. Surrounding
+whitespace is trimmed on save. Nothing is written to disk unless you choose
+**Remember**.
 
 Delete every saved kind for a service and revoke its outstanding deliveries:
 
@@ -77,7 +90,7 @@ values and retrieval tokens belong only in JSON bodies, never URLs.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/secrets/request` | Local program only, no Origin/proxy headers. Body: `name`, `reason`, optional `kind`, `session_id`, `timeout`. Returns `id`, private `token`, and `status`. |
+| `POST /api/secrets/request` | Local program only, no Origin/proxy headers. Body: `name`, `reason`, optional `kind`, `session_id`, `timeout`, `store_only` (saves to the Vault; `take` then returns `status: stored` and `entry`, never a value). Returns `id`, private `token`, and `status`. |
 | `GET /api/secrets/pending` | Dashboard metadata only: `requests` containing `id`, `name`, `reason`, `kind`, `session_id`, `expires_at`. Never a value or retrieval token. |
 | `POST /api/secrets/resolve` | Dashboard submits `{id, value, remember: false}` or `{id, deny: true}`. Never returns the value. |
 | `POST /api/secrets/take` | Local program polls with `{id, token}`. Returns `status: pending`, `denied`, or `ready`; only `ready` includes `value` and consumes it atomically. |

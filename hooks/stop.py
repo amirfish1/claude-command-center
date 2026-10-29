@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Stop hook — marks session as waiting for input.
 
-Also fires a macOS notification ("Claude is waiting for you") via the
+Also fires a macOS notification with the turn's outcome via the
 shared _notify helper so the user sees a banner even when CCC isn't
 focused. Opt-out: CCC_NOTIFY=0 in the env.
 """
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -137,6 +138,74 @@ def first_prompt_snippet(transcript_path, limit=60):
     return ""
 
 
+def turn_notification_body(data, limit=240):
+    """Use the final response's outcome, without another model call.
+
+    Newer agents supply last_assistant_message directly. Older versions need
+    a bounded transcript tail read; never use tool output or reasoning, and
+    never cross a user message into a previous turn.
+    """
+    text = data.get("last_assistant_message")
+    if not isinstance(text, str) or not text.strip():
+        text = ""
+        try:
+            with open(data.get("transcript_path") or "", "rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 1_000_000))
+                tail = f.read().decode("utf-8", "ignore")
+            for line in reversed(tail.splitlines()):
+                try:
+                    entry = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("type") == "user":
+                    break
+                if entry.get("type") != "assistant":
+                    continue
+                content = (entry.get("message") or {}).get("content")
+                if isinstance(content, list):
+                    content = "\n".join(
+                        b["text"] for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                        and isinstance(b.get("text"), str))
+                if isinstance(content, str) and content.strip():
+                    text = content
+                    break
+        except (OSError, ValueError, TypeError):
+            pass
+
+    states = re.findall(r"<session-state>\s*(.*?)</session-state>", text,
+                        flags=re.DOTALL | re.IGNORECASE)
+    if states:
+        fields = dict(re.findall(r"^(DID|NEXT_STEP_USER):[ \t]*(.*)$", states[-1],
+                                 flags=re.MULTILINE))
+        outcome = fields.get("DID", "").strip()
+        action = fields.get("NEXT_STEP_USER", "").strip()
+        if action and action.lower().rstrip(".") != "none":
+            # Prioritize the required action over the outcome in a short banner.
+            budget = min(100, limit - len(" Needs you: ") - len(action))
+            if budget < 30:
+                outcome = ""
+            elif len(outcome) > budget:
+                outcome = outcome[:budget - 1].rstrip() + "…"
+            text = (outcome + " Needs you: " + action).strip()
+        else:
+            text = outcome
+    else:
+        # An incomplete footer is metadata too, never notification copy.
+        text = re.split(r"<session-state>", text, flags=re.IGNORECASE)[0]
+
+    text = re.sub(r"\[([^\]]+)\]\([^\n)]+\)", r"\1", text)
+    text = re.sub(r"(?m)^\s{0,3}(?:#{1,6}\s+|[-*]\s+)", "", text)
+    text = re.sub(r"[`*_]", "", text)
+    text = " ".join(text.split())
+    if not text:
+        return "Turn finished — open the session for details."
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def main():
     try:
         raw = sys.stdin.read()
@@ -186,7 +255,7 @@ def main():
                 (session_title(session_id, data.get("transcript_path") or "")
                  or first_prompt_snippet(data.get("transcript_path") or "")
                  or session_id[:8]),
-                "Ready for your input",
+                turn_notification_body(data),
                 session_id,
             )
 

@@ -489,3 +489,59 @@ def test_remote_state_shadows_stale_local_entry():
 
     assert snap["writer"] == "ccc"
     assert snap["external_active"] is False
+
+
+_STEER_TIMEOUT = {
+    "ok": False,
+    "error": "Codex app-server request timed out: turn/steer",
+    "fallback": "queue",
+    "ambiguous": True,
+}
+
+
+def test_timed_out_steer_found_in_rollout_is_delivered():
+    """CCC-238: Codex applied the steer but its reply came after the timeout."""
+    def respond(method, params):
+        if method == "turn/steer":
+            return dict(_STEER_TIMEOUT)
+        raise AssertionError(f"unexpected method: {method}")
+
+    with _SteerEnv(respond, state=_state(status="active", active_turn_id="turn-live-9")) as env, \
+            mock.patch.object(server, "_codex_rollout_stat", return_value={"path": "r", "size": 1}), \
+            mock.patch.object(server, "_codex_rollout_contains_user_text_since", return_value=True):
+        result = codex._codex_steer_via_app_server(SID, "nudge")
+
+    assert result["ok"] is True
+    assert result["reconciled"] == "rollout"
+    assert env.calls == ["turn/steer"]
+
+
+def test_timed_out_steer_missing_from_rollout_is_unknown_not_failed():
+    def respond(method, params):
+        if method == "turn/steer":
+            return dict(_STEER_TIMEOUT)
+        raise AssertionError(f"unexpected method: {method}")
+
+    with _SteerEnv(respond, state=_state(status="active", active_turn_id="turn-live-9")) as env, \
+            mock.patch.object(codex, "_CODEX_STEER_RECONCILE_S", 0.0), \
+            mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+            mock.patch.object(server, "_codex_rollout_contains_user_text_since", return_value=False):
+        result = codex._codex_steer_via_app_server(SID, "nudge")
+
+    assert result["ok"] is False
+    assert result["code"] == "codex_steer_unknown"
+    assert result["uncertain"] is True
+    assert env.calls == ["turn/steer"]
+
+
+def test_definite_steer_error_stays_failed():
+    def respond(method, params):
+        if method == "turn/steer":
+            return {"error": {"message": "boom"}}
+        raise AssertionError(f"unexpected method: {method}")
+
+    with _SteerEnv(respond, state=_state(status="active", active_turn_id="turn-live-9")):
+        result = codex._codex_steer_via_app_server(SID, "nudge")
+
+    assert result["code"] == "codex_steer_failed"
+    assert not result.get("uncertain")

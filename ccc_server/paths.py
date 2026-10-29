@@ -62,6 +62,7 @@ def _iter_common_cli_candidates(cmd):
         Path("/opt/homebrew/bin") / cmd,
         Path("/usr/local/bin") / cmd,
         home / ".local" / "bin" / cmd,
+        home / ".ccc" / "runtime" / cmd / "bin" / cmd,
         home / ".npm-global" / "bin" / cmd,
         home / "Library" / "pnpm" / cmd,
         home / ".volta" / "bin" / cmd,
