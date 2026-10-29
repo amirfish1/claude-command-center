@@ -501,7 +501,11 @@ class PeerClient:
 
     # -- public ------------------------------------------------------------
 
-    def request(self, method: str, path: str, body: dict | None = None, timeout: float = 30.0) -> dict[str, Any]:
+    def request(self, method: str, path: str, body: dict | None = None, timeout: float = 30.0,
+                pipe: bool = False) -> dict[str, Any]:
+        """``pipe=True`` (read-only callers only) sends an ssh request over
+        the peer's persistent pipe when one is live (federation_pipe), and
+        falls back to a per-call ssh session otherwise."""
         headers = {
             "X-CCC-Peer": self.self_node_id,
             "X-CCC-Peer-Token": self.peer.get("secret") or "",
@@ -510,7 +514,11 @@ class PeerClient:
         if ttype == "loopback":
             result = self._request_loopback(method, path, body, headers, timeout)
         elif ttype == "ssh":
-            result = self._request_ssh(method, path, body, headers, timeout)
+            result = None
+            if pipe:
+                result = self._request_ssh_pipe(method, path, body, headers, timeout)
+            if result is None:
+                result = self._request_ssh(method, path, body, headers, timeout)
         elif ttype == "unconfigured":
             raise PeerError(
                 "unsupported_capability",
@@ -592,6 +600,22 @@ class PeerClient:
             remote_tmp="/tmp",
         )
         return ssh_multiplexer.SSHMultiplexer(config)
+
+    def _request_ssh_pipe(self, method, path, body, headers, timeout) -> dict[str, Any] | None:
+        """None = no live pipe (or it failed before answering): use the
+        per-call path. Never waits for a pipe to start."""
+        from ccc_server import federation_pipe
+
+        live = federation_pipe.get_live(self.peer)
+        if live is None:
+            return None
+        try:
+            return live.request({"method": method, "path": path, "headers": headers,
+                                 "body": body, "port": self.transport.get("port")}, timeout)
+        except federation_pipe.PipeUnavailable:
+            return None
+        except TimeoutError:
+            raise PeerError("timeout", f"ssh pipe timed out after {timeout}s")
 
     def _request_ssh(self, method, path, body, headers, timeout) -> dict[str, Any]:
         result = self._request_ssh_once(method, path, body, headers, timeout,

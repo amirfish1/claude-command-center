@@ -47,7 +47,7 @@ def script(monkeypatch):
         def __init__(self, peer, self_node_id=None):
             self.peer = peer
 
-        def request(self, method, path, body=None, timeout=30.0):
+        def request(self, method, path, body=None, timeout=30.0, pipe=False):
             node = self.peer["node_id"]
             s.calls.append((node, body["action"], body["args"], body["hops"]))
             behaviour = s.by_node[node]
