@@ -46,7 +46,8 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 10
+_CODEX_META_VERSION = 11
+_CODEX_STARTED_TURN_IDS_MAX = 64
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
 _CODEX_THREAD_VISIBILITY_RANK = {
@@ -11132,6 +11133,18 @@ def _extract_codex_tail_meta(path):
             # hasn't flushed yet); both clear semantics differ so both kept.
             "turn_started_ts": 0,
             "last_user_ts": 0,
+            # Turn identity (CCC-248). current_turn_id is the latest
+            # task_started turn not yet closed by a terminal receipt;
+            # current_turn_prompted is set once that turn carries its own
+            # user prompt; started_turn_ids is a bounded list of turn ids
+            # this rollout started. last_terminal_* describe the newest
+            # terminal receipt (task_complete / turn_aborted) applied.
+            "current_turn_id": "",
+            "current_turn_prompted": False,
+            "started_turn_ids": [],
+            "last_terminal_turn_id": "",
+            "last_terminal_reason": "",
+            "last_terminal_ts": 0,
             "needs_approval": False,
             "needs_approval_message": "",
             "pending_approval_call_id": "",
@@ -11274,6 +11287,13 @@ def _extract_codex_tail_meta(path):
                     if ptype == "task_started":
                         # The turn's own durable start marker — cleared by
                         # task_complete below. Drives the sidebar WIP timer.
+                        started_id = str(payload.get("turn_id") or "")
+                        meta["current_turn_id"] = started_id
+                        meta["current_turn_prompted"] = False
+                        if started_id:
+                            meta["started_turn_ids"] = (
+                                meta["started_turn_ids"] + [started_id]
+                            )[-_CODEX_STARTED_TURN_IDS_MAX:]
                         if ts_epoch:
                             meta["turn_started_ts"] = ts_epoch
                             meta["last_meaningful_ts"] = ts_epoch
@@ -11286,6 +11306,7 @@ def _extract_codex_tail_meta(path):
                             meta["first_message"] = meta["first_message"] or text
                             meta["last_prompt"] = text
                         meta["last_event_type"] = "user"
+                        meta["current_turn_prompted"] = bool(meta.get("current_turn_id"))
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
@@ -11304,11 +11325,41 @@ def _extract_codex_tail_meta(path):
                         meta["last_event_type"] = "assistant"
                         if ts_epoch:
                             meta["last_meaningful_ts"] = ts_epoch
-                    elif ptype == "task_complete":
-                        text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
-                        if text:
-                            meta["last_assistant_text"] = text
-                            meta.update(_extract_codex_summary_signals(text, pr_url_re))
+                    elif ptype in ("task_complete", "turn_aborted"):
+                        # Terminal receipt. turn_aborted (interrupted / failed
+                        # turns) ends a turn exactly like task_complete; before
+                        # CCC-248 it was ignored, so an interrupted turn kept
+                        # reading as mid-turn ("working") until the stale-tool
+                        # threshold. A receipt naming a turn this rollout never
+                        # started (a late receipt from another turn) must not
+                        # end the current prompted turn. A receipt for a turn
+                        # that DID start here always applies: Codex nests
+                        # sub-turns (task_started, sometimes prompted, often
+                        # never closed) inside the outer turn, and the outer
+                        # turn's receipt is what ends the session's turn.
+                        term_turn_id = str(payload.get("turn_id") or "")
+                        cur_turn_id = meta.get("current_turn_id") or ""
+                        if ptype == "task_complete":
+                            text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
+                            if text:
+                                meta["last_assistant_text"] = text
+                                meta.update(_extract_codex_summary_signals(text, pr_url_re))
+                        if (
+                            term_turn_id
+                            and cur_turn_id
+                            and term_turn_id != cur_turn_id
+                            and term_turn_id not in meta["started_turn_ids"]
+                            and meta.get("current_turn_prompted")
+                        ):
+                            continue
+                        meta["current_turn_id"] = ""
+                        meta["current_turn_prompted"] = False
+                        meta["last_terminal_turn_id"] = term_turn_id
+                        meta["last_terminal_reason"] = (
+                            "completed" if ptype == "task_complete"
+                            else str(payload.get("reason") or "aborted")
+                        )
+                        meta["last_terminal_ts"] = ts_epoch or 0
                         meta["last_event_type"] = "result"
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
@@ -11342,6 +11393,7 @@ def _extract_codex_tail_meta(path):
                             meta["first_message"] = meta["first_message"] or text
                             meta["last_prompt"] = text
                         meta["last_event_type"] = "user"
+                        meta["current_turn_prompted"] = bool(meta.get("current_turn_id"))
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
@@ -11618,6 +11670,23 @@ def _codex_app_activity_superseded_by_tail(app_activity, tail):
     return pending_tool != app_activity.get("sidecar_tool")
 
 
+def _codex_tail_terminal_predates_app_turn(tail, app_state):
+    """True when the rollout's last terminal receipt belongs to an older turn
+    than the app-server's active one (CCC-248): a different turn id, stamped
+    no later than the active turn's start. Such a late receipt must not mark
+    the newer, genuinely active turn idle."""
+    active_id = str((app_state or {}).get("active_turn_id") or "")
+    term_id = str((tail or {}).get("last_terminal_turn_id") or "")
+    if not active_id or not term_id or active_id == term_id:
+        return False
+    try:
+        started = float((app_state or {}).get("turn_started_at") or 0)
+        term_ts = float((tail or {}).get("last_terminal_ts") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(started and term_ts and term_ts <= started + 2)
+
+
 def _codex_fresh_threshold_s():
     try:
         v = float(os.environ.get("CCC_CODEX_FRESH_SEC", "40"))
@@ -11799,7 +11868,12 @@ def _codex_state_fields(
             except (TypeError, ValueError):
                 app_ts = 0.0
                 tail_ts = 0.0
-            if not (tail_ts > app_ts + 2 and (tail or {}).get("last_event_type") == "result"):
+            tail_ended_turn = (
+                tail_ts > app_ts + 2
+                and (tail or {}).get("last_event_type") == "result"
+                and not _codex_tail_terminal_predates_app_turn(tail, app_state)
+            )
+            if not tail_ended_turn:
                 fields["codex_state"] = "working"
                 fields["codex_fresh"] = True
                 ws = _working_since()
