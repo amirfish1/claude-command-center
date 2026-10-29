@@ -22505,7 +22505,7 @@ CCC_HOOK_SCRIPT_NAMES = (
     # see ensure_codex_hooks_installed) share this same copy step and the
     # same HOOK_SCRIPTS_DIR location so both engines' scripts stay in sync
     # with the repo from one place.
-    "_reorient_shared.py", "post-compact-codex.py",
+    "_reorient_shared.py", "post-compact-codex.py", "user-prompt-submit.py",
 )
 # Legacy marker (pre-rename) — kept so ensure_hooks_installed can detect old
 # entries in ~/.claude/settings.json and rewrite them to the new path.
@@ -28729,6 +28729,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Sessions a machine restart cut off mid-turn (scanned once per boot).
             from ccc_server import restart_recovery
             restart_recovery.handle_api_get(self)
+        elif path == "/api/runaway/holds":
+            # Sessions on Hold (runaway card); see ccc_server/runaway_hold.py.
+            from ccc_server import runaway_hold
+            runaway_hold.handle_api_get(self)
         elif path == "/api/runaway":
             # Sessions working on autonomously with nothing changing (timers,
             # goals, WatchTower pings). Report-only; see ccc_server/runaway.py.
@@ -29753,7 +29757,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import health_report as _health_report
             qs = urllib.parse.parse_qs(parsed.query)
             exact = qs.get("exact", ["0"])[0] in ("1", "true")
-            self.send_json(_health_report.build_report(exact=exact))
+            hours = qs.get("hours", ["24"])[0]
+            self.send_json(_health_report.build_report(exact=exact, hours=hours))
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("federated", ["0"])[0] in ("1", "true"):
@@ -33077,9 +33082,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             auto_rerun.handle_api_post(self)
             return
         if path.startswith("/api/runaway/"):
-            # Lease ("let it run") / dismiss for a flagged runaway session.
-            # Same-origin was already enforced at the top of do_POST.
-            from ccc_server import runaway
+            # Lease ("let it run") / dismiss / hold / release for a flagged
+            # runaway session. Same-origin was already enforced at the top of do_POST.
+            from ccc_server import runaway, runaway_hold
+            if runaway_hold.handle_api_post(self, path):
+                return
             if runaway.handle_api_post(self, path):
                 return
         if path.startswith("/api/restart-recovery/"):
@@ -40494,6 +40501,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         return
                     if continuation_origin != sid:
                         inject_options["attr"] = _attribution.relay(inject_options["attr"], "continuation", delivered=sid)
+                    # CCC-265: a session on runaway Hold takes no automatic
+                    # wakes (WatchTower, peers, CCC's own); WatchTower keeps a
+                    # refused message in its outbox. A composer send is the
+                    # human taking over, so it releases the hold.
+                    from ccc_server import runaway_hold as _runaway_hold
+                    if _runaway_hold.is_held(sid):
+                        if browser_composer:
+                            _runaway_hold.release(sid, why="composer")
+                        else:
+                            _log_activity("inject", "HELD_REFUSED", f"{sid} source={source}")
+                            self.send_json({"ok": False, "held": True, "code": "runaway_hold",
+                                            "error": "session is on Hold (runaway card); release it to deliver"}, 409)
+                            return
                     try:
                         # Cloud-relay presence: composer sends are human input;
                         # every other source is remembered as machine input.

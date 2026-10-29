@@ -1,0 +1,1 @@
+A ⚑ Report flag on every page opens Report a problem, which now sends privately by default (you get a report ID) and attaches a 7-day diagnostics report you can inspect under "Show exactly what's sent". A public GitHub issue remains the second option; the mail-app draft option is gone.

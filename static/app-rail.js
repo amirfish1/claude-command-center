@@ -71,7 +71,7 @@
     "  width: var(--ccc-rail-w, " + RAIL_DEFAULT + "px);",
     "  background: #0f1115; border-right: 1px solid #20252c;",
     "  display: flex; flex-direction: column; align-items: center;",
-    "  padding: 12px 0 8px; gap: 6px; z-index: 1000; overflow-y: auto;",
+    "  padding: 12px 0 64px; gap: 6px; z-index: 1000; overflow-y: auto;",
     "  overflow-x: hidden; scrollbar-width: none;",
     "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
     "}",
@@ -130,11 +130,32 @@
     ".ccc-rail-resizer:hover::before,",
     ".ccc-rail-resizer.dragging::before { background: #5ac8fa; }",
     "body.ccc-rail-dragging { cursor: col-resize; user-select: none; }",
+    /* Report-a-problem flag: pinned to the rail's foot on every page. */
+    ".ccc-report-flag {",
+    "  position: fixed; left: 0; bottom: 8px; z-index: 1000;",
+    "  width: var(--ccc-rail-w, " + RAIL_DEFAULT + "px); display: flex;",
+    "  justify-content: center; pointer-events: none;",
+    "}",
+    ".ccc-report-flag button {",
+    "  pointer-events: auto; position: relative; display: flex;",
+    "  flex-direction: column; align-items: center; gap: 2px;",
+    "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px);",
+    "  padding: 6px 3px; border-radius: 7px; cursor: pointer;",
+    "  border: 1px solid rgba(240,180,60,.45); background: rgba(240,180,60,.10);",
+    "  color: #f0b43c; font: 9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
+    "  text-transform: uppercase; letter-spacing: 0.2px; white-space: nowrap;",
+    "}",
+    ".ccc-report-flag button .icon { font-size: 17px; line-height: 1; }",
+    ".ccc-report-flag button:hover { background: rgba(240,180,60,.2); color: #ffd27a; }",
+    ".ccc-report-flag.hint button::after {",
+    "  content: ''; position: absolute; top: 4px; right: 6px; width: 7px;",
+    "  height: 7px; border-radius: 50%; background: #f85149;",
+    "}",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
     /* Phones and the PWA have no room for the gutter. */
     "@media (max-width: 700px) {",
-    "  .ccc-side-nav, .ccc-rail-resizer { display: none; }",
+    "  .ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag { display: none; }",
     "  body { padding-left: 0; }",
     "}"
   ].join("\n");
@@ -203,6 +224,7 @@
       afterPaint(function () {
         var ms = Date.now() - rec.t;
         if (ms < 0 || ms > 60000) return;
+        if (ms > SLOW_SWITCH_MS) hintReport("Opening this page took " + (ms / 1000).toFixed(1) + " s.");
         var detail = { from: String(rec.from || ""), to: String(rec.to || ""), mode: "navigate" };
         try {
           var n = performance.getEntriesByType("navigation")[0];
@@ -220,6 +242,37 @@
   }
 
   var lastApps = FALLBACK;
+
+  // "Report a problem" lives on every page, so the moment something feels
+  // wrong the report is one click away. It never pops up on its own; after
+  // a slow switch or a failed rail load it only grows a dot.
+  var SLOW_SWITCH_MS = 5000;
+  var flag = document.createElement("div");
+  flag.className = "ccc-report-flag";
+  var flagBtn = document.createElement("button");
+  flagBtn.type = "button";
+  flagBtn.title = "Report a problem: sends a private report with the last 7 days of diagnostics";
+  flagBtn.setAttribute("aria-label", "Report a problem");
+  var flagIcon = document.createElement("span");
+  flagIcon.className = "icon";
+  flagIcon.textContent = "\u2691";
+  flagBtn.appendChild(flagIcon);
+  flagBtn.appendChild(document.createTextNode("Report"));
+  flag.appendChild(flagBtn);
+
+  function hintReport(why) {
+    flag.classList.add("hint");
+    flagBtn.title = why + " Report a problem?";
+  }
+
+  // The dashboard owns the report modal; other pages hand off to it with
+  // ?report_problem=<page>, which opens the modal after the load.
+  flagBtn.addEventListener("click", function () {
+    var from = activeIdFor(lastApps) || "";
+    flag.classList.remove("hint");
+    if (typeof window.cccOpenReport === "function" && window.cccOpenReport(from)) return;
+    window.location.href = "/?report_problem=" + encodeURIComponent(from || "page");
+  });
 
   var nav = document.createElement("nav");
   nav.className = "ccc-side-nav";
@@ -326,6 +379,8 @@
           try { localStorage.setItem(APPS_CACHE_KEY, JSON.stringify(d.apps)); } catch (e) {}
         } else if (attempt < RETRY_MS.length) {
           setTimeout(function () { refresh(attempt + 1); }, RETRY_MS[attempt]);
+        } else {
+          hintReport("The app list did not load.");
         }
       });
   }
@@ -361,6 +416,7 @@
     applyWidth(railW);
     render(cachedApps() || FALLBACK);
     document.body.appendChild(nav);
+    document.body.appendChild(flag);
     mountResizer();
     refresh();
     reportArrival();

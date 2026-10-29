@@ -13378,7 +13378,16 @@
   .bug-dest-text { display: flex; flex-direction: column; gap: 2px; }
   .bug-dest-title { font-size: 12.5px; color: var(--text); }
   .bug-dest-sub { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
+  .bug-diag-toggle {
+    display: flex; align-items: flex-start; gap: 8px; cursor: pointer;
+    font-size: 12.5px; color: var(--text);
+  }
+  .bug-diag-toggle input { margin-top: 2px; accent-color: var(--accent); }
+  .bug-diag-toggle > span { display: flex; flex-direction: column; gap: 2px; }
+  .bug-preview-details > summary { cursor: pointer; }
+  .bug-preview-details[open] > summary { margin-bottom: 6px; }
   .bug-preview {
+    width: 100%; box-sizing: border-box;
     min-height: 150px; max-height: 260px; resize: vertical;
     font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
     font-size: 11px; line-height: 1.45; white-space: pre;

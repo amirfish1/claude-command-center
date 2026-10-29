@@ -81,23 +81,35 @@ class ReportTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _report(self, exact=False):
+    def _report(self, exact=False, hours=24):
         return hr.build_report(exact=exact, now=NOW, rows=self.rows, cards=self.cards,
                                wt_counts=(3, 42, 2, 9), events=self.events,
-                               activity_path=self.log)
+                               activity_path=self.log, hours=hours)
+
+    def test_seven_day_window(self):
+        r = self._report(exact=True, hours=168)
+        self.assertEqual(r["window_hours"], 168)
+        # The 3-day-old inject and the 5-day-old session now count.
+        self.assertEqual(r["messages"]["by_source"]["composer"], 2)
+        self.assertEqual(r["sessions"]["active"], 4)
+
+    def test_window_is_clamped(self):
+        self.assertEqual(self._report(hours=99999)["window_hours"], hr.MAX_WINDOW_HOURS)
+        self.assertEqual(self._report(hours=0)["window_hours"], 1)
+        self.assertEqual(self._report(hours="junk")["window_hours"], 24)
 
     def test_shape_and_buckets(self):
         r = self._report()
         self.assertEqual(r["report_version"], hr.REPORT_VERSION)
         self.assertFalse(r["exact"])
-        self.assertEqual(r["sessions"]["active_24h"], "2-5")
+        self.assertEqual(r["sessions"]["active"], "2-5")
         self.assertEqual(r["watchtower"]["tickets_open"], "21-50")
-        self.assertEqual(r["messages"]["sent_24h"], "2-5")
+        self.assertEqual(r["messages"]["sent"], "2-5")
         json.dumps(r)  # serializable
 
     def test_exact_mode(self):
         r = self._report(exact=True)
-        self.assertEqual(r["sessions"]["active_24h"], 3)
+        self.assertEqual(r["sessions"]["active"], 3)
         self.assertEqual(r["messages"]["by_source"], {"composer": 1, "other": 1, "wt": 1})
         self.assertEqual(r["watchtower"]["workers_alive"], 2)
 
@@ -132,6 +144,32 @@ class ReportTest(unittest.TestCase):
         t = time.time()
         self._report()
         self.assertLess(time.time() - t, 2.0)
+
+
+class PerfWindowReadTest(unittest.TestCase):
+    def test_reads_window_past_the_2mb_summary_tail(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "perf-events.jsonl"
+            def row(ts, kind, ms, detail=None):
+                iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ts)) + ".5Z"
+                return json.dumps({"ts": iso, "kind": kind, "ms": ms, "boot_id": "",
+                                   "conv_id": "", "detail": detail}) + "\n"
+            with open(path, "w") as f:
+                f.write(row(NOW - 9 * 86400, "conv_open", 1))       # outside 7d
+                f.write(row(NOW - 6 * 86400, "conv_open", 700))
+                pad = row(NOW - 3 * 86400, "list_read", 5)
+                f.write(pad * (3 * 1024 * 1024 // len(pad)))       # > 2 MB filler
+                f.write(row(NOW - 60, "view_switch", 2400, {"to": "queues", "mode": "navigate"}))
+                f.write("not json\n")
+            ev = hr.read_perf_window(NOW - 7 * 86400, path=path)
+            kinds = [e["kind"] for e in ev]
+            self.assertEqual(kinds[0], "conv_open")
+            self.assertEqual(ev[0]["ms"], 700)
+            self.assertEqual(ev[-1]["detail"], {"to": "queues", "mode": "navigate"})
+            self.assertNotIn(1, [e["ms"] for e in ev if e["kind"] == "conv_open"])
+            capped = hr.read_perf_window(NOW - 7 * 86400, path=path, max_bytes=1024)
+            self.assertLess(len(capped), 20)                     # bounded read
+            self.assertEqual(capped[-1]["kind"], "view_switch")
 
 
 class PerfKindsTest(unittest.TestCase):
