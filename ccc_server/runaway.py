@@ -34,7 +34,13 @@ A cold candidate is read from its last INITIAL_TAIL_BYTES at most. The API
 answers from the last result and refreshes it on a background thread at most
 every SCAN_TTL_S, so a request never waits on a scan. No subprocesses.
 
-Engines: Claude (~/.claude/projects) and Codex ($CODEX_HOME/sessions).
+Engines: Claude (~/.claude/projects), Codex ($CODEX_HOME/sessions), Kimi
+($KIMI_CODE_HOME/sessions/*/session_*/agents/main/wire.jsonl), and the
+SQLite-backed Devin CLI (sessions.db) and Hermes (state.db, one per profile).
+SQLite engines follow the same rules: a database whose file and WAL did not
+change since the last scan is not queried; otherwise one query lists sessions
+active within ACTIVE_WINDOW_S and only rows past each session's last-read id
+are fetched, with JSON fields pulled by json_extract inside SQLite.
 Stdlib-only.
 """
 
@@ -43,6 +49,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -54,10 +61,13 @@ CODEX_ROOT = _rr.CODEX_ROOT
 STATE_DIR = _rr.STATE_DIR
 SCAN_STATE_FILE = STATE_DIR / "runaway-scan.json"
 LEASES_FILE = STATE_DIR / "runaway-leases.json"
+KIMI_ROOT = Path(os.path.expanduser(os.environ.get("KIMI_CODE_HOME", "").strip() or "~/.kimi-code")) / "sessions"
+DEVIN_SESSION_PREFIX = "devincli-"  # CCC's id for a raw Devin CLI session id
 
 ACTIVE_WINDOW_S = 3 * 3600      # still running "into the sunset"
 CODEX_DAYS_BACK = 14            # a long-lived rollout stays in its start-day dir
 INITIAL_TAIL_BYTES = 16 * 1024 * 1024
+INITIAL_TAIL_ROWS = 3000        # SQLite engines: rows read for a cold candidate
 SCAN_TTL_S = 300.0  # the card polls every 5 min; a rescan costs seconds in the busy server
 PRUNE_AFTER_S = 7 * 86400
 
@@ -74,7 +84,8 @@ LEASE_DEFAULT_H = 24
 DISMISS_H = 6
 
 HUMAN = "human"
-_PRODUCTIVE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"}
+_PRODUCTIVE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch",
+                     "edit", "write", "patch", "write_file"}  # + Devin, Hermes
 _PROGRESS_RE = re.compile(
     r"\bgit\b[^\n|;&]{0,200}?\b(?:commit|push)\b"
     r"|\bwt\s+(?:close|accept)\b"
@@ -221,6 +232,7 @@ def _close_turn(st):
     if not turn or not turn.get("active"):
         return  # a prompt that got no model work is not a turn
     trigger = turn["trigger"] or "unknown"
+    st["last_trigger"] = trigger
     if trigger == HUMAN:
         return
     sk = st["streak"]
@@ -263,15 +275,32 @@ def _claude_text(rec):
 
 
 def _claude_prompt(st, rec, text, ts):
+    _start_prompt(st, claude_trigger(rec, text), text, ts)
+
+
+def _start_prompt(st, trigger, text, ts):
+    """A new prompt closes the open turn and opens one for ``trigger``."""
     turn = st["turn"]
     if turn is not None and not turn.get("active"):
         st["turn"] = None  # the same prompt seen twice (dequeue + user record)
     elif turn is not None:
         _close_turn(st)
-    trigger = _resolve_answer(st, claude_trigger(rec, text), text)
+    trigger = _resolve_answer(st, trigger, text)
     if trigger == HUMAN and not st["title"] and not _ANSWER_RE.search(text[:400]):
         st["title"] = " ".join(text.split())[:120]
     _open_turn(st, trigger, ts)
+
+
+def _repeat_trigger(st, trigger, text):
+    """Kimi/Devin/Hermes carry no reliable sender on scripted prompts. The
+    same long prompt arriving again is a script re-sending it, not a person."""
+    if trigger != HUMAN:
+        return trigger
+    key = " ".join(str(text or "").split())[:400]
+    if len(key) >= 40 and key == st.get("last_prompt_key"):
+        return "repeat"
+    st["last_prompt_key"] = key
+    return trigger
 
 
 def feed_claude(st, rec):
@@ -404,6 +433,298 @@ def _codex_prompt(st, text, ts):
     _classify_open_turn(st, trigger, ts)
 
 
+# -------------------------------------------------------------------- Kimi
+
+_KIMI_ORIGINS = {"system_trigger": "system", "task": "task", "background_task": "task",
+                 "skill_activation": "system", "injection": "system"}
+_KIMI_STEP_CONTINUES = ("tool_use", "tool_calls")
+
+
+def _kimi_text(value):
+    if isinstance(value, str):
+        return value
+    return " ".join(str(b.get("text") or "") for b in value or [] if isinstance(b, dict))
+
+
+def feed_kimi(st, rec):
+    kind = rec.get("type")
+    ts = float(rec.get("time") or 0) / 1000.0
+    if ts:
+        st["last_ts"] = max(st["last_ts"], ts)
+    if kind == "profile.bind" and not st["cwd"]:
+        st["cwd"] = str((rec.get("environmentDisclosure") or {}).get("cwd") or "")
+    elif kind in ("turn.prompt", "turn.steer"):
+        origin = rec.get("origin") if isinstance(rec.get("origin"), dict) else {}
+        text = _kimi_text(rec.get("input"))
+        if origin.get("kind", "user") == "user":
+            trigger = text_trigger(text)
+        elif origin.get("kind") == "system_trigger" and origin.get("name") == "goal":
+            trigger = "goal"
+        else:
+            trigger = _KIMI_ORIGINS.get(origin.get("kind"), "system")
+        if kind == "turn.prompt":
+            if text.strip():
+                _start_prompt(st, _repeat_trigger(st, trigger, text), text, ts)
+        elif trigger == HUMAN and st["turn"] is not None:
+            _classify_open_turn(st, _resolve_answer(st, trigger, text), ts)  # steering
+    elif kind in ("turn.cancel", "turn.ended", "agent.turn.ended"):
+        _close_turn(st)
+    elif kind == "context.append_loop_event":
+        event = rec.get("event") if isinstance(rec.get("event"), dict) else {}
+        etype = event.get("type")
+        if etype in ("step.begin", "tool.call", "step.end") and st["turn"] is None:
+            if etype == "step.end":
+                return  # the tail of a turn that already ended
+            _open_turn(st, "goal", ts)  # model work with no prompt: a continuation
+        if etype in ("step.begin", "tool.call"):
+            st["turn"]["active"] = True
+        if etype == "tool.call":
+            _mark_tool(st, str(event.get("name") or ""), event.get("args"))
+        elif etype == "step.end":
+            usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+            _add_cost(st, (usage.get("inputOther") or 0)
+                      + 1.25 * (usage.get("inputCacheCreation") or 0)
+                      + 0.1 * (usage.get("inputCacheRead") or 0)
+                      + 5 * (usage.get("output") or 0))
+            if str(event.get("finishReason") or "end_turn") not in _KIMI_STEP_CONTINUES:
+                _close_turn(st)
+
+
+# ----------------------------------------------------------------- SQLite
+
+def _connect_ro(db):
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=3)
+    con.execute("PRAGMA query_only = 1")
+    return con
+
+
+def _db_sig(db):
+    sig = []
+    for suffix in ("", "-wal"):
+        try:
+            stat = os.stat(f"{db}{suffix}")
+            sig.append([stat.st_mtime_ns, stat.st_size])
+        except OSError:
+            sig.append(None)
+    return sig
+
+
+def _db_scan(engine, db, states, now, query_sessions, feed_session):
+    """Shared SQLite candidacy: skip unchanged DBs, read only new rows."""
+    db = str(db)
+    prefix = f"{engine}:{db}#"
+    meta_key = f"{engine}-db:{db}"
+    meta = states.get(meta_key) if isinstance(states.get(meta_key), dict) else {}
+    sig = _db_sig(db)
+    if sig[0] is not None and meta.get("sig") != sig:
+        try:
+            con = _connect_ro(db)
+        except sqlite3.Error:
+            con = None
+        if con is not None:
+            try:
+                for sid, info in query_sessions(con, now - ACTIVE_WINDOW_S):
+                    key = prefix + sid
+                    st = states.get(key)
+                    if not isinstance(st, dict) or "streak" not in st:
+                        st = _new_state()
+                    st["sid"] = st["sid"] or info.get("sid", sid)
+                    st["cwd"] = st["cwd"] or str(info.get("cwd") or "")
+                    feed_session(con, sid, st, info)
+                    states[key] = st
+                meta = {"sig": sig, "seen": now}
+            except sqlite3.Error:
+                pass
+            finally:
+                con.close()
+    meta["seen"] = now
+    states[meta_key] = meta
+    out = []
+    for key, st in states.items():
+        if key.startswith(prefix) and isinstance(st, dict) and now - st["last_ts"] <= ACTIVE_WINDOW_S:
+            st["seen"] = now
+            out.append((engine, db, st))
+    return out
+
+
+def _rows_since(con, sql_new, sql_tail, sid, last_id, st):
+    if last_id:
+        return con.execute(sql_new, (sid, last_id)).fetchall()
+    rows = con.execute(sql_tail, (sid, INITIAL_TAIL_ROWS + 1)).fetchall()
+    if len(rows) > INITIAL_TAIL_ROWS:
+        st["partial"] = True
+        rows = rows[:INITIAL_TAIL_ROWS]
+    return rows[::-1]
+
+
+# ------------------------------------------------------------------- Devin
+
+# Devin rows can be many MB (inline images, tool dumps). octet_length() reads
+# only the record header, so oversized rows are skipped without loading them;
+# their role and usage go unseen, which can only make a flag less likely.
+# octet_length() needs SQLite 3.43; older builds parse every row.
+DEVIN_ROW_CAP = 1024 * 1024
+_DEVIN_MSG = ("CASE WHEN octet_length(chat_message) <= %d THEN chat_message END" % DEVIN_ROW_CAP
+              if sqlite3.sqlite_version_info >= (3, 43) else "chat_message")
+_DEVIN_COLS = f"""node_id, created_at,
+    json_extract(m, '$.role'),
+    substr(json_extract(m, '$.content'), 1, 2000),
+    json_extract(m, '$.tool_calls'),
+    json_extract(m, '$.metadata.is_user_input'),
+    json_extract(m, '$.metadata.finish_reason'),
+    json_extract(m, '$.metadata.metrics.input_tokens'),
+    json_extract(m, '$.metadata.metrics.cache_read_tokens'),
+    json_extract(m, '$.metadata.metrics.cache_creation_tokens'),
+    json_extract(m, '$.metadata.metrics.output_tokens')
+    FROM (SELECT node_id, created_at, {_DEVIN_MSG} AS m FROM message_nodes
+          WHERE session_id = ?"""
+_DEVIN_NEW = f"SELECT {_DEVIN_COLS} AND node_id > ?) ORDER BY node_id"
+_DEVIN_TAIL = f"SELECT {_DEVIN_COLS} ORDER BY node_id DESC LIMIT ?) ORDER BY node_id DESC"
+
+
+def _devin_sessions(con, lower):
+    for sid, cwd, title in con.execute(
+            "SELECT id, working_directory, title FROM sessions WHERE last_activity_at >= ?",
+            (int(lower),)):
+        yield str(sid), {"sid": DEVIN_SESSION_PREFIX + str(sid), "cwd": cwd, "title": title}
+
+
+def _devin_feed_session(con, sid, st, info):
+    rows = _rows_since(con, _DEVIN_NEW, _DEVIN_TAIL, sid, st.get("last_id") or 0, st)
+    for row in rows:
+        st["last_id"] = row[0]
+        feed_devin(st, row)
+    if not st["title"] and info.get("title"):
+        st["title"] = str(info["title"])[:120]
+
+
+def feed_devin(st, row):
+    (_nid, created, role, content, tool_calls, user_input, finish,
+     fresh, cache_read, cache_write, output) = row
+    ts = float(created or 0)
+    if ts:
+        st["last_ts"] = max(st["last_ts"], ts)
+    text = str(content or "")
+    if role == "user":
+        if user_input:
+            _start_prompt(st, _repeat_trigger(st, text_trigger(text), text), text, ts)
+        elif text.strip().lower() == "continue":
+            _start_prompt(st, "goal", text, ts)
+        # anything else unattributed is compaction bookkeeping, not a prompt
+        return
+    if role != "assistant":
+        return
+    if st["turn"] is None:
+        _open_turn(st, "goal", ts)
+    st["turn"]["active"] = True
+    _add_cost(st, (fresh or 0) + 1.25 * (cache_write or 0) + 0.1 * (cache_read or 0) + 5 * (output or 0))
+    try:
+        calls = json.loads(tool_calls) if tool_calls else []
+    except ValueError:
+        calls = []
+    for call in calls if isinstance(calls, list) else []:
+        if isinstance(call, dict):
+            _mark_tool(st, str(call.get("name") or ""), call.get("arguments"))
+    if finish == "stop":
+        _close_turn(st)
+
+
+# ------------------------------------------------------------------ Hermes
+
+_HERMES_COLS = """id, role, substr(content, 1, 2000), tool_calls, finish_reason, timestamp,
+    display_kind FROM messages WHERE session_id = ?"""
+_HERMES_NEW = f"SELECT {_HERMES_COLS} AND id > ? ORDER BY id"
+_HERMES_TAIL = f"SELECT {_HERMES_COLS} ORDER BY id DESC LIMIT ?"
+
+
+def _hermes_sessions(con, lower):
+    for row in con.execute(
+            "SELECT id, cwd, title, source, input_tokens, output_tokens, cache_read_tokens,"
+            " cache_write_tokens FROM sessions"
+            " WHERE COALESCE(last_activity_at, started_at) >= ?", (lower,)):
+        yield str(row[0]), {"cwd": row[1], "title": row[2], "source": row[3], "totals": row[4:8]}
+
+
+def _hermes_feed_session(con, sid, st, info):
+    st["source"] = info.get("source") or ""
+    rows = _rows_since(con, _HERMES_NEW, _HERMES_TAIL, sid, st.get("last_id") or 0, st)
+    for row in rows:
+        st["last_id"] = row[0]
+        feed_hermes(st, row)
+    if not st["title"] and info.get("title"):
+        st["title"] = str(info["title"])[:120]
+    # Hermes keeps usage per session, not per message: bill the growth since
+    # the last scan to whoever drove the latest turn.
+    totals = [int(v or 0) for v in info.get("totals") or (0, 0, 0, 0)]
+    prev = st.get("hermes_total")
+    st["hermes_total"] = totals
+    if prev:
+        d_in, d_out, d_read, d_write = (max(0, a - b) for a, b in zip(totals, prev))
+        driver = (st["turn"] or {}).get("trigger") or st.get("last_trigger")
+        if driver != HUMAN:
+            st["streak"]["cost"] += d_in + 1.25 * d_write + 0.1 * d_read + 5 * d_out
+
+
+def feed_hermes(st, row):
+    _mid, role, content, tool_calls, finish, ts, display_kind = row
+    ts = float(ts or 0)
+    if ts:
+        st["last_ts"] = max(st["last_ts"], ts)
+    text = str(content or "")
+    if role == "user":
+        if display_kind == "internal_notification":
+            trigger = "task"
+        elif st.get("source") == "cron":
+            trigger = "timer"
+        else:
+            trigger = text_trigger(text)
+        if display_kind == "steer":
+            if st["turn"] is not None:
+                _classify_open_turn(st, trigger, ts)
+            return
+        if text.strip():
+            _start_prompt(st, _repeat_trigger(st, trigger, text), text, ts)
+        return
+    if role != "assistant":
+        return
+    if st["turn"] is None:
+        _open_turn(st, "goal", ts)
+    st["turn"]["active"] = True
+    try:
+        calls = json.loads(tool_calls) if tool_calls else []
+    except ValueError:
+        calls = []
+    for call in calls if isinstance(calls, list) else []:
+        fn = call.get("function") if isinstance(call, dict) else None
+        if isinstance(fn, dict):
+            args = fn.get("arguments")
+            try:
+                args = json.loads(args) if isinstance(args, str) else args
+            except ValueError:
+                pass
+            _mark_tool(st, str(fn.get("name") or ""), args)
+    if finish and finish != "tool_calls":
+        _close_turn(st)
+
+
+def _default_devin_dbs():
+    try:
+        from ccc_server import devin
+        return [str(p) for p in devin._devin_cli_db_paths()]
+    except Exception:
+        home = Path.home() / ".local" / "share" / "devin"
+        return [str(home / "cli" / "sessions.db"), str(home / "cli-next" / "sessions.db")]
+
+
+def _default_hermes_dbs():
+    try:
+        from ccc_server import hermes
+        return [str(p) for p in hermes._hermes_db_paths()]
+    except Exception:
+        root = Path.home() / ".hermes"
+        return [str(root / "state.db")] + sorted(str(p) for p in root.glob("profiles/*/state.db"))
+
+
 # -------------------------------------------------------------------- scan
 
 def _read_new(path, st, size, ino):
@@ -434,7 +755,22 @@ def _read_new(path, st, size, ino):
     return list(_rr._records(raw[:end + 1]))
 
 
-def _candidates(now, projects_root, codex_root):
+def _kimi_wires(kimi_root):
+    for workdir in _scandir(kimi_root):
+        for session in _scandir(workdir.path):
+            if session.name.startswith("session_"):
+                yield os.path.join(session.path, "agents", "main", "wire.jsonl")
+
+
+def _scandir(path):
+    try:
+        with os.scandir(path) as it:
+            return [e for e in it if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return []
+
+
+def _candidates(now, projects_root, codex_root, kimi_root=None):
     lower = now - ACTIVE_WINDOW_S
     for entry in _rr._claude_files(projects_root):
         try:
@@ -443,6 +779,13 @@ def _candidates(now, projects_root, codex_root):
             continue
         if stat.st_mtime >= lower:
             yield "claude", entry.path, stat
+    for wire in _kimi_wires(kimi_root) if kimi_root is not None else ():
+        try:
+            stat = os.stat(wire)
+        except OSError:
+            continue
+        if stat.st_mtime >= lower:
+            yield "kimi", wire, stat
     if codex_root is None:
         return
     seen = set()
@@ -483,6 +826,8 @@ def _codex_head_title(path):
 def _session_id(engine, path, st):
     if engine == "claude":
         return Path(path).stem
+    if engine == "kimi":
+        return Path(path).parents[2].name  # .../session_<uuid>/agents/main/wire.jsonl
     if st["sid"]:
         return st["sid"]
     m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$", path)
@@ -536,17 +881,25 @@ def _write_json(path, data):
     _rr._write_json(path, data)
 
 
-def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=False):
+_FEEDERS = {"claude": feed_claude, "codex": feed_codex, "kimi": feed_kimi}
+
+
+def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=False,
+         kimi_root=None, devin_dbs=None, hermes_dbs=None):
     """Incrementally re-read active transcripts; return flagged entries."""
     now = time.time() if now is None else now
     projects_root = PROJECTS_ROOT if projects_root is None else projects_root
     codex_root = CODEX_ROOT if codex_root is None else codex_root
+    kimi_root = KIMI_ROOT if kimi_root is None else kimi_root
+    devin_dbs = _default_devin_dbs() if devin_dbs is None else devin_dbs
+    hermes_dbs = _default_hermes_dbs() if hermes_dbs is None else hermes_dbs
     state_file = SCAN_STATE_FILE if state_file is None else state_file
     states = _read_json(state_file, {})
     if not isinstance(states, dict):
         states = {}
     flagged, watch = [], []
-    for engine, path, stat in _candidates(now, projects_root, codex_root):
+    seen = []
+    for engine, path, stat in _candidates(now, projects_root, codex_root, kimi_root):
         st = states.get(path)
         if not isinstance(st, dict) or "streak" not in st:
             st = _new_state()
@@ -556,15 +909,21 @@ def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=F
                 records = _read_new(path, st, stat.st_size, stat.st_ino)
             except OSError:
                 continue
-            feed = feed_claude if engine == "claude" else feed_codex
+            feed = _FEEDERS[engine]
             for rec in records:
                 feed(st, rec)
             st["size"] = stat.st_size
         st["seen"] = now
         states[path] = st
+        seen.append((engine, path, st))
+    for db in devin_dbs:
+        seen += _db_scan("devin", db, states, now, _devin_sessions, _devin_feed_session)
+    for db in hermes_dbs:
+        seen += _db_scan("hermes", db, states, now, _hermes_sessions, _hermes_feed_session)
+    for engine, path, st in seen:
         hit, reasons = evaluate(st, now)
         if hit:
-            if not st["title"]:
+            if not st["title"] and engine in ("claude", "codex"):
                 st["title"] = (_rr._title(path, []) if engine == "claude"
                                else _codex_head_title(path))
             flagged.append(_entry(engine, path, st, reasons))
