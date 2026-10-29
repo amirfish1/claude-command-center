@@ -46,7 +46,7 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 12
+_CODEX_META_VERSION = 13
 _CODEX_STARTED_TURN_IDS_MAX = 64
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
@@ -2399,7 +2399,7 @@ def _codex_app_server_activity_fields(session_id):
     turn_start = state.get("turn_started_at") or state.get("ccc_turn_start_pending_at")
     # Turn identity lets the status merge drop this overlay once the rollout
     # carries this exact turn's terminal receipt (CCC-248).
-    if state.get("active_turn_id"):
+    if state.get("active_turn_id") and not state.get("ccc_turn_start_pending"):
         fields["sidecar_turn_id"] = str(state.get("active_turn_id"))
     if item and item.get("tool") and item.get("tool") != "Thinking":
         fields.update({
@@ -6044,12 +6044,15 @@ def _codex_ccc_exec_child_running(session_id):
 
 def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
                                   app_state=None, attached=None,
-                                  exec_child=None, holders=None):
+                                  exec_child=None, holders=None,
+                                  ended_turn=None):
     """Attribute the current writer of one Codex thread.
 
     Returns {writer, desktop_attached, external_active, mtime_age_s}:
       writer ∈ "ccc" | "desktop" | "external" | "unknown" | None (quiet).
-    Keyword args exist for unit tests; production callers pass none of them.
+    Keyword args exist for unit tests; production callers pass none of them,
+    except ``ended_turn``: {"turn_id", "ts"} of the rollout's terminal receipt
+    when it names exactly the app state's active turn (CCC-248).
     """
     now = time.time() if now is None else float(now)
     snap = {"writer": None, "desktop_attached": False, "external_active": False}
@@ -6060,6 +6063,22 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
     active_turn_id = state.get("active_turn_id")
     active_status = str(state.get("status") or "").strip().lower() == "active"
     active_writer = str(state.get("active_writer") or "").strip().lower()
+    ended_turn = ended_turn or {}
+    ended_same_turn = False
+    if (
+        active_turn_id
+        and ended_turn.get("turn_id")
+        and str(active_turn_id) == str(ended_turn.get("turn_id"))
+    ):
+        # The rollout's terminal receipt for this exact turn proves it ended,
+        # whatever the writer, timestamps or active-status age (CCC-248). Its
+        # active id/status are stale evidence of that same turn, so they no
+        # longer imply CCC ownership or another client's live turn. A CCC
+        # turn's own writes stay attributed to CCC; for any other writer a
+        # rollout write after the receipt is still independent evidence.
+        active_turn_id = None
+        active_status = False
+        ended_same_turn = True
     ccc_turn_active = bool(
         state.get("ccc_turn_start_pending")
         or (active_turn_id and active_writer == "ccc")
@@ -6099,6 +6118,17 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
             mtime_recent = age < _CODEX_EXTERNAL_WRITER_WINDOW_S
         except (TypeError, ValueError):
             pass
+    if mtime_recent and ended_same_turn:
+        if active_writer == "ccc":
+            mtime_recent = False
+        else:
+            try:
+                ended_ts = float(ended_turn.get("ts") or 0)
+                mtime_s = float((rollout or {}).get("mtime_ns") or 0) / 1e9
+                if ended_ts and mtime_s <= ended_ts + 2:
+                    mtime_recent = False
+            except (TypeError, ValueError):
+                pass
     if path:
         if attached is None:
             attached = _codex_desktop_attached_rollouts(now)
@@ -11303,6 +11333,12 @@ def _extract_codex_tail_meta(path):
                         if ts_epoch:
                             meta["turn_started_ts"] = ts_epoch
                             meta["last_meaningful_ts"] = ts_epoch
+                        # The turn is in progress from its start marker, not
+                        # only once its prompt is written: a just-started turn
+                        # must not inherit the previous turn's "result" and
+                        # read idle (CCC-248).
+                        if meta.get("last_event_type") == "result" or not meta.get("last_event_type"):
+                            meta["last_event_type"] = "assistant"
                         continue
                     if ptype == "user_message":
                         text = _core._strip_ccc_session_state_instruction(
@@ -11695,7 +11731,10 @@ def _codex_app_activity_superseded_by_tail(app_activity, tail):
 def _codex_tail_ended_app_turn(tail, app_state):
     """True when the rollout's last applied terminal receipt names exactly the
     app-server's active turn (CCC-248). That receipt is authoritative: the
-    turn ended, however close its timestamp is to the cached app activity."""
+    turn ended, however close its timestamp is to the cached app activity.
+    A pending CCC turn start is a newer turn, so it is never ended here."""
+    if (app_state or {}).get("ccc_turn_start_pending"):
+        return False
     active_id = str((app_state or {}).get("active_turn_id") or "")
     term_id = str((tail or {}).get("last_terminal_turn_id") or "")
     return bool(
@@ -11861,6 +11900,13 @@ def _codex_state_fields(
         snap = _core._codex_thread_writer_snapshot(
             sid, now, app_state=app_state, rollout=rollout,
             holders=_core._codex_shared_state_db_holders_stale_ok(now),
+            ended_turn=(
+                {
+                    "turn_id": tail.get("last_terminal_turn_id"),
+                    "ts": tail.get("last_terminal_ts"),
+                }
+                if app_turn_ended else None
+            ),
         )
         if note_writer_transition:
             _core._codex_note_external_writer_transition(sid, snap)

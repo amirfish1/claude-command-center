@@ -535,5 +535,209 @@ class TestSessionStatusApi(_Base):
         self.assertEqual(get(), ("working", 1))
 
 
+class TestExactTurnPipeline(TestSessionStatusApi):
+    """Cycle 4: the reviewer's witness and its controls, end to end through
+    the real parser, the real writer attribution
+    (_codex_thread_writer_snapshot is NOT stubbed), loopback
+    /api/session-status and _queue_health_stats. Timestamps are relative to
+    now so writer-window boundaries are realistic."""
+
+    WRITERS = ("ccc", "external", "", "unknown")
+
+    def setUp(self):
+        super().setUp()
+        self.now = time.time()
+        self._n = 0
+
+    def _sid(self, tag):
+        self._n += 1
+        return "ccc248-c4-%s-%d-%d" % (tag, self._n, int(self.now))
+
+    def _file(self, events, mtime_age):
+        self._n += 1
+        path = self.rollout(events, "c4-%d.jsonl" % self._n)
+        t = self.now - mtime_age
+        os.utime(path, (t, t))
+        return path
+
+    def _app(self, sid, **state):
+        srv = self.server
+        state.setdefault("thread_id", sid)
+        srv._CODEX_APP_SERVER_THREAD_STATE[sid] = state
+        self.addCleanup(srv._CODEX_APP_SERVER_THREAD_STATE.pop, sid, None)
+
+    def _witness(self, end=None):
+        n = self.now
+        return [
+            task_started(n - 500, TURN_A), user(n - 499), tool_call(n - 11),
+            end if end is not None else aborted(n - 10, TURN_A),
+        ]
+
+    def _both(self, sid, path):
+        """(HTTP codex_state, unfinished) plus the in-process decision."""
+        api = self._serve(sid, path)()
+        st = path.stat()
+        fields = self.server._codex_state_fields(
+            sid, now=time.time(), note_writer_transition=False,
+            rollout_path=path, rollout_stat=st,
+        )
+        unfinished = self.server._queue_health_stats(
+            [dict(fields, session_id=sid)])["unfinished_turns"]
+        return api, (fields["codex_state"], unfinished)
+
+    def test_reviewer_witness_exact_turn_idle_for_every_writer(self):
+        n = self.now
+        for writer in self.WRITERS:
+            for app_gap in (0, 1, 2, -5):
+                with self.subTest(active_writer=writer, app_activity_vs_abort=app_gap):
+                    sid = self._sid("wit")
+                    path = self._file(self._witness(), mtime_age=60)
+                    self._app(sid, active_turn_id=TURN_A, status="active",
+                              active_writer=writer, turn_started_at=n - 500,
+                              last_activity_at=n - 10 - app_gap)
+                    api, direct = self._both(sid, path)
+                    self.assertEqual(api, ("idle", 0))
+                    self.assertEqual(direct, ("idle", 0))
+
+    def test_exact_completion_also_ends_turn_for_every_writer(self):
+        n = self.now
+        for writer in self.WRITERS:
+            with self.subTest(active_writer=writer):
+                sid = self._sid("cmp")
+                path = self._file(self._witness(completed(n - 10, TURN_A)), mtime_age=60)
+                self._app(sid, active_turn_id=TURN_A, status="active",
+                          active_writer=writer, last_activity_at=n - 10)
+                self.assertEqual(self._serve(sid, path)(), ("idle", 0))
+
+    def test_exact_receipt_fresh_mtime_explained_by_receipt(self):
+        # The rollout's latest write IS the receipt (mtime within 2s of it):
+        # no independent writer, so idle even inside the 20s writer window.
+        n = self.now
+        for writer in self.WRITERS:
+            with self.subTest(active_writer=writer):
+                sid = self._sid("rcpt")
+                path = self.rollout(self._witness(aborted(n - 3, TURN_A)), "rcpt-%s.jsonl" % (writer or "none"))
+                os.utime(path, (n - 3, n - 3))
+                self._app(sid, active_turn_id=TURN_A, status="active",
+                          active_writer=writer, last_activity_at=n - 3)
+                self.assertEqual(self._serve(sid, path)(), ("idle", 0))
+
+    def test_genuine_write_after_receipt_still_reads_external_writer(self):
+        # Control: a non-CCC client wrote the rollout well after A's receipt.
+        # That is independent evidence of a live writer and must not be
+        # suppressed because A ended.
+        n = self.now
+        for writer in ("external", "", "unknown"):
+            with self.subTest(active_writer=writer):
+                sid = self._sid("gen")
+                # Receipt and last app activity sit outside the 20s window
+                # (recent app activity alone attributes writes to CCC).
+                path = self._file(self._witness(aborted(n - 40, TURN_A)), mtime_age=1)
+                self._app(sid, active_turn_id=TURN_A, status="active",
+                          active_writer=writer, last_activity_at=n - 40)
+                self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def test_different_active_turn_survives_exact_receipt_of_older_turn(self):
+        n = self.now
+        for writer in self.WRITERS:
+            with self.subTest(active_writer=writer):
+                sid = self._sid("diff")
+                path = self._file(self._witness(), mtime_age=60)
+                self._app(sid, active_turn_id=TURN_B, status="active",
+                          active_writer=writer, turn_started_at=n - 8,
+                          last_activity_at=n - 8)
+                self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def test_pending_ccc_turn_start_is_not_ended_by_previous_receipt(self):
+        n = self.now
+        sid = self._sid("pend")
+        path = self._file(self._witness(), mtime_age=60)
+        self._app(sid, active_turn_id=TURN_A, status="active", active_writer="ccc",
+                  ccc_turn_start_pending=True, ccc_turn_start_pending_at=n - 2,
+                  last_activity_at=n - 2)
+        self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def test_unknown_status_without_turn_identity_stays_conservative(self):
+        # No active_turn_id: nothing ties the active status to A, so another
+        # client's active status keeps the thread busy (unknown ownership).
+        n = self.now
+        sid = self._sid("noid")
+        path = self._file(self._witness(), mtime_age=60)
+        self._app(sid, status="active", active_writer="external", last_activity_at=n - 5)
+        self.assertEqual(self._serve(sid, path)(), ("working", 1))
+
+    def _preprompt(self, tail_events=()):
+        n = self.now
+        return [
+            task_started(n - 400, TURN_A), user(n - 399), completed(n - 300, TURN_A),
+            task_started(n - 30, TURN_B), *tail_events,
+        ]
+
+    def test_preprompt_started_turn_is_working(self):
+        n = self.now
+        cases = {
+            "first-ever B": [task_started(n - 30, TURN_B)],
+            "B after result A": self._preprompt(),
+            "B then unknown receipt": self._preprompt([aborted(n - 29, "turn-from-elsewhere")]),
+            "B then duplicate A receipt": self._preprompt([aborted(n - 29, TURN_A)]),
+        }
+        for name, events in cases.items():
+            for app_b in (False, True):
+                with self.subTest(case=name, app_active_b=app_b):
+                    sid = self._sid("pre")
+                    path = self._file(events, mtime_age=60)
+                    m = self.meta(path)
+                    self.assertEqual(m["current_turn_id"], TURN_B)
+                    self.assertAlmostEqual(m["turn_started_ts"], n - 30, delta=0.01)
+                    self.assertNotEqual(m["last_event_type"], "result")
+                    if app_b:
+                        self._app(sid, active_turn_id=TURN_B, status="active",
+                                  active_writer="ccc", turn_started_at=n - 30,
+                                  last_activity_at=n - 30)
+                    api, direct = self._both(sid, path)
+                    self.assertEqual(api, ("working", 1))
+                    self.assertEqual(direct, ("working", 1))
+
+    def test_preprompt_turn_ends_only_on_its_own_receipt(self):
+        n = self.now
+        for app_b in (False, True):
+            with self.subTest(app_active_b=app_b):
+                sid = self._sid("preend")
+                path = self._file(self._preprompt([aborted(n - 20, TURN_B)]), mtime_age=60)
+                if app_b:
+                    self._app(sid, active_turn_id=TURN_B, status="active",
+                              active_writer="external", last_activity_at=n - 20)
+                self.assertEqual(self._serve(sid, path)(), ("idle", 0))
+
+    def test_quiet_preprompt_turn_is_never_idled_by_a_timer(self):
+        # Paused B: started, then silent past the stale threshold. A timer
+        # may flag it stuck, but only a receipt makes it idle.
+        n = self.now
+        sid = self._sid("quiet")
+        path = self._file(self._preprompt(), mtime_age=0)
+        st = path.stat()
+        later = st.st_mtime + self.server._codex_stale_tool_threshold_s() + 60
+        fields = self.server._codex_state_fields(
+            sid, now=later, note_writer_transition=False,
+            rollout_path=path, rollout_stat=st,
+        )
+        self.assertEqual(fields["codex_state"], "stuck")
+
+    def test_witness_across_incremental_resume(self):
+        # The cache resumes mid-file: the receipt arrives in a later append.
+        n = self.now
+        for writer in ("external", "ccc"):
+            with self.subTest(active_writer=writer):
+                sid = self._sid("inc")
+                path = self._file(self._witness()[:-1], mtime_age=120)
+                self.meta(path)
+                self.append(path, [aborted(n - 10, TURN_A)])
+                t = n - 60
+                os.utime(path, (t, t))
+                self._app(sid, active_turn_id=TURN_A, status="active",
+                          active_writer=writer, last_activity_at=n - 10)
+                self.assertEqual(self._serve(sid, path)(), ("idle", 0))
+
+
 if __name__ == "__main__":
     unittest.main()
