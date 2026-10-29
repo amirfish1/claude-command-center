@@ -134,6 +134,37 @@ class TestWorkLedger(unittest.TestCase):
         )
 
 
+class TestWorkerHealthCodexTurns(unittest.TestCase):
+    """CCC-250: health reports live Codex app-server turns apart from the
+    ledger counts, so restart gates can see turns that hold no ledger job."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.runtime = WorkerRuntime(
+            ledger=WorkLedger(pathlib.Path(self.tmp.name) / "ledger.sqlite3"),
+            token="c" * 64,
+        )
+
+    def test_reports_live_turns_from_loaded_server(self):
+        fake = mock.Mock(__version__="0", _ccc_content_hash="h", _ccc_closure={})
+        fake._codex_app_server_live_turns.return_value = ["t1", "t2"]
+        with mock.patch.dict(sys.modules, {"server": fake}):
+            health = self.runtime.dispatch("health", {})
+        self.assertEqual(health["codex_live_turns"], 2)
+        self.assertEqual(health["active"], 0)
+
+    def test_zero_when_server_not_loaded_unknown_when_probe_fails(self):
+        with mock.patch.dict(sys.modules):
+            sys.modules.pop("server", None)
+            self.assertEqual(self.runtime.dispatch("health", {})["codex_live_turns"], 0)
+        fake = mock.Mock(__version__="0", _ccc_content_hash="h", _ccc_closure={})
+        fake._codex_app_server_live_turns.side_effect = RuntimeError("boom")
+        with mock.patch.dict(sys.modules, {"server": fake}):
+            # -1 = unknown; restart gates treat it as busy (fail safe).
+            self.assertEqual(self.runtime.dispatch("health", {})["codex_live_turns"], -1)
+
+
 class TestWorkerIPC(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -485,6 +516,8 @@ class TestWorkerCompatMaintenanceSelfHeal(unittest.TestCase):
         def request(method, params=None, *, engine_timeout=False):
             if method == "health":
                 return dict(health)
+            if method == "codex.restart_freeze":
+                return {"ok": True, "frozen": True, "live_turns": 0, "threads": []}
             if method == "engine.adopt":
                 return {"ok": True, "available": True, "adopted": 0}
             if method == "drain.set":
@@ -499,6 +532,7 @@ class TestWorkerCompatMaintenanceSelfHeal(unittest.TestCase):
 
         health = {
             "ok": True, "active": 0, "queued": 0, "uncertain": 0,
+            "codex_live_turns": 0,
             "worker": {"pid": 4321, "capabilities": []},
         }
         with mock.patch.object(

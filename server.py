@@ -18492,14 +18492,30 @@ def _restart_stale_worker():
         key: int(health.get(key) or 0)
         for key in ("active", "queued", "uncertain")
     }
+    # Live Codex app-server turns hold no ledger job but die with the worker
+    # (CCC-250). A missing count (older worker) is unknown, never idle.
+    try:
+        busy["codex_live_turns"] = int(health.get("codex_live_turns", -1))
+    except (TypeError, ValueError):
+        busy["codex_live_turns"] = -1
     if any(busy.values()):
         print(
             "  [maintenance] worker stale, deferred "
             f"(active={busy['active']} queued={busy['queued']} "
-            f"uncertain={busy['uncertain']})"
+            f"uncertain={busy['uncertain']} "
+            f"codex_live_turns={busy['codex_live_turns']})"
         )
         return {"restarted": False, "reason": "stale_deferred_busy", **busy}
-    return _restart_worker_process(worker, was=loaded, now=repo_version)
+    frozen, refusal = _codex_restart_freeze("stale-worker-roll")
+    if not frozen:
+        print(f"  [maintenance] worker stale, deferred ({refusal.get('code')})")
+        return {"restarted": False, "reason": "stale_deferred_codex",
+                "codex": refusal}
+    outcome = _restart_worker_process(worker, was=loaded, now=repo_version,
+                                      codex_final_check=True)
+    if not outcome.get("restarted"):
+        _codex_restart_release("stale-worker-roll did not restart")
+    return outcome
 
 
 _WORKER_SYSTEMD_UNIT = "ccc-worker.service"
@@ -18574,7 +18590,7 @@ def _restart_systemd_worker(scope, pid, pid_in_unit, *, was=None, now=None):
     return outcome
 
 
-def _restart_worker_process(worker=None, *, was=None, now=None):
+def _restart_worker_process(worker=None, *, was=None, now=None, codex_final_check=False):
     """Restart the execution worker, whatever its version.
 
     Split out of _restart_stale_worker so the Maintenance UI can restart the
@@ -18601,12 +18617,24 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
     exact pid ourselves, the same pid this function always confirmed launchd
     would not touch, never a different real launchd-owned worker.
     """
-    if worker is None:
+    if worker is None or codex_final_check:
         try:
             health = _control_plane_request("health")
         except Exception:
             health = {}
-        worker = health.get("worker") if isinstance(health, dict) and isinstance(health.get("worker"), dict) else {}
+        if codex_final_check:
+            # Callers froze Codex admissions first; this closes the gap for
+            # turns the app-server started on its own since (CCC-250).
+            turns = _codex_restart_final_check(health)
+            if turns:
+                _log_activity(
+                    "worker", "RESTART_CODEX_ABORT",
+                    f"codex_live_turns={turns} at final check; not restarting",
+                )
+                return {"restarted": False, "reason": "codex_turns_running",
+                        "codex_live_turns": turns}
+        if worker is None:
+            worker = health.get("worker") if isinstance(health, dict) and isinstance(health.get("worker"), dict) else {}
     target = f"gui/{os.getuid()}/{_WORKER_LAUNCHD_LABEL}"
     pid = worker.get("pid")
     systemd_scope, pid_in_unit = _worker_systemd_scope(pid)
@@ -18668,7 +18696,94 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
     return outcome
 
 
-def _safe_worker_restart_precheck(reason_prefix="worker-restart"):
+# A worker restart SIGTERMs its stdio Codex app-server, which aborts every
+# turn in flight (CCC-250). Those turns hold no ledger job, so the ledger
+# drain cannot protect them. Every path that kills the worker first asks the
+# worker to freeze Codex admissions (ccc_server/codex_restart_gate.py: turns
+# counted and freeze set in one critical section under the app-server lock),
+# then rechecks just before the kill. Unknown state never counts as safe;
+# only an explicit allow_codex_interrupt from a human skips the gate.
+def _restart_body_allows_codex_interrupt(handler):
+    """True only for an explicit {"allow_codex_interrupt": true} body."""
+    try:
+        length = int(handler.headers.get("Content-Length", "0") or 0)
+        if length > 64 * 1024:
+            return False
+        body = handler.rfile.read(length) if length > 0 else b""
+        payload = json.loads(body) if body else {}
+    except (ValueError, OSError):
+        return False
+    return isinstance(payload, dict) and payload.get("allow_codex_interrupt") is True
+
+
+def _codex_restart_freeze(reason, *, allow_codex_interrupt=False):
+    """(ok, error_or_None). ok=True means Codex admissions are frozen (or
+    the caller explicitly accepted interrupting turns)."""
+    if allow_codex_interrupt:
+        _log_activity(
+            "worker", "RESTART_CODEX_OVERRIDE",
+            f"reason={reason} restart allowed to interrupt live Codex turns",
+        )
+        return True, None
+    try:
+        resp = _control_plane_request("codex.restart_freeze", {
+            "enabled": True, "reason": str(reason or "")[:200],
+        })
+    except Exception as e:
+        resp = {"ok": False, "available": False, "error": str(e)}
+    if not isinstance(resp, dict):
+        resp = {"ok": False, "error": "invalid worker response"}
+    if resp.get("ok") and resp.get("frozen"):
+        return True, None
+    hint = (" Pass allow_codex_interrupt=true to restart anyway and "
+            "interrupt any running Codex turns.")
+    if resp.get("ok"):
+        turns = int(resp.get("live_turns") or 0)
+        return False, {
+            "ok": False,
+            "code": "codex_turns_running",
+            "error": (f"{turns} Codex turn(s) are running in the worker; a "
+                      "worker restart would interrupt them. Retry when they "
+                      "finish." + hint),
+            "codex_live_turns": turns,
+            "threads": resp.get("threads") or [],
+        }
+    if resp.get("code") == "method_not_found":
+        why = ("the running worker predates the Codex turn gate, so its "
+               "live Codex turns cannot be checked")
+        code = "codex_gate_unsupported"
+    else:
+        why = ("the worker's Codex turn state is unavailable ("
+               + str(resp.get("error") or resp.get("code") or "no reply")[:160]
+               + ")")
+        code = "codex_state_unavailable"
+    return False, {"ok": False, "code": code,
+                   "error": "Worker restart refused: " + why + "." + hint}
+
+
+def _codex_restart_release(reason=""):
+    try:
+        _control_plane_request("codex.restart_freeze", {
+            "enabled": False, "reason": str(reason or "")[:200],
+        })
+    except Exception:
+        pass
+
+
+def _codex_restart_final_check(health):
+    """Recheck right before the kill. The freeze stops CCC-issued turns; a
+    turn the app-server starts on its own (server-side queue, goal) can
+    still appear, and unknown counts as busy."""
+    if not isinstance(health, dict) or not health.get("ok"):
+        return -1
+    try:
+        return int(health.get("codex_live_turns", -1))
+    except (TypeError, ValueError):
+        return -1
+
+
+def _safe_worker_restart_precheck(reason_prefix="worker-restart", restarts_worker=True,
+                                  allow_codex_interrupt=False):
     """Shared safety gate before killing the worker process.
 
     Originally lived only inline in the /api/restart/all handler, which is
@@ -18684,6 +18799,11 @@ def _safe_worker_restart_precheck(reason_prefix="worker-restart"):
     Returns (ok, error_response_or_None, adopted, protected). `adopted` and
     `protected` are the raw control-plane responses, worth threading into
     the final response so a caller can see how much was actually saved.
+
+    restarts_worker=False (a dashboard-only restart) skips the live Codex
+    turn gate: those turns live in the worker's app-server and survive.
+    Otherwise a successful precheck leaves Codex admissions frozen; a caller
+    whose restart then fails must call _codex_restart_release().
     """
     local_active = _dashboard_owned_active_executions()
     active_kimi = [item for item in local_active if item.get("engine") == "kimi"]
@@ -18696,15 +18816,25 @@ def _safe_worker_restart_precheck(reason_prefix="worker-restart"):
             ),
             "active": active_kimi,
         }, None, None
+    if restarts_worker:
+        ok, err = _codex_restart_freeze(
+            reason_prefix, allow_codex_interrupt=allow_codex_interrupt,
+        )
+        if not ok:
+            return False, err, None, None
     adopted = _control_plane_request("engine.adopt", {}, engine_timeout=True)
     if adopted.get("code") == "method_not_found":
         adopted = {"ok": False, "available": False}
     if adopted.get("available") and not adopted.get("ok"):
+        if restarts_worker:
+            _codex_restart_release("precheck refused")
         return False, {
             "ok": False,
             "error": adopted.get("error") or "worker could not adopt sessions",
         }, adopted, None
     if not adopted.get("available") and local_active:
+        if restarts_worker:
+            _codex_restart_release("precheck refused")
         return False, {
             "ok": False,
             "error": (
@@ -18719,6 +18849,8 @@ def _safe_worker_restart_precheck(reason_prefix="worker-restart"):
         "reason": f"{reason_prefix}:{uuid.uuid4()}",
     })
     if protected.get("available") and not protected.get("ok"):
+        if restarts_worker:
+            _codex_restart_release("precheck refused")
         return False, {
             "ok": False,
             "error": protected.get("error") or "worker refused safe drain",
@@ -18799,7 +18931,10 @@ def _worker_compat_snapshot(health=None):
     capabilities = list(worker.get("capabilities") or [])
     reachable = bool(health.get("ok"))
     compatible = "engine-execution-v1" in capabilities
-    idle = not any(int(health.get(key) or 0) for key in ("active", "queued", "uncertain"))
+    idle = not any(
+        int(health.get(key) or 0)
+        for key in ("active", "queued", "uncertain", "codex_live_turns")
+    )
     return {
         "ok": reachable and compatible,
         "reachable": reachable,
@@ -18837,7 +18972,9 @@ def _worker_compat_self_heal_restart(reason_prefix="worker-compat-selfheal"):
     )
     if not ok:
         return {"ok": False, "restarted": False, "precheck_error": precheck_err}
-    outcome = _restart_worker_process()
+    outcome = _restart_worker_process(codex_final_check=True)
+    if not outcome.get("restarted"):
+        _codex_restart_release("compat self-heal did not restart")
     healthy = False
     if outcome.get("restarted"):
         healthy = _wait_worker_healthy()
@@ -19380,7 +19517,7 @@ def _auto_update_busy_reasons(now=None):
     except Exception:
         health = {}
     if isinstance(health, dict):
-        busy = {k: int(health.get(k) or 0) for k in ("active", "queued", "uncertain")}
+        busy = {k: int(health.get(k) or 0) for k in ("active", "queued", "uncertain", "codex_live_turns")}
         if any(busy.values()):
             reasons.append("worker busy (" + " ".join(f"{k}={v}" for k, v in busy.items()) + ")")
     try:
@@ -19417,7 +19554,11 @@ def _auto_update_tick():
         return {"action": "busy", "tag": chk["tag"], "reasons": busy}
     # Same handoff the Restart button runs: adopt/drain so live sessions
     # survive. The "dashboard-restart" drain is released on the next boot.
-    ok, precheck_err, _, _ = _safe_worker_restart_precheck(reason_prefix="dashboard-restart")
+    # Dashboard-only: the worker roll after the pull is _restart_stale_worker,
+    # which runs its own Codex turn gate (CCC-250).
+    ok, precheck_err, _, _ = _safe_worker_restart_precheck(
+        reason_prefix="dashboard-restart", restarts_worker=False,
+    )
     if not ok:
         _log_activity("update", "skip", f"{chk['tag']} available, restart precheck refused: {precheck_err}")
         return {"action": "busy", "tag": chk["tag"], "reasons": ["restart precheck refused"]}
@@ -34081,11 +34222,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # again and auto-runs reconcile, so a queue item that needed
             # "needs reconciliation" fixed doesn't wait on a human to
             # remember the button in Settings -> Maintenance.
-            ok, precheck_err, adopted, protected = _safe_worker_restart_precheck()
+            allow_codex_interrupt = _restart_body_allows_codex_interrupt(self)
+            ok, precheck_err, adopted, protected = _safe_worker_restart_precheck(
+                allow_codex_interrupt=allow_codex_interrupt,
+            )
             if not ok:
                 self.send_json(precheck_err, 409)
                 return
-            outcome = _restart_worker_process()
+            outcome = _restart_worker_process(
+                codex_final_check=not allow_codex_interrupt,
+            )
+            if not outcome.get("restarted"):
+                _codex_restart_release("worker restart did not happen")
             healthy = False
             reconciled = None
             drain_replayed = None
@@ -34129,8 +34277,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # the handoff below succeeds: adopt/drain need a live worker, so
             # restarting it first would strand this dashboard's sessions.
             restart_all = path.endswith("/all")
+            allow_codex_interrupt = _restart_body_allows_codex_interrupt(self)
             ok, precheck_err, adopted, protected = _safe_worker_restart_precheck(
                 reason_prefix="dashboard-restart",
+                restarts_worker=restart_all,
+                allow_codex_interrupt=allow_codex_interrupt,
             )
             if not ok:
                 self.send_json(precheck_err, 409)
@@ -34142,7 +34293,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # scheduled after the response flushes, so kicking the worker here
             # keeps the ordering right without stranding the reply.
             if restart_all:
-                worker_outcome = _restart_worker_process()
+                worker_outcome = _restart_worker_process(
+                    codex_final_check=not allow_codex_interrupt,
+                )
+                if not worker_outcome.get("restarted"):
+                    _codex_restart_release("restart/all worker kick did not happen")
             elif pull.get("changed"):
                 # execvp bypasses run.sh's stale-worker gate, and the worker
                 # imports server.py, so a pull that changed code needs this.

@@ -85,6 +85,17 @@ class WorkerRuntime:
                 and summary.get("uncertain_max_age_s", 0.0)
                 > RETIRE_UNCERTAIN_AFTER_S + UNCERTAIN_SWEEP_INTERVAL_S
             )
+            # Codex turns on this process's stdio app-server hold no ledger
+            # job, yet a restart aborts every one of them (CCC-250). Kept out
+            # of "active" so ledger semantics stay intact; restart gates add it.
+            live_turns = []
+            if server_mod is not None:
+                try:
+                    live_turns = server_mod._codex_app_server_live_turns()
+                except Exception:
+                    live_turns = None
+            # -1 = unknown; every gate treats a nonzero value as busy.
+            summary["codex_live_turns"] = -1 if live_turns is None else len(live_turns)
             return {
                 "ok": True,
                 "worker": {
@@ -102,10 +113,25 @@ class WorkerRuntime:
                         "work-graph-v1",
                         "safe-drain-v1",
                         "pending-input-cas-v1",
+                        "codex-turn-gate-v1",
                     ],
                 },
                 **summary,
             }
+        if method == "codex.restart_freeze":
+            # CCC-250: freeze Codex admissions before a restart, atomically
+            # with counting in-flight turns; frozen=False means do not restart.
+            from ccc_server import codex_restart_gate
+            try:
+                if params.get("enabled") is False:
+                    return codex_restart_gate.release()
+                return codex_restart_gate.acquire(
+                    reason=params.get("reason") or "",
+                    ttl_s=params.get("ttl_s") or codex_restart_gate.DEFAULT_TTL_S,
+                )
+            except Exception as exc:
+                return {"ok": False, "code": "codex_state_unavailable",
+                        "error": f"could not read Codex turn state: {exc}"}
         if method == "system.app_server":
             # The Codex transport lives HERE, not in the dashboard:
             # _control_plane_routes_engines() defaults on, so worker_engines
@@ -457,7 +483,28 @@ def main(argv=None):
         "--health", action="store_true",
         help="query the running worker and exit",
     )
+    parser.add_argument(
+        "--codex-restart-freeze", action="store_true",
+        help="freeze Codex admissions for a restart if no turn is in flight; "
+             "exit 0 only when frozen (CCC-250)",
+    )
+    parser.add_argument(
+        "--codex-restart-release", action="store_true",
+        help="lift a Codex restart freeze",
+    )
     args = parser.parse_args(argv)
+    if args.codex_restart_freeze or args.codex_restart_release:
+        params = (
+            {"enabled": False} if args.codex_restart_release
+            else {"enabled": True, "reason": "run.sh worker roll"}
+        )
+        response = ControlPlaneClient(path=args.socket).request(
+            "codex.restart_freeze", params,
+        )
+        print(json.dumps(response, indent=2, sort_keys=True))
+        if args.codex_restart_release:
+            return 0 if response.get("ok") else 1
+        return 0 if response.get("ok") and response.get("frozen") else 1
     if args.health:
         response = ControlPlaneClient(path=args.socket).request("health")
         print(json.dumps(response, indent=2, sort_keys=True))

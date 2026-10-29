@@ -3238,6 +3238,11 @@ def _codex_app_server_request_to_transport(
             from ccc_server.codex_capabilities import codex_method_is_mutating
             if in_progress() and codex_method_is_mutating(method):
                 return {"ok": False, "code": "codex_handover_pending", "error": "Desktop handover has an active writer gate; retry when it finishes."}
+            # Worker restart freeze (CCC-250): checked under the same
+            # condition codex_restart_gate.acquire() counts turns under.
+            from ccc_server import codex_restart_gate
+            if codex_method_is_mutating(method) and codex_restart_gate.blocks(method):
+                return codex_restart_gate.refusal()
             req_id = _CODEX_APP_SERVER_NEXT_ID
             _CODEX_APP_SERVER_NEXT_ID += 1
             try:
@@ -3610,9 +3615,12 @@ def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=Tr
             "fallback": "queue",
         }
     from ccc_server.codex_handover import in_progress
+    from ccc_server import codex_restart_gate
     with _core._CODEX_APP_SERVER_LOCK:
         if in_progress() and mutating:
             return {"ok": False, "code": "codex_handover_pending", "error": "Desktop handover has an active writer gate; retry when it finishes."}
+        if mutating and codex_restart_gate.blocks(method):
+            return codex_restart_gate.refusal()
     thread_id = _codex_app_server_request_thread_id(method, params)
     if method == "turn/start" and thread_id:
         with _core._CODEX_APP_SERVER_LOCK:
@@ -3902,6 +3910,46 @@ def _codex_app_server_active_turn_fresh(now):
         if now - last < _CODEX_APP_SERVER_TURN_BUSY_GRACE_S:
             return True
     return False
+
+
+_CODEX_APP_SERVER_RESTART_TURN_STALE_S = 600.0
+
+
+def _codex_app_server_live_turns(now=None):
+    """Thread ids with a turn in flight on CCC's own stdio app-server.
+
+    That child dies with this process (the atexit shutdown SIGTERMs it), and
+    Codex then aborts every in-flight turn as "interrupted". turn/start
+    returns at once, so these turns hold no ledger job and the ledger's
+    active count cannot see them; restart gates read this instead (CCC-250).
+    A managed-unix daemon outlives us, so its turns are not at risk. A turn
+    silent for _CODEX_APP_SERVER_RESTART_TURN_STALE_S stops counting, so a
+    wedged one cannot block restarts. Lock-free: health must stay fast.
+    """
+    transport = _core._CODEX_APP_SERVER_TRANSPORT
+    if transport is None or transport.kind != "stdio" or not transport.alive():
+        return []
+    now = time.time() if now is None else now
+    live = []
+    for thread_id, state in list(_core._CODEX_APP_SERVER_THREAD_STATE.items()):
+        if not isinstance(state, dict):
+            continue
+        if not (
+            state.get("active_turn_id")
+            or state.get("ccc_turn_start_pending")
+            or str(state.get("status") or "").lower() == "active"
+        ):
+            continue
+        last = 0.0
+        for key in ("last_activity_at", "last_event_at", "turn_started_at",
+                    "ccc_turn_start_pending_at"):
+            try:
+                last = max(last, float(state.get(key) or 0.0))
+            except (TypeError, ValueError):
+                continue
+        if now - last < _CODEX_APP_SERVER_RESTART_TURN_STALE_S:
+            live.append(thread_id)
+    return live
 
 
 def _ensure_codex_app_server(*, allow_stdio=True):
@@ -7494,7 +7542,7 @@ def _codex_resume_or_steer_via_app_server_locked(
     resume_at = time.monotonic()
     resumed = _core._codex_app_server_request("thread/resume", resume_params, timeout=20)
     resume_ms = _codex_elapsed_ms(resume_at)
-    if resumed.get("code") == "codex_handover_pending":
+    if resumed.get("code") in ("codex_handover_pending", "codex_restart_pending"):
         return {"ok": False, "fallback": "queue", "via": "codex-app-server", "error": resumed["error"]}
     if resumed.get("error"):
         _err = _codex_error_text(resumed)

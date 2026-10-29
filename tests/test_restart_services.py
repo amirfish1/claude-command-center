@@ -140,6 +140,17 @@ class RestartWorkerProcessTests(unittest.TestCase):
         scope.start()
         self.addCleanup(scope.stop)
 
+    @staticmethod
+    def _idle_cpr(health):
+        """Idle worker on the gated build: zero live Codex turns, freeze ok."""
+        health = dict(health, codex_live_turns=0)
+
+        def fake(method, params=None, *, engine_timeout=False):
+            if method == "codex.restart_freeze":
+                return {"ok": True, "frozen": True, "live_turns": 0}
+            return health
+        return fake
+
     def test_systemd_user_worker_restarts_through_systemctl_never_respawns(self):
         """A detached respawn beside the unit's own worker holds worker.sock
         while the unit's copy crash-loops "already running"."""
@@ -308,7 +319,7 @@ class RestartWorkerProcessTests(unittest.TestCase):
         server = self.server
         with mock.patch.object(
             server, "_control_plane_request",
-            return_value={"ok": True, "worker": {"server_version": "1.0.0"}},
+            side_effect=self._idle_cpr({"ok": True, "worker": {"server_version": "1.0.0"}}),
         ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
              mock.patch.object(
                  server, "_restart_worker_process",
@@ -323,9 +334,9 @@ class RestartWorkerProcessTests(unittest.TestCase):
         server = self.server
         with mock.patch.object(
             server, "_control_plane_request",
-            return_value={"ok": True, "worker": {
+            side_effect=self._idle_cpr({"ok": True, "worker": {
                 "server_version": "2.0.0", "server_content_hash": "old0000000000000",
-            }},
+            }}),
         ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
              mock.patch(
                  "ccc_server.content_hash.compute",
@@ -382,8 +393,8 @@ class RestartWorkerProcessTests(unittest.TestCase):
         server = self.server
         with mock.patch.object(
             server, "_control_plane_request",
-            return_value={"ok": True, "active": 0, "queued": 0, "uncertain": 0,
-                          "worker": {"server_version": "1.0.0"}},
+            side_effect=self._idle_cpr({"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                          "worker": {"server_version": "1.0.0"}}),
         ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
              mock.patch.object(
                  server, "_restart_worker_process",
@@ -401,8 +412,8 @@ class RestartWorkerProcessTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True), \
              mock.patch.object(
                  server, "_control_plane_request",
-                 return_value={"ok": True, "active": 0, "queued": 0, "uncertain": 0,
-                               "worker": {"server_version": "1.0.0"}},
+                 side_effect=self._idle_cpr({"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                               "worker": {"server_version": "1.0.0"}}),
              ), mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
              mock.patch.object(server, "_restart_worker_process",
                                return_value={"restarted": True}) as restart:
@@ -519,7 +530,7 @@ class RestartRoutingTests(unittest.TestCase):
         src = pathlib.Path(self.server.__file__).read_text()
         block = src[src.index('if path in ("/api/restart", "/api/restart/all"):'):]
         handoff = block.index("_safe_worker_restart_precheck(")
-        kick = block.index("if restart_all:\n                worker_outcome = _restart_worker_process()")
+        kick = block.index("if restart_all:\n                worker_outcome = _restart_worker_process(")
         self.assertLess(
             handoff, kick,
             "the worker restart must come after the safety precheck (which "
@@ -558,6 +569,8 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
 
         def fake_cpr(method, params=None, *, engine_timeout=False):
             calls.append(method)
+            if method == "codex.restart_freeze":
+                return {"ok": True, "frozen": True, "live_turns": 0}
             if method == "engine.adopt":
                 return {"ok": True, "available": True, "adopted": 2}
             if method == "drain.set":
@@ -570,7 +583,7 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
             ok, err, adopted, protected = server._safe_worker_restart_precheck()
         self.assertTrue(ok)
         self.assertIsNone(err)
-        self.assertEqual(calls, ["engine.adopt", "drain.set"])
+        self.assertEqual(calls, ["codex.restart_freeze", "engine.adopt", "drain.set"])
         self.assertEqual(adopted["adopted"], 2)
         self.assertEqual(protected["queued"], 1)
 
@@ -583,7 +596,7 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
         block = src[src.index('if path == "/api/restart/worker":'):
                      src.index('if path in ("/api/restart", "/api/restart/all"):')]
         precheck = block.index("_safe_worker_restart_precheck(")
-        kick = block.index("_restart_worker_process()")
+        kick = block.index("outcome = _restart_worker_process(")
         wait = block.index("_wait_worker_healthy(")
         reconcile = block.index('"work.reconcile"')
         release = block.index('"drain.set"')
@@ -595,3 +608,196 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodexLiveTurnRestartGateTests(unittest.TestCase):
+    """CCC-250: a worker restart SIGTERMs its stdio Codex app-server, which
+    aborts every in-flight turn. Those turns hold no ledger job, so every
+    worker-restart path freezes Codex admissions first and fails safe."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = importlib.import_module("server")
+
+    def _precheck(self, freeze_reply, **kwargs):
+        server = self.server
+        calls = []
+
+        def fake_cpr(method, params=None, *, engine_timeout=False):
+            calls.append((method, dict(params or {})))
+            if method == "codex.restart_freeze":
+                if (params or {}).get("enabled") is False:
+                    return {"ok": True, "released": True}
+                return freeze_reply
+            return {"ok": True, "available": True}
+
+        with mock.patch.object(
+            server, "_dashboard_owned_active_executions", return_value=[],
+        ), mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr), \
+                mock.patch.object(server, "_log_activity"):
+            result = server._safe_worker_restart_precheck(**kwargs)
+        return result, [c[0] for c in calls]
+
+    def test_worker_restart_refused_while_codex_turns_run(self):
+        (ok, err, adopted, protected), calls = self._precheck(
+            {"ok": True, "frozen": False, "live_turns": 3, "threads": ["a", "b", "c"]},
+        )
+        self.assertFalse(ok)
+        self.assertEqual(err["code"], "codex_turns_running")
+        self.assertEqual(err["codex_live_turns"], 3)
+        # No adopt and, crucially, no drain left behind by a refusal.
+        self.assertEqual(calls, ["codex.restart_freeze"])
+
+    def test_old_worker_without_gate_fails_safe(self):
+        (ok, err, _, _), calls = self._precheck(
+            {"ok": False, "code": "method_not_found"},
+        )
+        self.assertFalse(ok)
+        self.assertEqual(err["code"], "codex_gate_unsupported")
+        self.assertEqual(calls, ["codex.restart_freeze"])
+
+    def test_unreachable_worker_fails_safe(self):
+        (ok, err, _, _), _ = self._precheck(
+            {"ok": False, "available": False, "error": "connection refused"},
+        )
+        self.assertFalse(ok)
+        self.assertEqual(err["code"], "codex_state_unavailable")
+        self.assertIn("allow_codex_interrupt", err["error"])
+
+    def test_explicit_override_skips_the_gate(self):
+        (ok, _, _, _), calls = self._precheck(
+            {"ok": True, "frozen": False, "live_turns": 3},
+            allow_codex_interrupt=True,
+        )
+        self.assertTrue(ok)
+        self.assertNotIn("codex.restart_freeze", calls)
+
+    def test_dashboard_only_restart_ignores_codex_turns(self):
+        (ok, _, _, _), calls = self._precheck(
+            {"ok": True, "frozen": False, "live_turns": 3}, restarts_worker=False,
+        )
+        self.assertTrue(ok)
+        self.assertNotIn("codex.restart_freeze", calls)
+
+    def test_later_precheck_refusal_releases_the_freeze(self):
+        server = self.server
+        calls = []
+
+        def fake_cpr(method, params=None, *, engine_timeout=False):
+            calls.append((method, (params or {}).get("enabled")))
+            if method == "codex.restart_freeze":
+                return {"ok": True, "frozen": True, "live_turns": 0}
+            if method == "engine.adopt":
+                return {"ok": False, "available": True, "error": "nope"}
+            return {"ok": True}
+
+        with mock.patch.object(
+            server, "_dashboard_owned_active_executions", return_value=[],
+        ), mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr):
+            ok, _, _, _ = server._safe_worker_restart_precheck()
+        self.assertFalse(ok)
+        self.assertEqual(calls[-1], ("codex.restart_freeze", False))
+
+    def test_final_check_aborts_kill_when_a_turn_appeared(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_control_plane_request",
+            return_value={"ok": True, "codex_live_turns": 1, "worker": {"pid": 4242}},
+        ), mock.patch.object(server, "_worker_systemd_scope") as scope, \
+                mock.patch.object(server, "_log_activity"):
+            outcome = server._restart_worker_process(codex_final_check=True)
+        self.assertFalse(outcome["restarted"])
+        self.assertEqual(outcome["reason"], "codex_turns_running")
+        scope.assert_not_called()
+
+    def test_final_check_unknown_state_is_busy(self):
+        check = self.server._codex_restart_final_check
+        self.assertEqual(check({"ok": True, "codex_live_turns": 0}), 0)
+        self.assertNotEqual(check({"ok": True}), 0)  # older worker
+        self.assertNotEqual(check({"ok": False, "available": False}), 0)
+        self.assertNotEqual(check({"ok": True, "codex_live_turns": -1}), 0)
+
+    def test_stale_roll_defers_on_codex_turns_and_unknown(self):
+        server = self.server
+        base = {"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                "worker": {"pid": 1, "server_version": "0.0.0-old"}}
+        for health in (dict(base, codex_live_turns=2), dict(base)):
+            with mock.patch.object(server, "_control_plane_request", return_value=health), \
+                    mock.patch.object(server, "_repo_version_on_disk", return_value="9.9.9"), \
+                    mock.patch.object(server, "_log_activity"), \
+                    mock.patch.object(server, "_restart_worker_process") as kill:
+                out = server._restart_stale_worker()
+            self.assertFalse(out["restarted"])
+            self.assertEqual(out["reason"], "stale_deferred_busy")
+            kill.assert_not_called()
+
+    def test_stale_roll_freezes_then_kills_with_final_check(self):
+        server = self.server
+        health = {"ok": True, "active": 0, "queued": 0, "uncertain": 0,
+                  "codex_live_turns": 0,
+                  "worker": {"pid": 1, "server_version": "0.0.0-old"}}
+
+        def fake_cpr(method, params=None, *, engine_timeout=False):
+            if method == "codex.restart_freeze":
+                return {"ok": True, "frozen": True, "live_turns": 0}
+            return health
+
+        with mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr), \
+                mock.patch.object(server, "_repo_version_on_disk", return_value="9.9.9"), \
+                mock.patch.object(server, "_log_activity"), \
+                mock.patch.object(server, "_restart_worker_process",
+                                  return_value={"restarted": True}) as kill:
+            out = server._restart_stale_worker()
+        self.assertTrue(out["restarted"])
+        self.assertTrue(kill.call_args.kwargs.get("codex_final_check"))
+
+    def test_restart_endpoints_wire_the_gate(self):
+        src = pathlib.Path(self.server.__file__).read_text()
+        block = src[src.index('if path in ("/api/restart", "/api/restart/all"):'):]
+        call = block[block.index("_safe_worker_restart_precheck("):][:300]
+        self.assertIn("restarts_worker=restart_all", call)
+        self.assertIn("codex_final_check=not allow_codex_interrupt", block[:3000])
+        worker = src[src.index('if path == "/api/restart/worker":'):]
+        self.assertIn("codex_final_check=not allow_codex_interrupt", worker[:3000])
+
+    def test_compat_snapshot_not_idle_with_codex_turns(self):
+        snap = self.server._worker_compat_snapshot(
+            {"ok": True, "active": 0, "queued": 0, "uncertain": 0, "codex_live_turns": 1},
+        )
+        self.assertFalse(snap["idle"])
+
+    def test_run_sh_gates_the_stale_roll(self):
+        run_sh = (pathlib.Path(self.server.__file__).parent / "run.sh").read_text()
+        self.assertIn('"active", "queued", "uncertain", "codex_live_turns"', run_sh)
+        self.assertIn("&& ! codex_restart_freeze_ok; then", run_sh)
+
+
+class CodexLiveTurnsCountTests(unittest.TestCase):
+    """_codex_app_server_live_turns: only turns on our own stdio child count,
+    and a turn silent past the stale window stops blocking restarts."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = importlib.import_module("server")
+
+    def _count(self, states, kind="stdio", alive=True, now=10_000.0):
+        server = self.server
+        transport = mock.Mock(kind=kind)
+        transport.alive.return_value = alive
+        with mock.patch.object(server, "_CODEX_APP_SERVER_TRANSPORT", transport), \
+                mock.patch.object(server, "_CODEX_APP_SERVER_THREAD_STATE", states):
+            return server._codex_app_server_live_turns(now=now)
+
+    def test_counts_fresh_active_turns_only(self):
+        states = {
+            "t-active": {"active_turn_id": "u1", "last_activity_at": 9_990.0},
+            "t-pending": {"ccc_turn_start_pending": True, "ccc_turn_start_pending_at": 9_999.0},
+            "t-idle": {"status": "idle", "last_activity_at": 9_999.0},
+            "t-wedged": {"active_turn_id": "u2", "last_activity_at": 1_000.0},
+        }
+        self.assertEqual(sorted(self._count(states)), ["t-active", "t-pending"])
+
+    def test_managed_or_dead_transport_has_no_turns_at_risk(self):
+        states = {"t": {"active_turn_id": "u1", "last_activity_at": 9_999.0}}
+        self.assertEqual(self._count(states, kind="managed-unix"), [])
+        self.assertEqual(self._count(states, alive=False), [])

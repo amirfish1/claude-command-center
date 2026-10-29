@@ -458,6 +458,25 @@ worker_systemd_managed() {
     && [ "$(systemctl --user show -p LoadState --value "$WORKER_SYSTEMD_UNIT_NAME" 2>/dev/null)" = "loaded" ]
 }
 
+# Freeze Codex admissions in the worker before a stale-code roll, then
+# recheck the live-turn count (CCC-250). Succeeds only when frozen with zero
+# live turns; an older worker without the gate fails, which defers the roll.
+codex_restart_freeze_ok() {
+  "$PYTHON" "$HERE/ccc_worker.py" --codex-restart-freeze >/dev/null 2>&1 || return 1
+  if ! "$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if data.get("ok") and data.get("codex_live_turns") == 0 else 1)
+'; then
+    "$PYTHON" "$HERE/ccc_worker.py" --codex-restart-release >/dev/null 2>&1 || true
+    return 1
+  fi
+  return 0
+}
+
 # Restart the systemd-managed worker. A stray worker outside the unit (pid
 # given, not the unit's MainPID) is stopped first so the unit's copy can bind
 # the socket. KillMode=process keeps the sessions the worker launched alive.
@@ -1026,8 +1045,10 @@ except Exception:
     data = {}
 worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
 capabilities = worker.get("capabilities") or []
+# codex_live_turns: Codex turns on the worker's stdio app-server hold no
+# ledger job, but a worker restart aborts them all (CCC-250).
 idle = not any(int(data.get(key) or 0) for key in (
-    "active", "queued", "uncertain",
+    "active", "queued", "uncertain", "codex_live_turns",
 ))
 print(
     int(worker.get("pid") or 0),
@@ -1139,6 +1160,13 @@ EOF
         # files change far more often than worker behaviour, and a restart
         # cuts off live turns. The hourly maintenance tick retries once idle.
         echo "→ Worker code is stale but the worker is busy — restart deferred until it is idle"
+      elif { [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; } \
+        && ! codex_restart_freeze_ok; then
+        # CCC-250: a worker restart aborts every live Codex app-server turn,
+        # and those turns hold no ledger job. The freeze stops new Codex
+        # turns atomically with counting live ones; it refuses when any run
+        # or the worker cannot report them. The maintenance tick retries.
+        echo "→ Worker code is stale but Codex turns are running (or cannot be checked) — restart deferred"
       elif [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; then
         if [ "$worker_stale_version" = "1" ]; then
           echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
