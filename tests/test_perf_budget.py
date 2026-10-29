@@ -3177,9 +3177,13 @@ def test_archive_snapshot_publication_reads_only_cached_metadata(tmp_path, monke
 
     reads = []
     original_open = Path.open
+    test_thread = threading.get_ident()
 
     def tracked_open(candidate, *args, **kwargs):
-        reads.append(candidate)
+        # Path.open is patched process-wide; a background writer's atomic
+        # .tmp write from an earlier test must not count (CCC-259).
+        if threading.get_ident() == test_thread:
+            reads.append(candidate)
         return original_open(candidate, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", tracked_open)
