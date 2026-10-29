@@ -20176,14 +20176,14 @@
   // gates mobile-vs-desktop CHROME). This gates plain-language labels and
   // progressive disclosure of technical info within whatever chrome is
   // already showing. Explicit user choice (localStorage 'ccc-ui-mode')
-  // always wins. Without a saved choice, mobile starts on Simple Home;
-  // desktop keeps the Advanced workspace.
+  // always wins. Without a saved choice, keep the Advanced workspace on all
+  // screen sizes; mobile layout is handled independently by the chrome rules.
   function getUiMode() {
     try {
       const stored = localStorage.getItem('ccc-ui-mode');
       if (stored === 'simple' || stored === 'advanced') return stored;
     } catch (_) {}
-    return isMobileRedesign() ? 'simple' : 'advanced';
+    return 'advanced';
   }
   function setUiMode(mode) {
     const value = mode === 'simple' ? 'simple' : 'advanced';
