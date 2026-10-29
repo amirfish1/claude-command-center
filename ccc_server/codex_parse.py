@@ -662,7 +662,21 @@ def _parse_codex_event_unattributed(ev, line_num, token_usage=None, codex_turn_m
                 "type": "result",
                 "duration_ms": payload.get("duration_ms", "?"),
             }
-            if not text:
+            err = payload.get("error")
+            err_text = ""
+            if isinstance(err, dict):
+                err_text = str(err.get("message") or err.get("codex_error_info") or "").strip()
+                if err.get("codex_error_info") and err.get("codex_error_info") not in err_text:
+                    err_text = f"{err_text} ({err['codex_error_info']})".strip()
+            elif err:
+                err_text = str(err).strip()
+            if err_text:
+                # A failed turn (usage_limit_exceeded, unauthorized, ...) ends
+                # with task_complete.error and no text; surface the reason
+                # instead of the generic "no visible response" label.
+                result["is_error"] = True
+                result["error"] = err_text
+            elif not text:
                 result["no_agent_output"] = True
             if token_usage:
                 result["token_usage"] = token_usage
