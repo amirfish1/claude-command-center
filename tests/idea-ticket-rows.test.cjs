@@ -148,3 +148,34 @@ test('moving an old session makes it visible and selects it in the destination',
     assert.deepEqual(representatives([moved], lane, 'active', [], '1d'), []);
   }
 });
+
+test('a running handoff leaves the main list for the Handed off section', () => {
+  const rows = [row('h', 'EXAMPLE-1', 20), row('n', 'EXAMPLE-2', 15)];
+  rows[0].idea_ticket.handoff = { state: 'running' };
+  assert.deepEqual(representatives(rows, 'ideas', 'active'), ['n']);
+  assert.deepEqual(representatives(rows, 'ideas', 'handoff'), ['h']);
+  rows[0].idea_ticket.handoff.state = 'blocked';  // a question puts it back on top
+  assert.deepEqual(representatives(rows, 'ideas', 'active'), ['h', 'n']);
+  assert.deepEqual(representatives(rows, 'ideas', 'handoff'), []);
+});
+
+test('sessionAttentionStep labels handoffs and owner-held tails', () => {
+  const a = app.indexOf('  const _ATTN_NONE_RE');
+  const b = app.indexOf('  // The server derives readiness', a);
+  assert.ok(a >= 0 && b > a);
+  const ctx = {};
+  vm.runInNewContext(app.slice(a, b) + '\nthis.step = sessionAttentionStep;', ctx);
+  const comp = extra => ({ version: 1, valid: true, ready_to_close: false,
+    decision_dependency: { score: 0 }, remaining_actions: [], ...extra });
+  const blocked = ctx.step({ idea_ticket: { handoff: { state: 'blocked', question: 'Ship?' } } });
+  assert.equal(blocked.label, 'Needs you');
+  assert.equal(blocked.text, 'Ship?');
+  assert.equal(ctx.step({ idea_ticket: { handoff: { state: 'running' } }, session_state: { did: 'X' } }).kind, 'handoff');
+  const mine = ctx.step({ session_state: { next_step_user: 'None.', completion: comp({
+    remaining_actions: [{ text: 'User: approve the client email' }] }) } });
+  assert.equal(mine.text, 'approve the client email');
+  assert.ok(ctx.step({ session_state: { next_step_user: 'None.', completion: comp({
+    decision_dependency: { score: 0.5, evidence: 'pick a plan' } }) } }).text.includes('pick a plan'));
+  assert.equal(ctx.step({ session_state: { next_step_user: 'None.', completion: comp({
+    remaining_actions: [{ text: 'agent: verify' }] }) } }), null);
+});

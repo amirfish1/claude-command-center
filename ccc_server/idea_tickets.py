@@ -214,6 +214,10 @@ def idea_ticket_rows_map():
             # The UI invalidates it when newer activity arrives.
             "ready_to_close_reviewed_at": entry.get("ready_to_close_reviewed_at", 0),
         }
+        h = ticket.get("handoff")
+        if isinstance(h, dict) and h.get("state"):
+            out[sid]["handoff"] = {k: h.get(k) for k in
+                                   ("state", "auto", "at", "question", "nudges", "session")}
     # UI spawns still waiting for their first reply: no ticket yet, but the
     # row belongs in Ideas now rather than in Other.
     for sid in (data.get("pending") or {}):
@@ -910,3 +914,480 @@ def detach_ticket(session_id):
     _mutate(_record)
     return {"ok": True, "ref": "", "queue": OTHER}
 
+
+
+# ── Autopilot and handoff ──────────────────────────────────────────────────
+#
+# A ticketed session that ends a turn is in one of three places: done (its
+# footer says closure is met), waiting on the owner (a question, a decision
+# or a user-owned action), or waiting on an agent (work remains that the
+# agent itself owns). The owner only needs to see the middle case. Done
+# tickets close and archive themselves; agent-owned tails are handed off:
+# CCC tells the session it owns the ticket and watches it until the ticket
+# closes, or blocks on a question with the regular "needs input" route.
+#
+# WT's reconciler never treats an ambient (non-WT-spawned) claimer as dead,
+# so CCC is the watchdog for handed-off sessions: it nudges a stalled one a
+# few times, then blocks the ticket on the owner.
+
+AUTOPILOT_QUIET_S = 120
+# Older sessions are left alone: turning the autopilot on must not act on a
+# whole backlog in one burst.
+AUTOPILOT_MAX_AGE_S = 2 * 86400
+AUTOPILOT_MAX_PER_CALL = 3
+HANDOFF_WATCH_EVERY_S = 60
+HANDOFF_STALL_S = 20 * 60
+HANDOFF_MAX_NUDGES = 3
+HANDOFF_QUEUE = "SMALL-BUGS"
+_ACTIVE_HANDOFF = ("running", "blocked")
+
+_NONE_STEP_RE = re.compile(
+    r"^(?:none|nothing|no action(?: is)?(?: needed| required)?|n/?a|not applicable)?"
+    r"\s*[.!]?\s*(?:[—–(:-].*)?$", re.I | re.S)
+_OWNER_RE = re.compile(
+    r"\bowner\s*[:=]\s*(agent|user|external|amir|human)\b"
+    r"|^\s*\(?(agent|user|external|amir|human)\)?\s*[:\u2014\u2013-]", re.I)
+_BUSY_STATES = ("working", "running", "thinking", "tool")
+_watch = {"at": 0.0, "running": False}
+
+
+def _is_none(text):
+    return bool(_NONE_STEP_RE.match(str(text or "").strip()))
+
+
+def _action_owner(action):
+    """'agent' | 'user' | 'external' for a remaining action ('' unknown)."""
+    if not isinstance(action, dict):
+        return ""
+    owner = str(action.get("owner") or "").strip().lower()
+    if not owner:
+        m = _OWNER_RE.search(str(action.get("text") or ""))
+        owner = (m.group(1) or m.group(2)).lower() if m else ""
+    return {"amir": "user", "human": "user"}.get(owner, owner)
+
+
+def attention(session_state):
+    """Classify a session's last footer: 'needs_you', 'done', 'handoff' or ''.
+
+    '' means there is no valid footer to act on. Work that only waits on an
+    external party (a scheduled release, a vendor) counts as done: routine
+    jobs pick that up, so the owner's list shouldn't keep it.
+    """
+    ss = session_state if isinstance(session_state, dict) else {}
+    if not _is_none(ss.get("next_step_user")):
+        return "needs_you"
+    comp = ss.get("completion")
+    if not isinstance(comp, dict) or not comp.get("valid"):
+        return ""
+    if comp.get("ready_to_close"):
+        return "done"
+    try:
+        decision = float((comp.get("decision_dependency") or {}).get("score") or 0)
+    except (TypeError, ValueError):
+        decision = 0.0
+    if decision > 0:
+        return "needs_you"
+    if any(isinstance(c, dict) and c.get("blocking") for c in comp.get("caveats") or []):
+        # A blocking caveat without an action or decision is a judgment call
+        # the agent couldn't make on its own.
+        if not comp.get("remaining_actions"):
+            return "needs_you"
+    owners = [_action_owner(a) for a in comp.get("remaining_actions") or []]
+    if "user" in owners:
+        return "needs_you"
+    closure_met = bool((comp.get("scope") or {}).get("closure_met"))
+    if owners and all(o == "external" for o in owners) and closure_met:
+        return "done"
+    if not owners and closure_met:
+        return "done"
+    return "handoff"
+
+
+def _row_busy(row):
+    if not isinstance(row, dict):
+        return False
+    for key in ("state", "codex_state"):
+        if str(row.get(key) or "").lower() in _BUSY_STATES:
+            return True
+    if row.get("last_event_type") == "user":
+        return True  # a turn was sent and hasn't answered yet
+    if str(row.get("sidecar_status") or "").lower() in ("running", "queued", "starting"):
+        return True
+    return any(row.get(k) for k in ("sidecar_in_flight", "pending_spawn", "pending_tool",
+                                    "needs_approval", "question_waiting", "stale_tool_call"))
+
+
+def _row_mtime(row):
+    for key in ("mtime", "modified", "last_interacted"):
+        try:
+            value = float(row.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value:
+            return value
+    return 0.0
+
+
+def _autopilot_allowed():
+    # The list also builds inside the archive-refresh subprocess; only the
+    # serving process may inject into sessions or start the watchdog.
+    import sys
+    return "--archive-refresh-worker" not in sys.argv
+
+
+def _ticket_views(rows, data):
+    """ref -> {"lead": row, "rows": [member rows]} for ticketed rows."""
+    sessions = data["sessions"]
+    views = {}
+    for row in rows or []:
+        sid = str(row.get("session_id") or row.get("id") or "")
+        entry = sessions.get(sid) if sid else None
+        ref = entry.get("ref") if isinstance(entry, dict) else None
+        if not ref:
+            continue
+        view = views.setdefault(ref, {"lead": None, "rows": []})
+        view["rows"].append(row)
+        if entry.get("kind") == "child":
+            continue
+        lead = view["lead"]
+        if lead is None or _row_mtime(row) > _row_mtime(lead):
+            view["lead"] = row
+    return views
+
+
+def autopilot_rows(rows, *, now=None):
+    """List-build entry point: close+archive done tickets, hand off agent
+    tails, and tick the handoff watchdog. Cheap dict work per row; wt calls
+    and injects run on daemon threads, at most AUTOPILOT_MAX_PER_CALL."""
+    if not _enabled() or not _autopilot_allowed():
+        return 0
+    now = time.time() if now is None else now
+    data = load_state()
+    views = _ticket_views(rows, data)
+    started = 0
+    for ref, view in views.items():
+        ticket = data["tickets"].get(ref) or {}
+        lead = view["lead"]
+        if not lead or ticket.get("closed") or ("autopilot", ref) in _inflight:
+            continue
+        if (ticket.get("handoff") or {}).get("state") in _ACTIVE_HANDOFF:
+            continue
+        lead_sid = str(lead.get("session_id") or lead.get("id") or "")
+        lead_mtime = _row_mtime(lead)
+        if lead_mtime <= float(ticket.get("autopilot_mtime") or 0):
+            continue  # already acted on this turn (or the owner undid it)
+        if lead.get("archived") or lead.get("trashed") or lead.get("recently_unarchived"):
+            continue
+        if any(_row_busy(r) for r in view["rows"]):
+            continue
+        newest = max(_row_mtime(r) for r in view["rows"])
+        if now - newest < AUTOPILOT_QUIET_S or now - lead_mtime > AUTOPILOT_MAX_AGE_S:
+            continue
+        verdict = attention(lead.get("session_state"))
+        if verdict == "done":
+            target = _autopilot_done
+        elif verdict == "handoff":
+            target = _autopilot_handoff
+        else:
+            continue
+        with _lock:
+            _inflight.add(("autopilot", ref))
+        did = str((lead.get("session_state") or {}).get("did") or "").strip()
+        threading.Thread(target=target, args=(ref, lead_sid, lead_mtime, did),
+                         daemon=True).start()
+        started += 1
+        if started >= AUTOPILOT_MAX_PER_CALL:
+            break
+    _tick_watchdog(views, data, now)
+    return started
+
+
+def _mark_autopilot(ref, mtime, **extra):
+    def _record(d):
+        t = d["tickets"].get(ref)
+        if t is not None:
+            t["autopilot_mtime"] = max(float(t.get("autopilot_mtime") or 0), float(mtime))
+            t.update(extra)
+    _mutate(_record)
+
+
+def _close_and_archive(ref, sid, summary, source):
+    """Close the ticket with ``summary``, then archive its session group."""
+    rc, _ = _wt(["close", ref, "--force", "--no-code", "--summary", summary[:1500]])
+    if rc != 0:
+        state = (_find(ref) or {}).get("status")
+        if state != "closed":
+            _core._log_activity("idea", "IDEA_TICKET_ERR", f"{source} close {ref} rc={rc}")
+            return False
+    _mutate(lambda d: d["tickets"].get(ref, {}).__setitem__("closed", True))
+    _archive_group(sid, source)
+    return True
+
+
+def _archive_group(sid, source):
+    try:
+        _core._set_conversations_archived([sid], True, source=source)
+    except Exception as exc:
+        _core._log_activity("idea", "IDEA_TICKET_ERR", f"{source} archive {sid} {exc}")
+    _restamp_rows()
+
+
+def _autopilot_done(ref, sid, mtime, did):
+    try:
+        _mark_autopilot(ref, mtime)
+        summary = (did or f"Session {sid} reported the work complete.") + \
+            " (Closed by CCC autopilot: the session's footer met its closure criteria.)"
+        if _close_and_archive(ref, sid, summary, "autopilot-done"):
+            _core._log_activity("idea", "AUTOPILOT_DONE", f"{ref} {sid}")
+    except Exception as exc:
+        _core._log_activity("idea", "IDEA_TICKET_ERR", f"autopilot-done {ref} {exc}")
+    finally:
+        with _lock:
+            _inflight.discard(("autopilot", ref))
+
+
+def _autopilot_handoff(ref, sid, mtime, did):
+    try:
+        _mark_autopilot(ref, mtime)
+        handoff(sid, auto=True)
+    except Exception as exc:
+        _core._log_activity("idea", "IDEA_TICKET_ERR", f"autopilot-handoff {ref} {exc}")
+    finally:
+        with _lock:
+            _inflight.discard(("autopilot", ref))
+
+
+def _handoff_prompt(ref, auto):
+    why = ("CCC's autopilot handed this session off: your last turn ended with "
+           "work you own still remaining." if auto else
+           "The owner clicked Hand off: they are not watching this session.")
+    return (
+        f"[CCC handoff] {why} You now own WatchTower ticket {ref}. Drive the "
+        "remaining work to a verified, delivered close on your own: finish your "
+        "remaining actions, wait for deploys or CI with background waits (never "
+        "a long foreground poll), and verify the result.\n\n"
+        f"When it is done, close the ticket:\n"
+        f"  wt close {ref} --summary \"<what shipped and how it was verified>\" "
+        "--commit <SHA>   (or --no-code when nothing was committed)\n\n"
+        "If you truly need the owner (a decision, access, or approval), ask once "
+        "and end your turn:\n"
+        f"  wt block {ref} --kind input --wait-on owner --question "
+        "\"<one self-contained question>\"\n"
+        "The answer will be sent back to this session. Work that only waits on a "
+        "routine job (a scheduled release) does not need the owner: close the "
+        "ticket and name that job in the summary. Work scheduled for a later "
+        "date: file a follow-up ticket (or schedule it) and close this one.\n\n"
+        "Do not take outward-facing or irreversible steps the owner has not "
+        "already approved in this session (messages to clients or vendors, "
+        "payments, deletions, public posts): block and ask instead."
+    )
+
+
+def _inject(sid, text, source):
+    try:
+        result = _core._inject_text_into_session(sid, text, mode="send", source=source)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    if isinstance(result, dict):
+        return result if "ok" in result else {**result, "ok": True}
+    return {"ok": bool(result)}
+
+
+def _set_handoff(ref, **fields):
+    def _record(d):
+        t = d["tickets"].get(ref)
+        if t is None:
+            return None
+        h = dict(t.get("handoff") or {})
+        h.update(fields)
+        t["handoff"] = h
+        return h
+    return _mutate(_record)
+
+
+def handoff(session_id, *, auto=False):
+    """Hand a session's work to CCC: the session owns its ticket (filed in
+    SMALL-BUGS if it has none) and the watchdog follows it to a close."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "no session"}
+    if not _enabled():
+        return {"ok": False, "error": "idea_tickets is off"}
+    ticket = ticket_for_session(sid)
+    if not ticket:
+        filed = file_ticket(sid, HANDOFF_QUEUE)
+        if not filed.get("ok"):
+            return filed
+        ticket = ticket_for_session(sid)
+        if not ticket:
+            return {"ok": False, "error": "ticket not recorded"}
+    ref = ticket["ref"]
+    if ticket["closed"]:
+        return {"ok": False, "error": f"{ref} is already closed"}
+    current = load_state()["tickets"].get(ref, {}).get("handoff") or {}
+    if current.get("state") in _ACTIVE_HANDOFF and current.get("session") == sid:
+        return {"ok": True, "ref": ref, "already": True}
+    sent = _inject(sid, _handoff_prompt(ref, auto), "handoff")
+    if not sent.get("ok"):
+        _core._log_activity("idea", "HANDOFF_FAIL", f"{ref} {sid} {sent.get('error')}")
+        return {"ok": False, "error": sent.get("error") or "inject failed", "ref": ref}
+    now = int(time.time())
+    _set_handoff(ref, state="running", session=sid, auto=bool(auto), at=now,
+                 nudges=0, nudged_at=0, question="")
+    _wt(["comment", ref, ("Auto-handed off" if auto else "Handed off") +
+         f" to session {sid}; CCC watches it until the ticket closes.", "--by", "system"])
+    _core._log_activity("idea", "HANDOFF", f"{ref} {sid} auto={bool(auto)}")
+    _restamp_rows()
+    return {"ok": True, "ref": ref}
+
+
+def takeback(session_id):
+    """Stop watching: the owner manages the session again."""
+    ticket = ticket_for_session(str(session_id or "").strip())
+    if not ticket:
+        return {"ok": False, "error": "no ticket"}
+    ref = ticket["ref"]
+    _set_handoff(ref, state="taken_back", taken_back_at=int(time.time()))
+    _wt(["comment", ref, "Taken back by the owner; CCC stopped watching.", "--by", "system"])
+    _restamp_rows()
+    return {"ok": True, "ref": ref}
+
+
+def answer(session_id, text):
+    """Answer a blocked handoff: record it on the ticket and send it to the
+    session (WT can't resume an unclaimed ticket's session itself)."""
+    text = str(text or "").strip()
+    ticket = ticket_for_session(str(session_id or "").strip())
+    if not ticket or not text:
+        return {"ok": False, "error": "no ticket" if not ticket else "empty answer"}
+    ref = ticket["ref"]
+    h = load_state()["tickets"].get(ref, {}).get("handoff") or {}
+    target = h.get("session") or ticket["sessions"][-1]
+    _wt(["answer", ref, text])
+    sent = _inject(target, (
+        f"[CCC handoff] The owner answered your question on {ref}:\n\n{text}\n\n"
+        f"Continue driving {ref} to a verified close (wt close {ref} ... when done, "
+        f"or wt block {ref} --kind input --wait-on owner --question ... if stuck again)."),
+        "handoff-answer")
+    if not sent.get("ok"):
+        return {"ok": False, "error": sent.get("error") or "inject failed", "ref": ref}
+    _set_handoff(ref, state="running", at=int(time.time()), nudges=0, nudged_at=0,
+                 question="", session=target)
+    _restamp_rows()
+    return {"ok": True, "ref": ref}
+
+
+def _find(ref):
+    rc, out = _wt(["find", ref, "--json"], timeout=20)
+    if rc != 0:
+        return None
+    try:
+        data = json.loads(out[out.index("{"):]) if "{" in out else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _tick_watchdog(views, data, now):
+    """Throttled: one background pass over handed-off tickets per minute."""
+    active = {ref: t["handoff"] for ref, t in data["tickets"].items()
+              if not t.get("closed")
+              and (t.get("handoff") or {}).get("state") in _ACTIVE_HANDOFF}
+    if not active or _watch["running"] or now - _watch["at"] < HANDOFF_WATCH_EVERY_S:
+        return
+    snap = {}
+    for ref in active:
+        view = views.get(ref) or {}
+        h_sid = active[ref].get("session")
+        row = next((r for r in view.get("rows") or []
+                    if str(r.get("session_id") or r.get("id") or "") == h_sid), None)
+        snap[ref] = {
+            "busy": any(_row_busy(r) for r in view.get("rows") or []),
+            "mtime": max([_row_mtime(r) for r in view.get("rows") or []] or [0]),
+            "session_state": (row or view.get("lead") or {}).get("session_state"),
+            "seen": row is not None,
+        }
+    _watch["at"], _watch["running"] = now, True
+    threading.Thread(target=_watchdog_pass, args=(active, snap), daemon=True).start()
+
+
+def _watchdog_pass(active, snap):
+    try:
+        for ref, h in active.items():
+            try:
+                _watch_one(ref, h, snap.get(ref) or {})
+            except Exception as exc:
+                _core._log_activity("idea", "IDEA_TICKET_ERR", f"watchdog {ref} {exc}")
+    finally:
+        _watch["running"] = False
+
+
+def _watch_one(ref, h, info, *, now=None):
+    now = time.time() if now is None else now
+    sid = h.get("session") or ""
+    item = _find(ref)
+    if item is None:
+        return
+    if item.get("status") == "closed":
+        _mutate(lambda d: d["tickets"].get(ref, {}).__setitem__("closed", True))
+        _set_handoff(ref, state="closed", closed_at=int(now))
+        if sid:
+            _archive_group(sid, "handoff-closed")
+        _core._log_activity("idea", "HANDOFF_CLOSED", f"{ref} {sid}")
+        return
+    if item.get("needs_input") or item.get("status") == "awaiting_answer":
+        question = str(item.get("block_question") or "").strip()
+        if h.get("state") != "blocked" or h.get("question") != question:
+            _set_handoff(ref, state="blocked", question=question)
+            _restamp_rows()
+        return
+    if h.get("state") == "blocked":
+        # Answered outside CCC (wt answer, the WT dashboard): back to running.
+        _set_handoff(ref, state="running", question="", at=int(now), nudges=0)
+        return
+    if info.get("busy") or not info.get("seen"):
+        return
+    since = max(float(info.get("mtime") or 0), float(h.get("at") or 0),
+                float(h.get("nudged_at") or 0))
+    if now - since < HANDOFF_STALL_S:
+        return
+    # Idle long enough. If the session's own footer says done or asks the
+    # owner, act on that instead of nudging blindly.
+    ss = info.get("session_state") or {}
+    verdict = attention(ss)
+    if verdict == "done" and float(info.get("mtime") or 0) > float(h.get("at") or 0):
+        did = str(ss.get("did") or "").strip()
+        summary = (did or f"Session {sid} reported the work complete.") + \
+            " (Closed by CCC after handoff: the session's footer met its closure criteria.)"
+        if _close_and_archive(ref, sid, summary, "handoff-done"):
+            _set_handoff(ref, state="closed", closed_at=int(now))
+        return
+    if verdict == "needs_you" and float(info.get("mtime") or 0) > float(h.get("at") or 0):
+        question = str(ss.get("next_step_user") or "").strip() or \
+            "The handed-off session is waiting on the owner; see its last reply."
+        _block(ref, question)
+        return
+    nudges = int(h.get("nudges") or 0)
+    if nudges >= HANDOFF_MAX_NUDGES:
+        did = str(ss.get("did") or "").strip()
+        _block(ref, f"The handed-off session stopped {nudges} times without closing {ref}."
+               + (f" Its last update: {did}" if did else "")
+               + " Answer with guidance, or take it back.")
+        return
+    sent = _inject(sid, (
+        f"[CCC handoff] Reminder: you own {ref} and it is still open. Continue "
+        "the remaining work now. Close it with wt close when verified, or "
+        f"wt block {ref} --kind input --wait-on owner --question \"...\" if you "
+        "need the owner."), "handoff-nudge")
+    if sent.get("ok"):
+        _set_handoff(ref, nudges=nudges + 1, nudged_at=int(now))
+        _core._log_activity("idea", "HANDOFF_NUDGE", f"{ref} {sid} #{nudges + 1}")
+
+
+def _block(ref, question):
+    rc, _ = _wt(["block", ref, "--force", "--kind", "input", "--wait-on", "owner",
+                 "--question", question[:1500]])
+    if rc == 0:
+        _set_handoff(ref, state="blocked", question=question[:1500])
+        _restamp_rows()
+        _core._log_activity("idea", "HANDOFF_BLOCKED", ref)

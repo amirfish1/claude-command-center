@@ -33456,3 +33456,31 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 /* A scheduled deferral takes precedence over historical claim/stage colors. */
 .fq-row.is-deferred.is-att-neutral .fq-status.fq-status { background: var(--text-muted, #8b949e); box-shadow: none; animation: none; }
 .fq-row.is-deferred.is-att-neutral .fq-status::after { content: none; display: none; animation: none; }
+
+/* Handoff and needs-you chips (idea tickets): answer a blocked handoff,
+   take a handed-off ticket back, or open a session that needs a decision. */
+.conv-item .conv-outcome.is-handoff { border-left-color: rgba(163,113,247,0.5); background: rgba(163,113,247,0.06); }
+.conv-item .conv-outcome.is-handoff .conv-outcome-step::before { color: #a371f7; }
+.conv-item .conv-outcome.is-handoff .conv-outcome-step { color: var(--text-muted); }
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-attn-chip) {
+  display: flex !important; align-items: flex-end; gap: 6px;
+}
+#convList#convList .conv-item .conv-outcome:has(.conv-attn-chip) .conv-outcome-step {
+  flex: 1 1 auto; min-width: 0; width: auto;
+}
+.conv-attn-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--text-muted);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  padding: 2px 10px;
+  min-height: 24px;
+  font: 600 12px/18px inherit;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.conv-attn-chip.is-primary { border-color: var(--accent); color: var(--accent); }
+.conv-attn-chip:hover, .conv-attn-chip:focus-visible { color: var(--text); border-color: var(--text); }
+.conv-attn-chip:disabled { opacity: .6; cursor: default; }

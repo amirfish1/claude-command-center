@@ -16576,6 +16576,12 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
         _idea_tickets.sweep_rows(projected)
     except Exception:
         pass
+    # Done tickets close and archive themselves; agent-owned tails are handed
+    # off and watched to a close (only rows the owner needs stay visible).
+    try:
+        _idea_tickets.autopilot_rows(projected)
+    except Exception:
+        pass
     # One-time catch-up for an install where the flag just turned on: ticket
     # the last 2 days of sessions from these same rows (marker-gated, so this
     # body only runs once ever per machine).
@@ -38604,6 +38610,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "session_ids must be a list"}, 400)
                 return
             self.send_json(_idea_tickets.backfill(ids[:200]))
+        elif path in ("/api/idea-tickets/handoff", "/api/idea-tickets/takeback",
+                      "/api/idea-tickets/answer"):
+            # Handoff: CCC tells the session it owns its ticket and watches it
+            # to a close (filing a SMALL-BUGS ticket if it has none). Take back
+            # stops watching; answer replies to a blocked handoff's question.
+            # Body: {session_id, text?}.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not _feature_flag("idea_tickets"):
+                self.send_json({"ok": False, "error": "idea_tickets flag is off"}, 400)
+                return
+            sid = str(payload.get("session_id") or "").strip()
+            action = path.rsplit("/", 1)[-1]
+            if action == "handoff":
+                result = _idea_tickets.handoff(sid)
+            elif action == "takeback":
+                result = _idea_tickets.takeback(sid)
+            else:
+                result = _idea_tickets.answer(sid, payload.get("text"))
+            if result.get("ok"):
+                _restamp_archive_serve_cache_after_mutation(mutated_sids=[sid])
+            self.send_json(result, 200 if result.get("ok") else 400)
         elif path == "/api/conversations/all-lane" or re.match(r"^/api/conversations/[^/]+/all-lane$", path):
             conv_id = "" if path == "/api/conversations/all-lane" else urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))

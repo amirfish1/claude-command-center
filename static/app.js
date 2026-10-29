@@ -3530,8 +3530,10 @@
     const next = String(summary.next_step_user || '').trim();
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(next);
     const hasAnswer = !!text;
+    const attn = (working || ready || (hasNext && !rowHandoff(c))) ? null : sessionAttentionStep(c);
     return working ? { label: 'Working', kind: 'working', hasAnswer, text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
       : ready ? { label: 'Close', kind: 'ready', hasAnswer, text: summary.did || 'Reviewed as complete; archive when ready.' }
+      : attn ? { label: attn.label, kind: attn.kind, hasAnswer, text: attn.text }
       : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update', hasAnswer,
         text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
   }
@@ -3753,6 +3755,52 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _ultraFreshStart, { once: true });
   else _ultraFreshStart();
 
+  // Mirrors idea_tickets.attention() on the server for the owner-facing
+  // cases: a handed-off ticket (running, or blocked on a question) and a
+  // finished turn that needs the owner without naming a next step (a
+  // decision, or a remaining action the owner holds). Done and agent-owned
+  // turns are closed or handed off by the server autopilot.
+  const _ATTN_NONE_RE = /^(?:none|nothing|no action(?: is)?(?: needed| required)?|n\/?a|not applicable)?\s*[.!]?\s*(?:[—–(:-][\s\S]*)?$/i;
+  const _ATTN_OWNER_RE = /\bowner\s*[:=]\s*(agent|user|external|amir|human)\b|^\s*\(?(agent|user|external|amir|human)\)?\s*[:—–-]/i;
+  function _attentionActionOwner(a) {
+    if (!a || typeof a !== 'object') return '';
+    let owner = String(a.owner || '').trim().toLowerCase();
+    if (!owner) {
+      const m = String(a.text || '').match(_ATTN_OWNER_RE);
+      owner = m ? String(m[1] || m[2]).toLowerCase() : '';
+    }
+    return owner === 'amir' || owner === 'human' ? 'user' : owner;
+  }
+  function rowHandoff(c) {
+    const h = c && c.idea_ticket && !c.idea_ticket.closed && c.idea_ticket.handoff;
+    return h && (h.state === 'running' || h.state === 'blocked') ? h : null;
+  }
+  function sessionAttentionStep(c) {
+    const h = rowHandoff(c);
+    if (h && h.state === 'blocked') {
+      return { label: 'Needs you', kind: 'next', handoff: 'blocked',
+        text: String(h.question || 'The handed-off session is waiting on you.') };
+    }
+    const ss = (c && c.session_state) || {};
+    if (h) {
+      return { label: 'Handed off', kind: 'handoff', handoff: 'running',
+        text: String(ss.did || 'CCC is driving this to a close.') };
+    }
+    const next = String(ss.next_step_user || '').trim();
+    if (next && !_ATTN_NONE_RE.test(next)) return null;
+    const comp = ss.completion;
+    if (!comp || comp.valid !== true || comp.ready_to_close) return null;
+    const mine = (comp.remaining_actions || []).find(a => _attentionActionOwner(a) === 'user');
+    if (mine) {
+      return { label: 'Next', kind: 'next', needsYou: true,
+        text: String(mine.text || '').replace(/^\s*(?:owner\s*[:=]\s*)?\(?(?:user|amir|human)\)?\s*[:—–-]\s*/i, '') };
+    }
+    if (Number((comp.decision_dependency || {}).score) > 0) {
+      return { label: 'Next', kind: 'next', needsYou: true,
+        text: 'Decision needed: ' + String((comp.decision_dependency || {}).evidence || 'see the last reply') };
+    }
+    return null;
+  }
   // The server derives readiness from evidence-backed completion gates.
   // Existing explicit reviews remain valid until new transcript activity.
   function sessionReadyToClose(c, live = c) {
@@ -3778,6 +3826,23 @@
   function readyToCloseArchiveHtml() {
     return '<button type="button" class="conv-archive-btn conv-ready-archive conv-ready-close" data-role="archive" data-archived="true"'
       + ' title="Close: archive this finished session" aria-label="Close: archive this finished session">Close</button>';
+  }
+
+  // Chips at the end of an owner-facing row: answer a blocked handoff, take
+  // a handed-off ticket back, or open the session when there's no one-tap reply.
+  function attentionChipsHtml(c, attn) {
+    if (!attn) return '';
+    if (attn.handoff === 'blocked') {
+      return '<button type="button" class="conv-attn-chip is-primary" data-role="handoff-answer" title="Answer the question; the session continues">Answer</button>'
+        + '<button type="button" class="conv-attn-chip" data-role="handoff-takeback" title="Take this back: CCC stops watching it">Take back</button>';
+    }
+    if (attn.handoff === 'running') {
+      return '<button type="button" class="conv-attn-chip" data-role="handoff-takeback" title="Take this back: CCC stops watching it">Take back</button>';
+    }
+    if (attn.needsYou && !sessionQuickAction((c.session_state || {}).next_action)) {
+      return '<button type="button" class="conv-attn-chip is-primary" data-role="attn-open" title="Open the session to decide">Open</button>';
+    }
+    return '';
   }
 
   function _trackedRowStatus(c) {
@@ -17348,6 +17413,41 @@
         _rowQuickActionFeedback.delete(sid);
         syncRowQuickActions(sid);
       }, 8000);
+    }
+  }, true);
+
+  // Handoff chips and the row's Hand off button. Delegated so they survive
+  // row repaints; the server restamps the row, and the list refresh shows it.
+  document.addEventListener('click', async ev => {
+    const btn = ev.target.closest && ev.target.closest(
+      '[data-role="handoff"], [data-role="handoff-answer"], [data-role="handoff-takeback"]');
+    if (!btn || !btn.closest('#convList')) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    const row = btn.closest('.conv-item[data-session-id]');
+    const sid = row && row.dataset.sessionId;
+    if (!sid || btn.disabled) return;
+    const role = btn.dataset.role;
+    const body = { session_id: sid };
+    let url = '/api/idea-tickets/handoff';
+    if (role === 'handoff-takeback') url = '/api/idea-tickets/takeback';
+    if (role === 'handoff-answer') {
+      const step = row.querySelector('.conv-outcome-step');
+      const text = window.prompt((step && step.textContent ? step.textContent + '\n\n' : '') + 'Your answer:');
+      if (!text || !text.trim()) return;
+      url = '/api/idea-tickets/answer';
+      body.text = text.trim();
+    }
+    btn.disabled = true;
+    try {
+      const data = await ccPostJson(url, body);
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Request failed');
+      showOpToast(role === 'handoff' ? 'Handed off ' + (data.ref || '') + ': CCC will drive it to a close'
+        : role === 'handoff-takeback' ? 'Taken back: CCC stopped watching ' + (data.ref || '')
+        : 'Answer sent to the session');
+      refreshConversationList();
+    } catch (error) {
+      btn.disabled = false;
+      showOpToast(String(error.message || error), 'error');
     }
   }, true);
 
@@ -31790,6 +31890,9 @@
     '[data-role="move-lane"]',
     '[data-role="move-idea"]',
     '[data-role="idea-ticket"]',
+    '[data-role="handoff"]',
+    '[data-role="handoff-answer"]',
+    '[data-role="handoff-takeback"]',
     '[data-role="read-row-answer"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
@@ -40092,6 +40195,14 @@
         ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="IDEAS" title="File in Features" aria-label="File in Features">&#128161;</button>'
           + '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="SMALL-BUGS" title="File in Small bugs" aria-label="File in Small bugs">&#128027;</button>'
         : '';
+      // Hand off: CCC tells the session it owns its ticket and watches it to
+      // a close (or a "needs input" block). Any tab; a row without a ticket
+      // gets one in Small bugs.
+      const handoffBtn = (ideaTicketsOn() && !isBacklogRow && !isGithubPrRow && !c.archived && !c.trashed
+        && !rowHandoff(c) && !(c.idea_ticket && c.idea_ticket.closed) && !c.pending_spawn
+        && lifecycleContext !== 'trash' && !sessionReadyToClose(c))
+        ? '<button class="conv-lane-btn conv-handoff-btn" data-role="handoff" title="Hand off: CCC drives this to a close and only asks you if it gets stuck" aria-label="Hand off">&#129309;</button>'
+        : '';
       const moveLaneBtn = _ideaRef
         ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="' + _ideaToQueue + '" title="Move to ' + _ideaToLabel + '" aria-label="Move to ' + _ideaToLabel + '">' + (_ideaToQueue === 'IDEAS' ? '&#128161;' : '&#128027;') + '</button>'
         : _ideaFileBtns + ((lifecycleContext === 'all-main' && !isBacklogRow && !isGithubPrRow)
@@ -40504,7 +40615,7 @@
         // One label carries the state (no separate status column):
         // Working + current activity, Next + user action, Update + summary, or Close
         // after an explicit review or passing completion assessment.
-        let _label, _kind, _stepText;
+        let _label, _kind, _stepText, _attn = null;
         if (_outWorking) {
           _label = 'Working'; _kind = 'working';
           const _turnText = (_latest && !_latestStale) ? _latest : '';
@@ -40512,6 +40623,8 @@
             || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
         } else if (_readyToCloseRow || c.archived || c.trashed) {
           _label = 'Close'; _kind = 'ready'; _stepText = _did || 'Reviewed as complete; archive when ready.';
+        } else if ((_attn = (_hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c))) {
+          _label = _attn.label; _kind = _attn.kind; _stepText = _attn.text;
         } else if (_hasNext) {
           // A next step is always "yours"; one green label, no separate
           // NEEDS YOU variant.
@@ -40540,6 +40653,7 @@
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + (_closeBtn ? ' has-close-btn' : '') + '" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-step"' + (_closeBtn ? '' : ' data-label="' + escapeAttr(_label) + '"') + '>' + escapeHtml(_stepText) + '</span>'
             + (_closeBtn ? readyToCloseArchiveHtml() : '')
+            + attentionChipsHtml(c, _attn)
             + '</div>'
           : '<div class="conv-outcome" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-did">' + escapeHtml(_did) + '</span>'
@@ -40686,7 +40800,7 @@
             +     quickTrashBtn
             +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '</span>'
-            +   '<span class="conv-row-actions">' + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
+            +   '<span class="conv-row-actions">' + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + handoffBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
@@ -43136,6 +43250,9 @@
         const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
         if (!ref) return;
         if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
+        const _handedOff = !c.archived && !c.trashed && !c.idea_ticket.closed
+          && (c.idea_ticket.handoff || {}).state === 'running';
+        if (bucket === 'handoff' && !_handedOff) return;
         if (bucket === 'archived' && (c.trashed || activeRefs.has(ref)
           || (!c.archived && !c.idea_ticket.closed))) return;
         if (bucket === 'trash' && !c.trashed) return;
@@ -43156,7 +43273,11 @@
           if (!prev || byRecency(c, prev) < 0) best.set(ref, c);
         });
       });
-      return Array.from(best.values()).sort(byRecency);
+      const rowsOut = Array.from(best.values()).sort(byRecency);
+      // A handed-off ticket leaves the main list for its own collapsed
+      // section until it closes (then Archived) or blocks (back on top).
+      return bucket === 'active'
+        ? rowsOut.filter(c => (c.idea_ticket.handoff || {}).state !== 'running') : rowsOut;
     };
     const _allTabIdeaConvs = _ideaTicketsOn ? _ideaTicketRows('ideas') : [];
     const _allTabSmallBugConvs = _ideaTicketsOn ? _ideaTicketRows('smallbugs') : [];
@@ -43498,7 +43619,8 @@
         })).join('') + '</div></div>';
     };
     if (_ticketLifecycleView) {
-      _ideaArchivedHtml = _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
+      _ideaArchivedHtml = _lifecycleSection('Handed off', 'ccc-' + _allTabView + '-handoff-collapsed', _ideaTicketRows(_allTabView, 'handoff'))
+        + _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
       _trashHtml = _lifecycleSection('Trash', 'ccc-' + _allTabView + '-trash-collapsed', _ideaTicketRows(_allTabView, 'trash'));
     } else if (_allTabView !== 'workers') {
       const _trashItems = [];
@@ -46022,7 +46144,7 @@
         if (!(await moveSessionIdeaTicket(sessionId, queue))) btn.disabled = false;
       });
     });
-    $convList.querySelectorAll('.conv-lane-btn:not(.conv-idea-move-btn)').forEach(btn => {
+    $convList.querySelectorAll('.conv-lane-btn:not(.conv-idea-move-btn):not(.conv-handoff-btn)').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         ev.preventDefault();
