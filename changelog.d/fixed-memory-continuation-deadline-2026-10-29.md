@@ -1,0 +1,1 @@
+- A cross-machine continuation origin in `ccc brief` no longer shows as unresolved when a busy peer answers in 1.5-4 s; resolution now uses the same per-peer deadline as memory recall.
