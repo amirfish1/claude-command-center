@@ -1228,6 +1228,12 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.16);
 }
 .q2-trow.is-open .q2-tstatus { color: var(--orange); }
+/* Deferred to a scheduled check: neutral, not amber "open" work (CCC-244). */
+.q2-trow.is-open.is-deferred .q2-tdot {
+  background: var(--text-muted);
+  box-shadow: 0 0 0 2px rgba(139, 148, 158, 0.16);
+}
+.q2-trow.is-open.is-deferred .q2-tstatus { color: var(--text-muted); }
 .q2-trow.is-in_progress .q2-tdot {
   background: var(--green);
   animation: q2-status-glow 1.5s ease-in-out infinite;

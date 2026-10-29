@@ -55494,7 +55494,8 @@
             + (stageSince ? ' for ' + timeAgo(stageSince).replace(/\s+ago$/, '') : '');
         const runTitle = queuedToRun
           ? 'Queued to run - click to cancel'
-          : (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
+          : (att && att.key === 'deferred' ? att.label + ' - ' : '')
+            + (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
         const statusTitle = (blocked && att) ? att.label : blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
           : (att && att.tone === 'answer') ? att.label
           : (stageTone && !queuedToRun) ? stageToneTitle

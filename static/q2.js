@@ -2347,6 +2347,8 @@
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
       : queued ? 'launching\u2026'
       : (st === 'blocked' && att) ? (att.owner ? statusLabel(st) : att.label)
+      // A future defer is a scheduled check, not plain "open" work (CCC-244).
+      : (att && att.key === 'deferred') ? att.label
       // An answer in flight (queued/sending) or received names that state, so
       // the status word never reads plain "in progress" over an amber chip.
       : (att && att.tone === 'answer') ? att.label
@@ -2375,6 +2377,7 @@
     return '<button type="button" class="q2-trow is-' + esc(rowSt)
       + (att ? ' is-att-' + esc(att.tone) : '')
       + (att && att.key === 'answer-working' ? ' is-att-working' : '')
+      + (att && att.key === 'deferred' ? ' is-deferred' : '')
       + (stageText ? ' has-stage' : '')
       + (stuckAtStage ? ' is-stage-stuck' : '')
       + (ref === state.ref ? ' is-selected' : '')

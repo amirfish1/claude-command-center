@@ -195,7 +195,9 @@
 
     if (opts.explain) {
       if (status === 'in_progress') {
-        if (opts.liveClaim === true) return make('working', 'answer', 'working', 'A live worker matches this ticket’s claim.');
+        // Amber (tone 'answer') is reserved for real answer/delivery state;
+        // plain live work and plain open work explain themselves neutrally.
+        if (opts.liveClaim === true) return make('working', 'neutral', 'working', 'A live worker matches this ticket’s claim.');
         return make('unverified-claim', 'neutral', 'worker not verified',
           'Claimed by ' + str(it.claimed_by || 'an unknown worker')
           + (it.claimed_machine ? ' on ' + str(it.claimed_machine) : '')
@@ -216,7 +218,7 @@
         'This ticket is excluded from automatic draining; it needs an explicit run request.');
       if (it.claimable === false || it.watchtower_runnable === false) return make('unexplained', 'neutral', 'eligibility needs checking',
         'The scheduler marks this ticket unavailable but supplies no specific reason here. This needs investigation; it is not a confirmed request for your input.');
-      if (status === 'open') return make('worker', 'answer', 'awaiting worker',
+      if (status === 'open') return make('ready', 'neutral', 'awaiting worker',
         'No current blocker is recorded. Waiting for the scheduler to assign an available worker.');
       return make('unexplained', 'neutral', 'state needs checking',
         'Recorded state: ' + status + '. No actionable waiting reason is supplied; this needs investigation.');

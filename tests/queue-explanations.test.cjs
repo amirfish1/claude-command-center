@@ -29,3 +29,19 @@ test('claims require liveness evidence and unknown eligibility is exposed', () =
   assert.match(a.title, /remote/);
   assert.equal(explain({status:'open', claimable:false}).key, 'unexplained');
 });
+test('amber answer tone only comes from answer/delivery state (CCC-244)', () => {
+  assert.notEqual(explain({status:'open'}).tone, 'answer');
+  assert.notEqual(explain({status:'in_progress'}, {liveClaim:true}).tone, 'answer');
+  assert.equal(explain({status:'in_progress', pending_answer:{state:'queued'}}).tone, 'answer');
+  assert.equal(explain({status:'blocked', needs_input:true, wait:{on:'worker'}}).tone, 'answer');
+});
+test('review and deferred work never count as owner input (CCC-244)', () => {
+  const review = explain({status:'in_review'});
+  assert.equal(review.key, 'review');
+  assert.equal(review.owner, false);
+  const now = Date.parse('2026-10-29T00:00:00Z');
+  const d = explain({status:'open', deferred_until:'2026-10-29T01:00:00Z'}, {now});
+  assert.equal(d.key, 'deferred');
+  assert.equal(d.tone, 'neutral');
+  assert.equal(d.owner, false);
+});

@@ -12,9 +12,9 @@ function fn(name) {
   assert.ok(start >= 0 && end > start, name + ' exists');
   return source.slice(start, end);
 }
-const { githubBlockedHint } = new Function('window', 'hasLiveClaim', 'isStaleClaim',
-  fn('githubBlockedHint') + fn('attentionOf') + '\nreturn { githubBlockedHint };'
-)({ QueueAttention: QA }, () => false, () => false);
+const { githubBlockedHint, blockedOnOwner } = new Function('window', 'hasLiveClaim', 'isStaleClaim', 'state', 'projectKey',
+  fn('githubBlockedHint') + fn('attentionOf') + fn('blockedOnOwner') + '\nreturn { githubBlockedHint, blockedOnOwner };'
+)({ QueueAttention: QA }, () => false, () => false, { queues: [] }, k => String(k || '').toUpperCase());
 
 const BLOCK_AT = '2026-10-20T10:00:00Z';
 const blocked = extra => ({ ref: 'G-1', status: 'open', source: 'github', needs_input: true,
@@ -30,4 +30,10 @@ test('external and dependency waits name who must act, not "answer it"', () => {
   assert.doesNotMatch(ext, /needs input|answer it there/);
   const dep = githubBlockedHint(blocked({ wait: { on: 'dependency', ref: 'OPS-1', block_at: BLOCK_AT } }));
   assert.match(dep, /^Waiting on OPS-1; nothing for you to answer/);
+});
+
+test('backlog "needs input" count skips review and deferred work (CCC-244)', () => {
+  assert.equal(blockedOnOwner({ ref: 'G-2', status: 'in_review' }), false);
+  assert.equal(blockedOnOwner(blocked({})), true);
+  assert.equal(blockedOnOwner(blocked({ wait: { on: 'external', actor: 'Sonia', block_at: BLOCK_AT } })), false);
 });
