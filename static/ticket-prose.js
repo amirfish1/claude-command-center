@@ -103,15 +103,22 @@
   // inline options "(a) … (b) … (c) …", then a follow-up question and a
   // recommendation. Lift that structure out so a human can scan it (CCC-64).
   // Returns HTML, or null when the text has no inline options to lift.
+  // Labels may be "(a)", "(A)", "(1)" or carry a short note such as
+  // "(A, recommended)" (STRAMP-215); the note is shown bold after the key.
   function renderDense(text) {
     var flat = String(text || '').replace(/\s+/g, ' ').trim();
     var marks = [];
-    var re = /\(([a-z])\)\s/g;
-    var m, want = 'a';
+    var re = /\(([a-zA-Z]|[1-9])(?:,\s*([^()]{1,30}))?\)\s/g;
+    var m, kind = '';
     while ((m = re.exec(flat))) {
-      if (m[1] !== want) continue;
-      marks.push({ at: m.index, end: re.lastIndex });
-      want = String.fromCharCode(want.charCodeAt(0) + 1);
+      var key = m[1].toLowerCase();
+      var k = marks.length;
+      var mKind = /\d/.test(key) ? 'num' : 'alpha';
+      if (k && mKind !== kind) continue;
+      var want = mKind === 'num' ? String(k + 1) : String.fromCharCode(97 + k);
+      if (key !== want) continue;
+      kind = mKind;
+      marks.push({ at: m.index, end: re.lastIndex, key: m[1], note: (m[2] || '').trim() });
     }
     if (marks.length < 2) return null;
     var out = [];
@@ -127,7 +134,9 @@
         var cut = body.search(/[.?!]\s+(?=[A-Z])/);
         if (cut !== -1) { tail = body.slice(cut + 1).trim(); body = body.slice(0, cut + 1); }
       }
-      items.push('<li><span class="tp-opt-k">' + String.fromCharCode(97 + k) + '</span>'
+      var note = marks[k].note;
+      items.push('<li' + (/recommend/i.test(note) ? ' class="tp-opt-rec"' : '') + '><span class="tp-opt-k">' + esc(marks[k].key) + '</span>'
+        + (note ? '<strong class="tp-opt-note">' + esc(note) + '</strong> ' : '')
         + decorate(esc(body.replace(/[,;]\s*$/, ''))) + '</li>');
     }
     out.push('<ol class="tp-opts">' + items.join('') + '</ol>');
