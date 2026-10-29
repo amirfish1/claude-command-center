@@ -189,14 +189,86 @@ def test_archive_sweep_never_auto_unarchives_trashed_worker(tmp_path, monkeypatc
     server._save_trashed_conversations(["worker-a"])
     swept_inputs = []
 
-    def sweep(rows):
-        swept_inputs.append(list(rows))
-        return []
+    def sweep(rows, trashed=()):
+        swept_inputs.append((list(rows), list(trashed)))
+        return list(rows)
 
     monkeypatch.setattr(server, "_auto_unarchive_live_sessions", sweep)
 
     assert server._load_archived_conversations() == ["worker-a"]
-    assert swept_inputs == [[]]
+    assert swept_inputs == [(["worker-a"], ["worker-a"])]
+
+
+def _resume_sweep_env(tmp_path, monkeypatch, sid, trashed_at):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "_archive_grace", {sid: trashed_at})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_archive_auto_sweep_last", 0.0)
+    monkeypatch.setattr(server, "_discover_live_session_ids", lambda: {sid})
+    monkeypatch.setattr(server, "_codex_pool_candidate_sids", lambda now: frozenset())
+    monkeypatch.setattr(server, "_archive_session_is_live", lambda s: True)
+    transcript = tmp_path / f"{sid}.jsonl"
+    monkeypatch.setattr(server, "_resolve_conversation_reader", lambda s: (transcript, None))
+    server._save_archived_conversations([sid])
+    server._save_trashed_conversations([sid])
+    return transcript
+
+
+def _iso(epoch):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def test_trashed_session_with_new_user_turn_returns_to_active(tmp_path, monkeypatch):
+    """CCC-262: a trashed session resumed with a new prompt must not stay hidden."""
+    sid = "resumed-a"
+    trashed_at = time.time() - 3600
+    transcript = _resume_sweep_env(tmp_path, monkeypatch, sid, trashed_at)
+    transcript.write_text("\n".join(json.dumps(r) for r in [
+        {"type": "user", "timestamp": _iso(trashed_at - 60),
+         "message": {"role": "user", "content": "old prompt"}},
+        {"type": "user", "timestamp": _iso(time.time() - 10),
+         "message": {"role": "user", "content": [{"type": "text", "text": "keep going"}]}},
+    ]) + "\n")
+
+    assert server._load_archived_conversations() == []
+    assert server._load_trashed_conversations() == []
+    assert sid not in server._archive_grace
+    assert server._is_recently_unarchived(sid)
+
+
+def test_trashed_session_finishing_its_turn_stays_trashed(tmp_path, monkeypatch):
+    """Only a new prompt counts: tool results and replies after trash do not."""
+    sid = "lane-b"
+    trashed_at = time.time() - 3600
+    transcript = _resume_sweep_env(tmp_path, monkeypatch, sid, trashed_at)
+    transcript.write_text("\n".join(json.dumps(r) for r in [
+        {"type": "user", "timestamp": _iso(trashed_at - 60),
+         "message": {"role": "user", "content": "the task"}},
+        {"type": "user", "timestamp": _iso(time.time() - 10),
+         "message": {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]}},
+        {"type": "user", "isMeta": True, "timestamp": _iso(time.time() - 8),
+         "message": {"role": "user", "content": "<local-command-stdout>x"}},
+        {"type": "assistant", "timestamp": _iso(time.time() - 5),
+         "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]}},
+    ]) + "\n")
+
+    assert server._load_archived_conversations() == [sid]
+    assert server._load_trashed_conversations() == [sid]
+
+
+def test_trashed_codex_session_with_new_user_message_returns(tmp_path, monkeypatch):
+    sid = "codex-c"
+    trashed_at = time.time() - 3600
+    transcript = _resume_sweep_env(tmp_path, monkeypatch, sid, trashed_at)
+    transcript.write_text(json.dumps({
+        "type": "event_msg", "timestamp": _iso(time.time() - 10),
+        "payload": {"type": "user_message", "message": "resume"},
+    }) + "\n")
+
+    assert server._load_archived_conversations() == []
+    assert server._load_trashed_conversations() == []
 
 
 def test_parallel_trash_operations_do_not_lose_worker(tmp_path, monkeypatch):
