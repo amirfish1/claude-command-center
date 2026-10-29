@@ -222,6 +222,40 @@ class TestInstallBehavior(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def _app_launch(self, run_sh_status, app_service):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            run_sh = os.path.join(td, "run.sh")
+            with open(run_sh, "w") as fh:
+                fh.write(f'#!/bin/bash\necho "run.sh $*" >> "{td}/calls"\n'
+                         f'[ "${{1:-}}" = "--install-service" ] && exit {run_sh_status}\nexit 0\n')
+            os.chmod(run_sh, 0o755)
+            env = {"CCC_INSTALL_MODE": "app", "CCC_INSTALL_DIR": td}
+            if app_service:
+                env["CCC_APP_SERVICE"] = "1"
+            result = _run_install_script_function(
+                "launch_server",
+                prelude='uname() { printf "Darwin"; }\nlaunchctl() { return 1; }',
+                env_extra=env,
+            )
+            with open(os.path.join(td, "calls")) as fh:
+                return result, fh.read().splitlines()
+
+    def test_app_service_mode_installs_service_and_exits(self):
+        result, calls = self._app_launch(0, True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, ["run.sh --install-service"])
+
+    def test_app_service_mode_falls_back_to_app_server_on_failure(self):
+        result, calls = self._app_launch(1, True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, ["run.sh --install-service", "run.sh "])
+
+    def test_app_mode_without_consent_runs_app_server(self):
+        result, calls = self._app_launch(0, False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, ["run.sh "])
+
     def test_default_mode_is_not_app(self):
         result = _run_install_script_function("is_app_install")
         self.assertNotEqual(result.returncode, 0)

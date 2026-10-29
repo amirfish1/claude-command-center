@@ -45,6 +45,38 @@ let CCC_REMOTE_URL_DEFAULTS_KEY = "CCCRemoteServerURL"
 // every loadDashboard() call is allowed to consider the Moment Zero
 // deep-link — see resolveFirstDashboardURL().
 let CCC_DID_OPEN_DASHBOARD_KEY = "CCCDidOpenDashboard"
+// Who owns server.py. "service": a launchd agent (run.sh --install-service)
+// owns it, so quitting, relaunching or updating the app never stops the
+// server or its streams; launchd KeepAlive restarts it after a crash. "app":
+// the app runs server.py as its own child and stops it on quit. The user
+// picks once (askServerModeConsent). The dashboard label is not the bundle ID
+// on purpose: macOS will not bootstrap a job whose Label equals a running
+// app's bundle ID (the legacy label did; run.sh migrates it).
+let CCC_SERVER_MODE_DEFAULTS_KEY = "CCCServerMode"
+let CCC_SERVICE_LABEL = CCC_ENV["CCC_SERVICE_LABEL"] ?? "com.github.claude-command-center.server"
+let CCC_LEGACY_SERVICE_LABEL = "com.github.claude-command-center"
+
+func launchAgentPlistPath(_ label: String) -> String {
+    NSString(string: "~/Library/LaunchAgents/\(label).plist").expandingTildeInPath
+}
+
+func serviceInstalled() -> Bool {
+    let fm = FileManager.default
+    return fm.fileExists(atPath: launchAgentPlistPath(CCC_SERVICE_LABEL))
+        || fm.fileExists(atPath: launchAgentPlistPath(CCC_LEGACY_SERVICE_LABEL))
+}
+
+/// True when launchd has the dashboard job loaded (running or about to be).
+func serviceJobLoaded() -> Bool {
+    let task = Process()
+    task.launchPath = "/bin/launchctl"
+    task.arguments = ["print", "gui/\(getuid())/\(CCC_SERVICE_LABEL)"]
+    task.standardOutput = FileHandle.nullDevice
+    task.standardError = FileHandle.nullDevice
+    do { try task.run() } catch { return false }
+    task.waitUntilExit()
+    return task.terminationStatus == 0
+}
 
 func resolveCCCTargetURL() -> URL {
     if let envValue = CCC_ENV["CCC_REMOTE_URL"], !envValue.isEmpty, let url = URL(string: envValue) {
@@ -117,6 +149,28 @@ func staleRestartCompleted(before: ServerVersionInfo, now: ServerVersionInfo, di
     let replaced = now.pid != before.pid || now.startedAt != before.startedAt
     return replaced && !serverIsStale(serverRev: now.codeRev, diskRev: diskRev)
         && !now.codeRev.isEmpty
+}
+
+/// How to get a server when the port is free at launch. An installed agent
+/// (new or legacy label: run.sh --start-service migrates the legacy one) is
+/// always started, never replaced by an app child. Without one, the stored
+/// choice decides; no choice yet (or "service" whose agent was removed) asks.
+enum ServerLaunchPlan: Equatable {
+    case startService
+    case spawnChild
+    case askConsent
+}
+
+func serverLaunchPlan(serviceInstalled: Bool, storedMode: String?) -> ServerLaunchPlan {
+    if serviceInstalled { return .startService }
+    return storedMode == "app" ? .spawnChild : .askConsent
+}
+
+/// After a service command (run.sh --start-service / --install-service, or
+/// the installer in service mode) exits: keep waiting for the port when it
+/// succeeded or launchd still has the job loaded; otherwise fall back.
+func serviceCommandShouldKeepWaiting(exitStatus: Int32, jobLoaded: Bool) -> Bool {
+    exitStatus == 0 || jobLoaded
 }
 
 /// Same resolution as server.py `_install_dir()`: the clone containing
@@ -1081,6 +1135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var bridgedContentControllers = Set<ObjectIdentifier>()
     private var terminationSignalSources: [DispatchSourceSignal] = []
     var serverProcess: Process?
+    // run.sh --start-service / --install-service while it runs. Never
+    // terminated on quit: the server it starts belongs to launchd.
+    var serviceCommandProcess: Process?
     var serverLogHandle: FileHandle?
     var pollTimer: Timer?
     // True while a single background poller waits for Command Line Tools.
@@ -1252,6 +1309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Set Remote Server…",
                         action: #selector(setRemoteServer),
                         keyEquivalent: "")
+        appMenu.addItem(withTitle: "Restart Server",
+                        action: #selector(restartServerFromMenu),
+                        keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         // Car Mode (Voice) — only when a local launcher is wired (see ccc-voice).
         if carModeCommandExists() {
@@ -1271,6 +1331,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         action: #selector(NSApplication.unhideAllApplications(_:)),
                         keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Stop Server and Quit…",
+                        action: #selector(stopServerAndQuit),
+                        keyEquivalent: "")
         appMenu.addItem(withTitle: "Quit CCC",
                         action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
@@ -1519,6 +1582,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let statusLabel = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         statusLabel.isEnabled = false
         menu.addItem(statusLabel)
+        if !CCC_TARGET_IS_REMOTE {
+            let owner = NSMenuItem(title: serverOwnerDescription(), action: nil, keyEquivalent: "")
+            owner.isEnabled = false
+            menu.addItem(owner)
+        }
 
         if statusServerRunning && !statusLiveWorkers.isEmpty {
             menu.addItem(NSMenuItem.separator())
@@ -1535,10 +1603,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      action: #selector(showMainWindowFromStatusItem),
                      keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
+        if !CCC_TARGET_IS_REMOTE {
+            menu.addItem(withTitle: "Stop Server and Quit…",
+                         action: #selector(stopServerAndQuit),
+                         keyEquivalent: "")
+        }
         menu.addItem(withTitle: "Quit CCC",
                      action: #selector(NSApplication.terminate(_:)),
                      keyEquivalent: "")
         statusItem?.menu = menu
+    }
+
+    /// Cheap (file checks only): rebuilt on every status poll.
+    func serverOwnerDescription() -> String {
+        if let proc = serverProcess, proc.isRunning {
+            return "Runs inside the app (stops when you quit)"
+        }
+        if serviceInstalled() {
+            return "Background service (keeps running after quit)"
+        }
+        return statusServerRunning ? "Started outside the app" : "Not installed as a background service"
+    }
+
+    @objc func restartServerFromMenu() {
+        guard !CCC_TARGET_IS_REMOTE else { return }
+        restartServerThenReload()
+    }
+
+    /// The explicit Stop control. Service mode: boot the dashboard agent out
+    /// (run.sh --stop-service; the worker and its sessions keep running, the
+    /// next app launch starts it again), then quit. App mode: quit stops the
+    /// child anyway. A server started elsewhere is left alone.
+    @objc func stopServerAndQuit() {
+        guard !CCC_TARGET_IS_REMOTE else { NSApp.terminate(nil); return }
+        let ownsChild = serverProcess?.isRunning == true
+        let isService = !ownsChild && serviceInstalled()
+        if !ownsChild && !isService && portIsBound(CCC_PORT) {
+            let info = NSAlert()
+            info.messageText = "This server was not started by CCC"
+            info.informativeText = "Stop it where it runs (for example the terminal running ./run.sh). CCC will quit and leave it running."
+            info.addButton(withTitle: "Quit CCC")
+            info.addButton(withTitle: "Cancel")
+            if info.runModal() == .alertFirstButtonReturn { NSApp.terminate(nil) }
+            return
+        }
+        if isService {
+            let confirm = NSAlert()
+            confirm.messageText = "Stop the CCC server and quit?"
+            confirm.informativeText = "The dashboard server stops until you open CCC again. "
+                + "Agent sessions run in the CCC worker and keep running."
+            confirm.addButton(withTitle: "Stop Server and Quit")
+            confirm.addButton(withTitle: "Cancel")
+            guard confirm.runModal() == .alertFirstButtonReturn else { return }
+            let proc = Process()
+            proc.launchPath = "/bin/bash"
+            proc.arguments = ["\(CCC_INSTALL_DIR)/run.sh", "--stop-service"]
+            proc.currentDirectoryPath = CCC_INSTALL_DIR
+            var env = CCC_ENV
+            env["PATH"] = augmentedPath()
+            proc.environment = env
+            var exitStatus: Int32 = -1
+            if (try? proc.run()) != nil {
+                proc.waitUntilExit()
+                exitStatus = proc.terminationStatus
+            }
+            if exitStatus != 0 || serviceJobLoaded() {
+                showFatal("The CCC server did not stop",
+                          "run.sh --stop-service exited with status \(exitStatus). "
+                          + "Run ./run.sh --stop-service in \(CCC_INSTALL_DIR) to see why.")
+                return
+            }
+        }
+        NSApp.terminate(nil)
     }
 
     // One line per live WatchTower worker: which queue it belongs to, and
@@ -1933,8 +2069,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // It may predate the code on disk; replace it first if so.
             replaceStaleServerThenLoad()
         } else {
-            spawnServer()
+            startServerForLaunch()
         }
+    }
+
+    func startServerForLaunch() {
+        let plan = serverLaunchPlan(
+            serviceInstalled: serviceInstalled(),
+            storedMode: UserDefaults.standard.string(forKey: CCC_SERVER_MODE_DEFAULTS_KEY))
+        switch plan {
+        case .startService:
+            runServiceCommand("--start-service", status: "Starting the CCC background server…")
+        case .spawnChild:
+            spawnServer()
+        case .askConsent:
+            if askServerModeConsent() {
+                runServiceCommand("--install-service", status: "Setting up the CCC background server…")
+            } else {
+                spawnServer()
+            }
+        }
+    }
+
+    /// One-time choice (approved first-launch consent). Returns true for the
+    /// background service and stores the answer either way.
+    func askServerModeConsent() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Keep the CCC server running in the background?"
+        alert.informativeText =
+            "CCC can add a background service (a macOS launch agent) that runs the dashboard server. "
+            + "It keeps running when you quit, relaunch or update this app, so live sessions and streams are not interrupted, "
+            + "and it starts again after a crash or at login.\n\n"
+            + "Stop it at any time with CCC > Stop Server and Quit. Remove it with ./run.sh --uninstall-service.\n\n"
+            + "Choose \"Only While Open\" to run the server inside the app and stop it when you quit."
+        alert.addButton(withTitle: "Run in Background")
+        alert.addButton(withTitle: "Only While Open")
+        let useService = alert.runModal() == .alertFirstButtonReturn
+        UserDefaults.standard.set(useService ? "service" : "app", forKey: CCC_SERVER_MODE_DEFAULTS_KEY)
+        return useService
+    }
+
+    /// Run `run.sh <flag>` and wait for the port. The launchd job, not this
+    /// process, owns the server. If the command fails and launchd does not
+    /// have the job loaded, run the server inside the app and say why.
+    func runServiceCommand(_ flag: String, status: String) {
+        let runSh = "\(CCC_INSTALL_DIR)/run.sh"
+        guard FileManager.default.fileExists(atPath: runSh) else {
+            runInstaller()
+            return
+        }
+        if !python3Works() {
+            waitForDeveloperTools()
+            return
+        }
+        loadingLabel.stringValue = status
+
+        let proc = Process()
+        proc.launchPath = "/bin/bash"
+        proc.arguments = [runSh, flag]
+        proc.currentDirectoryPath = CCC_INSTALL_DIR
+        var env = CCC_ENV
+        env["PATH"] = augmentedPath()
+        env["PORT"] = "\(CCC_PORT)"
+        env["CCC_FROM"] = "dmg"
+        proc.environment = env
+
+        do {
+            closeServerLog()
+            serverLogHandle = try attachProcessLog(proc)
+            try proc.run()
+            serviceCommandProcess = proc
+        } catch {
+            closeServerLog()
+            fallBackToAppServer("the background server command could not start (\(error))")
+            return
+        }
+
+        pollUntilReady(process: proc, operation: "background server start", timeout: 90) { [weak self] status in
+            if serviceCommandShouldKeepWaiting(exitStatus: status, jobLoaded: serviceJobLoaded()) {
+                return true
+            }
+            self?.fallBackToAppServer(status == 3
+                ? "the background service is not installed"
+                : "the background server did not start (exit \(status))")
+            return false
+        }
+    }
+
+    func fallBackToAppServer(_ reason: String) {
+        NSLog("CCC: \(reason); running the server inside the app")
+        serviceCommandProcess = nil
+        window.subtitle = "Background server unavailable: \(reason). Running it inside the app. Log: \(CCC_LOG_PATH)"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+            self?.window.subtitle = ""
+        }
+        spawnServer()
     }
 
     /// Port already bound by a server we did not start. If its code_rev differs
@@ -1996,6 +2225,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // entitled to the Moment Zero onboarding deep-link regardless of any
         // later server-side check.
         didInstallThisLaunch = true
+        // A fresh install has no agent yet. Ask once, before the installer,
+        // whether the server should outlive the app.
+        var wantService = false
+        if !serviceInstalled() {
+            let stored = UserDefaults.standard.string(forKey: CCC_SERVER_MODE_DEFAULTS_KEY)
+            wantService = stored == "service" || (stored == nil && askServerModeConsent())
+        }
         loadingLabel.stringValue = "Setting up Command Center for the first time…"
 
         let proc = Process()
@@ -2008,6 +2244,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         env["CCC_FROM"] = "dmg"
         env["CCC_INSTALL_MODE"] = "app"
         env["CCC_INSTALL_DIR"] = CCC_INSTALL_DIR
+        if wantService {
+            env["CCC_APP_SERVICE"] = "1"
+        }
         proc.environment = env
         proc.currentDirectoryPath = env["HOME"] ?? NSHomeDirectory()
 
@@ -2027,7 +2266,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // a network transfer. A too-short timeout here SIGTERMs the clone
         // mid-transfer, which git reports as a confusing "unexpected
         // disconnect" rather than "we killed it."
-        pollUntilReady(process: proc, operation: "installation", timeout: 600)
+        // In service mode the installer exits 0 once launchd owns the server.
+        pollUntilReady(process: proc, operation: "installation", timeout: 600) { status in
+            wantService && serviceCommandShouldKeepWaiting(exitStatus: status, jobLoaded: serviceJobLoaded())
+        }
     }
 
     func spawnServer() {
@@ -2073,17 +2315,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollUntilReady(process: proc, operation: "server startup")
     }
 
-    func pollUntilReady(process: Process?, operation: String, timeout: TimeInterval = 60) {
+    /// `onExit` decides what an exit of `process` means: return true to keep
+    /// waiting for the port (a launchd job now owns the server), false when
+    /// it already handled the failure. Without it, an exit is a failure.
+    func pollUntilReady(process: Process?, operation: String, timeout: TimeInterval = 60,
+                        onExit: ((Int32) -> Bool)? = nil) {
         let start = Date()
+        var watched = process
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
             if portIsBound(CCC_PORT) {
                 timer.invalidate()
                 self.pollTimer = nil
+                self.serviceCommandProcess = nil
                 self.loadDashboard()
                 return
             }
-            if let process = process, !process.isRunning {
+            if let process = watched, !process.isRunning, let onExit = onExit {
+                watched = nil
+                if !onExit(process.terminationStatus) {
+                    timer.invalidate()
+                    if self.pollTimer === timer { self.pollTimer = nil }
+                    return
+                }
+            }
+            if let process = watched, !process.isRunning {
                 timer.invalidate()
                 self.pollTimer = nil
                 let tail = logTail(CCC_LOG_PATH)

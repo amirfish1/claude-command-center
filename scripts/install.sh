@@ -513,8 +513,22 @@ pick_port() {
 
 launch_server() {
   if is_app_install; then
-    note "launching CCC for the native app on port $PORT"
     cd "$INSTALL_DIR"
+    # CCC_APP_SERVICE=1: the user agreed in CCC.app to a background server
+    # that outlives the app. Install it and exit; the app waits for the port.
+    # A failed install falls through to the app-owned server.
+    if [ "${CCC_APP_SERVICE:-}" = "1" ] && [ "$(uname -s)" = "Darwin" ]; then
+      note "setting CCC up as a background server for the native app on port $PORT"
+      if ./run.sh --install-service; then
+        exit 0
+      fi
+      # Loaded but slow to bind: launchd owns it; the app keeps waiting.
+      if launchctl print "gui/$(id -u)/com.github.claude-command-center.server" >/dev/null 2>&1; then
+        exit 0
+      fi
+      note "the background server did not start; running it inside the app instead"
+    fi
+    note "launching CCC for the native app on port $PORT"
     exec ./run.sh
   fi
 

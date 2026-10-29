@@ -160,6 +160,33 @@ class RunShServiceLifecycleTests(unittest.TestCase):
         self.assertNotIn("Migrating", second.stdout)
         self.assertEqual(backup.read_text(), "legacy-plist")
 
+    def test_start_service_migrates_legacy_plist_keeping_its_env(self):
+        legacy = (
+            "<plist><dict><key>Label</key><string>" + LEGACY + "</string>"
+            "<key>EnvironmentVariables</key><dict><key>CCC_BIND_HOST</key>"
+            "<string>100.64.0.1</string></dict></dict></plist>"
+        )
+        (self.agents / f"{LEGACY}.plist").write_text(legacy)
+        proc = self.run_sh("--start-service", FAKE_LISTEN_LABEL=SERVER)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        migrated = (self.agents / f"{SERVER}.plist").read_text()
+        self.assertIn(f"<string>{SERVER}</string>", migrated)
+        self.assertIn("100.64.0.1", migrated)
+        self.assertFalse((self.agents / f"{LEGACY}.plist").exists())
+        backup = self.home / ".claude" / "command-center" / "service-backup" / f"{LEGACY}.plist"
+        self.assertEqual(backup.read_text(), legacy)
+
+    def test_start_service_does_not_migrate_while_port_serves(self):
+        (self.agents / f"{LEGACY}.plist").write_text("legacy-plist")
+        with socket.socket() as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", self.port))
+            s.listen()
+            proc = self.run_sh("--start-service")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.agents / f"{LEGACY}.plist").exists())
+        self.assertFalse(any(line.startswith("bootout") for line in self.log()))
+
     def test_isolated_label_override_never_touches_default_labels(self):
         (self.agents / f"{LEGACY}.plist").write_text("legacy-plist")
         (self.agents / "test.ccc.server.plist").write_text("<plist/>")

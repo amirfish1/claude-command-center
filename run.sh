@@ -176,14 +176,20 @@ EOF
 }
 
 # Move a pre-rename dashboard agent (Label == the .app bundle ID) out of the
-# way. Idempotent: no legacy plist, nothing to do. The old plist is kept in
-# LEGACY_PLIST_BACKUP_DIR so a rollback is: ./run.sh --uninstall-service, move
-# the backup back into ~/Library/LaunchAgents, launchctl bootstrap it. The
-# worker label never changed, so the worker (and its sessions) is untouched.
+# way. Idempotent: no legacy plist, nothing to do. If no new plist exists yet,
+# the legacy one is copied under the new Label so its baked-in env survives.
+# The old plist is kept in LEGACY_PLIST_BACKUP_DIR so a rollback is:
+# ./run.sh --uninstall-service, move the backup back into
+# ~/Library/LaunchAgents, launchctl bootstrap it. The worker label never
+# changed, so the worker (and its sessions) is untouched.
 migrate_legacy_service() {
   [ "$PLIST_LABEL" = "$LEGACY_PLIST_LABEL" ] && return 0
   [ -f "$LEGACY_PLIST_PATH" ] || return 0
   echo "→ Migrating the CCC dashboard agent: $LEGACY_PLIST_LABEL -> $PLIST_LABEL"
+  if [ ! -f "$PLIST_PATH" ]; then
+    sed "s#<string>${LEGACY_PLIST_LABEL}</string>#<string>${PLIST_LABEL}</string>#" \
+      "$LEGACY_PLIST_PATH" > "$PLIST_PATH.tmp" && mv -f "$PLIST_PATH.tmp" "$PLIST_PATH"
+  fi
   if launchctl_supports_bootstrap; then
     launchctl bootout "$(service_domain)/$LEGACY_PLIST_LABEL" >/dev/null 2>&1 \
       || launchctl bootout "$(service_domain)" "$LEGACY_PLIST_PATH" >/dev/null 2>&1 \
@@ -210,20 +216,23 @@ wait_for_service_bind() {
 }
 
 # Start an installed dashboard agent (CCC.app calls this on launch when the
-# port is free). Exit 3 = not installed, so the caller can ask for consent.
+# port is free), migrating a legacy-label plist first. Exit 3 = not
+# installed, so the caller can ask for consent.
 start_service() {
   if [ "$(uname -s)" != "Darwin" ]; then
     echo "--start-service is macOS-only (use systemctl --user start ccc.service)." >&2
     exit 2
   fi
+  local target_port="${PORT:-8090}"
+  if is_port_bound "$target_port"; then
+    # Never migrate (bootout) a legacy job that is serving right now.
+    echo "✓ Port $target_port is already serving."
+    return 0
+  fi
+  migrate_legacy_service
   if [ ! -f "$PLIST_PATH" ]; then
     echo "Service is not installed." >&2
     exit 3
-  fi
-  local target_port="${PORT:-8090}"
-  if is_port_bound "$target_port"; then
-    echo "✓ Port $target_port is already serving."
-    return 0
   fi
   if [ -f "$WORKER_PLIST_PATH" ]; then
     load_worker_service

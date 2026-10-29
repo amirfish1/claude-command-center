@@ -196,7 +196,7 @@ How to decide — the three services and what each one loads:
 
 | Service | launchd label | Runs | Restart when you touched |
 |---|---|---|---|
-| **Dashboard** | `com.github.claude-command-center` | `server.py` + the HTTP API | `server.py` or any module it imports |
+| **Dashboard** | `com.github.claude-command-center.server` (legacy: `com.github.claude-command-center`) | `server.py` + the HTTP API | `server.py` or any module it imports |
 | **Worker** | `com.github.claude-command-center.worker` | `ccc_worker.py`, owns engine execution + the shared Codex app-server | `ccc_worker.py`, `worker_engines.py`, `control_plane.py` — **and `server.py`**, see the gotcha below |
 | **WatchTower** | `ai.watchtower.watcher` | the `wt` queue daemon on `:8787` | WatchTower's own code (separate repo). CCC changes never need this — default **N** |
 
@@ -230,7 +230,7 @@ minute, up to 10 times. State lives in
 `~/.claude/command-center/restart-debounce.json`, runner output in
 `restart-debounce.log` next to it. `--now` skips the window; use it only when a
 human asked for an immediate restart. The raw `launchctl kickstart -k
-gui/$(id -u)/com.github.claude-command-center[.worker]` (or `systemctl --user
+gui/$(id -u)/com.github.claude-command-center.server` (or `.worker`; `systemctl --user
 restart ccc[-worker]` on Linux) is for a human recovering a wedged server that
 no longer answers HTTP.
 
@@ -270,20 +270,42 @@ If you're unsure, default to pushing then checking the table — `git push` is r
 - Bounding a headless `claude -p` to read-only tools: `--allowedTools` alone does NOT restrict the toolset; also pass `--disallowedTools` (Bash/Write/Edit/etc).
 - Never add a manual refresh button to fix UI staleness; fix the staleness at its source with auto-refresh.
 
-## Restart matrix: launchd bundle-ID collision
+## Server ownership (CCC.app and launchd)
 
-**If `launchctl kickstart` says "Could not find service" for the dashboard
-label**, don't assume the fix is `./run.sh --install-service` — check
-`pgrep -f "MacOS/CCC"` first. The .app shares its launchd Label with the app's
-bundle identifier (`com.github.claude-command-center`), so while the .app is
-open, `launchctl bootstrap` for that same Label always fails with a bare
-`Bootstrap failed: 5: Input/output error` (bundle-ID collision in the gui/<uid>
-session — confirmed via `launchctl dumpstate | grep application.com.github...`
-showing an active per-PID "application" domain for the running app). The
-.app self-manages its own `server.py` child whenever nothing else is already
-serving the port — quit and relaunch the .app to restore it instead of
-fighting the launchd install path. `run.sh` now detects this and prints the
-same guidance (OPS-1246).
+Exactly one process owns the dashboard `server.py` on a port:
+
+| Owner | How it got there | Quit / relaunch / Sparkle update of CCC.app |
+|---|---|---|
+| launchd job `com.github.claude-command-center.server` | `./run.sh --install-service`, or CCC.app after the user picked "Run in Background" | Server and streams keep running. KeepAlive restarts it after a crash. |
+| CCC.app child (`run.sh` under the app) | the user picked "Only While Open" (`CCCServerMode=app` in the app's defaults) | Quit stops it (`stopOwnedProcess`). |
+| anything else on the port (foreground `./run.sh`, a dev clone) | started by hand | The app attaches and never stops it. |
+
+On launch with the port free, CCC.app runs `run.sh --start-service` when either
+plist exists, otherwise it asks once (the approved first-launch consent).
+A port that is already bound is attached to; a stale `code_rev` gets
+`POST /api/restart`. "Stop Server and Quit…" runs `run.sh --stop-service`,
+which boots out the dashboard job only: the worker
+(`com.github.claude-command-center.worker`) and its sessions keep running, and
+the plist stays, so the next login or app launch starts it again. If a
+service command fails and launchd does not have the job loaded, the app runs
+the server as its child and says so in the window subtitle.
+
+**Legacy label.** The old dashboard Label was the .app bundle ID
+(`com.github.claude-command-center`), and macOS will not bootstrap a job whose
+Label equals a running app's bundle ID (bare `Bootstrap failed: 5:
+Input/output error`, OPS-1246). `run.sh --install-service`, `--start-service`
+(only when the port is free) and `--uninstall-service` migrate it
+idempotently: boot out the legacy job, copy its plist under the new Label
+(keeping its baked-in env) when no new plist exists, and move the old plist to
+`~/.claude/command-center/service-backup/`. `--service-status` reports a
+leftover legacy plist. Rollback: `./run.sh --uninstall-service`, move the
+backup back into `~/Library/LaunchAgents/`, then `launchctl bootstrap
+gui/$(id -u) ~/Library/LaunchAgents/com.github.claude-command-center.plist`
+(that only works while CCC.app is closed, which is why the label changed).
+`server.py` resolves the installed label with `_ccc_dashboard_launchd_label()`.
+For tests, `CCC_SERVICE_LABEL` / `CCC_WORKER_SERVICE_LABEL` give run.sh and
+CCC.app an isolated label; `tests/test_run_sh_service_lifecycle.py` runs
+run.sh against a temp HOME with a fake `launchctl`.
 
 ## Scratch-HOME test servers
 
