@@ -41805,6 +41805,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return
         is_codex = parser is _parse_codex_event
         codex_token_usage = None
+        # Live rows need the turn_id the snapshot readers thread on from
+        # turn_context: the Codex live overlay reconciles by it (CCC-260).
+        codex_turn_meta = None
         native_path = _resolve_codex_rollout_path(conversation_id) if is_codex or parser is _parse_codex_exec_log_event else None
         if parser is _parse_codex_exec_log_event or (native_path and _codex_rollout_is_stub(native_path)):
             self._stream_codex_capture(conversation_id, native_path, after_line)
@@ -41856,6 +41859,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     file_offset = 0
                     line_num = 0
                     codex_token_usage = None
+                    codex_turn_meta = None
                 try:
                     with open(filepath, "r") as f:
                         if file_offset > 0:
@@ -41865,6 +41869,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 f.seek(0)
                                 line_num = 0
                                 codex_token_usage = None
+                                codex_turn_meta = None
                         while True:
                             pos_before = f.tell()
                             line = f.readline()
@@ -41879,7 +41884,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                     break
                             line_num_current = line_num + 1
                             if line_num_current <= after_line:
-                                if is_codex and '"token_count"' in stripped:
+                                if is_codex and ('"token_count"' in stripped or '"turn_context"' in stripped):
                                     try:
                                         ev = json.loads(stripped)
                                     except json.JSONDecodeError:
@@ -41888,6 +41893,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                         usage = _codex_token_usage_from_event(ev)
                                         if usage:
                                             codex_token_usage = usage
+                                        turn_meta = _codex_turn_meta_from_event(ev)
+                                        if turn_meta:
+                                            codex_turn_meta = turn_meta
                                 line_num = line_num_current
                                 continue
                             line_num = line_num_current
@@ -41898,11 +41906,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             except json.JSONDecodeError:
                                 continue
                             if is_codex:
+                                turn_meta = _codex_turn_meta_from_event(ev)
+                                if turn_meta:
+                                    codex_turn_meta = turn_meta
+                                    continue
                                 usage = _codex_token_usage_from_event(ev)
                                 if usage:
                                     codex_token_usage = usage
                                     continue
-                                parsed = parser(ev, line_num, codex_token_usage)
+                                parsed = parser(ev, line_num, codex_token_usage, codex_turn_meta=codex_turn_meta)
                             else:
                                 parsed = parser(ev, line_num)
                             if parsed:

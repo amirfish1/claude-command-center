@@ -1,0 +1,1 @@
+- Codex replies no longer appear twice in a live session: rows streamed during a turn now carry their turn id, so the live preview copy is matched and removed.
