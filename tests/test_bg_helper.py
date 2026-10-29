@@ -195,3 +195,21 @@ def test_board_is_pulled_only_while_read(helper):
     assert server._gh_queue_proxy_tick() is True
     with server._ux_fixes_list_cache_lock:
         assert [i["ref"] for i in server._ux_fixes_list_cache[("", "")]["items"]] == ["CCC-1"]
+
+
+@pytest.mark.parametrize("module", ["bg_helper", "conv_reader"])
+def test_child_exits_when_a_restarted_dashboard_replaces_its_socket(module, tmp_path, monkeypatch):
+    # In-place dashboard restarts keep the pid, so getppid() never changes;
+    # the replaced socket inode is what tells the old child to go.
+    import importlib
+    mod = importlib.import_module(f"ccc_server.{module}")
+    path = tmp_path / "s.sock"
+    path.write_text("old")
+    inode = mod._socket_inode(path)
+    path.unlink()
+    path.write_text("new child")  # a fresh child published a new socket
+    exits = []
+    monkeypatch.setattr(mod.os, "_exit", lambda code: (exits.append(code), (_ for _ in ()).throw(SystemExit))[1])
+    with pytest.raises(SystemExit):
+        mod._watch_parent(os.getppid(), path, inode)
+    assert exits == [0]
