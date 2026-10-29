@@ -33403,3 +33403,4 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 
 /* A scheduled deferral takes precedence over historical claim/stage colors. */
 .fq-row.is-deferred.is-att-neutral .fq-status.fq-status { background: var(--text-muted, #8b949e); box-shadow: none; animation: none; }
+.fq-row.is-deferred.is-att-neutral .fq-status::after { content: none; display: none; animation: none; }
