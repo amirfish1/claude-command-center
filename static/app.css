@@ -33349,7 +33349,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 /* The logo leads; a narrow repo-colored rim keeps repository identity visible. */
 .conv-idea-avatar.has-repo-background { border-radius:50%; overflow:visible; }
 .conv-idea-avatar > .repo-avatar.conv-avatar-background { position:absolute; inset:2px; width:calc(100% - 4px); height:calc(100% - 4px); margin:0; border-radius:50%; overflow:hidden; pointer-events:none; background:transparent; }
-.conv-idea-avatar > .conv-avatar-background img { object-fit:cover; background:transparent; opacity:1; }
+.conv-idea-avatar > .conv-avatar-background img { object-fit:cover; background:transparent; opacity:.4; filter:blur(1.5px); }
 .conv-avatar-background .repo-avatar-initials { display:none; }
 .conv-idea-avatar > .conv-avatar-stack { position:relative; z-index:1; display:flex; flex-direction:column; align-items:center; gap:1px; text-shadow:0 1px 3px #000, 0 0 5px #000; }
 .conv-avatar-initials { font:700 9px/1 system-ui, sans-serif; letter-spacing:.5px; }
