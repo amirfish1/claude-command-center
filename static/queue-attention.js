@@ -73,7 +73,9 @@
     if (!it) return null;
     opts = opts || {};
     var status = str(it.status || 'open');
-    if (status === 'closed' || status === 'in_review') return null;
+    if (status === 'closed') return null;
+    if (status === 'in_review') return opts.explain ? make('review', 'neutral', 'awaiting checks / review',
+      'Implementation has been submitted; required checks or review must pass before closure.') : null;
     var question = str(it.block_question);
 
     // Duplicate followers wait for the original's completion and checks.
@@ -129,10 +131,21 @@
           + new Date(until).toISOString()
           + (it.defer_reason ? '\n' + it.defer_reason : '') + '\nNot ready for a worker yet.');
     }
+    if (opts.explain) {
+      var deps = Array.isArray(it.waiting_on) ? it.waiting_on : [];
+      if (deps.length) return make('dependency', 'neutral', 'waiting on ' + deps.join(', '),
+        'These dependencies must complete before a worker can claim this ticket: ' + deps.join(', '),
+        { blocked: true, depRef: str(deps[0]) });
+      var ready = str(it.readiness);
+      var readinessLabels = { 'needs-spec': 'needs specification', 'needs-shaping': 'needs shaping', 'needs-rationale': 'needs rationale' };
+      if (status === 'open' && readinessLabels[ready]) return make('readiness', 'neutral', readinessLabels[ready],
+        'Build workers cannot claim this ticket until ' + readinessLabels[ready].replace('needs ', '')
+        + ' is completed. This is preparation work, not automatically a question for you.', { blocked: true });
+    }
     // Legacy blocked rows do not necessarily request an owner decision.
     if (status === 'blocked') {
-      return make('blocked', 'neutral', 'blocked',
-        question || 'Blocked; no owner decision is recorded. Open the ticket for details.', { blocked: true });
+      return make('blocked', 'neutral', opts.explain && !question ? 'block reason missing' : 'blocked',
+        question || 'Blocked without a recorded reason. This needs investigation; no owner decision is recorded.', { blocked: true });
     }
 
     var live = opts.liveClaim !== undefined ? !!opts.liveClaim : status === 'in_progress';
@@ -180,6 +193,34 @@
       }
     }
 
+    if (opts.explain) {
+      if (status === 'in_progress') {
+        if (opts.liveClaim === true) return make('working', 'answer', 'working', 'A live worker matches this ticket’s claim.');
+        return make('unverified-claim', 'neutral', 'worker not verified',
+          'Claimed by ' + str(it.claimed_by || 'an unknown worker')
+          + (it.claimed_machine ? ' on ' + str(it.claimed_machine) : '')
+          + '. This dashboard has not verified that worker is alive; remote workers may be outside its local roster.');
+      }
+      var q = opts.queue || {};
+      var stage = it.stages && it.stages.current;
+      if (stage && ['plan', 'plan_review', 'checks', 'verify'].indexOf(stage) >= 0) {
+        var stageLabel = { plan: 'planning', plan_review: 'plan review', checks: 'checks', verify: 'verification' }[stage];
+        return make('stage', 'neutral', 'awaiting ' + stageLabel,
+          'The ticket is in the ' + stageLabel + ' stage; implementation workers must wait for that stage to complete.');
+      }
+      if (q.auto_drain === false && !it.run_requested) return make('paused', 'neutral', 'automatic work paused',
+        'Automatic draining is disabled for this queue. Request a run or enable automatic draining.');
+      if (q.desired_workers === 0) return make('capacity', 'neutral', 'no worker slots configured',
+        'This queue’s worker budget is zero. A worker slot must be configured before it can run.');
+      if (it.no_auto_drain === true && !it.run_requested) return make('manual', 'neutral', 'manual run required',
+        'This ticket is excluded from automatic draining; it needs an explicit run request.');
+      if (it.claimable === false || it.watchtower_runnable === false) return make('unexplained', 'neutral', 'eligibility needs checking',
+        'The scheduler marks this ticket unavailable but supplies no specific reason here. This needs investigation; it is not a confirmed request for your input.');
+      if (status === 'open') return make('worker', 'answer', 'awaiting worker',
+        'No current blocker is recorded. Waiting for the scheduler to assign an available worker.');
+      return make('unexplained', 'neutral', 'state needs checking',
+        'Recorded state: ' + status + '. No actionable waiting reason is supplied; this needs investigation.');
+    }
     return null;
   }
 

@@ -53891,7 +53891,7 @@
     const runBusy = _uxqRunBusyRefs.has(ref);
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
     // Who it waits on (CCC-244), same projection as the queue row.
-    const attention = window.QueueAttention ? window.QueueAttention.project(item) : null;
+    const attention = window.QueueAttention ? window.QueueAttention.project(item, { explain: true }) : null;
 
     // Sidebar property row helpers
     function _propRow(key, valHtml) {
@@ -55342,7 +55342,7 @@
       const _uxqAttention = it => {
         const QA = window.QueueAttention;
         if (!QA) return null;
-        return QA.project(it, { liveClaim: !_isStaleClaim(it) && !_isUnverifiedClaim(it) });
+        return QA.project(it, { explain: true, liveClaim: _hasLiveClaim(it), queue: ((_uxqHealthCache || {}).queues || []).find(q => _uxqProjectKey(q.queue) === _uxqProjectKey(it.project)) });
       };
       // After deferred tickets: WIP → needs input → unresolved attention → claimable work →
       // non-claimable, unready, or otherwise inert open work → clean closes.
@@ -55402,7 +55402,7 @@
           c.push('<span class="fq-chip fq-att fq-att-' + escapeAttr(att.tone) + (att.owner ? ' fq-blocked' : '')
             + '" data-attention="' + escapeAttr(att.key) + '" title="' + escapeAttr(att.title) + '">' + escapeHtml(att.label) + '</span>');
         }
-        if (it.status === 'in_review') {
+        if (it.status === 'in_review' && (!att || att.key !== 'review')) {
           const label = _uxqReviewLabel(it);
           c.push('<span class="fq-chip fq-review" title="' + escapeAttr('Closed by its worker, ' + label + ' (wt accept / wt reject)') + '">'
             + escapeHtml(label.replace('awaits review · ', 'review · ')) + '</span>');
@@ -55423,11 +55423,11 @@
         // Readiness is meaningless once closed; while a blocker is still open
         // the ticket is not READY either, so name what it waits on (WT-4).
         const waitingOn = _uxqWaitingOn(it);
-        if (waitingOn) {
+        if (waitingOn && (!att || att.key !== 'dependency')) {
           c.push('<span class="fq-chip fq-waiting-on" role="button" tabindex="0" data-blocker-ref="' + escapeAttr(waitingOn) + '"'
             + ' title="' + escapeAttr('Blocked by ' + waitingOn + ': no worker picks this up until it closes as completed. Click to open ' + waitingOn + '.') + '">'
             + 'waiting on ' + escapeHtml(waitingOn) + '</span>');
-        } else if (it.readiness && it.status !== 'closed') {
+        } else if (!waitingOn && it.readiness && it.status !== 'closed' && (!att || att.key !== 'readiness')) {
           c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
         }
         if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '-') + '/' + escapeHtml(it.confidence || '-') + '</span>');

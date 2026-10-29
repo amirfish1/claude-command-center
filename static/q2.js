@@ -252,7 +252,7 @@
   function attentionOf(it) {
     var QA = window.QueueAttention;
     if (!QA || !it) return null;
-    return QA.project(it, { liveClaim: hasLiveClaim(it) && !isStaleClaim(it) });
+    return QA.project(it, { explain: true, liveClaim: hasLiveClaim(it) && !isStaleClaim(it), queue: (state.queues || []).find(function (q) { return projectKey(q.queue) === projectKey(it.project); }) });
   }
   // A blocked ticket only counts as "needs input" when the owner must act.
   function blockedOnOwner(it) {
