@@ -5257,3 +5257,43 @@ def test_runaway_scan_opens_only_changed_active_transcripts(tmp_path, monkeypatc
         fh.write(rec)
     runaway.scan(now=now, **kw)
     assert opened == [str(active)]
+
+
+def test_swr_cache_polled_endpoints_compute_once_and_never_block_when_stale():
+    """Polled status endpoints must serve a stale answer instantly and
+    refresh in the background (single-flight), not recompute per poll."""
+    from ccc_server import swr_cache
+    swr_cache.clear()
+    calls = []
+    gate = threading.Event()
+
+    def compute():
+        calls.append(1)
+        if len(calls) > 1:
+            gate.wait(5)
+        return {"n": len(calls)}
+
+    assert swr_cache.cached("k", compute, fresh_s=0.05) == {"n": 1}
+    for _ in range(20):
+        assert swr_cache.cached("k", compute, fresh_s=0.05) == {"n": 1}
+    assert len(calls) == 1
+    time.sleep(0.08)
+    t0 = time.time()
+    for _ in range(20):
+        assert swr_cache.cached("k", compute, fresh_s=0.05) == {"n": 1}
+    assert time.time() - t0 < 0.5
+    time.sleep(0.05)
+    assert len(calls) == 2  # exactly one background refresh in flight
+    gate.set()
+    time.sleep(0.1)
+    assert swr_cache.cached("k", compute, fresh_s=5) == {"n": 2}
+    # errors are not cached
+    swr_cache.clear()
+    n = []
+    def bad():
+        n.append(1)
+        return {"ok": False}, 500
+    swr_cache.cached("e", bad, fresh_s=60)
+    swr_cache.cached("e", bad, fresh_s=60)
+    assert len(n) == 2
+    swr_cache.clear()

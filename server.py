@@ -131,6 +131,7 @@ from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
 from ccc_server import cpu_accounting as _cpu_accounting
 from ccc_server import conv_reader as _conv_reader
+from ccc_server import swr_cache as _swr
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -29151,7 +29152,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
-                self.send_json(vercel_deploy_status_with_autofix(ctx["repo_path"]))
+                _rp = ctx["repo_path"]
+                self.send_json(_swr.cached(
+                    ("vercel-deploy", _rp),
+                    lambda: vercel_deploy_status_with_autofix(_rp),
+                    fresh_s=30.0, max_stale_s=1800.0))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
         elif path == "/api/repo/ship/status":
@@ -29165,7 +29170,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             try:
                 ctx = _nextjs_repo_ctx(query=qs)
-                self.send_json(nextjs_status(ctx["repo_path"], ctx.get("cwd")))
+                _rp, _cwd = ctx["repo_path"], ctx.get("cwd")
+                self.send_json(_swr.cached(
+                    ("nextjs-status", _rp, _cwd),
+                    lambda: nextjs_status(_rp, _cwd),
+                    fresh_s=3.0, max_stale_s=60.0))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/issues/\d+/summary$", path):
@@ -29216,7 +29225,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/usage/current":
             self.send_json(usage_current_payload())
         elif path == "/api/headroom":
-            self.send_json(_headroom.headroom_payload())
+            self.send_json(_swr.cached(
+                ("headroom",), _headroom.headroom_payload,
+                fresh_s=10.0, max_stale_s=300.0))
         elif path == "/api/question-tags":
             from ccc_server import question_tags as _question_tags
             self.send_json(_question_tags.payload())
@@ -29985,8 +29996,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
                 "1", "true", "yes"
             )
-            payload, status = _throughput_daily_payload(
-                date_str, engine_filter=engine_filter, force_refresh=force
+            payload, status = _swr.cached(
+                ("throughput-daily", date_str, engine_filter),
+                lambda: _throughput_daily_payload(
+                    date_str, engine_filter=engine_filter, force_refresh=force
+                ),
+                fresh_s=20.0, max_stale_s=600.0, bypass=force,
             )
             self.send_json(payload, status)
             return
@@ -29998,7 +30013,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
                 "1", "true", "yes"
             )
-            payload, status = savings_payload(range_key, refresh=force)
+            payload, status = _swr.cached(
+                ("savings", range_key),
+                lambda: savings_payload(range_key, refresh=force),
+                fresh_s=30.0, max_stale_s=900.0, bypass=force,
+            )
             self.send_json(payload, status)
             return
         elif path == "/api/weekly_usage":
@@ -30760,7 +30779,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
-                self.send_json(list_repo_worktrees(ctx["repo_path"]))
+                _rp = ctx["repo_path"]
+                self.send_json(_swr.cached(
+                    ("repo-worktrees", _rp),
+                    lambda: list_repo_worktrees(_rp),
+                    fresh_s=5.0, max_stale_s=120.0))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/session/[^/]+/spawn-stream$", path):
@@ -32221,7 +32244,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # land in the `errors` map so the UI can surface them without
             # the whole call failing. Cold first request takes 1–3s
             # parallel; warm hits are sub-100ms.
-            payload = fetch_cross_repo_issues()
+            payload = _swr.cached(
+                ("issues-all",), fetch_cross_repo_issues,
+                fresh_s=60.0, max_stale_s=900.0)
             self.send_json(payload)
         elif path == "/api/group-chats/active":
             # Background polling must not enumerate historical chats or probe
