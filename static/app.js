@@ -3529,9 +3529,10 @@
     const ready = !working && !sending && sessionReadyToClose(c, live);
     const next = String(summary.next_step_user || '').trim();
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(next);
-    return working ? { label: 'Working', kind: 'working', text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
-      : ready ? { label: 'Close', kind: 'ready', text: summary.did || 'Reviewed as complete; archive when ready.' }
-      : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
+    const hasAnswer = !!text;
+    return working ? { label: 'Working', kind: 'working', hasAnswer, text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
+      : ready ? { label: 'Close', kind: 'ready', hasAnswer, text: summary.did || 'Reviewed as complete; archive when ready.' }
+      : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update', hasAnswer,
         text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
   }
   function _ultraFreshPaint(sid) {
@@ -17167,7 +17168,16 @@
     document.querySelectorAll(selector).forEach(row => {
       const id = row.dataset.sessionId;
       const base = _ultraFreshRow(id);
-      if (!base || base.pending_spawn || base.source === 'backlog' || base.source === 'github_pr') return;
+      // A speaker is only worth showing when there is an answer to read
+      // (CCC-256): empty, still-starting and placeholder rows get none.
+      const readable = !!base && !base.pending_spawn && base.source !== 'backlog' && base.source !== 'github_pr'
+        && _ultraFreshExplanation(_ultraFreshCurrent(base)).hasAnswer;
+      if (!readable) {
+        row.querySelectorAll('[data-role="read-row-answer"]').forEach(btn => {
+          if (_ttsDirectBtn !== btn && !btn.disabled) btn.remove();
+        });
+        return;
+      }
       const desktop = row.querySelector('.conv-outcome') || row.querySelector('.conv-row-end');
       [desktop, row.querySelector('.wa-line2')].filter(Boolean).forEach(host => {
         if (host.querySelector('[data-role="read-row-answer"]')) return;

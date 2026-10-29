@@ -1,0 +1,1 @@
+- Sidebar rows show the read-aloud speaker only when there is an answer to read, and with a mouse only while hovering the row (or while it is reading).

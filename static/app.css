@@ -33102,6 +33102,15 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-row-read:hover, .conv-row-read:focus-visible, .conv-row-read.speaking { color: var(--accent); border-color: var(--accent); }
 .conv-row-read:disabled { opacity: .6; cursor: wait; }
 .conv-row-read.paused { opacity: .65; }
+/* With a mouse, a row's speaker appears only on hover/focus (or while it is
+   reading) so a list of rows is not a column of speaker icons (CCC-256).
+   Visibility, not display, so the row does not reflow on hover. Touch keeps
+   it visible: there is no hover to reveal it. */
+@media not all and (pointer: coarse) {
+  #convList .conv-item:not(:hover):not(:focus-within) .conv-row-read:not(.speaking):not(.paused):not([aria-busy]) {
+    visibility: hidden;
+  }
+}
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) {
   display: flex !important; align-items: flex-end; gap: 4px;
 }
