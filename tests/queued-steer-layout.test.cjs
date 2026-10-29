@@ -215,9 +215,14 @@ test('queued Steer button is shown for Codex',async()=>{
   assert.ok(buttons.includes('Copy message') && buttons.includes('Cancel'));
  }finally{await page.close();}
 });
-test('conversation rendering treats every fetch response as an authoritative queue snapshot',()=>{
+test('conversation rendering treats every fetch response but older history as an authoritative queue snapshot',()=>{
  const source=fs.readFileSync('static/app.js','utf8');
- assert.match(source,/syncQueuedSteerTray\(\$view, paneId, !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\)\)/);
+ assert.match(source,/syncQueuedSteerTray\(\$view, paneId,\s*!opts\.prepending && !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\)\)/);
+});
+test('a queue-snapshot render does not dedupe server queued rows against the tray it replaces (CCC-246)',()=>{
+ const source=fs.readFileSync('static/app.js','utf8');
+ assert.match(source,/const _replacesTray = !opts\.provisionalOverlay && !opts\.prepending\s*&& !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\);/);
+ assert.match(source,/\[!_replacesTray && _queuedScope && _queuedScope\.querySelector\('\.queued-steer-tray'\), \$view\]/);
 });
 test('Codex live-overlay forwards only agent events and is non-authoritative for input state',async()=>{
  const start=app.indexOf('  window.CCCCodexRenderLiveEvents = function');

@@ -67741,9 +67741,15 @@
         // append a duplicate row on every poll. Dedupe by normalized text
         // against both the transcript and the queued-steer tray (the server
         // queue itself dedupes by text, so identical words are one entry).
+        // A queue-snapshot render (see the syncQueuedSteerTray call below)
+        // drops every server card already in the tray as stale, so skipping
+        // this row against the tray emptied it on every other poll (CCC-246).
+        // Render it fresh then; the sync swaps it in for the old card.
         const _queuedText = _normSend(ev.text);
         const _queuedScope = $view.closest('.conv-pane');
-        const _queuedDup = [_queuedScope && _queuedScope.querySelector('.queued-steer-tray'), $view]
+        const _replacesTray = !opts.provisionalOverlay && !opts.prepending
+          && !!(opts.initialLoad || opts.queueSnapshot !== false);
+        const _queuedDup = [!_replacesTray && _queuedScope && _queuedScope.querySelector('.queued-steer-tray'), $view]
           .some(scope => scope && [...scope.querySelectorAll('.event.user_text[data-queued-steer-server]')]
             .some(el => {
               const msg = el.querySelector('.user-msg');
@@ -69403,7 +69409,10 @@
       // queue events (which are not represented in `_pendingSends`).
       // Every server fetch includes the current durable pending overlay. If a
       // former server card is absent, that absence is authoritative.
-      syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || opts.queueSnapshot !== false));
+      // Older history (load-earlier, first-prompt pin) carries no queue
+      // overlay, so its absence there proves nothing (CCC-246).
+      syncQueuedSteerTray($view, paneId,
+        !opts.prepending && !!(opts.initialLoad || opts.queueSnapshot !== false));
       // Self-heal optimistic echoes only against durable user rows.
       if (_pendingSends.length) {
         const _durableUserRows = [];
