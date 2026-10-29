@@ -367,6 +367,9 @@
       // CCC_EVENT lines the job emitted: each becomes its own timeline row so
       // a repeating job's real work shows up between the rows around it.
       (j.events || []).forEach(ev => {
+        // Enqueue acknowledgments are routine bookkeeping, not completed work.
+        // Keep them in job details without filling the day with launch receipts.
+        if (/^Dispatched [\w.@-]+$/.test(String(ev.text || '').trim())) return;
         const d = new Date(ev.at);
         if (!isNaN(d) && sameDay(d, now)) slots.push({ j: j, min: minuteOf(d), sec: d.getSeconds(), event: ev });
       });

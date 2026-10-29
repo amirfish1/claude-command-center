@@ -47,7 +47,8 @@ def test_spawn_runs_in_the_worker_when_routed():
     local_new.assert_not_called()
     engine, operation, args = call.call_args[0]
     assert (engine, operation) == ("devin", "acp_spawn")
-    assert args["prompt"] == "hello" and args["cwd"] == "/tmp/x"
+    assert args["prompt"] == server._devin_session_state_prompt("hello")
+    assert args["cwd"] == "/tmp/x"
     assert args["model"] == "swe-2"
 
 

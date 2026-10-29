@@ -117,6 +117,8 @@ def test_ship_status_reuses_completed_responses_but_live_actions_force_refresh()
 
 
 def test_ccc_owned_archive_callers_avoid_duplicate_compatibility_payloads():
-    projected_url = "/api/conversations/list?window=all&stale_ok=1"
+    projected_url = "/api/conversations/list?window=1d&stale_ok=1"
     assert projected_url in APP_JS
+    # CCC-229: the boot splash must not pull the whole all-window body.
+    assert "fetchJSON('/api/conversations/list?window=all" not in APP_JS
     assert "/api/conversations?all=1&compact=1&" in THROUGHPUT

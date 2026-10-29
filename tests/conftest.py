@@ -9,6 +9,12 @@ re-imports it (`_fresh_server`) to pick up per-test env.
 import os
 import sys
 import tempfile
+import time
+
+# Bound at import: tests monkeypatch time.monotonic/sleep, and fixture
+# teardowns below run before monkeypatch undoes that.
+_real_monotonic = time.monotonic
+_real_sleep = time.sleep
 
 import pytest
 
@@ -32,6 +38,24 @@ def _reset_ccc_ttl_caches():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _drain_recall_background_syncs(monkeypatch):
+    """Let a test's background ship_graph / session_fts sync finish before
+    monkeypatch restores the env. Depending on monkeypatch makes this teardown
+    run first; otherwise the still-running thread re-reads the restored env,
+    walks this host's real transcript corpus while holding the module sync
+    lock, and later tests' non-blocking syncs silently skip.
+    """
+    yield
+    deadline = _real_monotonic() + 15
+    for name, flag in (("ccc_server.ship_graph", "_bg_sync_running"),
+                       ("ccc_server.session_fts", "_bg_sync_running"),
+                       ("ccc_server_session_fts", "_bg_sync_running")):
+        mod = sys.modules.get(name)
+        while mod is not None and getattr(mod, flag, False) and _real_monotonic() < deadline:
+            _real_sleep(0.02)
 
 
 @pytest.fixture(autouse=True)
@@ -112,3 +136,20 @@ def _restore_canonical_server_module_after_file():
     yield
     if orig is not None and sys.modules.get("server") is not orig:
         _restore_server(orig)
+
+
+@pytest.fixture(autouse=True)
+def isolated_attribution_state(tmp_path, monkeypatch):
+    """Legacy suites cover rollback; attribution integration tests opt in."""
+    monkeypatch.setenv("WATCHTOWER_STATE_DIR", str(tmp_path / "wt-attribution"))
+    monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path / "ccc-attribution"))
+    monkeypatch.setenv("CCC_ATTRIBUTION_EMIT", "0")
+    monkeypatch.setenv("WT_UDS_RECONCILE_S", "0")
+
+
+@pytest.fixture(autouse=True)
+def isolated_sender_identity(monkeypatch):
+    import sender_envelope
+    for key in sender_envelope._INHERITED:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(sender_envelope, '_nearest_engine', lambda: '')

@@ -1,4 +1,4 @@
-# Claude Command Center — HARDENED deployment (Layer A: reverse proxy + auth + TLS).
+# Claude Command Center — opt-in remote-visitor TLS + Basic-auth profile.
 #
 # WHY THIS EXISTS
 #   CCC has no authentication. Its own SECURITY.md is explicit: the trust
@@ -8,20 +8,18 @@
 #   bind — gets the full, unauthenticated API (including agent spawn, which
 #   runs with --dangerously-skip-permissions).
 #
-#   This file puts CCC behind a Caddy reverse proxy that enforces TLS and
-#   HTTP Basic auth, and — critically — removes CCC's own host port entirely.
-#   CCC listens ONLY on an internal Docker network that nothing on the host
-#   or LAN can route to. The only reachable surface is Caddy, and Caddy
-#   demands credentials before it forwards a single byte to CCC.
+#   This opt-in profile puts a TLS + Basic-auth Caddy proxy in front of
+#   CCC for remote visitors. Only Caddy publishes a host port, to loopback
+#   by default. Remote access requires an explicit VPN/interface configuration.
 #
 # WHAT THIS DOES AND DOES NOT PROTECT
-#   Protects against: LAN / remote access, browser-tab CSRF, and — because
-#   there is no host-published CCC port — other host processes connecting to
-#   CCC directly. In this containerized layout there is no 127.0.0.1:8090 and
-#   no port.txt TCP target on the host for a local process to hijack.
-#   Does NOT change: the fact that anyone who authenticates through Caddy has
-#   the full CCC API. Auth gates access; it does not sandbox capability. Guard
-#   the credentials accordingly.
+#   Remote visitors must authenticate through Caddy. Authenticated callers
+#   retain the full CCC API. Basic auth is not a replacement for CCC's
+#   same-origin POST checks or a capability sandbox.
+#   Native Linux host programs can reach the internal backend directly by
+#   its Docker bridge IP, without authenticating. Docker's internal network
+#   is NOT a host-process isolation boundary. Local-program hardening is
+#   separate work: https://github.com/amirfish1/claude-command-center/issues/222.
 #
 # USAGE
 #   1. cp .env.hardened.example .env.hardened
@@ -39,21 +37,19 @@ services:
     build: .
     image: claude-command-center:local
     container_name: ccc-hardened
-    # NO host port publish. CCC is reachable only via the `internal` network,
-    # which Caddy also joins. Nothing on the host or LAN can route to it.
+    # No published backend port. Caddy joins this network; native Linux host
+    # programs can also reach its bridge IP directly, without authentication.
     expose:
       - "8090"
     environment:
       PORT: "8090"
       # Bind 0.0.0.0 INSIDE the container namespace so Caddy (on the same
-      # internal Docker network) can reach it. This is not a host-facing
-      # bind: the `internal` network below has no gateway to the host or
-      # outside world, and this service publishes no ports.
+      # internal Docker network) can reach it. This service publishes no
+      # ports, but the native Linux host can still reach the bridge IP.
       CCC_BIND_HOST: "0.0.0.0"
-      # Trust the reverse proxy's forwarded Origin. Caddy presents requests
-      # to CCC as coming from the ccc service origin; CCC's same-origin POST
-      # check allows loopback + this allowlist. See docs/hardened-deploy.md.
-      CCC_ALLOWED_ORIGIN: "https://localhost:8443,http://localhost:8443"
+      # Caddy preserves the browser Origin. Allow the intended HTTPS origin
+      # explicitly; do not disable CCC's same-origin POST checks.
+      CCC_ALLOWED_ORIGIN: "https://localhost:8443"
       # Telemetry off by default in this hardened profile.
       CCC_TELEMETRY_DISABLED: "1"
     volumes:
@@ -92,9 +88,8 @@ services:
     restart: unless-stopped
 
 networks:
-  # No host/LAN routing: CCC lives here, unreachable except from other
-  # containers on this same network (i.e. Caddy). `internal: true` is what
-  # makes the local-process bypass go away in the container layout.
+  # Isolate the backend from external networks, not from the native host.
+  # Native Linux host programs can reach this network's container IPs.
   internal:
     internal: true
   # Caddy's public side.

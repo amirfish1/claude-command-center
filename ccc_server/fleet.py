@@ -648,7 +648,21 @@ def _federation_execute_route(envelope, peer=None):
         return {"ok": False, "error": "routing_loop",
                 "detail": "hop limit exhausted"}, 400
     method, api_path, mutating = spec
-    req_id = str(envelope.get("req_id") or "")
+    req_id = str(args.get("idempotency_key") or (args["attr"].get("message_id") if isinstance(args.get("attr"), dict) else "") or envelope.get("req_id") or "")
+    if action in ("inject", "ask") and isinstance(args.get("attr"), dict):
+        import sender_envelope as attribution
+        args = dict(args)
+        try:
+            args["attr"] = attribution.relay(args["attr"], "federation")
+        except ValueError as exc:
+            return {"ok": False, "error": "bad_request", "detail": str(exc)}, 400
+        args["attr"]["relay"][-1]["peer_node"] = str((peer or {}).get("node_id") or "")
+        args["attr"]["basis"] = "claimed"
+        args["attr"]["evidence"] = {"source": "federation", "peer_node": str((peer or {}).get("node_id") or "")}
+        reply = args['attr'].get('reply_to') or {}
+        if reply.get('node') and reply['node'] != attribution.local_node() and str(reply.get('addr') or '').startswith('rr_'):
+            reply['addr'] = reply['node'] + ':' + reply['addr']
+        attribution.journal(args['attr'], app='ccc', event='federation-receive')
     # Confirmed Fleet steps have permanent executor receipts. Do not cache a
     # transient loopback timeout or an in-progress response over that receipt:
     # a later retry must be able to recover the actual completed outcome.
@@ -657,7 +671,7 @@ def _federation_execute_route(envelope, peer=None):
         action == "fleet_step" and isinstance(args.get("action"), dict)
         and fleet_receipts.request_id(args["action"]) is not None
     )
-    dedupe = mutating and req_id and not planned_step
+    dedupe = (mutating or action == "ask") and req_id and not planned_step
     if dedupe:
         prior = federation.check_and_record_request(req_id)
         if prior is not None:

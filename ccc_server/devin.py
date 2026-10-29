@@ -39,6 +39,14 @@ from pathlib import Path
 from ccc_server import core as _core
 
 
+def _devin_session_state_prompt(text):
+    """Devin has no system-instruction flag; preserve the visible retry text."""
+    visible = _core._strip_ccc_session_state_instruction(text)
+    return (visible + "\n\n<ccc-session-state-instructions>\n"
+            + _core._CCC_SESSION_STATE_SYSTEM_PROMPT
+            + "\n</ccc-session-state-instructions>")
+
+
 # `devin acp`, `devin -p`, and `devin --resume` watchdog WINDSURF_EXT_HOST_PID
 # and self-terminate when that pid exits — the Windsurf/Devin IDE uses it to
 # reap CLI children when its extension host dies ("Parent process exited;
@@ -938,16 +946,31 @@ def _devin_cli_pid_alive(pid):
     return reaped == 0
 
 
+# Every Devin row rebuild probes session liveness: lock-file read +
+# kill(0) + waitpid, ~15-20ms across two locks dirs. With ~100+ devin
+# sessions and sessions.db changing on every turn, that probe dominated
+# rebuild time. Liveness changes on lock acquisition (mtime) or process
+# death (seconds-scale) — a short TTL is plenty.
+_DEVIN_CLI_LIVE_CACHE = {}
+_DEVIN_CLI_LIVE_CACHE_TTL_S = 5.0
+
+
 def _devin_cli_session_live(raw_id):
     """True when the session lock's recorded pid is still alive.
 
     A leftover lock file after the CLI exits is not liveness — every Devin
     CLI row was showing as live because locks were never reaped.
     """
+    now = time.monotonic()
+    hit = _DEVIN_CLI_LIVE_CACHE.get(raw_id)
+    if hit and hit[0] > now:
+        return hit[1]
     pid = _devin_cli_lock_pid(raw_id)
-    if not pid:
-        return False
-    return _devin_cli_pid_alive(pid)
+    live = _devin_cli_pid_alive(pid) if pid else False
+    _DEVIN_CLI_LIVE_CACHE[raw_id] = (now + _DEVIN_CLI_LIVE_CACHE_TTL_S, live)
+    if len(_DEVIN_CLI_LIVE_CACHE) > 2000:
+        _DEVIN_CLI_LIVE_CACHE.clear()
+    return live
 
 
 def _devin_cli_raw_id_for_pid(pid):
@@ -1352,15 +1375,22 @@ def _devin_cli_session_versions(con, raw_ids):
     last_activity_at can lag the newest message row (observed: 1 of 42
     sessions had message rows newer than it), so the caller takes
     max(last_activity_at, max_created_at) instead of trusting the column
-    alone (CCC-992: a row read "3h" for a session active 46 min ago)."""
+    alone (CCC-992: a row read "3h" for a session active 46 min ago).
+
+    created_at is NOT in idx_message_nodes_session, so a plain
+    MAX(created_at) in the GROUP BY drops the covering index and reads every
+    message blob (50-260s on a 4 GB DB, parking every sidebar list). Take it
+    from the newest row instead: one rowid lookup per session."""
     if not raw_ids or con is None:
         return {}
     out = {}
     placeholders = ",".join("?" * len(raw_ids))
     try:
         for row in con.execute(
-            "SELECT session_id, MAX(row_id), COUNT(*), MAX(created_at) "
-            "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id".format(
+            "SELECT v.session_id, v.max_row, v.n, m.created_at FROM ("
+            "SELECT session_id, MAX(row_id) AS max_row, COUNT(*) AS n "
+            "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id"
+            ") v JOIN message_nodes m ON m.row_id = v.max_row".format(
                 placeholders
             ),
             raw_ids,
@@ -1457,7 +1487,9 @@ def _devin_cli_row_fields_for_session(con, raw_id, prev):
             gm = meta.get("generation_model")
             if gm:
                 out["model"] = str(gm)
-            out["last_assistant_text"] = str(msg.get("content") or "").strip()[:2000]
+            answer = str(msg.get("content") or "").strip()
+            out["last_assistant_text"] = answer[:2000]
+            out["session_state"] = _core._parse_session_state(answer)
             metrics = meta.get("metrics") or {}
             if isinstance(metrics, dict):
                 try:
@@ -2010,7 +2042,92 @@ def _devin_cli_cached_rows(params_key, *, ttl_only=True):
         return list(entry["rows"])
 
 
-def find_devin_cli_conversations(
+def _devin_cli_start_bg_rebuild(**kwargs):
+    """Start one detached list rebuild unless one is already running.
+
+    Returns True when this call started the thread. The rebuild lock is
+    taken non-blocking here and released by the thread, so concurrent
+    stale-ok polls never queue behind (or duplicate) a sessions.db scan.
+    """
+    if not _DEVIN_CLI_LIST_REBUILD_LOCK.acquire(blocking=False):
+        return False
+
+    def _rebuild():
+        try:
+            _find_devin_cli_conversations_locked(**kwargs)
+        except Exception:
+            pass
+        finally:
+            _DEVIN_CLI_LIST_REBUILD_LOCK.release()
+
+    try:
+        threading.Thread(target=_rebuild, name="devin-cli-list-rebuild", daemon=True).start()
+    except Exception:
+        _DEVIN_CLI_LIST_REBUILD_LOCK.release()
+        raise
+    return True
+
+
+_DEVIN_ACP_ROW_TAIL_CACHE = {}
+_DEVIN_ACP_ROW_TAIL_LOCK = threading.Lock()
+
+
+def _devin_acp_row_tail(raw_id):
+    """Read at most 256 KiB of CCC's replay log; ACP may outlive DB flushes."""
+    try:
+        path = _core._acp_transcript_path("devin", raw_id)
+        st = path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+        with _DEVIN_ACP_ROW_TAIL_LOCK:
+            cached = _DEVIN_ACP_ROW_TAIL_CACHE.get(raw_id)
+        if cached and cached[0] == key:
+            return cached[1]
+        with path.open("rb") as handle:
+            start = max(0, st.st_size - 262144)
+            handle.seek(start)
+            if start:
+                handle.readline()
+            lines = handle.read(262144).splitlines()
+    except OSError:
+        return None
+    latest = None
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        kind = event.get("type")
+        if kind in ("user", "user_text"):
+            latest = {"ts": _devin_epoch(event.get("ts")), "text": "", "session_state": None}
+        elif kind == "assistant":
+            text = "\n".join(str(b.get("text") or "") for b in event.get("blocks", [])
+                             if isinstance(b, dict) and b.get("kind") == "text")
+            if not text:
+                text = str(event.get("text") or "")
+            if text:
+                latest = {"ts": _devin_epoch(event.get("ts")), "text": text[:2000],
+                          "session_state": _core._parse_session_state(text)}
+    with _DEVIN_ACP_ROW_TAIL_LOCK:
+        _DEVIN_ACP_ROW_TAIL_CACHE[raw_id] = (key, latest)
+        if len(_DEVIN_ACP_ROW_TAIL_CACHE) > 256:
+            _DEVIN_ACP_ROW_TAIL_CACHE.pop(next(iter(_DEVIN_ACP_ROW_TAIL_CACHE)))
+    return latest
+
+
+def find_devin_cli_conversations(*args, **kwargs):
+    rows = _find_devin_cli_db_conversations(*args, **kwargs)
+    out = []
+    for row in rows:
+        tail = _devin_acp_row_tail(_devin_cli_raw_id(row.get("session_id")))
+        if tail and tail["ts"] > _devin_epoch(row.get("modified")):
+            row = dict(row)
+            row.update(last_assistant_text=tail["text"], session_state=tail["session_state"],
+                       modified=tail["ts"], mtime=tail["ts"])
+        out.append(row)
+    return out
+
+
+def _find_devin_cli_db_conversations(
     repo_path=None,
     include_old=False,
     repo_only=False,
@@ -2046,52 +2163,37 @@ def find_devin_cli_conversations(
         )
         return hit
     if stale_ok:
-        # Prefer any cached rows — even expired — over a 30-60s rebuild.
-        # The /list overlay is a gap-filler; freshness comes from the
-        # detached archive build, not from blocking the sidebar poll.
+        # Prefer any cached rows — even expired — over a 30-60s rebuild, but
+        # kick a background refresh so the next poll is fresh. Without it an
+        # expired cache was served forever: Devin rows kept a stale
+        # ``modified`` and sorted below a fake time gap while the row's
+        # ultra-fresh text said "8m ago" (CCC-137).
         stale = _devin_cli_cached_rows(params_key, ttl_only=False)
+        started = _devin_cli_start_bg_rebuild(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=repo_only,
+            progress=progress,
+            limit=limit,
+        )
         if stale is not None:
             _devin_cli_profile_log(
                 "find_devin_cli_conversations",
                 time.perf_counter() - start,
-                f"rows={len(stale)} repo_only={repo_only} stale-ok",
+                f"rows={len(stale)} repo_only={repo_only} stale-ok"
+                + ("-bg" if started else ""),
             )
             return stale
-        acquired = _DEVIN_CLI_LIST_REBUILD_LOCK.acquire(blocking=False)
-        if not acquired:
-            _devin_cli_profile_log(
-                "find_devin_cli_conversations",
-                time.perf_counter() - start,
-                f"rows=0 repo_only={repo_only} stale-ok-busy",
-            )
-            return []
-        # Cold miss (fresh process, nothing cached): build in the background
-        # and return [] now. Built inline, this was the first sidebar list
-        # after every restart paying the ~28s cold sessions.db scan
-        # (CCC-1244); the archive snapshot already carries Devin rows, and
-        # the next poll reads the rows this thread caches.
-        def _rebuild():
-            try:
-                _find_devin_cli_conversations_locked(
-                    repo_path=repo_path,
-                    include_old=include_old,
-                    repo_only=repo_only,
-                    progress=progress,
-                    limit=limit,
-                )
-            except Exception:
-                pass
-            finally:
-                _DEVIN_CLI_LIST_REBUILD_LOCK.release()
-        try:
-            threading.Thread(target=_rebuild, name="devin-cli-list-rebuild", daemon=True).start()
-        except Exception:
-            _DEVIN_CLI_LIST_REBUILD_LOCK.release()
-            raise
+        # Cold miss (fresh process, nothing cached): return [] now and let
+        # the background build fill the cache. Built inline, this was the
+        # first sidebar list after every restart paying the ~28s cold
+        # sessions.db scan (CCC-1244); the archive snapshot already carries
+        # Devin rows, and the next poll reads the rows the thread caches.
         _devin_cli_profile_log(
             "find_devin_cli_conversations",
             time.perf_counter() - start,
-            f"rows=0 repo_only={repo_only} stale-ok-cold-bg",
+            f"rows=0 repo_only={repo_only} "
+            + ("stale-ok-cold-bg" if started else "stale-ok-busy"),
         )
         return []
     with _DEVIN_CLI_LIST_REBUILD_LOCK:
@@ -2422,6 +2524,7 @@ def _find_devin_cli_conversations_locked(
                         str(fields.get("last_assistant_text") or "")
                     ).strip()[:2000]
                 )
+                r["session_state"] = fields.get("session_state")
                 flags = fields.get("ship") or {}
                 r["has_commit"] = bool(flags.get("has_commit"))
                 r["has_push"] = bool(flags.get("has_push"))
@@ -2704,6 +2807,7 @@ def _devin_cli_parse_message_row(chat_message, created_at, seen, sidekick_key):
     text = str(msg.get("content") or "").strip()
 
     if role == "user":
+        text = _core._strip_ccc_session_state_instruction(text)
         # Skip system-injected user messages (context rebuilds, sidekick
         # handoffs) — only keep actual user input.
         if not meta.get("is_user_input") or not text:
@@ -3077,11 +3181,20 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
             pass
     finally:
         con.close()
+    visible = _merge_devin_acp_result_events(raw_id, list(events))
     if after_line and after_line > 0:
-        visible = [e for e in events if e["line"] > after_line]
-    else:
-        visible = list(events)
-    visible = _merge_devin_acp_result_events(raw_id, visible)
+        # Splice ACP result rows against the full DB event list first, then
+        # slice past the last DB row at or before after_line. Splicing after
+        # filtering dumped every historical ACP result row on incremental
+        # polls, which the client could not dedupe once ?tail=N truncated
+        # older turns out of the DOM.
+        cutoff = -1
+        for idx, ev in enumerate(visible):
+            ev_line = int(ev.get("line") or 0)
+            if 0 < ev_line <= after_line:
+                cutoff = idx
+        if cutoff >= 0:
+            visible = visible[cutoff + 1:]
     elapsed = time.perf_counter() - start
     _devin_cli_profile_log(
         "parse_devin_cli_conversation",
@@ -3118,6 +3231,14 @@ def _devin_acp_result_rows(raw_id):
         with path.open("rb") as handle:
             for raw in handle:
                 if b'"result"' not in raw:
+                    continue
+                prefix = raw.lstrip()[:32]
+                if prefix.startswith((
+                    b'{"type": "assistant"',
+                    b'{"type":"assistant"',
+                    b'{"type": "user"',
+                    b'{"type":"user"',
+                )):
                     continue
                 try:
                     ev = json.loads(raw)
@@ -3172,8 +3293,25 @@ def _merge_devin_acp_result_events(raw_id, events):
     merged = []
     i = 0
     for res in results:
-        res_ts = str(res.get("ts") or "")
-        while i < len(events) and str(events[i].get("ts") or "") <= res_ts:
+        # DB rows carry whole-second ISO timestamps ("...T22:27:12Z") while
+        # ACP result rows carry microseconds ("...T22:27:12.922121Z"); raw
+        # string comparison sorted "." < "Z" and placed same-second result
+        # rows before the assistant reply they closed. Compare at second
+        # resolution, stopping before a same-second queued user prompt that
+        # starts the next turn after an assistant reply.
+        res_sec = str(res.get("ts") or "")[:19]
+        while i < len(events):
+            ev_sec = str(events[i].get("ts") or "")[:19]
+            if ev_sec > res_sec:
+                break
+            if (
+                ev_sec == res_sec
+                and events[i].get("type") == "user_text"
+                and merged
+                and merged[-1].get("type") == "assistant"
+                and str(merged[-1].get("ts") or "")[:19] == res_sec
+            ):
+                break
             merged.append(events[i])
             i += 1
         merged.append(res)
@@ -3188,12 +3326,78 @@ DEVIN_CLI_CONTEXT_LIMIT = 200_000
 # rows interleave, so 1 is not always enough (a dangling tool call or a
 # not-yet-answered user turn can be the literal last row); 8 comfortably
 # covers a normal turn's node count without pulling meaningful data volume.
+# CCC-141: per-session running totals for _extract_devin_cli_usage, so a poll
+# only folds the message_nodes added since the last one. A long session holds
+# ~1 GB of chat_message JSON; decoding all of it in Python took ~20 s per
+# poll, longer than the composer waits, so the model and context pills never
+# appeared on a busy Devin session.
+_DEVIN_CLI_USAGE_CACHE = {}
+_DEVIN_CLI_USAGE_CACHE_LOCK = threading.Lock()
+_DEVIN_CLI_USAGE_CACHE_MAX = 64
+
+
+def _devin_cli_usage_acc():
+    return {"latest": 0, "peak": 0, "in": 0, "out": 0, "cache_read": 0,
+            "cache_creation": 0, "model": "", "series": []}
+
+
+def _devin_cli_usage_fold(acc, rows, series_max):
+    """Fold assistant rows (metrics JSON, generation_model, created_at) into
+    ``acc`` in place."""
+    for metrics_raw, gm, created_at in rows:
+        try:
+            metrics = json.loads(metrics_raw) if metrics_raw else {}
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(metrics, dict):
+            continue
+        in_tok = int(metrics.get("input_tokens") or 0)
+        out_tok = int(metrics.get("output_tokens") or 0)
+        cache_read = int(metrics.get("cache_read_tokens") or 0)
+        cache_creation = int(metrics.get("cache_creation_tokens") or 0)
+        # The context window is non-cached input + cached read + newly
+        # created cached prefix. input_tokens alone is the non-cached
+        # portion, so the live/peak bars must add cache to match the
+        # model's real window.
+        window = in_tok + cache_read + cache_creation
+        if window:
+            acc["latest"] = window
+            acc["peak"] = max(acc["peak"], window)
+        acc["in"] += in_tok
+        acc["out"] += out_tok
+        acc["cache_read"] += cache_read
+        acc["cache_creation"] += cache_creation
+        # Compactor summaries still count toward token totals/turn
+        # series, but "compactor" is not the session's chat model.
+        if gm and str(gm).strip().lower() != "compactor":
+            acc["model"] = str(gm)
+        if window or out_tok:
+            turn_epoch = _devin_epoch(created_at)
+            turn_ts = (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(turn_epoch))
+                if turn_epoch else ""
+            )
+            acc["series"].append({
+                "ts": turn_ts,
+                "tokens_in": window,
+                "tokens_cached": cache_read,
+                "tokens_out": out_tok,
+            })
+    if len(acc["series"]) > series_max:
+        del acc["series"][:-series_max]
+
+
 def _extract_devin_cli_usage(session_id):
     """Token usage for a Devin CLI session, read from the SQLite DB.
 
     Assistant messages carry ``metadata.metrics`` with input/output/cache
     token counts. We sum across all assistant turns and track the peak
     input window — same shape as ``_extract_gemini_usage`` etc.
+
+    SQLite's json_extract pulls just the fields we read (the full message
+    is never decoded in Python), and running totals are cached per session
+    up to the second-newest node: a poll re-reads only the newest node,
+    which may still be streaming, plus anything added since.
     """
     empty = {
         "latest_input_tokens": 0,
@@ -3211,71 +3415,60 @@ def _extract_devin_cli_usage(session_id):
     raw_id = _devin_cli_raw_id(session_id)
     if not raw_id:
         return empty
-    con = _devin_cli_connect_for_raw_id(raw_id)
+    db_path = _devin_cli_db_path_for_raw_id(raw_id)
+    con = _devin_cli_connect(db_path)
     if con is None:
         return empty
-    latest = 0
-    peak = 0
-    total_in = 0
-    total_out = 0
-    total_cache_read = 0
-    total_cache_creation = 0
-    model = ""
     # Per-turn tail for the status-rail column graph — one entry per
     # assistant message with metrics, same raw-count shape Claude's
     # turn_series uses.
-    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
+    series_max = _core.USAGE_TURN_SERIES_MAX
+    key = (str(db_path), raw_id)
+    acc = _devin_cli_usage_acc()
     try:
-        for row in con.execute(
-            "SELECT chat_message FROM message_nodes "
-            "WHERE session_id = ? ORDER BY node_id",
-            (raw_id,),
-        ):
-            try:
-                msg = json.loads(row["chat_message"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            if str(msg.get("role") or "").lower() != "assistant":
-                continue
-            meta = msg.get("metadata") or {}
-            metrics = meta.get("metrics") or {}
-            if not isinstance(metrics, dict):
-                continue
-            in_tok = int(metrics.get("input_tokens") or 0)
-            out_tok = int(metrics.get("output_tokens") or 0)
-            cache_read = int(metrics.get("cache_read_tokens") or 0)
-            cache_creation = int(metrics.get("cache_creation_tokens") or 0)
-            # The context window is non-cached input + cached read + newly
-            # created cached prefix. input_tokens alone is the non-cached
-            # portion, so the live/peak bars must add cache to match the
-            # model's real window.
-            window = in_tok + cache_read + cache_creation
-            if window:
-                latest = window
-                peak = max(peak, window)
-            total_in += in_tok
-            total_out += out_tok
-            total_cache_read += cache_read
-            total_cache_creation += cache_creation
-            gm = meta.get("generation_model")
-            # Compactor summaries still count toward token totals/turn
-            # series, but "compactor" is not the session's chat model.
-            if gm and str(gm).strip().lower() != "compactor":
-                model = gm
-            if window or out_tok:
-                turn_epoch = _devin_epoch(meta.get("created_at"))
-                turn_ts = (
-                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(turn_epoch))
-                    if turn_epoch else ""
-                )
-                turn_series.append({
-                    "ts": turn_ts,
-                    "tokens_in": window,
-                    "tokens_cached": cache_read,
-                    "tokens_out": out_tok,
-                })
+        with _DEVIN_CLI_USAGE_CACHE_LOCK:
+            cached = _DEVIN_CLI_USAGE_CACHE.get(key)
+        through = -1
+        if cached:
+            # Rewritten history (rows deleted or re-inserted below the
+            # commit point) changes the count; rescan from scratch then.
+            n = con.execute(
+                "SELECT COUNT(*) FROM message_nodes "
+                "WHERE session_id = ? AND node_id <= ?",
+                (raw_id, cached["through"]),
+            ).fetchone()[0]
+            if n == cached["count"]:
+                through = cached["through"]
+                acc = json.loads(json.dumps(cached["acc"]))
+        rows = con.execute(
+            "SELECT node_id, "
+            "json_extract(chat_message, '$.metadata.metrics'), "
+            "json_extract(chat_message, '$.metadata.generation_model'), "
+            "json_extract(chat_message, '$.metadata.created_at') "
+            "FROM message_nodes WHERE session_id = ? AND node_id > ? "
+            "AND json_valid(chat_message) "
+            "AND lower(json_extract(chat_message, '$.role')) = 'assistant' "
+            "ORDER BY node_id",
+            (raw_id, through),
+        ).fetchall()
+        settled, tail = rows[:-1], rows[-1:]
+        _devin_cli_usage_fold(acc, [tuple(r)[1:] for r in settled], series_max)
+        if settled:
+            commit = settled[-1][0]
+            count = con.execute(
+                "SELECT COUNT(*) FROM message_nodes "
+                "WHERE session_id = ? AND node_id <= ?",
+                (raw_id, commit),
+            ).fetchone()[0]
+            with _DEVIN_CLI_USAGE_CACHE_LOCK:
+                if key not in _DEVIN_CLI_USAGE_CACHE and len(_DEVIN_CLI_USAGE_CACHE) >= _DEVIN_CLI_USAGE_CACHE_MAX:
+                    _DEVIN_CLI_USAGE_CACHE.pop(next(iter(_DEVIN_CLI_USAGE_CACHE)))
+                _DEVIN_CLI_USAGE_CACHE[key] = {
+                    "through": commit, "count": count,
+                    "acc": json.loads(json.dumps(acc)),
+                }
+        _devin_cli_usage_fold(acc, [tuple(r)[1:] for r in tail], series_max)
+        model = acc["model"]
         if not model:
             # No assistant turn has reported a generation_model yet (fresh
             # session, or the first turn died before producing one) — the
@@ -3285,20 +3478,20 @@ def _extract_devin_cli_usage(session_id):
             ).fetchone()
             model = str((row[0] if row else "") or "")
     except sqlite3.Error:
-        pass
+        model = acc["model"]
     finally:
         con.close()
     return {
         **empty,
-        "latest_input_tokens": latest,
-        "peak_input_tokens": peak,
-        "total_output_tokens": total_out,
-        "total_input_tokens": total_in,
-        "total_cache_read_tokens": total_cache_read,
-        "total_cache_creation_tokens": total_cache_creation,
+        "latest_input_tokens": acc["latest"],
+        "peak_input_tokens": acc["peak"],
+        "total_output_tokens": acc["out"],
+        "total_input_tokens": acc["in"],
+        "total_cache_read_tokens": acc["cache_read"],
+        "total_cache_creation_tokens": acc["cache_creation"],
         "model": model,
         "override": _core._get_session_override(session_id),
-        "turn_series": list(turn_series),
+        "turn_series": list(acc["series"]),
     }
 
 
@@ -3452,23 +3645,27 @@ def _extract_files_from_devin_cli_conversation(session_id):
     line = ent["line"]
     max_row = ent["max_row"]
     try:
+        # Decode in SQLite, not Python: a cold walk (every dashboard restart)
+        # json.loads'd ~1 GB of chat_message rows and held the GIL for ~20s
+        # while the session's open waited (CCC-143). sqlite3 releases the GIL
+        # while stepping. Every row still counts toward `line`.
         for row in con.execute(
-            "SELECT row_id, chat_message FROM message_nodes "
+            "SELECT row_id, "
+            "CASE WHEN json_valid(chat_message) AND json_type(chat_message) = 'object' "
+            "THEN json_extract(chat_message, '$.role') END AS role, "
+            "CASE WHEN json_valid(chat_message) AND json_type(chat_message) = 'object' "
+            "AND json_type(chat_message, '$.content') = 'text' "
+            "THEN json_extract(chat_message, '$.content') END AS content "
+            "FROM message_nodes "
             "WHERE session_id = ? AND row_id > ? ORDER BY row_id",
             (raw_id, max_row),
         ):
             line += 1
             max_row = max(max_row, int(row["row_id"] or 0))
-            try:
-                msg = json.loads(row["chat_message"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            role = str(msg.get("role") or "").lower()
+            role = str(row["role"] or "").lower()
             if role == "system":
                 continue
-            content = msg.get("content")
+            content = row["content"]
             if not isinstance(content, str) or not content:
                 continue
             for target, kind in _core._ffc_iter_targets(content):
@@ -3573,5 +3770,6 @@ def _devin_cli_session_detail(session_id):
         "question_text": "",
         "soft_block": None,
         "last_assistant_text": (last_assistant_text or "")[:2000],
+        "session_state": _core._parse_session_state(last_assistant_text),
         "turns": turns,
     }, 200

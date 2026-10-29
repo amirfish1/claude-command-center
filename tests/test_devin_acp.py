@@ -644,9 +644,12 @@ def test_spawn_session_devin_falls_back_to_cli_when_acp_fails(tmp_path):
         server._spawned_sessions.extend(original_spawns)
         _exit_stack(stack)
 
-    popen.assert_called_once()
-    cmd = popen.call_args.args[0]
-    assert cmd[0] == "/usr/bin/devin-test"
+    # subprocess.Popen is process-wide: another test's background thread
+    # (e.g. a `gh issue list` refresh) can land in this mock too.
+    devin_calls = [c for c in popen.call_args_list
+                   if c.args and c.args[0] and c.args[0][0] == "/usr/bin/devin-test"]
+    assert len(devin_calls) == 1, popen.call_args_list
+    cmd = devin_calls[0].args[0]
     assert "-p" in cmd
     assert result["ok"] is True
     assert result["engine"] == "devin"

@@ -731,9 +731,11 @@ def _kill_session_by_id(session_id):
     so a recycled PID can't end up taking out something unrelated.
     """
     import signal
+    from ccc_server import session_death
     sessions_dir = Path.home() / ".claude" / "sessions"
     if not sessions_dir.is_dir():
         return {"ok": False, "error": "no sessions dir"}
+    session_death.note_stop(session_id, "kill")
     killed = []
     errors = []
     matched = 0

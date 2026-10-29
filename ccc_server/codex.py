@@ -46,7 +46,7 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 8
+_CODEX_META_VERSION = 10
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
 _CODEX_THREAD_VISIBILITY_RANK = {
@@ -1044,6 +1044,47 @@ def _codex_shared_state_db_holders(now=None, force=False):
     return unique
 
 
+_CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+
+
+def _codex_shared_state_db_holders_stale_ok(now=None):
+    """Holder list for read-only status paths: never forks lsof inline once warm.
+
+    lsof scans every process on the host (~1.6s on a busy 16-core box), and the
+    5s TTL always expires between live-activity builds, so every build paid a
+    fresh fork -- 95% of build_live_sessions_activity time (CCC-168). Status
+    rows tolerate a holder list a few seconds old: serve the last sample and
+    refresh it on one background thread. Only the very first call (no sample
+    yet) waits. Spawn/send gates keep calling _codex_shared_state_db_holders.
+    """
+    global _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+    now = time.time() if now is None else float(now)
+    with _CODEX_SHARED_STATE_HOLDER_LOCK:
+        cached = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
+        fresh = now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S
+        kick = cached is not None and not fresh and not _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+        if kick:
+            _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = True
+    if cached is None:
+        return _core._codex_shared_state_db_holders(now)
+    if kick:
+        def _refresh():
+            global _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
+            try:
+                _core._codex_shared_state_db_holders(force=True)
+            except Exception:
+                pass
+            finally:
+                with _CODEX_SHARED_STATE_HOLDER_LOCK:
+                    _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+        try:
+            threading.Thread(target=_refresh, name="codex-holder-refresh", daemon=True).start()
+        except Exception:
+            with _CODEX_SHARED_STATE_HOLDER_LOCK:
+                _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
+    return list(cached)
+
+
 def _codex_shared_state_conflict(now=None, force=False):
     """Return a human-readable conflict summary if another Codex writer holds the shared DBs."""
     holders = _core._codex_shared_state_db_holders(now, force=force)
@@ -2032,6 +2073,29 @@ def _codex_compaction_recovery_note_notification_unlocked(
     if not isinstance(recovery, dict):
         return
     if str(recovery.get("status") or "") in _CODEX_COMPACTION_RECOVERY_TERMINAL:
+        return
+
+    # Compaction recovery only bridges the gap until execution resumes. Once
+    # Codex is producing output or running tools, later silence belongs to the
+    # normal silent-turn watchdog, not this old compaction episode.
+    resumed = (
+        method.startswith("item/")
+        and item_type != "contextCompaction"
+        and (
+            (method in ("item/started", "item/completed")
+             and item_type not in ("", "userMessage"))
+            or bool(str(params.get("delta") or "").strip())
+        )
+    )
+    if resumed and not _codex_recovery_is_silent_turn(recovery):
+        recovery["status"] = "recovered"
+        recovery["reason"] = "Codex resumed execution after compaction"
+        recovery["recovered_at"] = float(now)
+        recovery["last_progress_at"] = float(now)
+        _core._codex_coordination_event_unlocked(
+            state, "compaction_recovery_recovered",
+            detail=recovery["reason"], now=now,
+        )
         return
 
     if method == "turn/started":
@@ -3246,6 +3310,7 @@ def _codex_app_server_request_to_transport(
                 "error": f"Codex app-server exited before replying: {method}",
                 "fallback": "queue",
                 "exited": True,
+                "ambiguous": True,
             }
         if timed_out is not None:
             _core._app_server_trace(
@@ -3262,6 +3327,8 @@ def _codex_app_server_request_to_transport(
                 "ok": False,
                 "error": f"Codex app-server request timed out: {method}",
                 "fallback": "queue",
+                # The request was written; the server may have applied it.
+                "ambiguous": True,
             }
     finally:
         if count_as_inflight:
@@ -3516,6 +3583,10 @@ def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=Tr
     if method in ("thread/start", "thread/resume"):
         params = dict(params)
         params["config"] = {**(params.get("config") or {}), **_codex_context_config()}
+        reminder = _core._CCC_SESSION_STATE_SYSTEM_PROMPT
+        instructions = params.get("developerInstructions") or ""
+        if reminder not in instructions:
+            params["developerInstructions"] = (instructions + "\n\n" + reminder).strip()
     from ccc_server.codex_capabilities import codex_method_is_mutating
     mutating = codex_method_is_mutating(method)
     routed = _core._control_plane_engine_call(
@@ -3789,26 +3860,17 @@ def _codex_app_server_reap_stray_children():
 def _codex_app_server_dump_stacks_on_liveness_miss(reason):
     """Capture every thread's current frame when a liveness check misses.
 
-    Reuses the existing SIGUSR2 stack-dump handler (see
-    _install_python_stack_dump_handler) instead of duplicating dump logic --
-    this just writes a locating marker into the same python-stacks.log and
-    then raises the signal against our own process so faulthandler produces
-    an all-thread traceback right at the moment of the miss. That's the
-    evidence needed to identify which thread was actually holding the GIL
-    (or otherwise busy) when the app-server reader thread should have been
-    running, rather than guessing at a cause.
+    Appends an all-thread traceback to python-stacks.log via
+    _dump_python_stacks (see _install_python_stack_dump_handler) right at the
+    moment of the miss. That's the evidence needed to identify which thread
+    was actually holding the GIL (or otherwise busy) when the app-server
+    reader thread should have been running, rather than guessing at a cause.
     """
-    sigusr2 = getattr(signal, "SIGUSR2", None)
-    if sigusr2 is None or _core._PYTHON_STACK_DUMP_FILE is None:
+    if _core._PYTHON_STACK_DUMP_FILE is None:
         return
     try:
-        _core._PYTHON_STACK_DUMP_FILE.write(
-            f"\n=== app-server liveness miss ({reason}) pid={os.getpid()} "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC ===\n"
-        )
-        _core._PYTHON_STACK_DUMP_FILE.flush()
-        os.kill(os.getpid(), sigusr2)
-    except OSError:
+        _core._dump_python_stacks(f"app-server liveness miss ({reason})")
+    except Exception:
         pass
 
 
@@ -7678,6 +7740,7 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
         _bind_codex_queued_steer_ack_suppression(
             session_id, text, _fast_turn_id,
         )
+        baseline = _core._codex_rollout_stat(session_id)
         steered = _core._codex_app_server_request(
             "turn/steer",
             {
@@ -7698,12 +7761,9 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
         if _codex_error_is_thread_unloaded(steered) or _core._codex_error_is_not_steerable(steered):
             pass  # stale fast-path state — resume below is the authority
         else:
-            return {
-                "ok": False,
-                "via": "codex-steer",
-                "code": "codex_steer_failed",
-                "error": _codex_error_text(steered) or "Codex steer failed",
-            }
+            return _codex_steer_failure_result(
+                session_id, text, steered, baseline, _fast_turn_id,
+            )
     resume_params = {
         "threadId": session_id,
         "excludeTurns": False,
@@ -7733,6 +7793,7 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
     _bind_codex_queued_steer_ack_suppression(
         session_id, text, active_turn.get("id"),
     )
+    baseline = _core._codex_rollout_stat(session_id)
     steered = _core._codex_app_server_request(
         "turn/steer",
         {
@@ -7749,11 +7810,62 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
             "turn_id": (steered["result"] or {}).get("turnId") or active_turn["id"],
             "session_id": session_id,
         }
+    return _codex_steer_failure_result(
+        session_id, text, steered, baseline, active_turn["id"],
+    )
+
+
+# How long a timed-out turn/steer may take to show up in the rollout. Codex
+# writes the steered UserMessage when it accepts the input, usually well
+# before the RPC reply, so a short look is enough.
+_CODEX_STEER_RECONCILE_S = 3.0
+
+
+def _codex_steer_failure_result(session_id, text, steered, baseline, turn_id):
+    """Turn a failed turn/steer reply into an honest delivery outcome.
+
+    A timeout or app-server exit happens AFTER the request was written, so
+    Codex may already have applied the steer (CCC-238: the rollout held the
+    message 20s before the RPC timed out, and the reply arrived 10s late).
+    Reporting that as a failure makes senders resend a duplicate. Check the
+    rollout first; if the message is not there, report the outcome as
+    unknown instead of rejected.
+    """
+    if not (isinstance(steered, dict) and steered.get("ambiguous")):
+        return {
+            "ok": False,
+            "via": "codex-steer",
+            "code": "codex_steer_failed",
+            "error": _codex_error_text(steered) or "Codex steer failed",
+        }
+    deadline = time.monotonic() + _CODEX_STEER_RECONCILE_S
+    while True:
+        if _core._codex_rollout_contains_user_text_since(baseline, session_id, text):
+            _core._log_activity(
+                "app-server", "STEER_RECONCILED",
+                f"session={session_id} turn/steer reply missing "
+                f"({_codex_error_text(steered)}) but the rollout recorded the input",
+            )
+            return {
+                "ok": True,
+                "via": "codex-steer",
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "reconciled": "rollout",
+            }
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
     return {
         "ok": False,
         "via": "codex-steer",
-        "code": "codex_steer_failed",
-        "error": _codex_error_text(steered) or "Codex steer failed",
+        "code": "codex_steer_unknown",
+        "uncertain": True,
+        "ambiguous": True,
+        "error": (
+            f"{_codex_error_text(steered) or 'Codex steer failed'}; delivery is "
+            "unknown (it may still land) - check the session before resending"
+        ),
     }
 
 
@@ -8249,6 +8361,48 @@ def _codex_headless_exec_refusal(session_id, action):
             f"be {action}. Use Stop to interrupt it."
         ),
     }
+
+
+def _codex_wt_app_worker_delivery(session_id, text):
+    """Steer a Codex thread hosted by a WatchTower app-server worker.
+
+    Such a worker (`wt config --codex-transport app-server`, CODEX-CCC-WT-10)
+    owns the thread on its own `codex app-server --listen unix://`; CCC's
+    app-server must not resume it (second writer, -32600). WatchTower owns the
+    socket protocol, so this shells out to `wt codex-app steer` -- but only
+    when WatchTower has advertised a worker for this thread, so every other
+    Codex send pays one stat(). Returns None when no such worker exists."""
+    record = Path(_core._WT_HOME) / "codex-app" / f"{session_id}.json"
+    if not session_id or "/" in str(session_id) or not record.exists():
+        return None
+    wt = _core._wt_cli_path()
+    if not wt:
+        return None
+    try:
+        proc = subprocess.run(
+            [wt, "codex-app", "steer", str(session_id)],
+            input=str(text or ""), capture_output=True, text=True, timeout=45,
+        )
+    except subprocess.TimeoutExpired:
+        # The steer may have landed; reporting a rejection would invite a
+        # double-post retry (CCC-238).
+        return {
+            "ok": False, "code": "codex_steer_unknown", "uncertain": True,
+            "via": "wt-app-worker", "error": "wt codex-app steer timed out",
+        }
+    except OSError as exc:
+        return {"ok": False, "code": "codex_app_worker_unreachable",
+                "via": "wt-app-worker", "error": str(exc)}
+    if proc.returncode == 2:
+        return None
+    try:
+        result = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        result = {"ok": False, "error": (proc.stderr or proc.stdout or "").strip()[-300:]}
+    result["via"] = "wt-app-worker-steer"
+    if not result.get("ok"):
+        result.setdefault("code", "codex_app_worker_steer_failed")
+    return result
 
 
 def _codex_interrupt_needs_local_transport():
@@ -9145,7 +9299,8 @@ def _codex_display_name(row, override=None, title="", first_message=""):
     # straight off the thread row rather than through
     # _extract_user_prompt_text, so the shared stripper is applied here.
     def visible_prompt(value):
-        return _core._strip_host_system_instruction(value)
+        import sender_envelope as attribution
+        return attribution.strip_header(_core._strip_host_system_instruction(value))
 
     return (
         _core._truncate_session_name(override)
@@ -9181,6 +9336,7 @@ def _codex_rollout_path_from_row(row):
         p = Path(os.path.expanduser(raw))
         if p.is_file():
             return p
+        return None
     tid = row.get("id") or ""
     if tid and _core.CODEX_SESSIONS_ROOT.is_dir():
         try:
@@ -11151,6 +11307,7 @@ def _extract_codex_tail_meta(path):
                     elif ptype == "task_complete":
                         text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
                         if text:
+                            meta["last_assistant_text"] = text
                             meta.update(_extract_codex_summary_signals(text, pr_url_re))
                         meta["last_event_type"] = "result"
                         meta["pending_tool"] = None
@@ -11166,7 +11323,42 @@ def _extract_codex_tail_meta(path):
                     continue
                 if ev_type != "response_item":
                     continue
-                if ptype in ("function_call", "custom_tool_call"):
+                if ptype == "message":
+                    # Current Codex rollouts persist messages directly rather
+                    # than emitting the older user_message/agent_message events.
+                    role = payload.get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    text = "\n".join(
+                        part.get("text", "")
+                        for part in (payload.get("content") or [])
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    ).strip()
+                    if role == "user":
+                        if text.startswith(("# AGENTS.md instructions", "<environment_context>")):
+                            continue
+                        text = _core._strip_ccc_session_state_instruction(text).strip()
+                        if text:
+                            meta["first_message"] = meta["first_message"] or text
+                            meta["last_prompt"] = text
+                        meta["last_event_type"] = "user"
+                        meta["pending_tool"] = None
+                        meta["pending_file"] = None
+                        meta["pending_tool_ts"] = 0
+                        meta["needs_approval"] = False
+                        meta["needs_approval_message"] = ""
+                        meta["pending_approval_call_id"] = ""
+                        pending_calls.clear()
+                        if ts_epoch:
+                            meta["last_user_ts"] = ts_epoch
+                    else:
+                        if text:
+                            meta["last_assistant_text"] = text
+                            meta.update(_extract_codex_summary_signals(text, pr_url_re))
+                        meta["last_event_type"] = "assistant"
+                    if ts_epoch:
+                        meta["last_meaningful_ts"] = ts_epoch
+                elif ptype in ("function_call", "custom_tool_call"):
                     name = payload.get("name") or ""
                     is_custom_tool = ptype == "custom_tool_call"
                     raw_input = payload.get("input") if isinstance(payload.get("input"), str) else ""
@@ -11567,7 +11759,10 @@ def _codex_state_fields(
         # Writer attribution (desktop ↔ CCC coordination): reuses the rollout
         # stat above + the TTL-cached desktop-attachment map. Also feeds the
         # durable external-turn transition events.
-        snap = _core._codex_thread_writer_snapshot(sid, now, app_state=app_state, rollout=rollout)
+        snap = _core._codex_thread_writer_snapshot(
+            sid, now, app_state=app_state, rollout=rollout,
+            holders=_core._codex_shared_state_db_holders_stale_ok(now),
+        )
         if note_writer_transition:
             _core._codex_note_external_writer_transition(sid, snap)
         if snap.get("writer"):
@@ -11716,6 +11911,14 @@ def build_codex_stuck_summary(now=None, force=False):
         sid = row.get("id") or ""
         if not sid:
             continue
+        try:
+            up = float(row.get("updated_at") or row.get("created_at") or 0)
+            if up > 100000000000:
+                up /= 1000.0
+            if up and max(0.0, now - up) > (recent_window + 300):
+                continue
+        except (TypeError, ValueError):
+            pass
         path = _core._codex_rollout_path_from_row(row)
         if not path:
             continue

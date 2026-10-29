@@ -1,1 +1,0 @@
-- Daily release gate blocks only on uncommitted work or unpushed commits on main; stale worktrees and branches go to a REPO-FIXER ticket, and a second blocked day reports FAILED.

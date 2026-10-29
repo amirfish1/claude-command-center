@@ -25,7 +25,7 @@ test('quota cost applies the historical rate without capping multiweek sessions'
     {available: true, pct_per_usd: 12}, 200,
   );
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    state: 'ready', engine: 'claude', apiCost: 12.5, contributionPct: 150,
+    state: 'ready', engine: 'claude', apiCost: 12.5, contributionPct: 150, rate: 12,
     monthlyPlanUsd: 200, allocatedCost: 70,
   });
 });

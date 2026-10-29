@@ -7,7 +7,11 @@ demand (ccc_server/free_runtime.py) and talks to it over 127.0.0.1 only.
 
     POST /speak  {"text": "...", "voice": "af_heart"}  ->  audio/wav
     POST /stream {"text": "...", "voice": "af_heart"}  ->  audio/mpeg, sentence by sentence
-    GET  /health                                        ->  {"ok": true, "model": ..., "stream": bool}
+    GET  /health                                        ->  {"ok": true, "model": ..., "stream": bool, "rev": int, ...}
+
+Requests carry "prio": "fg" (a read the user is listening to) or "bg"
+(prepare-ahead). Only one piece is made at a time, and a waiting fg request
+always goes before bg, so background work never slows the read being heard.
 
 /stream starts sending after the first sentence is made, so playback begins in a
 fraction of the full clip's time; it needs lameenc in the venv (404 without it).
@@ -17,12 +21,20 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOME = os.path.expanduser(os.environ.get("CCC_LOCAL_TTS_DIR", os.path.join(os.path.expanduser("~"), ".ccc", "local-tts")))
 PORT = int(os.environ.get("CCC_LOCAL_TTS_PORT", "3019"))
 MAX_CHARS = 2000
+
+# Bumped when the process's runtime contract changes (priority, threads), so
+# CCC replaces an older process left running from before an upgrade.
+SERVER_REV = 5
+# Normal priority: at nice 10 a loaded machine starved the voice for tens of
+# seconds. Background work is kept polite by the fg-first lock instead.
 
 import soundfile as sf
 from kokoro_onnx import Kokoro
@@ -44,36 +56,108 @@ def model_path():
 
 
 def _load():
-    threads = os.environ.get("CCC_KOKORO_THREADS", "").strip()
-    if not threads:
+    threads = os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4"
+    try:
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = max(1, int(threads))
+        opts.inter_op_num_threads = 1
+        opts.enable_cpu_mem_arena = False
+        # ORT's intra-op pool busy-spins between ops by default; on a shared
+        # box that kept ~3 cores pegged for minutes per read. Sleep instead.
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        sess = ort.InferenceSession(model_path(), opts, providers=["CPUExecutionProvider"])
+        return Kokoro.from_session(sess, os.path.join(HOME, "voices.bin"))
+    except Exception:
         return Kokoro(model_path(), os.path.join(HOME, "voices.bin"))
-    import onnxruntime as ort
-    opts = ort.SessionOptions()
-    opts.intra_op_num_threads = int(threads)
-    sess = ort.InferenceSession(model_path(), opts, providers=["CPUExecutionProvider"])
-    return Kokoro.from_session(sess, os.path.join(HOME, "voices.bin"))
 
 
 _kokoro = _load()
 _voices = set(_kokoro.get_voices())
+
+
+class _PriorityLock:
+    """One synthesis at a time; waiting fg requests always go before bg.
+
+    A fg stream releases the lock between its pieces (encode + write), and
+    that instant used to hand the lock to a waiting bg request, so bg and fg
+    pieces alternated and the read being heard made audio at half speed
+    (CCC-144: a 173-char fg clip took 23.6s beside a bg prefetch). bg
+    therefore also waits until fg has been idle for FG_GRACE_S. A time grace,
+    not stream registration, so a stalled fg client cannot starve bg forever.
+    """
+
+    FG_GRACE_S = 0.5
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._busy = False
+        self._fg_waiting = 0
+        self._fg_released = 0.0
+        self._holder_fg = False
+
+    def acquire(self, fg):
+        with self._cond:
+            if fg:
+                self._fg_waiting += 1
+                try:
+                    while self._busy:
+                        self._cond.wait()
+                finally:
+                    self._fg_waiting -= 1
+            else:
+                while True:
+                    idle = time.monotonic() - self._fg_released
+                    if not self._busy and not self._fg_waiting and idle >= self.FG_GRACE_S:
+                        break
+                    self._cond.wait(None if self._busy or self._fg_waiting else self.FG_GRACE_S - idle)
+            self._busy = True
+            self._holder_fg = fg
+
+    def release(self):
+        with self._cond:
+            self._busy = False
+            if self._holder_fg:
+                self._fg_released = time.monotonic()
+            self._cond.notify_all()
+
+
+_SYNTH_LOCK = _PriorityLock()
+_SYNTH_CACHE = {}  # (text, voice) -> (samples, rate, nbytes), LRU order
+_SYNTH_CACHE_LOCK = threading.Lock()
+_SYNTH_CACHE_MAX_BYTES = int(os.environ.get("CCC_TTS_SYNTH_CACHE_MB", "256")) * 1024 * 1024
 try:
     import lameenc
 except ImportError:  # /speak still works; /stream answers 404 and CCC uses /speak
     lameenc = None
 
-FIRST_PIECE_CHARS = 120
-PIECE_CHARS = 300
+# Kokoro's cost grows faster than piece length: on a 16-core host a 300-char
+# piece made audio at 0.5x real time, 90-char pieces at 1.9x (8 threads), so
+# long pieces could never keep up with a read at 1.25x (CCC-144).
+FIRST_PIECE_CHARS = 60
+PIECE_CHARS = 90
+
+
+def _cut_point(sent, limit):
+    """Where to cut an over-long sentence: a clause break, else the last space."""
+    window = sent[:limit]
+    best = max(window.rfind(", "), window.rfind("; "), window.rfind(" - "), window.rfind(" \u2014 "))
+    if best > limit // 2:
+        return best + 1
+    cut = window.rfind(" ")
+    return cut if cut > 20 else limit
 
 
 def split_for_stream(text):
-    """Sentence-sized pieces; the first is kept short so audio starts early."""
+    """Short sentence-sized pieces; the first is shortest so audio starts early."""
     sentences = [s for s in re.split(r"(?<=[.!?;:])\s+|\n+", text) if s.strip()]
     pieces, cur = [], ""
     for sent in sentences:
         limit = FIRST_PIECE_CHARS if not pieces else PIECE_CHARS
-        while len(sent) > limit:  # one long sentence: cut at the last space
-            cut = sent.rfind(" ", 0, limit)
-            cut = cut if cut > 20 else limit
+        if cur and len(cur) < 30 and len(cur) + 1 + len(sent) > limit:
+            sent, cur = cur + " " + sent, ""   # a short leftover rides with the next cut
+        while len(sent) > limit:  # one long sentence: cut at a clause or space
+            cut = _cut_point(sent, limit)
             if cur:
                 pieces.append(cur)
                 cur = ""
@@ -93,8 +177,29 @@ def split_for_stream(text):
     return [p for p in pieces if p.strip()]
 
 
-def _synth(text, voice):
-    return _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
+def _synth(text, voice, fg=True):
+    key = (text, voice)
+    with _SYNTH_CACHE_LOCK:
+        hit = _SYNTH_CACHE.pop(key, None)
+        if hit is not None:
+            _SYNTH_CACHE[key] = hit
+            return hit[0], hit[1]
+    _SYNTH_LOCK.acquire(fg)
+    try:
+        samples, rate = _kokoro.create(text, voice=voice, speed=1.0, lang="en-gb" if voice.startswith("b") else "en-us")
+    finally:
+        _SYNTH_LOCK.release()
+    nbytes = int(getattr(samples, "nbytes", len(samples) * 4))
+    if 0 < nbytes <= _SYNTH_CACHE_MAX_BYTES:
+        with _SYNTH_CACHE_LOCK:
+            _SYNTH_CACHE.pop(key, None)
+            _SYNTH_CACHE[key] = (samples, rate, nbytes)
+            total = sum(v[2] for v in _SYNTH_CACHE.values())
+            for old in list(_SYNTH_CACHE):
+                if total <= _SYNTH_CACHE_MAX_BYTES or old == key:
+                    break
+                total -= _SYNTH_CACHE.pop(old)[2]
+    return samples, rate
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -111,7 +216,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._json(200, {"ok": True, "model": os.path.basename(model_path()), "stream": lameenc is not None})
+            self._json(200, {"ok": True, "model": os.path.basename(model_path()), "stream": lameenc is not None,
+                             "rev": SERVER_REV, "pid": os.getpid(), "nice": os.nice(0),
+                             "threads": int(os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4")})
         else:
             self._json(404, {"ok": False})
 
@@ -120,10 +227,16 @@ class Handler(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(length)) if 0 < length <= 64 * 1024 else {}
         text = str(req.get("text") or "").strip()[:MAX_CHARS]
         voice = req.get("voice") if req.get("voice") in _voices else "af_heart"
+        self._fg = req.get("prio") != "bg"
         return text, voice
 
     def _stream(self):
-        """mp3 frames per piece, written as each piece is made (close-delimited body)."""
+        """mp3 frames per piece, written as each piece is made.
+
+        Chunked, so the reader can tell a finished clip (terminating 0 chunk)
+        from one cut short by a failed piece: a close-delimited body ended
+        cleanly either way and CCC cached the truncated clip (CCC-173).
+        """
         try:
             text, voice = self._request()
         except (ValueError, OSError):
@@ -136,23 +249,35 @@ class Handler(BaseHTTPRequestHandler):
         enc.set_in_sample_rate(24000)
         enc.set_channels(1)
         enc.set_quality(5)
+        self.protocol_version = "HTTP/1.1"   # chunked needs a 1.1 status line
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+
+        def chunk(data):
+            if data:
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
+                self.wfile.flush()
+
         t0 = time.time()
         try:
             for i, piece in enumerate(split_for_stream(text)):
-                samples, _rate = _synth(piece, voice)
+                samples, _rate = _synth(piece, voice, self._fg)
                 pcm = (samples.clip(-1.0, 1.0) * 32767).astype("<i2").tobytes()
-                self.wfile.write(bytes(enc.encode(pcm)))
-                self.wfile.flush()
+                chunk(bytes(enc.encode(pcm)))
                 if i == 0:
                     sys.stderr.write("stream first piece %d chars in %dms\n" % (len(piece), (time.time() - t0) * 1000))
-            self.wfile.write(bytes(enc.flush()))
+            chunk(bytes(enc.flush()))
+            self.wfile.write(b"0\r\n\r\n")
         except (BrokenPipeError, ConnectionResetError):
             pass  # the reader stopped (Stop / skip); drop the rest
+        except Exception:
+            # No terminating chunk: the reader sees a truncated stream.
+            sys.stderr.write("stream failed after %dms (%d chars)\n" % ((time.time() - t0) * 1000, len(text)))
+            traceback.print_exc()
 
     def do_POST(self):
         if self.path == "/stream" and lameenc is not None:
@@ -166,7 +291,7 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 self._json(400, {"ok": False})
                 return
-            samples, rate = _synth(text, voice)
+            samples, rate = _synth(text, voice, self._fg)
             buf = io.BytesIO()
             sf.write(buf, samples, rate, format="WAV", subtype="PCM_16")
         except Exception as exc:  # keep serving; the caller falls back

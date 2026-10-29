@@ -68,11 +68,26 @@ def test_rpc_replaces_historical_context_and_preserves_other_options(method):
     with mock.patch.object(server, "_control_plane_engine_call", return_value={"response": {"result": {}}}) as route:
         codex._codex_app_server_request(method, params)
     config = route.call_args.args[2]["params"]["config"]
+    assert server._CCC_SESSION_STATE_SYSTEM_PROMPT in route.call_args.args[2]["params"]["developerInstructions"]
     assert config["model_context_window"] == 250000
     assert config["model_auto_compact_token_limit"] == 225000
     assert config["model_auto_compact_token_limit_scope"] == "total"
     assert config["unrelated_option"] is True
     assert params["config"]["model_context_window"] == 1000000
+
+
+@pytest.mark.parametrize("method", ["thread/start", "thread/resume"])
+def test_summary_reminder_preserves_instructions_and_is_not_duplicated(method):
+    reminder = server._CCC_SESSION_STATE_SYSTEM_PROMPT
+    params = {"developerInstructions": "Keep custom instructions.\n\n" + reminder}
+    with mock.patch.object(server, "_control_plane_engine_call", return_value={"response": {"result": {}}}) as route:
+        codex._codex_app_server_request(method, params)
+    assert route.call_args.args[2]["params"]["developerInstructions"] == params["developerInstructions"]
+    params = {"developerInstructions": "Keep custom instructions."}
+    with mock.patch.object(server, "_control_plane_engine_call", return_value={"response": {"result": {}}}) as route:
+        codex._codex_app_server_request(method, params)
+    assert route.call_args.args[2]["params"]["developerInstructions"] == "Keep custom instructions.\n\n" + reminder
+    assert params["developerInstructions"] == "Keep custom instructions."
 
 
 @pytest.mark.parametrize("worker, expected", [(False, 250000), (True, 180000)])

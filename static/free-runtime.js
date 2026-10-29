@@ -145,8 +145,10 @@
   }
 
   function setEnabled(on) {
+    var changed = state.enabled !== !!on;
     state.enabled = !!on;
     try { localStorage.setItem(LS_KEY, state.enabled ? '1' : '0'); } catch (_) {}
+    if (changed) window.dispatchEvent(new CustomEvent('ccc-runtime-change', {detail: {enabled: state.enabled}}));
   }
 
   function useClaudeEngine() {
@@ -165,7 +167,8 @@
     pill.classList.toggle('is-selected', on);
     pill.classList.toggle('is-setup', notReady);
     pill.setAttribute('aria-checked', on ? 'true' : 'false');
-    pill.querySelector('.ccc-free-pill-label').textContent = notReady ? 'Set up free models' : 'Free';
+    var ranked = pill.parentNode && pill.parentNode.classList.contains('is-depth-ranked');
+    pill.querySelector('.ccc-free-pill-label').textContent = notReady ? 'Set up free models' : (ranked ? 'Free · manual' : 'Free');
     pill.title = notReady
       ? 'Free models are not set up yet. Click to set them up.'
       : 'Runs on your free router. Costs $0.';
@@ -254,6 +257,7 @@
   window.CCCFreeRuntime = {
     ENGINES: ENGINES,
     supports: supports,
+    setEnabled: setEnabled,
     sync: sync,
     refreshStatus: refreshStatus,
     readyFor: readyFor,

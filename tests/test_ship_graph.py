@@ -119,6 +119,7 @@ def mock_graph_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
     monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", str(repo_dir))
 
@@ -367,6 +368,7 @@ def mock_trap_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
     monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", repos_str)
 
@@ -630,6 +632,7 @@ def mock_coverage_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CCC_GEMINI_TMP_ROOT", str(tmp_path / "gemini-empty"))
     monkeypatch.setenv("CCC_AGY_BRAIN_ROOTS", "")
     monkeypatch.setenv("CCC_CURSOR_PROJECTS_ROOT", str(tmp_path / "cursor-empty"))
+    monkeypatch.setenv("CCC_DEVIN_TRANSCRIPTS_ROOT", str(tmp_path / "devin-empty"))
     monkeypatch.setenv("CCC_SHIP_GRAPH_DAYS", "45")
     monkeypatch.setenv("CCC_SHIP_GRAPH_REPOS", repos_str)
 
