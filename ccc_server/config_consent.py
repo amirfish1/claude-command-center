@@ -68,6 +68,7 @@ CLAUDE_HOOK_SPECS = (
     ("SessionStart", "session-start.py", 5),
     ("PreCompact", "pre-compact.py", None),
     ("PostCompact", "post-compact.py", None),
+    ("UserPromptSubmit", "user-prompt-submit.py", 5),
 )
 CODEX_HOOK_SPECS = (
     ("PostCompact", "post-compact-codex.py", 5),
@@ -75,7 +76,7 @@ CODEX_HOOK_SPECS = (
 HOOK_SCRIPT_NAMES = (
     "pre-tool-use.py", "permission-request.py", "post-tool-use.py", "notification.py",
     "stop.py", "session-start.py", "pre-compact.py", "post-compact.py", "_reorient_shared.py",
-    "post-compact-codex.py",
+    "post-compact-codex.py", "user-prompt-submit.py",
 )
 
 BUNDLED_SKILLS = (
