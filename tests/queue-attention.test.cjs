@@ -100,7 +100,34 @@ test('local answer receipts read queued, sending, delivered, handed off', () => 
 test('a live worker on a delivered answer reads working, a stale one does not', () => {
   const it = answered('delivered', { status: 'in_progress' });
   assert.equal(QA.project(it, { liveClaim: true }).key, 'answer-working');
-  assert.equal(QA.project(it, { liveClaim: false }), null);
+  const stale = QA.project(it, { liveClaim: false });
+  assert.equal(stale.key, 'answer-delivered');
+  assert.equal(stale.tone, 'answer');
+  assert.match(stale.label, /awaiting worker/);
+});
+
+test('an in-flight answer on an in-progress ticket keeps its amber receipt label', () => {
+  // WatchTower keeps status in_progress while an answer is delivering/queued
+  // (E3, E6-E8); the claim lands at the same instant as the receipt state.
+  for (const [state, label] of [['queued', 'answer queued'], ['delivering', 'answer sending']]) {
+    const it = answered(state, { status: 'in_progress' });
+    it.history.push({ event: 'claim', at: it.pending_answer.state_at });
+    for (const liveClaim of [true, false, undefined]) {
+      const a = QA.project(it, { liveClaim });
+      assert.equal(a && a.label, label, state + ' live=' + liveClaim);
+      assert.equal(a.tone, 'answer');
+    }
+    // A later claim does not turn an undelivered answer into "working".
+    it.history.push({ event: 'claim', at: '2026-10-20T13:00:00Z' });
+    assert.equal(QA.project(it, { liveClaim: true }).label, label);
+  }
+});
+
+test('a handed-off answer bound by a later live claim reads working', () => {
+  const it = answered('handed_off', { status: 'in_progress' });
+  it.history.push({ event: 'claim', at: '2026-10-20T13:00:00Z' });
+  assert.equal(QA.project(it, { liveClaim: true }).key, 'answer-working');
+  assert.equal(QA.project(it, { liveClaim: false }).key, 'answer-delivered');
 });
 
 test('github answer event newer than the block reads awaiting worker', () => {

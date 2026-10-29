@@ -138,11 +138,21 @@
     var live = opts.liveClaim !== undefined ? !!opts.liveClaim : status === 'in_progress';
     var pa = it.pending_answer;
     if (pa && typeof pa === 'object' && pa.state) {
+      // Receipt-backed only: 'delivered' is the delivery receipt; an
+      // affinity/handed_off answer travels with the claim that bound it.
       var claimedAfter = lastEventAt(it, ['claim']) > str(pa.state_at || '');
-      if (status === 'in_progress' && live && (claimedAfter || pa.state === 'delivered')) {
+      var received = pa.state === 'delivered'
+        || ((pa.state === 'affinity' || pa.state === 'handed_off') && claimedAfter);
+      if (received && status === 'in_progress' && live) {
         return make('answer-working', 'answer', 'working on answer',
           'Your answer was delivered and a live worker is on it.');
       }
+      if (received && status === 'in_progress') {
+        return make('answer-delivered', 'answer', 'delivered · awaiting worker',
+          'Your answer was delivered, but no live worker is verified on this ticket. Delivery confirmation is historical, not proof of an active worker.');
+      }
+      // queued/delivering keep status in_progress (WatchTower E6-E8): the
+      // answer is still in flight whatever the claim's liveness.
       var paLabel = {
         routing: ['answer queued', 'Your answer is recorded and queued for delivery to the worker.'],
         queued: ['answer queued', 'Your answer is queued; the worker session has not received it yet.'],
@@ -151,7 +161,7 @@
         affinity: ['answer waiting', 'Your answer is reserved for the worker that asked; it has not resumed yet.'],
         handed_off: ['answer handed off', 'The asking session could not take your answer; the next worker gets it with the question.'],
       }[pa.state];
-      if (paLabel && status !== 'in_progress') {
+      if (paLabel) {
         return make('answer-' + pa.state, 'answer', paLabel[0], paLabel[1]);
       }
     } else {

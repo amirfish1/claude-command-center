@@ -2305,8 +2305,10 @@
     var st = statusOf(it);
     var ref = it.ref || '';
     var title = titleOf(it).split('\n')[0];
-    var stale = isStaleClaim(it);
-    var unverified = isUnverifiedClaim(it);
+    // A blocked worker has already left; who the block waits on is the
+    // signal, not whether the claim that asked is still alive.
+    var stale = st !== 'blocked' && isStaleClaim(it);
+    var unverified = st !== 'blocked' && isUnverifiedClaim(it);
     var unresolved = String(it.status) === 'closed' && unresolvedNotes(it).length > 0;
     // Same source the main dashboard uses: last touch, or close time once
     // closed. Rendered without the trailing " ago", as it is there.
