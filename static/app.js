@@ -25830,9 +25830,12 @@
     }
     return hit;
   }
-  function repoInitials(repoPath, label = '') {
-    return String(label || String(repoPath || '').split('/').filter(Boolean).pop() || '?')
-      .split(/[-_\s]+/).slice(0, 2).map(word => word[0] || '').join('').toUpperCase();
+  function repoInitials(repoPath, label = '', max = 2) {
+    const words = String(label || String(repoPath || '').split('/').filter(Boolean).pop() || '?')
+      .split(/[-_\s]+/).filter(Boolean);
+    // One-word names have no word initials, so take their first letters.
+    if (words.length === 1 && max > 2) return words[0].slice(0, max).toUpperCase();
+    return words.slice(0, max).map(word => word[0]).join('').toUpperCase();
   }
   function repoAvatarHtml(repoPath, label = '', extraClass = '') {
     if (!repoPath) return '';
@@ -25892,7 +25895,7 @@
       + ' aria-label="Open ' + noun + ' ' + escapeAttr(num) + '">'
       + background
       + '<span class="conv-avatar-stack">'
-      + '<span class="conv-avatar-initials">' + escapeHtml(repoInitials(repoPath, c.folder_label_chip || c.folder_label || repo)) + '</span>'
+      + '<span class="conv-avatar-initials">' + escapeHtml(repoInitials(repoPath, c.folder_label_chip || c.folder_label || repo, 3)) + '</span>'
       + '<span class="conv-avatar-number">' + escapeHtml(num) + '</span></span>'
       + _avatarModelBadgeHtml(presentation) + '</button>';
   }
