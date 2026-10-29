@@ -28364,6 +28364,7 @@ def _car_mode_stop() -> dict:
     return {"ok": True, "running": False, "stopped": True}
 
 
+_QUEUE_LIST_ENCODED = {}
 _BACKGROUND_API_READ_LIMIT = 2
 _background_api_read_slots = threading.BoundedSemaphore(_BACKGROUND_API_READ_LIMIT)
 _BACKGROUND_API_READ_PATHS = frozenset({
@@ -28718,13 +28719,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 limit = int(qs.get("limit", ["0"])[0] or 0) or None
             except (TypeError, ValueError):
                 limit = None
-            if scope == "all":
-                self.send_json(compute_attention_feed(recent_only=False, limit=limit))
+            def _attention_feed(recent_only):
+                feed = compute_attention_feed(recent_only=recent_only, limit=limit)
                 _save_conv_meta_cache()
+                return feed
+            if scope == "all":
+                self.send_json(_swr.cached(
+                    ("attention-feed", False, limit), lambda: _attention_feed(False),
+                    fresh_s=10.0, max_stale_s=300.0))
                 return
             if scope in ("live", "recent"):
-                self.send_json(compute_attention_feed(recent_only=True, limit=limit))
-                _save_conv_meta_cache()
+                self.send_json(_swr.cached(
+                    ("attention-feed", True, limit), lambda: _attention_feed(True),
+                    fresh_s=10.0, max_stale_s=300.0))
                 return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
@@ -28732,8 +28739,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except RepoContextError:
                 # No repo selected → the tight cross-repo live feed is the
                 # sensible default (and the bug we are killing: NYA empty).
-                self.send_json(compute_attention_feed(recent_only=True, limit=limit))
-                _save_conv_meta_cache()
+                self.send_json(_swr.cached(
+                    ("attention-feed", True, limit), lambda: _attention_feed(True),
+                    fresh_s=10.0, max_stale_s=300.0))
         elif re.match(r"^/api/session/[^/]+$", path):
             # Lightweight single-session drill-in: state + last few turns from
             # one file tail, so the COO doesn't re-pull the whole list.
@@ -28866,12 +28874,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 synced_at = _ux_fixes_list_synced_at(status_filter, lane_filter)
                 # ?slim=1 trims closed-ticket prose the list rows never read
                 # (see _ux_fixes_slim_items). Opt-in: default shape unchanged.
-                if (qs.get("slim", [""])[0] or "").strip() in ("1", "true", "yes"):
+                _slim = (qs.get("slim", [""])[0] or "").strip() in ("1", "true", "yes")
+                _memo_items = items
+                if _slim:
                     items = _ux_fixes_slim_items(items)
+                _ek = (status_filter, lane_filter, _slim, synced_at)
+                _ent = _QUEUE_LIST_ENCODED.get(_ek)
+                if _ent is None or _ent[0] is not _memo_items:
+                    if len(_QUEUE_LIST_ENCODED) > 16:
+                        _QUEUE_LIST_ENCODED.clear()
+                    # Keeping `items` here pins its identity: it is the memo's
+                    # own list, so `is` means "no rebuild since".
+                    _ent = (_memo_items, {})
+                    _QUEUE_LIST_ENCODED[_ek] = _ent
                 self.send_json({
                     "ok": True, "items": items, "count": len(items),
                     "synced_at": synced_at,
-                })
+                }, encoded=_ent[1])
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/roles":
@@ -42396,7 +42415,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def send_json(self, data, status=200, etag=False):
+    def send_json(self, data, status=200, etag=False, encoded=None):
         # Any 5xx is a real server-side error — feed the in-process health
         # counter the dashboard's bottom-left bar reads. Cheap, no disk scan.
         if status >= 500:
@@ -42421,7 +42440,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             pass
         if status >= 400 and self.command == "POST":
             data = _annotate_engine_not_installed(data, urllib.parse.urlparse(self.path).path)
-        body_str = json.dumps(data)
+        # `encoded`: a dict owned by a memoised payload. Holds the finished
+        # (body, encoding) per gzip capability so a polled multi-MB list is
+        # serialised and compressed once per rebuild, not once per poll.
+        _gz_ok = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
+        _enc_hit = encoded.get(_gz_ok) if (encoded is not None and not etag and status == 200) else None
+        body_str = None if _enc_hit is not None else json.dumps(data)
         etag_val = None
         if etag:
             etag_val = '"' + hashlib.sha1(body_str.encode()).hexdigest() + '"'
@@ -42433,9 +42457,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("ETag", etag_val)
                 self.end_headers()
                 return
-        body = body_str.encode()
         ct = "application/json"
-        body, enc = self._maybe_gzip(body, ct)
+        if _enc_hit is not None:
+            body, enc = _enc_hit
+        else:
+            body = body_str.encode()
+            body, enc = self._maybe_gzip(body, ct)
+            if encoded is not None and not etag and status == 200:
+                encoded[_gz_ok] = (body, enc)
         self.send_response(status)
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(body)))

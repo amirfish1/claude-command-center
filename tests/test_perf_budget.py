@@ -5323,3 +5323,45 @@ def test_codex_fetch_threads_reuses_rows_until_state_db_changes(tmp_path, monkey
     w.commit()
     w.close()
     assert len(codex._codex_fetch_threads()) == 2
+
+
+def test_send_json_reuses_encoded_body_for_memoised_payload():
+    """A multi-MB memoised list (queue/list is ~20 MB) must be serialised and
+    gzipped once per rebuild, not once per poll."""
+    import io
+    H = server.CommandCenterHandler
+
+    def make(accept):
+        h = H.__new__(H)
+        h.headers = {"Accept-Encoding": accept}
+        h.path = "/api/queue/list"
+        h.command = "GET"
+        h.wfile = io.BytesIO()
+        h.send_response = lambda *a, **k: None
+        h.send_header = lambda *a, **k: None
+        h.end_headers = lambda: None
+        h._send_server_timing = lambda: None
+        h._send_list_server_timing = lambda: None
+        return h
+
+    class Counted(dict):
+        dumps = 0
+
+    real = server.json.dumps
+    calls = []
+    server.json.dumps = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+    try:
+        cache = {}
+        payload = {"items": [{"ref": "X-%d" % i, "note": "n" * 80} for i in range(500)]}
+        outs = []
+        for _ in range(10):
+            h = make("gzip")
+            h.send_json(payload, encoded=cache)
+            outs.append(h.wfile.getvalue())
+        assert len(calls) == 1
+        assert len(set(outs)) == 1
+        h = make("")
+        h.send_json(payload, encoded=cache)
+        assert len(calls) == 2  # identity encoding is a separate entry
+    finally:
+        server.json.dumps = real
