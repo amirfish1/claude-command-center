@@ -167,7 +167,7 @@ class WaitDashboardBackTests(unittest.TestCase):
         self.assertEqual(v["started_at"], 3.0)
 
     def test_failed_restart_times_out(self):
-        self._feed([{"pid": 7, "started_at": 1.0}] * 50)
+        self._feed([{"pid": 7, "started_at": 1.0}] * 10**6)
         self.assertIsNone(self.m._wait_dashboard_back("b", 7, timeout=0.01, before_started_at=1.0))
 
     def test_pid_change_still_works_without_started_at(self):
