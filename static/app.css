@@ -23948,6 +23948,27 @@ body.has-gc-reader .pwa-install-banner {
 .fq-row.is-blocked { background: rgba(248,81,73,0.06); }
 .fq-row.is-blocked .fq-status { background: var(--red, #f85149); }
 .fq-row.is-blocked .fq-note { color: #ff7b72; }
+/* Who a ticket waits on (CCC-244, static/queue-attention.js). Red above is
+   only for an owner decision; the label always names the state, and the dot
+   shape differs (solid = act/answer flow, ring = someone else), so colour is
+   never the only signal. */
+.fq-chip.fq-att-owner { background: rgba(248,81,73,0.20); color: #ff7b72; }
+.fq-chip.fq-att-external { background: rgba(56,139,253,0.20); color: #79c0ff; }
+.fq-chip.fq-att-answer { background: rgba(210,153,34,0.22); color: #e3b341; }
+.fq-chip.fq-att-neutral { background: rgba(139,148,158,0.18); color: #b1bac4; }
+:root[data-theme="light"] .fq-chip.fq-att-owner { color: #a40e26; background: rgba(207,34,46,0.12); }
+:root[data-theme="light"] .fq-chip.fq-att-external { color: #0550ae; background: rgba(9,105,218,0.12); }
+:root[data-theme="light"] .fq-chip.fq-att-answer { color: #7d4e00; background: rgba(154,103,0,0.14); }
+:root[data-theme="light"] .fq-chip.fq-att-neutral { color: #424a53; background: rgba(87,96,106,0.14); }
+.fq-row.is-waiting.is-att-external { background: rgba(56,139,253,0.05); }
+.fq-row.is-waiting.is-att-answer { background: rgba(210,153,34,0.05); }
+.fq-row.is-waiting .fq-status { background: transparent; box-shadow: inset 0 0 0 2px var(--text-muted, #8b949e); }
+.fq-row.is-waiting.is-att-external .fq-status { box-shadow: inset 0 0 0 2px #58a6ff; }
+.fq-row.is-waiting.is-att-answer .fq-status { background: #d29922; box-shadow: none; }
+.fq-row.is-waiting.is-att-external .fq-note { color: #a5d6ff; }
+:root[data-theme="light"] .fq-row.is-waiting.is-att-external .fq-note { color: #0550ae; }
+/* Answer handoff on an unblocked row: amber dot unless a live worker pulses. */
+.fq-row.is-open.is-att-answer .fq-status { background: #d29922; box-shadow: 0 0 0 3px rgba(210,153,34,0.22); }
 /* in_review (WT-5 gate): closed by its worker, waiting on accept/reject. */
 .fq-chip.fq-review { background: rgba(163,113,247,0.20); color: #d2a8ff; }
 /* WT-4 dependency: replaces READY while a blocked_by ticket is unfinished. */

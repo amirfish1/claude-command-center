@@ -1002,15 +1002,15 @@ _ux_fixes_list_cache_lock = threading.Lock()
 _ux_fixes_list_refreshing = set()
 
 
-def _ux_fixes_cache_ack(item):
+def _ux_fixes_cache_ack(item, keys=("resolution", "history", "updated_at")):
     """Keep a successful resolution ack visible through cached list polls.
 
-    Patch only fields ack_resolution writes, preserving computed list fields
-    and the snapshot age. Copy the list so slim-mode memoization also expires.
+    Patch only fields ack_resolution writes (or ``keys``: wait-on passes its
+    own), preserving computed list fields and the snapshot age. Copy the list
+    so slim-mode memoization also expires.
     """
     ref = item.get("ref")
-    changes = {key: item[key] for key in ("resolution", "history", "updated_at")
-               if key in item}
+    changes = {key: item[key] for key in keys if key in item}
     with _ux_fixes_list_cache_lock:
         for entry in _ux_fixes_list_cache.values():
             if any(row.get("ref") == ref for row in entry["items"]):

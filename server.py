@@ -34706,6 +34706,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path == "/api/ux-fixes/wait-on":
+            # Say who a blocked ticket waits on (CCC-244), the API twin of
+            # `wt wait-on`: owner | external (+actor) | dependency (+wait_ref)
+            # | worker. Leaves the question and needs_input alone; WatchTower
+            # appends a history event, so nothing earlier is erased.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            ref = str(payload.get("ref") or "").strip()
+            on = str(payload.get("on") or "").strip()
+            set_wait = getattr(_q, "set_wait", None)
+            if not ref or not on:
+                self.send_json({"ok": False, "error": "ref and on required"}, 400)
+                return
+            if not callable(set_wait):
+                self.send_json({"ok": False, "error": "WatchTower too old for wait-on; update it"}, 501)
+                return
+            try:
+                item = set_wait(
+                    ref, on,
+                    actor=str(payload.get("actor") or ""),
+                    ref=str(payload.get("wait_ref") or ""),
+                    note=str(payload.get("note") or ""),
+                    by=str(payload.get("worker") or ""),
+                )
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            if not item:
+                self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                return
+            try:
+                _ux_fixes_cache_ack(item, keys=("wait", "history", "updated_at"))
+            except Exception:
+                pass
+            self.send_json({"ok": True, "item": _uxq_item_payload(item)})
+            return
         if path == "/api/watchtower/alerts/investigate":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

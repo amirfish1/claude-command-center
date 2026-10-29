@@ -52597,7 +52597,11 @@
       if (!k || k === '?') continue;
       if (it.status === 'closed') continue;
       openByQ.set(k, (openByQ.get(k) || 0) + 1);
-      if (it.needs_input) needsByQ.set(k, (needsByQ.get(k) || 0) + 1);
+      // Owner decisions only (CCC-244): waits on a client, a dependency or a
+      // worker are not "needs input" for the person reading this count.
+      if (it.needs_input && (!window.QueueAttention || window.QueueAttention.needsOwner(it))) {
+        needsByQ.set(k, (needsByQ.get(k) || 0) + 1);
+      }
     }
     // sub-queue counts per root
     const subsByRoot = new Map();
@@ -52768,8 +52772,9 @@
       gh: false,
       hasRepo: false,
       repo: '',
-      hasNeeds: !!t.needs_input && t.status !== 'closed',
-      needs: (t.needs_input && t.status !== 'closed') ? 'needs input' : '',
+      hasNeeds: !!t.needs_input && t.status !== 'closed' && (!window.QueueAttention || window.QueueAttention.needsOwner(t)),
+      needs: (t.needs_input && t.status !== 'closed')
+        ? ((window.QueueAttention && (window.QueueAttention.project(t) || {}).label) || 'needs input') : '',
       openLabel: '',
       last: age,
       drainOn: false,
@@ -53261,11 +53266,15 @@
         // Same-queue refs shrink to their number so chips fit the narrow
         // sidebar strip; the tooltip keeps the full ref and title.
         const short = qKey && cRef.indexOf(qKey + '-') === 0 ? cRef.slice(qKey.length + 1) : cRef;
+        // Only an owner decision earns the "needs input" marker (CCC-244);
+        // a block on a client, ticket or worker names who it waits on.
+        const att = it.needs_input && window.QueueAttention ? window.QueueAttention.project(it) : null;
+        const ownerAsk = !!it.needs_input && (!att || att.owner || att.key === 'gate');
         return {
           ref: cRef,
-          label: (it.needs_input ? '?' : '#') + short,
-          needsInput: !!it.needs_input,
-          tip: cRef + (it.needs_input ? ' needs input: ' : ' also claimed: ')
+          label: (ownerAsk ? '?' : '#') + short,
+          needsInput: ownerAsk,
+          tip: cRef + (ownerAsk ? ' needs input: ' : (att ? ' ' + att.label + ': ' : ' also claimed: '))
             + String(it.title || it.note || it.text || '').split('\n')[0],
         };
       });
@@ -53875,6 +53884,8 @@
     const runQueued = canRequestRun && !!item.run_requested;
     const runBusy = _uxqRunBusyRefs.has(ref);
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
+    // Who it waits on (CCC-244), same projection as the queue row.
+    const attention = window.QueueAttention ? window.QueueAttention.project(item) : null;
 
     // Sidebar property row helpers
     function _propRow(key, valHtml) {
@@ -53906,6 +53917,10 @@
     }
     const topBadges = _jumpBadge(statusClass, status === 'in_review' ? _uxqReviewLabel(item) : status,
         status === 'in_review' ? '.uxq-td-review-sec' : statusJumpTarget)
+      + (attention && attention.key !== 'gate'
+        ? '<span class="uxq-td-badge fq-chip fq-att fq-att-' + escapeAttr(attention.tone) + '" data-attention="' + escapeAttr(attention.key)
+          + '" title="' + escapeAttr(attention.title) + '">' + escapeHtml(attention.label) + '</span>'
+        : '')
       + (item.lane ? _jumpBadge('uxq-bs-lane', item.lane, '.uxq-td-pg-origin') : '')
       + (item.priority ? _jumpBadge(priorityClass, item.priority, '.uxq-td-pg-properties') : '')
       + (item.type ? _jumpBadge('uxq-bs-type', item.type, '.uxq-td-pg-properties') : '')
@@ -54099,7 +54114,8 @@
       : '';
 
     if (!item.closed_at) {
-      const verb = status === 'in_progress' ? 'In progress' : status === 'blocked' ? 'Agent needs your input'
+      const verb = status === 'in_progress' ? 'In progress' : status === 'blocked'
+        ? (attention && !attention.owner && attention.key !== 'gate' ? 'Blocked: ' + attention.label : 'Agent needs your input')
         : status === 'in_review' ? 'Closed by worker, ' + _uxqReviewLabel(item) : 'Open';
       tlHtml += _tlEvt('uxq-tl-open',
         '<span class="uxq-tl-verb">' + verb + '</span>' + _tlWorker(item.claimed_by), '');
@@ -54261,7 +54277,9 @@
             + '<div class="uxq-td-answer-hint" style="margin-top:6px;">Approve or decline this product-gate pitch. CLI: <code>wt ack ' + escapeHtml(ref) + '</code> / <code>wt nack ' + escapeHtml(ref) + '</code></div>'
             + '</div>'
           : '<div class="uxq-td-sec uxq-td-answer-sec">'
-            + '<div class="uxq-td-sec-label">Your Decision</div>'
+            + '<div class="uxq-td-sec-label">' + (attention && !attention.owner
+              ? escapeHtml('Not waiting on you: ' + attention.label + '. Answer only to override.')
+              : 'Your Decision') + '</div>'
             + '<div class="uxq-answer-row">'
             + '<input class="uxq-answer-input" type="text" placeholder="Type your decision / answer…" aria-label="Answer this blocked ticket">'
             + '<button type="button" class="ann-btn ann-primary uxq-answer-send">Send</button>'
@@ -55311,13 +55329,27 @@
         return !_isStaleClaim(it) && it.claimable !== false && it.watchtower_runnable !== false && !_unready(it)
           && !_uxqWaitingOn(it);
       };
+      // Who the ticket waits on (CCC-244, static/queue-attention.js): red
+      // only for an owner decision; external/dependency/answer-handoff/
+      // deferred each get their own label and tone. A comment after the
+      // question is never read as an answer.
+      const _uxqAttention = it => {
+        const QA = window.QueueAttention;
+        if (!QA) return null;
+        return QA.project(it, { liveClaim: !_isStaleClaim(it) && !_isUnverifiedClaim(it) });
+      };
       // WIP → needs input → unresolved attention → claimable work →
       // non-claimable, unready, or otherwise inert open work → clean closes.
       // Open work of any kind stays above closed, full stop.
       const _operationalBucket = it => {
         const status = _effectiveStatus(it);
         if (_isLiveWip(it)) return 0;
-        if (status === 'blocked' || status === 'in_review') return 1;
+        if (status === 'blocked') {
+          // Owner decisions first; waits on someone else sink below them.
+          const att = _uxqAttention(it);
+          return (!att || att.owner || att.key === 'gate') ? 1 : 2;
+        }
+        if (status === 'in_review') return 1;
         if (_hasUnresolved(it)) return 2;
         if (_isWaitingToDrain(it)) return 3;
         if (status === 'closed') return 5;
@@ -55353,27 +55385,14 @@
       // own amber marker instead of a new backend status (closed/unresolved
       // is a property of the resolution, not a distinct queue state the
       // engine needs to reason about).
-      // A human `wt comment` after the block does not clear needs_input (only
-      // `wt answer` does), so the row would read "needs input" for a question
-      // the owner already replied to. Surface that as "replied".
-      const _uxqRepliedAfterBlock = it => {
-        const h = it && Array.isArray(it.history) ? it.history : [];
-        let blockAt = '';
-        for (let i = h.length - 1; i >= 0; i--) {
-          if (h[i] && h[i].event === 'block') { blockAt = String(h[i].at || ''); break; }
-        }
-        if (!blockAt) return false;
-        return h.some(e => e && e.event === 'comment' && e.kind === 'human' && String(e.at || '') > blockAt);
-      };
       const _uxqChips = (it, priorityBumpHtml = '') => {
         const c = [];
-        if (it.needs_input && it.status !== 'closed') {
-          if (it.block_kind === 'rationale') {
-            c.push('<span class="fq-chip fq-gated" title="' + escapeAttr(it.block_question || 'pitch awaiting decision') + '">GATE</span>');
-          } else {
-            const replied = _uxqRepliedAfterBlock(it);
-            c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr((replied ? 'Owner commented after this question; worker has not picked it up yet. ' : '') + (it.block_question || 'needs human input')) + '">' + (replied ? 'replied' : 'needs input') + '</span>');
-          }
+        const att = _uxqAttention(it);
+        if (att && att.key === 'gate') {
+          c.push('<span class="fq-chip fq-gated" title="' + escapeAttr(att.title) + '">GATE</span>');
+        } else if (att) {
+          c.push('<span class="fq-chip fq-att fq-att-' + escapeAttr(att.tone) + (att.owner ? ' fq-blocked' : '')
+            + '" data-attention="' + escapeAttr(att.key) + '" title="' + escapeAttr(att.title) + '">' + escapeHtml(att.label) + '</span>');
         }
         if (it.status === 'in_review') {
           const label = _uxqReviewLabel(it);
@@ -55426,8 +55445,10 @@
         const blocked = !!it.needs_input && rawStatus !== 'closed';
         const unresolvedNotes = _uxqUnresolvedNotes(it);
         const hasUnresolved = rawStatus === 'closed' && unresolvedNotes.length > 0;
+        const att = _uxqAttention(it);
+        const ownerBlocked = blocked && !!att && (att.owner || att.key === 'gate');
         const noteShown = blocked && it.block_question ? visibleQueueNote(it.block_question) : noteFull;
-        const tip = (blocked && it.block_question ? ('Needs input: ' + visibleQueueNote(it.block_question) + '\n\n') : '')
+        const tip = (att ? (visibleQueueNote(att.title) + '\n\n') : '')
           + (hasUnresolved ? ('Closed with unresolved follow-up:\n' + unresolvedNotes.join('\n\n') + '\n\n') : '')
           + noteFull + '\n\nClick to view ticket details.';
         const nextPrio = { '': 'p2', p3: 'p2', p2: 'p1', p1: 'p0', p0: 'p0' };
@@ -55466,7 +55487,7 @@
         const runTitle = queuedToRun
           ? 'Queued to run - click to cancel'
           : (stageToneTitle ? stageToneTitle + ' - ' : '') + 'Run this ticket';
-        const statusTitle = blocked ? (_uxqRepliedAfterBlock(it) ? 'replied - awaiting worker' : 'needs input') : hasUnresolved ? 'closed - unresolved follow-up'
+        const statusTitle = (blocked && att) ? att.label : blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
           : (stageTone && !queuedToRun) ? stageToneTitle
           : unverifiedClaim ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
           : staleClaim ? 'stale claim - no current live worker'
@@ -55488,7 +55509,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(blocked && !ownerBlocked ? 'waiting' : status) + (att ? ' is-att-' + escapeAttr(att.tone) : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + (stageTone ? ' is-stage-' + stageTone : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(compactRef) + '</span>'
           + queueLabelHtml
