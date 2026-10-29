@@ -191,3 +191,21 @@ def test_lease_hides_session(env, monkeypatch):
     assert out["sessions"] == [] and out["leased"] == ["eeeeeeee-5555"]
     later = runaway.state(now=NOW + 25 * 3600, leases_file=leases, **kw)
     assert later["leased"] == []
+
+
+def test_dashboard_state_never_scans_on_the_request_thread(monkeypatch):
+    started = []
+    monkeypatch.setattr(runaway, "_MEMO", {"at": 0.0, "result": None, "running": False})
+    monkeypatch.setattr(runaway, "scan", lambda **kw: pytest.fail("scanned on the request thread"))
+
+    class FakeThread:
+        def __init__(self, target, **kw):
+            self.target = target
+
+        def start(self):
+            started.append(self.target)
+
+    monkeypatch.setattr(runaway.threading, "Thread", FakeThread)
+    assert runaway.state()["sessions"] == []
+    assert runaway.state()["sessions"] == []  # refresh already running: no second thread
+    assert started == [runaway._refresh_memo]

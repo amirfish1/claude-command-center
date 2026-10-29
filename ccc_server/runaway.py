@@ -30,8 +30,9 @@ that hides the session until it expires; a human turn resets the streak.
 Perf (CLAUDE.md gates): candidacy is stat-only (transcript mtime within
 ACTIVE_WINDOW_S); only candidates are read, and only the bytes appended since
 the last scan, with the parse state persisted to disk keyed by (inode, size).
-A cold candidate is read from its last INITIAL_TAIL_BYTES at most. Results are
-memoised for SCAN_TTL_S. No subprocesses.
+A cold candidate is read from its last INITIAL_TAIL_BYTES at most. The API
+answers from the last result and refreshes it on a background thread at most
+every SCAN_TTL_S, so a request never waits on a scan. No subprocesses.
 
 Engines: Claude (~/.claude/projects) and Codex ($CODEX_HOME/sessions).
 Stdlib-only.
@@ -57,7 +58,7 @@ LEASES_FILE = STATE_DIR / "runaway-leases.json"
 ACTIVE_WINDOW_S = 3 * 3600      # still running "into the sunset"
 CODEX_DAYS_BACK = 14            # a long-lived rollout stays in its start-day dir
 INITIAL_TAIL_BYTES = 16 * 1024 * 1024
-SCAN_TTL_S = 60.0
+SCAN_TTL_S = 300.0  # the card polls every 5 min; a rescan costs seconds in the busy server
 PRUNE_AFTER_S = 7 * 86400
 
 MIN_AUTO_TURNS = 6
@@ -100,7 +101,7 @@ _CLAUDE_ORIGINS = {"human": HUMAN, "scheduled": "timer", "peer": "peer",
                    "task_notification": "task", "system": "system"}
 
 _LOCK = threading.Lock()
-_MEMO = {"at": 0.0, "result": None}
+_MEMO = {"at": 0.0, "result": None, "running": False}
 
 
 # ---------------------------------------------------------------- classify
@@ -597,17 +598,35 @@ def set_lease(session_id, hours, kind="lease", now=None, leases_file=None):
     return data[session_id]
 
 
-def state(now=None, debug=False, leases_file=None, **kwargs):
-    """Flagged sessions minus leased / dismissed ones (memoised SCAN_TTL_S)."""
+def _refresh_memo():
+    try:
+        flagged, watch = scan()
+        _MEMO.update(at=time.time(), result=(flagged, watch))
+    finally:
+        with _LOCK:
+            _MEMO["running"] = False
+
+
+def state(now=None, debug=False, leases_file=None, wait=False, **kwargs):
+    """Flagged sessions minus leased / dismissed ones.
+
+    The default (dashboard) call never scans on the request thread: it
+    answers from the last result and, when that is older than SCAN_TTL_S,
+    starts one background refresh. Inside the busy server a warm rescan
+    takes seconds of GIL time, so it must not block a request. Explicit
+    roots (tests), debug and wait=True scan synchronously."""
     now = time.time() if now is None else now
-    with _LOCK:
-        memo = _MEMO["result"]
-        if debug or kwargs or memo is None or now - _MEMO["at"] >= SCAN_TTL_S:
-            flagged, watch = scan(now=now, debug=debug, **kwargs)
-            if not debug and not kwargs:
-                _MEMO.update(at=now, result=(flagged, watch))
-        else:
-            flagged, watch = memo
+    if debug or kwargs or wait:
+        flagged, watch = scan(now=now, debug=debug, **kwargs)
+    else:
+        with _LOCK:
+            stale = _MEMO["result"] is None or now - _MEMO["at"] >= SCAN_TTL_S
+            start = stale and not _MEMO.get("running")
+            if start:
+                _MEMO["running"] = True
+        if start:
+            threading.Thread(target=_refresh_memo, name="ccc-runaway-scan", daemon=True).start()
+        flagged, watch = _MEMO["result"] or ([], [])
     leases = _leases(now, leases_file)
     out = {"sessions": [e for e in flagged if e["session_id"] not in leases],
            "leased": sorted(sid for sid in leases),
@@ -626,7 +645,8 @@ def handle_api_get(handler, parsed=None):
     if parsed is not None:
         import urllib.parse
         debug = urllib.parse.parse_qs(parsed.query).get("debug", ["0"])[0] in ("1", "true")
-    handler.send_json({"ok": True, **state(debug=debug)})
+    out = state(debug=debug)
+    handler.send_json({"ok": True, "pending": _MEMO["result"] is None and not debug, **out})
 
 
 def handle_api_post(handler, path):
