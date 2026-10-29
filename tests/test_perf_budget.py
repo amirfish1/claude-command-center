@@ -5297,3 +5297,29 @@ def test_swr_cache_polled_endpoints_compute_once_and_never_block_when_stale():
     swr_cache.cached("e", bad, fresh_s=60)
     assert len(n) == 2
     swr_cache.clear()
+
+
+def test_codex_fetch_threads_reuses_rows_until_state_db_changes(tmp_path, monkeypatch):
+    """Polled stuck-summary/thread-row paths must not reopen SQLite per call."""
+    import sqlite3
+    from ccc_server import codex
+    db = tmp_path / "state_5.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT, updated_at INTEGER, created_at INTEGER)")
+    con.execute("INSERT INTO threads VALUES ('t1', '/x', 1, 1)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(codex, "_codex_state_db_candidates", lambda: [db])
+    monkeypatch.setattr(codex._core, "_codex_deleted_thread_ids", lambda: set())
+    codex._CODEX_THREADS_CACHE.clear()
+    opens = []
+    real = sqlite3.connect
+    monkeypatch.setattr(codex.sqlite3, "connect", lambda *a, **k: (opens.append(1), real(*a, **k))[1])
+    for _ in range(30):
+        assert [r["id"] for r in codex._codex_fetch_threads("id = ?", ("t1",), limit=1)] == ["t1"]
+    assert len(opens) == 1
+    w = real(db)
+    w.execute("INSERT INTO threads VALUES ('t2', '/y', 2, 2)")
+    w.commit()
+    w.close()
+    assert len(codex._codex_fetch_threads()) == 2

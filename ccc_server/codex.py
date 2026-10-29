@@ -8751,6 +8751,32 @@ def _schedule_codex_visibility_retry(session_id, spawn_entry=None, attempts=60, 
     return True
 
 
+_CODEX_THREADS_CACHE = {}
+_CODEX_THREADS_CACHE_LOCK = threading.Lock()
+
+
+def _codex_db_signature(db):
+    """(mtime_ns, size) of the state DB and its WAL, or None if unreadable.
+
+    Rows read from a Codex state DB cannot change unless one of these moves,
+    so polled callers (stuck-summary, thread rows) reuse them instead of
+    reopening SQLite and re-running PRAGMA + SELECT on every call.
+    """
+    sig = []
+    for suffix in ("", "-wal"):
+        try:
+            st = os.stat(str(db) + suffix)
+        except FileNotFoundError:
+            if suffix:
+                sig.append(None)
+                continue
+            return None
+        except OSError:
+            return None
+        sig.append((st.st_mtime_ns, st.st_size))
+    return tuple(sig)
+
+
 def _codex_fetch_threads(where="", params=(), limit=None):
     """Read rows from Codex's local thread index without creating files.
 
@@ -8759,6 +8785,14 @@ def _codex_fetch_threads(where="", params=(), limit=None):
     mode so a dashboard scan cannot create a missing DB or mutate state.
     """
     for db in _codex_state_db_candidates():
+        sig = _codex_db_signature(db)
+        cache_key = (str(db), where, tuple(params), limit)
+        if sig is not None:
+            with _CODEX_THREADS_CACHE_LOCK:
+                hit = _CODEX_THREADS_CACHE.get(cache_key)
+            if hit is not None and hit[0] == sig:
+                deleted = _core._codex_deleted_thread_ids()
+                return [dict(r) for r in hit[1] if str(r["id"]) not in deleted]
         try:
             con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.25)
             con.row_factory = sqlite3.Row
@@ -8801,9 +8835,13 @@ def _codex_fetch_threads(where="", params=(), limit=None):
                 sql += " LIMIT ?"
                 params = tuple(params) + (int(limit),)
             deleted = _core._codex_deleted_thread_ids()
-            rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()
-                    if str(r["id"]) not in deleted]
-            return rows
+            all_rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
+            if sig is not None and _codex_db_signature(db) == sig:
+                with _CODEX_THREADS_CACHE_LOCK:
+                    if len(_CODEX_THREADS_CACHE) > 64:
+                        _CODEX_THREADS_CACHE.clear()
+                    _CODEX_THREADS_CACHE[cache_key] = (sig, all_rows)
+            return [dict(r) for r in all_rows if str(r["id"]) not in deleted]
         except sqlite3.Error:
             continue
         finally:

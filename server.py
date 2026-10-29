@@ -5043,8 +5043,29 @@ def _archive_load_fail(err):
         })
 
 
+_CUSTOM_REPOS_MEMO = {"sig": None, "at": 0.0, "out": []}
+_CUSTOM_REPOS_MEMO_TTL_S = 15.0
+
+
 def _load_custom_repos():
-    """Return the list of user-picked repo paths (absolute, deduped, existing dirs)."""
+    """Return the list of user-picked repo paths (absolute, deduped, existing dirs).
+
+    Memoised by the file's (mtime_ns, size) plus a short TTL (a listed dir can
+    vanish): polled callers resolve() and is_dir() every line otherwise."""
+    try:
+        st = _CUSTOM_REPOS_FILE.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    memo = _CUSTOM_REPOS_MEMO
+    if memo["sig"] == sig and time.time() - memo["at"] < _CUSTOM_REPOS_MEMO_TTL_S:
+        return list(memo["out"])
+    out = _load_custom_repos_uncached()
+    memo.update(sig=sig, at=time.time(), out=list(out))
+    return out
+
+
+def _load_custom_repos_uncached():
     try:
         raw = _CUSTOM_REPOS_FILE.read_text()
     except OSError:
