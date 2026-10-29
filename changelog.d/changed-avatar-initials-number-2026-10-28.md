@@ -1,1 +1,0 @@
-- Session avatars for ideas and small bugs now show the repo initials above the ticket number.

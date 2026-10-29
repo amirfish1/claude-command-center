@@ -1,1 +1,0 @@
-- Speaker: clicking a message whose audio is still being prepared now makes that audio at full priority instead of queueing it behind other messages being prepared, so cold clicks start sooner.

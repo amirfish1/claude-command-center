@@ -1,1 +1,0 @@
-- Explain unfinished ticket states across queue views, including preparation, dependencies, review, worker assignment, and unverified claims. Separate working and idle counts, label the local machine scope, and prioritize visible queue snapshots so background probes cannot leave the panel showing a false zero.

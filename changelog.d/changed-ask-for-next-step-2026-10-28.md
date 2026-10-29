@@ -1,1 +1,0 @@
-- Open session-state cards with no next step now offer an **Ask for next step** button instead of a dead-end "Not stated."

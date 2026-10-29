@@ -1,1 +1,0 @@
-- Fixed the Working Now strip flashing "loading ticket…" / "loading workers" over live data on every WatchTower workers.json heartbeat: queue SSE hints now expire caches without un-rendering loaded rows, and repaints are coalesced into one revalidation per burst.

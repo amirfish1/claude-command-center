@@ -1,1 +1,0 @@
-- Phone sidebar: child sessions nested under a parent drop the repeated ticket avatar and use a smaller one-line title and preview, so they take less space.

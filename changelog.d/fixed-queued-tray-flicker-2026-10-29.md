@@ -1,1 +1,0 @@
-- Queued messages above the composer no longer flash in and out on every refresh; the tray stays put until the message is delivered.

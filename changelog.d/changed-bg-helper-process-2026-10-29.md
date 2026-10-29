@@ -1,1 +1,0 @@
-- The dashboard runs its heaviest background refreshers (GitHub queue watch, queue health, session-graph indexing) in a helper process, so session-list refreshes no longer wait behind them. `CCC_BG_HELPER=0` turns the helper off.

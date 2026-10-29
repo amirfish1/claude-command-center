@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.41.1] - 2026-10-29
+
+### Changed
+- The macOS app can keep the CCC server running in a background service (asked once on first launch). Quitting, relaunching or updating the app no longer stops the server or live streams, launchd restarts it after a crash, and the CCC menu has Restart Server and Stop Server and Quit. The dashboard launch agent is now `com.github.claude-command-center.server`, so it no longer collides with the app's bundle ID; an older install is migrated automatically and its plist is kept in `~/.claude/command-center/service-backup/`. New `./run.sh --start-service` and `--stop-service`.
+- Open session-state cards with no next step now offer an **Ask for next step** button instead of a dead-end "Not stated."
+- Session avatars for ideas and small bugs now show the repo initials above the ticket number.
+- The dashboard runs its heaviest background refreshers (GitHub queue watch, queue health, session-graph indexing) in a helper process, so session-list refreshes no longer wait behind them. `CCC_BG_HELPER=0` turns the helper off.
+- Messages delivered to agent sessions now carry a one-line `[sender: name (kind) · msg id]` attribution header (about 25 tokens) instead of the full JSON envelope (about 250 tokens); text you type into a session from the dashboard carries no header at all. The full record stays in the attribution journal.
+- Phone sidebar: child sessions nested under a parent drop the repeated ticket avatar and use a smaller one-line title and preview, so they take less space.
+- The boot splash now loads only the last day of sessions instead of the whole history, so page loads no longer build and parse a ~30MB list next to the sidebar's own read.
+- Reopening a conversation now shows the last-seen copy instantly (saved in the browser), marked "refreshing", and swaps in the fresh transcript when it arrives; a busy host no longer leaves the pane blank for seconds. Turn off with localStorage `ccc-conv-cache=0`.
+- Cross-machine memory (`ccc memory recall/brief/shipped --scope all`) is faster against SSH peers: the dashboard keeps a persistent SSH pipe to each paired peer, so a query skips the SSH connect and the remote Python startup (warm peer call p50 about 0.5-1.2 s down to about 0.3 s, Mac to VM).
+- Queue rows, chips, status dots, tooltips, the ticket detail and the "needs input" counts now say who a blocked ticket waits on. Red "needs you" is kept for a decision only you can make; a client or other outside party shows blue "waiting on <who>", answer delivery and a worker resuming show amber ("answer queued", "answer delivered", "working on answer", "awaiting worker"), and dependencies and deferrals stay neutral. A comment after a question no longer reads as an answer. Workers record the wait with `wt block --wait-on` / `wt wait-on`, or `POST /api/ux-fixes/wait-on`.
+- README: new first screen with the latest 33-second product video, fresh v5.41 screenshots (helper lanes, a session asking a question), a clearer pitch, and a single Docs list in place of a dozen one-link sections.
+- New-session folder picker collapses to one "Auto · repo · Change" line when smart repo (Jev) is on, matching the model line; Change shows the full picker.
+
+### Fixed
+- Dropping a session row onto another row inside an Active-mode object group moves it into that object again and the move persists.
+- Queue picker dropdowns and the Queues health strip no longer list queues retired via `wt queue archive` — CCC reads queue-config.json directly and now honors the `archived` flag like `wt status` does.
+- Long Codex sessions now show their first prompt at the top of the conversation, above "Load earlier messages", instead of starting mid-conversation.
+- ### Fixed
+- Deferred tickets with a queued run show a static neutral dot instead of an animated queued-run spinner.
+- Fixed the landing page still showing the v5.39 screenshot after the README moved to v5.41, and replaced the em dash shown for unknown ready/worker-slot counts in the queue workload summary with a plain dash.
+- A session's "needs you" dot now appears as soon as it asks for permission and clears within seconds of you answering, instead of lingering for about 90 seconds; a terminal session's next turn also shows as working from its first tool.
+- The needs-you badge no longer drops while a second tool in the same Claude session is still waiting for permission; it clears once the last pending ask is answered.
+- Keep productivity snapshots in memory when the state directory is read-only, so startup succeeds and polling reuses the completed report.
+- Queue rows on an in-progress ticket now show an amber "answer queued" or "answer sending" label while your answer is still being delivered. The q2 board's status dot and text for a blocked ticket now name who it is waiting on, instead of an orange "claim unverified" or "stale claim" warning.
+- In both the q2 board and the sidebar, an in-progress or stale-claimed ticket whose answer is still queued or being delivered now has an amber status word, dot and row tint. A live worker on a delivered answer shows a green "working on answer". A GitHub-synced ticket that is waiting on someone else no longer tells you to answer it on GitHub.
+- Queue board: deferred tickets read "deferred · in 1h" with a neutral dot instead of amber "open"; in-review tickets no longer inflate the Backlog "needs input" count; plain open and working rows are no longer tinted amber like an answer in flight.
+- Show deferred tickets first by return time, prioritize current deferrals over past answer delivery, label legacy blocked tickets, and summarize unfinished work, ready tickets, active work, and worker slots in the queue panel. Exclude future deferrals, duplicate followers, and readiness-gated tickets from the ready count.
+- Explain unfinished ticket states across queue views, including preparation, dependencies, review, worker assignment, and unverified claims. Separate working and idle counts, label the local machine scope, and prioritize visible queue snapshots so background probes cannot leave the panel showing a false zero.
+- Queued messages above the composer no longer flash in and out on every refresh; the tray stays put until the message is delivered.
+- ### Fixed
+- Deferred sidebar tickets keep a neutral status indicator despite historical worker claims or pipeline stages, and no longer show a contradictory ready badge.
+- Speaker: clicking a message whose audio is still being prepared now makes that audio at full priority instead of queueing it behind other messages being prepared, so cold clicks start sooner.
+- Stopping a session (Stop/Esc, or a steer that says STOP / "end your turn") now holds its queued after-turn messages instead of replaying them as new turns once the stopped turn ends. They appear in a "Held after Stop" block where each one can be released or cancelled; `ccc held <session>` does the same from the CLI, and `ccc send --steer --stop` marks a steer as a stop.
+- Sessions started from a terminal now show up in the sidebar within seconds, instead of waiting up to five minutes (or indefinitely on a heavily loaded machine) for the next session-list refresh.
+- Fixed the Working Now strip flashing "loading ticket…" / "loading workers" over live data on every WatchTower workers.json heartbeat: queue SSE hints now expire caches without un-rendering loaded rows, and repaints are coalesced into one revalidation per burst.
+
+### Security
+- Add `CCC_PROXY_SECRET` / `CCC_PROXY_SECRET_FILE` backend authentication boundary (`X-CCC-Proxy-Secret` or `Authorization: Bearer <secret>`) to protect against local-program and Docker bridge bypass when running behind an authenticating reverse proxy.
+
 ## [5.41.0] - 2026-10-28
 
 ### Added
@@ -4328,7 +4370,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.41.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.41.1...HEAD
+[5.41.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.1
 [5.41.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.0
 [5.40.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.40.0
 [5.39.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.39.0

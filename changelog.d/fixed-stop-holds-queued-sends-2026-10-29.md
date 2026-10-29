@@ -1,1 +1,0 @@
-- Stopping a session (Stop/Esc, or a steer that says STOP / "end your turn") now holds its queued after-turn messages instead of replaying them as new turns once the stopped turn ends. They appear in a "Held after Stop" block where each one can be released or cancelled; `ccc held <session>` does the same from the CLI, and `ccc send --steer --stop` marks a steer as a stop.

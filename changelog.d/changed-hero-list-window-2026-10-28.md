@@ -1,1 +1,0 @@
-- The boot splash now loads only the last day of sessions instead of the whole history, so page loads no longer build and parse a ~30MB list next to the sidebar's own read.

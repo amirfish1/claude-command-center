@@ -1,1 +1,0 @@
-- Cross-machine memory (`ccc memory recall/brief/shipped --scope all`) is faster against SSH peers: the dashboard keeps a persistent SSH pipe to each paired peer, so a query skips the SSH connect and the remote Python startup (warm peer call p50 about 0.5-1.2 s down to about 0.3 s, Mac to VM).

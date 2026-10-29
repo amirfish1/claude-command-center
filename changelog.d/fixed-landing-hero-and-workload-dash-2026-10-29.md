@@ -1,1 +1,0 @@
-- Fixed the landing page still showing the v5.39 screenshot after the README moved to v5.41, and replaced the em dash shown for unknown ready/worker-slot counts in the queue workload summary with a plain dash.

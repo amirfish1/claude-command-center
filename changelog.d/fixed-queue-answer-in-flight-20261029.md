@@ -1,1 +1,0 @@
-- Queue rows on an in-progress ticket now show an amber "answer queued" or "answer sending" label while your answer is still being delivered. The q2 board's status dot and text for a blocked ticket now name who it is waiting on, instead of an orange "claim unverified" or "stale claim" warning.

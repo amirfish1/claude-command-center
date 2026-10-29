@@ -1,1 +1,0 @@
-- New-session folder picker collapses to one "Auto · repo · Change" line when smart repo (Jev) is on, matching the model line; Change shows the full picker.
