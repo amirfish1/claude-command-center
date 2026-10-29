@@ -3834,16 +3834,15 @@
       + ' title="Close: archive this finished session" aria-label="Close: archive this finished session">Close</button>';
   }
 
-  // Chips at the end of an owner-facing row: answer a blocked handoff, take
-  // a handed-off ticket back, or open the session when there's no one-tap reply.
+  // Answer a blocked handoff, or open the session when there's no one-tap
+  // reply. The AUTO switch already lets the owner take back a handoff.
   function attentionChipsHtml(c, attn) {
     if (!attn) return '';
     if (attn.handoff === 'blocked') {
-      return '<button type="button" class="conv-attn-chip is-primary" data-role="handoff-answer" title="Answer the question; the session continues">Answer</button>'
-        + '<button type="button" class="conv-attn-chip" data-role="handoff-takeback" title="Take this back: CCC stops watching it">Take back</button>';
+      return '<button type="button" class="conv-attn-chip is-primary" data-role="handoff-answer" title="Answer the question; the session continues">Answer</button>';
     }
     if (attn.handoff === 'running') {
-      return '<button type="button" class="conv-attn-chip" data-role="handoff-takeback" title="Take this back: CCC stops watching it">Take back</button>';
+      return '';
     }
     if (attn.needsYou && !sessionQuickAction((c.session_state || {}).next_action)) {
       return '<button type="button" class="conv-attn-chip is-primary" data-role="attn-open" title="Open the session to decide">Open</button>';
@@ -3853,7 +3852,7 @@
 
   // AUTO switch under a ticket row's avatar: who drives the work. On (CCC
   // drives it to a close, animated), paused (it asked you), off (you drive).
-  // Clicking hands off or takes back through the same handlers as the chips.
+  // Clicking hands off or takes back through the handoff handlers.
   function autonomySwitchHtml(c, canHandOff) {
     const h = rowHandoff(c);
     if (!h && !canHandOff) return '';
@@ -40262,8 +40261,8 @@
       const _canHandOff = ideaTicketsOn() && !_childLaneRow && !isBacklogRow && !isGithubPrRow && !c.archived && !c.trashed
         && !rowHandoff(c) && !(c.idea_ticket && c.idea_ticket.closed) && !c.pending_spawn
         && lifecycleContext !== 'trash' && !sessionReadyToClose(c);
-      // Numbered-avatar rows carry the AUTO switch under the avatar instead.
-      const autoSwitchHtml = _ideaAvatarHtml(c) && !_childLaneRow
+      // Numbered avatars and all active handoffs carry the AUTO switch.
+      const autoSwitchHtml = !_childLaneRow && (_ideaAvatarHtml(c) || rowHandoff(c))
         ? autonomySwitchHtml(c, _canHandOff) : '';
       const handoffBtn = (_canHandOff && !autoSwitchHtml)
         ? '<button class="conv-lane-btn conv-handoff-btn" data-role="handoff" title="Hand off: CCC drives this to a close and only asks you if it gets stuck" aria-label="Hand off">&#129309;</button>'
