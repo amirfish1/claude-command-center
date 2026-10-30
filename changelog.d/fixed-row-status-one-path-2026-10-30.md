@@ -1,0 +1,1 @@
+- Sidebar rows no longer flip status (Working, Close, Next) a few seconds after they appear: the first paint and the live updater now share one set of status rules.

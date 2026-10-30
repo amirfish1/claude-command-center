@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { loadRowOutcomeView } = require('./row_outcome_view_harness.cjs');
 
 const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const start = source.indexOf('      // Outcome line (GOAL-1)');
@@ -13,7 +14,9 @@ function renderOutcome(row, overlay = row) {
   const escape = text => String(text).replace(/[&<>"]/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
   }[ch]));
+  const rowOutcomeView = loadRowOutcomeView({ _applyLiveOverlayToRow: () => overlay });
   return vm.runInNewContext('(function () {\n' + outcomeCode + '\nreturn outcomeHtml;\n})()', {
+    _outView: rowOutcomeView(row, {}),
     _readyToCloseRow: false, readyToCloseArchiveHtml: () => '',
     _childLaneRow: false, rowHandoff: () => null, sessionAttentionStep: () => null, attentionChipsHtml: () => '',
     c: row, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,

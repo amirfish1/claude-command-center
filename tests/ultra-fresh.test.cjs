@@ -27,6 +27,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
       const preSendPreviewFor = () => preSend;
       const _applyLiveOverlayToRow = c => c;
       const sessionReadyToClose = c => c.session_state?.completion?.valid && c.session_state?.completion?.ready_to_close;
+      let _ttsDirectBtn = null;
       window.sources = [];
       window.EventSource = class {
         constructor(url) {this.url = url; this.closed = false; sources.push(this);}

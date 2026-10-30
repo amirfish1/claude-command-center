@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { loadRowOutcomeView } = require('./row_outcome_view_harness.cjs');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const code = app.slice(app.indexOf('  function sessionReadyToClose('), app.indexOf('  function _trackedRowStatus('));
 const ready = vm.runInNewContext(code + '\nsessionReadyToClose;');
@@ -36,11 +37,16 @@ test('new work and real approval signals override an earlier completion summary'
   assert.equal(ready(completed, { sidecar_in_flight: true, sidecar_status: 'active' }), false);
 });
 
+// A row that is genuinely ready: an explicit review newer than its activity.
+const reviewedRow = { ...completed, mtime: 100, modified: 100,
+  session_state: {}, idea_ticket: { ready_to_close_reviewed_at: 110 } };
+
 test('ready explanation ends in a Close button instead of a CLOSE label (CCC-136)', () => {
   const start = app.indexOf('      // Outcome line (GOAL-1)');
   const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
   const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
-    c: { ...completed, session_state: {} }, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
+    c: reviewedRow, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
+    _outView: loadRowOutcomeView()(reviewedRow, { childLane: false }),
     _codexStateWorking: false, _readyToCloseRow: true, _childLaneRow: false,
     sessionIsOptimisticallySending: () => false, preSendPreviewFor: () => null,
     _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
@@ -58,7 +64,8 @@ test('child lanes get no Close or attention chips; they report to their parent',
   const start = app.indexOf('      // Outcome line (GOAL-1)');
   const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
   const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
-    c: { ...completed, session_state: {} }, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
+    c: reviewedRow, isBacklogRow: false, isGithubPrRow: false, _isWorkingRow: false,
+    _outView: loadRowOutcomeView()(reviewedRow, { childLane: true }),
     _codexStateWorking: false, _readyToCloseRow: true, _childLaneRow: true,
     sessionIsOptimisticallySending: () => false, preSendPreviewFor: () => null,
     _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
@@ -128,4 +135,22 @@ test('an explicit no-action value may explain delivered behavior without hiding 
   }
   assert.equal(ready({...row,session_state:{...row.session_state,
     next_step_user:'None — already applied.'}}, {state:'working'}), false);
+});
+
+test('first paint and the live patcher share one status rule set (CCC-273)', () => {
+  const paint = app.slice(app.indexOf('  function _ultraFreshPaint('), app.indexOf('  function _ultraFreshAccept('));
+  const start = app.indexOf('      // Outcome line (GOAL-1)');
+  const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
+  assert.match(paint, /rowOutcomeView\(c, \{ childLane:/);
+  assert.match(app, /const _outView = rowOutcomeView\(c, \{ childLane: _childLaneRow/);
+  for (const path of [paint, outcome]) {
+    assert.doesNotMatch(path, /sessionReadyToClose\(|sessionAttentionStep\(|sidebarSessionWorking\(/,
+      'status rules belong in rowOutcomeView, not in one paint path');
+  }
+  const view = loadRowOutcomeView();
+  const reviewed = { ...completed, mtime: 100, modified: 100, session_state: {}, idea_ticket: { ready_to_close_reviewed_at: 110 } };
+  assert.equal(view(reviewed, { childLane: false }).offerClose, true);
+  assert.equal(view(reviewed, { childLane: true }).offerClose, false);
+  assert.equal(view(reviewed, { childLane: true }).kind, 'ready');
+  assert.equal(view({ ...reviewed, archived: true }).offerClose, false);
 });

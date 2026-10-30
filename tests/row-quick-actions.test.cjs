@@ -29,7 +29,7 @@ test('row action replies, stale state, failure recovery and responsive rendering
       const _ultraFreshRow = () => window.row;
       const _ultraFreshCurrent = c => c;
       const _applyLiveOverlayToRow = c => c;
-      const _ultraFreshExplanation = c => ({kind:c.state === 'working' ? 'working' : 'next', text:c.session_state.next_step_user});
+      const rowOutcomeView = c => ({kind:c.state === 'working' ? 'working' : 'next', text:c.session_state.next_step_user});
       const postInjectInput = async (...args) => { sent.push(args); await new Promise(r => setTimeout(r, 120)); return sendFails ? {ok:false,error:'Offline'} : {ok:true,queued:sendQueued}; };
       const markSessionSending = () => { row.state = 'working'; syncRowQuickActions(); };
       const showOpToast = (...args) => toasts.push(args);
@@ -186,7 +186,7 @@ test('row speaker shows only for rows with an answer, and only on hover with a m
       const _ultraFreshRow = sid => window.rows[sid];
       const _ultraFreshCurrent = c => c;
       const _applyLiveOverlayToRow = c => c;
-      const _ultraFreshExplanation = c => ({kind:'update', text:'x', hasAnswer:c.hasAnswer});
+      const rowOutcomeView = c => ({kind:'update', text:'x', hasAnswer:c.hasAnswer});
       const showOpToast = () => {};
       ${helpers}
       window.syncAudio = syncRowAnswerAudio;

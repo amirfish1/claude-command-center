@@ -3514,7 +3514,12 @@
         || live.state === 'working' || live.codex_state === 'working'
         || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight));
   }
-  function _ultraFreshExplanation(c) {
+  // One rule set for a sidebar row's status line, shared by the first paint
+  // (_renderRow) and the in-place live patcher (_ultraFreshPaint), so a fix
+  // to either can't drift from the other (CCC-273). opts.childLane: lanes
+  // report to their parent and never offer Close. opts.liveToolInFlight: the
+  // renderer's in-flight tool pill also counts as work.
+  function rowOutcomeView(c, opts = {}) {
     const sid = c.session_id || c.id;
     const live = _applyLiveOverlayToRow(c);
     const sending = sessionIsOptimisticallySending(sid);
@@ -3525,28 +3530,33 @@
     const text = stale ? '' : raw.replace(/<session-state>[\s\S]*$/, '')
       .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280);
     const summary = stale ? {} : (c.session_state || {});
-    const working = sidebarSessionWorking(c, live);
+    const working = sidebarSessionWorking(c, live) || !!opts.liveToolInFlight;
     const ready = !working && !sending && sessionReadyToClose(c, live);
+    const offerClose = ready && !opts.childLane;
     const next = String(summary.next_step_user || '').trim();
     const hasNext = next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(next);
     const hasAnswer = !!text;
-    const attn = (working || ready || (hasNext && !rowHandoff(c))) ? null : sessionAttentionStep(c);
-    return working ? { label: 'Working', kind: 'working', hasAnswer, text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') }
-      : ready ? { label: 'Close', kind: 'ready', hasAnswer, text: summary.did || 'Reviewed as complete; archive when ready.' }
-      : attn ? { label: attn.label, kind: attn.kind, hasAnswer, text: attn.text }
-      : { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update', hasAnswer,
-        text: (hasNext && next) || summary.did || text || 'Completion assessment pending.' };
+    const did = String(summary.did || '').trim();
+    const base = { hasAnswer, ready, offerClose, attn: null };
+    if (working) return Object.assign(base, { label: 'Working', kind: 'working',
+      text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') });
+    // Archived/trashed rows read as finished but get no Close button.
+    if (ready || c.archived || c.trashed) return Object.assign(base, { label: 'Close', kind: 'ready',
+      text: did || 'Reviewed as complete; archive when ready.' });
+    const attn = (hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c);
+    if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
+    return Object.assign(base, { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
+      text: (hasNext && next) || did || text || 'Completion assessment pending.' });
   }
   function _ultraFreshPaint(sid) {
     const entry = _ultraFresh.entries.get(sid);
     const base = _ultraFreshRow(sid);
     if (!entry || !base) return;
     const c = _ultraFreshCurrent(base);
-    const info = _ultraFreshExplanation(c);
     for (const row of document.querySelectorAll('#convList .conv-item[data-session-id="' + CSS.escape(sid) + '"]')) {
       if (row.dataset.sessionId !== sid) continue;
-      // Child lanes just report back to their parent: never offer Close.
-      const offerClose = info.kind === 'ready' && !row.classList.contains('is-current-child-row');
+      const info = rowOutcomeView(c, { childLane: row.classList.contains('is-current-child-row') });
+      const offerClose = info.offerClose;
       const main = row.querySelector('.conv-main-row');
       if (main) {
         let dot = main.querySelector('.conv-working-dot');
@@ -3615,8 +3625,8 @@
       }
       // New message text invalidates an earlier Close recommendation. Archive
       // remains a manual row action; never archive or move the session here.
-      if (info.kind === 'ready') row.classList.add('is-ready-to-close');
-      if (info.kind !== 'ready') {
+      if (info.ready) row.classList.add('is-ready-to-close');
+      else {
         row.style.removeProperty('min-height');
         row.classList.remove('is-ready-to-close');
       }
@@ -17267,7 +17277,7 @@
       // A speaker is only worth showing when there is an answer to read
       // (CCC-256): empty, still-starting and placeholder rows get none.
       const readable = !!base && !base.pending_spawn && base.source !== 'backlog' && base.source !== 'github_pr'
-        && _ultraFreshExplanation(_ultraFreshCurrent(base)).hasAnswer;
+        && rowOutcomeView(_ultraFreshCurrent(base)).hasAnswer;
       if (!readable) {
         row.querySelectorAll('[data-role="read-row-answer"]').forEach(btn => {
           if (_ttsDirectBtn !== btn && !btn.disabled) btn.remove();
@@ -17336,7 +17346,7 @@
     const live = _applyLiveOverlayToRow(c);
     if (!sid || _rowQuickActionSending.has(sid) || live.needs_approval || live.question_waiting
         || c.last_event_type === 'user') return null;
-    const info = _ultraFreshExplanation(c);
+    const info = rowOutcomeView(c);
     const next = String((c.session_state || {}).next_step_user || '').trim();
     const action = sessionQuickAction((c.session_state || {}).next_action);
     if (!action || !next || info.kind !== 'next' || info.text !== next) return null;
@@ -40611,9 +40621,10 @@
       // a UI lie, so suppress it there too.
       // Live state first: the row's own state lags, so a session that resumed
       // work kept its yellow needs-you dot until the next list refresh.
-      const _readyToCloseRow = !isBacklogRow && !isGithubPrRow && !_isWorkingRow
-        && !sessionIsOptimisticallySending(c.session_id || c.id)
-        && sessionReadyToClose(c, _applyLiveOverlayToRow(c));
+      // Status line rules live in rowOutcomeView, shared with the live
+      // patcher (CCC-273).
+      const _outView = rowOutcomeView(c, { childLane: _childLaneRow, liveToolInFlight: _isWorkingRow });
+      const _readyToCloseRow = !isBacklogRow && !isGithubPrRow && _outView.ready;
       // A live approval/question ask counts at once: the row's own state only
       // turns 'waiting' on the next list refresh (CCC-245).
       const _nyLive = _applyLiveOverlayToRow(c);
@@ -40691,26 +40702,7 @@
         ? _latestRaw.replace(/<session-state>[\s\S]*$/, '')
           .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280)
         : '';
-      const _outSid = c.session_id || c.id || '';
-      const _outSending = !!_outSid && sessionIsOptimisticallySending(_outSid);
-      // Text captured at send time is the previous turn's, not this one's.
-      const _preSend = preSendPreviewFor(_outSid);
-      // A user event after the last reply also means the text is the
-      // previous turn's (covers sends from other tabs or the CLI).
-      const _latestStale = (_preSend !== null && _latestRaw === _preSend) || c.last_event_type === 'user';
-      // The server's four-state label covers the think gaps between tools,
-      // where no live tool pill shows but the turn is still running.
-      // The row's own state can lag the 5s live poll (and a reply that ended
-      // in a question leaves it 'waiting'), so trust the live overlay too.
-      const _lv = _applyLiveOverlayToRow(c);
-      const _liveAge = _lv.sidecar_ts ? Date.now() / 1000 - _lv.sidecar_ts : 9999;
-      const _liveFresh = !!(_lv.is_live && _lv.sidecar_status === 'active' && _lv.sidecar_tool
-        && _liveAge < (_lv.sidecar_in_flight ? 300 : 60));
-      // Codex's turn state bridges gaps between tools. The generic state
-      // can read idle during those gaps while the WIP timer keeps running.
-      const _outWorking = _outSending || _isWorkingRow || _codexStateWorking
-        || _lv.codex_state === 'working' || c.state === 'working'
-        || _lv.state === 'working' || (_liveFresh && !!_lv.sidecar_in_flight);
+      const _outWorking = _outView.kind === 'working';
       if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow)) {
         const _did = ((_ss && _ss.did) || '').trim();
         const _next = ((_ss && _ss.next_step_user) || '').trim();
@@ -40718,24 +40710,7 @@
         // One label carries the state (no separate status column):
         // Working + current activity, Next + user action, Update + summary, or Close
         // after an explicit review or passing completion assessment.
-        let _label, _kind, _stepText, _attn = null;
-        if (_outWorking) {
-          _label = 'Working'; _kind = 'working';
-          const _turnText = (_latest && !_latestStale) ? _latest : '';
-          _stepText = _turnText
-            || (_outSending ? 'Sent, waiting for the first reply…' : 'Working…');
-        } else if (_readyToCloseRow || c.archived || c.trashed) {
-          _label = 'Close'; _kind = 'ready'; _stepText = _did || 'Reviewed as complete; archive when ready.';
-        } else if ((_attn = (_hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c))) {
-          _label = _attn.label; _kind = _attn.kind; _stepText = _attn.text;
-        } else if (_hasNext) {
-          // A next step is always "yours"; one green label, no separate
-          // NEEDS YOU variant.
-          _label = 'Next'; _kind = 'next';
-          _stepText = _next;
-        } else {
-          _label = 'Update'; _kind = 'update'; _stepText = _did || _latest || 'Completion assessment pending.';
-        }
+        const _label = _outView.label, _kind = _outView.kind, _stepText = _outView.text, _attn = _outView.attn;
         _outcomeKind = _kind || 'update';
         _outcomeText = _stepText || _did;
         const _assessment = _ss && _ss.completion;
@@ -40751,7 +40726,7 @@
           + (_hasNext ? 'Next step: ' + _next : '')
           + (_latest ? ((_did || _hasNext) ? '\n' : '') + 'Last reply: ' + _latest : '') + _assessmentTip;
         // A finished row's label is its Close button, after the text.
-        const _closeBtn = _kind === 'ready' && _readyToCloseRow && !_childLaneRow;
+        const _closeBtn = _readyToCloseRow && _outView.offerClose;
         outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + (_closeBtn ? ' has-close-btn' : '') + '" title="' + escapeAttr(_outTip) + '">'
             + '<span class="conv-outcome-step"' + (_closeBtn ? '' : ' data-label="' + escapeAttr(_label) + '"') + '>' + escapeHtml(_stepText) + '</span>'
