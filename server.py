@@ -45094,8 +45094,9 @@ def main():
     _archive_deferred_boot.ensure_running()
     # Next.js and Claude/Agy detached background scanner
     threading.Thread(target=_system_processes_scanner_loop, daemon=True, name="ccc-system-processes-scanner").start()
-    # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new
-    # messages from +17035592946 into the CHUCK session via inject-input.
+    # iMessage relay: when ~/.claude/command-center/imessage-relay.json names
+    # a contact and a session, polls chat.db every 2 minutes and injects that
+    # contact's new messages into the session. No config, no polling.
     threading.Thread(target=_chuck_imessage_poller, daemon=True).start()
     # Keep installed harnesses and Anthropic's exact model catalog current.
     # The first pass runs immediately in the daemon; failures are recorded for
@@ -45219,12 +45220,32 @@ def main():
 
 
 # ── Chuck iMessage Poller ─────────────────────────────────────────────────────
-_CHUCK_PHONE = "+17035592946"
-_CHUCK_SESSION_ID = "b1216dcf-99b2-48bf-85af-cb0ecea4f1ca"
+# The contact and target session are personal, so they live in a local file,
+# never in the source: {"phone": "+1...", "session_id": "<uuid>"}.
+_CHUCK_CONFIG_FILE = Path.home() / ".claude" / "command-center" / "imessage-relay.json"
+_CHUCK_PHONE = ""
+_CHUCK_SESSION_ID = ""
 _CHUCK_LAST_SEEN_FILE = Path("/tmp/chuck-loop-last-seen.txt")
 _IMESSAGE_DB = Path.home() / "Library" / "Messages" / "chat.db"
 _CHUCK_POLL_INTERVAL = 120  # seconds
 _APPLE_EPOCH_OFFSET = 978307200  # seconds between Unix epoch and Apple epoch (2001-01-01)
+
+
+def _chuck_load_config() -> bool:
+    """Load the relay contact and session; False when unconfigured."""
+    global _CHUCK_PHONE, _CHUCK_SESSION_ID
+    try:
+        cfg = json.loads(_CHUCK_CONFIG_FILE.read_text())
+    except Exception:
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    phone = str(cfg.get("phone") or "").strip()
+    session_id = str(cfg.get("session_id") or "").strip()
+    if not phone or not session_id:
+        return False
+    _CHUCK_PHONE, _CHUCK_SESSION_ID = phone, session_id
+    return True
 
 
 def _chuck_read_last_seen() -> int:
@@ -45303,6 +45324,8 @@ def _chuck_is_quiet_hours() -> bool:
 
 def _chuck_imessage_poller() -> None:
     """Background daemon thread: poll chat.db, inject new Chuck messages into CHUCK session."""
+    if not _chuck_load_config():
+        return
     # Stagger startup so the server is fully bound before first inject attempt.
     time.sleep(15)
     while True:
