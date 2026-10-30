@@ -3773,9 +3773,17 @@
     }
     return owner === 'amir' || owner === 'human' ? 'user' : owner;
   }
+  // AUTO clicks flip the switch at once; the server catches up later. Each
+  // entry holds the wanted state until the server agrees or it expires.
+  const _handoffOptimistic = new Map();
   function rowHandoff(c) {
     const h = c && c.idea_ticket && !c.idea_ticket.closed && c.idea_ticket.handoff;
-    return h && (h.state === 'running' || h.state === 'blocked' || h.state === 'waiting') ? h : null;
+    const live = h && (h.state === 'running' || h.state === 'blocked' || h.state === 'waiting') ? h : null;
+    const sid = c && (c.session_id || c.id);
+    const want = sid && _handoffOptimistic.get(sid);
+    if (!want) return live;
+    if (Date.now() > want.until || !!live === want.on) { _handoffOptimistic.delete(sid); return live; }
+    return want.on ? { state: 'running' } : null;
   }
   function sessionAttentionStep(c) {
     const h = rowHandoff(c);
@@ -17461,6 +17469,17 @@
       body.text = text.trim();
     }
     btn.disabled = true;
+    // The AUTO switch shows its new state immediately, not after the server
+    // round trip and list refresh; a failure puts it back.
+    const autoSwitch = btn.classList.contains('conv-auto-switch') && role !== 'handoff-answer';
+    const autoBefore = autoSwitch ? btn.className : '';
+    if (autoSwitch) {
+      const on = role === 'handoff';
+      _handoffOptimistic.set(sid, { on, until: Date.now() + 60000 });
+      btn.classList.remove('is-on', 'is-off', 'is-paused');
+      btn.classList.add(on ? 'is-on' : 'is-off');
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
     try {
       const data = await ccPostJson(url, body);
       if (!data || !data.ok) throw new Error((data && data.error) || 'Request failed');
@@ -17470,6 +17489,11 @@
       refreshConversationList();
     } catch (error) {
       btn.disabled = false;
+      if (autoSwitch) {
+        _handoffOptimistic.delete(sid);
+        btn.className = autoBefore;
+        btn.setAttribute('aria-pressed', role === 'handoff' ? 'false' : 'true');
+      }
       showOpToast(String(error.message || error), 'error');
     }
   }, true);
@@ -41188,18 +41212,13 @@
         currentChildDepth: entry.item.depth,
         subagentCompact: false,
       }))).join('');
-      const collapseFooterHtml = (isCollapsible && expanded)
-        ? '<div class="conv-subagent-collapse-footer">'
-          + '<button type="button" class="conv-subagent-collapse-btn" data-role="subagent-cluster-toggle" data-subagent-parent-sid="' + escapeAttr(parentId) + '" title="Collapse child sessions">'
-          + '<span class="conv-subagent-cluster-arrow">&#9652;</span> Collapse ' + total + ' ' + (total === 1 ? 'lane' : 'lanes')
-          + '</button>'
-          + '</div>'
-        : '';
       return '<div class="conv-subagent-cluster' + (expanded ? ' is-expanded' : '')
         + (cluster.familyNest ? ' is-family-nest' : '') + '"'
         + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '">'
         + _renderRow(rootItem.card, parentOpts)
-        + '<div class="conv-subagent-cluster-body">' + descendantsHtml + collapseFooterHtml + '</div>'
+        // The "↳ N lanes" chip on the parent toggles the lanes both ways, so
+        // the body carries no separate Collapse footer.
+        + '<div class="conv-subagent-cluster-body">' + descendantsHtml + '</div>'
         + '</div>';
     };
     // Active list keeps the date-gap separators so morning/evening
@@ -75973,7 +75992,13 @@
       resources.add('archive');
       const inFlightQueueRead = _uxqItemsPromise;
       const inFlightWorkerRead = _wtWorkersPromise;
-      _uxqItemsVersion += 1;
+      // Do NOT bump _uxqItemsVersion here. This is a passive invalidation, not
+      // a confirmed mutation: bumping it discards every in-flight
+      // /api/queue/list read mid-parse, and under queue churn (workers.json
+      // heartbeats) the multi-MB read starves forever — the ticket cache
+      // never lands and the board pins on "loading tickets". The refresh
+      // chain below already serializes a fresh fetch behind the in-flight
+      // one, so ordering is preserved without discarding reads.
       _uxqHealthAppliedSeq = ++_uxqHealthReqSeq;
       _wtWorkersVersion += 1;
       _uxqItemsCache.ts = 0;
@@ -76425,10 +76450,13 @@
 
   // Second line of an idea-ticket row: its ticket chip, plus the recorded-
   // ticket history only when it holds more than the idea ticket itself.
+  // A numbered avatar already names the ticket, so that row keeps no second
+  // line at all: the owner asked for compact ticket rows.
   function _ideaRowLine(c) {
+    if (_ideaAvatarHtml(c)) return '';
     const ref = c.idea_ticket.ref;
     const others = _uxFixesWorkerTicketsForRow(c).some(t => t && t.ref !== ref);
-    return (_ideaAvatarHtml(c) ? '' : '<div class="conv-idea-line">' + ideaTicketChipHtml(c) + '</div>')
+    return '<div class="conv-idea-line">' + ideaTicketChipHtml(c) + '</div>'
       + (others ? _uxFixesWorkerHistoryHtml(c) : '');
   }
 
