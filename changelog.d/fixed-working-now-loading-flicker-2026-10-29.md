@@ -1,0 +1,1 @@
+- Fixed the Working Now strip sticking on "loading ticket…" / "loading workers": queue SSE invalidations no longer discard in-flight ticket-list reads mid-parse (which starved the cache under workers.json heartbeat churn), freshness expiry no longer un-renders loaded rows, and event-driven repaints are coalesced into one revalidation per burst.
