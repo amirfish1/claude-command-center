@@ -27468,6 +27468,12 @@ def _parse_conversation_event_unattributed(ev, line_num):
         stderr_text = _extract_attachment_text(att.get("stderr") or ev.get("stderr"))
 
         is_hook = bool(hook_event or hook_name or att_type.startswith("hook") or att_type == "async_hook_response")
+        # A hook that answers with an empty JSON object/array/null (e.g. a
+        # plugin's PostToolUse no-op printing "{}") said nothing: no row.
+        if stdout_text.strip() in ("{}", "[]", "null"):
+            stdout_text = ""
+        if content_text.strip() in ("{}", "[]", "null"):
+            content_text = ""
         if not is_hook or not (stdout_text or content_text or stderr_text):
             return None
 

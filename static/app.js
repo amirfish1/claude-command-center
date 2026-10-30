@@ -69580,6 +69580,8 @@
           ? _linkifyEscapedUrls(escapeHtml(rawText))
           : escapeHtml(rawText);
         div.classList.add('attachment-event');
+        // Compact mode hides routine hook output; failures stay visible.
+        if (ev.stderr || (ev.exit_code != null && Number(ev.exit_code) !== 0)) div.classList.add('hook-failed');
         div.innerHTML = '<details class="hook-attachment-details"' + (convVerboseOn() ? ' open' : '') + '>'
           + '<summary class="hook-attachment-summary">'
           + '<span class="hook-arrow" aria-hidden="true">▶</span>'

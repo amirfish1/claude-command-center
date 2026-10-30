@@ -107,3 +107,22 @@ def test_empty_hook_attachment_ignored():
         },
     }
     assert server._parse_conversation_event(event, 11) is None
+
+
+def test_empty_json_hook_stdout_is_dropped():
+    # CCC-271: a plugin PostToolUse hook printing "{}" after every Bash call
+    # flooded transcripts with empty HOOK rows.
+    event = {
+        "type": "attachment",
+        "timestamp": "2026-10-29T23:54:14.276Z",
+        "attachment": {
+            "type": "hook_success",
+            "hookName": "PostToolUse:Bash",
+            "hookEvent": "PostToolUse",
+            "content": "",
+            "stdout": "{}\n",
+            "stderr": "",
+            "exitCode": 0,
+        },
+    }
+    assert server._parse_conversation_event(event, 7) is None

@@ -1,0 +1,1 @@
+- Claude transcripts no longer show a "HOOK {}" row after every tool call when a plugin hook replies with empty JSON, and compact view hides successful hook rows (failures stay visible).
