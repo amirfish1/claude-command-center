@@ -1,0 +1,1 @@
+- The AUTO switch changes colour as soon as you click it instead of waiting for the server; it reverts if the request fails.

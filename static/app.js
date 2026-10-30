@@ -17490,9 +17490,11 @@
     } catch (error) {
       btn.disabled = false;
       if (autoSwitch) {
+        // A repaint may have replaced the clicked switch: restore every copy.
         _handoffOptimistic.delete(sid);
+        document.querySelectorAll('#convList .conv-item[data-session-id="' + CSS.escape(sid) + '"] .conv-auto-switch')
+          .forEach(el => { el.className = autoBefore; el.setAttribute('aria-pressed', role === 'handoff' ? 'false' : 'true'); });
         btn.className = autoBefore;
-        btn.setAttribute('aria-pressed', role === 'handoff' ? 'false' : 'true');
       }
       showOpToast(String(error.message || error), 'error');
     }

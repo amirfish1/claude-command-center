@@ -33577,3 +33577,27 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   box-shadow: none;
   border-radius: 0;
 }
+
+/* Compact lane clusters (owner request): no tree rail, no divider lines
+   between the parent and its lanes, and no reserved empty second step line
+   that pushed the "↳ N lanes" chip down. One divider closes the cluster. */
+#convList#convList .conv-subagent-cluster.is-expanded > .conv-subagent-cluster-body {
+  border-left: 0;
+  padding-left: 0;
+}
+/* !important + doubled id: the row-divider rules pin border-bottom with
+   !important at #convList#convList specificity. */
+#convList#convList .conv-subagent-cluster.is-expanded > .conv-item.conv-item,
+#convList#convList .conv-subagent-cluster-body > .conv-item.conv-item:not(:last-child) {
+  border-bottom-color: transparent !important;
+}
+#convList#convList .conv-subagent-cluster > .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) .conv-outcome-step {
+  min-height: 0;
+}
+@media not all and (pointer: coarse) {
+  #convList#convList .conv-subagent-cluster .conv-row-read {
+    min-width: 22px;
+    min-height: 22px;
+    align-self: center;
+  }
+}
