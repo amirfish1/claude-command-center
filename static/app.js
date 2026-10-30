@@ -2265,6 +2265,28 @@
         drain();
       });
     };
+    // A hover prefetch parked in the pool becomes the user's request once
+    // they click that row: send it now instead of behind every queued poll
+    // (CCC-143: opens waited 10-70s with pool_queued 10-17).
+    stats.promote = function promoteQueuedFetch(matches) {
+      let n = 0;
+      for (let i = queue.length - 1; i >= 0; i--) {
+        const task = queue[i];
+        const rawUrl = typeof task.input === 'string' ? task.input : (task.input && task.input.url) || '';
+        if (!matches(rawUrl)) continue;
+        queue.splice(i, 1);
+        if (task.signal) task.signal.removeEventListener('abort', task.onAbort);
+        stats.direct += 1;
+        stats.directActive += 1;
+        const settle = () => { stats.directActive = Math.max(0, stats.directActive - 1); drain(); };
+        const pending = nativeFetch(task.input, task.init);
+        pending.then(settle, settle);
+        pending.then(task.resolve, task.reject);
+        n += 1;
+      }
+      stats.queued = queue.length;
+      return n;
+    };
     window.__cccConnectionGate = stats;
   })();
 
@@ -50480,7 +50502,7 @@
     }
     if (id && pane.conversationId !== id && typeof _prefetchConversationTail === 'function') {
       try {
-        if ((sessionSourceByConv[id] || '') !== 'hermes') _prefetchConversationTail(id);
+        if ((sessionSourceByConv[id] || '') !== 'hermes') _prefetchConversationTail(id, true);
       } catch (_) {}
     }
     const staleQueuedTray = getConvInputBarForPane(paneId)?.closest('.conv-pane')?.querySelector('.queued-steer-tray');
@@ -59132,12 +59154,23 @@
   }
   const CONV_TAIL_PREFETCH_MAX = 4;
   const CONV_TAIL_PREFETCH_TTL_MS = 30000;
-  function _prefetchConversationTail(id) {
+  // user: the row is being opened (click, restore, programmatic select), so
+  // the fetch skips the background pool even without a recent pointerdown.
+  function _prefetchConversationTail(id, user) {
     if (!id || id.startsWith('backlog-') || id.startsWith('spawning-')) return null;
     if (id.startsWith('pkood-') || id.startsWith('issue-')) return null;
     const existing = _convTailPrefetches.get(id);
-    if (existing) return existing;
-    const pending = _fetchConvJsonTimed('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), {
+    if (existing) {
+      const g = window.__cccConnectionGate;
+      if (user && g && typeof g.promote === 'function') {
+        const prefix = '/api/conversations/' + encodeURIComponent(id) + '?tail=';
+        try { g.promote(u => u.indexOf(prefix) >= 0); } catch (_) {}
+      }
+      return existing;
+    }
+    const pending = _fetchConvJsonTimed('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), user ? {
+      cache: 'no-store', cccPriority: 'user',
+    } : {
       cache: 'no-store',
     }).catch(() => null);
     _convTailPrefetches.set(id, pending);
@@ -59257,7 +59290,7 @@
   }
   function prefetchRestoredConversationTails() {
     for (const pane of splitState.panes) {
-      if (pane && pane.conversationId) _prefetchConversationTail(pane.conversationId);
+      if (pane && pane.conversationId) _prefetchConversationTail(pane.conversationId, true);
     }
   }
   function _convPrefetchSchedule(id) {
@@ -59934,7 +59967,7 @@
       }
       const _loadNet = async () => {
         if (_freshOpen && !_loadingEarlier) {
-          return _fetchConvJsonTimed(_url, undefined, true);
+          return _fetchConvJsonTimed(_url, { cccPriority: 'user' }, true);
         }
         const res = await fetch(_url, _loadingEarlier ? {
           cccPriority: 'user',
