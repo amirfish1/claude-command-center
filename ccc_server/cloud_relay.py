@@ -1,7 +1,7 @@
 """CCC Cloud Relay — local (device) client.
 
-Stdlib-only implementation of the device side of the CCC Cloud Relay protocol
-(docs/cloud-relay/PROTOCOL.md, §2/§3/§4/§7). The device only ever makes
+Stdlib-only implementation of the device side of the CCC Cloud Relay protocol.
+The device only ever makes
 OUTBOUND HTTPS requests: it pushes a minimized state snapshot and long-polls
 for commands, then validates and executes every command itself against its own
 loopback CCC API — exactly as a local caller would. The relay is not a proxy.
@@ -81,7 +81,7 @@ CAP_ACTION = 2000
 CAP_QUESTION_TEXT = 4000
 # Complete canonical tool input of a pending approval (hard cap, chars of JSON).
 # Over the cap the text is cut and `action_input_truncated` is set; a truncated
-# input can never be allowed by an agent. See PROTOCOL.md "Approval input".
+# input can never be allowed by an agent, as required by the relay wire contract.
 CAP_ACTION_INPUT = _rc.INPUT_CAP
 MAX_SESSIONS = 200
 MAX_ATTENTION = 50

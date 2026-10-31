@@ -45039,7 +45039,7 @@ else:
     from ccc_server import phone_access
 # CCC Cloud Relay (ccc_server/cloud_relay.py): opt-in, outbound-only device
 # client for the hosted relay. Namespace import; the manager singleton below
-# owns its state. See docs/cloud-relay/PROTOCOL.md and SECURITY.md.
+# owns its state. See ccc_server/cloud_relay.py and SECURITY.md.
 from ccc_server import cloud_relay as _cloud_relay
 # Consent gate for agent-config writes: namespace import (generic names).
 if "ccc_server.config_consent" in sys.modules:

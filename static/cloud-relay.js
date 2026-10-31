@@ -4,7 +4,7 @@
  * window.cccCloudRelay.open()). Optional, outbound-only device pairing with a
  * hosted relay. It does NOT change local or Tailscale access. Every
  * /api/cloud-relay/* endpoint is localhost-only on the server
- * (ccc_server/cloud_relay.py, docs/cloud-relay/PROTOCOL.md).
+ * (ccc_server/cloud_relay.py).
  */
 (function () {
   'use strict';

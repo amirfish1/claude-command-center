@@ -4,7 +4,7 @@ Audience: engineers and security reviewers. This document describes the trust
 architecture of CCC Cloud in detail, public-safe. It is derived from the
 normative sources and must not contradict them on any line:
 
-- The wire contract: [`PROTOCOL.md`](./PROTOCOL.md) (and Appendix A).
+- The wire contract is maintained separately from this public repository.
 - The hosted service's data classification, privacy statement, and threat
   model (in the `ccc-cloud` repository).
 - The local client: `cloud_relay.py` in this repository.

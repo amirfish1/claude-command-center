@@ -7,9 +7,9 @@ metadata about what needs your attention, never your code or your work. You can
 run CCC forever without it — CCC Cloud is something you turn on, and can turn
 off just as easily.
 
-This guide is the user-facing companion to the wire contract in
-[`PROTOCOL.md`](./PROTOCOL.md) and the security detail in
-[`SECURITY-AND-PRIVACY.md`](./SECURITY-AND-PRIVACY.md).
+This guide covers user-facing setup and controls. Security details are in
+[`SECURITY-AND-PRIVACY.md`](./SECURITY-AND-PRIVACY.md). The wire protocol
+specification is maintained separately from this public repository.
 
 ---
 
