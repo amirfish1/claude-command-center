@@ -3568,7 +3568,7 @@
     if (c.archived || c.trashed) return Object.assign(base, { label: c.trashed ? 'Archived' : 'Finished', kind: 'ready',
       text: did || 'Closed session.' });
     if (ready) return Object.assign(base, { label: 'Ready to close', kind: 'ready',
-      text: 'Ready to close · ' + (did || 'Reviewed as complete; archive when ready.') });
+      text: (offerClose ? 'Ready to close · ' : '') + (did || 'Reviewed as complete; archive when ready.') });
     const attn = (hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c);
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
     return Object.assign(base, { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
