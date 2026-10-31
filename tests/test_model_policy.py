@@ -293,11 +293,28 @@ class AstraGuardrailPromptTests(_PolicyFixture):
         self.assertIn("Do the thing.", prefix)
         self.assertIn("astra-guardrail", prefix)
 
-    def test_no_injection_without_confirm(self):
-        self.assertEqual(server._astra_guardrail_prompt_prefix("codex", "gpt-6-astra", False), "")
+    def test_astra_injects_without_confirm(self):
+        prefix = server._astra_guardrail_prompt_prefix("codex", "gpt-6-astra", False)
+        self.assertIn("Do the thing.", prefix)
 
     def test_no_injection_for_allowed_model(self):
         self.assertEqual(server._astra_guardrail_prompt_prefix("codex", "gpt-5.6-terra", True), "")
+
+    def test_no_injection_for_unconfirmed_other_blocked_model(self):
+        self.block("gpt-6-astra", "gpt-5.6-sol")
+        self.assertEqual(server._astra_guardrail_prompt_prefix("codex", "gpt-5.6-sol", False), "")
+        self.assertIn("Do the thing.", server._astra_guardrail_prompt_prefix("codex", "gpt-5.6-sol", True))
+
+    def test_unblocked_astra_still_gets_guardrail(self):
+        self.block()
+        prefix = server._astra_guardrail_prompt_prefix("codex", "gpt-6-astra", False)
+        self.assertIn("Do the thing.", prefix)
+        self.assertIn("allowed on this machine", prefix)
+        self.assertNotIn("deny-listed model", prefix)
+
+    def test_no_injection_when_skill_missing(self):
+        self.skill_file.unlink()
+        self.assertEqual(server._astra_guardrail_prompt_prefix("codex", "gpt-6-astra", False), "")
 
     def test_no_injection_for_other_engines(self):
         self.assertEqual(server._astra_guardrail_prompt_prefix("claude", "gpt-6-astra", True), "")

@@ -8345,6 +8345,7 @@ def _model_policy_error(model):
     )
 
 
+ASTRA_MODEL_KEY = "gpt-6-astra"
 ASTRA_GUARDRAIL_SKILL_FILE = Path.home() / ".claude" / "skills" / "astra-guardrail" / "SKILL.md"
 _ASTRA_GUARDRAIL_CACHE = {"sig": None, "text": ""}
 
@@ -8357,10 +8358,16 @@ def _astra_guardrail_prompt_prefix(engine, model, confirm_blocked_model):
     spawn deliberately opts a blocked model in (confirm_blocked_model=true,
     the only way an astra spawn reaches this far), push the guardrail's own
     SKILL.md into the prompt instead of hoping it gets picked up on its own.
-    Codex-only: astra is a Codex model, and this is read fresh (mtime/size
-    cached) so editing the skill doesn't need a server restart.
+    Astra itself gets it on every Codex spawn, blocked or not: a machine that
+    allows astra still wants its spend rules. Codex-only: astra is a Codex
+    model, and this is read fresh (mtime/size cached) so editing the skill
+    doesn't need a server restart.
     """
-    if engine != "codex" or not confirm_blocked_model or not _model_policy_blocks(model):
+    if engine != "codex":
+        return ""
+    key = _model_catalog_key(model or _codex_default_model())
+    blocked = bool(confirm_blocked_model) and _model_policy_blocks(key)
+    if not blocked and not key.startswith(ASTRA_MODEL_KEY):
         return ""
     path = ASTRA_GUARDRAIL_SKILL_FILE
     try:
@@ -8377,11 +8384,22 @@ def _astra_guardrail_prompt_prefix(engine, model, confirm_blocked_model):
         cache["sig"] = sig
     if not cache["text"]:
         return ""
+    if blocked:
+        intro = (
+            "You are running as a deny-listed model (gpt-6-astra) that was "
+            "explicitly confirmed for this one task. Follow this guardrail for "
+            "the whole session -- it is not optional reading:\n\n"
+        )
+    else:
+        intro = (
+            "You are running as gpt-6-astra, which is allowed on this machine "
+            "(it is not on the model-policy deny-list), so skip the guardrail's "
+            "opt-in and deny-list steps. Its spend rules still apply for the "
+            "whole session -- this is not optional reading:\n\n"
+        )
     return (
         "<astra-guardrail>\n"
-        "You are running as a deny-listed model (gpt-6-astra) that was "
-        "explicitly confirmed for this one task. Follow this guardrail for "
-        "the whole session -- it is not optional reading:\n\n"
+        f"{intro}"
         f"{cache['text']}\n"
         "</astra-guardrail>\n\n"
     )
