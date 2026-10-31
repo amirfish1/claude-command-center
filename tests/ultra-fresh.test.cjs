@@ -71,7 +71,7 @@ test('spawn text deltas expose authored choices when the complete footer arrives
   assert.equal(frames[1].next_step_user, 'Choose the report scope.');
 });
 
-test('a streamed decision changes section on the next render frame despite a permanent hover pause', async () => {
+test('streamed attention changes reorder within Active despite a permanent hover pause', async () => {
   const fn = name => {
     const start = app.indexOf('  function ' + name + '(');
     return app.slice(start, app.indexOf('\n  }\n', start) + 4);
@@ -79,8 +79,7 @@ test('a streamed decision changes section on the next render frame despite a per
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
-    await page.setContent('<style>.conv-item{min-height:80px}#convList{height:400px}</style><div id="convList"><section data-session-section="needs-you"></section>'
-      + '<section data-session-section="active"><div class="conv-item" data-session-id="s0">'
+    await page.setContent('<style>.conv-item{min-height:80px}#convList{height:400px}</style><div id="convList"><section data-session-section="active"><div id="other-decision"></div><div class="conv-item" data-session-id="s0" data-lifecycle-group="active">'
       + '<div class="wa-line2"><span class="wa-preview"></span></div></div></section></div>');
     await page.addScriptTag({ content: `
       const conversationsData = [{session_id:'s0', idea_ticket:{ref:'TASK-1'}, state:'idle', modified:1}];
@@ -99,8 +98,12 @@ test('a streamed decision changes section on the next render frame despite a per
       window.renders = [];
       const renderSidebar = (rows, opts) => {
         renders.push(opts);
-        document.querySelector('[data-session-section="'+ticketSessionSection(rows[0])+'"]')
-          .appendChild(document.querySelector('.conv-item'));
+        const row = document.querySelector('.conv-item');
+        const group = ticketSessionSection(rows[0]);
+        row.dataset.lifecycleGroup = group;
+        const section = document.querySelector('[data-session-section="active"]');
+        if (group === 'needs-you') section.prepend(row);
+        else section.append(row);
       };
       window.EventSource = class {close(){}};
       ${fn('_scheduleSidebarRender')}
@@ -119,12 +122,18 @@ test('a streamed decision changes section on the next render frame despite a per
       for(let frame=0;frame<4;frame++) await new Promise(requestAnimationFrame);
       return performance.now()-start;
     });
-    assert.equal(await page.$eval('.conv-item', el=>el.closest('section').dataset.sessionSection),'needs-you');
+    assert.equal(await page.$eval('.conv-item', el=>el.dataset.lifecycleGroup),'needs-you');
+    assert.equal(await page.$eval('section',el=>el.firstElementChild.dataset.sessionId),'s0');
     assert.match(await page.$eval('.wa-preview',el=>el.textContent), /Decision needed: Choose the publication scope/);
     assert.deepEqual(await page.evaluate(()=>renders), [{force:true}]);
     assert.ok(elapsed < 1000, 'section must follow the stream without a list poll or hover release');
     await page.evaluate(() => uf.accept({session_id:'s0',clear:true,user_ts:'2099-01-02T00:00:00Z'}));
-    await page.waitForFunction(() => document.querySelector('.conv-item').closest('section').dataset.sessionSection === 'active');
+    await page.waitForFunction(() => document.querySelector('.conv-item').dataset.lifecycleGroup === 'active');
+    assert.equal(await page.$eval('section',el=>el.firstElementChild.id),'other-decision');
+    const renderCount = await page.evaluate(()=>renders.length);
+    await page.evaluate(() => _ultraFreshPaint('s0'));
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await page.evaluate(()=>renders.length),renderCount,'unchanged group must not cause a render loop');
   } finally { await browser.close(); }
 });
 

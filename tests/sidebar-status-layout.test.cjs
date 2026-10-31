@@ -20,7 +20,7 @@ function row() {
     rowDraggableAttr: () => 'false', isMobileChromeActive: () => false,
     _uxFixesWorkerHistoryHtml: () => '', _continuationChainBadgeHtml: () => '',
     sessionStuckWarningHtml: () => '', workerOriginBadgeHtml: () => '',
-    ideaTicketChipHtml: () => '', _ideaRowLine: () => '',
+    ideaTicketChipHtml: () => '', _ideaRowLine: () => '', ticketSessionSection: () => 'active',
     readyToCloseArchiveHtml: () => '', _nyaRowBlockHtml: () => '',
     window: {},
   };
