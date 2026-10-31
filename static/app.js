@@ -39998,6 +39998,11 @@
     };
     const _renderRow = (c, opts = {}) => {
       c = _ultraFreshCurrent(c);
+      // Flat results still represent spawned lanes, even without a cluster.
+      const recordedParent = manualSubsessionParentId(c.session_id || c.id) || c.parent_session_id || c.hermes_parent_session_id;
+      if (!(opts.currentChildDepth > 0) && recordedParent && recordedParent !== (c.session_id || c.id) && !continuationParentId(c)) {
+        opts = { ...opts, currentChildDepth: 1 };
+      }
       if (!opts.subagentClusterMeta && !(opts.currentChildDepth > 0) && !opts.familyNested
         && !opts.evergreenAgent && (opts.lifecycleContext === 'active' || opts.lifecycleContext === 'all-main')) {
         const _nestKids = _familyNestChildRows(c);
@@ -41129,7 +41134,7 @@
             + '</div>';
       }
       const _outcomeInline = outcomeHtml.indexOf(' is-inline ') !== -1;
-      const _ideaStack = _outcomeInline && !!_ideaRowRef;
+      const _ideaStack = !_childLaneRow && _outcomeInline && !!_ideaRowRef;
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
           + (_summaryState.did ? '<div><strong>Did:</strong> ' + escapeHtml(_summaryState.did) + '</div>' : '')
@@ -41278,7 +41283,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
-        + (_ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c)))
+        + (_childLaneRow || _ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c)))
         + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
