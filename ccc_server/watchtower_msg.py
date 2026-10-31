@@ -1615,7 +1615,8 @@ def _inject_scoped_input(session_id, text, **options):
             ))):
         return refused("invalid_scoped_delivery", "Scoped delivery cannot queue, replace input or control a session")
     if not _core._is_codex_session(session_id):
-        return refused("scoped_transport_unsupported", "Exact-session no-queue delivery is supported only on a current managed Codex connection")
+        from ccc_server import takeover_sessions
+        return takeover_sessions.deliver(session_id, text, engine=options.get("engine") or "")
     transport = _core._CODEX_APP_SERVER_TRANSPORT
     if (transport is None or getattr(transport, "kind", None) != "managed-unix"
             or not _core._codex_app_server_is_live()):
@@ -1864,6 +1865,7 @@ def _inject_text_into_session_router(
     skip_wt=False,
     same_session=False,
     no_queue=False,
+    engine="",
     preserve_queued_steer=False,
     idempotency_key=None,
     source="api",
@@ -1884,7 +1886,7 @@ def _inject_text_into_session_router(
     if same_session or no_queue:
         return _inject_scoped_input(
             session_id, text, same_session=same_session, no_queue=no_queue,
-            skip_wt=skip_wt, wt_origin=wt_origin, mode=mode,
+            skip_wt=skip_wt, wt_origin=wt_origin, mode=mode, engine=engine,
             force_queue=force_queue, force_terminal=force_terminal,
             force_headless=force_headless, _from_terminal_queue=_from_terminal_queue,
             preserve_queued_steer=preserve_queued_steer,

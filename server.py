@@ -31811,7 +31811,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/takeover/capabilities":
             # Protocol support, not a promise that any particular session is
             # reachable: guarded inject refuses unsupported/busy transports.
-            self.send_json({"schema_version": 1, "same_session": True, "no_queue": True})
+            from ccc_server import takeover_sessions
+            self.send_json(takeover_sessions.capabilities())
+        elif path == "/api/takeover/observe":
+            from ccc_server import takeover_sessions
+            query = urllib.parse.parse_qs(parsed.query)
+            self.send_json(takeover_sessions.observe(
+                query.get("session_id", [""])[0],
+                query.get("engine", [""])[0],
+                query.get("nonce", [""])[0],
+            ))
         elif path == "/api/healthcheck":
             # Surface the state of every external dependency CCC delegates to.
             # Used by the setup banner so first-time users see exactly what's
@@ -40717,7 +40726,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     scoped_result = _inject_text_into_session(
                         scoped_sid, scoped_text, mode=scoped_mode,
                         same_session=True, no_queue=True, skip_wt=True, wt_origin=True,
-                        source="wt",
+                        source="wt", engine=payload.get("engine") or "",
                     )
                 except Exception:
                     scoped_result = {"ok": False, "same_session": False, "queued": False,

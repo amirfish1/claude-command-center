@@ -1,0 +1,1 @@
+Add engine-neutral takeover observation and exact-session delivery adapters, with bounded native transcript reads, persisted user-input receipt evidence, and guarded delivery to current ACP connections or native session resumes.

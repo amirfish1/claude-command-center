@@ -220,9 +220,14 @@ def test_no_current_managed_transport_never_routes_to_worker(connected, monkeypa
     assert connected[0] == []
 
 
-def test_native_claude_explicitly_unsupported(connected, monkeypatch):
+def test_native_non_codex_uses_engine_neutral_broker(connected, monkeypatch):
+    from ccc_server import takeover_sessions
     monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
-    assert inject()["code"] == "scoped_transport_unsupported"
+    calls = []
+    monkeypatch.setattr(takeover_sessions, "deliver", lambda sid, text, **kw:
+                        calls.append((sid, text, kw)) or {"ok": False, "queued": False, "code": "session_unknown"})
+    assert inject()["code"] == "session_unknown"
+    assert calls and calls[0][0] == SID
     assert connected[0] == []
 
 
@@ -306,6 +311,11 @@ def endpoint(connected, monkeypatch):
             response = exc
         with response:
             return response.code, json.load(response)
+    def get_observation(**params):
+        url = f"http://127.0.0.1:{httpd.server_port}/api/takeover/observe?" + urllib.parse.urlencode(params)
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return response.code, json.load(response)
+    post.observation = get_observation
     post.capabilities = get_capabilities
     yield post
     httpd.shutdown()
@@ -322,7 +332,9 @@ def test_endpoint_delivers_without_continuation_or_alias_rewrite(endpoint, conne
 def test_capability_handshake_does_not_start_or_probe_agents(endpoint, connected):
     status, result = endpoint.capabilities()
     assert status == 200
-    assert result == {"schema_version": 1, "same_session": True, "no_queue": True}
+    assert result["schema_version"] == 1
+    assert result["same_session"] is True and result["no_queue"] is True
+    assert result["observation"] is True and "devin" in result["engines"]
     assert connected[0] == []
 
 
@@ -344,3 +356,24 @@ def test_endpoint_respects_hold_without_delivery(endpoint, connected, monkeypatc
     status, result = endpoint()
     assert status == 409 and not result["same_session"]
     assert connected[0] == []
+
+
+def test_observation_get_forwards_exact_engine_sid_and_nonce(endpoint, monkeypatch):
+    from ccc_server import takeover_sessions
+    calls = []
+    monkeypatch.setattr(takeover_sessions, "observe", lambda sid, engine, nonce:
+                        calls.append((sid, engine, nonce)) or {"schema_version": 1, "session_id": sid, "engine": engine})
+    status, result = endpoint.observation(session_id="devincli-native-slug", engine="devin", nonce="[nonce exact]")
+    assert status == 200 and result["engine"] == "devin"
+    assert calls == [("devincli-native-slug", "devin", "[nonce exact]")]
+
+
+def test_scoped_endpoint_forwards_engine_to_broker(endpoint, connected, monkeypatch):
+    from ccc_server import takeover_sessions
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
+    calls = []
+    monkeypatch.setattr(takeover_sessions, "deliver", lambda sid, text, **kw:
+                        calls.append((sid, text, kw)) or {"ok": True, "same_session": True, "queued": False})
+    status, result = endpoint(engine="custom-engine")
+    assert status == 200 and result["same_session"] is True
+    assert calls == [(SID, "takeover prompt", {"engine": "custom-engine"})]

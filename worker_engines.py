@@ -443,6 +443,14 @@ class EngineHost:
 
     def _call_unbound(self, engine, operation, args, query=False):
         legacy = self._legacy()
+        if operation == "takeover_deliver":
+            # Dedicated immediate operation: never the durable dispatch ledger
+            # or the legacy prompt router, both of which may queue input.
+            from ccc_server import takeover_sessions
+            return takeover_sessions.deliver(
+                args.get("session_id") or "", args.get("text") or "",
+                engine=engine, local=True,
+            )
         if engine in ("kimi", "grok", "devin"):
             if operation == "availability":
                 if engine == "devin":
