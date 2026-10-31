@@ -50603,6 +50603,38 @@
   let conversationPaneLoading = false;
   let conversationPaneLoadToken = 0;
 
+  // Paint pane chrome from the already-loaded row before the transcript can
+  // appear. Detail requests enrich it later without hiding the initial strip.
+  const _sessionStripCache = new Map();
+  function seedSessionInputContext(sid, row, paneId) {
+    const oldSid = _workspaceSessionIdByPane[paneId];
+    if (oldSid) {
+      _sessionStripCache.delete(oldSid);
+      _sessionStripCache.set(oldSid, {
+        workspace: _workspaceDataByPane[paneId],
+        usage: _usageSessionIdByPane[paneId] === oldSid ? _usageDataByPane[paneId] : null,
+      });
+      if (_sessionStripCache.size > 50) _sessionStripCache.delete(_sessionStripCache.keys().next().value);
+    }
+    const cached = sid && _sessionStripCache.get(sid);
+    const cwd = row.cwd || row.spawn_cwd || sessionCwdByConv[row.id] || rowRepoPath(row);
+    _workspaceSessionIdByPane[paneId] = sid;
+    _workspaceDataByPane[paneId] = (cached && cached.workspace) || (cwd ? { cwd, _initial: true } : null);
+    _usageRequestGenerationByPane[paneId] = (_usageRequestGenerationByPane[paneId] || 0) + 1;
+    delete _usageRequestByPane[paneId];
+    if (_usageSessionIdByPane[paneId] !== sid) delete _usageLastFetchByPane[paneId];
+    _usageSessionIdByPane[paneId] = sid;
+    _usageDataByPane[paneId] = Object.assign({}, cached && cached.usage, row, {
+      _initial: !(cached && cached.usage && !cached.usage._initial),
+    });
+    const slot = getInputContextSlot(paneId);
+    const wsSlot = slot && slot.querySelector('[data-workspace]');
+    if (wsSlot) wsSlot.innerHTML = '';
+    renderSessionWorkspaceIntoSticky(paneId);
+    renderSessionUsageIntoStrip(paneId);
+    syncInputContextVisibility(slot);
+  }
+
   function scheduleSessionMetadataFetches(convId, sid, paneId) {
     if (!sid) return;
     setTimeout(() => {
@@ -50905,6 +50937,7 @@
         selectedRow && selectedRow.jsonl_path
       );
     }
+    seedSessionInputContext(selectedSessionId, selectedRow || selectedConv, paneId);
     // Update split panel input bar visibility
     updateSplitInputBar();
     // Update the active pane's own input bar immediately so it shows on restore
@@ -61106,19 +61139,15 @@
 
   async function fetchSessionWorkspace(sid, paneId) {
     const pid = paneId || paneIdForSessionId(sid);
-    _workspaceSessionIdByPane[pid] = sid;
-    _workspaceDataByPane[pid] = null;
-    // Clear the strip immediately so a stale workspace from the previous
-    // session doesn't flash before the new fetch lands.
-    const slot = getInputContextSlot(pid);
-    const wsSlot = slot && slot.querySelector('[data-workspace]');
-    if (wsSlot) wsSlot.innerHTML = '';
-    if (slot) {
-      if (slot.classList.contains('is-new-session')) syncInputContextVisibility(slot);
-      else {
-        slot.classList.remove('visible');
-        slot.classList.remove('hide-cotenants');
-      }
+    // Keep this session's seeded/cached strip visible during enrichment.
+    // Only clear when the caller actually changes the session.
+    if (_workspaceSessionIdByPane[pid] !== sid) {
+      _workspaceSessionIdByPane[pid] = sid;
+      _workspaceDataByPane[pid] = null;
+      const slot = getInputContextSlot(pid);
+      const wsSlot = slot && slot.querySelector('[data-workspace]');
+      if (wsSlot) wsSlot.innerHTML = '';
+      syncInputContextVisibility(slot);
     }
     if (!sid) return;
     try {
@@ -61177,7 +61206,11 @@
     const parts = [];
     let kindCls, kindLabel, kindTitle;
     let setCwdSid = '';  // CCC-128: non-empty → render the kind chip as a "set folder" button
-    if (useEff) {
+    if (w._initial) {
+      // The row knows the path, but has not probed its git/disk state.
+      kindCls = 'wp-kind-clone';
+      kindTitle = '';
+    } else if (useEff) {
       if (w.effective_kind === 'worktree') {
         kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
         kindTitle = 'git worktree' + inferTitle;
@@ -62720,7 +62753,7 @@
     // it (CCC-817).
     const TOKEN_SITTER_SYNCED_ENGINES = ['claude', 'codex', 'kimi', 'grok', 'devin', 'gemini', 'antigravity'];
     let handoverPill = '';
-    if (TOKEN_SITTER_SYNCED_ENGINES.includes(engine) && ff('auto_handover_pill')) {
+    if (!u._initial && TOKEN_SITTER_SYNCED_ENGINES.includes(engine) && ff('auto_handover_pill')) {
       const handoverOn = !!u.auto_handover_enabled;
       const handoverMode = handoverOn && AUTO_HANDOVER_MODE_CYCLE.includes(u.auto_handover_mode)
         ? u.auto_handover_mode : (handoverOn ? 'mdfile' : 'off');
