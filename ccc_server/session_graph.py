@@ -1092,8 +1092,11 @@ def _save_session_issue(session_id, issue_number):
 
 
 
+# Agents may wrap the block in an HTML comment (<!-- <session-state> …
+# </session-state> -->) so markdown-rendering terminal UIs hide the
+# machine-readable footer; group(1) stays the inner fields either way.
 _SESSION_STATE_RE = re.compile(
-    r"<session-state>\s*(.*?)\s*</session-state>",
+    r"(?:<!--\s*)?<session-state>\s*(.*?)\s*</session-state>(?:\s*-->)?",
     re.IGNORECASE | re.DOTALL,
 )
 _SESSION_STATE_FIELD_RE = re.compile(
@@ -1101,7 +1104,7 @@ _SESSION_STATE_FIELD_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE = re.compile(
-    r"\n*Before your final reply\b.*?</session-state>\s*$",
+    r"\n*Before your final reply\b.*?</session-state>(?:\s*-->)?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 _CCC_MODE3_INSTRUCTION_TRAILER_RE = re.compile(
@@ -1249,14 +1252,16 @@ actual required contribution; it must not stand in for the whole plan or invent
 an approval request when the agent owns the next step. Keep DID and INSIGHT to
 one short sentence each; put supporting evidence in COMPLETION.
 
-End your final reply with a compact CCC session-state block:
-<session-state>
+End your final reply with a compact CCC session-state block, wrapped in an
+HTML comment exactly as shown so terminal clients that render markdown hide
+the machine-readable footer (CCC parses the raw transcript either way):
+<!-- <session-state>
 DID: one sentence describing what you changed or learned
 INSIGHT: one sentence with the main finding, root cause, or surprise
 NEXT_STEP_USER: the exact action requiring the user, or None.
 NEXT_ACTION: null, or a single-line JSON object or array as described below
 COMPLETION: a single-line JSON object using the schema below
-</session-state>
+</session-state> -->
 
 Write NEXT_ACTION yourself in this same answer; the dashboard renders it
 directly as one-tap chips without another model call. Use {"label":"Restart","reply":"Yes, restart the dashboard and worker."}

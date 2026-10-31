@@ -1,0 +1,1 @@
+- Spawned sessions now wrap the `<session-state>` footer in an HTML comment, so terminal clients that render markdown hide the machine-readable trailer; parsing, previews, and the transcript card accept both forms.

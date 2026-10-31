@@ -16563,7 +16563,7 @@ def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
     return _archive_list_row_ts({"idea_ticket": ticket}) >= cutoff
 
 
-_PREVIEW_STATE_RE = re.compile(r"<session-state>.*?(</session-state>|$)", re.S)
+_PREVIEW_STATE_RE = re.compile(r"(?:<!--\s*)?<session-state>.*?(</session-state>\s*-->|</session-state>|$)", re.S)
 _PREVIEW_MD_RE = re.compile(r"[`*_#>|]+|\[([^\]]*)\]\([^)]*\)")
 
 
@@ -27179,7 +27179,7 @@ def _extract_files_from_gemini_conversation(session_id):
 _PRESENTATION_ARTIFACT_FENCE_RE = re.compile(
     r"\A(?P<prose>.*?)(?:^|\n)```ccc-slides[ \t]*\r?\n"
     r"(?P<artifact>.*?)\r?\n```[ \t]*"
-    r"(?:\r?\n+[ \t]*<session-state>.*?</session-state>[ \t]*)?\Z",
+    r"(?:\r?\n+[ \t]*(?:<!--\s*)?<session-state>.*?</session-state>(?:\s*-->)?[ \t]*)?\Z",
     re.DOTALL | re.MULTILINE | re.IGNORECASE,
 )
 _PRESENTATION_ARTIFACT_ID_RE = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")

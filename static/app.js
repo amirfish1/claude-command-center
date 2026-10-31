@@ -3117,7 +3117,7 @@
     // …</session-state>" trailer even if the constant has shifted slightly
     // (whitespace, wording tweaks). Anchored to "Before your final reply"
     // so it can't eat unrelated user text.
-    out = out.replace(/\n*Before your final reply[\s\S]*?<\/session-state>\s*$/i, '');
+    out = out.replace(/\n*Before your final reply[\s\S]*?<\/session-state>(?:\s*-->)?\s*$/i, '');
     return out
       // Old template
       .replace(/^\s*Fix GitHub issue #\d+:\s*/i, '')
@@ -3551,7 +3551,7 @@
     const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw
       || (live.last_event_type === 'user'
         && _ultraFreshTime(live.last_event_ts) > _ultraFreshTime(c.modified || c.mtime));
-    const text = stale ? '' : raw.replace(/<session-state>[\s\S]*$/, '')
+    const text = stale ? '' : raw.replace(/(?:<!--\s*)?<session-state>[\s\S]*$/, '')
       .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280);
     const summary = stale ? {} : (c.session_state || {});
     const working = sidebarSessionWorking(c, live) || !!opts.liveToolInFlight;
@@ -16106,8 +16106,8 @@
   // navigated away and there's no rendered transcript to read from).
   function _stripSessionStateFromText(text) {
     let out = String(text || '');
-    const idx = out.indexOf('<session-state>');
-    if (idx !== -1) out = out.slice(0, idx);
+    const _ssm = /(?:<!--\s*)?<session-state>/.exec(out);
+    if (_ssm) out = out.slice(0, _ssm.index);
     // Belt-and-suspenders: also drop the "Before your final reply…" trailer
     // some prompts emit without the tags.
     out = out.replace(/\n*Before your final reply[\s\S]*$/i, '');
@@ -19023,10 +19023,10 @@
       // Render as a styled card instead of raw <session-state> tags + KEY:
       // pairs in the prose. Detect first so the block doesn't get partially
       // gobbled by the table or list logic below.
-      if (/^\s*<session-state>\s*$/.test(line)) {
+      if (/^\s*(?:<!--\s*)?<session-state>\s*$/.test(line)) {
         i++;
         const start = i;
-        while (i < lines.length && !/^\s*<\/session-state>\s*$/.test(lines[i])) i++;
+        while (i < lines.length && !/^\s*<\/session-state>(?:\s*-->)?\s*$/.test(lines[i])) i++;
         const body = lines.slice(start, i).join('\n');
         if (i < lines.length) i++;  // skip closing tag
         out.push(renderSessionStateBlock(body));
@@ -26359,7 +26359,7 @@
   // the full reply (per-repo /api/conversations) instead of the preview.
   function _waPreviewText(text) {
     if (!text) return '';
-    let t = String(text).slice(0, 2000).replace(/<session-state>[\s\S]*?(<\/session-state>|$)/g, ' ');
+    let t = String(text).slice(0, 2000).replace(/(?:<!--\s*)?<session-state>[\s\S]*?(<\/session-state>\s*-->|<\/session-state>|$)/g, ' ');
     t = t.replace(/[`*_#>|]+|\[([^\]]*)\]\([^)]*\)/g, (m, g1) => g1 || ' ');
     t = t.split(/\s+/).filter(Boolean).join(' ');
     return t.length <= 140 ? t : t.slice(0, 139).trimEnd() + '\u2026';
@@ -40946,7 +40946,7 @@
       // blank while the session works.
       const _latestRaw = String(c.last_assistant_text || c.last_assistant_preview || '');
       const _latest = (!isBacklogRow && !isGithubPrRow)
-        ? _latestRaw.replace(/<session-state>[\s\S]*$/, '')
+        ? _latestRaw.replace(/(?:<!--\s*)?<session-state>[\s\S]*$/, '')
           .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280)
         : '';
       const _outWorking = _outView.kind === 'working';
