@@ -1,0 +1,1 @@
+- Sessions started on GPT-6 Astra are named after the request instead of the "<astra-guardrail> You are running as gpt-6-astra…" preamble CCC adds to their first prompt.

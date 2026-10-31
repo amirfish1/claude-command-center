@@ -13679,8 +13679,12 @@ def _apply_claude_goal_command(meta, command_text):
         meta["goal_status"] = "active"
 
 
+# Leading machine wrappers: Conductor's <system_instruction> and CCC's own
+# <astra-guardrail> spawn prefix (_astra_guardrail_prompt_prefix). Either can
+# come first, so strip every leading block (CCC-277: an Astra spawn was named
+# "<astra-guardrail> You are running as gpt-6-astra...").
 _HOST_SYSTEM_INSTRUCTION_RE = re.compile(
-    r"^\s*<system_instruction>.*?</system_instruction>\s*",
+    r"^\s*(?:<(system_instruction|astra-guardrail)>.*?</\1>\s*)+",
     re.DOTALL | re.IGNORECASE,
 )
 

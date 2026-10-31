@@ -62,6 +62,22 @@ class TestCodexConductorTitles(unittest.TestCase):
             "",
         )
 
+    def test_astra_guardrail_prefix_is_not_the_title(self):
+        # CCC prepends this block to Astra spawns (CCC-277); the session
+        # name is the ask after it, whether or not a Conductor wrapper too.
+        sys.modules.pop("server", None)
+        server = importlib.import_module("server")
+        guard = (
+            "<astra-guardrail>\nYou are running as gpt-6-astra, which is allowed\n"
+            "spend rules\n</astra-guardrail>\n\n")
+        self.assertEqual(server._strip_host_system_instruction(guard + "Fix the intake form"),
+                         "Fix the intake form")
+        wrapped = "<system_instruction>\nhost\n</system_instruction>\n" + guard + "Fix it"
+        self.assertEqual(server._strip_host_system_instruction(wrapped), "Fix it")
+        self.assertEqual(
+            server._codex_display_name({}, title=guard + "Fix the intake form"),
+            "Fix the intake form")
+
     def test_mid_message_system_instruction_is_left_alone(self):
         # Only a leading wrapper is host boilerplate. A user quoting the tag
         # mid-prompt keeps their text intact.
