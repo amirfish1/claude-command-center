@@ -78,6 +78,28 @@ class CodexTitleRehydrateTests(unittest.TestCase):
         self.assertEqual(next_row["task_title"], "Fix attention sections")
         self.assertIn("task_title", server._ARCHIVE_LIST_FIELDS)
 
+    def test_persisted_sidebar_projection_receives_new_title_without_rebuild(self):
+        server = self.server
+        row = {"session_id": "saved-task", "engine": "codex", "display_name": "old"}
+        with mock.patch.object(server, "_auto_titled_session_ids",
+                               return_value={"saved-task": "Current task"}), \
+             mock.patch.object(server, "_load_session_name_overrides",
+                               return_value={"saved-task": "Manual topic"}):
+            out = server._archive_list_project_rows([row])[0]
+        self.assertEqual(out["display_name"], "Manual topic")
+        self.assertEqual(out["task_title"], "Current task")
+        self.assertTrue(out["name_overridden"])
+        self.assertEqual(row["display_name"], "old")
+
+    def test_title_changes_participate_in_sidebar_delta_updates(self):
+        server = self.server
+        server._archive_delta_ctx_remember("before-title", "test", "all", {}, {},
+                                           {"saved-task": {"task_title": "Old"}})
+        server._archive_delta_ctx_remember("after-title", "test", "all", {}, {},
+                                           {"saved-task": {"task_title": "New"}})
+        changed = server._archive_delta_ctx_changed_sids("before-title", "after-title")
+        self.assertIn("saved-task", changed)
+
     def test_a_copied_prompt_is_not_reported_as_an_ai_title(self):
         """Codex stores the raw ask as `title` when it did not summarize."""
         server = self.server

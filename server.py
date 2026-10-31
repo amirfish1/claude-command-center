@@ -16132,11 +16132,12 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     # Inputs of the row projection that are not part of the row itself: any
     # change invalidates every older token (the client gets a full body).
     # Overlay rows stay out: every delta resends them whole.
+    titles = _archive_list_title_overlays()
     ctx = hashlib.sha1(json.dumps(
-        [key, window, _session_graph.parent_revision(), resumes, ideas],
+        [key, window, _session_graph.parent_revision(), resumes, ideas, titles],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
-    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas)
+    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles)
     ovl = hashlib.sha1(json.dumps(
         extra, sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:8] if extra else "0"
@@ -16167,7 +16168,7 @@ def _archive_delta_ctx_fingerprints(mapping):
     return out
 
 
-def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas):
+def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles=None):
     with _archive_delta_ctx_lock:
         if ctx in _ARCHIVE_DELTA_CTX_HIST:
             _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
@@ -16177,6 +16178,7 @@ def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas):
         "parents": _session_graph.parent_snapshot(),
         "resumes": _archive_delta_ctx_fingerprints(resumes),
         "ideas": _archive_delta_ctx_fingerprints(ideas),
+        "titles": _archive_delta_ctx_fingerprints(titles),
     }
     with _archive_delta_ctx_lock:
         _ARCHIVE_DELTA_CTX_HIST[ctx] = entry
@@ -16195,8 +16197,8 @@ def _archive_delta_ctx_changed_sids(old_ctx, new_ctx):
     if old is None or new is None or old["scope"] != new["scope"]:
         return None
     changed = set()
-    for field in ("parents", "resumes", "ideas"):
-        a, b = old[field], new[field]
+    for field in ("parents", "resumes", "ideas", "titles"):
+        a, b = old.get(field), new.get(field)
         if a is None or b is None:
             if a is not b:
                 return None
@@ -16643,6 +16645,14 @@ def _archive_list_project_row(row, *, resumes=None, parents=None):
     return out
 
 
+def _archive_list_title_overlays():
+    """Small live title inputs, independent of the historical row snapshot."""
+    titles = {sid: {"task_title": title} for sid, title in _auto_titled_session_ids().items() if title}
+    for sid, name in _load_session_name_overrides().items():
+        titles.setdefault(sid, {}).update(display_name=name, name_overridden=True)
+    return titles
+
+
 def _archive_list_project_rows(rows, *, window="all", now=None):
     cutoff = _archive_list_window_cutoff(window, now=now)
     resumes = _load_usage_limit_resumes()
@@ -16660,6 +16670,11 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
         if isinstance(row, dict)
         and _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid)
     ]
+    # Persisted row snapshots may predate the title or this projection field.
+    # One cached snapshot for the batch; never scan history to refresh names.
+    titles = _archive_list_title_overlays()
+    for out in projected:
+        out.update(titles.get(out.get("session_id") or out.get("id"), {}))
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
     try:
