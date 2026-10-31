@@ -84,22 +84,23 @@ class TakeoverBridgeTest(unittest.TestCase):
         self.assertEqual(self.calls, [["answer", "DEMO-1", "Proceed"]])
         self.assertEqual(self.injects, [])
 
-    def test_unsupported_engine_rejected_before_ticket_creation(self):
-        before = tickets.load_state()
-        result = tickets.handoff("devincli-example")
-        self.assertEqual(result["code"], "unsupported_engine")
-        self.assertIn("Claude and Codex", result["error"])
-        self.assertEqual(tickets.load_state(), before)
-        self.assertEqual(self.calls, [])
+    def test_engine_independent_adoption_reaches_watchtower(self):
+        for sid in ("devincli-example", "kimi-example", "cursor-example"):
+            self.response["session"] = {"session_id": sid}
+            with tickets.handoff_effect_lock("DEMO-1"):
+                result = bridge.adopt(sid, "DEMO-1")
+            self.assertTrue(result["ok"])
+            self.assertEqual(self.calls[-1][:3], ["takeover", sid, "--ticket"])
+        self.assertEqual(self.injects, [])
 
-    def test_failed_unsupported_adoption_stops_retrying(self):
+    def test_former_engine_rejection_recovers_through_adoption(self):
         tickets._set_handoff("DEMO-1", owner="watchtower", session="devincli-example",
-                             state="waiting", adoption_pending=True)
+                             state="unsupported", adoption_pending=False)
+        self.response["session"] = {"session_id": "devincli-example"}
         bridge.sync_once()
-        self.assertEqual(self.handoff()["state"], "unsupported")
+        self.assertEqual(self.handoff()["state"], "running")
         self.assertFalse(self.handoff()["adoption_pending"])
-        bridge.sync_once()
-        self.assertEqual(self.calls, [])
+        self.assertEqual(self.calls[0][:3], ["takeover", "devincli-example", "--ticket"])
         self.assertEqual(self.injects, [])
 
     def test_legacy_import_preserves_budget_and_is_fenced_before_call(self):
@@ -166,6 +167,15 @@ class TakeoverBridgeTest(unittest.TestCase):
         payload = json.loads(args[args.index("--candidates-json") + 1])
         self.assertFalse(payload["enabled"])
         self.assertEqual(payload["scopes"], [])
+
+    def test_publisher_accepts_engine_from_registered_observation_adapter(self):
+        tickets._mutate(lambda d: d["tickets"]["DEMO-1"].update(title="Finish existing work"))
+        self.response = {"schema_version": 1, "session_id": "session-a",
+                         "engine": "custom-engine", "repo_path": "/tmp/demo"}
+        bridge.publish_candidates()
+        publish = self.calls[-1]
+        payload = json.loads(publish[publish.index("--candidates-json") + 1])
+        self.assertEqual(payload["scopes"][0]["candidates"][0]["engine"], "custom-engine")
 
 
 if __name__ == "__main__":

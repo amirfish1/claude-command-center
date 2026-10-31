@@ -1373,11 +1373,6 @@ def handoff(session_id, *, auto=False):
         return {"ok": False, "error": "no session"}
     if not _enabled():
         return {"ok": False, "error": "idea_tickets is off"}
-    from . import takeover_bridge
-    if takeover_bridge.available():
-        error = takeover_bridge.unsupported_reason(sid)
-        if error:
-            return {"ok": False, "error": error, "code": "unsupported_engine"}
     ticket = ticket_for_session(sid)
     if not ticket:
         filed = file_ticket(sid, HANDOFF_QUEUE)

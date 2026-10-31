@@ -26,19 +26,6 @@ def available():
     return _available is True
 
 
-def unsupported_reason(sid):
-    from . import idea_tickets as tickets
-    engine = "devin" if str(sid).startswith("devincli-") else ""
-    try:
-        if not engine:
-            engine = tickets._core._detect_session_engine(sid) or ""
-    except (AttributeError, TypeError):
-        pass
-    if engine and engine not in ("claude", "codex"):
-        return f"WatchTower takeover supports Claude and Codex sessions; {engine} is not supported yet."
-    return ""
-
-
 def _marker():
     from . import idea_tickets as tickets
     return tickets._state_path().parent / "watchtower-takeover.json"
@@ -107,14 +94,6 @@ def adopt(sid, ref, *, auto=False, legacy=None):
     from . import idea_tickets as tickets
     # Caller holds the effect lock, which also guards all old CCC effects.
     current = (tickets.load_state()["tickets"].get(ref) or {}).get("handoff") or {}
-    error = unsupported_reason(sid)
-    if error:
-        if current.get("adoption_pending") and not current.get("supervision_id"):
-            tickets._set_handoff(ref, state="unsupported", adoption_pending=False,
-                                 supervision_state="unsupported", sync_error=error,
-                                 waiting_on="")
-            tickets._restamp_rows()
-        return {"ok": False, "ref": ref, "error": error, "code": "unsupported_engine"}
     tickets._set_handoff(ref, owner="watchtower", session=sid,
                          state=current.get("state") or "running", auto=bool(auto),
                          adoption_pending=True)
@@ -171,7 +150,7 @@ def sync_once(statuses=None):
     for ref, ticket in list(data["tickets"].items()):
         h = ticket.get("handoff") or {}
         sid = h.get("session")
-        if not sid or ticket.get("closed") or h.get("state") == "unsupported":
+        if not sid or ticket.get("closed"):
             continue
         legacy_states = {*tickets._ACTIVE_HANDOFF, "taken_back"}
         if h.get("owner") != "watchtower" and h.get("state") not in legacy_states:
@@ -179,6 +158,11 @@ def sync_once(statuses=None):
         with tickets.handoff_effect_lock(ref):
             tickets._state_cache["key"] = None
             current = (tickets.load_state()["tickets"].get(ref) or {}).get("handoff") or {}
+            if current.get("state") == "unsupported" and not current.get("supervision_id"):
+                # Recover requests incorrectly rejected by the former engine
+                # restriction through the ordinary durable adoption path.
+                adopt(sid, ref, auto=current.get("auto", False))
+                continue
             if current.get("owner") != "watchtower":
                 if current.get("state") not in legacy_states:
                     continue
@@ -231,7 +215,7 @@ def publish_candidates(*, enabled=True):
         if not meta.get("repo_path") and meta.get("retry_at", 0) <= time.time() and looked_up < 5:
             looked_up += 1
             native = _call(["observe", sid])
-            if native.get("repo_path") and native.get("engine") in ("claude", "codex"):
+            if native.get("repo_path") and native.get("engine"):
                 meta = {"repo_path": native["repo_path"], "engine": native["engine"]}
                 tickets._mutate(lambda d: d["sessions"].get(sid, {}).__setitem__(
                     "takeover_observation", meta))

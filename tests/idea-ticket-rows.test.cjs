@@ -198,19 +198,15 @@ test('All tickets tab merges Features and Small bugs by recency (CCC-285)', () =
   assert.deepEqual(representatives(rows, 'smallbugs'), ['bug']);
 });
 
-test('Auto refuses unsupported engines while retaining cancellation controls', () => {
+test('Auto supports every engine while retaining cancellation controls', () => {
   const a = app.indexOf('  const _ATTN_NONE_RE');
   const b = app.indexOf('  function _trackedRowStatus', a);
   const ctx = {escapeAttr: s => s};
   vm.runInNewContext(app.slice(a, b) + '\nthis.control = autonomySwitchHtml;', ctx);
-  for (const engine of ['devin', 'kimi', 'cursor']) {
+  for (const engine of ['devin', 'kimi', 'cursor', 'hermes', 'grok', 'antigravity', 'kilo', 'aider', 'opencode', 'copilot', 'claude', 'codex', 'custom-engine']) {
     const html = ctx.control({engine, session_id: 'example'}, true);
-    assert.match(html, /disabled aria-disabled="true"/);
-    assert.match(html, /not supported yet/);
-    assert.doesNotMatch(html, /data-role="handoff"/);
-  }
-  for (const engine of ['claude', 'codex']) {
-    assert.match(ctx.control({engine}, true), /data-role="handoff"/);
+    assert.match(html, /data-role="handoff"/);
+    assert.doesNotMatch(html, /disabled/);
   }
   assert.match(ctx.control({engine: 'devin', idea_ticket: {handoff: {state: 'waiting'}}}, true), /data-role="handoff-takeback"/);
 });

@@ -1,3 +1,4 @@
-Disable Auto for session engines that WatchTower takeover does not support,
-with an explanatory tooltip. Reject unsupported enrollment before ticket
-creation or ownership changes, and stop retrying failed unsupported adoptions.
+Session takeover uses a shared lifecycle across engines, with engine adapters
+for session observation, same-session delivery and receipt verification.
+Auto remains available across engines, and requests rejected by the former
+engine restriction recover through the normal adoption path.
