@@ -3649,6 +3649,7 @@
         else {
           if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
           label.textContent = info.label + ':';
+          label.dataset.status = info.label.toLowerCase();
         }
         if (preview.dataset.ultraFreshText !== info.text) {
           for (const node of [...preview.childNodes]) {
@@ -41080,7 +41081,7 @@
       // decorative leading glyphs (🪄 ✏️ 🧵 ⤴ …) from the name.
       const _waTitle = String(title || '').replace(/^(?:[\p{Extended_Pictographic}\uFE0F\u200d›⤴]\s*)+/u, '') || title;
       const _waExplanationLabel = (_needsYouRow && c.question_text && _outcomeKind !== 'working') ? 'Next'
-        : ({ working: 'Working', ready: 'Close', next: 'Next', update: 'Update' }[_outcomeKind] || 'Update');
+        : _outView.label;
       const _waPreview = (_needsYouRow && c.question_text && _outcomeKind !== 'working') ? String(c.question_text)
         : (_outcomeText || c.last_assistant_preview || _waPreviewText(c.last_assistant_text)
           || _waPreviewText(c.session_state && c.session_state.did)
@@ -41103,7 +41104,7 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Numbered idea avatars already open the ticket.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview && !_readyToCloseRow ? '<span class="wa-explanation-label">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview && !_readyToCloseRow ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '<div class="wa-row-footer">' + sessionIdChipHtml + '</div>'
         + '</div>'
         + '</div>';

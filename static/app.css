@@ -33792,3 +33792,26 @@ body:has(#settingsModal.open) #ideaTicketsIntroBanner { visibility:hidden; point
 .settings-modal.is-first-run .settings-section-links { display:none; }
 #settingsSection-defaults .settings-data-card { display:block; padding:18px; }
 @media(max-width:700px) { #settingsSection-defaults .settings-data-card { padding:14px; } }
+
+/* Make the status word scannable without lighting up the whole preview. */
+#convList#convList .conv-item .wa-explanation-label[data-status="working"],
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome:not(.has-close-btn) .conv-outcome-step[data-label="Working"]::before {
+  color: var(--green, #3fb950);
+  font-weight: 650;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--green, #3fb950) 30%, transparent);
+}
+#convList#convList .conv-item .wa-explanation-label[data-status="finished"],
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome:not(.has-close-btn) .conv-outcome-step[data-label="Finished"]::before {
+  color: var(--text-secondary, #aab7c4);
+  font-weight: 650;
+}
+@keyframes session-working-glow {
+  from { text-shadow: 0 0 6px color-mix(in srgb, var(--green, #3fb950) 22%, transparent); }
+  to { text-shadow: 0 0 11px color-mix(in srgb, var(--green, #3fb950) 50%, transparent); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  #convList#convList .conv-item .wa-explanation-label[data-status="working"],
+  #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome:not(.has-close-btn) .conv-outcome-step[data-label="Working"]::before {
+    animation: session-working-glow 2.8s ease-in-out infinite alternate;
+  }
+}
