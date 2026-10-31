@@ -209,6 +209,7 @@ def idea_ticket_rows_map():
             "queue": ticket.get("queue") or "",
             "sessions": len(ticket.get("sessions") or []),
             "closed": bool(ticket.get("closed")),
+            "explicitly_archived": bool(entry.get("explicitly_archived")),
             "moved_at": entry.get("moved_at", 0),
             # A review applies only to this session's existing transcript.
             # The UI invalidates it when newer activity arrives.
@@ -779,6 +780,30 @@ def _attach(sid, ref, kind, origin):
             else f"Child session {sid} spawned by {origin}.")
     _wt(["comment", ref, note, "--by", "system"])
     return {"ok": True, "ref": ref, "kind": kind}
+
+
+def note_explicit_archive(session_ids, archived):
+    """Keep the owner's put-away action separate from automatic completion."""
+    if not _enabled():
+        return
+    def record(data):
+        for sid in session_ids:
+            entry = data["sessions"].get(sid)
+            if isinstance(entry, dict) and entry.get("ref"):
+                entry["explicitly_archived"] = bool(archived)
+    _mutate(record)
+
+
+def resume_after_owner_input(sid):
+    """Accepted human input reopens completed work, including a closed ticket."""
+    ticket = ticket_for_session(sid)
+    archived = sid in _core._load_archived_conversations(sweep=False)
+    if not archived and not (ticket and ticket.get("closed")):
+        return
+    changed, _, _, _ = _core._set_conversations_archived([sid], False, source="composer")
+    if sid not in changed:
+        on_archive(sid, False)
+    _restamp_rows()
 
 
 def on_archive(session_id, archived):

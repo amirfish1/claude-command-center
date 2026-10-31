@@ -2246,6 +2246,9 @@ def _set_conversations_archived(session_ids, want_archived, *, source="bulk"):
                 _idea_tickets_on_archive(sid, True)
             for sid in to_remove:
                 _idea_tickets_on_archive(sid, False)
+        if source == "manual" or not want_archived:
+            from ccc_server import idea_tickets
+            idea_tickets.note_explicit_archive(session_ids, want_archived)
         return changed, unchanged, to_add, to_remove
 
 

@@ -162,7 +162,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
         session_state:{did:'Finished and checked.', completion:{valid:true,ready_to_close:true}}});
     });
     await page.waitForFunction(() => document.querySelectorAll('[data-id="s0"] .conv-ready-close').length === 2);
-    assert.equal(await page.$eval('[data-id="s0"] .conv-outcome .conv-ready-close',el=>el.textContent),'Close');
+    assert.equal(await page.$eval('[data-id="s0"] .conv-outcome .conv-ready-close',el=>el.textContent),'Archive');
     assert.equal(await page.$eval('[data-id="s0"] .wa-line2 .conv-ready-close',el=>el.dataset.archived),'true');
     // A user starts a newer turn; even a subsequently delivered old reply
     // cannot resurrect its explanation or completion recommendation.

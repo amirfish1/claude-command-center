@@ -87,7 +87,7 @@ test('archive and restore patch every returned group member but leave other idea
 const closeStart = app.indexOf('  async function closeReadyConversation(');
 const closeCode = app.slice(closeStart, app.indexOf("  document.addEventListener('click'", closeStart));
 const readinessStart = app.indexOf('  function sessionReadyToClose(');
-const readinessCode = app.slice(readinessStart, app.indexOf('  // The finished row', readinessStart));
+const readinessCode = app.slice(readinessStart, app.indexOf('  // Completion and explicit archiving', readinessStart));
 
 function closeFixture() {
   const row = { id: 'ready-session', state: 'idle', session_state: {

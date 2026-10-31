@@ -106,6 +106,44 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(rows["s1"]["ready_to_close_reviewed_at"], 123)
         self.assertEqual(rows["s2"]["ready_to_close_reviewed_at"], 0)
 
+    def test_explicit_archive_is_distinct_from_ticket_completion(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda text: "idea")
+        ref = it.idea_ticket_rows_map()["s1"]["ref"]
+        it._mutate(lambda d: d["tickets"][ref].update(closed=True))
+        self.assertFalse(it.idea_ticket_rows_map()["s1"]["explicitly_archived"])
+        it.note_explicit_archive(["s1"], True)
+        self.assertTrue(it.idea_ticket_rows_map()["s1"]["explicitly_archived"])
+        self.assertTrue(it.idea_ticket_rows_map()["s1"]["closed"])
+        it.note_explicit_archive(["s1"], False)
+        self.assertFalse(it.idea_ticket_rows_map()["s1"]["explicitly_archived"])
+
+    def test_owner_input_reopens_closed_ticket_without_archive_flag(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda text: "idea")
+        ref = it.idea_ticket_rows_map()["s1"]["ref"]
+        it._mutate(lambda d: d["tickets"][ref].update(closed=True))
+        self.core._load_archived_conversations = lambda **kw: []
+        self.core._set_conversations_archived = lambda *a, **kw: ([], ["s1"], [], set())
+        it.resume_after_owner_input("s1")
+        self.assertFalse(it.idea_ticket_rows_map()["s1"]["closed"])
+        self.assertTrue(any(c[:2] == ["reopen", ref] for c in self.calls))
+
+    def test_owner_input_restores_archived_group_and_clears_explicit_marker(self):
+        self._ui_session("s1")
+        it.attach_or_file("s1", classify_fn=lambda text: "idea")
+        it.note_explicit_archive(["s1"], True)
+        self.core._load_archived_conversations = lambda **kw: ["s1"]
+        restored = []
+        def restore(sids, archived, **kw):
+            restored.append((sids, archived, kw))
+            it.note_explicit_archive(sids, archived)
+            return sids, [], [], set(sids)
+        self.core._set_conversations_archived = restore
+        it.resume_after_owner_input("s1")
+        self.assertEqual(restored, [(["s1"], False, {"source": "composer"})])
+        self.assertFalse(it.idea_ticket_rows_map()["s1"]["explicitly_archived"])
+
     def test_pending_ui_spawn_rows_as_ideas_until_filed(self):
         self._ui_session("s1")
         row = it.idea_ticket_rows_map()["s1"]

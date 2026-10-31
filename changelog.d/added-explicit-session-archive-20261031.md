@@ -1,0 +1,1 @@
+Add an explicit Archived section below Finished, with Archive actions on ticket rows. New owner messages immediately return finished work to Active and reopen its ticket. Preserve saved task titles through frontend row shaping.

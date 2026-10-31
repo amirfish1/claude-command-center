@@ -16496,7 +16496,7 @@ _ARCHIVE_LIST_FIELDS = (
     "session_cwd", "session_cwd_exists", "session_cwd_is_worktree", "mtime",
     "modified", "last_interacted", "size", "first_message", "ai_title", "task_title",
     "branch", "git_branch", "effective_branch", "effective_kind", "display_name",
-    "spawn_named", "spawn_pid", "name_overridden", "auto_titled", "archived", "trashed",
+    "spawn_named", "spawn_pid", "name_overridden", "auto_titled", "archived", "explicitly_archived", "trashed",
     "recently_unarchived", "verified", "pinned", "pin_rank", "all_lane_override",
     "worktree_dirty", "has_commit", "has_push", "has_edit", "tail_pr_number",
     "tail_pr_url", "pr_state", "pr_notes", "is_live", "worktree_label", "state",
@@ -16699,6 +16699,7 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
             ticket = idea_tickets_by_sid.get(out.get("session_id") or out.get("id"))
             if ticket:
                 out["idea_ticket"] = dict(ticket)
+                out["explicitly_archived"] = bool(ticket.get("explicitly_archived"))
     return projected
 
 
@@ -40785,6 +40786,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         text,
                         source=str(payload.get("source") or "composer"),
                     )
+                if (result.get("ok") and payload.get("source") == "composer"
+                        and payload.get("composer_form") == "ccc-composer-v1"
+                        and self.headers.get("Origin")):
+                    try:
+                        from ccc_server import archive_deferred as _archive_deferred
+                        _archive_deferred.clear(sid)
+                        _idea_tickets.resume_after_owner_input(sid)
+                    except Exception as exc:
+                        _log_activity("inject", "RESUME_STATE_FAILED", f"{sid}: {exc}")
+                        result = dict(result, lifecycle_error="Message accepted; session state could not be reopened.")
                 status_code = (
                     409 if result.get("code") == "queued_message_missing" else 200
                 )

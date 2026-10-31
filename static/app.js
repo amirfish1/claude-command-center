@@ -3533,7 +3533,9 @@
       modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
   }
   function sidebarSessionWorking(c, live = c) {
-    return !c.archived && !c.trashed && !live.needs_approval && !live.question_waiting
+    const sending = sessionIsOptimisticallySending(c.session_id || c.id);
+    const finishedTicket = c.idea_ticket && !(c.explicitly_archived ?? c.idea_ticket.explicitly_archived);
+    return (!c.archived || finishedTicket || sending) && !c.trashed && !live.needs_approval && !live.question_waiting
       && (sessionIsOptimisticallySending(c.session_id || c.id) || c.pending_spawn
         || live.state === 'working' || live.codex_state === 'working'
         || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight));
@@ -3565,7 +3567,7 @@
     if (working) return Object.assign(base, { label: 'Working', kind: 'working',
       text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') });
     // Closed rows don't invite the user to close them again.
-    if (c.archived || c.trashed) return Object.assign(base, { label: c.trashed ? 'Archived' : 'Finished', kind: 'ready',
+    if (c.archived || c.trashed) return Object.assign(base, { label: (c.trashed || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)) ? 'Archived' : 'Finished', kind: 'ready',
       text: did || 'Closed session.' });
     if (ready) return Object.assign(base, { label: 'Ready to close', kind: 'ready',
       text: (offerClose ? 'Ready to close · ' : '') + (did || 'Reviewed as complete; archive when ready.') });
@@ -3666,8 +3668,8 @@
       if (!offerClose) row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
       // The status stream can resume work before the list snapshot catches up.
       // Reconcile section membership through the normal renderer as well.
-      if (info.kind === 'working'
-          && row.closest('[data-session-section="needs-you"]')) _scheduleSidebarRender();
+      if (info.kind === 'working' && !row.classList.contains('is-current-child-row')
+          && row.closest('[data-session-section="needs-you"], [data-session-section="finished"]')) _scheduleSidebarRender();
     }
     // Live activity invalidates any pending one-tap reply immediately.
     syncRowQuickActions(sid);
@@ -3888,10 +3890,14 @@
   // belongs in Finished; an idle turn and a recommendation to close stay Active.
   function ticketSessionSection(c) {
     if (c.trashed) return 'archived';
-    if (c.archived) return 'finished';
     c = _ultraFreshCurrent(c);
     const live = _applyLiveOverlayToRow(c);
+    if (sessionIsOptimisticallySending(c.session_id || c.id)) return 'active';
+    if (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) return 'archived';
+    if (c.last_event_type === 'user' || live.last_event_type === 'user'
+        || sidebarSessionWorking(c, live)) return 'active';
     if (live.needs_approval || live.question_waiting) return 'needs-you';
+    if (c.archived) return 'finished';
     const outcome = rowOutcomeView(c);
     if (outcome.kind === 'next') return 'needs-you';
     if (outcome.kind === 'working') return 'active';
@@ -3912,11 +3918,10 @@
     return groups;
   }
 
-  // The finished row's one action: a Close button at the end of its
-  // explanation (it archives the session; no separate Archive chip).
+  // Completion and explicit archiving are separate actions.
   function readyToCloseArchiveHtml() {
     return '<button type="button" class="conv-archive-btn conv-ready-archive conv-ready-close" data-role="archive" data-archived="true"'
-      + ' title="Close: archive this finished session" aria-label="Close: archive this finished session">Close</button>';
+      + ' title="Archive this session" aria-label="Archive this session">Archive</button>';
   }
 
   // Answer a blocked handoff, or open the session when there's no one-tap
@@ -21188,9 +21193,9 @@
     };
     // Move the row now: the POST can queue for seconds behind in-flight polls,
     // and a menu click that changes nothing reads as "it didn't work".
-    const prior = { archived: !!row.archived, trashed: !!row.trashed };
+    const prior = { archived: !!row.archived, trashed: !!row.trashed, explicitly_archived: !!(row.explicitly_archived ?? row.idea_ticket?.explicitly_archived) };
     const optimistic = kind === 'untrash' ? { archived: true, trashed: false }
-      : (kind === 'archive' ? { archived: true } : { archived: false, trashed: false });
+      : (kind === 'archive' ? { archived: true, explicitly_archived: true } : { archived: false, explicitly_archived: false, trashed: false });
     applyPatch(new Set([sessionId]), optimistic);
     showOpToast(kind === 'untrash' ? 'Untrashing…' : (kind === 'archive' ? 'Archiving…' : 'Unarchiving…'));
     try {
@@ -21203,7 +21208,7 @@
       if (!data.ok) throw new Error(data.error || (kind + ' failed'));
       const patch = kind === 'untrash'
         ? { archived: !!data.archived, trashed: false }
-        : { archived: !!data.archived, ...(!data.archived ? { trashed: false } : {}) };
+        : { archived: !!data.archived, explicitly_archived: !!data.archived, ...(!data.archived ? { trashed: false } : {}) };
       applyPatch(new Set(data.session_ids || [sessionId]), patch);
       // A slow archive must not navigate away from another conversation.
       if (kind === 'archive' && data.archived
@@ -21228,10 +21233,11 @@
     };
     const isSession = !!row && !String(row.id || '').startsWith('backlog-issue-')
       && !String(row.id || '').startsWith('xrepo-issue-');
-    show('archive', isSession && !row.archived && !row.trashed);
+    const explicitlyArchived = row && row.idea_ticket ? (row.explicitly_archived ?? row.idea_ticket.explicitly_archived) : row && row.archived;
+    show('archive', isSession && !explicitlyArchived && !row.trashed);
     // Ticket sessions only ever say "Archived": Unarchive clears Trash too.
     const ticketRow = !!(row && ideaTicketsOn() && row.idea_ticket && row.idea_ticket.ref);
-    show('unarchive', isSession && !!row.archived && (!row.trashed || ticketRow));
+    show('unarchive', isSession && !!explicitlyArchived && (!row.trashed || ticketRow));
     show('untrash', isSession && !!row.trashed && !ticketRow);
     const ideaQueue = row && row.idea_ticket && row.idea_ticket.queue;
     const ideasOn = isSession && ideaTicketsOn();
@@ -24567,6 +24573,9 @@
       let allMatch = true;
       if ('archived' in ov) {
         if (c.archived !== ov.archived) { c.archived = ov.archived; allMatch = false; }
+      }
+      if ('explicitly_archived' in ov) {
+        if (c.explicitly_archived !== ov.explicitly_archived) { c.explicitly_archived = ov.explicitly_archived; allMatch = false; }
       }
       if ('trashed' in ov) {
         if (c.trashed !== ov.trashed) { c.trashed = ov.trashed; allMatch = false; }
@@ -40610,7 +40619,9 @@
         // CCC-859: worker sessions (Workers tab) can't be trashed -- they're
         // owned by a WatchTower/Hermes queue, not the user, so "move to
         // trash" would silently orphan a claimed ticket.
-        lifecycleButtons = (c.archived
+        lifecycleButtons = (c.idea_ticket && !(c.explicitly_archived ?? c.idea_ticket.explicitly_archived) && !c.trashed
+          ? '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive session" aria-label="Archive session">Archive</button>'
+          : c.archived
           ? '<button class="conv-archive-btn is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Active</span></button>'
           : '')
           + (opts.hideTrash ? '' : '<button class="conv-trash-btn" data-role="trash" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>');
@@ -41067,8 +41078,9 @@
           || _waPreviewText(cleanFirst));
       const _waStatus = (c.trashed && !_archiveOnlyRow)
         ? '<button type="button" class="conv-trash-btn conv-ready-archive is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">Restore</button>'
-        : c.archived
+        : c.archived && !(c.idea_ticket && !(c.explicitly_archived ?? c.idea_ticket.explicitly_archived))
           ? '<button type="button" class="conv-archive-btn conv-ready-archive is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active">Restore</button>'
+        : c.archived ? readyToCloseArchiveHtml()
         : (_readyToCloseRow && !_childLaneRow) ? readyToCloseArchiveHtml()
         : _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
@@ -44045,15 +44057,14 @@
         + '<h3 class="session-lifecycle-heading" title="' + hint + '"><span class="session-lifecycle-dot" aria-hidden="true"></span>'
         + label + '<span class="session-lifecycle-count">' + groups[key].length + '</span></h3>'
         + (groups[key].length ? renderSectionRows(groups[key])
-          : '<div class="session-lifecycle-empty">' + (key === 'needs-you' ? 'Nothing needs your attention.' : 'No active sessions in this view.') + '</div>')
+          : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
         + '</section>';
       if (!_ipSearchActive) {
         _arcRows = sectionHtml('needs-you', 'Needs you', 'Questions and decisions waiting on you')
           + sectionHtml('active', 'Active', 'Unfinished work, including idle sessions and sessions ready to close');
       }
-      _ideaArchivedHtml = (groups.finished.length
-        ? sectionHtml('finished', 'Finished', 'Explicitly closed sessions; ending a turn never moves a session here') : '')
-        + _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', groups.archived);
+      _ideaArchivedHtml = sectionHtml('finished', 'Finished', 'Completed work; a new message returns it to Active')
+        + sectionHtml('archived', 'Archived', 'Sessions explicitly put away; restore one to resume work');
     } else if (_allTabView !== 'workers') {
       const _trashItems = [];
       for (const c of _allTabTrashConvs) {
@@ -46647,7 +46658,7 @@
           if (!Array.isArray(rows)) continue;
           for (const row of rows) {
             const id = row.session_id || row.id;
-            if (knownGroup.has(id)) priorStates.set(row, !!row.archived);
+            if (knownGroup.has(id)) priorStates.set(row, { archived: !!row.archived, explicitly_archived: row.explicitly_archived });
           }
         }
         const priorOverrides = new Map(Array.from(knownGroup, id => [id, _optimisticOverrides.get(id)]));
@@ -46664,7 +46675,7 @@
         const patchArchivedNow = (rows, val) => {
           if (!Array.isArray(rows)) return;
           for (const row of rows) {
-            if (row && (row.id === convId || knownGroup.has(row.session_id || row.id))) row.archived = val;
+            if (row && (row.id === convId || knownGroup.has(row.session_id || row.id))) { row.archived = val; row.explicitly_archived = val; }
           }
         };
         if (nextArchived) {
@@ -46672,7 +46683,7 @@
           patchArchivedNow(conversationsData, true);
           patchArchivedNow(archiveData, true);
           patchArchivedNow(currentRepoBacklogData, true);
-          for (const member of knownGroup) setOptimisticOverride(member, { archived: true });
+          for (const member of knownGroup) setOptimisticOverride(member, { archived: true, explicitly_archived: true });
           if (nextSelectId) selectConversation(nextSelectId);
           requestAnimationFrame(() => {
             renderSidebar(filterConversations($convSearch.value), { force: true });
@@ -46696,6 +46707,7 @@
               if (!row) continue;
               if (row.id === convId || archivedGroup.has(row.session_id || row.id)) {
                 row.archived = !!data.archived;
+                row.explicitly_archived = !!data.archived;
                 if (!data.archived) row.trashed = false;
               }
             }
@@ -46705,6 +46717,7 @@
           patchLifecycle(currentRepoBacklogData);
           for (const member of archivedGroup) setOptimisticOverride(member, {
             archived: !!data.archived,
+            explicitly_archived: !!data.archived,
             ...(!data.archived ? { trashed: false } : {}),
           });
           if ((convId || '').startsWith('xrepo-issue-') || (convId || '').startsWith('backlog-issue-')) {
@@ -46719,7 +46732,7 @@
           if (!data.archived) showOpToast('Restored to Active');
         } catch (err) {
           if (nextArchived) {
-            for (const [row, archived] of priorStates) row.archived = archived;
+            for (const [row, prior] of priorStates) Object.assign(row, prior);
             for (const [id, override] of priorOverrides) {
               if (override) _optimisticOverrides.set(id, override);
               else _optimisticOverrides.delete(id);
@@ -78542,6 +78555,8 @@
         // global state files (session-names.json / archived-conversations.json).
         display_name: c.display_name || '',
         ai_title: c.ai_title || null,
+        task_title: c.task_title || '',
+        explicitly_archived: c.explicitly_archived ?? c.idea_ticket?.explicitly_archived ?? false,
         name_overridden: !!c.name_overridden,
         // 🪄 marker — CCC's own auto-titler filled this row's name. Must be in
         // the allowlist or the glyph silently never renders (this shaping drops

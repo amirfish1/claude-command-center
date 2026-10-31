@@ -6,14 +6,15 @@ const { loadRowOutcomeView } = require('./row_outcome_view_harness.cjs');
 const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 function load(stubs = {}) {
   const start = source.indexOf('  function ticketSessionSection(');
-  const end = source.indexOf('  // The finished row\'s one action:', start);
-  const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs'].map(name => {
+  const end = source.indexOf('  // Completion and explicit archiving', start);
+  const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs', 'sidebarSessionWorking'].map(name => {
     const begin = source.indexOf('  function ' + name + '(');
     return source.slice(begin, source.indexOf('\n  }\n', begin) + 4);
   }).join('\n');
   return vm.runInNewContext(helpers + '\n' + source.slice(start, end) + '\n({ ticketSessionSection, stableTicketSessionGroups });', {
     _applyLiveOverlayToRow: c => c,
     _ultraFreshCurrent: c => c,
+    sessionIsOptimisticallySending: () => false,
     rowOutcomeView: loadRowOutcomeView(),
     ...stubs,
   });
@@ -96,4 +97,15 @@ test('section membership uses the same fresh state as the rendered status', () =
     _ultraFreshCurrent: c => ({ ...c, state: 'working', last_event_type: 'user', session_state: null }),
   });
   assert.equal(section(row('a', { session_state: { next_step_user: 'Choose a region.' } })), 'active');
+});
+test('new owner input reopens a finished session, including archived completion rows', () => {
+  const { ticketSessionSection: section } = load();
+  for (const extra of [{ last_event_type: 'user' }, { state: 'working' }, { codex_state: 'working' }]) {
+    assert.equal(section(row('a', { archived: true, ...extra })), 'active');
+  }
+});
+test('explicit Archive has its own category and a deliberate send resumes it', () => {
+  const item = row('a', { archived: true, idea_ticket: { ref: 'TASK-a', closed: true, explicitly_archived: true } });
+  assert.equal(load().ticketSessionSection(item), 'archived');
+  assert.equal(load({ sessionIsOptimisticallySending: () => true }).ticketSessionSection(item), 'active');
 });
