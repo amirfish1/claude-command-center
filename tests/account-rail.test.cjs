@@ -72,6 +72,11 @@ test('loading and unavailable are never green and never claim pairing', () => {
   assert.equal(un.key, 'unavailable');
   assert.equal(un.dot, 'warn');
   assert.equal(un.paired, false);
+  // An access denial must not read as signed-out or connected.
+  const fb = st(null, true, 'forbidden');
+  assert.equal(fb.key, 'unavailable');
+  assert.equal(fb.dot, 'warn');
+  assert.match(fb.sub, /does not have access/);
 });
 
 test('unpaired state invites sign-in; env-disabled explains itself', () => {

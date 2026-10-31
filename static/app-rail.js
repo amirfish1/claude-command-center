@@ -430,6 +430,7 @@
 
   var lastStatus = cachedStatus();
   var statusFresh = false;
+  var lastFetchErr = null;
   var popOpen = false;
   var signingOut = false;
 
@@ -448,13 +449,15 @@
   // Pure status → presentation mapping, kept free of DOM so tests can
   // exercise every state. Green is only ever paired + enabled + loop online;
   // everything else is amber (transitional/error) or grey.
-  function cccAccountState(s, fresh) {
+  function cccAccountState(s, fresh, err) {
     if (s === undefined || !fresh)
       return { key: "loading", dot: "off", letter: "", who: "Checking…",
                sub: "Reading connection status.", paired: false, machine: "" };
     if (s === null)
       return { key: "unavailable", dot: "warn", letter: "", who: "Status unavailable",
-               sub: "Could not read CCC Cloud status on this machine.",
+               sub: (err === "forbidden")
+                 ? "This browser does not have access to the account status."
+                 : "Could not read CCC Cloud status on this machine.",
                paired: false, machine: "" };
     var who = s.account_email_masked || "Paired device";
     var machine = String(s.device_id || "");
@@ -492,7 +495,7 @@
   }
 
   function paintAccount() {
-    var st = cccAccountState(lastStatus, statusFresh);
+    var st = cccAccountState(lastStatus, statusFresh, lastFetchErr);
     accDot.className = "ccc-account-dot " + st.dot;
     setGlyph(accGlyph, st.letter);
     accountBtn.title = "Account: " + st.sub;
@@ -505,7 +508,7 @@
   }
 
   function renderPop() {
-    var st = cccAccountState(lastStatus, statusFresh);
+    var st = cccAccountState(lastStatus, statusFresh, lastFetchErr);
     popWho.textContent = st.who;
     popSub.textContent = st.sub;
     popDot.className = "ccc-account-dot " + st.dot;
@@ -559,16 +562,22 @@
         if (r.ok) return r.json();
         if (url === "/api/cloud-relay/indicator" && (r.status === 404 || r.status === 405))
           return get("/api/cloud-relay/status");
-        return null;
+        var err = new Error("cloud-relay http " + r.status);
+        err.code = r.status;
+        throw err;
       });
     }
     return get("/api/cloud-relay/indicator")
-      .catch(function () { return null; })
-      .then(function (d) {
+      .then(function (d) { return { d: d }; })
+      .catch(function (e) { return { err: e }; })
+      .then(function (res) {
         if (timer) clearTimeout(timer);
         if (seq !== statusSeq) return;   // a newer request already owns the paint
         statusFresh = true;
-        lastStatus = (d && typeof d === "object") ? d : null;
+        lastStatus = (res.d && typeof res.d === "object") ? res.d : null;
+        // Access denial is not evidence that the machine is signed out.
+        lastFetchErr =
+          (!lastStatus && res.err && res.err.code === 403) ? "forbidden" : null;
         // The indicator answer carries `state`/`last_error` flat; normalize
         // to the status shape the state mapper reads.
         if (lastStatus && lastStatus.state !== undefined && !lastStatus.loop)
