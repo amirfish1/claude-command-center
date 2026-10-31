@@ -14494,6 +14494,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                  mock.patch.object(engines_mod, "_antigravity_live_resume_pid", return_value=None), \
                  mock.patch.object(engines_mod, "_antigravity_terminal_holder_pid", return_value=None), \
                  mock.patch.object(engines_mod.antigravity_ls, "send", return_value=None), \
+                 mock.patch.object(engines_mod._antigravity_stream, "enabled", return_value=False), \
                  mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
                  mock.patch.object(server, "_record_spawn_to_registry"):
                 result = server.resume_session_antigravity(sid, f"look at {image}")

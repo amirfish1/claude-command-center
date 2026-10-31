@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 
 import server
 
@@ -239,11 +240,22 @@ def test_spawn_marker_index_survives_restart(tmp_path, monkeypatch):
     server._SPAWN_MARKER_INDEX_DIR_MTIME.clear()
     server._SPAWN_MARKER_MEMO.update(ts=0.0, dir=None, out={})
     decoded = []
-    monkeypatch.setattr(
-        server, "_decode_spawn_marker_file",
-        lambda path: decoded.append(path.name),
-    )
+    real_scandir = server.os.scandir
+    real_decode = server._decode_spawn_marker_file
+    test_thread = threading.get_ident()
+
+    def spy_decode(path):
+        if threading.get_ident() != test_thread:
+            return real_decode(path)
+        decoded.append(path.name)
+
+    monkeypatch.setattr(server, "_decode_spawn_marker_file", spy_decode)
+
     def no_scan(*a, **k):
+        # os.scandir is process-global: the load's own background
+        # revalidation (a separate thread) may scan legitimately (CCC-274).
+        if threading.get_ident() != test_thread:
+            return real_scandir(*a, **k)
         raise AssertionError("cold start with an unchanged dir must not scan per file")
 
     monkeypatch.setattr(server.os, "scandir", no_scan)

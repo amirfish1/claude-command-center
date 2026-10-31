@@ -26,6 +26,16 @@ class SpawnFinalizeAsyncTests(unittest.TestCase):
     def setUpClass(cls):
         cls.server = importlib.import_module("server")
 
+    def setUp(self):
+        # The finalizer's rollout watcher polls the host's real Codex
+        # sessions for up to 180s, long after the test ends (CCC-274):
+        # report the rollout as already written so it returns at once.
+        for name, kw in (("_codex_rollout_stat", {"return_value": {"size": 1}}),
+                         ("_spawn_timeline_mark", {})):
+            patcher = mock.patch.object(self.server, name, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def _run_finalizer(self, server, requests, confirmation):
         calls = []
 

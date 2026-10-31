@@ -2722,6 +2722,8 @@ def test_throughput_refresh_is_single_flight(monkeypatch):
     monkeypatch.setattr(server, "_throughput_payload", fake_payload)
     monkeypatch.setattr(server, "_throughput_build_bootstrap", lambda *a, **k: {})
     monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *a, **k: True)
+    # The worker's real weekly block reads this host's usage for ~60s (CCC-274).
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda *a, **k: {})
     with server._THROUGHPUT_REFRESH_LOCK:
         server._THROUGHPUT_REFRESH_JOBS.clear()
 
@@ -2732,6 +2734,16 @@ def test_throughput_refresh_is_single_flight(monkeypatch):
     assert first["job_id"] == second["job_id"]
     assert len(calls) == 1
     release.set()
+    # Let the job finish while the fakes are still patched, or it runs the
+    # real helpers after monkeypatch unwinds, into later tests (CCC-274).
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with server._THROUGHPUT_REFRESH_LOCK:
+            busy = any(job.get("state") == "refreshing"
+                       for job in server._THROUGHPUT_REFRESH_JOBS.values())
+        if not busy:
+            break
+        time.sleep(0.01)
 
 
 def test_throughput_refresh_reports_live_session_progress(monkeypatch):

@@ -9,6 +9,7 @@ re-imports it (`_fresh_server`) to pick up per-test env.
 import os
 import sys
 import tempfile
+import threading
 import time
 
 # Bound at import: tests monkeypatch time.monotonic/sleep, and fixture
@@ -56,6 +57,42 @@ def _drain_recall_background_syncs(monkeypatch):
         mod = sys.modules.get(name)
         while mod is not None and getattr(mod, flag, False) and _real_monotonic() < deadline:
             _real_sleep(0.02)
+    # Same for the server's own detached workers (CCC-274): an archive
+    # response refresh rebuilds the list from transcripts for ~10s and a
+    # spawn-marker revalidation rescans the marker dir. Outliving the test,
+    # they read this host's real ~/.claude state and hit functions later
+    # tests patch and count.
+    # Keyed on the live threads, not the in-flight flags: a test that sets a
+    # flag by hand must not stall every later teardown.
+    for thread in threading.enumerate():
+        target = getattr(thread, "_target", None)
+        if getattr(target, "__qualname__", "") in _DRAINED_SERVER_WORKERS:
+            thread.join(max(0.0, deadline - _real_monotonic()))
+
+
+@pytest.fixture(autouse=True)
+def _no_cold_archive_scan(monkeypatch):
+    """Never start the census path's cold archive warm-up under test.
+
+    _census_identity_map kicks _archive_refresh_response_cache_async whenever
+    the archive response cache is empty, which every isolated test state is.
+    The refresh parses this host's real transcript corpus (~10k files, well
+    past any teardown drain) on a detached thread, into later tests that
+    patch and count process-global functions (CCC-274). Tests that exercise
+    the kick replace this function themselves.
+    """
+    srv = sys.modules.get("server")
+    if srv is not None and hasattr(srv, "_archive_refresh_response_cache_async"):
+        monkeypatch.setattr(
+            srv, "_archive_refresh_response_cache_async", lambda key, options: False,
+        )
+    yield
+
+
+_DRAINED_SERVER_WORKERS = frozenset({
+    "_archive_refresh_response_cache_async.<locals>.refresh",
+    "_load_spawn_markers_locked.<locals>._revalidate",
+})
 
 
 @pytest.fixture(autouse=True)

@@ -175,6 +175,11 @@ def dashboard_server(monkeypatch):
         DashboardEventHub(capacity=8, boot_id="http-boot"),
         raising=False,
     )
+    # The SSE handler starts the shared session/queue watcher, which ticks
+    # the host's real live sessions every second for ~60s after the client
+    # hangs up, into later tests (CCC-274). The ticks are tested directly.
+    monkeypatch.setattr(server, "_dashboard_event_watch_enter", lambda: None)
+    monkeypatch.setattr(server, "_dashboard_event_watch_exit", lambda: None)
     httpd = server.http.server.ThreadingHTTPServer(
         ("127.0.0.1", 0), server.CommandCenterHandler
     )

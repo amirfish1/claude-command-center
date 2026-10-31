@@ -126,7 +126,10 @@ def test_open_when_ready_passes_the_url_to_the_browser(tmp_path):
         )
         assert log.read_text().strip() == f"http://localhost:{port}/?onboarding=1"
     finally:
+        # Join before closing: closing under a blocked accept() kills the
+        # thread with EBADF, reported against a later test (CCC-274).
         stop.set()
+        thread.join(timeout=2)
         listener.close()
         thread.join(timeout=2)
 

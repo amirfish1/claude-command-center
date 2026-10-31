@@ -801,7 +801,17 @@ class DevinListPerfTests(unittest.TestCase):
         # Cleanups run LIFO: drain the background finisher before the
         # patches above unwind, so it never touches the real memo.
         self.addCleanup(devin_mod._devin_cli_row_memo_background_join, 10)
+        # Same for a stale-ok overlay's background list rebuild: once the
+        # env above unwinds it scans the host's real sessions.db for ~50s,
+        # into later tests (CCC-274).
+        self.addCleanup(self._wait_list_rebuild, devin_mod)
         return server, devin_mod, db_path, now
+
+    @staticmethod
+    def _wait_list_rebuild(devin_mod, timeout=10):
+        lock = devin_mod._DEVIN_CLI_LIST_REBUILD_LOCK
+        if lock.acquire(timeout=timeout):
+            lock.release()
 
     def _bump_mtime(self, db_path, secs):
         st = os.stat(db_path)
