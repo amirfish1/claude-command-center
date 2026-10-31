@@ -5054,7 +5054,7 @@
   // Priority: user rename or CCC spawn name (display_name) > Claude Code's
   // ai_title > raw first user prompt > "(untitled)". The prefix glyphs the
   // caller adds say which slot won: ✏️ user-chosen, ✨ ai-title, none = raw.
-  function rowRawTitle(c) {
+  function rowLocalTitle(c) {
     if (!c) return { rawTitle: '(untitled)', titleSource: '' };
     const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
     let titleSource = '';
@@ -5082,6 +5082,35 @@
       rawTitle = stripGhIssueProjectTag(rawTitle);
     }
     return { rawTitle: _uxFixesWorkerDisplayTitle(c, rawTitle), titleSource };
+  }
+  // A continuation's latest task is context within its original topic. Keep
+  // the original name (especially a human rename) as the stable first part.
+  function rowRawTitle(c) {
+    const local = rowLocalTitle(c);
+    if (!c) return local;
+    let origin = c;
+    let named = null;
+    const seen = new Set([String(c.session_id || c.id || '')]);
+    while (origin) {
+      const pid = continuationParentId(origin);
+      if (!pid || seen.has(pid)) break;
+      seen.add(pid);
+      const parent = _continuationRowForSid(pid);
+      if (!parent) break;
+      origin = parent;
+      if (parent.name_overridden && parent.display_name) named = parent;
+    }
+    const topicRow = named || origin;
+    const topic = rowLocalTitle(topicRow);
+    const topicTitle = String(topic.rawTitle || '').trim();
+    const taskTitle = String(c.ai_title || local.rawTitle || '').trim();
+    if (!topicTitle || topicTitle === '(untitled)' || isContinuationBoilerplateTitle(topicTitle)) return local;
+    if (!taskTitle || taskTitle === '(untitled)' || isContinuationBoilerplateTitle(taskTitle)) return topic;
+    const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (norm(taskTitle) === norm(topicTitle)) return topic;
+    if (norm(taskTitle).startsWith(norm(topicTitle) + ':')) return { ...local, titleSource: topic.titleSource };
+    return { rawTitle: topicTitle + ': ' + taskTitle, titleSource: topic.titleSource,
+      topicTitle, taskTitle };
   }
   // One row per continuation chain. A session that was continued into a
   // successor present in the same list folds into that successor (its
@@ -28669,6 +28698,7 @@
     if (c && (c.backlog_type === 'github' || c.issue_number || c.linked_issue)) {
       rawTitle = stripGhIssueProjectTag(rawTitle);
     }
+    rawTitle = rowRawTitle(c).rawTitle;
     return stripTitle(String(rawTitle || '(untitled)')).replace(/-/g, ' ').trim() || '(untitled)';
   }
 
@@ -36821,6 +36851,7 @@
           rawTitle = stripGhIssueProjectTag(rawTitle);
         }
         // Replace dashes with spaces for display (storage keeps the slug); strip user-configured title prefixes
+        if (!isBacklog) rawTitle = rowRawTitle(c).rawTitle;
         const title = stripTitle(rawTitle).replace(/-/g, ' ').trim();
         // Description: prefer the last assistant "outcome" message (so cards
         // show progress/result without opening them). Fall back to the original
