@@ -33317,14 +33317,14 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
      details in a smaller ellipsized font, then % and age. No preview lines. */
   #convList#convList .conv-item.is-current-child-row:has(.conv-main-row.has-inline-step) {
     --conv-content-left: calc(var(--conv-icon-left) + 36px);
-    padding-top: 4px !important;
-    padding-bottom: 4px !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
   }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step {
     grid-template-columns: fit-content(42%) minmax(0, 1fr) auto auto auto;
     align-items: center;
     gap: 0 6px;
-    min-height: 28px;
+    min-height: 22px;
   }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-title {
     font-size: 14px !important;
