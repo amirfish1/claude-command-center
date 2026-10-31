@@ -384,3 +384,82 @@ def test_hermes_cli_session_with_human_prompts_is_not_flagged(env):
     hermes_append(db, 4, NOW - 2 * 3600, (0, 10_000_000, 90_000_000, 0))
     kw["hermes_dbs"] = [str(db)]
     assert runaway.scan(now=NOW, **kw)[0] == []
+
+
+def completed_report(label="browser checks", **overrides):
+    report = {"version": 1, "scope": {"closure_met": True},
+              "resolution": {"score": 1}, "verification": {"score": 0.9},
+              "delivery": {"score": 1, "evidence": label},
+              "decision_dependency": {"score": 0}, "caveats": [], "remaining_actions": []}
+    report.update(overrides)
+    return "<session-state>\n<!--\nCOMPLETION: " + json.dumps(report) + "\n-->\n</session-state>"
+
+
+@pytest.mark.parametrize("engine", ["claude", "codex"])
+def test_read_only_completed_reports_reset_stagnation(env, engine):
+    _, projects, codex, kw = env
+    if engine == "codex":
+        path = codex_rollout(codex, "01a18617-8314-7c32-8b0b-ab2ee8d53211", 8)
+        recs = [json.loads(line) for line in path.read_text().splitlines()]
+        expanded = []
+        for rec in recs:
+            if rec.get("payload", {}).get("type") == "task_complete":
+                expanded.append({"type": "response_item", "timestamp": rec["timestamp"],
+                                 "payload": {"type": "message", "role": "assistant", "content": [
+                                     {"type": "output_text", "text": completed_report(rec["timestamp"])}]}})
+            expanded.append(rec)
+    else:
+        path = projects / "p" / "bbbbbbbb-2222.jsonl"
+        expanded = timer_loop(NOW - 5 * 3600, 8)
+        for rec in expanded:
+            msg = rec.get("message", {})
+            for block in msg.get("content", []) if isinstance(msg.get("content"), list) else []:
+                if block.get("type") == "text":
+                    block["text"] = completed_report(rec["timestamp"])
+    path.unlink(missing_ok=True)
+    write(path, expanded)
+    flagged, watch = runaway.scan(now=NOW, debug=True, **kw)
+    assert flagged == []
+    assert watch[0]["productive_turns"] == 8
+    assert watch[0]["stagnant_turns"] == 0
+    # Existing cached counters must be reinterpreted once after upgrading.
+    states = json.loads(kw["state_file"].read_text())
+    states[str(path)]["parse_version"] = 1
+    states[str(path)]["streak"]["stagnant"] = 8
+    kw["state_file"].write_text(json.dumps(states))
+    assert runaway.scan(now=NOW, **kw)[0] == []
+
+
+@pytest.mark.parametrize("overrides", [
+    {"scope": {"closure_met": False}}, {"verification": {"score": 0.5}},
+    {"delivery": {"score": 0}}, {"remaining_actions": [{"text": "still testing"}]},
+    {"caveats": [{"text": "unchecked", "blocking": True}]}, {"resolution": None},
+    {"decision_dependency": {"score": 1}},
+])
+def test_incomplete_reports_are_not_progress(overrides):
+    st = runaway._new_state()
+    runaway._open_turn(st, "peer", NOW)
+    runaway._mark_report(st, completed_report(**overrides))
+    assert not st["turn"]["productive"]
+
+
+def test_duplicate_report_does_not_hide_a_stagnant_loop():
+    st = runaway._new_state()
+    for i in range(8):
+        runaway._open_turn(st, "peer", NOW - 5 * 3600 + i * 1800)
+        st["turn"]["active"] = True
+        runaway._mark_report(st, completed_report())
+        runaway._close_turn(st)
+    st["last_ts"] = NOW
+    st["streak"]["cost"] = runaway.MIN_COST
+    assert st["streak"]["productive"] == 1
+    assert runaway.evaluate(st, NOW) == (True, ["stagnant"])
+
+
+def test_prompt_quoting_completed_report_is_not_progress():
+    st = runaway._new_state()
+    runaway.feed_codex(st, {"type": "event_msg", "payload": {"type": "task_started"}})
+    runaway.feed_codex(st, {"type": "response_item", "payload": {
+        "type": "message", "role": "user", "content": [{"text":
+            "[sender: verifier (session)]\n" + completed_report()}]}})
+    assert not st["turn"]["productive"]

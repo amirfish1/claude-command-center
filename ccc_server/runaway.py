@@ -47,6 +47,7 @@ Stdlib-only.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import sqlite3
@@ -69,6 +70,7 @@ CODEX_DAYS_BACK = 14            # a long-lived rollout stays in its start-day di
 INITIAL_TAIL_BYTES = 16 * 1024 * 1024
 INITIAL_TAIL_ROWS = 3000        # SQLite engines: rows read for a cold candidate
 SCAN_TTL_S = 300.0  # the card polls every 5 min; a rescan costs seconds in the busy server
+PARSE_VERSION = 2  # completed read-only reports now count as progress
 PRUNE_AFTER_S = 7 * 86400
 
 MIN_AUTO_TURNS = 6
@@ -177,7 +179,7 @@ def _progress_text(value):
 # ------------------------------------------------------------ parse state
 
 def _new_state():
-    return {"offset": 0, "ino": 0, "partial": False, "sid": "", "cwd": "",
+    return {"parse_version": PARSE_VERSION, "offset": 0, "ino": 0, "partial": False, "sid": "", "cwd": "",
             "title": "", "last_ts": 0.0, "last_human": 0.0, "msg_id": "",
             "codex_total": None, "turn": None, "streak": _new_streak()}
 
@@ -268,6 +270,48 @@ def _mark_tool(st, name, payload):
         turn["productive"] = True
 
 
+def _mark_report(st, text, closed=False):
+    """A delivered, checked result is progress even without source edits.
+
+    Only assistant-authored session-state footers count. Replaying an identical
+    report must not keep an otherwise stagnant session alive indefinitely.
+    Like ScheduleWakeup(noop=false), this is a structured self-report, not an
+    independent judgment of the work's quality.
+    """
+    if (st["turn"] is None and not closed) or "<session-state>" not in text:
+        return
+    footer = text.rsplit("<session-state>", 1)[1]
+    if "</session-state>" not in footer:
+        return
+    footer = footer.split("</session-state>", 1)[0]
+    match = re.search(r"^COMPLETION:\s*(\{[^\n]+\})\s*$", footer, re.M)
+    if not match:
+        return
+    try:
+        report = json.loads(match.group(1))
+        if (report.get("version") != 1
+                or report["scope"].get("closure_met") is not True
+                or report["resolution"]["score"] < 0.9
+                or report["verification"]["score"] < 0.8
+                or report["delivery"]["score"] != 1
+                or report["decision_dependency"]["score"] != 0
+                or report.get("remaining_actions")
+                or any(c.get("blocking") for c in report.get("caveats", []))):
+            return
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return
+    key = hashlib.sha256(json.dumps(report, sort_keys=True).encode()).hexdigest()
+    seen = st.setdefault("reports", [])
+    if key not in seen:
+        seen.append(key)
+        del seen[:-100]
+        if closed:
+            st["streak"]["productive"] += 1
+            st["streak"]["stagnant"] = 0
+        else:
+            st["turn"]["productive"] = True
+
+
 # ------------------------------------------------------------------ Claude
 
 def _claude_text(rec):
@@ -346,6 +390,12 @@ def feed_claude(st, rec):
     mid = str(msg.get("id") or "")
     if st["turn"] is None:
         if mid and mid == st.get("closed_mid"):
+            # Claude can write thinking/end_turn before text/end_turn for the
+            # same message. The report belongs to the turn already closed.
+            if st.get("last_trigger") != HUMAN and st["streak"]["stagnant"]:
+                for block in _rr._blocks(rec):
+                    if block.get("type") == "text":
+                        _mark_report(st, str(block.get("text") or ""), closed=True)
             return  # another content block of the message that ended the turn
         # Activity with no prompt: a Stop-hook / goal continuation.
         _open_turn(st, "goal", ts)
@@ -360,6 +410,8 @@ def feed_claude(st, rec):
     for block in _rr._blocks(rec):
         if block.get("type") == "tool_use":
             _mark_tool(st, str(block.get("name") or ""), block.get("input"))
+        elif block.get("type") == "text":
+            _mark_report(st, str(block.get("text") or ""))
     if msg.get("stop_reason") in ("end_turn", "stop_sequence"):
         st["closed_mid"] = mid
         _close_turn(st)
@@ -422,6 +474,10 @@ def feed_codex(st, rec):
     elif ptype in ("function_call", "custom_tool_call"):
         raw = payload.get("arguments") if ptype == "function_call" else payload.get("input")
         _mark_tool(st, str(payload.get("name") or ""), raw)
+    elif ptype == "message" and payload.get("role") == "assistant":
+        text = "\n".join(str(p.get("text") or "") for p in payload.get("content") or []
+                         if isinstance(p, dict))
+        _mark_report(st, text)
 
 
 def _codex_prompt(st, text, ts):
@@ -901,7 +957,7 @@ def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=F
     seen = []
     for engine, path, stat in _candidates(now, projects_root, codex_root, kimi_root):
         st = states.get(path)
-        if not isinstance(st, dict) or "streak" not in st:
+        if not isinstance(st, dict) or st.get("parse_version") != PARSE_VERSION:
             st = _new_state()
         st["engine"] = engine
         if st.get("size") != stat.st_size or st.get("ino") != stat.st_ino:
