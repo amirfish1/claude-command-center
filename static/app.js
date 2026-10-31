@@ -14656,6 +14656,64 @@
     }
     _ttsScheduleCacheDebug();
   }
+  // The inspector can sit over whatever the owner is reading: drag its header
+  // anywhere, mouse or touch (CCC-278). A short tap still expands/collapses.
+  const TTS_QUEUE_POS_KEY = 'ccc-tts-queue-pos';
+  function _ttsClampDebugQueue(panel, left, top) {
+    if (!panel || !panel.isConnected) return;
+    let pos = left == null ? null : { left, top };
+    if (!pos) { try { pos = JSON.parse(localStorage.getItem(TTS_QUEUE_POS_KEY) || 'null'); } catch (_) {} }
+    if (!pos || !Number.isFinite(pos.left) || !Number.isFinite(pos.top)) return;
+    const r = panel.getBoundingClientRect();
+    const head = panel.querySelector('summary')?.getBoundingClientRect().height || 32;
+    const x = Math.max(0, Math.min(pos.left, innerWidth - Math.min(r.width || 120, innerWidth)));
+    const y = Math.max(0, Math.min(pos.top, innerHeight - head));
+    panel.style.left = x + 'px';
+    panel.style.top = y + 'px';
+    return { left: x, top: y };
+  }
+  function _ttsMakeDebugQueueDraggable(panel, handle) {
+    let drag = null;
+    let suppressClick = false;
+    // Move/up listen on window while a drag is live: a fast pointer outruns
+    // the header, and pointer capture is not reliable on every browser.
+    const move = ev => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      if (!drag.moved) {
+        if (Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) < 5) return;
+        drag.moved = true;
+        panel.classList.add('is-dragging');
+      }
+      ev.preventDefault();
+      drag.pos = _ttsClampDebugQueue(panel, ev.clientX - drag.dx, ev.clientY - drag.dy);
+    };
+    const end = ev => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', end);
+      removeEventListener('pointercancel', end);
+      if (drag.moved) {
+        suppressClick = true;
+        setTimeout(() => { suppressClick = false; }, 0);
+        panel.classList.remove('is-dragging');
+        if (drag.pos) { try { localStorage.setItem(TTS_QUEUE_POS_KEY, JSON.stringify(drag.pos)); } catch (_) {} }
+      }
+      drag = null;
+    };
+    handle.addEventListener('pointerdown', ev => {
+      if (ev.button !== 0) return;
+      const r = panel.getBoundingClientRect();
+      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: ev.clientX - r.left, dy: ev.clientY - r.top, moved: false };
+      addEventListener('pointermove', move, { passive: false });
+      addEventListener('pointerup', end);
+      addEventListener('pointercancel', end);
+    });
+    // A drag ends with a click on <summary>; don't let it toggle the panel.
+    handle.addEventListener('click', ev => {
+      if (suppressClick) { suppressClick = false; ev.preventDefault(); }
+    });
+    addEventListener('resize', () => _ttsClampDebugQueue(panel));
+  }
   function _ttsRenderDebugQueue() {
     let panel = document.getElementById('ttsCacheDebugQueue');
     if (!_ttsCacheDebug) { panel?.remove(); return; }
@@ -14672,8 +14730,11 @@
       panel.addEventListener('toggle', () => {
         if (panel.open) log.scrollTop = log.scrollHeight;
         else _ttsScheduleCacheDebug();
+        _ttsClampDebugQueue(panel);
       });
+      _ttsMakeDebugQueueDraggable(panel, summary);
       document.body.appendChild(panel);
+      _ttsClampDebugQueue(panel);
     }
     const waiting = _ttsDebugJobs.filter(j => j.status === 'queued');
     const processing = _ttsDebugJobs.filter(j => j.status === 'processing');
