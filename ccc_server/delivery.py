@@ -167,6 +167,7 @@ def cancel(session_id, delivery_id):
     hit = transaction.get("value")
     if hit:
         _core._complete_pending_input_handoff(hit["item"])
+        settle(session_id, want, "dropped")
         _core._log_activity(
             "inject", "Q_CANCELLED",
             f"session={session_id} delivery_id={want} queue={hit['queue']}",
@@ -176,3 +177,43 @@ def cancel(session_id, delivery_id):
     if held.get("cancelled"):
         return {"ok": True, "cancelled": int(held["cancelled"]), "queue": "stop_held"}
     return {"ok": True, "cancelled": 0}
+
+
+def settle(session_id, delivery_id, outcome):
+    """Close the receipt for one message: ``landed``, ``dropped`` or ``expired``.
+
+    Called where the row leaves the queue with a known outcome: the claim
+    commit (the Codex delivery authority), the terminal watcher's drops, and
+    ``cancel``. Never lets a receipt write fail the delivery it describes.
+    """
+    from ccc_server import inject_receipts
+    try:
+        inject_receipts.close_receipt(
+            str(session_id or ""), inject_id=str(delivery_id or ""), outcome=outcome,
+        )
+    except Exception as e:  # pragma: no cover - best-effort bookkeeping
+        print(f"  [delivery] receipt settle failed: {e}", flush=True)
+
+
+def outstanding(session_id, *, now=None, stale_after_s=None):
+    """The unproven message for a session, with where it waits, or None.
+
+    Extends the receipt with ``state``: ``queued``/``held`` when the row is
+    still in a CCC queue (``queue`` names it), ``unproven`` when the row left
+    the queue and nothing settled the receipt. An unproven receipt older than
+    ``inject_receipts.EXPIRE_AFTER_S`` is expired here and reported as None.
+    """
+    from ccc_server import inject_receipts
+    import time as _time
+    now = _time.time() if now is None else now
+    receipt = inject_receipts.outstanding(
+        session_id, now=now, stale_after_s=stale_after_s)
+    if not receipt:
+        return None
+    where = lookup(session_id, receipt.get("inject_id"))
+    if where:
+        return dict(receipt, state=where["state"], queue=where["queue"])
+    if receipt.get("age_s", 0) > inject_receipts.EXPIRE_AFTER_S:
+        settle(session_id, receipt.get("inject_id"), "expired")
+        return None
+    return dict(receipt, state="unproven", queue=None)

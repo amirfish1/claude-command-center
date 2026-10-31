@@ -11,9 +11,14 @@ When a user says a session "got stuck", "won't take input", or a message sits on
    `{"outstanding": {"inject_id", "text_preview", "sent_ts", "age_s", ...}}`
    when a queued inject has not been confirmed landed. This is the receipt
    opened at `/api/inject-input` time whenever the result is `queued=True`,
-   closed the moment the terminal-queue watcher (or auto-recovery, or
-   force-restart) proves the text reached the session — it is what steps 1-2
-   below exist to reconstruct by hand when this field is unavailable.
+   closed the moment the queued row is committed as delivered (the Codex
+   claim commit, the terminal-queue watcher, auto-recovery, force-restart)
+   — it is what steps 1-2 below exist to reconstruct by hand when this field
+   is unavailable. Its `state` says what to do: `queued` or `held` means the
+   row is still in CCC's queue (`queue` names it; `delivery_id` =
+   `inject_id`, so `POST /api/pending-input/cancel` can drop it by id);
+   `unproven` means the row left the queue and nothing proved it landed —
+   that is the case worth chasing. An `unproven` receipt expires after a day.
    A non-zero `stop_held` count is not a stuck delivery: an explicit Stop
    (or a stop steer) parked that queued input on purpose (CCC-237). It sends
    only when released (`ccc held <sid> --release all`, or the "Held after

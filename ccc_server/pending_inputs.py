@@ -2839,11 +2839,28 @@ def _claim_matching_pending_input(session_id, text):
 
 
 def _commit_pending_input_claim(claim):
+    """The claimed row was delivered: it leaves the queue for good.
+
+    This is the one place a queued message is proven delivered, so it also
+    settles the message's receipt (by id for rows minted with one, by text
+    for worker handoff files that carry none).
+    """
     if not isinstance(claim, dict) or "item" not in claim:
         return False
     item = claim.get("item")
     if isinstance(item, _PendingInputHandoff):
-        return _core._complete_pending_input_handoff(item)
+        if not _core._complete_pending_input_handoff(item):
+            return False
+    sid = str(claim.get("session_id") or "")
+    pending_id = getattr(item, "pending_id", None)
+    if sid and pending_id:
+        from ccc_server import delivery as _delivery
+        _delivery.settle(sid, pending_id, "landed")
+    elif sid:
+        try:
+            _inject_receipts.close_receipt(sid, text=str(item))
+        except Exception as e:  # pragma: no cover - best-effort bookkeeping
+            print(f"  [pending-inputs] receipt settle failed: {e}", flush=True)
     return True
 
 
@@ -6138,6 +6155,7 @@ def _start_resume_queue_watcher() -> None:
                         # would re-offer the same blocked text every tick and
                         # turn a rate limit into a hot loop. Drop it; the
                         # attempt is in the held bucket for the human.
+                        _inject_receipts.close_receipt(sid, text=text, outcome="dropped")
                         _core._complete_pending_input_handoff(text)
                         _core._pending_terminal_retry_after.pop(sid, None)
                     elif _core._terminal_queue_result_is_terminal(result):

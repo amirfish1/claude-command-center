@@ -30346,11 +30346,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # the stuck-session-triage rule). None when nothing is
             # outstanding, or when it is too fresh to be worth flagging yet.
             sid = path.rsplit("/", 2)[-2]
-            from ccc_server import inject_receipts as _inject_receipts
+            from ccc_server import delivery as _delivery
             self.send_json({
                 "ok": True,
                 "session_id": sid,
-                "outstanding": _inject_receipts.outstanding(sid),
+                # `state` says where it waits (queued/held) or `unproven`.
+                "outstanding": _delivery.outstanding(sid),
                 # CCC-237: queued input an explicit Stop parked. It waits for
                 # a release on purpose; it is not a stuck delivery.
                 "stop_held": len(_stop_held_inputs_view(sid)["items"]),

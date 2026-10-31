@@ -55,6 +55,18 @@ def _env_float(name, default):
 # ordinary queue hop, not a stuck message.
 STALE_AFTER_S = _env_float("CCC_INJECT_RECEIPT_STALE_S", 45)
 
+# A receipt whose queue row is gone and that nothing settled within this long
+# is not evidence of anything any more (ccc_server/delivery.py expires it).
+# Before claim commits settled receipts, 163 of 164 on one host sat open for
+# weeks and the "outstanding" read answered yes for every session ever queued.
+EXPIRE_AFTER_S = _env_float("CCC_INJECT_RECEIPT_EXPIRE_S", 24 * 3600)
+# Anything older than this is swept on the next open, row or no row.
+SWEEP_AFTER_S = _env_float("CCC_INJECT_RECEIPT_SWEEP_S", 7 * 24 * 3600)
+
+_BUCKETS = {"landed": ("_landed", "landed_ts"),
+            "dropped": ("_dropped", "dropped_ts"),
+            "expired": ("_expired", "expired_ts")}
+
 
 def _default_path():
     base = os.environ.get("CCC_STATE_DIR") or os.path.join(
@@ -113,10 +125,29 @@ def open_receipt(sid, inject_id, text, *, source="", now=None, path=None):
     attr = attribution.from_text(text)
     original_fn = fn
     def with_attr(state):
+        _sweep(state, now)
         original_fn(state)
         if attr and isinstance(state.get(sid), dict):
             state[sid].update(attr=attr, message_id=attr["message_id"])
     _mutate(path, with_attr)
+
+
+def _settle(state, sid, outcome, now):
+    """Move the open receipt for ``sid`` into its settled bucket."""
+    e = state.pop(sid, None)
+    bucket, timestamp = _BUCKETS[outcome]
+    settled = state.setdefault(bucket, [])
+    settled.append({"sid": sid, "inject_id": e.get("inject_id"),
+                    "sent_ts": e.get("sent_ts"), timestamp: now})
+    state[bucket] = settled[-_KEEP_LANDED:]
+
+
+def _sweep(state, now):
+    """Expire receipts nothing settled for a week; they prove nothing now."""
+    for sid in [k for k, e in state.items()
+                if not k.startswith("_") and isinstance(e, dict)
+                and now - float(e.get("sent_ts") or 0.0) > SWEEP_AFTER_S]:
+        _settle(state, sid, "expired", now)
 
 
 def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,
@@ -127,9 +158,11 @@ def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,
     guards against a late confirmation for an old inject closing a newer,
     still-genuinely-outstanding one for the same session.
 
-    A discarded continuation must not be recorded as proven delivery.
+    A discarded continuation must not be recorded as proven delivery;
+    ``expired`` is for a receipt whose row is long gone and that nothing
+    ever settled (no proof either way).
     """
-    if outcome not in ("landed", "dropped"):
+    if outcome not in _BUCKETS:
         raise ValueError("unknown receipt outcome")
     now = time.time() if now is None else now
     import sender_envelope as attribution
@@ -147,13 +180,7 @@ def close_receipt(sid, *, inject_id=None, text=None, now=None, path=None,
             != attribution.strip_header(str(text or ""))[:160]
         ):
             return
-        state.pop(sid, None)
-        bucket = "_landed" if outcome == "landed" else "_dropped"
-        timestamp = "landed_ts" if outcome == "landed" else "dropped_ts"
-        settled = state.setdefault(bucket, [])
-        settled.append({"sid": sid, "inject_id": e.get("inject_id"),
-                        "sent_ts": e.get("sent_ts"), timestamp: now})
-        state[bucket] = settled[-_KEEP_LANDED:]
+        _settle(state, sid, outcome, now)
 
     _mutate(path, fn)
 

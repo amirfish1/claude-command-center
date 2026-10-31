@@ -104,7 +104,7 @@ def test_inject_receipt_endpoint_is_registered():
     import pathlib
     server_py = pathlib.Path(__file__).parent.parent.joinpath("server.py").read_text(encoding="utf-8")
     assert '"^/api/session/[a-zA-Z0-9_-]+/inject-receipt$"' in server_py
-    assert "_inject_receipts.outstanding(sid)" in server_py
+    assert "_delivery.outstanding(sid)" in server_py
 
 
 def test_open_receipt_is_wired_into_inject_input_handler():
@@ -147,3 +147,23 @@ def test_discarded_auto_continue_settles_only_its_receipt(
         state = json.loads((tmp_path / "inject-receipts.json").read_text())
         assert state["_dropped"][0]["inject_id"] == "auto"
         assert "_landed" not in state
+
+
+def test_expired_is_a_settled_outcome(tmp_path):
+    path = str(tmp_path / "r.json")
+    rc.open_receipt("s1", "a", "hello", now=NOW, path=path)
+    rc.close_receipt("s1", inject_id="a", outcome="expired", now=NOW + 5, path=path)
+    state = json.load(open(path))
+    assert "s1" not in state
+    assert state["_expired"] == [{"sid": "s1", "inject_id": "a", "sent_ts": NOW,
+                                  "expired_ts": NOW + 5}]
+
+
+def test_open_receipt_sweeps_week_old_receipts(tmp_path):
+    path = str(tmp_path / "r.json")
+    rc.open_receipt("old", "a", "hello", now=NOW, path=path)
+    rc.open_receipt("recent", "b", "hello", now=NOW + rc.SWEEP_AFTER_S - 60, path=path)
+    rc.open_receipt("new", "c", "hello", now=NOW + rc.SWEEP_AFTER_S + 1, path=path)
+    state = json.load(open(path))
+    assert "old" not in state and "recent" in state and "new" in state
+    assert [e["sid"] for e in state["_expired"]] == ["old"]

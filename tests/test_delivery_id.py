@@ -205,3 +205,75 @@ def test_worker_rebinds_the_id_around_the_engine_call(queue_env, monkeypatch):
     assert out.get("queued") is True
     assert [ev["delivery_id"] for ev in _queued_events(SID)] == ["did-w"]
     assert delivery.bound_id() is None, "the binding does not leak past the call"
+
+
+# ── receipts settle by the same id ───────────────────────────────────────────
+
+receipts = importlib.import_module("ccc_server.inject_receipts")
+
+
+def _queue_with_receipt(text):
+    out = server._inject_text_into_session(SID, text)
+    did = out["delivery_id"]
+    receipts.open_receipt(SID, did, text, source="composer")
+    return did
+
+
+def test_claim_commit_settles_the_receipt_by_id(queue_env, queueing_router):
+    did = _queue_with_receipt("deliver me")
+    assert delivery.outstanding(SID, stale_after_s=0)["state"] == "queued"
+    claimed = server._apply_pending_input_operations(SID, [{
+        "field": "terminal", "action": "pop_head_claim",
+    }])["value"][0]
+    assert delivery.entry_id(claimed["item"]) == did
+    assert server._commit_pending_input_claim({
+        "session_id": SID, "queue_name": "terminal", "index": 0,
+        "item": claimed["item"], "claim_sequence": claimed["claim_sequence"],
+    }) is True
+    assert delivery.outstanding(SID, stale_after_s=0) is None
+    state = receipts._load(receipts._default_path())
+    assert [e["inject_id"] for e in state["_landed"]] == [did]
+
+
+def test_commit_of_an_older_row_keeps_the_newer_receipt_open(queue_env, queueing_router):
+    first = _queue_with_receipt("first")
+    second = _queue_with_receipt("second")
+    claimed = server._apply_pending_input_operations(SID, [{
+        "field": "terminal", "action": "pop_head_claim",
+    }])["value"][0]
+    assert delivery.entry_id(claimed["item"]) == first
+    server._commit_pending_input_claim({"session_id": SID, "item": claimed["item"]})
+    still = delivery.outstanding(SID, stale_after_s=0)
+    assert still["inject_id"] == second and still["state"] == "queued"
+
+
+def test_cancel_by_id_settles_the_receipt_as_dropped(queue_env, queueing_router):
+    did = _queue_with_receipt("never mind")
+    assert delivery.cancel(SID, did)["cancelled"] == 1
+    assert delivery.outstanding(SID, stale_after_s=0) is None
+    state = receipts._load(receipts._default_path())
+    assert [e["inject_id"] for e in state["_dropped"]] == [did]
+
+
+def test_outstanding_names_where_the_message_waits(queue_env, queueing_router):
+    did = _queue_with_receipt("where am i")
+    view = delivery.outstanding(SID, stale_after_s=0)
+    assert (view["state"], view["queue"]) == ("queued", "terminal")
+    server._apply_pending_input_operations(SID, [{
+        "field": "terminal", "action": "pop_head_claim",
+    }])
+    view = delivery.outstanding(SID, stale_after_s=0)
+    assert (view["state"], view["queue"]) == ("unproven", None)
+    assert view["inject_id"] == did
+
+
+def test_unproven_receipt_expires_after_a_day(queue_env, queueing_router):
+    did = _queue_with_receipt("lost")
+    server._apply_pending_input_operations(SID, [{
+        "field": "terminal", "action": "pop_head_claim",
+    }])
+    later = __import__("time").time() + receipts.EXPIRE_AFTER_S + 1
+    assert delivery.outstanding(SID, now=later, stale_after_s=0) is None
+    state = receipts._load(receipts._default_path())
+    assert [e["inject_id"] for e in state["_expired"]] == [did]
+    assert delivery.outstanding(SID, now=later, stale_after_s=0) is None
