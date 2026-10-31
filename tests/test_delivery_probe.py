@@ -18,6 +18,7 @@ server = importlib.import_module("server")
 liveness = importlib.import_module("ccc_server.liveness")
 delivery = importlib.import_module("ccc_server.delivery")
 pending_inputs = importlib.import_module("ccc_server.pending_inputs")
+watchtower_msg = importlib.import_module("ccc_server.watchtower_msg")
 
 SID = "sess-probe-0001"
 
@@ -235,9 +236,14 @@ def test_resume_via_transport_calls_the_matching_resumer(monkeypatch):
     assert seen[-1][3] == {"mode": "steer"}, "antigravity is the one mode-aware resumer"
 
 
-def test_router_and_watcher_both_use_the_table():
-    router = inspect.getsource(server._inject_text_into_session_router)
-    watcher = inspect.getsource(server._start_resume_queue_watcher)
+def test_router_and_watcher_both_use_the_table(monkeypatch):
+    # This checks implementation structure, not the patchable server facade.
+    # Other tests replace facade entry points; pin source inspection to the
+    # owning modules and prove facade substitutions cannot change the check.
+    monkeypatch.setattr(server, "_inject_text_into_session_router", lambda *a, **kw: None)
+    monkeypatch.setattr(server, "_start_resume_queue_watcher", lambda: None)
+    router = inspect.getsource(watchtower_msg._inject_text_into_session_router)
+    watcher = inspect.getsource(pending_inputs._start_resume_queue_watcher)
     assert "_delivery.resume_via_transport(session_id, text, mode=mode)" in router
     assert "_delivery.resume_via_transport(sid, text)" in watcher
     for engine, _predicate, resumer in delivery.RESUME_TRANSPORTS:

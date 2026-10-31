@@ -169,6 +169,15 @@ test('sessionAttentionStep labels handoffs and owner-held tails', () => {
   assert.equal(blocked.label, 'Needs you');
   assert.equal(blocked.text, 'Ship?');
   assert.equal(ctx.step({ idea_ticket: { handoff: { state: 'running' } }, session_state: { did: 'X' } }).kind, 'handoff');
+  const pending = ctx.step({ idea_ticket: { handoff: {
+    state: 'running', owner: 'watchtower', supervision_state: 'pending_delivery'
+  } } });
+  assert.equal(pending.label, 'Takeover pending');
+  assert.ok(pending.text.includes('awaiting delivery confirmation'));
+  const confirmed = ctx.step({ idea_ticket: { handoff: {
+    state: 'running', owner: 'watchtower', supervision_state: 'running'
+  } } });
+  assert.equal(confirmed.label, 'Taken over');
   const waiting = ctx.step({ idea_ticket: { handoff: { state: 'waiting', waiting_on: 'EXAMPLE-11', question: 'build receipts' } } });
   assert.deepEqual([waiting.label, waiting.handoff, waiting.text], ['Waiting', 'running', 'Waiting on EXAMPLE-11: build receipts']);
   const mine = ctx.step({ session_state: { next_step_user: 'None.', completion: comp({

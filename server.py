@@ -31801,6 +31801,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "preview": _resolved_feature_flags(),
                 "preview_meta": _feature_flags_meta(),
             })
+        elif path == "/api/takeover/capabilities":
+            # Protocol support, not a promise that any particular session is
+            # reachable: guarded inject refuses unsupported/busy transports.
+            self.send_json({"schema_version": 1, "same_session": True, "no_queue": True})
         elif path == "/api/healthcheck":
             # Surface the state of every external dependency CCC delegates to.
             # Used by the setup banner so first-time users see exactly what's
@@ -40667,6 +40671,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            # Scoped takeover input must be validated before any return-route,
+            # bridge alias, continuation or queue/control verb can rewrite it.
+            if isinstance(payload, dict) and any(
+                key in payload and not isinstance(payload[key], bool)
+                for key in ("same_session", "no_queue")
+            ):
+                self.send_json({"ok": False, "same_session": False, "queued": False,
+                                "error": "same_session and no_queue must be booleans"}, 400)
+                return
+            if isinstance(payload, dict) and (payload.get("same_session") or payload.get("no_queue")):
+                scoped_mode = payload.get("mode") or ("steer" if payload.get("steer") else "send")
+                if (payload.get("same_session") is not True or payload.get("no_queue") is not True
+                        or payload.get("skip_wt") is not True or payload.get("origin") != "wt"
+                        or scoped_mode not in ("send", "steer", "engine_default")
+                        or any(payload.get(key) for key in (
+                            "force_queue", "force_terminal", "force_headless", "replace_queued",
+                            "replace_queued_texts", "replace_queued_ids", "stop",
+                            "presentation_bootstrap", "presentation_mode3",
+                        ))):
+                    self.send_json({"ok": False, "same_session": False, "queued": False,
+                                    "error": "invalid exact-session no-queue delivery options"}, 400)
+                    return
+                scoped_sid = payload.get("session_id", "")
+                scoped_text = payload.get("text", "")
+                if (not isinstance(scoped_sid, str) or not scoped_sid.strip()
+                        or not isinstance(scoped_text, str) or not scoped_text.strip()):
+                    self.send_json({"ok": False, "same_session": False, "queued": False,
+                                    "error": "missing session_id or text"}, 400)
+                    return
+                from ccc_server import runaway_hold as _scoped_hold
+                scoped_guard = _handoff_lease_guard(scoped_sid)
+                if scoped_guard or _scoped_hold.is_held(scoped_sid):
+                    self.send_json({"ok": False, "same_session": False, "queued": False,
+                                    "error": "session is held or handed off"}, 409)
+                    return
+                try:
+                    scoped_result = _inject_text_into_session(
+                        scoped_sid, scoped_text, mode=scoped_mode,
+                        same_session=True, no_queue=True, skip_wt=True, wt_origin=True,
+                        source="wt",
+                    )
+                except Exception:
+                    scoped_result = {"ok": False, "same_session": False, "queued": False,
+                                     "error": "scoped delivery failed; no fallback attempted"}
+                self.send_json(scoped_result)
+                return
             sid = payload.get("session_id", "")
             # CCC-1202: a spawned child's report addresses its route id;
             # deliver to whoever owns that return address right now.
@@ -45115,6 +45165,11 @@ def main():
     except Exception as e:
         print(f"  [session-graph] build failed: {e}")
     _start_session_graph_codex_refresh()
+    # Presentation sync and fenced legacy imports only. WatchTower owns
+    # supervision deadlines and delivery independently of browser polling.
+    if not os.environ.get("CCC_EPHEMERAL"):
+        from ccc_server import takeover_bridge as _takeover_bridge
+        _takeover_bridge.start()
     # Diagnostic: mark every server start in the resume ledger so a burst of
     # cold_resume events right after this line implicates restart-EOF as the
     # cause of warm processes dying.

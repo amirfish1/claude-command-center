@@ -3,8 +3,9 @@
 Every session the user starts from the CCC UI gets a WatchTower ticket after
 its first reply, so the work has a handle that outlives any one session.
 
-- CCC owns the ticket. The agent never writes to it, so it costs no turns:
-  this module files it, appends the session log, and closes it on archive.
+- CCC records ticket associations and session history. With takeover-capable
+  WatchTower, supervision and normal ticket completion belong to WatchTower;
+  the bridge only imports legacy ownership and mirrors presentation state.
 - After the first reply, Jev (TypeSafe System One) labels the session an idea
   or a small bug. With no Jev key it falls back to an idea; the sidebar row
   menu moves it.
@@ -33,6 +34,7 @@ thread, never on a request or list path.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -67,6 +69,8 @@ _inflight = set()
 _queues_ready = set()
 _state_cache = {"key": None, "data": None}
 _flock_depth = threading.local()
+_handoff_effect_locks = {}
+_handoff_effect_locks_guard = threading.Lock()
 # A claim older than this belongs to a filer that died mid-`wt take`.
 CLAIM_STALE_S = 300
 
@@ -160,6 +164,35 @@ def _mutate(fn):
         return result
 
 
+@contextmanager
+def handoff_effect_lock(ref):
+    """Serialize legacy sends and ownership transfers across server processes.
+
+    Keep this separate from the state lock: a delivery can take seconds, and
+    the state writer must remain available while it is in flight.
+    """
+    token = hashlib.sha256(str(ref).encode("utf-8")).hexdigest()
+    with _handoff_effect_locks_guard:
+        local_lock = _handoff_effect_locks.setdefault(token, threading.RLock())
+    with local_lock:
+        target = _state_path().parent / "handoff-locks" / (token + ".lock")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a") as fh:
+            if fcntl is not None:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _watchtower_owned(ref):
+    _state_cache["key"] = None
+    ticket = load_state()["tickets"].get(ref) or {}
+    return (ticket.get("handoff") or {}).get("owner") == "watchtower"
+
+
 def _claim(sid, *, over_skip=False):
     """Atomically reserve ``sid`` for filing. False when another thread or
     process already filed or is filing it."""
@@ -219,7 +252,8 @@ def idea_ticket_rows_map():
         if isinstance(h, dict) and h.get("state"):
             out[sid]["handoff"] = {k: h.get(k) for k in
                                    ("state", "auto", "at", "question", "nudges", "session",
-                                    "waiting_on")}
+                                    "waiting_on", "owner", "supervision_state", "delivery_state",
+                                    "sync_error")}
     # UI spawns still waiting for their first reply: no ticket yet, but the
     # row belongs in Ideas now rather than in Other.
     for sid in (data.get("pending") or {}):
@@ -652,7 +686,8 @@ def _file_new(sid, queue, text, cwd, *, label=""):
 
     def _record(d):
         d["tickets"][ref] = {"queue": queue, "sessions": [sid], "closed": False,
-                             "title": _title_from(text)}
+                             "title": _title_from(text), "task_brief": text[:2000],
+                             "repo_path": cwd or ""}
         d["sessions"][sid] = {"ref": ref, "kind": "started", "at": int(time.time())}
         d["pending"].pop(sid, None)
     _mutate(_record)
@@ -846,6 +881,14 @@ def _archive_transition_lock():
 
 
 def _archive_worker_locked(sid, ticket, archived):
+    with handoff_effect_lock(ticket["ref"]):
+        if _watchtower_owned(ticket["ref"]):
+            # Archiving a conversation must not force-close supervised work.
+            return
+        return _legacy_archive_worker_locked(sid, ticket, archived)
+
+
+def _legacy_archive_worker_locked(sid, ticket, archived):
     _state_cache["key"] = None
     current = ticket_for_session(sid)
     if not current or current["ref"] != ticket["ref"]:
@@ -1091,6 +1134,11 @@ def autopilot_rows(rows, *, now=None):
     and injects run on daemon threads, at most AUTOPILOT_MAX_PER_CALL."""
     if not _enabled() or not _autopilot_allowed():
         return 0
+    from . import takeover_bridge
+    if takeover_bridge.available():
+        # WatchTower discovers candidates and supervises on its own clock.
+        # List projection only reads the mirrored presentation state.
+        return 0
     now = time.time() if now is None else now
     data = load_state()
     views = _ticket_views(rows, data)
@@ -1163,6 +1211,16 @@ def _archive_group(sid, source):
 
 
 def _autopilot_done(ref, sid, mtime, did):
+    with handoff_effect_lock(ref):
+        from . import takeover_bridge
+        if _watchtower_owned(ref) or takeover_bridge.available():
+            with _lock:
+                _inflight.discard(("autopilot", ref))
+            return
+        return _legacy_autopilot_done(ref, sid, mtime, did)
+
+
+def _legacy_autopilot_done(ref, sid, mtime, did):
     try:
         _mark_autopilot(ref, mtime)
         summary = (did or f"Session {sid} reported the work complete.") + \
@@ -1236,8 +1294,10 @@ def _set_handoff(ref, **fields):
 
 
 def handoff(session_id, *, auto=False):
-    """Hand a session's work to CCC: the session owns its ticket (filed in
-    SMALL-BUGS if it has none) and the watchdog follows it to a close."""
+    """Delegate supervision to WatchTower, retaining older-install compatibility.
+
+    Once delegated, unavailable delivery never reactivates CCC supervision.
+    """
     sid = str(session_id or "").strip()
     if not sid:
         return {"ok": False, "error": "no session"}
@@ -1254,6 +1314,14 @@ def handoff(session_id, *, auto=False):
     ref = ticket["ref"]
     if ticket["closed"]:
         return {"ok": False, "error": f"{ref} is already closed"}
+    with handoff_effect_lock(ref):
+        from . import takeover_bridge
+        if _watchtower_owned(ref) or takeover_bridge.available():
+            return takeover_bridge.adopt(sid, ref, auto=auto)
+        return _legacy_handoff(sid, ref, auto=auto)
+
+
+def _legacy_handoff(sid, ref, *, auto=False):
     current = load_state()["tickets"].get(ref, {}).get("handoff") or {}
     if current.get("state") in _ACTIVE_HANDOFF and current.get("session") == sid:
         return {"ok": True, "ref": ref, "already": True}
@@ -1277,6 +1345,14 @@ def takeback(session_id):
     if not ticket:
         return {"ok": False, "error": "no ticket"}
     ref = ticket["ref"]
+    with handoff_effect_lock(ref):
+        if _watchtower_owned(ref):
+            from . import takeover_bridge
+            return takeover_bridge.cancel(str(session_id).strip(), ref)
+        return _legacy_takeback(ref)
+
+
+def _legacy_takeback(ref):
     _set_handoff(ref, state="taken_back", taken_back_at=int(time.time()))
     _wt(["comment", ref, "Taken back by the owner; CCC stopped watching.", "--by", "system"])
     _restamp_rows()
@@ -1290,6 +1366,15 @@ def answer(session_id, text):
     ticket = ticket_for_session(str(session_id or "").strip())
     if not ticket or not text:
         return {"ok": False, "error": "no ticket" if not ticket else "empty answer"}
+    ref = ticket["ref"]
+    with handoff_effect_lock(ref):
+        if _watchtower_owned(ref):
+            from . import takeover_bridge
+            return takeover_bridge.answer(str(session_id).strip(), ref, text)
+        return _legacy_answer(ticket, text)
+
+
+def _legacy_answer(ticket, text):
     ref = ticket["ref"]
     h = load_state()["tickets"].get(ref, {}).get("handoff") or {}
     target = h.get("session") or ticket["sessions"][-1]
@@ -1353,6 +1438,14 @@ def _watchdog_pass(active, snap):
 
 
 def _watch_one(ref, h, info, *, now=None):
+    with handoff_effect_lock(ref):
+        from . import takeover_bridge
+        if _watchtower_owned(ref) or takeover_bridge.available():
+            return
+        return _legacy_watch_one(ref, h, info, now=now)
+
+
+def _legacy_watch_one(ref, h, info, *, now=None):
     now = time.time() if now is None else now
     sid = h.get("session") or ""
     item = _find(ref)

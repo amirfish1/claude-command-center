@@ -3960,6 +3960,12 @@
           + (h.question ? ': ' + String(h.question) : '') };
     }
     if (h) {
+      if (h.owner === 'watchtower') {
+        const pending = h.supervision_state === 'pending_delivery';
+        return { label: pending ? 'Takeover pending' : 'Taken over', kind: 'handoff', handoff: 'running',
+          text: pending ? 'WatchTower accepted supervision; its instruction is awaiting delivery confirmation.'
+            : 'WatchTower is supervising this session through completion.' };
+      }
       return { label: 'Handed off', kind: 'handoff', handoff: 'running',
         text: String(ss.did || 'CCC is driving this to a close.') };
     }
@@ -17887,9 +17893,9 @@
     try {
       const data = await ccPostJson(url, body);
       if (!data || !data.ok) throw new Error((data && data.error) || 'Request failed');
-      showOpToast(role === 'handoff' ? 'Handed off ' + (data.ref || '') + ': CCC will drive it to a close'
-        : role === 'handoff-takeback' ? 'Taken back: CCC stopped watching ' + (data.ref || '')
-        : 'Answer sent to the session');
+      showOpToast(role === 'handoff' ? 'Takeover accepted for ' + (data.ref || '')
+        : role === 'handoff-takeback' ? 'Takeover cancelled for ' + (data.ref || '')
+        : 'Answer accepted for delivery');
       refreshConversationList();
     } catch (error) {
       btn.disabled = false;
@@ -40720,7 +40726,7 @@
       const autoSwitchHtml = !_childLaneRow && (_ideaAvatarHtml(c) || rowHandoff(c))
         ? autonomySwitchHtml(c, _canHandOff) : '';
       const handoffBtn = (_canHandOff && !autoSwitchHtml)
-        ? '<button class="conv-lane-btn conv-handoff-btn" data-role="handoff" title="Hand off: CCC drives this to a close and only asks you if it gets stuck" aria-label="Hand off">&#129309;</button>'
+        ? '<button class="conv-lane-btn conv-handoff-btn" data-role="handoff" title="Takeover: supervise this session through completion" aria-label="Takeover">&#129309;</button>'
         : '';
       const moveLaneBtn = _ideaRef
         ? '<button class="conv-lane-btn conv-idea-move-btn" data-role="move-idea" data-queue="' + _ideaToQueue + '" title="Move to ' + _ideaToLabel + '" aria-label="Move to ' + _ideaToLabel + '">' + (_ideaToQueue === 'IDEAS' ? '&#128161;' : '&#128027;') + '</button>'

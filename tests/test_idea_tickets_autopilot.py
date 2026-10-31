@@ -258,6 +258,20 @@ class AutopilotTest(unittest.TestCase):
         self.assertEqual(len([c for c in self.calls if c[0] == "find"]), finds)
         self.assertEqual(finds, 1)
 
+    def test_watchtower_owner_fences_stale_watchdog_and_completion(self):
+        stale = self._handed_off()
+        it._set_handoff("IDEAS-1", owner="watchtower")
+        self.find["IDEAS-1"] = {"status": "closed"}
+        # A watchdog queued before adoption must re-read ownership before
+        # any ticket lookup, reminder, forced close or archive action.
+        it._watch_one("IDEAS-1", stale, {"seen": True}, now=NOW)
+        it._autopilot_done("IDEAS-1", "a1", NOW, "Done")
+        it._archive_worker_locked("a1", it.ticket_for_session("a1"), True)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.injects, [])
+        self.assertEqual(self.archived, [])
+        self.assertFalse(self._ticket()["closed"])
+
 
 if __name__ == "__main__":
     unittest.main()

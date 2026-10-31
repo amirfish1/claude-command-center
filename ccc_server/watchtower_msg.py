@@ -1582,6 +1582,122 @@ def _log_inject_result(
     )
 
 
+def _inject_scoped_input(session_id, text, **options):
+    """Immediate, exact-thread delivery; never enter a queue-capable router.
+
+    In particular do not use engine.inject or the generic app-server RPC
+    wrapper: the former drops these constraints in older workers, and the
+    latter may initialize a replacement connection. Worker-owned transports
+    are unsupported until the worker exposes an equally scoped operation.
+    """
+    def refused(code, error, **extra):
+        return {"ok": False, "same_session": False, "queued": False,
+                "code": code, "error": error, **extra}
+
+    def busy(state):
+        return (any(state.get(key) for key in (
+            "active_turn_id", "ccc_turn_start_pending", "thread_needs_approval",
+            "active_flags", "pending_approval_request", "active_items",
+        )) or str(state.get("status") or "").lower() == "active")
+
+    if (options.get("same_session") is not True
+            or options.get("no_queue") is not True
+            or options.get("skip_wt") is not True
+            or options.get("wt_origin") is not True):
+        return refused("invalid_scoped_delivery", "Scoped delivery requires same_session, no_queue, skip_wt and origin wt")
+    if (not isinstance(session_id, str) or not session_id.strip()
+            or not isinstance(text, str) or not text.strip()):
+        return refused("invalid_scoped_delivery", "missing session_id or text")
+    if (options.get("mode", "send") not in ("send", "steer", "engine_default")
+            or any(options.get(key) for key in (
+                "force_queue", "force_terminal", "force_headless", "_from_terminal_queue",
+                "preserve_queued_steer", "queued_steer_batch", "replace_queued_ids",
+            ))):
+        return refused("invalid_scoped_delivery", "Scoped delivery cannot queue, replace input or control a session")
+    if not _core._is_codex_session(session_id):
+        return refused("scoped_transport_unsupported", "Exact-session no-queue delivery is supported only on a current managed Codex connection")
+    transport = _core._CODEX_APP_SERVER_TRANSPORT
+    if (transport is None or getattr(transport, "kind", None) != "managed-unix"
+            or not _core._codex_app_server_is_live()):
+        return refused("scoped_transport_unavailable", "No current managed Codex connection; no worker, resume or fallback attempted")
+    # Do not break stale locks: a competing writer must never be bypassed.
+    lock = _core._codex_thread_turn_lock(session_id)
+    if not lock.acquire(blocking=False):
+        return refused("session_busy", "Another operation owns this thread")
+    try:
+        state = _core._codex_app_server_thread_state(session_id)
+        if busy(state):
+            return refused("session_busy", "Thread has an active or unresolved operation")
+        response = _core._codex_app_server_request_to_transport(
+            transport, "thread/read", {"threadId": session_id, "includeTurns": True}, timeout=5,
+        )
+        thread = (response.get("result") or {}).get("thread") or {}
+        if (not _core._codex_response_succeeded(response)
+                or thread.get("id") != session_id
+                or (thread.get("status") or {}).get("type") != "idle"
+                or _core._codex_latest_active_turn(thread)):
+            return refused("session_not_idle", "Exact thread is not provably idle on this connection")
+        snap = _core._codex_thread_writer_snapshot(session_id)
+        if snap.get("external_active") or snap.get("writer"):
+            return refused("session_busy", "A competing or unknown writer owns this thread")
+        # Recheck identity and volatile state immediately before sending on
+        # this same transport. No ensure/start/resume and no rerouted RPC.
+        with _core._CODEX_APP_SERVER_LOCK:
+            state = _core._CODEX_APP_SERVER_THREAD_STATE.setdefault(session_id, {})
+            if (transport is not _core._CODEX_APP_SERVER_TRANSPORT
+                    or not _core._codex_app_server_is_live()
+                    or busy(state)):
+                return refused("session_busy", "Connection or thread state changed before delivery")
+            # Omitted settings remain native to the thread. Only explicit
+            # session picks apply here; generic turn params also override
+            # permissions, and model defaults can substitute another model.
+            turn_params = {
+                "threadId": session_id,
+                "input": _core._codex_user_input(_core._strip_lone_surrogates(text)),
+            }
+            override = _core._get_session_override(session_id) or {}
+            for setting, field in (("model", "model"), ("reasoning_effort", "effort")):
+                value = override.get(setting)
+                if isinstance(value, str) and value.strip():
+                    turn_params[field] = value
+            state["ccc_turn_start_pending"] = True
+            state["ccc_turn_start_pending_at"] = time.time()
+            try:
+                started = _core._codex_app_server_request_to_transport(
+                    transport, "turn/start", turn_params, timeout=5,
+                )
+                result_body = started.get("result") if isinstance(started, dict) else None
+                turn = result_body.get("turn") if isinstance(result_body, dict) else None
+                turn = turn if isinstance(turn, dict) else {}
+                if not isinstance(started, dict):
+                    raise ValueError("missing turn/start response")
+            except Exception:
+                # Keep the pending marker: a lost reply is not proof that
+                # the daemon rejected the turn. Never retry/fallback here.
+                return refused("delivery_unknown", "Turn acceptance is unknown; reconcile before retrying", uncertain=True)
+            if (not _core._codex_response_succeeded(started)
+                    or not isinstance(turn.get("id"), str) or not turn["id"].strip()):
+                # JSON-RPC rejection is definitive; transport timeouts are not.
+                if isinstance(started.get("error"), dict):
+                    state.pop("ccc_turn_start_pending", None)
+                    state.pop("ccc_turn_start_pending_at", None)
+                    return refused("delivery_rejected", _core._codex_error_text(started))
+                return refused("delivery_unknown", "Turn acceptance is unknown; reconcile before retrying", uncertain=True)
+            state.pop("ccc_turn_start_pending", None)
+            state.pop("ccc_turn_start_pending_at", None)
+            state["active_turn_id"] = turn["id"]
+            state["active_writer"] = "ccc"
+            state["turn_started_at"] = time.time()
+            _core._CODEX_APP_SERVER_TURN_THREAD[turn["id"]] = session_id
+        return {"ok": True, "same_session": True, "queued": False,
+                "session_id": session_id, "turn_id": turn["id"],
+                "via": "codex-app-server", "landed": "now"}
+    except Exception:
+        return refused("scoped_transport_unavailable", "Unable to prove exact-thread delivery; no fallback attempted")
+    finally:
+        lock.release()
+
+
 def _inject_text_into_session(session_id, text, **kwargs):
     """Route `text` to a session, then stamp the CCC-1000 result contract.
 
@@ -1612,6 +1728,13 @@ def _inject_text_into_session(session_id, text, **kwargs):
         attribution_recorded = attribution.journal(attr, app="ccc", event="inject")
     else:
         kwargs.pop("attr", None)
+    if kwargs.get("same_session") or kwargs.get("no_queue"):
+        # Generic dedupe includes queued/forwarded deliveries, so it cannot
+        # attest to this stronger contract. Bypass it as well as the router.
+        return _annotate_inject_result(
+            _inject_scoped_input(session_id, text, **kwargs),
+            requested=kwargs.get("requested_verb") or kwargs.get("mode", "send"),
+        )
     requested = str(kwargs.pop("requested_verb", "") or "")
     mode = str(kwargs.get("mode", "send"))
     # One id for the whole trip: response, queue row, receipt, browser card.
@@ -1739,6 +1862,8 @@ def _inject_text_into_session_router(
     mode="send",
     wt_origin=False,
     skip_wt=False,
+    same_session=False,
+    no_queue=False,
     preserve_queued_steer=False,
     idempotency_key=None,
     source="api",
@@ -1756,6 +1881,15 @@ def _inject_text_into_session_router(
     else `claude --resume` headless. Returns a dict with at least
     {"ok": bool, "via": <route>}.
     """
+    if same_session or no_queue:
+        return _inject_scoped_input(
+            session_id, text, same_session=same_session, no_queue=no_queue,
+            skip_wt=skip_wt, wt_origin=wt_origin, mode=mode,
+            force_queue=force_queue, force_terminal=force_terminal,
+            force_headless=force_headless, _from_terminal_queue=_from_terminal_queue,
+            preserve_queued_steer=preserve_queued_steer,
+            queued_steer_batch=queued_steer_batch, replace_queued_ids=replace_queued_ids,
+        )
     text = _core._strip_ccc_session_state_instruction(text)
     # Hard boundary: strip lone UTF-16 surrogates BEFORE the text reaches
     # any code path that will eventually JSON-serialise it for an
