@@ -3653,6 +3653,18 @@
       text: (offerClose ? 'Ready to close · ' : '') + (did || 'Reviewed as complete; archive when ready.') });
     const attn = (hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c);
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
+    // An open task's pending work is more useful than its completed milestone.
+    const completion = summary.completion;
+    const planned = !hasNext && completion && completion.valid === true && !completion.ready_to_close
+      && Array.isArray(completion.remaining_actions) && completion.remaining_actions[0];
+    if (planned && typeof planned.text === 'string' && planned.text.trim()) {
+      const ownerTag = planned.text.match(/^\s*(?:owner\s*[:=]\s*)?\(?(agent|user|external|amir|human)\)?\s*[:=—–-]\s*/i);
+      const owner = String(planned.owner || (ownerTag && ownerTag[1]) || '').trim().toLowerCase();
+      if (!['user', 'amir', 'human'].includes(owner)) return Object.assign(base, {
+        label: owner === 'external' ? 'Waiting' : 'Next', kind: 'plan',
+        text: (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim(),
+      });
+    }
     // A decision with chips reads "Decide: <the choice>", never
     // "Next: Answer Q12 ..." (CCC-276). info.next keeps the raw step so the
     // quick-action source still matches it.

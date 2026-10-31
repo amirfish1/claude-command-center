@@ -121,3 +121,13 @@ test('explicit Archive has its own category and a deliberate send resumes it', (
   assert.equal(load().ticketSessionSection(item), 'archived');
   assert.equal(load({ sessionIsOptimisticallySending: () => true }).ticketSessionSection(item), 'active');
 });
+
+
+test('an agent-owned pending step stays active without becoming a user decision', () => {
+  const { ticketSessionSection: section } = load();
+  assert.equal(section(row('pending', { session_state: {
+    did: 'Reviewed the prior milestone.', next_step_user: 'None.',
+    completion: { valid: true, ready_to_close: false,
+      remaining_actions: [{ owner: 'agent', text: 'Review the pending screenshots.' }] },
+  } })), 'active');
+});

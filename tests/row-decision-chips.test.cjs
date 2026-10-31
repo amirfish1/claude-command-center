@@ -38,3 +38,22 @@ test('model-authored decision chips win and a single go-ahead stays Next', () =>
   assert.equal(single.label, 'Next');
   assert.equal(single.text, 'Say yes to a restart.');
 });
+
+
+test('pending agent work replaces a completed milestone without asking the user', () => {
+  const pending = { did: 'Reviewed the earlier verification.', next_step_user: 'None.',
+    completion: { valid: true, ready_to_close: false,
+      remaining_actions: [{ text: 'Agent: review the pending independent screenshots.' }] } };
+  const info = rowOutcomeView(row(pending));
+  assert.equal(info.label, 'Next');
+  assert.equal(info.kind, 'plan');
+  assert.equal(info.text, 'review the pending independent screenshots.');
+  const waiting = rowOutcomeView(row({ ...pending, completion: { ...pending.completion,
+    remaining_actions: [{ owner: 'external', text: 'Wait for the independent browser report.' }] } }));
+  assert.equal(waiting.label, 'Waiting');
+  assert.equal(waiting.kind, 'plan');
+  assert.equal(rowOutcomeView(row({ ...pending, completion: { valid: false, remaining_actions: pending.completion.remaining_actions } })).text, pending.did);
+  assert.equal(rowOutcomeView(row({ ...pending, completion: { valid: true, remaining_actions: [] } })).text, pending.did);
+  assert.equal(rowOutcomeView({ ...row(pending), state: 'working' }).label, 'Working');
+  assert.equal(rowOutcomeView(row({ ...pending, next_step_user: 'Choose a region.' })).label, 'Decide');
+});
