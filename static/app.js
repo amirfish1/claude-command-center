@@ -66837,6 +66837,52 @@
       + '</div>';
   }
 
+  // CCC-275: images returned inside a structured tool output (Codex
+  // custom_tool_call_output list: input_text / input_image / input_text, e.g.
+  // tools.image_gen__imagegen run inside `exec`). codex_parse.py already
+  // emits them as lazy (line, idx) refs on the tool_result event; this
+  // card shows them outside the (usually collapsed) tool row, with an
+  // open/download fallback through the same /api/conv-image endpoint.
+  function _toolResultImageKey(img) {
+    return String(img && img.line != null ? img.line : '') + ':' + String(img && img.idx != null ? img.idx : 0);
+  }
+  function _toolResultImagesCardHtml(ev, convId) {
+    const imgs = (ev && Array.isArray(ev.images)) ? ev.images : [];
+    if (!imgs.length) return '';
+    let items = '';
+    for (const img of imgs) {
+      let src = '';
+      if (img && img.kind === 'base64' && img.line != null && img.data == null && convId) {
+        src = '/api/conv-image?conversation_id=' + encodeURIComponent(convId)
+          + '&line=' + encodeURIComponent(img.line)
+          + '&idx=' + encodeURIComponent(img.idx != null ? img.idx : 0);
+      } else if (img && img.kind === 'base64' && img.data) {
+        src = 'data:' + (img.media_type || 'image/png') + ';base64,' + img.data;
+      } else if (img && img.kind === 'path' && img.session_id && img.filename) {
+        src = '/image-cache/' + encodeURIComponent(img.session_id) + '/' + encodeURIComponent(img.filename);
+      }
+      if (!src) continue;
+      const ext = String((img.media_type || 'image/png').split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+      const fname = 'tool-image-L' + (img.line != null ? img.line : 'x') + '-' + (img.idx != null ? img.idx : 0) + '.' + ext;
+      items += '<figure class="tool-result-image" data-tool-image-key="' + escapeAttr(_toolResultImageKey(img)) + '">'
+        + '<a href="' + escapeAttr(src) + '" target="_blank" rel="noopener" title="Open full size">'
+        + '<img class="msg-image" src="' + escapeAttr(src) + '" alt="Image returned by tool" loading="lazy"'
+        + ' onerror="this.closest(\'figure\').classList.add(\'is-missing\')"></a>'
+        + '<figcaption><a href="' + escapeAttr(src) + '" target="_blank" rel="noopener">Open</a>'
+        + ' · <a href="' + escapeAttr(src) + '" download="' + escapeAttr(fname) + '">Download</a>'
+        + '<span class="tool-result-image-missing"> · image unavailable</span></figcaption>'
+        + '</figure>';
+    }
+    if (!items) return '';
+    return '<div class="stream-block-image-gen image-gen-card tool-result-images" data-tool-use-id="'
+      + escapeAttr(String((ev && ev.tool_use_id) || '')) + '">'
+      + '<div class="image-gen-card-head"><span class="image-gen-icon" aria-hidden="true">◫</span> '
+      + (imgs.length === 1 ? 'Image from tool' : imgs.length + ' images from tool') + '</div>'
+      + '<div class="image-gen-media">' + items + '</div>'
+      + '</div>';
+  }
+  window.CCCToolResultImagesCardHtml = _toolResultImagesCardHtml;
+
   // `codex_request` pending event: a shared inline card for an
   // approval/question/permission/elicitation request, mirroring what
   // codex-client.js's renderPendingRequest shows in the native pane. Answers
@@ -69607,6 +69653,27 @@
               }
               const grp = row.parentElement && row.parentElement.closest('.kimi-tool-group');
               if (grp) _kimiUpdateToolGroupHead(grp);
+            }
+          }
+          // CCC-275: images in the tool output render as a visible card
+          // right after the tool row (a turn-level sibling breaks the tool
+          // group run, so collapse / hide-tools never hides it). Keyed by
+          // (line, idx) so replays, reloads and repeat polls never duplicate.
+          if (Array.isArray(ev.images) && ev.images.length && ev.tool_use_id) {
+            const escId = (window.CSS && CSS.escape) ? CSS.escape(String(ev.tool_use_id)) : String(ev.tool_use_id);
+            const row = $view.querySelector('.kimi-tool[data-tool-use-id="' + escId + '"]');
+            const fresh = ev.images.filter(img => {
+              const k = _toolResultImageKey(img);
+              const esc = (window.CSS && CSS.escape) ? CSS.escape(k) : k;
+              return !$view.querySelector('[data-tool-image-key="' + esc + '"]');
+            });
+            const cardHtml = row && fresh.length
+              ? _toolResultImagesCardHtml(Object.assign({}, ev, { images: fresh }), renderedConversationId) : '';
+            if (cardHtml) {
+              const inGroup = row.parentElement && row.parentElement.closest('.kimi-tool-group');
+              row.insertAdjacentHTML('afterend', cardHtml);
+              const turn = row.closest('.kimi-turn');
+              if (inGroup && turn) _kimiRegroupTools(turn);
             }
           }
           continue;

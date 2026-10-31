@@ -1,0 +1,1 @@
+- Images returned inside a tool output (for example a Codex image generated inside `exec`) now show inline in the conversation, with Open and Download links, instead of being visible only to the agent.

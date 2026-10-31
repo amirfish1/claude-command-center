@@ -2237,6 +2237,14 @@
   .image-gen-prompt { margin-top: 4px; color: var(--text); white-space: pre-wrap; }
   .image-gen-media { margin-top: 6px; }
   .image-gen-media img { max-width: 100%; border-radius: 6px; display: block; }
+  /* CCC-275: images returned inside a tool output (tool-result-images). */
+  .tool-result-image { margin: 0 0 6px; }
+  .tool-result-image img { max-height: 520px; width: auto; }
+  .tool-result-image figcaption { margin-top: 3px; font-size: 11px; color: var(--text-muted); }
+  .tool-result-image figcaption a { color: inherit; }
+  .tool-result-image .tool-result-image-missing { display: none; }
+  .tool-result-image.is-missing img { display: none; }
+  .tool-result-image.is-missing .tool-result-image-missing { display: inline; }
 
   /* Inline `codex_request` card: approval/question/permission/elicitation,
      rendered in the transcript instead of only in the live strip. */

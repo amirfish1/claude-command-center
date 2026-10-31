@@ -53,7 +53,7 @@ async function loadHelpers(page) {
     (0, eval)('window.__fns = (() => {\nvar currentConversation = "conv-test-1";\n'
       + code
       + '\nreturn { _turnDiffBlockHtml, _imageGenerationBlockHtml, _codexRequestCardHtml, '
-      + '_codexRequestResultForDecision, _codexRequestCardShowing };\n})();');
+      + '_codexRequestResultForDecision, _codexRequestCardShowing, _toolResultImagesCardHtml };\n})();');
   }, helpersCode);
 }
 
@@ -220,5 +220,36 @@ test('_codexRequestCardShowing suppresses the live strip once a matching card is
       return window.__fns._codexRequestCardShowing(view, 'req-other');
     });
     assert.equal(differentRequest, false, 'a card for a different request id must not suppress');
+  });
+});
+
+// CCC-275: images inside a list-valued custom_tool_call_output (e.g. an
+// image generated inside `exec`) render as a visible card with open/download
+// fallbacks, keyed for dedupe, and never inline the base64 body.
+test('tool_result images render as a keyed card with open/download links', async () => {
+  await withPage(async (page) => {
+    await loadHelpers(page);
+    const r = await page.evaluate(() => {
+      const ev = { type: 'tool_result', line: 89, tool_use_id: 'call_x',
+        images: [{ kind: 'base64', media_type: 'image/png', line: 89, idx: 0 },
+                 { kind: 'base64', media_type: 'image/jpeg', line: 89, idx: 1 }] };
+      const host = document.createElement('div');
+      host.innerHTML = window.__fns._toolResultImagesCardHtml(ev, 'sess-abc');
+      return {
+        none: window.__fns._toolResultImagesCardHtml({ type: 'tool_result', images: [] }, 'sess-abc'),
+        srcs: Array.from(host.querySelectorAll('img')).map(i => i.getAttribute('src')),
+        keys: Array.from(host.querySelectorAll('[data-tool-image-key]')).map(e => e.dataset.toolImageKey),
+        downloads: Array.from(host.querySelectorAll('a[download]')).map(a => a.getAttribute('download')),
+        head: host.querySelector('.image-gen-card-head').textContent.trim(),
+      };
+    });
+    assert.equal(r.none, '');
+    assert.deepEqual(r.srcs, [
+      '/api/conv-image?conversation_id=sess-abc&line=89&idx=0',
+      '/api/conv-image?conversation_id=sess-abc&line=89&idx=1',
+    ]);
+    assert.deepEqual(r.keys, ['89:0', '89:1']);
+    assert.deepEqual(r.downloads, ['tool-image-L89-0.png', 'tool-image-L89-1.jpeg']);
+    assert.match(r.head, /2 images from tool/);
   });
 });
