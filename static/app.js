@@ -1964,7 +1964,9 @@
       wrap.style.display = open ? '' : 'none';
       localStorage.setItem('ccc-perf-open', open ? '1' : '0');
     });
-    footer.parentNode.insertBefore(sec, footer);
+    const usageDrawer = document.querySelector('.session-usage-drawer');
+    if (usageDrawer) usageDrawer.appendChild(sec);
+    else footer.parentNode.insertBefore(sec, footer);
     // Replay anything logged before the pane mounted.
     _perfPaneLog.list.forEach(function (e) { _perfPaneRow('list', e, true); });
     _perfPaneLog.open.forEach(function (e) { _perfPaneRow('open', e, true); });
@@ -3562,9 +3564,11 @@
     const base = { hasAnswer, ready, offerClose, attn: null };
     if (working) return Object.assign(base, { label: 'Working', kind: 'working',
       text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') });
-    // Archived/trashed rows read as finished but get no Close button.
-    if (ready || c.archived || c.trashed) return Object.assign(base, { label: 'Close', kind: 'ready',
-      text: did || 'Reviewed as complete; archive when ready.' });
+    // Closed rows don't invite the user to close them again.
+    if (c.archived || c.trashed) return Object.assign(base, { label: c.trashed ? 'Archived' : 'Finished', kind: 'ready',
+      text: did || 'Closed session.' });
+    if (ready) return Object.assign(base, { label: 'Ready to close', kind: 'ready',
+      text: 'Ready to close · ' + (did || 'Reviewed as complete; archive when ready.') });
     const attn = (hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c);
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
     return Object.assign(base, { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
@@ -3867,6 +3871,44 @@
       Number(live && live.mtime) || 0, Number(live && live.modified) || 0);
     if (reviewedAt > 0 && activityAt > 0 && activityAt <= reviewedAt) return true;
     return false;
+  }
+
+  // Lifecycle is independent of process/turn liveness. Only explicit closure
+  // belongs in Finished; an idle turn and a recommendation to close stay Active.
+  function ticketSessionSection(c) {
+    if (c.trashed) return 'archived';
+    if (c.archived || c.idea_ticket?.closed) return 'finished';
+    const live = _applyLiveOverlayToRow(c);
+    if (live.needs_approval || live.question_waiting) return 'needs-you';
+    const outcome = rowOutcomeView(c);
+    return outcome.kind === 'next' ? 'needs-you' : 'active';
+  }
+
+  // Keep the order first seen in each category through polling updates. New
+  // tickets lead the list; status/mtime changes don't shuffle existing rows.
+  const _ticketSessionLayouts = new Map();
+  function stableTicketSessionGroups(rows, lane, selectedId) {
+    const previous = _ticketSessionLayouts.get(lane) || new Map();
+    const next = new Map();
+    const keyFor = c => c.idea_ticket?.ref || c.session_id || c.id;
+    const ordered = rows.filter(c => !previous.has(keyFor(c))).concat(
+      rows.filter(c => previous.has(keyFor(c))).sort((a, b) =>
+        previous.get(keyFor(a)).rank - previous.get(keyFor(b)).rank));
+    const groups = { 'needs-you': [], active: [], finished: [], archived: [] };
+    ordered.forEach((c, rank) => {
+      const key = keyFor(c);
+      let section = ticketSessionSection(c);
+      const before = previous.get(key);
+      // Keep the open conversation anchored while reading. Explicit closure
+      // still takes effect immediately; this only holds attention transitions.
+      if ((c.session_id || c.id) === selectedId && before
+          && ['active', 'needs-you'].includes(section)
+          && ['active', 'needs-you'].includes(before.section)) section = before.section;
+      next.set(key, { rank, section });
+      groups[section].push(c);
+    });
+    _ticketSessionLayouts.set(lane, next);
+    return groups;
   }
 
   // The finished row's one action: a Close button at the end of its
@@ -43788,7 +43830,46 @@
         })).join('') + '</div></div>';
     };
     if (_ticketLifecycleView) {
-      _ideaArchivedHtml = _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', _ideaTicketRows(_allTabView, 'archived'));
+      const lifecycleRows = _ideaTicketRows(_allTabView, 'archived');
+      const groups = stableTicketSessionGroups(_allTabMainConvs.concat(lifecycleRows), _allTabView, currentConversation);
+      const renderSectionRows = rows => {
+        let clusters = _allTabRowsToClusters(_allTabTreeRowsFor(rows));
+        clusters.sort((a, b) => {
+          const pinDelta = _allTabClusterPinRank(a) - _allTabClusterPinRank(b);
+          if (!Number.isNaN(pinDelta) && pinDelta !== 0) return pinDelta;
+          return _arcGrouping === 'cost' ? _allTabClusterCost(b) - _allTabClusterCost(a) : 0;
+        });
+        if (!_arcShouldGroupByFolder) return _renderAllTabClusters(clusters, _isSpecificFolderFilter, false);
+        const folders = new Map();
+        clusters.forEach(cluster => {
+          const root = cluster.rows[0].card;
+          const key = root.folder_label_chip || root.folder_path || '(unknown)';
+          if (!folders.has(key)) folders.set(key, []);
+          folders.get(key).push(cluster);
+        });
+        return Array.from(folders, ([folder, items]) => {
+          const root = items[0].rows[0].card;
+          const key = root.folder_path || folder;
+          const collapsed = _isFolderGroupCollapsed('archived', key);
+          return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
+            + _folderGroupHeaderHtml('archived', folder, items.length, root.folder_chip_hue | 0,
+              root.folder_chip_orphan ? ' is-orphan' : '', key, '', root.folder_path || '')
+            + _renderAllTabClusters(items, true, false) + '</div>';
+        }).join('');
+      };
+      const sectionHtml = (key, label, hint) => '<section class="session-lifecycle-section" data-session-section="' + key + '" aria-label="' + label + '">'
+        + '<h3 class="session-lifecycle-heading" title="' + hint + '"><span class="session-lifecycle-dot" aria-hidden="true"></span>'
+        + label + '<span class="session-lifecycle-count">' + groups[key].length + '</span></h3>'
+        + (groups[key].length ? renderSectionRows(groups[key])
+          : '<div class="session-lifecycle-empty">' + (key === 'needs-you' ? 'Nothing needs your attention.' : 'No active sessions in this view.') + '</div>')
+        + '</section>';
+      if (!_ipSearchActive) {
+        _arcRows = sectionHtml('needs-you', 'Needs you', 'Questions and decisions waiting on you')
+          + sectionHtml('active', 'Active', 'Unfinished work, including idle sessions and sessions ready to close');
+      }
+      _ideaArchivedHtml = (groups.finished.length
+        ? sectionHtml('finished', 'Finished', 'Explicitly closed sessions; ending a turn never moves a session here') : '')
+        + _lifecycleSection('Archived', 'ccc-' + _allTabView + '-archived-collapsed', groups.archived);
     } else if (_allTabView !== 'workers') {
       const _trashItems = [];
       for (const c of _allTabTrashConvs) {
@@ -44203,6 +44284,7 @@
       + (_ipSearchActive ? _textSearchRowsHtml : _tabBody) + _showMoreRowsHtml;
     const _objectsSplitActive = !_ipSearchActive && _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
+    $convList.classList.toggle('session-workspace', _ticketLifecycleView && !_ipSearchActive);
     // Hoist classes ride on $convList, like .compact-rows and .workers-dense:
     // a class on the section wrapper does not survive every render path (that
     // was the bug that left Dense inert). Set before the flicker guard's early

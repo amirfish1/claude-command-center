@@ -869,7 +869,6 @@
              flip the palette via CSS so no chip needs to re-render. -->
         <button id="chipsColorToggle" class="sh-btn" title="Toggle folder chip color mode" aria-label="Toggle folder chip color mode"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
       </div>
-      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
     </div>
 
     <div class="new-session-panel">
@@ -886,7 +885,7 @@
         </span>
         <button class="new-session-btn new-session-btn-secondary" id="sidebarNewTicketBtn" title="File a ticket into any queue" aria-label="New ticket"><span class="plus" aria-hidden="true">+</span> Ticket</button>
         <div class="search-wrap">
-          <input type="text" id="convSearch" class="conv-search-input" data-tour="search" placeholder="Search..." autocomplete="off">
+          <input type="text" id="convSearch" class="conv-search-input" data-tour="search" placeholder="Search sessions…" aria-label="Search sessions" autocomplete="off">
           <datalist id="convSearchHistoryList"></datalist>
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
@@ -997,6 +996,10 @@
     <div class="sidebar-global-actions" id="sidebarGlobalActions" data-role="global-actions"></div>
 
     <!-- Bottom-mounted settings strip, Claude-Desktop-style -->
+    <details class="session-usage-drawer">
+      <summary>Usage &amp; diagnostics</summary>
+      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
+    </details>
     <div class="sidebar-footer">
       <!-- Active group-chat coordinations pill. Lives bottom-left so it's
            glanceable from anywhere without crowding the topbar. JS toggles

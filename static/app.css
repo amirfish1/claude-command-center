@@ -33609,3 +33609,85 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
     align-self: center;
   }
 }
+
+/* Session workspace: categories remain navigation; lifecycle guides attention. */
+.session-lifecycle-section { margin: 0 0 22px; }
+.session-lifecycle-heading {
+  display: flex; align-items: center; gap: 8px; margin: 20px 8px 10px;
+  color: var(--text-muted); font-size: 11px; line-height: 18px;
+  font-weight: 650; letter-spacing: .08em; text-transform: uppercase;
+}
+.session-lifecycle-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+[data-session-section="needs-you"] .session-lifecycle-dot { background: var(--orange, #d9a441); }
+[data-session-section="finished"] .session-lifecycle-dot { background: var(--text-muted); }
+.session-lifecycle-count { padding: 0 6px; border-radius: 5px; background: var(--surface-2); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.session-lifecycle-empty { padding: 8px 8px 12px; color: var(--text-muted); font-size: 12px; }
+#convList.session-workspace { padding-inline: 12px; }
+#convList.session-workspace .conv-tab-bar { gap: 2px; margin-bottom: 4px; }
+#convList.session-workspace .conv-tab { padding: 10px 7px; font-size: 12px; }
+#convList.session-workspace .conv-tab-count { font-size: 10px; }
+#convList.session-workspace .conv-archived-section { border-top: 0; margin-top: 0; padding-top: 0; }
+#convList.session-workspace .conv-archived-tools { border: 0; padding: 8px 4px; margin: 0; }
+#convList#convList.session-workspace .conv-item:not(.is-current-child-row) {
+  --conv-content-left: calc(var(--conv-icon-left) + 46px);
+  padding-top: 13px !important; padding-bottom: 13px !important;
+  border-radius: 8px !important; margin: 2px 0 !important;
+  border-bottom-color: color-mix(in srgb, var(--text) 7%, transparent) !important;
+  box-shadow: none;
+}
+#convList#convList.session-workspace .conv-item.active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface)) !important;
+  box-shadow: inset 3px 0 var(--accent);
+}
+#convList#convList.session-workspace .conv-item .conv-idea-avatar:not(.is-child-mini) {
+  width: 34px; height: 34px; border-radius: 8px; top: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  box-shadow: none; animation: none;
+}
+#convList.session-workspace .conv-idea-avatar > .conv-avatar-background { display: none; }
+#convList.session-workspace .conv-avatar-stack { text-shadow: none; gap: 3px; }
+#convList#convList.session-workspace .conv-avatar-initials { font-size: 10px; }
+#convList#convList.session-workspace .conv-avatar-stack > .conv-avatar-number { font-size: 9px; opacity: .7; }
+#convList#convList.session-workspace .conv-item:not(.is-current-child-row) .conv-main-row > .conv-auto-switch { top: 53px; left: calc(var(--conv-icon-left) + 2px); }
+#convList.session-workspace .conv-avatar-model { filter: none; transform: scale(.8); }
+#convList#convList.session-workspace .conv-main-row.has-inline-step .conv-title { font-size: 15px !important; line-height: 21px !important; font-weight: 550; }
+#convList#convList.session-workspace .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step { font-size: 13px; line-height: 19px; }
+#convList.session-workspace .conv-working-dot,
+#convList.session-workspace .conv-working-dot::after,
+#convList.session-workspace .conv-auto-switch { animation: none !important; box-shadow: none !important; }
+#convList.session-workspace .conv-pct-badge { background: transparent; font-size: 10px; opacity: .65; }
+#convList.session-workspace .conv-attn-chip,
+#convList.session-workspace .conv-ready-close { border-radius: 6px; padding: 5px 9px; font-size: 12px; }
+#convList.session-workspace [data-session-section="finished"] .conv-item { opacity: 1; }
+.session-usage-drawer { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 9px 18px; color: var(--text-muted); font-size: 12px; }
+.session-usage-drawer > summary { cursor: pointer; padding: 4px 0; }
+.session-usage-drawer > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.session-usage-drawer #headroomBars { padding: 12px 0 4px; }
+.session-usage-drawer .hb-heading { display: none; }
+.session-usage-drawer:has(.hb-low) > summary { color: var(--red); }
+.session-usage-drawer:has(.hb-low) > summary::after { content: ' · Low capacity'; }
+.sidebar:has(.session-workspace) .sidebar-header { padding: 14px 18px 10px; }
+.sidebar:has(.session-workspace) .sh-title-main { font-size: 17px; font-weight: 650; background: none; color: var(--text); -webkit-text-fill-color: currentColor; }
+.sidebar:has(.session-workspace) .sh-app-icon { width: 25px; height: 25px; }
+.sidebar:has(.session-workspace) .new-session-panel { padding: 10px 16px; }
+.sidebar:has(.session-workspace) .new-session-primary-row { flex-wrap: wrap; gap: 8px; }
+.sidebar:has(.session-workspace) #sidebarNewBtn { background: var(--accent); color: var(--bg, #101318); border-color: var(--accent); border-radius: 7px; font-size: 13px; }
+.sidebar:has(.session-workspace) #sidebarNewTicketBtn { border-radius: 7px; font-size: 13px; background: transparent; }
+.sidebar:has(.session-workspace) .search-wrap { order: 10; flex: 1 0 100%; }
+.sidebar:has(.session-workspace) .conv-search-input { border-radius: 7px; min-height: 36px; font-size: 13px; }
+@media (max-width: 1200px) {
+  #convList#convList.session-workspace .conv-item .wa-body { min-height: 78px; }
+  #convList#convList.session-workspace .conv-item .wa-row > .conv-idea-avatar:not(.is-child-mini) { position: relative; top: auto; flex: 0 0 34px; }
+  #convList.session-workspace .wa-title { font-size: 15px; }
+  #convList.session-workspace .wa-preview { font-size: 13px; line-height: 19px; }
+  .session-usage-drawer { padding: 6px 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #convList.session-workspace * { animation: none !important; transition: none !important; }
+}
+@media (max-width: 600px) {
+  .sidebar:has(.session-workspace) .sh-title-link { display: inline-flex; min-width: 0; }
+  .sidebar:has(.session-workspace) .sh-title-main { font-size: 15px; }
+  .sidebar:has(.session-workspace) .new-session-caret { background: var(--accent); border-color: var(--accent); color: var(--bg, #101318); }
+}
