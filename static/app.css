@@ -33625,6 +33625,16 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   color: var(--text-muted); font-size: 11px; line-height: 18px;
   font-weight: 650; letter-spacing: .08em; text-transform: uppercase;
 }
+.session-lifecycle-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px;
+  padding: 2px 0; border: 0; border-radius: 4px; background: transparent;
+  color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit;
+  text-align: left; cursor: pointer;
+}
+.session-lifecycle-toggle:hover { color: var(--text); }
+.session-lifecycle-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.session-lifecycle-arrow { margin-left: auto; font-size: 12px; letter-spacing: 0; }
+.session-lifecycle-content[hidden] { display: none !important; }
 .session-lifecycle-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 [data-session-section="needs-you"] .session-lifecycle-dot { background: var(--orange, #d9a441); }
 [data-session-section="finished"] .session-lifecycle-dot { background: var(--text-muted); }

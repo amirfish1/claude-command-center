@@ -44114,12 +44114,25 @@
             + _renderAllTabClusters(items, true, false) + '</div>';
         }).join('');
       };
-      const sectionHtml = (key, label, hint) => '<section class="session-lifecycle-section" data-session-section="' + key + '" aria-label="' + label + '">'
-        + '<h3 class="session-lifecycle-heading" title="' + hint + '"><span class="session-lifecycle-dot" aria-hidden="true"></span>'
-        + label + '<span class="session-lifecycle-count">' + groups[key].length + '</span></h3>'
-        + (groups[key].length ? renderSectionRows(groups[key])
-          : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
-        + '</section>';
+      const sectionHtml = (key, label, hint) => {
+        const storageKey = 'ccc-session-section-' + _allTabView + '-' + key + '-collapsed';
+        let collapsed = key === 'archived';
+        try {
+          const saved = localStorage.getItem(storageKey);
+          if (saved !== null) collapsed = saved === '1';
+        } catch (_) {}
+        // Search results must remain discoverable without changing the saved choice.
+        if (_hideGroupChatsForSearch) collapsed = false;
+        const contentId = 'session-section-' + _allTabView + '-' + key + '-content';
+        return '<section class="session-lifecycle-section' + (collapsed ? ' is-collapsed' : '') + '" data-session-section="' + key + '" aria-label="' + label + '">'
+          + '<h3 class="session-lifecycle-heading"><button type="button" class="session-lifecycle-toggle" data-role="session-section-toggle" data-storage-key="' + storageKey + '"'
+          + ' title="' + hint + '" aria-expanded="' + !collapsed + '" aria-controls="' + contentId + '"><span class="session-lifecycle-dot" aria-hidden="true"></span>'
+          + label + '<span class="session-lifecycle-count">' + groups[key].length + '</span><span class="session-lifecycle-arrow" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span></button></h3>'
+          + '<div class="session-lifecycle-content" id="' + contentId + '"' + (collapsed ? ' hidden' : '') + '>'
+          + (groups[key].length ? renderSectionRows(groups[key])
+            : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
+          + '</div></section>';
+      };
       if (!_ipSearchActive) {
         _arcRows = sectionHtml('needs-you', 'Needs you', 'Questions and decisions waiting on you')
           + sectionHtml('active', 'Active', 'Unfinished work, including idle sessions and sessions ready to close');
@@ -44876,6 +44889,20 @@
         $archivedToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
+    $convList.querySelectorAll('[data-role="session-section-toggle"]').forEach(toggle => {
+      toggle.addEventListener('click', ev => {
+        ev.stopPropagation();
+        const section = toggle.closest('[data-session-section]');
+        const content = section && section.querySelector('.session-lifecycle-content');
+        if (!content) return;
+        const collapsed = !content.hidden;
+        content.hidden = collapsed;
+        section.classList.toggle('is-collapsed', collapsed);
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        toggle.querySelector('.session-lifecycle-arrow').textContent = collapsed ? '▸' : '▾';
+        try { localStorage.setItem(toggle.dataset.storageKey, collapsed ? '1' : '0'); } catch (_) {}
+      });
+    });
     // Toggle handler for the All tab's Trash section header (CCC-468).
     $convList.querySelectorAll('[data-role="trash-toggle"]').forEach($trashToggle => {
       $trashToggle.addEventListener('click', (ev) => {
