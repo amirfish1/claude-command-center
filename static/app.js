@@ -44175,6 +44175,7 @@
         }).join('');
       };
       const sectionHtml = (key, label, hint) => {
+        const rows = key === 'active' ? groups['needs-you'].concat(groups.active) : groups[key];
         const storageKey = 'ccc-session-section-' + _allTabView + '-' + key + '-collapsed';
         let collapsed = key === 'archived';
         try {
@@ -44187,15 +44188,16 @@
         return '<section class="session-lifecycle-section' + (collapsed ? ' is-collapsed' : '') + '" data-session-section="' + key + '" aria-label="' + label + '">'
           + '<h3 class="session-lifecycle-heading"><button type="button" class="session-lifecycle-toggle" data-role="session-section-toggle" data-storage-key="' + storageKey + '"'
           + ' title="' + hint + '" aria-expanded="' + !collapsed + '" aria-controls="' + contentId + '"><span class="session-lifecycle-dot" aria-hidden="true"></span>'
-          + label + '<span class="session-lifecycle-count">' + groups[key].length + '</span><span class="session-lifecycle-arrow" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span></button></h3>'
+          + label + '<span class="session-lifecycle-count">' + rows.length + '</span><span class="session-lifecycle-arrow" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span></button></h3>'
           + '<div class="session-lifecycle-content" id="' + contentId + '"' + (collapsed ? ' hidden' : '') + '>'
-          + (groups[key].length ? renderSectionRows(groups[key])
+          + (rows.length ? (key === 'active'
+              ? renderSectionRows(groups['needs-you']) + renderSectionRows(groups.active)
+              : renderSectionRows(rows))
             : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
           + '</div></section>';
       };
       if (!_ipSearchActive) {
-        _arcRows = sectionHtml('needs-you', 'Needs you', 'Questions and decisions waiting on you')
-          + sectionHtml('active', 'Active', 'Unfinished work, including idle sessions and sessions ready to close');
+        _arcRows = sectionHtml('active', 'Active', 'Questions and decisions first, followed by working sessions');
       }
       _ideaArchivedHtml = sectionHtml('finished', 'Finished', 'Completed work; a new message returns it to Active')
         + sectionHtml('archived', 'Archived', 'Sessions explicitly put away; restore one to resume work');
