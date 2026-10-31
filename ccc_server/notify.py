@@ -690,9 +690,10 @@ def _plan_rerun(inc):
 def _alert_off_dashboard(key, item):
     """RESIL-6: also reach the owner's phone via CCC_ALERT_COMMAND (off unless
     set). Once per incident key, rate-capped; never raises."""
-    if (str(key).startswith("death:") and
+    if (str(key).startswith("death:") and (
+            _load_state().get("session_death_phone_alerts") is False or
             os.environ.get("CCC_ALERT_SESSION_DEATHS", "1").strip().lower()
-            in ("0", "false", "no", "off")):
+            in ("0", "false", "no", "off"))):
         return
     try:
         from ccc_server import alert_hook

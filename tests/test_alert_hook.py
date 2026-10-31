@@ -83,10 +83,13 @@ def test_dead_session_emitter_alerts_off_dashboard(monkeypatch):
     assert "stopped mid-turn" in calls[0][1] and "s9" in calls[0][3]
 
 
-def test_session_death_phone_opt_out_preserves_other_alerts(monkeypatch):
+@pytest.mark.parametrize("setting", ["env", "state"])
+def test_session_death_phone_opt_out_preserves_other_alerts(monkeypatch, setting):
     from ccc_server import notify
     calls = []
-    monkeypatch.setenv("CCC_ALERT_SESSION_DEATHS", "0")
+    monkeypatch.setenv("CCC_ALERT_SESSION_DEATHS", "0" if setting == "env" else "1")
+    monkeypatch.setattr(notify, "_load_state", lambda: {
+        "session_death_phone_alerts": setting != "state"})
     monkeypatch.setattr(ah, "send", lambda key, *a, **kw: calls.append(key) or ah.OFF)
     notify._alert_off_dashboard("death:s1:42", {"title": "Stopped"})
     notify._alert_off_dashboard("wake:s1:refused:42", {"title": "Wake refused"})

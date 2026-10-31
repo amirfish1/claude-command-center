@@ -69,7 +69,9 @@ Facts that trip people up:
   `activity.log`).
   Set `CCC_ALERT_SESSION_DEATHS=0` to silence stopped-session phone alerts
   while keeping dashboard notifications and refused-wake alerts. Restart
-  the dashboard server after changing this environment setting.
+  the dashboard service through its launcher after changing this environment
+  setting. Alternatively, set `"session_death_phone_alerts": false` in
+  `notify-state.json` for a preference read on each alert without a restart.
 - Dead sessions are notify-only by default. A session can opt in to one
   automatic rerun (`POST /api/auto-rerun {"session_id", "enabled"}`); a
   scheduled job that starts a fresh session each run gets a host-only rule in
