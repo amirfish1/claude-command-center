@@ -376,8 +376,9 @@ def _dashboard_event_watch_exit():
 # High-volume, machine-readable firehose for the app-server liveness
 # investigation: one JSON object per line for EVERY probe stage, request
 # send/receive, reader event, and _ensure() decision. Separate from
-# activity.log so the human log stays skim-able. Rotated by nothing --
-# truncate it by hand when the investigation ends.
+# activity.log so the human log stays skim-able. Size-capped: past
+# APP_SERVER_TRACE_MAX_BYTES the file rolls to .1 (one generation kept); it
+# grew unbounded to 709M at ~43MB/day before the cap (OPS-284).
 APP_SERVER_TRACE_FILE = COMMAND_CENTER_STATE_DIR / "logs" / "app-server-trace.log"
 if test_isolation_active():
     # Tests drive fake transports (Mock pids, fixed clocks); keep their records
@@ -385,6 +386,7 @@ if test_isolation_active():
     APP_SERVER_TRACE_FILE = (
         Path(tempfile.gettempdir()) / f"ccc-test-app-server-trace-{os.getpid()}.log"
     )
+APP_SERVER_TRACE_MAX_BYTES = 50 * 1024 * 1024
 _APP_SERVER_TRACE_FH = None
 _APP_SERVER_TRACE_LOCK = threading.Lock()
 
@@ -409,6 +411,17 @@ def _app_server_trace(event, **fields):
                 _APP_SERVER_TRACE_FH = open(APP_SERVER_TRACE_FILE, "a", encoding="utf-8")
             _APP_SERVER_TRACE_FH.write(line)
             _APP_SERVER_TRACE_FH.flush()
+            if _APP_SERVER_TRACE_FH.tell() > APP_SERVER_TRACE_MAX_BYTES:
+                # Several CCC processes append here; whichever crosses the cap
+                # first renames, the others keep writing into .1 until their
+                # own tell() trips and they reopen the fresh file.
+                _APP_SERVER_TRACE_FH.close()
+                _APP_SERVER_TRACE_FH = None
+                try:
+                    if os.path.getsize(APP_SERVER_TRACE_FILE) > APP_SERVER_TRACE_MAX_BYTES:
+                        os.replace(APP_SERVER_TRACE_FILE, f"{APP_SERVER_TRACE_FILE}.1")
+                except FileNotFoundError:
+                    pass
     except Exception:
         pass
 
