@@ -20895,7 +20895,7 @@
     } else {
       // Phone Advanced has no Active/Other. If the stored tab is one of
       // those, land on Coding so the hidden top bar cannot strand us.
-      if (_coreApp !== 'queues' && tab !== 'coding' && tab !== 'workers' && tab !== 'queues' && tab !== 'jobs' && tab !== 'ideas' && tab !== 'smallbugs') {
+      if (_coreApp !== 'queues' && tab !== 'coding' && tab !== 'workers' && tab !== 'queues' && tab !== 'jobs' && tab !== 'ideas' && tab !== 'smallbugs' && tab !== 'alltickets') {
         try { localStorage.setItem('ccc-sidebar-tab', 'coding'); } catch (_) {}
         if (document.querySelector('[data-role="conv-tab-bar"]')) {
           _activateSidebarTabFromMobileNav('coding');
@@ -39387,6 +39387,8 @@
   function _sidebarBudgetIdeaLane(row, tab) {
     const t = row && row.idea_ticket;
     if (!t || (!t.ref && !t.pending) || t.closed) return false;
+    // CCC-285: All tickets = Features + Small bugs.
+    if (tab === 'alltickets') return true;
     return (t.queue === 'SMALL-BUGS') === (tab === 'smallbugs');
   }
   function _boundSidebarRowsForRender(rows, limit, tab) {
@@ -39406,7 +39408,7 @@
       .map(row => ({
         row,
         inLane: (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab)
-          : (tab === 'ideas' || tab === 'smallbugs') ? _sidebarBudgetIdeaLane(row, tab)
+          : (tab === 'ideas' || tab === 'smallbugs' || tab === 'alltickets') ? _sidebarBudgetIdeaLane(row, tab)
           : true,
         inWindow: _archiveWindowAllowsRow(row, cutoff),
         ts: _archiveWindowRowTs(row),
@@ -43719,19 +43721,24 @@
     // with a session-id tie-break so input/bucket order cannot flip the row.
     const _ideaTicketRows = (lane, bucket = 'active') => {
       const best = new Map();
+      // CCC-285: 'alltickets' is Features + Small bugs in one list.
+      const laneOf = c => {
+        const l = _allTabLaneFor(c);
+        return lane === 'alltickets' && (l === 'ideas' || l === 'smallbugs') ? 'alltickets' : l;
+      };
       const inWindow = c => !!_qActive || _archiveWindowAllowsRow(c, _ipWindowCutoff);
       const byRecency = (x, y) => (
         _archiveWindowRowTs(y) - _archiveWindowRowTs(x)
         || _allTabSessionId(x).localeCompare(_allTabSessionId(y))
       );
-      const activeRefs = new Set(_allTabConvs.filter(c => _allTabLaneFor(c) === lane
+      const activeRefs = new Set(_allTabConvs.filter(c => laneOf(c) === lane
         && inWindow(c) && c.idea_ticket && !c.archived && !c.trashed && !c.idea_ticket.closed).map(c => c.idea_ticket.ref));
       // Archived includes trashed tickets: these tabs never say "Trash".
       const candidates = bucket === 'trash' ? _allTabTrashConvs
         : bucket === 'archived' ? _allTabConvs.concat(_allTabTrashConvs) : _allTabConvs;
       const members = new Map();
       candidates.forEach(c => {
-        if (_allTabLaneFor(c) !== lane || !inWindow(c)) return;
+        if (laneOf(c) !== lane || !inWindow(c)) return;
         const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
         if (!ref) return;
         if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
@@ -43765,11 +43772,12 @@
     };
     const _allTabIdeaConvs = _ideaTicketsOn ? _ideaTicketRows('ideas') : [];
     const _allTabSmallBugConvs = _ideaTicketsOn ? _ideaTicketRows('smallbugs') : [];
+    const _allTabAllTicketConvs = _ideaTicketsOn ? _ideaTicketRows('alltickets') : [];
     // CCC-778: the top-level Coding/Workers tabs (shown instead of Issues/
     // Queues when "Show issues and queues as separate tabs" is off) are just
     // the All tab pre-filtered to that lane.
     const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers'
-      : (_ideaTicketsOn && (_sidebarTab === 'ideas' || _sidebarTab === 'smallbugs')) ? _sidebarTab : null;
+      : (_ideaTicketsOn && (_sidebarTab === 'ideas' || _sidebarTab === 'smallbugs' || _sidebarTab === 'alltickets')) ? _sidebarTab : null;
     // CCC-851: Coding and Workers sessions now live exclusively under their
     // own top-level tabs, so the old "All" tab (renamed "Other") no longer
     // needs a nested Coding/Workers/Messages/Group-chats filter -- it always
@@ -43779,6 +43787,7 @@
       ? _allTabWorkerConvs
       : _allTabView === 'ideas' ? _allTabIdeaConvs
       : _allTabView === 'smallbugs' ? _allTabSmallBugConvs
+      : _allTabView === 'alltickets' ? _allTabAllTicketConvs
       : (_allTabView === 'coding' ? _allTabCodingConvs : _allTabOtherConvs);
     const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);
     // Uniform-column hoist (Workers). Engine glyph and $-tier are the two
@@ -44117,7 +44126,7 @@
     // belong to a queue, not the user, so there's nothing to restore there.
     let _trashHtml = '';
     let _ideaArchivedHtml = '';
-    const _ticketLifecycleView = _allTabView === 'ideas' || _allTabView === 'smallbugs';
+    const _ticketLifecycleView = _allTabView === 'ideas' || _allTabView === 'smallbugs' || _allTabView === 'alltickets';
     const _lifecycleSection = (label, key, rows) => {
       if (!rows.length) return '';
       let collapsed = !_hideGroupChatsForSearch;
@@ -44523,6 +44532,7 @@
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
     const _tabDefs = _ideaTicketsOn
       ? [
+        ['alltickets', 'All', _allTabAllTicketConvs.length],
         ['ideas', 'Features', _allTabIdeaConvs.length],
         ['smallbugs', 'Small bugs', _allTabSmallBugConvs.length],
         ['workers', 'Workers', _allTabWorkerConvs.length],
@@ -44569,7 +44579,7 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : _sidebarTab === 'jobs' ? '<div class="jobs-host" id="sidebarJobsHost"></div>'
-      : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers' || _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
+      : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers' || _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs' || _sidebarTab === 'alltickets') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       // _readyToMergeHtml is built at its declaration below the In-progress
       // assembly, so it has to be concatenated here rather than inside
       // _inProgressHtml. The CSS already expects it as a #convList child
@@ -44577,7 +44587,7 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs')))
+    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs' && _sidebarTab !== 'alltickets')))
       ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
         + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
         + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
@@ -93378,7 +93388,7 @@
   }
   function normalizeSidebarTabKey(t) {
     if (ideaTicketsOn()) {
-      return (t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'ideas';
+      return (t === 'alltickets' || t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'alltickets';
     }
     return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers' || t === 'jobs') ? t : 'coding';
   }

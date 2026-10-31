@@ -179,3 +179,12 @@ test('sessionAttentionStep labels handoffs and owner-held tails', () => {
   assert.equal(ctx.step({ session_state: { next_step_user: 'None.', completion: comp({
     remaining_actions: [{ text: 'agent: verify' }] }) } }), null);
 });
+
+test('All tickets tab merges Features and Small bugs by recency (CCC-285)', () => {
+  const bug = row('bug', 'BUG-1', 25);
+  bug.idea_ticket.queue = 'SMALL-BUGS';
+  const rows = [row('feature-old', 'EXAMPLE-1', 10), bug, row('feature-new', 'EXAMPLE-2', 30)];
+  assert.deepEqual(representatives(rows, 'alltickets'), ['feature-new', 'bug', 'feature-old']);
+  assert.deepEqual(representatives(rows, 'ideas'), ['feature-new', 'feature-old']);
+  assert.deepEqual(representatives(rows, 'smallbugs'), ['bug']);
+});
