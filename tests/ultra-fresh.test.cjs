@@ -1,11 +1,31 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
 const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'));
 const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
+
+test('spawn text deltas expose authored choices when the complete footer arrives', () => {
+  const frames = [];
+  const context = { _ultraFresh: { entries: new Map([['s0', {}]]) },
+    _ultraFreshAccept: update => frames.push(context._ultraFreshParseState(update.text)) };
+  const functions = ['sessionCompletionDetails', '_ultraFreshParseState', 'sessionQuickAction', '_ultraFreshSpawnFeed'];
+  vm.createContext(context);
+  vm.runInContext(functions.map(name => {
+    const start = app.indexOf('  function ' + name + '(');
+    return app.slice(start, app.indexOf('\n  }\n', start) + 4);
+  }).join('\n'), context);
+  const send = text => context._ultraFreshSpawnFeed('s0', [{type:'assistant_block',message_id:'m1',partial:true,
+    blocks:[{type:'text',text}]}]);
+  send('An earlier change shipped.\n<session-state>\nNEXT_STEP_USER: Choose the report scope.\nNEXT_ACTION: ');
+  assert.equal(frames[0], null);
+  send('[{"label":"Keep","reply":"Keep the scope."},{"label":"Change","reply":"Change the scope."}]\n</session-state>');
+  assert.deepEqual(Array.from(frames[1].next_actions,a=>a.label), ['Keep','Change']);
+  assert.equal(frames[1].next_step_user, 'Choose the report scope.');
+});
 
 test('a streamed decision changes section on the next render frame despite a permanent hover pause', async () => {
   const fn = name => {
@@ -207,9 +227,30 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
       session_state:{did:'Fixed playback.',next_step_user:'Reload the dashboard page.'}}));
     await page.waitForFunction(() => document.querySelector('[data-id="s0"] .wa-explanation-label').textContent === 'Next:');
     assert.equal(await page.$eval('[data-id="s0"] .conv-outcome-step',el=>el.textContent),'Reload the dashboard page.');
+    // The pane's real transcript feed supplies raw text, not session_state.
+    // Its footer must replace the prose summary and paint BOTH authored choices
+    // without another sidebar SSE frame, poll, selection, or tab change.
+    const decisionText = 'The earlier change shipped.\n<session-state>\n'
+      + 'DID: Saved the previous change.\nINSIGHT: One decision remains.\n'
+      + 'NEXT_STEP_USER: Choose whether the report needs more changes.\n'
+      + 'NEXT_ACTION: [{"label":"Already covered","reply":"[Q12:report] Already covered."},{"label":"More feedback","reply":"[Q12:report] More feedback."}]\n'
+      + '</session-state>';
+    await page.evaluate(text => uf.feed('s0', [{type:'assistant',line:500,ts:'2099-01-01T16:00:00Z',
+      blocks:[{kind:'text',text}]}]), decisionText);
+    await page.waitForFunction(() => document.querySelector('[data-id="s0"] .wa-explanation-label').textContent === 'Decide:');
+    assert.deepEqual(await page.$$eval('[data-id="s0"] .wa-line2 .conv-quick-action',els=>els.map(e=>e.textContent)), ['Already covered','More feedback']);
+    assert.doesNotMatch(await page.$eval('[data-id="s0"] .wa-preview',el=>el.textContent), /earlier change shipped|Saved the previous change/);
+    await page.evaluate(text => {
+      const parsed = uf.state.entries.get('s0').sessionState;
+      uf.accept({session_id:'s0',text,ts:'2099-01-01T16:00:00Z',session_state:{...parsed,serverMetadata:true}});
+      uf.feed('s0',[{type:'assistant',line:500,ts:'2099-01-01T16:00:00Z',blocks:[{kind:'text',text}]}]);
+    }, decisionText);
+    assert.equal(await page.evaluate(()=>uf.state.entries.get('s0').sessionState.serverMetadata),true,
+      'duplicate raw pane frames retain normalized server metadata');
+    assert.deepEqual(await page.$$eval('[data-id="s0"] .wa-line2 .conv-quick-action',els=>els.map(e=>e.textContent)), ['Already covered','More feedback']);
     await page.evaluate(() => uf.feed('s0', [{type:'user_text', bookkeeping:true,
       text:'Saved compaction context',ts:'2099-01-01T15:00:00Z'}]));
-    assert.equal(await page.$eval('[data-id="s0"] .conv-outcome-step',el=>el.textContent),'Reload the dashboard page.');
+    assert.equal(await page.$eval('[data-id="s0"] .conv-outcome-step',el=>el.textContent),'whether the report needs more changes.');
     // A final assessment arriving on an existing row must create the action,
     // without relying on a future full-list render. A new turn removes it.
     await page.evaluate(() => {

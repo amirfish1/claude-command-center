@@ -3492,6 +3492,73 @@
   // Ultra-fresh: one bounded stream for the first four sessions intersecting
   // the list viewport. Message updates touch only the existing explanation
   // slots; row identity, ordering, selection and scroll stay under list control.
+  function sessionCompletionDetails(assessment) {
+    const scope = assessment && assessment.scope;
+    const validScope = scope === undefined || (!!scope && typeof scope === 'object'
+      && typeof scope.closure_met === 'boolean'
+      && ['goal', 'done_when', 'evidence'].every(k => typeof scope[k] === 'string' && scope[k].trim()));
+    const openTopic = validScope && scope && scope.closure_met === false;
+    // Historical cards describe this assessment. The live pane adds Close
+    // only to its latest card after checking the current session's readiness.
+    const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+    const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
+    const valid = assessment && assessment.version === 1 && validScope && axes.every(k => {
+      const a = assessment[k];
+      return a && numeric(a.score) && typeof a.evidence === 'string' && a.evidence.trim();
+    }) && (assessment.delivery.applicable === undefined || typeof assessment.delivery.applicable === 'boolean')
+      && Array.isArray(assessment.caveats) && assessment.caveats.every(c => c && typeof c.text === 'string'
+        && c.text.trim() && typeof c.blocking === 'boolean')
+      && Array.isArray(assessment.remaining_actions) && assessment.remaining_actions.every(a => a
+        && typeof a.text === 'string' && a.text.trim() && numeric(a.confidence) && numeric(a.downside)
+        && typeof a.reversible === 'boolean' && typeof a.within_scope === 'boolean'
+        && (a.owner === undefined || ['agent', 'user', 'external'].includes(a.owner)));
+    const reasons = [];
+    if (valid) {
+      if (openTopic) reasons.push('topic goal is not yet met');
+      if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
+      if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
+      if (assessment.delivery.applicable === false || assessment.delivery.score !== 1) reasons.push('delivery incomplete');
+      if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
+      if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
+      if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
+    }
+    return { scope, validScope, openTopic, valid: !!valid, reasons, axes };
+  }
+  function _ultraFreshParseState(text) {
+    // The open-pane and spawn feeds carry raw text, unlike the sidebar SSE.
+    // Parse its completed footer immediately using the card's assessment rules.
+    const matches = [...String(text).matchAll(/<session-state>\s*([\s\S]*?)<\/session-state>/g)];
+    if (!matches.length) return null;
+    const fields = {};
+    for (const line of matches[matches.length - 1][1].split('\n')) {
+      const m = line.trim().match(/^(?:<!--\s*)?(DID|INSIGHT|NEXT_STEP_USER|NEXT_ACTION|COMPLETION):\s*(.*?)(?:\s*-->)?$/);
+      if (m) fields[m[1]] = m[2].trim();
+    }
+    const out = { did: fields.DID || null, insight: fields.INSIGHT || null,
+      next_step_user: fields.NEXT_STEP_USER || null };
+    try {
+      if (fields.COMPLETION && fields.COMPLETION.length <= 32000) {
+        const raw = JSON.parse(fields.COMPLETION);
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+          const details = sessionCompletionDetails(raw);
+          out.completion = Object.assign({}, raw, { valid: details.valid,
+            ready_to_close: details.valid && !details.reasons.length, reasons: details.reasons });
+        }
+      }
+    } catch (_) {}
+    try {
+      if (fields.NEXT_ACTION && fields.NEXT_ACTION.length <= 2000) {
+        const raw = JSON.parse(fields.NEXT_ACTION);
+        const actions = (Array.isArray(raw) ? raw : [raw]).map(sessionQuickAction);
+        if (actions.length && actions.length <= 4 && actions.every(Boolean)
+            && out.next_step_user && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(out.next_step_user)) {
+          out.next_actions = actions;
+          out.next_action = actions[0];
+        }
+      }
+    } catch (_) {}
+    return out;
+  }
   const _ultraFresh = { entries: new Map(), source: null, ids: '', generation: 0, queued: false, connectTimer: null };
   // Each connect re-parses the transcript tail of every watched row on the
   // server, and boot/list refreshes reshuffle the top rows many times a
@@ -3691,7 +3758,9 @@
     if (!at || at < entry.userAt) return;
     const line = Number(update.line) || 0;
     if (line && line < (entry.line || 0) && at <= entry.at) return;
-    const enrich = text === entry.text && !!update.session_state;
+    const sameText = text === entry.text;
+    const incomingState = update.session_state || _ultraFreshParseState(text);
+    const enrich = sameText && !!incomingState;
     if (at < entry.at && !enrich) return;
     const base = _ultraFreshRow(sid);
     if (!base) return;
@@ -3704,8 +3773,9 @@
     if (text === entry.text && at === entry.at && !enrich) return;
     if (line) entry.line = line;
     entry.text = text; entry.at = Math.max(entry.at, at); entry.sourceAt = sourceAt;
-    entry.sessionState = update.session_state || entry.sessionState;
-    if (!enrich) entry.sessionState = update.session_state || null;
+    // A duplicate raw pane frame must not erase richer server metadata.
+    entry.sessionState = sameText && !update.session_state && entry.sessionState
+      ? entry.sessionState : incomingState;
     if (!entry.paintQueued) {
       entry.paintQueued = true;
       requestAnimationFrame(() => {
@@ -17934,35 +18004,7 @@
     const rows = [];
     let assessment;
     try { assessment = JSON.parse(fields.COMPLETION || 'null'); } catch (_) {}
-    const scope = assessment && assessment.scope;
-    const validScope = scope === undefined || (!!scope && typeof scope === 'object'
-      && typeof scope.closure_met === 'boolean'
-      && ['goal', 'done_when', 'evidence'].every(k => typeof scope[k] === 'string' && scope[k].trim()));
-    const openTopic = validScope && scope && scope.closure_met === false;
-    // Historical cards describe this assessment. The live pane adds Close
-    // only to its latest card after checking the current session's readiness.
-    const numeric = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
-    const axes = ['resolution', 'verification', 'delivery', 'decision_dependency'];
-    const valid = assessment && assessment.version === 1 && validScope && axes.every(k => {
-      const a = assessment[k];
-      return a && numeric(a.score) && typeof a.evidence === 'string' && a.evidence.trim();
-    }) && (assessment.delivery.applicable === undefined || typeof assessment.delivery.applicable === 'boolean')
-      && Array.isArray(assessment.caveats) && assessment.caveats.every(c => c && typeof c.text === 'string'
-        && c.text.trim() && typeof c.blocking === 'boolean')
-      && Array.isArray(assessment.remaining_actions) && assessment.remaining_actions.every(a => a
-        && typeof a.text === 'string' && a.text.trim() && numeric(a.confidence) && numeric(a.downside)
-        && typeof a.reversible === 'boolean' && typeof a.within_scope === 'boolean'
-        && (a.owner === undefined || ['agent', 'user', 'external'].includes(a.owner)));
-    const reasons = [];
-    if (valid) {
-      if (openTopic) reasons.push('topic goal is not yet met');
-      if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
-      if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
-      if (assessment.delivery.applicable === false || assessment.delivery.score !== 1) reasons.push('delivery incomplete');
-      if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
-      if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
-      if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
-    }
+    const { scope, validScope, openTopic, valid, reasons, axes } = sessionCompletionDetails(assessment);
     const verdict = !valid ? 'Unassessed · invalid assessment'
       : reasons.length ? (openTopic ? 'Open · ' : 'Next · ') + reasons.join('; ') : 'Close criteria met';
 

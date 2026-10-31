@@ -19,7 +19,9 @@ def render_session_state(body: str, app_path: Path) -> str:
     row_helpers = source.rfind("// Row actions are model-authored replies", 0, start)
     if row_helpers != -1:
         start = row_helpers
-    function_source = source[start:end]
+    assessment_start = source.find("  function sessionCompletionDetails(")
+    assessment_end = source.index("\n  }\n", assessment_start) + 5 if assessment_start != -1 else 0
+    function_source = (source[assessment_start:assessment_end] if assessment_start != -1 else "") + source[start:end]
     harness = f"""
 function escapeHtml(value) {{
   return String(value)

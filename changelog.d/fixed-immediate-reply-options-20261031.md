@@ -1,0 +1,1 @@
+Show a reply's decision and authored options in the session list as soon as its footer reaches the open conversation or live spawn feed, without waiting for another poll or tab switch. Preserve richer metadata when duplicate feeds race.
