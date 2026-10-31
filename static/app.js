@@ -41125,8 +41125,6 @@
       }
       const _outcomeInline = outcomeHtml.indexOf(' is-inline ') !== -1;
       const _ideaStack = _outcomeInline && !!_ideaRowRef;
-      const projectTicketMeta = !_childLaneRow && ideaAvatarHtml
-        ? '<div class="conv-project-meta">' + ideaTicketChipHtml(c) + '</div>' : '';
       const summaryDetailHtml = (_hasSummaryDetails && _summaryExpanded)
         ? '<div class="conv-session-summary-detail" data-role="session-summary-detail">'
           + (_summaryState.did ? '<div><strong>Did:</strong> ' + escapeHtml(_summaryState.did) + '</div>' : '')
@@ -41199,9 +41197,8 @@
         +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
-        // Ticket identity lives in metadata rather than inside the project mark.
+        // Ticket identity stays inside the avatar.
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview && !_readyToCloseRow ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
-        + projectTicketMeta
         + '<div class="wa-row-footer">' + sessionIdChipHtml + '</div>'
         + '</div>'
         + '</div>';
@@ -41277,7 +41274,6 @@
           + evergreenMetaRowHtml
         + '</div>'
         + (_ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c)))
-        + projectTicketMeta
         + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
