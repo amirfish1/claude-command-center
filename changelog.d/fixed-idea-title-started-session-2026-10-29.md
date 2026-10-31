@@ -1,1 +1,0 @@
-- Idea tickets keep the title from the session that started them; a continuation or child session no longer renames a long-running topic.

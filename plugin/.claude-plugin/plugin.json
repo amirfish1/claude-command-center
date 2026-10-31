@@ -1,6 +1,6 @@
 {
   "name": "ccc-dashboard",
-  "version": "5.41.1",
+  "version": "5.42.0",
   "displayName": "Claude Command Center",
   "description": "Skills for running a fleet of coding-agent sessions through Claude Command Center (CCC): spawn, message and check on sibling sessions, verify fixes, and hand off work. Needs CCC running locally.",
   "author": {

@@ -1,1 +1,0 @@
-- The iMessage relay no longer ships a hardcoded contact; it runs only when `~/.claude/command-center/imessage-relay.json` names a `phone` and `session_id`, and otherwise never polls `chat.db`.

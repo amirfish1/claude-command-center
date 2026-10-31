@@ -1,1 +1,0 @@
-- Session search on hosts with Hermes installed is faster: Hermes message matches are ranked first, and highlighted snippets are built only for the sessions returned, not for every matching message.

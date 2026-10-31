@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.42.0] - 2026-10-31
+
+### Added
+- Ticket rows show an AUTO switch under the avatar: purple and moving while CCC drives the work, amber when it is waiting on you, faint when you drive it. Click it to hand off or take back.
+- Child lanes show only a tiny model icon instead of a repeat of the parent's numbered avatar.
+- Features and Small bugs now manage themselves (idea tickets). A finished session closes its ticket with its own summary and moves to Archived. A session that still has work it owns is handed off: CCC tells it to drive the ticket to a verified close and watches it, nudging a stalled session and turning it into a "Needs you" question if it stays stuck. A new 🤝 Hand off button does the same for any row, including one that is mid-deploy. Handed-off tickets sit in a collapsed "Handed off" section with a Take back chip. Rows that need you say so, with an Answer or Open chip.
+- Ask for a server URL on first iOS launch, remember it on the device, and provide native Settings and Retry controls that remain available while offline.
+- `GET /api/telemetry/health-report`: a local, nothing-sent health snapshot, last 24 hours by default or `?hours=` up to 7 days (view-switch, conversation-open and rail latency histograms with p50/p75/p95, bucketed session, Decision, message, and WatchTower counts) to paste into bug reports. Rail clicks now record `view_switch` timings and the rail's app fetch records `rail_apps`. See docs/telemetry.md.
+- `ccc brief` and `/api/memory/brief` now show a session's continuation predecessor and successors, tagged with the machine they live on. An origin that lives on a paired peer is looked up there (one hop, bounded deadline), and a session handed off to another machine shows the successors it got there. Trashing a session no longer cascades into an origin that only exists on another machine.
+- A ⚑ Report flag on every page opens Report a problem, which now sends privately by default (you get a report ID) and attaches a 7-day diagnostics report you can inspect under "Show exactly what's sent". A public GitHub issue remains the second option; the mail-app draft option is gone.
+- Runaway card: **Hold** stops a session waking itself (timers, cron, /loop, WatchTower and peer messages, Codex goals) until you click **Release**; a send from the CCC composer also releases it.
+- The runaway-session detector now also watches Kimi, Devin CLI and Hermes sessions, not just Claude and Codex.
+- A "Runaway" card at the top of the dashboard lists sessions that keep working on their own (timer wakes, goal continuations, WatchTower pings) long after you last spoke to them, with nothing changing. Each row shows turns, hours, idle streak and cost-weighted tokens, with Open and "Let it run 24h". It only reports; it never stops a session. Claude and Codex sessions; `GET /api/runaway`.
+- Show purple TokenEconomizer chips for its CLI commands and a conversation annotation for recorded hook activity and optimization actions, without implying measured savings.
+
+### Changed
+- Codex `gpt-6-astra` spawns now always get the astra-guardrail skill pasted into their prompt, even on machines that allow Astra; before, only blocked-and-confirmed spawns did.
+- The AUTO switch changes colour as soon as you click it instead of waiting for the server; it reverts if the request fails.
+- Remove redundant Take back chips from handed-off sessions; use the AUTO switch to return to manual control, while keeping Answer for blocked sessions.
+- Child lanes no longer show Close, Answer, Take back, Open or Hand off; they run, end and report to their parent row, which keeps those actions.
+- Child session rows in the sidebar now fit on one line: a smaller avatar, the title, the latest update in a smaller font, then context % and age.
+- Ticket rows with lanes are more compact: no ticket chip strip under the title, no rail or divider lines between the parent and its lanes, no empty line above the "↳ N lanes" chip, and no separate Collapse button (click the lanes chip again to collapse).
+- Every message sent into a session now carries one `delivery_id` from the `/api/inject-input` response through the queued-message card to `/api/pending-input/cancel`. Queued cards pair with the composer echo by that id, so two queued sends with the same words stay two cards and Cancel removes the one you clicked. The id is additive: text-based cancel still works.
+- Handed-off tickets stay where they are in the Features and Small bugs lists, marked by their AUTO switch, instead of moving to a separate "Handed off" section.
+- Queued messages recover faster: the terminal-queue watcher and the inject router now share one liveness snapshot per delivery attempt, so a status flicker between the two reads no longer re-parks a cleared message for a minute, and the tool-child process scan runs once per tick instead of twice.
+- Session recall stays fast on large session archives. The recall index's periodic sync now runs in the background helper process instead of on the dashboard's own threads, and title/snippet lookups for recall hits go through a row map instead of scanning the whole index. `CCC_BG_HELPER=0` keeps the old in-process sync.
+- Session recall answers in the conversation-reader process instead of the dashboard, so a busy dashboard no longer slows it from tens of milliseconds to seconds. `CCC_CONV_READER=0` keeps recall in the dashboard.
+- In a new session, opening the model override ("Change") now shows the engine, model and effort dropdowns right above the suggested model chips, and the toggle reads "Collapse" while open.
+- Sidebar rows show the read-aloud speaker only when there is an answer to read, and with a mouse only while hovering the row (or while it is reading).
+- Features and Small bugs now show a single **Archived** section. Trashed tickets appear there too, and their rows offer Archive and Restore instead of Trash.
+- Session rows list their recorded tickets by number only; the expandable list of ticket titles under each row is gone (click a number to open the ticket).
+
+### Fixed
+- Queued follow-ups to aider sessions now drain: the resume-queue watcher and the inject router share one engine transport table instead of two hand-written copies, and the watcher's copy had no aider branch.
+- Phone-width session rows now show the AUTO handoff switch under the ticket avatar, and child-lane titles on desktop sit right beside their small model mark.
+- Fixed ccc restart wait: detects exec restarts via started_at
+- Child lanes no longer pick up a Close button when a live status update marks them finished; only the parent ticket offers Close.
+- Child lanes in the chat-list sidebar layout now show only the tiny model mark under their parent ticket, not a second full numbered avatar.
+- A session that only closed a WatchTower ticket (never claimed it) is no longer renamed after that ticket, so idea-tracked sessions keep their own title.
+- Codex replies no longer appear twice in a live session: rows streamed during a turn now carry their turn id, so the live preview copy is matched and removed.
+- Codex thread lookups and custom-repo reads are cached by file signature, so polled stuck-summary and repo lists stop reopening SQLite and re-resolving paths on every call.
+- Codex tool groups no longer count a live tool row that the saved transcript already replaced ("4 tool calls" over three rows), and their headers now show the purple wt / ccc / CCC API chips in every view, not only in compact view.
+- Codex turns that end with an error (usage limit, sign-in expired) now show the reason in the transcript instead of "No visible response".
+- Earlier-message loading now bypasses background polling, times out with a retry button, and clears its loading indicator reliably. Search rows with folded earlier sessions now provide an expandable list to open them.
+- Claude transcripts no longer show a "HOOK {}" row after every tool call when a plugin hook replies with empty JSON, and compact view hides successful hook rows (failures stay visible).
+- The session family map now shows node-tagged continuation predecessors and successors across paired machines, including unresolved origins and unavailable peers, using the same bounded lazy resolver as session briefs.
+- A handed-off ticket that waits on another ticket, a worker or a client now shows "Waiting on …" with only Take back, instead of a "Needs you" question with an Answer chip, and is not nudged while it waits.
+- Session search on hosts with Hermes installed is faster: Hermes message matches are ranked first, and highlighted snippets are built only for the sessions returned, not for every matching message.
+- Idea tickets keep the title from the session that started them; a continuation or child session no longer renames a long-running topic.
+- The inject-receipt read (`GET /api/session/<sid>/inject-receipt`) is truthful again: a queued message's receipt now settles when its row is committed as delivered on the Codex resume queue (previously only the terminal queue closed receipts, so every Codex-queued message stayed "outstanding" forever) or cancelled by id, and `outstanding` carries a `state` of `queued`, `held` or `unproven` plus the queue name. Receipts nothing settled within a day expire instead of flagging the session for good.
+- Restore parent attribution for script-launched Claude sessions on Linux so automated children nest under their launching session.
+- A cross-machine continuation origin in `ccc brief` no longer shows as unresolved when a busy peer answers in 1.5-4 s; resolution now uses the same per-peer deadline as memory recall.
+- Added a stale-while-revalidate cache for the polled vercel-deploy, issues/all, savings, headroom, repo/worktrees, nextjs/status and throughput/daily endpoints.
+- Queued messages in a popped-out conversation show the Steer button again for CCC-spawned Codex sessions: the popout URL now carries the row's engine, not just its source.
+- Question chips now appear for bare `Q528` and `[Q528]` references (for example in Codex session-state cards), not only full `[Q528:slug]` tags.
+- The queue list and attention feeds reuse their last encoded response between rebuilds, so the polled 20 MB queue board no longer re-serialises and re-compresses on every request.
+- The left rail now paints your full app list (Decisions, Savings, your own apps) immediately on every page from the last good answer, and retries a failed fetch; before, a slow or failed app-list fetch left only Sessions and Queues showing.
+- Sidebar rows no longer flip status (Working, Close, Next) a few seconds after they appear: the first paint and the live updater now share one set of status rules.
+- Opening a session no longer waits behind background polls when the browser is on HTTP/1.x: the click's conversation fetch (and a hover prefetch it reuses) now skips the background request pool.
+- Steering a queued message now names its row by `delivery_id` (`replace_queued_ids` on `/api/inject-input`), so two identical queued texts no longer steer the wrong one; releasing a stop-held message keeps the id it was sent with, so its card, receipt and cancel still match.
+- Show Close beside the latest ready session-state card, use the same label above the composer, and keep historical assessments from offering stale Close actions.
+- A trashed session that gets a new prompt now returns to Active (marked unarchived) instead of staying hidden in Trash; finishing an in-flight turn still leaves it trashed.
+- The text-to-speech clip cache and question-tag scanner stop rescanning whole directories on every call, which freed a busy dashboard thread on large hosts.
+- Keep theoretical answers and unbuilt product topics open; an inapplicable delivery assessment no longer bypasses Close gates.
+- The usage database (`throughput.sqlite3`) now refreshes itself: the dashboard runs an incremental ingest every hour when the database exists, so notification digests and savings lines stop reading a frozen copy. Set `CCC_USAGE_INGEST_DISABLED=1` to turn it off.
+- Fixed the Working Now strip sticking on "loading ticket…" / "loading workers": queue SSE invalidations no longer discard in-flight ticket-list reads mid-parse (which starved the cache under workers.json heartbeat churn), freshness expiry no longer un-renders loaded rows, and event-driven repaints are coalesced into one revalidation per burst.
+
+### Security
+- The iMessage relay no longer ships a hardcoded contact; it runs only when `~/.claude/command-center/imessage-relay.json` names a `phone` and `session_id`, and otherwise never polls `chat.db`.
+
 ## [5.41.1] - 2026-10-29
 
 ### Changed
@@ -4370,7 +4440,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.41.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.42.0...HEAD
+[5.42.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.42.0
 [5.41.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.1
 [5.41.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.0
 [5.40.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.40.0

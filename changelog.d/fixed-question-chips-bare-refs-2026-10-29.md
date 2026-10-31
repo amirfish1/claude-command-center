@@ -1,1 +1,0 @@
-- Question chips now appear for bare `Q528` and `[Q528]` references (for example in Codex session-state cards), not only full `[Q528:slug]` tags.

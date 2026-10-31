@@ -1,1 +1,0 @@
-- A handed-off ticket that waits on another ticket, a worker or a client now shows "Waiting on …" with only Take back, instead of a "Needs you" question with an Answer chip, and is not nudged while it waits.

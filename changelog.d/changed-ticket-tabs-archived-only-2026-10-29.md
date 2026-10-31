@@ -1,1 +1,0 @@
-- Features and Small bugs now show a single **Archived** section. Trashed tickets appear there too, and their rows offer Archive and Restore instead of Trash.

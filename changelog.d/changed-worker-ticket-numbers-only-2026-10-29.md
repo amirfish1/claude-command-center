@@ -1,1 +1,0 @@
-- Session rows list their recorded tickets by number only; the expandable list of ticket titles under each row is gone (click a number to open the ticket).

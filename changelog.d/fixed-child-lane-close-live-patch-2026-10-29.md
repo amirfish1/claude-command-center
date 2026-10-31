@@ -1,1 +1,0 @@
-- Child lanes no longer pick up a Close button when a live status update marks them finished; only the parent ticket offers Close.

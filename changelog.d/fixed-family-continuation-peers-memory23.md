@@ -1,1 +1,0 @@
-The session family map now shows node-tagged continuation predecessors and successors across paired machines, including unresolved origins and unavailable peers, using the same bounded lazy resolver as session briefs.

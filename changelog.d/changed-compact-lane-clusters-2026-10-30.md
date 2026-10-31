@@ -1,1 +1,0 @@
-- Ticket rows with lanes are more compact: no ticket chip strip under the title, no rail or divider lines between the parent and its lanes, no empty line above the "↳ N lanes" chip, and no separate Collapse button (click the lanes chip again to collapse).

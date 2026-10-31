@@ -1,1 +1,0 @@
-- Every message sent into a session now carries one `delivery_id` from the `/api/inject-input` response through the queued-message card to `/api/pending-input/cancel`. Queued cards pair with the composer echo by that id, so two queued sends with the same words stay two cards and Cancel removes the one you clicked. The id is additive: text-based cancel still works.

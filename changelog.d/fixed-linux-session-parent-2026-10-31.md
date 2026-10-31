@@ -1,1 +1,0 @@
-- Restore parent attribution for script-launched Claude sessions on Linux so automated children nest under their launching session.

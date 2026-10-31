@@ -1,1 +1,0 @@
-- Codex `gpt-6-astra` spawns now always get the astra-guardrail skill pasted into their prompt, even on machines that allow Astra; before, only blocked-and-confirmed spawns did.

@@ -1,1 +1,0 @@
-- Queued follow-ups to aider sessions now drain: the resume-queue watcher and the inject router share one engine transport table instead of two hand-written copies, and the watcher's copy had no aider branch.

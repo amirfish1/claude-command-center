@@ -1,1 +1,0 @@
-- Session recall stays fast on large session archives. The recall index's periodic sync now runs in the background helper process instead of on the dashboard's own threads, and title/snippet lookups for recall hits go through a row map instead of scanning the whole index. `CCC_BG_HELPER=0` keeps the old in-process sync.

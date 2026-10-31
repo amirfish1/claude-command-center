@@ -1,1 +1,0 @@
-- Handed-off tickets stay where they are in the Features and Small bugs lists, marked by their AUTO switch, instead of moving to a separate "Handed off" section.

@@ -1,1 +1,0 @@
-- Session recall answers in the conversation-reader process instead of the dashboard, so a busy dashboard no longer slows it from tens of milliseconds to seconds. `CCC_CONV_READER=0` keeps recall in the dashboard.

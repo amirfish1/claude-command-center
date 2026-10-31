@@ -1,1 +1,0 @@
-- Child session rows in the sidebar now fit on one line: a smaller avatar, the title, the latest update in a smaller font, then context % and age.

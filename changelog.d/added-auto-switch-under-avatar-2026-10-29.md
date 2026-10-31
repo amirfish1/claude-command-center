@@ -1,2 +1,0 @@
-- Ticket rows show an AUTO switch under the avatar: purple and moving while CCC drives the work, amber when it is waiting on you, faint when you drive it. Click it to hand off or take back.
-- Child lanes show only a tiny model icon instead of a repeat of the parent's numbered avatar.

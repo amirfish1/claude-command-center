@@ -1,1 +1,0 @@
-- Runaway card: **Hold** stops a session waking itself (timers, cron, /loop, WatchTower and peer messages, Codex goals) until you click **Release**; a send from the CCC composer also releases it.

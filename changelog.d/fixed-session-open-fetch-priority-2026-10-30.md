@@ -1,1 +1,0 @@
-- Opening a session no longer waits behind background polls when the browser is on HTTP/1.x: the click's conversation fetch (and a hover prefetch it reuses) now skips the background request pool.

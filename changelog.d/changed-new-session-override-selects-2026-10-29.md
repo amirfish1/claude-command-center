@@ -1,1 +1,0 @@
-- In a new session, opening the model override ("Change") now shows the engine, model and effort dropdowns right above the suggested model chips, and the toggle reads "Collapse" while open.
