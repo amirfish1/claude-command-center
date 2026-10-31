@@ -5035,6 +5035,25 @@
     const fallback = String(parentId || '').trim().slice(0, 8) || 'earlier session';
     return parent ? sidebarRowDisplayTitle(parent) : fallback;
   }
+  // When CCC's own auto-resume preamble survived auto-titling, a continuation
+  // leg is named after the handoff instead of the work. Its honest name is
+  // whatever its parent was doing, so borrow the parent's title (resolved
+  // through the same chain). If the parent is boilerplate too, fall back to
+  // the parent's short id rather than walk the chain. Shared by the sidebar
+  // row and the pane header so the two never disagree (CCC-279).
+  function continuationBackstopTitle(c, title) {
+    if (!isContinuationBoilerplateTitle(title)) return title;
+    const parentId = continuationParentId(c);
+    if (!parentId) return title;
+    const parentRow = _continuationRowForSid(parentId);
+    const parentTitle = parentRow
+      ? sidebarRowDisplayTitle(rowRawTitle(parentRow).rawTitle)
+      : '';
+    return continuationFallbackTitle(
+      parentTitle && !isContinuationBoilerplateTitle(parentTitle) ? parentTitle : '',
+      parentId,
+    );
+  }
   // The sidebar's title-priority chain, lifted out of _renderRow so a
   // continuation leg can resolve its parent's title through the exact same
   // rules instead of a second, drift-prone copy of them.
@@ -39911,23 +39930,7 @@
       // Show the topic directly; continuation history lives in Earlier.
       // Legacy spawn names may still contain continuation prefixes.
       const _continuationParentId = continuationParentId(c);
-      if (_continuationParentId) {
-        // When CCC's own auto-resume preamble survived auto-titling, the row is
-        // named after the handoff instead of the work. The leg's honest name is
-        // whatever its parent was doing, so borrow the parent's title (resolved
-        // through the same chain). If the parent is boilerplate too, leave
-        // the title alone rather than walk the chain.
-        if (isContinuationBoilerplateTitle(title)) {
-          const _parentRow = _continuationRowForSid(_continuationParentId);
-          const _parentTitle = _parentRow
-            ? sidebarRowDisplayTitle(rowRawTitle(_parentRow).rawTitle)
-            : '';
-          title = continuationFallbackTitle(
-            _parentTitle && !isContinuationBoilerplateTitle(_parentTitle) ? _parentTitle : '',
-            _continuationParentId,
-          );
-        }
-      }
+      if (_continuationParentId) title = continuationBackstopTitle(c, title);
       // AI-generated titles (Claude/Codex/Antigravity) show with no glyph now
       // (the ✨ prefix was removed, CCC-962). User renames also get NO glyph;
       // the .user-renamed CSS class gives them a quiet dotted underline
@@ -48332,7 +48335,9 @@
     const fullRow = (rowId && Array.isArray(conversationsData)
       && conversationsData.find(x => x && (x.id === rowId || x.session_id === rowId))) || row;
     try {
-      if (fullRow && (fullRow.display_name || fullRow.ai_title || fullRow.first_message)) rowName = rowRawTitle(fullRow).rawTitle;
+      if (fullRow && (fullRow.display_name || fullRow.ai_title || fullRow.first_message)) {
+        rowName = continuationBackstopTitle(fullRow, rowRawTitle(fullRow).rawTitle);
+      }
     } catch (_) {}
     rowName = String(rowName || title || '').trim();
     const headerTitle = opts.title !== undefined ? String(title || '').trim() : rowName;

@@ -169,3 +169,41 @@ test('continued topics strip stacked legacy labels and inherit plain parent titl
   assert.equal(ctx.fallback('', 'parent-session'), 'parent-s');
   assert.equal(app.includes("title = '⤴︎ ' + title"), false);
 });
+
+// CCC-279: the pane header and the sidebar row must resolve a continuation
+// leg's boilerplate name through the SAME backstop, or the header reads
+// "You are continuing a task from an earlier Codex session..." while the
+// row shows the parent's topic.
+test('pane header and sidebar row share the continuation title backstop', () => {
+  const hStart = app.indexOf('function updatePaneHeader(');
+  const header = app.slice(hStart, app.indexOf('\n  function ', hStart + 10));
+  assert.match(header, /continuationBackstopTitle\(fullRow, rowRawTitle\(fullRow\)\.rawTitle\)/);
+  assert.match(app, /if \(_continuationParentId\) title = continuationBackstopTitle\(c, title\);/);
+
+  const parent = { id: 'parent-session', ai_title: 'Question from joyce about intake' };
+  const leg = { id: 'leg', continued_from_session_id: 'parent-session' };
+  const ctx = {
+    LEADING_PATH_OR_URL_RE: /(?!)/,
+    LEADING_CCC_PASTED_IMAGE_PATH_RE: /(?!)/,
+    continuationParentId: (c) => String((c && c.continued_from_session_id) || ''),
+    _continuationRowForSid: (sid) => (sid === 'parent-session' ? parent : null),
+    rowRawTitle: (c) => ({ rawTitle: c.ai_title || '(untitled)' }),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(
+    extractFunction('stripLeadingPathOrUrl')
+      + extractFunction('capitalizeSessionTitleStart')
+      + extractFunction('sidebarRowDisplayTitle')
+      + 'const _CONTINUATION_BOILERPLATE_RE = /^\\s*(?:[⤴↱]︎?️?\\s*)*(?:Continue\\s+)?You are continuing a task from an earlier\\b/i;'
+      + extractFunction('isContinuationBoilerplateTitle')
+      + extractFunction('continuationFallbackTitle')
+      + extractFunction('continuationBackstopTitle')
+      + '; this.backstop = continuationBackstopTitle;',
+    ctx,
+  );
+  const boiler = 'You are continuing a task from an earlier Codex session, which ran long. Origin session id: x';
+  assert.equal(ctx.backstop(leg, boiler), 'Question from joyce about intake');
+  assert.equal(ctx.backstop(leg, 'Real topic'), 'Real topic');
+  assert.equal(ctx.backstop({ id: 'solo' }, boiler), boiler);
+  assert.equal(ctx.backstop({ id: 'orphan', continued_from_session_id: 'gone-session' }, boiler), 'gone-ses');
+});
