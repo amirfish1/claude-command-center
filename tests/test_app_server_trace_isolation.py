@@ -38,8 +38,15 @@ def test_trace_rolls_over_at_the_size_cap(tmp_path, monkeypatch):
     server._app_server_trace("last", marker="after-roll")
     rolled = Path(f"{trace}.1")
     assert rolled.exists()
-    assert trace.stat().st_size <= 4096 + 200
-    assert rolled.stat().st_size <= 4096 + 200
-    assert json.loads(trace.read_text().splitlines()[-1])["marker"] == "after-roll"
+    # Other threads in the suite trace too, so the final write may itself be
+    # the one that crosses the cap and rolls (the live file then reappears only
+    # on the next write), or be followed by their lines. Either way nothing is
+    # lost and neither file outgrows the cap.
+    lines = []
+    for f in (trace, rolled):
+        if f.exists():
+            assert f.stat().st_size <= 4096 + 200
+            lines += f.read_text().splitlines()
+    assert any(json.loads(ln).get("marker") == "after-roll" for ln in lines)
     if server._APP_SERVER_TRACE_FH is not None:
         server._APP_SERVER_TRACE_FH.close()
