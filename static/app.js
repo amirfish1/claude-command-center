@@ -70340,7 +70340,7 @@
       if (_archivedBacklogIds.has(c.id)) c.archived = true;
     }
     const filtered = conversationsData.filter(c => {
-      if (c.pinned) return true;
+      if (c.pinned && !q) return true;
       // Recent-only filter (last N hours) — applies to everything, backlog included.
       // Backlog items use issue_created_at (falls back to modified).
       // Exempt the conversation the user is actively looking at: resuming a
@@ -70350,7 +70350,7 @@
       // was already inside of a moment ago — a session you're typing into
       // right now must never vanish from its own filtered list (CCC-1022).
       const isCurrentlyOpen = !!(currentConversation && c.id === currentConversation);
-      if (showRecentOnly && !isCurrentlyOpen && c.source !== 'hermes' && c.engine !== 'hermes') {
+      if (!q && showRecentOnly && !isCurrentlyOpen && c.source !== 'hermes' && c.engine !== 'hermes') {
         const ts = (c.source === 'backlog')
           ? (c.issue_created_at || c.modified || 0)
           : (c.modified || 0);
@@ -78186,7 +78186,6 @@
     // worktree sessions and "by time" cross-repo views.
     const byFolder = _windowed;
     let rows = q ? byFolder.filter(c =>
-      c.pinned ||
       // session_id + id let users paste a session UUID into the search box
       // and find the conversation directly — useful when CCC tooling, logs
       // or external scripts surface a UUID without a title.

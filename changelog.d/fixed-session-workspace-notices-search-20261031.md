@@ -1,0 +1,1 @@
+- Keep first-run notices clear of phone controls: reserve the wrapped intro-banner height and place the install prompt above bottom navigation. Pinned sessions now obey search queries instead of appearing as unrelated matches.

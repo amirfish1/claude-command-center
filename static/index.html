@@ -302,6 +302,29 @@
     <button type="button" class="idea-tickets-intro-banner__revert" id="ideaTicketsIntroRevertBtn">Revert</button>
     <button type="button" class="idea-tickets-intro-banner__dismiss" id="ideaTicketsIntroDismissBtn">Dismiss</button>
   </div>
+  <script>
+    // Reserve the actual wrapped intro height, including any health banners
+    // above it. Hidden-attribute changes and text wrapping both update layout.
+    (function () {
+      const intro = document.getElementById('ideaTicketsIntroBanner');
+      const above = Array.from(document.querySelectorAll('#injectionHealthBanner, .drain-paused-banner'));
+      function syncIntroSpace() {
+        const offset = above.reduce((height, el) => height + (el.hidden ? 0 : el.offsetHeight), 0);
+        intro.style.top = offset + 'px';
+        document.documentElement.style.setProperty('--session-intro-stack-h',
+          (intro.hidden ? 0 : offset + intro.offsetHeight) + 'px');
+      }
+      const observer = new MutationObserver(syncIntroSpace);
+      [intro].concat(above).forEach(el => observer.observe(el, { attributes: true, attributeFilter: ['hidden'] }));
+      if (window.ResizeObserver) {
+        const resize = new ResizeObserver(syncIntroSpace);
+        [intro].concat(above).forEach(el => resize.observe(el));
+      }
+      window.addEventListener('resize', syncIntroSpace);
+      syncIntroSpace();
+    })();
+  </script>
+
   <!-- FOIT guard: read the persisted layout choice synchronously and apply
        the body class BEFORE any layout paint. Without this, the sidebar
        briefly renders for kanban-split users (whose sidebar is display:none)
