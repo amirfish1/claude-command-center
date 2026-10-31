@@ -5263,8 +5263,12 @@ def test_runaway_scan_opens_only_changed_active_transcripts(tmp_path, monkeypatc
     opened = []
     real_open = builtins.open
 
+    # Count only this thread: in the full suite, background threads left by
+    # earlier tests open real transcripts through the patched builtin.
+    me = threading.get_ident()
+
     def counting_open(path, *args, **kwargs):
-        if str(path).endswith(".jsonl"):
+        if threading.get_ident() == me and str(path).endswith(".jsonl"):
             opened.append(str(path))
         return real_open(path, *args, **kwargs)
 
@@ -5401,7 +5405,9 @@ def test_tts_clip_cache_does_not_rescan_folder_per_put_or_get(tmp_path, monkeypa
         fr._clip_cache_put(("clip %d" % i, voice), b"x" * 64)
     scans = []
     real = os.scandir
-    monkeypatch.setattr(os, "scandir", lambda *a, **k: (scans.append(1), real(*a, **k))[1])
+    me = threading.get_ident()  # other tests' background threads also scandir
+    monkeypatch.setattr(os, "scandir", lambda *a, **k: (
+        scans.append(1) if threading.get_ident() == me else None, real(*a, **k))[1])
     for i in range(300, 340):
         fr._clip_cache_put(("clip %d" % i, voice), b"x" * 64)
     fr._CLIP_CACHE.clear()

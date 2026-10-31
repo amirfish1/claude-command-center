@@ -70,7 +70,9 @@ class DevinQueueTests(unittest.TestCase):
         self.assertEqual(result["via"], "devin-resume-queued")
         pump.assert_called_once_with(sid)
         resume.assert_not_called()
-        cp.assert_not_called()
+        # Only this session's calls count: background pollers left by earlier
+        # tests reach the patched module function for other sessions.
+        self.assertEqual([c for c in cp.call_args_list if sid in repr(c)], [])
         with server._pending_resume_lock:
             self.assertEqual(server._pending_resume_queue.get(sid), ["follow up"])
 
