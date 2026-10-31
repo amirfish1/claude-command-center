@@ -63,6 +63,16 @@ def within(delivery_id, text, fn):
         _binding.reset(token)
 
 
+def bound_id():
+    """The delivery_id of the send being routed on this thread, or None.
+
+    Lets a cross-process hop (dashboard -> worker) carry the id along, since
+    the queue row is created in whichever process the engine adapter runs.
+    """
+    binding = _binding.get()
+    return binding.delivery_id if binding is not None else None
+
+
 def adopt(text):
     """The bound id for a new queue row holding this message, once.
 

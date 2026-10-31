@@ -470,10 +470,19 @@ def _control_plane_engine_call(
     if not _control_plane_routes_engines():
         return None
     method = "engine.execute" if mutate else "engine.query"
+    args = args if isinstance(args, dict) else {}
+    if mutate and "delivery_id" not in args:
+        # The worker creates the queue row for a send the dashboard is
+        # routing; hand it the send's delivery_id so the row keeps the id the
+        # inject response already returned (ccc_server/delivery.py).
+        from ccc_server import delivery as _delivery
+        bound = _delivery.bound_id()
+        if bound:
+            args = dict(args, delivery_id=bound)
     payload = {
         "engine": engine,
         "operation": operation,
-        "args": args if isinstance(args, dict) else {},
+        "args": args,
     }
     if mutate:
         payload["idempotency_key"] = str(idempotency_key or uuid.uuid4())

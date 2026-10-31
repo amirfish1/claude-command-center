@@ -429,6 +429,19 @@ class EngineHost:
         }
 
     def _call(self, engine, operation, args, query=False):
+        # A send routed from the dashboard names itself with a delivery_id;
+        # rebind it here so the queue row this process creates keeps that id.
+        args = dict(args or {})
+        delivery_id = args.pop("delivery_id", None)
+        if not delivery_id:
+            return self._call_unbound(engine, operation, args, query=query)
+        from ccc_server import delivery as _delivery
+        return _delivery.within(
+            delivery_id, args.get("text") or args.get("prompt") or "",
+            lambda: self._call_unbound(engine, operation, args, query=query),
+        )
+
+    def _call_unbound(self, engine, operation, args, query=False):
         legacy = self._legacy()
         if engine in ("kimi", "grok", "devin"):
             if operation == "availability":
