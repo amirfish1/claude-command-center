@@ -36390,11 +36390,21 @@
     if (!c) return false;
     if (c.verified || c.archived) return false;
     if (c.source === 'backlog') return false;
-    if (c.is_live || c.pending_spawn) return false;
+    if (c.pending_spawn || c.needs_approval || c.question_waiting
+        || sidebarSessionWorking(c) || c.sidecar_in_flight) return false;
     if (c.has_edit || c.has_commit || c.has_push || c.tail_pr_number) return false;
     const lastType = String(c.last_event_type || '').toLowerCase();
+    // Process presence is not turn activity: an idle agent can remain alive
+    // after its result. List and live overlays disagree about that presence
+    // during refreshes; hiding this chip on is_live alone shrank the row and
+    // made every row below it jump. Keep completed output stable across both.
+    if (lastType === 'user') return false;
+    const idle = lastType === 'result' || c.state === 'idle' || c.state === 'waiting'
+      || c.codex_state === 'idle' || c.codex_state === 'waiting'
+      || c.sidecar_status === 'idle';
+    if (c.is_live && !idle) return false;
     return !!(
-      String(c.last_assistant_text || '').trim()
+      String(c.last_assistant_text || c.last_assistant_preview || '').trim()
       || c.pending_tool
       || lastType === 'result'
     );
@@ -36928,7 +36938,7 @@
         if (noEditsAttr) {
           html += '<span class="kanban-card-stage no-edits" title="Agent has not edited any files in this session">no edits</span>';
         } else if (readOnlyAttr) {
-          html += '<span class="kanban-card-stage read-only" title="Agent completed read-only work without file edits">read-only</span>';
+          html += '<span class="kanban-card-stage read-only" title="No file edits detected in this session. You can still reply or request changes.">read-only</span>';
         }
         }
 
@@ -40317,7 +40327,7 @@
       // (they never clear once set), and git progress belongs in the
       // status, not as a separate badge.
       } else if (_showGitStateSignals && hasReadOnlyWork(c)) {
-        signals += '<span class="conv-signal read-only" title="Agent completed read-only work without file edits">read-only</span>';
+        signals += '<span class="conv-signal read-only" title="No file edits detected in this session. You can still reply or request changes.">read-only</span>';
       } else if (_showGitStateSignals && hasNoEdits(c)) {
         signals += '<span class="conv-signal no-edits" title="Agent has not edited any files in this session">no edits</span>';
       }
