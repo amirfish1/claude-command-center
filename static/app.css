@@ -2238,8 +2238,19 @@
   .image-gen-media { margin-top: 6px; }
   .image-gen-media img { max-width: 100%; border-radius: 6px; display: block; }
   /* CCC-275: images returned inside a tool output (tool-result-images). */
-  .tool-result-image { margin: 0 0 6px; }
-  .tool-result-image img { max-height: 520px; width: auto; }
+  /* CCC-286: quarter-size thumbnails (half width, half height), several per
+     row; click or (+) enlarges in the media lightbox. */
+  .tool-result-images .image-gen-media { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+  .tool-result-image { position: relative; margin: 0; flex: 0 1 auto; min-width: 0; max-width: calc(50% - 4px); }
+  .tool-result-image img { max-height: 260px; max-width: 100%; width: auto; margin: 0; }
+  .tool-result-image-zoom {
+    position: absolute; top: 6px; right: 6px; z-index: 1;
+    width: 24px; height: 24px; padding: 0; border-radius: 50%;
+    border: 1px solid var(--border); background: rgba(0, 0, 0, 0.6); color: #fff;
+    font-size: 16px; line-height: 22px; text-align: center; cursor: zoom-in;
+  }
+  .tool-result-image-zoom:hover { background: rgba(0, 0, 0, 0.85); }
+  .tool-result-image.is-missing .tool-result-image-zoom { display: none; }
   .tool-result-image figcaption { margin-top: 3px; font-size: 11px; color: var(--text-muted); }
   .tool-result-image figcaption a { color: inherit; }
   .tool-result-image .tool-result-image-missing { display: none; }

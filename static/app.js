@@ -19907,6 +19907,13 @@
       openMediaLightbox(shotLink.href, { kind: 'image', title: 'screenshot.png' });
       return;
     }
+    // CCC-286: (+) enlarge button on tool-result image thumbnails.
+    const zoomBtn = ev.target.closest('.tool-result-image-zoom[data-zoom-src]');
+    if (zoomBtn) {
+      ev.preventDefault();
+      openMediaLightbox(zoomBtn.getAttribute('data-zoom-src'), { kind: 'image', title: zoomBtn.getAttribute('data-zoom-title') || 'image.png' });
+      return;
+    }
     const img = ev.target.closest('img.msg-image');
     if (img) {
       ev.preventDefault();
@@ -67345,6 +67352,8 @@
       const ext = String((img.media_type || 'image/png').split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
       const fname = 'tool-image-L' + (img.line != null ? img.line : 'x') + '-' + (img.idx != null ? img.idx : 0) + '.' + ext;
       items += '<figure class="tool-result-image" data-tool-image-key="' + escapeAttr(_toolResultImageKey(img)) + '">'
+        + '<button type="button" class="tool-result-image-zoom" data-zoom-src="' + escapeAttr(src) + '"'
+        + ' data-zoom-title="' + escapeAttr(fname) + '" title="Enlarge" aria-label="Enlarge image">+</button>'
         + '<a href="' + escapeAttr(src) + '" target="_blank" rel="noopener" title="Open full size">'
         + '<img class="msg-image" src="' + escapeAttr(src) + '" alt="Image returned by tool" loading="lazy"'
         + ' onerror="this.closest(\'figure\').classList.add(\'is-missing\')"></a>'

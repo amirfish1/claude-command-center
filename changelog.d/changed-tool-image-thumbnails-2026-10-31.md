@@ -1,0 +1,1 @@
+- Images returned by tools now show as half-size thumbnails, several per row, with a (+) button to enlarge them.
