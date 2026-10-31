@@ -17881,7 +17881,10 @@
     const otherRows = [];
     const knownKeys = new Set(['DID', 'INSIGHT', 'NEXT_STEP_USER', 'NEXT_ACTION', 'COMPLETION']);
     for (const ln of lines) {
-      const m = ln.match(/^([A-Z_]+):\s*(.*)$/);
+      // Skip the HTML comment markers that hide the machine JSON lines
+      // (NEXT_ACTION/COMPLETION) in markdown-rendering terminal clients.
+      if (ln === '<!--' || ln === '-->') continue;
+      const m = ln.match(/^(?:<!--\s*)?([A-Z_]+):\s*(.*?)(?:\s*-->)?$/);
       if (m && knownKeys.has(m[1])) {
         fields[m[1]] = m[2].trim();
       } else if (m) {
