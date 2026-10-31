@@ -7,7 +7,7 @@ const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 function load(stubs = {}) {
   const start = source.indexOf('  function ticketSessionSection(');
   const end = source.indexOf('  // Completion and explicit archiving', start);
-  const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs', 'sidebarSessionWorking'].map(name => {
+  const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs', '_ultraFreshTime', 'sidebarSessionWorking'].map(name => {
     const begin = source.indexOf('  function ' + name + '(');
     return source.slice(begin, source.indexOf('\n  }\n', begin) + 4);
   }).join('\n');
@@ -15,7 +15,7 @@ function load(stubs = {}) {
     _applyLiveOverlayToRow: c => c,
     _ultraFreshCurrent: c => c,
     sessionIsOptimisticallySending: () => false,
-    rowOutcomeView: loadRowOutcomeView(),
+    rowOutcomeView: loadRowOutcomeView({ _applyLiveOverlayToRow: stubs._applyLiveOverlayToRow || (c => c) }),
     ...stubs,
   });
 }
@@ -38,6 +38,18 @@ test('real questions need attention; stale previous-turn next steps do not', () 
   assert.equal(section(row('a', ask)), 'needs-you');
   assert.equal(section(row('a', { ...ask, last_event_type: 'user' })), 'active');
   assert.equal(section(row('a', { ...ask, state: 'working' })), 'active');
+});
+test('an older user overlay cannot keep a newer displayed decision in Active', () => {
+  const { ticketSessionSection: section } = load({
+    _applyLiveOverlayToRow: c => ({ ...c, last_event_type: 'user', last_event_ts: 10 }),
+  });
+  const decision = row('a', { modified: 20, last_event_type: 'assistant',
+    session_state: { next_step_user: 'Choose a region.' } });
+  assert.equal(section(decision), 'needs-you');
+  const { ticketSessionSection: newerUser } = load({
+    _applyLiveOverlayToRow: c => ({ ...c, last_event_type: 'user', last_event_ts: 30 }),
+  });
+  assert.equal(newerUser(decision), 'active');
 });
 test('new activity moves an existing row ahead of older sessions, even when selected', () => {
   const { stableTicketSessionGroups: groups } = load();

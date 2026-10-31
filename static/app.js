@@ -3666,10 +3666,13 @@
         row.classList.remove('is-ready-to-close');
       }
       if (!offerClose) row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
-      // The status stream can resume work before the list snapshot catches up.
-      // Reconcile section membership through the normal renderer as well.
-      if (info.kind === 'working' && !row.classList.contains('is-current-child-row')
-          && row.closest('[data-session-section="needs-you"], [data-session-section="finished"]')) _scheduleSidebarRender();
+      // Text and category must change together, in either direction. A real
+      // lifecycle transition must not wait behind the periodic hover pause.
+      const section = row.closest('[data-session-section]');
+      if (section && !row.classList.contains('is-current-child-row')
+          && section.dataset.sessionSection !== ticketSessionSection(c)) {
+        _scheduleSidebarRender({ lifecycle: true });
+      }
     }
     // Live activity invalidates any pending one-tap reply immediately.
     syncRowQuickActions(sid);
@@ -3894,7 +3897,9 @@
     const live = _applyLiveOverlayToRow(c);
     if (sessionIsOptimisticallySending(c.session_id || c.id)) return 'active';
     if (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) return 'archived';
-    if (c.last_event_type === 'user' || live.last_event_type === 'user'
+    if (c.last_event_type === 'user'
+        || (live.last_event_type === 'user'
+          && _ultraFreshTime(live.last_event_ts) > _ultraFreshTime(c.modified || c.mtime))
         || sidebarSessionWorking(c, live)) return 'active';
     if (live.needs_approval || live.question_waiting) return 'needs-you';
     if (c.archived) return 'finished';
@@ -31830,6 +31835,7 @@
   }
 
   let _sidebarRenderRaf = 0;
+  let _sidebarLifecycleRenderPending = false;
   let _sidebarRenderPendingWhilePaused = false;
   function renderSidebar(convs, opts) {
     if (_renameInProgress) return;
@@ -31914,15 +31920,18 @@
     _sidebarRenderPendingWhilePaused = false;
     _scheduleSidebarRender();
   }
-  function _scheduleSidebarRender() {
-    if (_pausePeriodicSidebarRender()) {
+  function _scheduleSidebarRender(opts = {}) {
+    if (opts.lifecycle) _sidebarLifecycleRenderPending = true;
+    if (!_sidebarLifecycleRenderPending && _pausePeriodicSidebarRender()) {
       _sidebarRenderPendingWhilePaused = true;
       return;
     }
     if (_sidebarRenderRaf) return;
     _sidebarRenderRaf = requestAnimationFrame(() => {
       _sidebarRenderRaf = 0;
-      if (_pausePeriodicSidebarRender()) {
+      const lifecycle = _sidebarLifecycleRenderPending;
+      _sidebarLifecycleRenderPending = false;
+      if (!lifecycle && _pausePeriodicSidebarRender()) {
         _sidebarRenderPendingWhilePaused = true;
         return;
       }
@@ -31932,7 +31941,7 @@
         const convs = (typeof filterConversations === 'function')
           ? filterConversations($s ? $s.value : '')
           : (conversationsData || []);
-        renderSidebar(convs);
+        renderSidebar(convs, lifecycle ? { force: true } : undefined);
       } catch (_) {}
     });
   }

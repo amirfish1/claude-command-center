@@ -7,6 +7,63 @@ const app = fs.readFileSync('static/app.js', 'utf8');
 const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'));
 const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
 
+test('a streamed decision changes section on the next render frame despite a permanent hover pause', async () => {
+  const fn = name => {
+    const start = app.indexOf('  function ' + name + '(');
+    return app.slice(start, app.indexOf('\n  }\n', start) + 4);
+  };
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<style>.conv-item{min-height:80px}#convList{height:400px}</style><div id="convList"><section data-session-section="needs-you"></section>'
+      + '<section data-session-section="active"><div class="conv-item" data-session-id="s0">'
+      + '<div class="wa-line2"><span class="wa-preview"></span></div></div></section></div>');
+    await page.addScriptTag({ content: `
+      const conversationsData = [{session_id:'s0', idea_ticket:{ref:'TASK-1'}, state:'idle', modified:1}];
+      const archiveData = [];
+      const sessionIsOptimisticallySending = () => false;
+      const preSendPreviewFor = () => null;
+      // The ordinary overlay still remembers an older owner event.
+      const _applyLiveOverlayToRow = c => ({...c,last_event_type:'user',last_event_ts:1});
+      const sessionReadyToClose = () => false;
+      const sessionQuickActions = () => [];
+      const syncRowQuickActions = () => {};
+      const readyToCloseArchiveHtml = () => '';
+      const _ttsDirectBtn = null;
+      const _pausePeriodicSidebarRender = () => true;
+      let _sidebarRenderRaf = 0, _sidebarLifecycleRenderPending = false, _sidebarRenderPendingWhilePaused = false;
+      window.renders = [];
+      const renderSidebar = (rows, opts) => {
+        renders.push(opts);
+        document.querySelector('[data-session-section="'+ticketSessionSection(rows[0])+'"]')
+          .appendChild(document.querySelector('.conv-item'));
+      };
+      window.EventSource = class {close(){}};
+      ${fn('_scheduleSidebarRender')}
+      ${fn('ticketSessionSection')}
+      ${block}
+      window.uf = {accept:_ultraFreshAccept,state:_ultraFresh};
+    ` });
+    await page.waitForFunction(() => window.uf?.state.entries.has('s0'));
+    const elapsed = await page.evaluate(async () => {
+      const start = performance.now();
+      _scheduleSidebarRender();
+      if (renders.length) throw new Error('ordinary periodic render escaped its pause');
+      uf.accept({session_id:'s0',text:'A decision is needed.',ts:'2099-01-01T00:00:00Z',
+        session_state:{next_step_user:'None.',completion:{valid:true,ready_to_close:false,
+          decision_dependency:{score:1,evidence:'Choose the publication scope.'}}}});
+      for(let frame=0;frame<4;frame++) await new Promise(requestAnimationFrame);
+      return performance.now()-start;
+    });
+    assert.equal(await page.$eval('.conv-item', el=>el.closest('section').dataset.sessionSection),'needs-you');
+    assert.match(await page.$eval('.wa-preview',el=>el.textContent), /Decision needed: Choose the publication scope/);
+    assert.deepEqual(await page.evaluate(()=>renders), [{force:true}]);
+    assert.ok(elapsed < 1000, 'section must follow the stream without a list poll or hover release');
+    await page.evaluate(() => uf.accept({session_id:'s0',clear:true,user_ts:'2099-01-02T00:00:00Z'}));
+    await page.waitForFunction(() => document.querySelector('.conv-item').closest('section').dataset.sessionSection === 'active');
+  } finally { await browser.close(); }
+});
+
 // Use the actual shipped controller and CSS in Chromium. SSE frames are
 // delivered explicitly so no timing/list-poll coincidence can pass this test.
 test('ultra-fresh patches only top-four message slots, rotates on scroll/filter, and rejects stale frames', async () => {
