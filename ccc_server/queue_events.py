@@ -1998,6 +1998,7 @@ def _resume_session_codex_native_delivery(
 
 def _codex_queued_steer_transaction(
     session_id, text, *, preserve_queued_steer, idempotency_key,
+    replace_queued_id=None,
 ):
     with _core._codex_queue_pump_lock(session_id):
         if not _core._retry_pending_input_recovery(session_id):
@@ -2007,7 +2008,9 @@ def _codex_queued_steer_transaction(
                 "error": "queued input recovery must complete before delivery",
                 **_core._pending_input_recovery_status(session_id),
             }
-        claim = _core._claim_matching_pending_input(session_id, text)
+        claim = _core._claim_matching_pending_input(
+            session_id, text, pending_id=replace_queued_id,
+        )
         if isinstance(claim, dict) and claim.get("code"):
             result = dict(claim)
             result.setdefault("via", "codex-steer")
@@ -2450,6 +2453,7 @@ def resume_session_codex(
     preserve_queued_steer=False, _native_delivery=False,
     queued_steer_transaction_protocol=None,
     queued_delivery_transaction_protocol=0,
+    replace_queued_id=None,
 ):
     """Resume a dormant Codex thread with a new prompt through the app-server.
 
@@ -2487,6 +2491,8 @@ def resume_session_codex(
                 "queued_delivery_transaction_protocol": int(
                     queued_delivery_transaction_protocol or 0
                 ),
+                **({"replace_queued_id": str(replace_queued_id)}
+                   if replace_queued_id else {}),
             },
             idempotency_key=idempotency_key,
         )
@@ -2521,6 +2527,7 @@ def resume_session_codex(
                 text,
                 preserve_queued_steer=bool(preserve_queued_steer),
                 idempotency_key=idempotency_key,
+                replace_queued_id=replace_queued_id,
             )
         delivery_kwargs = {"steer": True}
         if idempotency_key:

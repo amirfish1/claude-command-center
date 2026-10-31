@@ -10702,7 +10702,7 @@
       revertOptimisticSteerMove(moved, activePaneId());
     };
     try {
-      const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true });
+      const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] });
       if (data && data.queue_pump_started) {
         giveBack();
         showOpToast('Turn ended; sending the oldest queued message now.');
@@ -10786,7 +10786,8 @@
     btn.textContent = isPending ? 'Steering…' : '...';
     try {
       const data = await postInjectInput(sid, text, 'steer', isPending
-        ? { replaceQueued: true, userInitiated: true } : { userInitiated: true });
+        ? { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] }
+        : { userInitiated: true });
       if (data && data.queue_pump_started) {
         showOpToast('Turn ended; sending the oldest queued message now.');
         setTimeout(refreshConversationList, 500);
@@ -10861,6 +10862,7 @@
     try {
       const data = await postInjectInput(sid, texts.join('\n\n'), 'steer', {
         replaceQueuedTexts: texts,
+        replaceQueuedIds: rows.map(queuedRowDeliveryId),
         userInitiated: true,
       });
       if (data && (data.queue_pump_started || data.queued_preserved)) {
@@ -37826,6 +37828,11 @@
       // originals by matching the text it just sent -- name them explicitly.
       payload.replace_queued = true;
       payload.replace_queued_texts = opts.replaceQueuedTexts;
+    }
+    if (opts && Array.isArray(opts.replaceQueuedIds) && opts.replaceQueuedIds.some(Boolean)) {
+      // The queued card's own delivery_id: the server replaces that exact
+      // row rather than the first one with the same text.
+      payload.replace_queued_ids = opts.replaceQueuedIds.map(id => String(id || ''));
     }
     const announcedFrom = opts && opts.announcedFrom ? String(opts.announcedFrom).trim() : '';
     if (announcedFrom) payload.announced_from = announcedFrom;

@@ -259,3 +259,33 @@ test('queued Steer is a distinct keyed action from the Send that created it',asy
   assert.equal(bodies[1].idempotency_key,'inject:test-2');
  }finally{await page.close();}
 });
+test('queued Steer names the row it replaces by delivery_id, never by text alone',async()=>{
+ const start=app.indexOf('  async function postInjectInput(');
+ const helper=app.slice(start,app.indexOf('\n  function steeredToastText(',start)).trim();
+ const page=await browser.newPage();try{
+  const bodies=await page.evaluate(async helperSource=>{
+   const sent=[];
+   globalThis.durableActionId=()=>'inject:test';
+   globalThis.fetch=async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true,json:async()=>({ok:true})};};
+   const postInjectInput=(0,eval)('('+helperSource+')');
+   await postInjectInput('s','same text','steer',{replaceQueued:true,replaceQueuedIds:['row-b']});
+   await postInjectInput('s','a\n\nb','steer',{replaceQueuedTexts:['a','b'],replaceQueuedIds:['row-a','']});
+   await postInjectInput('s','no id yet','steer',{replaceQueued:true,replaceQueuedIds:['']});
+   return sent;
+  },helper);
+  assert.deepEqual(bodies[0].replace_queued_ids,['row-b']);
+  assert.equal(bodies[0].replace_queued,true);
+  assert.deepEqual(bodies[1].replace_queued_ids,['row-a','']);
+  assert.deepEqual(bodies[1].replace_queued_texts,['a','b']);
+  // An echo that never learned its id still steers by text.
+  assert.equal(Object.hasOwn(bodies[2],'replace_queued_ids'),false);
+  assert.equal(bodies[2].replace_queued,true);
+ }finally{await page.close();}
+});
+// Every human steer site hands the server the row id it is replacing.
+test('all three steer sites pass replaceQueuedIds',()=>{
+ const calls=app.match(/postInjectInput\([^;]*'steer'[^;]*;/g)||[];
+ const human=calls.filter(c=>/replaceQueued/.test(c));
+ assert.equal(human.length,3);
+ for(const call of human) assert.match(call,/replaceQueuedIds/);
+});

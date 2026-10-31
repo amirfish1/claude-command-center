@@ -40562,6 +40562,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 ]
                 if replace_queued_texts:
                     replace_queued = True
+                # The queued card's own delivery_id(s), parallel to the texts:
+                # name the exact row(s) instead of the first text match.
+                replace_queued_ids = [
+                    str(item or "").strip()
+                    for item in (payload.get("replace_queued_ids") or [])
+                ]
+                if any(replace_queued_ids):
+                    replace_queued = True
+                else:
+                    replace_queued_ids = []
                 queued_text = text
                 if presentation_bootstrap:
                     text = _mode3_prompt("", bootstrap=True)
@@ -40592,6 +40602,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         inject_options["preserve_queued_steer"] = True
                     if replace_queued_texts:
                         inject_options["queued_steer_batch"] = True
+                    if replace_queued_ids:
+                        inject_options["replace_queued_ids"] = replace_queued_ids
                     if payload.get("idempotency_key"):
                         inject_options["idempotency_key"] = payload.get(
                             "idempotency_key"
@@ -40673,7 +40685,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     result = dict(result, held_queued=held_queued)
                 if replace_queued_texts:
                     result = _finalize_queued_steer_batch_result(
-                        sid, replace_queued_texts, result,
+                        sid, replace_queued_texts, result, ids=replace_queued_ids,
                     )
                 elif replace_queued:
                     # Match against the text actually delivered/enqueued by
@@ -40683,7 +40695,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # on the unwrapped one never finds it. The stale queued
                     # copy then survives a successful steer and the queue
                     # pump resends it later, delivering the message twice.
-                    result = _finalize_queued_steer_result(sid, text, result)
+                    result = _finalize_queued_steer_result(
+                        sid, text, result,
+                        pending_id=(replace_queued_ids or [None])[0],
+                    )
                 if continuation_origin != sid and result.get("ok"):
                     try:
                         capture = _codex_capture_thread_row(continuation_origin) or {}

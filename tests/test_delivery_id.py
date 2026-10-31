@@ -277,3 +277,135 @@ def test_unproven_receipt_expires_after_a_day(queue_env, queueing_router):
     state = receipts._load(receipts._default_path())
     assert [e["inject_id"] for e in state["_expired"]] == [did]
     assert delivery.outstanding(SID, now=later, stale_after_s=0) is None
+
+
+# ── slice 3: steer and release name the row by id ────────────────────────────
+
+def _two_rows_same_text(text="same words"):
+    a = server._inject_text_into_session(SID, text, source="ui",
+                                         idempotency_key="inject:eeeeeeee-0001",
+                                         allow_duplicate=True)["delivery_id"]
+    b = server._inject_text_into_session(SID, text, source="ui",
+                                         idempotency_key="inject:eeeeeeee-0002",
+                                         allow_duplicate=True)["delivery_id"]
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == [a, b]
+    return a, b
+
+
+def test_claim_by_id_takes_that_row_not_the_first_text_match(queue_env, queueing_router):
+    a, b = _two_rows_same_text()
+    claim = server._claim_matching_pending_input(SID, "same words", pending_id=b)
+    assert delivery.entry_id(claim["item"]) == b and claim["index"] == 1
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == [a]
+    # A row that already left the queue is not silently swapped for a twin.
+    assert server._claim_matching_pending_input(SID, "same words", pending_id=b) is None
+    assert server._restore_pending_input_claim(claim)
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == [a, b]
+
+
+def test_consume_by_id_wins_over_text_and_falls_back_to_text(queue_env, queueing_router):
+    a, b = _two_rows_same_text()
+    assert server._consume_matching_pending_input(SID, "same words", pending_id=b) == 1
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == [a]
+    # Finalisers run after delivery: an unknown id must still withdraw the
+    # queued copy by text, or the pump would deliver it a second time.
+    assert server._consume_matching_pending_input(SID, "same words", pending_id="gone") == 1
+    assert _queued_events(SID) == []
+
+
+def test_released_hold_keeps_the_delivery_id_and_receipt(queue_env, queueing_router):
+    did = _queue_with_receipt("resume this later")
+    assert server._hold_queued_inputs_for_stop(SID, "stop-steer") == 1
+    assert delivery.outstanding(SID, stale_after_s=0)["state"] == "held"
+    out = server._release_stop_held_inputs(SID, [did])
+    assert out["released"] == 1 and out["held"]["items"] == []
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == [did]
+    view = delivery.outstanding(SID, stale_after_s=0)
+    assert (view["inject_id"], view["state"], view["queue"]) == (did, "queued", "terminal")
+    # Same message, same id: cancel by the id the browser already holds.
+    assert delivery.cancel(SID, did)["cancelled"] == 1
+
+
+def test_explicit_delivery_id_overrides_minting(queue_env, queueing_router):
+    out = server._inject_text_into_session(SID, "pinned", source="ui",
+                                           delivery_id="inject:pinned-0001")
+    assert out["delivery_id"] == "inject:pinned-0001"
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == ["inject:pinned-0001"]
+
+
+def test_codex_steer_by_id_claims_that_row(queue_env, monkeypatch):
+    """The browser's replace_queued_ids reaches the Codex claim transaction."""
+    from unittest import mock
+    for name in ("_is_cursor_session", "_is_hermes_session", "_is_kimi_session",
+                 "_is_opencode_session", "_is_devin_cli_session"):
+        monkeypatch.setattr(server, name, lambda sid: False)
+    monkeypatch.setenv("CCC_CODEX_DESKTOP_IPC", "0")
+    monkeypatch.setattr(server, "_resolve_codex_bin",
+                        lambda: {"available": True, "bin": "/usr/bin/codex-test"})
+    monkeypatch.setattr(server, "_inject_budget_check", lambda *args: None)
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: True)
+    monkeypatch.setattr(server, "find_session_cwd", lambda sid: "/tmp")
+    monkeypatch.setattr(server, "session_live_status",
+                        lambda sid, cwd=None: {"live": True, "status": "working", "tty": None})
+    monkeypatch.setattr(server, "_session_acp_harness", lambda sid: None)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_save_codex_app_server_state_unlocked", mock.Mock())
+    seen = []
+
+    def deliver(sid, text, **kwargs):
+        seen.append([ev["delivery_id"] for ev in _queued_events(SID)])
+        return {"ok": True, "via": "codex-steer"}
+
+    monkeypatch.setattr(server, "_resume_session_codex_native_delivery", deliver)
+    # The resume queue collapses identical text; the terminal queue keeps
+    # both twins, and the claim searches it too.
+    ids = []
+    for key in ("inject:ffffffff-0001", "inject:ffffffff-0002"):
+        assert delivery.within(key, "twin", lambda: server._queue_terminal_input(SID, "twin"))["ok"]
+        ids.append(key)
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == ids
+
+    result = server._inject_text_into_session_router(
+        SID, "twin", mode="steer", preserve_queued_steer=True,
+        replace_queued_ids=[ids[1]],
+    )
+    assert result["ok"] and result["queued_consumed"] == 1
+    assert seen == [[ids[0]]]
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == [ids[0]]
+
+
+def test_control_plane_resume_carries_replace_queued_id(monkeypatch):
+    calls = []
+
+    def fake_call(engine, operation, args, **kwargs):
+        calls.append((engine, operation, dict(args)))
+        return {"ok": True, "via": "codex-steer"}
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", fake_call)
+    monkeypatch.setattr(server, "_pending_writer_compatibility_status", lambda: {"ok": True})
+    server.resume_session_codex(SID, "twin", steer=True, preserve_queued_steer=True,
+                                replace_queued_id="row-b")
+    server.resume_session_codex(SID, "twin", steer=True)
+    assert calls[0][2]["replace_queued_id"] == "row-b"
+    assert "replace_queued_id" not in calls[1][2]
+
+
+def test_worker_forwards_replace_queued_id_only_when_named():
+    from types import SimpleNamespace
+    from unittest import mock
+    from worker_engines import EngineHost
+    resume = mock.Mock(return_value={"ok": True})
+    host = object.__new__(EngineHost)
+    host._legacy = lambda: SimpleNamespace(resume_session_codex=resume)
+    host._call("codex", "resume", {"session_id": SID, "text": "twin", "steer": True,
+                                   "replace_queued_id": "row-b"})
+    assert resume.call_args.kwargs["replace_queued_id"] == "row-b"
+    host._call("codex", "resume", {"session_id": SID, "text": "twin", "steer": True})
+    assert "replace_queued_id" not in resume.call_args.kwargs
+
+
+def test_inject_route_reads_replace_queued_ids():
+    server_py = Path(server.__file__).read_text()
+    assert 'payload.get("replace_queued_ids")' in server_py
+    assert 'inject_options["replace_queued_ids"] = replace_queued_ids' in server_py
+    assert "ids=replace_queued_ids" in server_py

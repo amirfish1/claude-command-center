@@ -1,0 +1,1 @@
+- Steering a queued message now names its row by `delivery_id` (`replace_queued_ids` on `/api/inject-input`), so two identical queued texts no longer steer the wrong one; releasing a stop-held message keeps the id it was sent with, so its card, receipt and cancel still match.

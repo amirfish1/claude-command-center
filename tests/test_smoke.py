@@ -7298,7 +7298,7 @@ class TestServerImports(unittest.TestCase):
             app_js.index("const btn = ev.target.closest('[data-steer-queued-message]')"):
             app_js.index("const btn = ev.target.closest('[data-steer-user-message]')")
         ]
-        self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true })", queued_handler)
+        self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] })", queued_handler)
         self.assertNotIn("postInjectInput(sid, text, 'send')", queued_handler)
         self.assertIn("if (data && data.queue_pump_started)", queued_handler)
         self.assertIn("if (data && data.queued_preserved)", queued_handler)

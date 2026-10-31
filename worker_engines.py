@@ -566,6 +566,12 @@ class EngineHost:
             if operation == "spawn":
                 return legacy.spawn_session_codex(**args)
             if operation == "resume":
+                # Only a steer that names its queued row carries the id;
+                # every other resume keeps the legacy call shape.
+                by_id = (
+                    {"replace_queued_id": str(args["replace_queued_id"])}
+                    if args.get("replace_queued_id") else {}
+                )
                 return legacy.resume_session_codex(
                     args.get("session_id"),
                     args.get("text") or "",
@@ -580,6 +586,7 @@ class EngineHost:
                     queued_delivery_transaction_protocol=int(
                         args.get("queued_delivery_transaction_protocol") or 0
                     ),
+                    **by_id,
                 )
             if operation == "approval":
                 return legacy._codex_app_server_resolve_approval(

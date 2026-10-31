@@ -2797,9 +2797,16 @@ def _drop_matching_terminal_queue_entries(session_id, text):
     return len(removed_items)
 
 
-def _claim_matching_pending_input(session_id, text):
+def _claim_matching_pending_input(session_id, text, pending_id=None):
+    """Take one queued row out of the queue ahead of delivering it.
+
+    ``pending_id`` (the row's delivery_id, as the browser's queued card knows
+    it) names the exact row; without it the first row with the same text is
+    claimed, which is ambiguous when identical texts are queued twice.
+    """
     clean = _queued_text_key(text)
-    if not session_id or not clean:
+    want = str(pending_id or "").strip()
+    if not session_id or not (clean or want):
         return None
     def claim_one():
         for queue_name, queue, lock in (
@@ -2811,7 +2818,10 @@ def _claim_matching_pending_input(session_id, text):
                 if not items:
                     continue
                 for index, item in enumerate(items):
-                    if _queued_text_key(item) != clean:
+                    if want:
+                        if str(getattr(item, "pending_id", "") or "") != want:
+                            continue
+                    elif _queued_text_key(item) != clean:
                         continue
                     claimed = items.pop(index)
                     if not items:
@@ -2895,15 +2905,21 @@ def _restore_pending_input_claim(claim):
     return bool(_core._mutate_pending_inputs({sid}, restore).get("ok"))
 
 
-def _consume_matching_pending_input(session_id, text):
+def _consume_matching_pending_input(session_id, text, pending_id=None):
     """Remove one queued copy before re-routing it through Steer.
 
-    Duplicate prompts are valid, so consume at most one item. Resume-queued
-    input is checked first because it is the queue used by dormant Codex turns;
-    the terminal queue is the fallback used by live terminal sessions.
+    Duplicate prompts are valid, so consume at most one item. A ``pending_id``
+    (the row's delivery_id) names the exact row and wins over the text match.
+    Resume-queued input is checked first because it is the queue used by
+    dormant Codex turns; the terminal queue is the fallback used by live
+    terminal sessions.
     """
     clean = str(text or "").strip()
-    if not session_id or not clean:
+    if not session_id:
+        return 0
+    if pending_id and _core._consume_pending_input_id(session_id, pending_id):
+        return 1
+    if not clean:
         return 0
     for field in ("resume", "terminal"):
         transaction = _core._apply_pending_input_operations(session_id, [{
@@ -3003,6 +3019,9 @@ def _release_stop_held_inputs(session_id, ids=None):
             "source": "stop-hold-release",
             "allow_duplicate": True,
             "idempotency_key": f"stop-hold-release:{item.get('id')}",
+            # The message keeps the id it was sent with: the browser card,
+            # its receipt and a later cancel all still name it.
+            "delivery_id": item.get("id"),
         }
         attr = (item.get("attr") if isinstance(item.get("attr"), dict) else None) \
             or attribution.from_text(stored)
@@ -3230,6 +3249,7 @@ def _consume_pending_input_id(
         )
         removed = ((transaction.get("value") or [None])[0])
         if transaction.get("ok") and removed is not None:
+            _core._complete_pending_input_handoff(removed)
             return 1
     return 0
 
@@ -3240,7 +3260,7 @@ def _consume_pending_input_id(
 _QUEUED_STEER_CONSUMING_VIA = frozenset({"codex-steer", "acp-prompt", "antigravity-ls"})
 
 
-def _finalize_queued_steer_batch_result(session_id, texts, result):
+def _finalize_queued_steer_batch_result(session_id, texts, result, ids=None):
     """Commit a Steer-all: withdraw every queued copy the one prompt carried.
 
     The batch is delivered as a single concatenated prompt on purpose -- N
@@ -3254,8 +3274,12 @@ def _finalize_queued_steer_batch_result(session_id, texts, result):
     result = dict(result or {})
     if result.get("ok") and result.get("via") in _QUEUED_STEER_CONSUMING_VIA:
         consumed = 0
-        for item in texts or []:
-            consumed += _core._consume_matching_pending_input(session_id, item)
+        ids = list(ids or [])
+        for index, item in enumerate(texts or []):
+            consumed += _core._consume_matching_pending_input(
+                session_id, item,
+                pending_id=ids[index] if index < len(ids) else None,
+            )
         if consumed:
             result["queued_consumed"] = consumed
         return result
@@ -3265,7 +3289,7 @@ def _finalize_queued_steer_batch_result(session_id, texts, result):
     return _core._finalize_queued_steer_result(session_id, "", result)
 
 
-def _finalize_queued_steer_result(session_id, text, result):
+def _finalize_queued_steer_result(session_id, text, result, pending_id=None):
     """Commit a queued-row Steer only when Codex confirmed delivery.
 
     The durable FIFO remains untouched for unavailable/failed steering. This
@@ -3292,7 +3316,9 @@ def _finalize_queued_steer_result(session_id, text, result):
     # had in fact just been sent, kept the tray card above the composer, and
     # the queue pump later delivered the same text a second time.
     if result.get("ok") and result.get("via") in _QUEUED_STEER_CONSUMING_VIA:
-        consumed = _core._consume_matching_pending_input(session_id, text)
+        consumed = _core._consume_matching_pending_input(
+            session_id, text, pending_id=pending_id,
+        )
         if consumed:
             result["queued_consumed"] = consumed
         return result

@@ -1615,7 +1615,8 @@ def _inject_text_into_session(session_id, text, **kwargs):
     mode = str(kwargs.get("mode", "send"))
     # One id for the whole trip: response, queue row, receipt, browser card.
     from ccc_server import delivery as _delivery
-    delivery_id = _delivery.mint(
+    # A re-send of a message CCC already owns (stop-hold release) keeps its id.
+    delivery_id = str(kwargs.pop("delivery_id", None) or "").strip() or _delivery.mint(
         attr=kwargs.get("attr"), idempotency_key=kwargs.get("idempotency_key"),
     )
     fields = dict(kwargs.pop("contract_fields", None) or {})
@@ -1746,6 +1747,7 @@ def _inject_text_into_session_router(
     peer_sender_sid=None,
     queued_steer_batch=False,
     attr=None,
+    replace_queued_ids=None,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -1986,6 +1988,10 @@ def _inject_text_into_session_router(
         if idempotency_key:
             steer_kwargs["idempotency_key"] = idempotency_key
         steer_kwargs["preserve_queued_steer"] = bool(preserve_queued_steer)
+        if replace_queued_ids and not queued_steer_batch:
+            # The queued card names its row: claim that row, not the first
+            # one with the same text.
+            steer_kwargs["replace_queued_id"] = str(replace_queued_ids[0])
         if queued_steer_batch:
             # Steer-all delivers every queued original as one concatenated
             # prompt. The claim-before-delivery transaction can only match a
@@ -2017,7 +2023,10 @@ def _inject_text_into_session_router(
             and not steer_result.get("queued")
             and int(steer_result.get("queued_consumed") or 0) <= 0
         ):
-            _core._consume_matching_pending_input(session_id, text)
+            _core._consume_matching_pending_input(
+                session_id, text,
+                pending_id=(replace_queued_ids or [None])[0],
+            )
         return steer_result
     if (
         mode == "steer"
