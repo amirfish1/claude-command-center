@@ -5340,7 +5340,9 @@ def test_codex_fetch_threads_reuses_rows_until_state_db_changes(tmp_path, monkey
     codex._CODEX_THREADS_CACHE.clear()
     opens = []
     real = sqlite3.connect
-    monkeypatch.setattr(codex.sqlite3, "connect", lambda *a, **k: (opens.append(1), real(*a, **k))[1])
+    me = threading.get_ident()  # other tests' background threads also connect
+    monkeypatch.setattr(codex.sqlite3, "connect", lambda *a, **k: (
+        opens.append(1) if threading.get_ident() == me else None, real(*a, **k))[1])
     for _ in range(30):
         assert [r["id"] for r in codex._codex_fetch_threads("id = ?", ("t1",), limit=1)] == ["t1"]
     assert len(opens) == 1
