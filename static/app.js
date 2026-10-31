@@ -8078,6 +8078,13 @@
   }
   function markSessionSending(sid) {
     if (!sid) return;
+    // A deliberate new message supersedes an earlier put-away action.
+    const lifecycleOverride = _optimisticOverrides.get(sid);
+    if (lifecycleOverride && 'explicitly_archived' in lifecycleOverride) {
+      delete lifecycleOverride.archived;
+      delete lifecycleOverride.explicitly_archived;
+      delete lifecycleOverride.trashed;
+    }
     const existing = _sendingSessions.get(sid);
     if (existing && existing.timer) clearTimeout(existing.timer);
     const timer = setTimeout(() => clearSessionSending(sid), _SENDING_TIMEOUT_MS);
@@ -24595,8 +24602,10 @@
       if ('pin_rank' in ov) {
         if (c.pin_rank !== ov.pin_rank) { c.pin_rank = ov.pin_rank; allMatch = false; }
       }
-      // Server now agrees on every field we were holding — stop overriding.
-      if (allMatch) _optimisticOverrides.delete(c.session_id);
+      // Local renders also pass through here, so agreement is not proof a
+      // server read began after the action. Retain explicit lifecycle intent
+      // for the bounded TTL to shield delayed pre-action polls as well.
+      if (allMatch && !('explicitly_archived' in ov)) _optimisticOverrides.delete(c.session_id);
     }
   }
 
@@ -40620,7 +40629,7 @@
       } else if (isGithubPrRow) {
         lifecycleButtons = '';
       } else if (_archiveOnlyRow) {
-        lifecycleButtons = (c.archived || c.trashed)
+        lifecycleButtons = ((c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) || c.trashed)
           ? '<button class="conv-archive-btn is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Active</span></button>'
           : '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive" aria-label="Archive">&#128229;</button>';
       } else if (lifecycleContext === 'trash') {

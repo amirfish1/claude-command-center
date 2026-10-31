@@ -6,6 +6,30 @@ const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const start = app.indexOf('  async function _setOpenSessionLifecycle(');
 const code = app.slice(start, app.indexOf('  // Show only the lifecycle/queue items', start));
 
+test('a confirming local render cannot consume archive protection before a delayed poll', () => {
+  const begin = app.indexOf('  const _optimisticOverrides = new Map()');
+  const fn = app.indexOf('  function applyOptimisticOverrides(', begin);
+  const end = app.indexOf('\n  }\n', fn) + 4;
+  let now = 1000;
+  const context = { Date: { now: () => now } };
+  vm.createContext(context);
+  vm.runInContext(app.slice(begin, end), context);
+  const intent = { archived: true, explicitly_archived: true };
+  context.setOptimisticOverride('session-test', intent);
+  context.applyOptimisticOverrides([{ session_id: 'session-test', ...intent }]);
+  const stale = { session_id: 'session-test', archived: false, explicitly_archived: false };
+  context.applyOptimisticOverrides([stale]);
+  assert.equal(stale.archived, true);
+  assert.equal(stale.explicitly_archived, true);
+  context.setOptimisticOverride('session-test', { archived: false, explicitly_archived: false });
+  let olderArchive = { session_id: 'session-test', ...intent };
+  context.applyOptimisticOverrides([olderArchive]);
+  assert.equal(olderArchive.archived, false, 'a new Restore supersedes the old Archive');
+  now += 31000;
+  context.applyOptimisticOverrides([olderArchive = { session_id: 'session-test', ...intent }]);
+  assert.equal(olderArchive.archived, true, 'expired protection yields to the server');
+});
+
 function fixture(response) {
   const row = { id: 'conversation-test', session_id: 'session-test' };
   const calls = [];
