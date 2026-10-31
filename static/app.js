@@ -25076,6 +25076,27 @@
     }
   }
 
+  function followPendingSpawnTicket(rows) {
+    if (!ideaTicketsOn()) return;
+    const previous = [...conversationsData, ...pendingSpawns.values()];
+    const selected = previous.find(c => c && (c.id === currentConversation
+      || c.session_id === currentConversation));
+    if (!selected || !selected.idea_ticket || !selected.idea_ticket.pending
+        || selected.no_auto_select || selected.external_spawn) return;
+    const real = rows.find(c => c && (
+      (c.session_id && (c.session_id === selected.session_id
+        || c.session_id === selected.expected_session_id))
+      || (c.spawn_pid && selected.spawn_pid && String(c.spawn_pid) === String(selected.spawn_pid))));
+    const ticket = real && real.idea_ticket;
+    if (!ticket || !ticket.ref || ticket.pending) return;
+    const target = ticket.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
+    // Follow only the selected launch while its provisional tab is still
+    // open. A background classification must not override manual navigation.
+    if (_currentSidebarTabKey() !== 'ideas' || target === 'ideas') return;
+    try { localStorage.setItem('ccc-sidebar-tab', target); } catch (_) {}
+    showConvToast('Filed in Small bugs');
+  }
+
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {
     if (!pid) return;
     const id = 'spawning-' + pid;
@@ -25453,19 +25474,13 @@
       // next scan and clobber a rename otherwise.
       const oldBySessionId = {};
       for (const c of (conversationsData || [])) oldBySessionId[c.session_id] = c;
+      followPendingSpawnTicket(fresh);
       for (const c of fresh) {
         const old = oldBySessionId[c.session_id];
         if (old && old.name_overridden && !c.name_overridden) {
           c.display_name = old.display_name;
           c.name_overridden = true;
         }
-        // Auto-classification can quietly file a session into Small bugs
-        // while the owner expected it in Features — flag the switch for a
-        // few seconds so it doesn't go unnoticed.
-        const wasPending = old && old.idea_ticket && old.idea_ticket.pending;
-        const nowSmallBug = c.idea_ticket && !c.idea_ticket.pending
-          && c.idea_ticket.queue === 'SMALL-BUGS';
-        if (wasPending && nowSmallBug) showConvToast('Filed in Small bugs');
       }
       // Drop pending placeholders whose real session has appeared (matched by spawn_pid).
       // When we do the swap, carry the placeholder's column preference over to
@@ -78337,6 +78352,7 @@
     // Archive mode bypasses /api/sessions, so it needs its own
     // placeholder-to-real handoff. Claude archive rows do not carry
     // spawn_pid, so reconcile by prompt/cwd/recency as a fallback.
+    followPendingSpawnTicket(shaped);
     const archiveSelectionSwap = reconcilePendingSpawnsWithRows(shaped);
     const pendingRows = Array.from(pendingSpawns.values()).filter(c => {
       if (!q) return true;

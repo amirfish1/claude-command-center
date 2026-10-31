@@ -81,3 +81,38 @@ test('a previous search cannot hide the new local Ideas session', () => {
   const external = launch({meta:{external_spawn:true, no_auto_select:true, spawned_via:'ui'}, query:'keep my search'});
   assert.equal(external.ctx.$convSearch.value, 'keep my search');
 });
+
+const follow = app.slice(app.indexOf('  function followPendingSpawnTicket('),
+  app.indexOf('  function insertPendingSpawnCard('));
+
+function classify({placeholder = false, selected = true, tab = 'ideas', external = false,
+  queue = 'SMALL-BUGS', pending = false} = {}) {
+  const old = {id: placeholder ? 'spawning-test' : 'real', session_id: placeholder ? 'spawning-test' : 'real',
+    expected_session_id: 'real', idea_ticket: {pending: true}, external_spawn: external};
+  const prefs = new Map([['ccc-sidebar-tab', tab]]);
+  const toasts = [];
+  const ctx = {conversationsData: [old], pendingSpawns: new Map(),
+    currentConversation: selected ? old.id : 'another', ideaTicketsOn: () => true,
+    _currentSidebarTabKey: () => prefs.get('ccc-sidebar-tab'),
+    localStorage: {setItem: (k, v) => prefs.set(k, v)}, showConvToast: t => toasts.push(t)};
+  vm.runInNewContext(follow, ctx);
+  ctx.followPendingSpawnTicket([{id: 'real', session_id: 'real', idea_ticket: {ref: 'topic-1', queue, pending}}]);
+  return {prefs, toasts};
+}
+
+test('selected launch follows classification before or after placeholder handoff', () => {
+  for (const placeholder of [true, false]) {
+    const {prefs, toasts} = classify({placeholder});
+    assert.equal(prefs.get('ccc-sidebar-tab'), 'smallbugs');
+    assert.deepEqual(toasts, ['Filed in Small bugs']);
+  }
+});
+
+test('classification respects navigation and does not follow background launches', () => {
+  for (const options of [{selected: false}, {tab: 'workers'}, {tab: 'smallbugs'},
+    {external: true}, {queue: 'IDEAS'}, {pending: true}]) {
+    const {prefs, toasts} = classify(options);
+    assert.equal(prefs.get('ccc-sidebar-tab'), options.tab || 'ideas');
+    assert.equal(toasts.length, 0);
+  }
+});
