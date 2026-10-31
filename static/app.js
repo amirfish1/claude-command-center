@@ -3574,6 +3574,10 @@
     if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
     return Date.parse(value || '') || 0;
   }
+  function _ultraFreshWaitingAt(c) {
+    return Math.max(_ultraFreshTime(c.sidecar_ts), _ultraFreshTime(c.last_event_ts),
+      _ultraFreshTime(c.pending_tool_ts));
+  }
   function _ultraFreshSendBarrier(entry, sid) {
     const sending = sessionIsOptimisticallySending(sid);
     const preSend = preSendPreviewFor(sid);
@@ -3588,9 +3592,12 @@
     const entry = _ultraFresh.entries.get(String(c.session_id || c.id));
     if (!entry) return c;
     _ultraFreshSendBarrier(entry, c.session_id || c.id);
+    const ownerInputAt = Math.max(entry.userAt || 0, entry.sendAt || 0);
+    const waiting = ownerInputAt && _ultraFreshWaitingAt(c) <= ownerInputAt
+      ? { needs_approval: false, question_waiting: false } : {};
     if (entry.userAt > entry.at || (entry.sendAt && entry.userAt === entry.at && !entry.text
-        && Date.now() - entry.sendAt < _SENDING_TIMEOUT_MS)) return Object.assign({}, c,
-      { last_event_type: 'user', state: 'working', needs_approval: false, question_waiting: false,
+        && Date.now() - entry.sendAt < _SENDING_TIMEOUT_MS)) return Object.assign({}, c, waiting,
+      { last_event_type: 'user', state: 'working', _ownerInputAt: ownerInputAt,
         session_state: null, last_assistant_text: '', last_assistant_preview: '' });
     if (!entry.text) return c;
     if (sessionIsOptimisticallySending(c.session_id || c.id) && entry.at <= entry.sendAt) return c;
@@ -3598,7 +3605,8 @@
     if (c.last_event_type === 'user'
         && _ultraFreshTime(c.modified || c.mtime) > Math.max(entry.at, entry.sourceAt || 0)) return c;
     const reopened = !!entry.sendAt || entry.userAt > _ultraFreshTime(c.modified || c.mtime);
-    return Object.assign({}, c, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
+    return Object.assign({}, c, waiting, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
+      _ownerInputAt: ownerInputAt,
       archived: reopened && !(c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) ? false : c.archived,
       session_state: entry.sessionState, last_event_type: 'assistant',
       modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
@@ -6211,6 +6219,10 @@
     const rowTs = merged.sidecar_ts || 0;
     if (ovTs >= rowTs || !merged.is_live || ov.codex_state) {
       for (const k of _LIVE_OVERLAY_KEYS) {
+        // A previous question snapshot must not hide the new reply's
+        // authored choices after the owner has already answered it.
+        if ((k === 'needs_approval' || k === 'question_waiting') && c._ownerInputAt
+            && _ultraFreshWaitingAt(ov) <= c._ownerInputAt) continue;
         if (ov[k] !== undefined) merged[k] = ov[k];
       }
     }

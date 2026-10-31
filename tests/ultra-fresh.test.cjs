@@ -12,9 +12,10 @@ test('a submitted turn survives delivery acknowledgment over an old finished sna
   let sending = true;
   const entry = {at: 1, userAt: 0, text: 'Old completed work.'};
   const context = { Date, _SENDING_TIMEOUT_MS: 300000, _ultraFresh: {entries: new Map([['reopened', entry]])},
+    _sessionLiveOverlay: new Map(), _LIVE_OVERLAY_KEYS: ['is_live','sidecar_ts','needs_approval','question_waiting'],
     sessionIsOptimisticallySending: () => sending, preSendPreviewFor: () => 'Old completed work.' };
   vm.createContext(context);
-  for (const name of ['_ultraFreshTime', '_ultraFreshSendBarrier', '_ultraFreshCurrent']) {
+  for (const name of ['_ultraFreshTime', '_ultraFreshWaitingAt', '_ultraFreshSendBarrier', '_ultraFreshCurrent', '_applyLiveOverlayToRow']) {
     const start = app.indexOf('  function ' + name + '(');
     vm.runInContext(app.slice(start, app.indexOf('\n  }\n', start) + 4), context);
   }
@@ -32,6 +33,16 @@ test('a submitted turn survives delivery acknowledgment over an old finished sna
   entry.sessionState = {next_step_user:'Choose the next step.'};
   assert.equal(context._ultraFreshCurrent(old).session_state.next_step_user, 'Choose the next step.');
   assert.equal(context._ultraFreshCurrent(old).archived, false);
+  const waiting = {...old, needs_approval:true, question_waiting:true, sidecar_ts:1};
+  assert.equal(context._ultraFreshCurrent(waiting).question_waiting, false);
+  assert.equal(context._ultraFreshCurrent(waiting).needs_approval, false);
+  context._sessionLiveOverlay.set('reopened', {is_live:true, sidecar_ts:1, needs_approval:true, question_waiting:true});
+  const fresh = context._ultraFreshCurrent(waiting);
+  assert.equal(context._applyLiveOverlayToRow(fresh).question_waiting, false, 'an old live overlay cannot restore the answered question');
+  context._sessionLiveOverlay.set('reopened', {is_live:true, sidecar_ts:entry.at + 1000, needs_approval:true});
+  assert.equal(context._applyLiveOverlayToRow(fresh).needs_approval, true, 'a newer live approval still takes precedence');
+  waiting.sidecar_ts = entry.at + 1000;
+  assert.equal(context._ultraFreshCurrent(waiting).needs_approval, true, 'a genuinely newer approval remains pending');
 });
 
 test('spawn text deltas expose authored choices when the complete footer arrives', () => {
